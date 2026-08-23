@@ -346,6 +346,12 @@ CreateThread(function()
                 -- unconditionally lets the current tick still draw the
                 -- partial line before the broken state takes effect next
                 -- tick (qa-tester/correctness-overseer finding).
+                -- Clamped defensively, same rationale/precedent as
+                -- FindWaterCrossingDistance's own `step` clamp above: a
+                -- misconfigured Config.Tracking.<Type>.markerSpacing of 0
+                -- (or negative) would otherwise spin this while loop
+                -- forever with no Wait() inside it (qa-tester finding).
+                local markerStep = math.max(trackingConfig.markerSpacing, 0.1)
                 local traveled = 0.0
                 while traveled < totalDist do
                     -- If breaksTrail, stop rendering past the crossing
@@ -361,7 +367,7 @@ CreateThread(function()
                     local underwater = waterCrossingDist ~= nil and traveled >= waterCrossingDist
                     DrawTrailMarker(markerCoords, underwater)
 
-                    traveled = traveled + trackingConfig.markerSpacing
+                    traveled = traveled + markerStep
                 end
             end
         end
