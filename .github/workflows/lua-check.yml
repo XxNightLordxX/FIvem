@@ -35,3 +35,29 @@ jobs:
             fi
           done < <(find qbx_k9unit -type f -name '*.lua' -print0)
           exit "$status"
+
+  luacheck:
+    name: luacheck (unused vars/globals)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install luacheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luarocks
+          sudo luarocks install luacheck
+
+      - name: luacheck qbx_k9unit (repo-root .luacheckrc)
+        run: |
+          luacheck qbx_k9unit
+        # Config lives in the repo-root .luacheckrc: a curated read_globals
+        # list of the FiveM/CFX natives this resource actually calls, plus a
+        # globals list of this resource's own cross-file globals (Config,
+        # NewCooldown/NewNestedCooldown/NewMutex, HasK9Access, the client-
+        # side global helper functions, etc.) so real FiveM/Qbox patterns
+        # aren't flagged as undefined. unused_args and max_line_length are
+        # off there too, with reasoning in that file -- see .luacheckrc
+        # before assuming a new warning class is a bug rather than a config
+        # gap.

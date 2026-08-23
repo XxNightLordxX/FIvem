@@ -192,8 +192,9 @@ local function PerformSearch(targetType, targetEntity)
             -- same copy as contrabandFound = false, per this file's
             -- EVENT/CALLBACK CONTRACT above.
             lib.notify({ title = 'K9 Unit', description = 'The search could not be completed — try again.', type = 'error' })
-        elseif reason == 'on_cooldown' or reason == 'search_in_progress' then
+        elseif reason == 'on_cooldown' or reason == 'search_in_progress' then -- luacheck: ignore 542
             -- Low-key / no notification, per the contract note's Rejection UX note.
+            -- Deliberately empty branch (silent no-op UX), not a missed implementation.
         else
             -- 'no_access', 'feature_disabled', 'too_far', 'invalid_target',
             -- or an unrecognized/missing reason: a plain error notify is
