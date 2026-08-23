@@ -131,16 +131,34 @@ RegisterKeyMapping('qbx_k9unit:toggleCamera', 'Toggle K9 First/Third Person Came
 --- capability check, unlike camera/locomotion above) — return early (and
 --- notify) if false, don't just rely on radial.lua having already hidden
 --- the item.
---- NOTE: "WORLD_DOG_SIT" below is this scaffold's best-effort native-only
---- approximation of a quadruped sit pose, via the same ambient-scenario
---- system the base game already uses to make stray/ambient dog peds sit.
---- SPEC.md §7 assumes no bespoke sit animation work is available for
---- Phase 1, and there's no confirmed dedicated "sit" native. This exact
---- scenario string is UNVERIFIED against documentation (native-api-
---- assistant was unreachable this session to confirm it) — flagged for a
---- documentation-verified follow-up pass. If the string is wrong the
---- failure mode is silent (the ped simply doesn't visibly change pose),
---- never a crash or broken state.
+--- VERIFIED (native-api-assistant pass, 2026-08-23): "WORLD_DOG_SIT" (the
+--- earlier scaffold's guess) is NOT a real scenario — there is no generic
+--- dog-sit scenario name at all. Cross-checked against two independently
+--- maintained community scenario dumps (DioneB/GTAV-Scenarios and
+--- kibook/spooner's scenarios.lua, both decompiled-game-data-derived lists
+--- that agree exactly on the dog entries), the real names are PER-BREED:
+---   WORLD_DOG_SITTING_SHEPHERD / _ROTTWEILER / _RETRIEVER / _SMALL
+--- (plus WORLD_DOG_BARKING_* siblings, not used here). Confidence: HIGH on
+--- these exact strings existing (two independent authoritative-for-FiveM-
+--- purposes sources agree); MEDIUM on the breed-to-scenario mapping below
+--- for a_c_chop/a_c_huskie specifically, since neither has an exact-name
+--- match and dog scenario anims are shared across the generic quadruped
+--- skeleton rather than being model-locked — untested in-engine this
+--- session, so if a mapped breed looks visibly off, that's the first
+--- place to revisit. TaskStartScenarioInPlace on a PLAYER-controlled ped
+--- (vs. an AI ped) is expected/normal here: same native, it plays the pose
+--- and exits automatically the moment the player provides movement input,
+--- which is the desired "self-emote until you move" behavior for this
+--- radial item, not a bug — no anim-dict/TaskPlayAnim fallback is needed
+--- since a real scripted scenario exists for every configured breed.
+local K9_SIT_SCENARIO_BY_MODEL = {
+    a_c_shepherd = 'WORLD_DOG_SITTING_SHEPHERD',
+    a_c_rottweiler = 'WORLD_DOG_SITTING_ROTTWEILER',
+    a_c_chop = 'WORLD_DOG_SITTING_ROTTWEILER', -- Chop is Rottweiler-framed; no Chop-specific scenario exists
+    a_c_huskie = 'WORLD_DOG_SITTING_RETRIEVER', -- no husky-specific scenario; RETRIEVER is the closest general/medium-dog sit
+}
+local K9_SIT_DEFAULT_SCENARIO = 'WORLD_DOG_SITTING_SHEPHERD' -- fallback if playing an unmapped/future Config.Peds model
+
 function K9Sit()
     if not CanShowK9UI() then
         lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
@@ -148,8 +166,17 @@ function K9Sit()
     end
 
     local ped = PlayerPedId()
+    local modelHash = GetEntityModel(ped)
+    local scenarioName = K9_SIT_DEFAULT_SCENARIO
+    for model, scenario in pairs(K9_SIT_SCENARIO_BY_MODEL) do
+        if modelHash == GetHashKey(model) then
+            scenarioName = scenario
+            break
+        end
+    end
+
     ClearPedTasksImmediately(ped)
-    TaskStartScenarioInPlace(ped, 'WORLD_DOG_SIT', 0, true)
+    TaskStartScenarioInPlace(ped, scenarioName, 0, true)
 end
 
 --- Local-only UI/role bookkeeping for the CURRENT leash pairing, if any.

@@ -113,26 +113,16 @@
     therefore gets `isConstrained = true`) via the SAME live,
     server-authoritative model check used for certification grants
     (IsConfiguredK9Model + GetEntityModel(GetPlayerPed(...))), never a
-    client-reported role. Only the K9-role party's access is checked via
-    HasK9Access — SPEC.md doesn't gate the human officer partner's job at
-    all for this mechanic (§1 calls them a "partnered human officer" but
-    §6.1's acceptance criteria never restricts the partner's job) — Phase 1
-    scaffold assumption: any nearby player may be the anchor/officer side,
-    no department check on them. Flag if a same-department (or "must hold
-    a job at all") requirement on the partner is actually wanted.
-
-    IMPLEMENTATION NOTE (coder-backend): the "Role assignment" paragraph
-    above is now STALE relative to SPEC.md's current text and is
-    superseded below, not followed as-is — see the DEVIATION comment
-    inside CheckLeashEligibility for the full reasoning. SPEC.md §6.1
-    explicitly states "The non-K9 side ('handler') must also satisfy
-    job.name ∈ Config.Departments" and §9 item 9 marks this **Resolved**
-    (department membership required, no active K9 cert of their own
-    required). That resolved text is more specific and more current than
-    this header's hedge, so the implementation below enforces department
-    membership on the officer/handler side. Flagging this header itself as
-    needing a follow-up correction pass to stay in sync with SPEC.md,
-    rather than silently leaving the contradiction for the next reader.
+    client-reported role. The K9-role party's access is checked via
+    HasK9Access. The other ("handler"/officer) party does NOT need an
+    active K9 certification of their own, but per SPEC.md §6.1/§9 item 9
+    (Resolved) they DO need `job.name ∈ Config.Departments` — "handler" is
+    defined throughout the spec (§1) as a partnered officer, so an
+    arbitrary non-department player cannot hold the other end of a working
+    K9's leash even with consent; department membership is a cheap check
+    reusing the exact same Config.Departments list. See
+    CheckLeashEligibility below for the enforcement of both halves of this
+    rule.
 
     EDGE CASE flagged, not resolved: if BOTH parties are K9-modeled and
     both hold access, which one is "constrained" is arbitrary — this
@@ -316,15 +306,11 @@ local function CheckLeashEligibility(initiatorSrc, targetSrc)
         return false, nil, nil, 'not_certified'
     end
 
-    -- DEVIATION FROM THIS FILE'S OWN HEADER, FLAGGED (see the
-    -- IMPLEMENTATION NOTE near the top of this file): SPEC.md §6.1 states
-    -- "The non-K9 side ('handler') must also satisfy job.name ∈
-    -- Config.Departments" and §9 item 9 marks this **Resolved** — department
-    -- membership required on the officer/handler side, but NOT an active
-    -- K9 certification of their own (the cert is specifically the "I am a
-    -- working K9" credential, not "I am allowed near one"). Implementing
-    -- per the resolved SPEC.md text rather than this header's older,
-    -- looser "no department check" assumption.
+    -- §6.1/§9 item 9 (Resolved): the officer/handler side must satisfy
+    -- job.name ∈ Config.Departments, but does NOT need an active K9
+    -- certification of their own (the cert is specifically the "I am a
+    -- working K9" credential, not "I am allowed near one") — see this
+    -- file's header "Role assignment" paragraph.
     local officerPlayer = exports.qbx_core:GetPlayer(officerSrc)
     local officerJob = officerPlayer and officerPlayer.PlayerData and officerPlayer.PlayerData.job
     if not officerJob or not Config.Departments[officerJob.name] then

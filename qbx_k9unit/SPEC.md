@@ -286,7 +286,8 @@ change.
 | Step | Actor | Event/mechanism |
 |---|---|---|
 | Grant | Certifier via ox_target "Certify K9 Handler" on nearby K9-model player, or `/k9certify [id]` | client → `qbx_k9unit:server:certifyHandler` → eligibility check (§4.2, incl. target-model check) → INSERT row → cache update → notify both |
-| Revoke (manual) | Certifier via ox_target "Revoke K9 Certification", or `/k9decertify [id]` (works offline) | client/command → `qbx_k9unit:server:revokeHandler` → eligibility check → UPDATE row → cache update → notify online target if applicable |
+| Revoke (manual, target online) | Certifier via ox_target "Revoke K9 Certification", or `/k9decertify [id]` | client/command → `qbx_k9unit:server:revokeHandler` → eligibility check → UPDATE row → cache update → notify online target |
+| Revoke (manual, target offline) | Certifier via `/k9decertifyoffline [citizenid] [job]` — **command-only, no ox_target/net-event equivalent**, since a disconnected target has no client to interact through and no numeric server id to identify them by | command → `RevokeCertificationOffline` (server-only function, no client-reachable event) → eligibility check (no proximity/model check — impossible against a disconnected target) → UPDATE row by citizenid+job → cache/notify update if the citizenid happens to be online after all |
 | Revoke (automatic) | System, on the K9 leaving/being fired from the department | `QBCore:Server:OnJobUpdate` handler (§4.4) → UPDATE row with `revoked_by = 'system:job_change'` → cache update → notify target if online |
 | Check | Any time a K9 feature gates on access | `lib.callback` `qbx_k9unit:server:hasK9Access` → server checks job ∈ Config.Departments AND (cache[citizenid] OR autoAccessGrade bypass) |
 | Display only | Client HUD | reads own `metadata.k9certified` mirror — never used for authorization |
@@ -731,7 +732,10 @@ check against whenever that phase lands, but they are not blocking Phase 1.
    refined by db-schema; ships at `qbx_k9unit/sql/install.sql`).
 3. Certification grant/revoke/check system (server-authoritative, per §4),
    including ox_target "Certify K9 Handler" / "Revoke K9 Certification"
-   options, `/k9certify [id]` / `/k9decertify [id]` commands, and the
+   options, `/k9certify [id]` / `/k9decertify [id]` commands,
+   `/k9decertifyoffline [citizenid] [job]` for a genuinely disconnected
+   target (§4.3's flow table — `/k9decertify` alone cannot reach an
+   offline player, since it only ever accepts a numeric server id), and the
    automatic revoke-on-job-change handler (§4.4).
 4. K9-model + access detection (§4.5): server-side live model check backing
    the certify-eligibility gate, and the `hasK9Access` callback backing every
