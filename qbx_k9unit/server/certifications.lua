@@ -45,6 +45,15 @@
     Commands (server-registered, call the same internal function as events 2/3):
     6. '/k9certify [targetServerId]' [THIS FILE]
     7. '/k9decertify [targetServerId]' [THIS FILE]
+    7b. '/k9decertifyoffline [citizenid] [job]' [THIS FILE] — closes the
+        online-only gap in event 3/command 7's numeric targetServerId
+        contract (SPEC.md §4.3 requires revocation to work on a target who
+        is genuinely disconnected, and a disconnected player has no live
+        server id at all — see RevokeCertificationOffline below). No
+        client-reachable event equivalent exists, nor should one: a
+        disconnected target has no client to trigger anything from, so
+        this is command-only, unlike certify/revoke which also expose net
+        events 2/3.
 
     Automatic, server-only path (no client entry point at all):
     8. AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job) ... end)
@@ -402,33 +411,26 @@ local function RevokeCertification(granterSrc, targetServerId)
             end
         end
     else
-        -- JUDGMENT CALL (flagged in this function's original TODO,
-        -- confirmed per instructions from the calling session): a
-        -- disconnected player has no live server id / ped at all —
-        -- GetPlayer(source) only ever resolves a CURRENTLY CONNECTED
-        -- player, and FiveM invalidates/recycles numeric source ids on
-        -- disconnect. §4.2 point 4's proximity check is inherently a
-        -- comparison of two LIVE ped coordinates; with no live target ped
-        -- to read a position from, that check cannot apply and is skipped
-        -- by necessity for a genuinely offline target — that reading is
-        -- confirmed here.
+        -- CONFIRMED READING: a disconnected player has no live server id /
+        -- ped at all — GetPlayer(source) only ever resolves a CURRENTLY
+        -- CONNECTED player, and FiveM invalidates/recycles numeric source
+        -- ids on disconnect. §4.2 point 4's proximity check is inherently
+        -- a comparison of two LIVE ped coordinates; with no live target
+        -- ped to read a position from, that check cannot apply and is
+        -- skipped by necessity for a genuinely offline target.
         --
-        -- What this does NOT resolve: this event/command's contract only
-        -- ever hands this function a bare numeric targetServerId, never a
-        -- citizenid, and there is no way to translate a stale/disconnected
-        -- numeric id back into a citizenid + job to run the revoke UPDATE
-        -- against. SPEC.md §4.3's flow table describes manual revoke as
-        -- working "offline," but that capability would require this
-        -- event/command to accept a citizenid (or another persistent
-        -- identifier) instead of a server id — a bigger contract change
-        -- than confirming the proximity reading calls for. Rather than
-        -- silently inventing an undocumented fallback (e.g. treating the
-        -- raw number as some other kind of id), this reports the
-        -- limitation back to the granter. Flagging back to
-        -- coder-architect/team-leader: a true offline-by-citizenid revoke
-        -- would need its own command/event, e.g.
-        -- `/k9decertifyoffline [citizenid]`.
-        NotifyPlayer(granterSrc, 'That player is not currently connected; revoking an offline handler by ID is not supported by this command.', 'error')
+        -- This function's numeric targetServerId contract still can't
+        -- translate a stale/disconnected id back into a citizenid + job,
+        -- so it cannot itself serve a genuinely offline target — SPEC.md
+        -- §4.3 requires manual revoke to work offline regardless (it's the
+        -- explicit rationale for a DB table over metadata in the first
+        -- place), so that gap is closed separately by
+        -- RevokeCertificationOffline / the `/k9decertifyoffline [citizenid]
+        -- [job]` command below, which takes a citizenid directly instead of
+        -- a server id for exactly this reason. This function simply
+        -- reports the mismatch back to the granter so they know to use
+        -- that command instead of assuming this one silently worked.
+        NotifyPlayer(granterSrc, 'That player is not currently connected; use /k9decertifyoffline [citizenid] [job] to revoke an offline handler.', 'error')
         return
     end
 
@@ -461,6 +463,89 @@ local function RevokeCertification(granterSrc, targetServerId)
         -- HUD display mirror only (SPEC.md §4.3) — never read for authorization.
         targetPlayer.Functions.SetMetaData('k9certified', false)
         NotifyPlayer(targetServerId, 'Your K9 certification has been revoked.', 'error')
+    end
+
+    NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')
+end
+
+--- SPEC.md §4.3 offline-capable revoke flow (manual). Called only by the
+--- '/k9decertifyoffline [citizenid] [job]' command — see that command's
+--- registration below and this file's header (item 7b) for why there is
+--- no client-triggerable event equivalent (a disconnected target has no
+--- client to trigger anything from). Closes the gap RevokeCertification
+--- above cannot: that function's numeric targetServerId contract can only
+--- ever resolve a currently-connected player, but SPEC.md §4.3 requires
+--- manual revoke to work on a genuinely offline target (this is the
+--- explicit stated rationale for choosing a dedicated DB table as the
+--- source of truth over qbx_core metadata in the first place — an
+--- admin/chief must be able to pull a cert from someone who isn't logged
+--- in right now). Same eligibility rule as the online path. Deliberately
+--- has NO proximity check (impossible against a disconnected target — the
+--- entire point of this path) and NO model check (revoke never runs the
+--- model check regardless of online/offline status, per §4.2.5 being
+--- grant-only).
+--- @param granterSrc number
+--- @param citizenid string
+--- @param job string
+local function RevokeCertificationOffline(granterSrc, citizenid, job)
+    if not IsEligibleCertifier(granterSrc) then
+        NotifyPlayer(granterSrc, 'You are not authorized to revoke K9 certifications.', 'error')
+        return
+    end
+
+    if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
+        NotifyPlayer(granterSrc, 'Usage: /k9decertifyoffline [citizenid] [job]', 'error')
+        return
+    end
+
+    -- Reject a typo'd/unconfigured job outright rather than silently
+    -- no-opping against a job name that could never have an active row.
+    if not Config.Departments[job] then
+        NotifyPlayer(granterSrc, ("'%s' is not a configured department."):format(job), 'error')
+        return
+    end
+
+    local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
+    local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
+    if not granterCitizenid then
+        NotifyPlayer(granterSrc, 'Unable to resolve your own citizen ID.', 'error')
+        return
+    end
+
+    -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
+    -- row matches (SPEC.md §4.3). Same UPDATE pattern as the online path.
+    local affectedRows = MySQL.update.await(
+        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
+        { granterCitizenid, citizenid, job }
+    )
+
+    if not affectedRows or affectedRows == 0 then
+        -- Distinguish "no matching active cert" from success — a granter
+        -- typo'ing a citizenid should not look identical to a real revoke.
+        NotifyPlayer(granterSrc, 'That citizen does not hold an active certification for that department.', 'inform')
+        return
+    end
+
+    -- The "offline" target might actually be online right now under a
+    -- different server id than the granter has in mind (or the granter
+    -- simply doesn't know/care about their live id) — resolve by
+    -- citizenid and, if found, run the same online-aware follow-up
+    -- (cache refresh, HUD mirror clear, notify) as RevokeCertification's
+    -- online branch above, reusing the same helpers rather than
+    -- duplicating divergent logic.
+    -- CONFIDENCE NOTE: exports.qbx_core:GetPlayerByCitizenId(citizenid) and
+    -- Player.PlayerData.source are used here per established QBCore/Qbox
+    -- convention (the standard citizenid-keyed counterpart to GetPlayer);
+    -- not independently verified against a live qbx_core install in this
+    -- sandbox — same caveat as this file's other qbx_core-export notes.
+    local targetPlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    if targetPlayer and targetPlayer.PlayerData then
+        RefreshCertificationCache(citizenid, job)
+        -- HUD display mirror only (SPEC.md §4.3) — never read for authorization.
+        targetPlayer.Functions.SetMetaData('k9certified', false)
+        if targetPlayer.PlayerData.source then
+            NotifyPlayer(targetPlayer.PlayerData.source, 'Your K9 certification has been revoked.', 'error')
+        end
     end
 
     NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')
@@ -540,6 +625,20 @@ RegisterCommand('k9decertify', function(source, args)
         return
     end
     RevokeCertification(source, targetServerId)
+end, false)
+
+-- Offline-capable counterpart to /k9decertify — see RevokeCertificationOffline
+-- above and this file's header (command 7b) for why this exists as a
+-- separate, citizenid-keyed command rather than extending the numeric
+-- targetServerId contract used everywhere else.
+RegisterCommand('k9decertifyoffline', function(source, args)
+    local citizenid = args[1]
+    local job = args[2]
+    if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
+        NotifyPlayer(source, 'Usage: /k9decertifyoffline [citizenid] [job]', 'error')
+        return
+    end
+    RevokeCertificationOffline(source, citizenid, job)
 end, false)
 
 -- CONFIDENCE NOTE (not silently asserted as verified fact): no qbx_core
