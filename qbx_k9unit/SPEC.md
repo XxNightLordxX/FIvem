@@ -23,6 +23,24 @@ Target stack: Qbox (qbx_core, ox_lib, ox_target, ox_inventory), oxmysql
 > refined by db-schema and no longer needs that sign-off. Nothing else below
 > should be read as having independent specialist sign-off beyond what's
 > noted inline.
+>
+> **Phase 2 detailed scoping (this pass, 2026-08-23, product-agent):** §6.3
+> and §6.4's acceptance-criteria bullets were high-level placeholders written
+> before any Phase 1 code existed. §11 (new, below) replaces them with
+> concrete, checkable acceptance criteria, a config schema addition, a
+> file/module plan grounded in Phase 1's actual file-boundary conventions,
+> an event/callback contract, a reality-check on native-only feasibility for
+> each Phase 2 item, and a sub-phase dependency ordering. §6.3/§6.4 are left
+> in place as the high-level anchor for reference, but §11 is the
+> authoritative detail for implementation and verification. This pass was
+> done while Phase 1 was still in its final review gate, per explicit
+> direction not to wait — nothing in §11 depends on Phase 1's review outcome,
+> but §11.3's file plan does assume Phase 1's files ship essentially as
+> reviewed (client/main.lua, client/movement.lua, client/radial.lua,
+> client/vehicle.lua, server/main.lua, server/certifications.lua); if Phase 1
+> review produces structural changes to those files, re-check §11.3's
+> extension points against the final versions before starting Phase 2
+> implementation.
 
 ---
 
@@ -521,6 +539,14 @@ Config.ContrabandAlertTiers = {
 }
 ```
 
+> **Phase 2 config additions (`Config.Tracking`, `Config.WaterTrackingDecay`,
+> `Config.SearchContrabandItems`, `Config.SearchZones`,
+> `Config.DoorInteraction`, `Config.Vision`) are specified in full in
+> §11.2**, kept out of this section so §5 stays a faithful record of what
+> Phase 1 actually shipped (per this file's own top-of-file transcription
+> convention in `config.lua`) rather than mixing unreviewed Phase 2 additions
+> into the Phase 1 block.
+
 ---
 
 ## 6. Acceptance criteria by feature group
@@ -627,6 +653,11 @@ check against whenever that phase lands, but they are not blocking Phase 1.
       not reachable this session).
 
 ### 6.3 Scent & Advanced Tracking — **Phase 2**
+
+> **Superseded in detail by §11.5** (this pass, 2026-08-23) — the bullets
+> below are kept as the high-level anchor/summary; §11.5 is the concrete,
+> checkable version correctness-overseer should verify against.
+
 - [ ] Scent tracking: handler can command a "search" that reveals a trail of
       client-side-only markers toward the nearest configured scent source
       (dropped item/stash location) within a configurable max range.
@@ -649,6 +680,11 @@ check against whenever that phase lands, but they are not blocking Phase 1.
       own constraint).
 
 ### 6.4 Vision & Tactical Systems — **Phase 2 (basic) / Phase 5 (PiP spike)**
+
+> **Superseded in detail by §11.5** (this pass, 2026-08-23) for the Phase 2
+> bullet — see that section for the concrete acceptance criteria and a
+> refinement of exactly which natives to use.
+
 - [ ] Thermal and night vision (see 6.3) ship Phase 2.
 - [ ] K9 camera feed PiP is a Phase 5 **research spike only**: see §7 for
       what is and isn't achievable without custom rendering work. No PiP
@@ -732,7 +768,7 @@ check against whenever that phase lands, but they are not blocking Phase 1.
 | Requested item | Native-only approximation (what ships without new assets) | What would actually need a custom asset |
 |---|---|---|
 | K9 camera feed PiP | A full-screen camera *takeover* toggle (handler presses a key, screen switches to the dog's camera, like a spectate mode) using a secondary in-game camera (`CreateCam`/`RenderScriptCams`). This is **not** picture-in-picture — it replaces the main view, it doesn't inset it. | A true inset PiP of *live 3D world video* requires a render-target/texture-capture path FiveM does not expose to plain Lua scripts for a moving in-game camera (DUI/NUI textures render HTML, not the 3D scene; there's no native "camera → runtime texture" hook in stock natives). This needs either an engine-level R&D spike (unclear if feasible at all in stock FiveM) or accepting a fundamentally different, lower-fidelity implementation (e.g. a static "K9 view" toggle instead of a literal PiP window). Phase 5 ships a feasibility spike only, not a committed feature. |
-| Thermal / night vision | `SetTimecycleModifier`/nightvision natives — this is genuinely native-only and fully achievable, matches the request's own stated constraint. | Nothing extra needed. |
+| Thermal / night vision | `SetTimecycleModifier`/nightvision natives — this is genuinely native-only and fully achievable, matches the request's own stated constraint. **Refined by §11.6:** the concrete recommended natives are `SetNightvision(true)` for night vision and `SetSeethrough(true)` for thermal (GTA's built-in heat-vision effect, already used for the base game's Predator random event / Cayo Perico thermal goggles) — `SetSeethrough` is a better fit than a generic timecycle modifier because it actually highlights peds as heat sources, which is the actual gameplay point of "K9 thermal vision." | Nothing extra needed. |
 | Bite-and-hold "locks onto arm/leg" | A task/animation state on the dog plus a control-disable flag on the target (can't sprint/fire while "held"), released on Recall/timeout. | A literal physics-attached bite to a specific limb bone with correct IK would need custom animation work; not attempted here. |
 | Agility mode (climb fences/windows) | Native jump task + a scripted "vault" that teleports/arcs the ped over a detected low obstacle when triggered near a tagged prop, similar to how existing parkour scripts approximate climbing for non-human peds. | A real climbing animation blended to arbitrary fence heights would need a custom clip set; not attempted here. |
 | Limping/injury gait | Reduced move-speed via `SetPedMoveRateOverride`, no distinct visual gait. | A visually distinct limping quadruped animation needs a custom clip set (no default GTA quadruped limp clip is assumed to exist). |
@@ -741,6 +777,8 @@ check against whenever that phase lands, but they are not blocking Phase 1.
 | Bark sounds | Fully achievable, but needs **bundled audio asset files** (bark .ogg/.wav clips) — GTA does not expose a scriptable "make this canine ped emit an aggressive-bark voice line on command" native the way human ped speech works; ambient dog vocalizations are AI-driven, not manually triggerable per type. This is a small, easy-to-source asset requirement, not a scripting blocker, but it is **not** zero-asset. | Higher-fidelity variation (breed-specific barks, snarls) would need a larger sourced/recorded audio library. |
 | Prop attachments (vest/harness/tracking camera) | `AttachEntityToEntity` onto an existing or lightly re-purposed GTA prop if a close-enough one exists. | A purpose-built K9 vest/harness/camera-housing model most likely needs a custom prop; base GTA doesn't ship these specifically for a quadruped bone rig. |
 | Deployable kennel | Achievable with an existing GTA prop as a stand-in visual. | A purpose-built kennel model needs a custom prop; unconfirmed whether GTA ships one natively. |
+| **Gunpowder/blood tracking data sources (Phase 2)** | **See §11.6** — both are achievable via native game events/polling, but require small amounts of authored client→server relay code; not literally "free" the way the original §6.3 phrasing could be read. | Nothing extra needed beyond that relay code — no custom asset. |
+| **Door interaction "nudge-open" (Phase 2)** | **See §11.6** — scratch-to-alert (pure sound cue) is fully native-only; nudge-open needs a real door-lock resource integration since GTA has no generic native lock-state query for arbitrary map doors. | No asset needed, but a genuine external-resource integration dependency, not purely a scripting task in isolation. |
 
 ---
 
@@ -781,7 +819,10 @@ department immediately and automatically ends their access.
 ### Phase 2 — tracking & basic vision
 Scent/blood/water/gunpowder tracking, search vehicle/person zones (ox_target),
 contraband alert tiers, door interaction (nudge/scratch), thermal + night
-vision.
+vision. **See §11 for the detailed spec** (acceptance criteria, config
+schema additions, file/module plan, event contract, reality-check, and
+sub-phase ordering) — ready for coder-architect/coder-backend/coder-frontend
+to pick up as soon as Phase 1's review gate closes.
 
 ### Phase 3 — combat & advanced agility
 Bite-and-hold, non-lethal takedown, handler-down defense mode, prop dragging,
@@ -860,6 +901,42 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
    working K9's leash doesn't match that framing, and department membership
    is a cheap, already-available check reusing the exact same
    `Config.Departments` list.
+10. **(NEW, Phase 2) Real event/native availability for tracking data
+    sources (§11.6).** Blood-trail (via `CEventNetworkEntityDamage`) and
+    gunpowder-sniff (via polling `IsPedShooting`) both require each client
+    to relay a small custom event to the server itself — there is no single
+    native that already delivers a global "damage/gunfire happened here"
+    feed server-side for free. Scoped as achievable, native-only, low-effort
+    relay code (§11.6), not a blocker, but flagged so it isn't assumed to be
+    zero-authored-code the way §6.3's original phrasing ("native weapon-fire
+    events already fired by the game") could be misread.
+11. **(NEW, Phase 2) ox_inventory export names/signatures** for reading real
+    inventory contents and item weights (search zones, contraband tiers) and
+    for detecting a fresh item drop (scent tracking's source data) are not
+    independently verified against a live ox_inventory install this session
+    — same caveat pattern as Phase 1's qbx_core export notes in
+    `server/certifications.lua`. Whoever implements `server/search.lua` and
+    `server/tracking.lua` (§11.3) should confirm the exact exports before
+    writing final code.
+12. **(NEW, Phase 2) Door interaction's "nudge-open" needs a real door-lock
+    resource to integrate with** (no such resource is in this spec's scope).
+    GTA has no generic native for arbitrary map-door lock state. Scoped in
+    §11.3/§11.6 as client-only and unlocked-doors-only for Phase 2, with a
+    small export hook other resources can implement; if the target server's
+    door-lock resource can't be confirmed/integrated, "nudge-open" may need
+    to ship even more narrowly (or not at all) while "scratch-to-alert"
+    (pure sound cue) ships regardless.
+13. **(NEW, Phase 2) `Config.SearchContrabandItems` is a placeholder list**,
+    same status as `Config.ContrabandAlertTiers` (item 4 above) — needs
+    economy-balance-agent/db-schema review against the real ox_inventory
+    items table before Phase 2 ships for real, not just as a demo.
+14. **(NEW, Phase 2) Whether tracking trail reveal (scent/blood/gunpowder)
+    needs any server-side rate-limit/anti-abuse beyond the per-type cooldown
+    in `Config.Tracking`** — e.g. should a K9 be blocked from tracking while
+    leashed-and-constrained past the leash limit, or during an active
+    search-zone cooldown on the same target? Not resolved here; flagged as a
+    judgment call for coder-backend during implementation, not a spec
+    mandate either way.
 
 ---
 
@@ -870,11 +947,490 @@ to the top-level session), I was not able to loop in:
 - **feature-ideation-agent** — not needed here since the feature was already
   fully specified by the requester, but noting per process.
 - **economy-balance-agent** — should review §9.4 (XP tiers, contraband
-  weight thresholds) before Phase 4.
+  weight thresholds) and §9.13 (Phase 2 contraband item list) before Phase 4
+  / Phase 2 respectively ship for real.
 - **db-schema** — should review §4.3 (certification table design) before
-  Phase 1 ships.
+  Phase 1 ships. Also worth a look at §11.4's ephemeral (non-persisted)
+  tracking event log design (§11.3's `server/tracking.lua`) to confirm
+  in-memory-only is the right call there too (mirrors the leash pairing
+  precedent in `server/main.lua`, which is also deliberately not persisted).
 - **team-leader** — should take this spec and break it into tracked tasks
   per phase, assigning coder-architect (config framework, handler-K9 link
   registry), coder-backend (certification system, DB layer), coder-security
   (server-authoritative review of every access check in §4), coder-frontend/
-  coder-ui (radial menu, NUI HUD in Phase 4), as appropriate.
+  coder-ui (radial menu, NUI HUD in Phase 4), as appropriate. For Phase 2
+  specifically (§11), the natural split is coder-backend on
+  `server/tracking.lua` + `server/search.lua` (event relay, contraband
+  read/weight computation — the two genuinely server-authoritative pieces),
+  coder-frontend on `client/tracking.lua` + `client/search.lua` (trail
+  rendering, ox_target zones, sniff animation), and coder-ui/coder-frontend
+  on `client/vision.lua` (thermal/night vision keybinds) — all reviewed by
+  coder-security for the same "server never trusts a client claim" standard
+  §4.3 already established for certification.
+
+---
+
+## 11. Phase 2 Detailed Spec
+
+> Author: product-agent, 2026-08-23. Written while Phase 1 was still in its
+> final review gate (qa-tester / regression-interaction / correctness-overseer
+> all running), per explicit direction to scope Phase 2 in parallel rather
+> than wait. Grounded in a full read of the actual Phase 1 files as they
+> exist right now (`config.lua`, `client/main.lua`, `client/movement.lua`,
+> `client/radial.lua`, `client/vehicle.lua`, `server/main.lua`,
+> `server/certifications.lua`, `fxmanifest.lua`) — file boundaries and
+> naming conventions below deliberately continue those files' own
+> documented patterns rather than inventing new ones. If Phase 1's review
+> gate produces structural changes to those files, re-check the extension
+> points named below (especially §11.3's "extends" column) against the
+> final versions before starting implementation.
+
+### 11.1 Sub-phase ordering (dependency graph)
+
+Phase 2's nine `Config.Features` flags are not all independent. Recommended
+build/land order, grouped into sub-phases so coder-architect/team-leader can
+parallelize what's genuinely independent and sequence what isn't:
+
+| Sub-phase | Features | Why this order |
+|---|---|---|
+| **2a — independent, parallelizable, start immediately** | `ThermalVision`, `NightVision`, `DoorInteraction` (scratch-to-alert only) | Pure client-side (vision) or near-pure client-side (door scratch, per §11.3's client-only design) with no dependency on anything else in this phase or on each other. Good first tickets — no shared state to coordinate over. |
+| **2b — foundational** | `SearchZones` | Must land before `ContrabandAlerts`: alert tiers are computed *from* a search's weight result (§6.3/§11.5), so there is nothing for tier logic to key off until server-authoritative contraband reading exists. This is also the piece coder-security should review first, per the task's explicit direction to confirm search results can't be client-claimed. |
+| **2c — depends on 2b** | `ContrabandAlerts` | Consumes `SearchZones`' weight computation directly (§11.4's `qbx_k9unit:server:searchTarget` response shape includes the computed tier) — do not start this before 2b lands, there is no independent data source for it. |
+| **2d — independent of 2b/2c, can run in parallel with them** | `ScentTracking` | Keys off item-drop/stash locations (a different data source than search zones' live-inventory reads), so it has no hard dependency on 2b/2c. Can be built alongside 2b by a second coder. |
+| **2e — depends on shared relay infrastructure, land together** | `BloodTracking`, `GunpowderSniffing` | Both need the same new server-side event-relay-and-log infrastructure (`server/tracking.lua`, §11.3) — one client→server relay pattern (damage events / weapon-fire polling) feeding one prune-and-query log. Building them together avoids two divergent copies of that infrastructure. |
+| **2f — depends on 2d and/or 2e** | `WaterTrackingDecay` | Not a standalone feature — it's a *modifier* on an existing rendered trail (breaks/fades it at a water crossing). Needs at least one of scent/blood/gunpowder tracking to already be rendering a trail before there's anything to degrade. Land last. |
+| **Door interaction, "nudge-open" half** | (still `DoorInteraction`) | Deliberately split from 2a above: nudge-open depends on confirming a door-lock resource integration exists on the target server (§9 item 12, §11.6) — treat as a stretch item within `DoorInteraction`, not a blocker for shipping scratch-to-alert. |
+
+### 11.2 Config schema additions
+
+New top-level `Config.*` tables, in the same style as `config.lua`'s
+existing Phase-1 blocks (banner comments, inline rationale). These are
+**additions** — none of Phase 1's existing config keys change.
+
+```lua
+-- ======================================================================
+-- PHASE 2 — TRACKING (scent / blood / gunpowder). Ranges in meters, ages/
+-- time windows in seconds. Each trail TYPE is independently gated by its
+-- own Config.Features flag (ScentTracking / BloodTracking /
+-- GunpowderSniffing) — these tuning tables only take effect for whichever
+-- types are enabled; read at the point of use (search command execution),
+-- not cached at resource start, per §3's acceptance criteria applied here.
+-- ======================================================================
+Config.Tracking = {
+    Scent = {
+        maxRange         = 40.0,  -- max distance from the K9's current position to a valid scent source at search time
+        markerSpacing    = 3.0,   -- meters between rendered trail markers/checkpoints
+        searchCooldownMs = 5000,  -- per-player cooldown on re-issuing a "search" command of this type
+    },
+    Blood = {
+        maxRange         = 40.0,
+        maxAgeSeconds    = 300,   -- damage events older than this are no longer trackable (pruned from the server-side log, §11.4)
+        markerSpacing    = 3.0,
+        searchCooldownMs = 5000,
+    },
+    Gunpowder = {
+        maxRange         = 40.0,
+        maxAgeSeconds    = 120,   -- shorter window than blood -- residue is time-sensitive
+        markerSpacing    = 3.0,
+        searchCooldownMs = 5000,
+    },
+}
+
+-- Water crossing degrades/breaks a visible trail (§6.3, §11.5). Applied by
+-- client/tracking.lua while rendering ANY active trail (scent, blood, or
+-- gunpowder) -- not a separate trackable type of its own, which is why it
+-- has no maxRange/searchCooldownMs of its own above.
+Config.WaterTrackingDecay = {
+    sampleIntervalMeters = 2.0,  -- how often the rendered path is sampled for water (GetWaterHeight / water-flag natives) while drawing it
+    breaksTrail          = true, -- true: water fully breaks the trail, handler must re-search on the far bank (§6.3's stated behavior); false: only fades marker opacity near/in water instead of a hard break -- a softer alternative flagged here as a one-line config choice, not a spec mandate either way
+}
+
+-- ======================================================================
+-- PHASE 2 — SEARCH ZONES & CONTRABAND. Item names below must match real
+-- ox_inventory item names on the target server -- PLACEHOLDER list, see
+-- §9 item 13 (needs economy-balance-agent/db-schema review before this
+-- ships for real). Item WEIGHT for tier computation is read live from
+-- ox_inventory's own item registry at search time, never duplicated into
+-- this config, so there is exactly one source of truth for item weight
+-- and it can never drift out of sync with a server's real items.lua.
+-- ======================================================================
+Config.SearchContrabandItems = {
+    'weed_bud', 'coke_brick', 'meth_bag', 'weapon_pistol', -- placeholder examples only
+}
+
+Config.SearchZones = {
+    vehicleSearchDistance = 2.0,   -- ox_target zone radius for "Search Vehicle"
+    personSearchDistance  = 2.0,   -- ox_target zone radius for "Search Person"
+    sniffAnimDurationMs   = 4000,  -- how long the sniff interaction takes before the result is revealed
+    searchCooldownMs      = 10000, -- per-(K9, target) cooldown -- prevents repeat-search spam against the same vehicle/person to fish for a different roll or just to harass
+}
+
+-- ======================================================================
+-- PHASE 2 — DOOR INTERACTION (nudge-open / scratch-to-alert). See §11.6
+-- for why "nudge-open" is conditioned on the target server having a
+-- separate door-lock resource, and why it's scoped client-only (mirrors
+-- the vehicle-entry-exit "no real capability granted" exception in §4.1).
+-- ======================================================================
+Config.DoorInteraction = {
+    interactDistance      = 1.5,  -- max distance to a door entity to show either option
+    nudgeRequiresUnlocked = true, -- hard requirement, not a toggle: nudge-open must never function as a lockpick bypass -- see §11.6
+    scratchCooldownMs     = 3000, -- per-player cooldown on the scratch-to-alert sound cue, same rationale as Config.Features.BasicBarkSounds' server-side cooldown in server/main.lua
+}
+
+-- ======================================================================
+-- PHASE 2 — VISION (thermal / night). Both are native-toggle keybinds, no
+-- custom shader/asset -- see §11.6 for the exact natives confirmed/refined
+-- against SPEC.md §7's original claim.
+-- ======================================================================
+Config.Vision = {
+    Thermal = { toggleKey = 'K' }, -- drives SetSeethrough(true/false) -- see §11.6
+    Night   = { toggleKey = 'J' }, -- drives SetNightvision(true/false) -- see §11.6
+}
+```
+
+### 11.3 File/module plan
+
+Continuing Phase 1's established boundary logic (thin radial wiring only in
+`client/radial.lua`; "own body" self-actions in `client/movement.lua`;
+target-entity interactions in their own file per target type, as
+`client/vehicle.lua` already does for vehicles; small server-authority-only
+actions that aren't part of the permission system itself in
+`server/main.lua`, per that file's own trailing comment reserving space for
+exactly this: *"Reserved for future Phase 2+ small, access-gated K9 actions
+that need server authority but aren't part of the certification/permission
+system itself (e.g. a scent-reveal trigger, a contraband-alert trigger)."*):
+
+| File | New or extends | Owns |
+|---|---|---|
+| `client/tracking.lua` | **New** | Scent/blood/gunpowder self-search: the "Track Scent" / "Track Blood" / "Track Gunpowder" radial items (self-actions, same category as `movement.lua`'s Sit — hence a sibling file rather than folded into `movement.lua`, to keep that file scoped to camera/sit/leash per its own header rather than becoming an everything-file, mirroring the exact reasoning `certifications.lua`'s header already gives for why bark relay lives in `main.lua` instead of there); trail marker rendering (checkpoints/blips) between the K9's live position and the resolved source coords; water-crossing degrade logic (`Config.WaterTrackingDecay`) applied to whichever trail is currently active. Calls the `qbx_k9unit:server:findTrackableSource` callback (§11.4). |
+| `client/search.lua` | **New** | Search-vehicle/search-person: registers `exports.ox_target:addGlobalVehicle` and `exports.ox_target:addGlobalPlayer` (and, if the target server exposes peds/NPCs as searchable too, a ped-model variant — flagged as a stretch item, not required for Phase 2's "person" scope which is player-only per §11.5) options that play the sniff animation, then await the `qbx_k9unit:server:searchTarget` callback (§11.4) and play the resulting contraband-alert bark/animation locally based on the returned tier. Kept separate from `client/tracking.lua` because the trust model differs: tracking reveals a client-cosmetic trail (no real capability granted, §11.6), search reveals real, server-verified inventory contents (a real capability, same category as certification) — splitting by trust model, not just by feature name, mirrors how Phase 1 split `certifications.lua` (real permission grants) from `main.lua` (bark/leash, lower-stakes) rather than splitting purely by "which SPEC.md subsection." |
+| `client/vision.lua` | **New** | Thermal/night vision toggle keybinds (`RegisterKeyMapping`, mirroring `movement.lua`'s `ToggleK9Camera` pattern exactly — same "cheap, local, free `IsOwnModelK9()` check, not gated behind `CanShowK9UI()`" judgment call `movement.lua`'s header already made for the camera toggle, applied identically here since vision is also a perception QoL toggle, not a granted capability). New file rather than extending `movement.lua` for the same "don't let one file balloon" reasoning as `client/tracking.lua` above — `movement.lua`'s header explicitly scopes it to "camera, Sit, leash," and vision is a big enough sibling concern (two natives, two keybinds, its own on/off state machine) to warrant its own file rather than a fourth unrelated concern bolted onto that one. |
+| `client/movement.lua` | **Extends** | Door interaction (`DoorInteraction` flag), both nudge and scratch. Deliberately placed here rather than a new file: it's a small, single self-action-shaped feature (find nearest door within `Config.DoorInteraction.interactDistance`, act on it) — the same shape as the existing Sit action already in this file, not big enough on its own to justify a fifth file. See §11.6 for why nudge-open ships **client-only, with no server event at all** (mirrors `client/vehicle.lua`'s documented exception in §4.1: nudging an already-unlocked door grants no real capability, exactly the same reasoning already applied to vehicle entry/exit) — only scratch-to-alert needs a thin server round-trip (see below), because unlike nudge it produces a shared, audible, broadcast effect other players can hear, the same reason Bark needed one. |
+| `server/tracking.lua` | **New** | The event-relay log backing blood-trail and gunpowder-sniff (§11.4): `RegisterNetEvent` handlers that log a damage-event / weapon-fire coordinate (read server-side from the reporting client's own live ped position, never trusting a client-supplied coordinate — same "never trust client claims" standard as §4.3), a periodic prune pass dropping entries older than `Config.Tracking.Blood/Gunpowder.maxAgeSeconds`, and the `qbx_k9unit:server:findTrackableSource` callback that resolves the nearest matching source (scent: queried live from ox_inventory drop data, see §9 item 11; blood/gunpowder: queried from this file's own in-memory log) within `Config.Tracking.<Type>.maxRange` of the K9's live server-side position. New file (not folded into `server/main.lua`) because — unlike bark relay, which is stateless — this owns real per-type state (growing/pruned event logs) large enough to warrant the same "don't let one file balloon" split `certifications.lua` already established relative to `main.lua`. Ephemeral/in-memory only, deliberately not persisted, mirroring `server/main.lua`'s `LeashPairs` precedent (both are live-session data, not account data) — flagged for db-schema to confirm that precedent still holds here (§10). |
+| `server/search.lua` | **New** | Search-vehicle/search-person server authority (§11.4): the `qbx_k9unit:server:searchTarget` callback — re-validates `Config.Features.SearchZones`/`HasK9Access(source)`, live server-side proximity to the target vehicle/ped (never client-claimed), reads the target's **real** inventory contents via an ox_inventory server export (exact export TBD, §9 item 11), cross-references `Config.SearchContrabandItems`, computes total weight using ox_inventory's own live item-weight data, looks up the matching tier in the existing `Config.ContrabandAlertTiers`, applies `Config.SearchZones.searchCooldownMs` per (K9, target) pair, and — if `Config.Features.ContrabandAlerts` and a tier matched — triggers a broadcast alert sound/animation the same way `server/main.lua`'s `relayBark` does (reusing that broadcast pattern, not duplicating it — consider exposing a small shared helper from `server/main.lua` if the two end up wanting byte-identical broadcast logic). New file for the same "real capability grant deserves the certification-file's level of scrutiny" reasoning given for `client/search.lua` above. |
+| `server/main.lua` | **Extends** | Door scratch-to-alert only: a `qbx_k9unit:server:relayDoorScratch` event, structurally identical to the existing `relayBark` handler immediately above it in that file (same `HasK9Access` re-check, same per-player cooldown-table pattern using `Config.DoorInteraction.scratchCooldownMs`, same broadcast-to-nearby-clients shape) — this is exactly the kind of "small, access-gated K9 action that needs some server authority but isn't part of the certification system" the file's own header already reserves space for. Nudge-open does **not** get an entry here — see the `client/movement.lua` row above for why it's client-only. |
+| `client/radial.lua` | **Extends** | Three new self-action items under the existing "K9 Unit" submenu — "Track Scent" / "Track Blood" / "Track Gunpowder" — each gated by its own `Config.Features` flag exactly like the existing Bark/Leash/Vehicle items, each a one-line call into `client/tracking.lua`'s exposed global (`StartScentTrack()` / `StartBloodTrack()` / `StartGunpowderTrack()`), per this file's own header rule ("If an item needs more than a couple of lines to decide what to do, that logic belongs in one of those files, not here"). Vision toggles and door interaction are **not** added to the radial (keybind and ox_target-zone respectively, per the rows above), consistent with the camera toggle's existing precedent of not being a radial item either. |
+| `config.lua` | **Extends** | Adds §11.2's five new tables verbatim. |
+| `fxmanifest.lua` | **Extends** | Adds `client/tracking.lua`, `client/search.lua`, `client/vision.lua` to `client_scripts` (after the existing four, before nothing — order among Phase 2 files doesn't matter since none of them declare globals another Phase 2 file depends on at load time, unlike Phase 1's `main.lua`-before-`movement.lua` ordering) and `server/tracking.lua`, `server/search.lua` to `server_scripts` (after `server/certifications.lua`, since `server/search.lua` will need `HasK9Access`/`IsConfiguredK9Model` from that file to already be defined as globals at call time — though since Lua resolves globals at call time not load time, strict ordering here is a defensive convention, not a hard requirement, matching how Phase 1's own manifest already orders `server/main.lua` before `server/certifications.lua` despite `main.lua` calling `certifications.lua`'s globals). |
+
+### 11.4 Event/callback contract (Phase 2)
+
+Following the exact documentation convention Phase 1 established (a full
+copy of this block belongs in each new file's header comment once
+implemented):
+
+**Callbacks (ox_lib `lib.callback`):**
+1. `qbx_k9unit:server:findTrackableSource` (trackType: `'scent'|'blood'|'gunpowder'`) → `{ found: boolean, coords: vector3?, breaksAtWater: boolean }` [`server/tracking.lua`]
+   Re-validates `Config.Features.<Type>` and `HasK9Access(source)` server-side
+   regardless of client UI state. Resolves the caller's own live position via
+   `GetEntityCoords(GetPlayerPed(source))` — **never** a client-supplied
+   coordinate — and searches for the nearest matching source within
+   `Config.Tracking.<Type>.maxRange`. Enforces
+   `Config.Tracking.<Type>.searchCooldownMs` per caller. `breaksAtWater` is
+   informational only (client still does its own path sampling per
+   `Config.WaterTrackingDecay`, this flag just tells it whether the config
+   wants a hard break or a soft fade if it finds one).
+2. `qbx_k9unit:server:searchTarget` (targetType: `'vehicle'|'person'`, targetNetId: number) → `{ ok: boolean, reason: string?, contrabandFound: boolean?, totalWeight: number?, alertTier: string? }` [`server/search.lua`]
+   **This is the security-critical one, per the task's explicit direction.**
+   Re-validates `Config.Features.SearchZones`/`HasK9Access(source)`,
+   resolves `targetNetId` to a live entity server-side
+   (`NetworkGetEntityFromNetworkId`) and confirms it still exists and is
+   within `Config.SearchZones.<vehicle|person>SearchDistance` of the
+   caller's own live position (never a client-claimed distance). Reads the
+   **actual** inventory contents of that vehicle/ped via an ox_inventory
+   server export — the client never supplies, and the server never trusts,
+   any claim about what contraband is present. Computes `totalWeight` from
+   real ox_inventory item-weight data (never `Config.*`-declared weight —
+   there is none, deliberately, see §11.2) and looks up `alertTier` from
+   `Config.ContrabandAlertTiers`. Enforces
+   `Config.SearchZones.searchCooldownMs` per `(source, targetNetId)` pair.
+   `reason` is populated (e.g. `'too_far'`, `'on_cooldown'`, `'no_access'`)
+   whenever `ok == false`, following the same rejection-reason-string
+   convention `server/main.lua`'s `LEASH_REJECT_MESSAGES` already
+   established.
+
+**Server events (client→server, `RegisterNetEvent`):**
+3. `qbx_k9unit:server:relayDamageEvent` () [`server/tracking.lua`] — triggered
+   by a client's own `gameEventTriggered('CEventNetworkEntityDamage', ...)`
+   handler when the **local player is the victim** (the one entity every
+   client is guaranteed to have streamed in and see its own damage on).
+   Takes no meaningful payload — the server logs the reporting client's own
+   live coordinates (`GetEntityCoords(GetPlayerPed(source))`), never a
+   client-supplied position, exactly like `relayBark`'s existing "resolve
+   the sender's own ped, don't trust a claimed netId" pattern.
+4. `qbx_k9unit:server:relayWeaponFire` () [`server/tracking.lua`] — triggered
+   by a client on a debounced local transition of `IsPedShooting(PlayerPedId())`
+   from false to true. Same "server logs the reporting client's own live
+   coordinates" rule as event 3. Needs its own tight per-player rate limit
+   (a player who fires continuously should not flood this event) —
+   independent of, and in addition to, `Config.Tracking.Gunpowder`'s
+   *search*-side cooldown, since this is a *logging* cooldown, not a
+   *query* cooldown.
+5. `qbx_k9unit:server:relayDoorScratch` (doorNetId: number) [`server/main.lua`]
+   — structurally identical to `relayBark` (§ existing contract): re-checks
+   `Config.Features.DoorInteraction` and `HasK9Access(source)`, applies
+   `Config.DoorInteraction.scratchCooldownMs`, then broadcasts a sound-only
+   client event. No inventory/lock-state reveal of any kind — purely a
+   sound cue, which is exactly why it's allowed to be this simple.
+
+**Client events (server→client, `RegisterNetEvent`):**
+6. `qbx_k9unit:client:playDoorScratch` (netId: number) [`client/movement.lua`]
+   — mirrors `client/main.lua`'s existing `playBark` handler exactly (resolve
+   the network entity, no-op if not streamed in, play a sound).
+7. No dedicated client event is needed for tracking-result or search-result
+   delivery — both are request/response shaped (§11.4 items 1–2 above), so
+   `lib.callback` is the correct fit, consistent with `hasK9Access` already
+   being a callback rather than a fire-and-forget event pair in Phase 1.
+
+**Nudge-open has no event or callback at all** — see §11.3/§11.6: it is
+scoped as fully client-local (like vehicle entry/exit's documented
+exception in §4.1), since a nudge that only ever succeeds against an
+already-unlocked door grants no real capability a modified client couldn't
+already get by calling the same client-only door-prop natives on itself.
+
+### 11.5 Acceptance criteria by feature (replaces §6.3/§6.4's placeholder bullets)
+
+**Scent tracking** (`Config.Features.ScentTracking`)
+- [ ] A certified K9 player (passes `CanShowK9UI()`) can trigger "Track
+      Scent" from the K9 Unit radial; a non-qualifying player triggering the
+      same server callback directly gets `found = false` and no coordinate
+      data, regardless of client-side UI state.
+- [ ] The callback resolves the **nearest** configured scent source (a
+      dropped/ground-placed item, per §9 item 11's export-TBD note) within
+      `Config.Tracking.Scent.maxRange` meters of the K9's own **live
+      server-side position** — not a client-reported position.
+- [ ] On success, the client renders a sequence of trail markers spaced
+      `Config.Tracking.Scent.markerSpacing` meters apart, from the K9's
+      current position toward the resolved source coordinate.
+- [ ] Re-triggering "Track Scent" before `Config.Tracking.Scent.searchCooldownMs`
+      has elapsed since the caller's last search of this type is rejected
+      server-side (client-side cooldown display is a convenience, the
+      server independently enforces it).
+- [ ] With `Config.Features.ScentTracking = false`, the radial item does not
+      appear, and the underlying callback returns `found = false`
+      unconditionally (a disabled feature is a server-side no-op, not just
+      hidden client-side, per §3).
+
+**Blood trail tracking** (`Config.Features.BloodTracking`)
+- [ ] Identical trail-rendering/cooldown/disabled-feature behavior to scent
+      tracking above, but the source data is the most recent logged
+      damage-event location (via `relayDamageEvent`, §11.4 item 3) within
+      `Config.Tracking.Blood.maxAgeSeconds`, not an item-drop location.
+- [ ] A damage event older than `Config.Tracking.Blood.maxAgeSeconds` is
+      never returned as a valid source — verified by triggering a search
+      immediately after the window elapses and confirming `found = false`
+      (assuming no other, more recent, damage event exists in range).
+- [ ] The logged coordinate for a given damage event is the **victim's own
+      live server-side position at the moment their client reports it**,
+      never a client-claimed coordinate.
+
+**Water tracking / scent degradation** (`Config.Features.WaterTrackingDecay`)
+- [ ] While rendering any active trail (scent, blood, or gunpowder), the
+      client samples the path every `Config.WaterTrackingDecay.sampleIntervalMeters`
+      for water presence (`GetWaterHeight`/water-flag natives).
+- [ ] If `Config.WaterTrackingDecay.breaksTrail = true` (default) and a water
+      crossing is detected, the trail rendering stops at the water's edge
+      and a fresh "Track <Type>" command is required to re-acquire a trail
+      on the far bank — the previous trail does not silently resume once
+      the player crosses.
+- [ ] If `Config.WaterTrackingDecay.breaksTrail = false`, markers within/near
+      the detected water instead render at reduced opacity rather than
+      being omitted, and the trail continues past the water crossing.
+- [ ] With `Config.Features.WaterTrackingDecay = false`, trails render
+      through water crossings with no degradation of any kind (Phase 1-style
+      simple straight-line rendering), confirming this really is a modifier
+      on top of §6.3's other tracking types, not a prerequisite for them.
+
+**Gunpowder residue sniffing** (`Config.Features.GunpowderSniffing`)
+- [ ] Identical trail-rendering/cooldown/disabled-feature behavior to scent
+      tracking, but the source data is the most recent logged weapon-fire
+      location (via `relayWeaponFire`, §11.4 item 4) within
+      `Config.Tracking.Gunpowder.maxAgeSeconds`.
+- [ ] The logged coordinate is the **shooting player's own live server-side
+      position at the moment their client reports the fire event**, never a
+      client-claimed coordinate.
+- [ ] A weapon fired more than `Config.Tracking.Gunpowder.maxAgeSeconds` ago
+      is never returned as a valid source.
+
+**Search vehicle/person + contraband alert tiers** (`Config.Features.SearchZones`, `Config.Features.ContrabandAlerts`)
+- [ ] An ox_target "Search Vehicle" option appears on any vehicle within
+      `Config.SearchZones.vehicleSearchDistance` while the interacting
+      player passes `CanShowK9UI()`; "Search Person" appears identically on
+      any player ped within `Config.SearchZones.personSearchDistance`.
+- [ ] Selecting either option plays a sniff animation lasting
+      `Config.SearchZones.sniffAnimDurationMs`, then awaits the
+      `qbx_k9unit:server:searchTarget` callback (§11.4 item 2) for the
+      actual result — the animation duration is purely cosmetic pacing, the
+      real result is never computed or revealed client-side.
+- [ ] **The server, not the client, determines whether contraband is
+      found and how much** — reading the target's real ox_inventory
+      contents live at request time and cross-referencing
+      `Config.SearchContrabandItems`. A modified client claiming
+      `contrabandFound = true` in a spoofed response, or calling the
+      callback against a target with no actual contraband, gets the real
+      (accurate) server-computed result regardless of what it claims —
+      verified by confirming the callback's return value is entirely
+      server-computed with no client-supplied field echoed back
+      unvalidated.
+- [ ] If `Config.Features.ContrabandAlerts = true` and the computed
+      `totalWeight` meets or exceeds a tier's `minWeight` in
+      `Config.ContrabandAlertTiers`, that tier's configured alert (e.g.
+      `'whine'` or `'aggressive_bark'`) plays as a broadcast sound/animation
+      audible to nearby players, not just the requesting K9 player — mirrors
+      how `relayBark` already broadcasts rather than playing client-locally
+      only.
+- [ ] With `Config.Features.ContrabandAlerts = false`, a successful search
+      still reports `contrabandFound`/`totalWeight` to the requesting K9
+      player (so "did I find anything" still works), but no alert
+      sound/animation broadcast fires — this flag gates the *alert*, not the
+      *search* itself (the two features are independently toggleable per
+      §3, and `SearchZones` is listed as the dependency in §11.1, not the
+      other way around).
+- [ ] Re-searching the same target before `Config.SearchZones.searchCooldownMs`
+      elapses (per `(K9 player, target)` pair, not globally) is rejected
+      server-side with a clear reason, not silently ignored or allowed to
+      re-roll.
+- [ ] With `Config.Features.SearchZones = false`, neither ox_target option
+      appears and the underlying callback rejects with `ok = false` for any
+      caller regardless of client state.
+
+**Door interaction** (`Config.Features.DoorInteraction`)
+- [ ] "Nudge Open" appears (ox_target or equivalent) on a door entity within
+      `Config.DoorInteraction.interactDistance` **only when that door is
+      already in an unlocked state** — if `Config.DoorInteraction.nudgeRequiresUnlocked`
+      is `true` (the shipped default, and not intended to ever ship as
+      `false` — see §11.6), nudge must never open a locked door under any
+      circumstance; this is a hard behavioral guarantee, not just a default.
+- [ ] Nudge-open is fully client-local: no server event fires for it (§11.3,
+      §11.6), consistent with it granting no real capability beyond what a
+      player could already achieve by walking through an already-unlocked
+      door normally.
+- [ ] "Scratch to Alert" is available on any door within
+      `Config.DoorInteraction.interactDistance` regardless of lock state,
+      triggers `relayDoorScratch` (§11.4 item 5), and is rejected server-side
+      if `Config.DoorInteraction.scratchCooldownMs` hasn't elapsed since the
+      same player's last scratch — same abuse-prevention shape as
+      `BARK_COOLDOWN_MS` already in `server/main.lua`.
+- [ ] With `Config.Features.DoorInteraction = false`, neither option appears
+      and `relayDoorScratch` is a server-side no-op for any caller.
+
+**Thermal vision** (`Config.Features.ThermalVision`)
+- [ ] Pressing `Config.Vision.Thermal.toggleKey` while `CanShowK9UI()`... —
+      **open question, resolve before implementation, do not guess**: is
+      thermal/night vision gated behind `CanShowK9UI()` (a granted
+      capability) or, like the camera toggle, only behind the cheap local
+      `IsOwnModelK9()` check (a QoL toggle available to anyone playing a K9
+      character)? `movement.lua`'s own header flags this exact question for
+      the camera toggle and leans toward "not gated" for QoL toggles — this
+      spec's lean, for consistency, is the **same answer as the camera
+      toggle** (gate on `IsOwnModelK9()` only, not `CanShowK9UI()`), since
+      thermal/night vision is presented in SPEC.md as the K9's own innate
+      perception, not a granted departmental privilege — but flagging this
+      explicitly rather than asserting it as settled, per this spec's own
+      "flag genuine ambiguity" mandate. Whichever answer is chosen, apply it
+      identically to both Thermal and Night vision for consistency with each
+      other.
+- [ ] Toggling on calls `SetSeethrough(true)` (§11.6); toggling off calls
+      `SetSeethrough(false)`. No custom shader or asset is used.
+- [ ] Thermal vision auto-disables on resource stop (mirrors
+      `client/vehicle.lua`'s `onResourceStop` safety-net pattern for its own
+      persistent native states) so a `/restart qbx_k9unit` mid-session
+      cannot leave a player stuck in the thermal effect with no toggle to
+      turn it back off (the new script instance's toggle state resets to
+      `false`, but the native effect itself persists across a resource
+      restart independent of script state, exactly the same class of bug
+      `client/vehicle.lua`'s header already documents and fixes for vehicle
+      entry/exit).
+
+**Night vision** (`Config.Features.NightVision`)
+- [ ] Identical acceptance criteria to thermal vision above, substituting
+      `SetNightvision(true/false)` and `Config.Vision.Night.toggleKey`.
+- [ ] Thermal and night vision are mutually exclusive at any given moment
+      (toggling one off the other if both were somehow active) — not
+      explicitly required by SPEC.md's original wording, but a reasonable
+      default given both are full-screen post-effects that would otherwise
+      visually conflict; flagged here as a judgment call, not a mandate.
+
+### 11.6 Reality-check refinements
+
+Applying §7's same rigor to every Phase 2 item:
+
+- **Thermal vision — CONFIRMED achievable, refined.** SPEC.md §7 originally
+  said "`SetTimecycleModifier`/nightvision natives only." The concrete,
+  better-fitting native is `SetSeethrough(true)` — GTA's built-in heat-vision
+  effect (the same one used for the base game's "Predator" random event and
+  the Cayo Perico heist's thermal goggles item), which actually highlights
+  peds as heat sources — closer to the real gameplay intent of "K9 thermal
+  vision" than a generic timecycle modifier reskin would be. Fully
+  native-only, zero new assets.
+- **Night vision — CONFIRMED achievable as stated.** `SetNightvision(true)`
+  is the standard native NV-goggle effect. Fully native-only, zero new
+  assets, matches SPEC.md §7 exactly.
+- **Gunpowder sniffing — PARTIALLY OVERSTATED in §6.3's original wording,
+  still fully achievable.** "Native weapon-fire events already fired by the
+  game" is not quite accurate as a zero-effort claim: there is no single
+  native that already delivers a global "a weapon was fired at coordinate X"
+  feed to the server for free. The achievable, still fully native/scripting
+  path is: each client locally polls (or hooks) its own
+  `IsPedShooting(PlayerPedId())` and relays a debounced event to the server
+  on a false→true transition (§11.4 item 4) — small, straightforward,
+  100%-native-based relay code, but genuinely *authored* relay code, not
+  something that already exists for free. Flagged as §9 item 10 so
+  implementation doesn't discover this gap partway through.
+- **Blood trail — mostly as claimed, same relay caveat.** `gameEventTriggered`
+  with the game event name `CEventNetworkEntityDamage` is a real, documented
+  FiveM game event carrying victim/attacker/weapon data, so the *detection*
+  half of this claim is directly native-supported. However, that event
+  fires **locally, per-client**, to whichever clients have the entities
+  involved streamed in — it is not automatically visible server-side. The
+  victim's own client is the one guaranteed to witness damage to itself, so
+  it relays a small event to the server (§11.4 item 3), same "authored relay
+  code, still fully native" shape as gunpowder above.
+- **Scent tracking (item-drop location) — genuinely uncertain, flagged, not
+  guessed.** Whether ox_inventory exposes a server-side hook/export for "an
+  item was just dropped in the world at coordinate X" was not verified
+  against a live ox_inventory install this session (§9 item 11) — same
+  confidence-caveat pattern Phase 1 already used for qbx_core exports in
+  `server/certifications.lua`. If no such hook exists, the fallback plan
+  (not yet chosen, a decision for whoever implements `server/tracking.lua`)
+  is a client-side world-entity proximity scan for ox_inventory's known drop
+  prop model/hash — dropped items are real networked world objects either
+  way, so this is achievable either through an event hook (if one exists)
+  or a scan (if one doesn't), not a hard blocker either way.
+- **Search vehicle/person contraband reading — genuinely uncertain export
+  names, not a feasibility blocker.** Reading a vehicle trunk's or a
+  player's real ox_inventory contents server-side is unambiguously possible
+  (ox_inventory is designed exactly for this), but the exact export
+  name/signature was not verified against a live install this session (§9
+  item 11) — flagged for coder-backend to confirm before writing
+  `server/search.lua`'s final code, not asserted as a known quantity here.
+- **Door interaction "nudge-open" — a genuine integration dependency, not a
+  pure scripting task.** GTA has no generic native to query or set lock
+  state on arbitrary map/interior doors the way it does for vehicle doors
+  (`SetVehicleDoorsLocked` and friends) — door lock state for MLO/interior
+  doors on a typical FiveM server lives entirely inside a separate,
+  server-specific door-lock resource's own data model (e.g. `ox_doorlock`,
+  a qbx smallresources equivalent, or a fully custom one), with no vanilla
+  native surface at all to query it from outside that resource. This is why
+  §11.3/§11.5 scope nudge-open strictly to **"only when the door is already
+  unlocked"** rather than attempting any lock/unlock logic of its own, and
+  why it's client-only with no server round-trip (there is no server-side
+  fact to check if the feature never touches lock state) — this makes
+  nudge-open safe to ship without an integration decision, at the cost of it
+  being a fairly thin feature (a cosmetic push-open animation on doors
+  that were already accessible). A richer version that can distinguish
+  locked from unlocked doors and only nudge the latter meaningfully would
+  need a real integration point (an export hook, per §9 item 12) with
+  whatever door-lock resource a given server runs — not attempted
+  speculatively here, since guessing at a specific resource's API without
+  confirming it exists on the target server would be worse than shipping
+  the narrower, safe version.
+- **"Scratch to alert" — CONFIRMED achievable, no caveats.** Pure sound cue,
+  identical shape to the already-shipped `relayBark`. No native uncertainty,
+  no integration dependency.
+
+### 11.7 Cross-reference
+
+New open questions raised by this section have been appended to §9 (items
+10–14) rather than duplicated here, so §9 remains the single running list
+correctness-overseer and team-leader can check against.
