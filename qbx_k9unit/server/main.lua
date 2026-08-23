@@ -190,6 +190,16 @@ local LeashPairs = {}
 local PendingLeashRequests = {}
 local LEASH_REQUEST_TTL_MS = 30000
 
+-- Regression-test fix: relayBark got an explicit per-source cooldown
+-- (BARK_COOLDOWN_MS below) specifically to close a spam vector — this
+-- event had no equivalent, letting an eligible nearby party spam
+-- accept/decline modals at a target with zero rate limit. Not a permission
+-- escalation (every proximity/model/cert check in CheckLeashEligibility
+-- still applies before this ever fires), just a UI-harassment vector.
+-- Mirrors the bark cooldown's exact pattern.
+local LEASH_REQUEST_COOLDOWN_MS = 1000
+local lastLeashRequestAt = {}
+
 --- Sends an ox_lib notification to a specific player — see
 --- server/certifications.lua's NotifyPlayer for why `ox_lib:notify` was
 --- chosen over exports.qbx_core:Notify. Duplicated here rather than
@@ -389,6 +399,13 @@ RegisterNetEvent('qbx_k9unit:server:requestLeashAttach', function(targetServerId
         return
     end
 
+    -- Rate limit — see LEASH_REQUEST_COOLDOWN_MS above.
+    local now = GetGameTimer()
+    if lastLeashRequestAt[src] and (now - lastLeashRequestAt[src]) < LEASH_REQUEST_COOLDOWN_MS then
+        return -- silent no-op: rate-limited, not an error worth notifying about
+    end
+    lastLeashRequestAt[src] = now
+
     PendingLeashRequests[targetServerId] = { from = src, expiresAt = GetGameTimer() + LEASH_REQUEST_TTL_MS }
 
     TriggerClientEvent('qbx_k9unit:client:leashAttachRequest', targetServerId, src)
@@ -495,6 +512,30 @@ function ForceDetachLeashForSource(src, reason)
     if not pairing or not pairing.isK9 then return false end -- not leashed, or leashed only as the officer/handler role — no-op
 
     return doDetachLeash(src, reason or 'certification_revoked')
+end
+
+--- Resource-global (no `local`) — exposed for server/certifications.lua's
+--- QBCore:Server:OnJobUpdate handler to call as a SECOND, INDEPENDENT check
+--- from ForceDetachLeashForSource above. An officer/handler-role leash
+--- party never holds a K9 certification of their own (SPEC.md §9 item 9 —
+--- their eligibility is pure Config.Departments membership, not a cert),
+--- so no certification-revocation path can ever observe them losing
+--- eligibility; only a job/department change can. Mirrors
+--- ForceDetachLeashForSource's role check but for the opposite role: only
+--- actually detaches when `src` is currently the officer/handler-role
+--- (`isK9 = false`) party of its pairing. No-op if `src` isn't currently
+--- leashed to anyone, or is leashed but as the K9-role party (that case is
+--- covered by ForceDetachLeashForSource / certification revocation
+--- instead, not this function).
+--- @param src number
+--- @param reason string?
+function ForceDetachOfficerLeashForSource(src, reason)
+    if type(src) ~= 'number' then return false end
+
+    local pairing = LeashPairs[src]
+    if not pairing or pairing.isK9 then return false end -- not leashed, or leashed as the K9-role party — no-op
+
+    return doDetachLeash(src, reason or 'department_changed')
 end
 
 --- Cleans up an orphaned leash pairing if one half disconnects, so the

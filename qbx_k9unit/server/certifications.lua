@@ -617,6 +617,19 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
     -- "invalidated/updated immediately on grant/revoke events".
     RefreshCertificationCache(citizenid, job)
 
+    -- Regression-test fix: keep the read-only `k9certified` HUD mirror
+    -- (SPEC.md §4.3 — never read for authorization, see GrantCertification's
+    -- comment on the same field) from drifting stale. The online guard
+    -- above already refused this whole path if the citizenid resolved to a
+    -- connected player at the time it was checked, so this is normally a
+    -- no-op; it only matters for the narrow TOCTOU window where the target
+    -- reconnects between that guard and this UPDATE completing — same
+    -- window ForceDetachLeashIfOnline below is already written to cover.
+    local nowOnlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    if nowOnlinePlayer and nowOnlinePlayer.PlayerData and nowOnlinePlayer.PlayerData.source then
+        nowOnlinePlayer.Functions.SetMetaData('k9certified', false)
+    end
+
     -- QA finding fix (SPEC.md §1/§4.4): tear down an active leash pairing
     -- for this citizenid if one exists. In the overwhelmingly common case
     -- this is a genuine no-op — the online guard above already refused
@@ -642,6 +655,26 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     if not Player or not Player.PlayerData then return end
 
     local citizenid = Player.PlayerData.citizenid
+
+    -- Regression-test fix: SECOND, INDEPENDENT check from the
+    -- certification-revocation branch below — an officer/handler leashed
+    -- to a K9 never holds a K9 certification of their own (SPEC.md §9 item
+    -- 9: their access is pure Config.Departments membership, not a cert),
+    -- so the cert-revocation branch below (gated on `cached.active`) can
+    -- never observe them losing eligibility. If this citizenid's NEW job no
+    -- longer satisfies Config.Departments membership, force-detach any
+    -- leash where `source` is currently the officer-role party — this is
+    -- not a variant of the cert-revoke path, it's a wholly separate
+    -- eligibility loss (department membership, not certification) that
+    -- CheckLeashEligibility in server/main.lua already refuses on
+    -- re-attach, so an already-formed pairing must not be allowed to
+    -- outlive it either. See server/main.lua's ForceDetachOfficerLeashForSource
+    -- for the role check (only actually detaches if `source` is the
+    -- officer/handler-role, not K9-role, party of its pairing).
+    if not job or not Config.Departments[job.name] then
+        ForceDetachOfficerLeashForSource(source, 'department_changed')
+    end
+
     local cached = Certifications[citizenid]
 
     -- No active cert to revoke, nothing to do.
@@ -666,6 +699,12 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     -- that new department from a prior stint — a fresh grant is required
     -- either way per SPEC.md §9 item 3).
     RefreshCertificationCache(citizenid, job.name)
+
+    -- Regression-test fix: keep the read-only `k9certified` HUD mirror
+    -- (SPEC.md §4.3) in sync here too — this player is online by
+    -- definition (OnJobUpdate fired for their live Player object), so this
+    -- is a plain, unconditional write, no online-check needed.
+    Player.Functions.SetMetaData('k9certified', false)
 
     local deptLabel = (Config.Departments[oldJob] and Config.Departments[oldJob].label) or oldJob
     NotifyPlayer(source, ('Your K9 certification has been revoked — you are no longer employed by %s.'):format(deptLabel), 'error')
@@ -748,5 +787,40 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     if not Player or not Player.PlayerData then return end
     local job = Player.PlayerData.job
     if not job then return end
-    RefreshCertificationCache(Player.PlayerData.citizenid, job.name)
+    local citizenid = Player.PlayerData.citizenid
+    RefreshCertificationCache(citizenid, job.name)
+
+    -- Regression-test fix: resync the read-only `k9certified` HUD mirror
+    -- (SPEC.md §4.3 — never read for authorization) from whatever value
+    -- RefreshCertificationCache just determined. The mirror can drift
+    -- while a player is offline (e.g. RevokeCertificationOffline revoking
+    -- their cert while disconnected) since it's only otherwise written by
+    -- GrantCertification, RevokeCertification's online branch, and
+    -- OnJobUpdate's auto-revoke — this self-corrects it on every login
+    -- regardless of which path (or no path) caused the drift.
+    -- RefreshCertificationCache always populates Certifications[citizenid],
+    -- so `cached` is guaranteed non-nil immediately after the call above.
+    local cached = Certifications[citizenid]
+    Player.Functions.SetMetaData('k9certified', cached.active)
+end)
+
+-- Regression-test fix: `Certifications` is keyed by citizenid and
+-- accumulates one entry per distinct citizenid ever loaded this session —
+-- unlike LeashPairs/PendingLeashRequests/lastBarkAt in server/main.lua
+-- (all cleared per-source in that file's playerDropped handler), nothing
+-- ever evicted an entry here, so a long-running server slowly grows this
+-- table forever. Not a correctness bug (a stale entry for a now-offline
+-- citizenid is simply never read again until PlayerLoaded repopulates it
+-- fresh), just unbounded memory growth. Resolve the citizenid for the
+-- disconnecting source via qbx_core (still resolvable here — playerDropped
+-- fires before the framework fully tears down the player object) and drop
+-- its cache entry; it's harmlessly rebuilt from a fresh DB query on their
+-- next PlayerLoaded/OnJobUpdate/certify/revoke touch.
+AddEventHandler('playerDropped', function(_reason)
+    local src = source
+    local Player = exports.qbx_core:GetPlayer(src)
+    local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+    if citizenid then
+        Certifications[citizenid] = nil
+    end
 end)
