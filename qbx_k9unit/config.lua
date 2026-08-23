@@ -119,7 +119,27 @@ Config.VehicleInteractMeters = 3.0
 -- ======================================================================
 -- LEASH — Phase 1
 -- ======================================================================
-Config.LeashMaxDistance = 8.0   -- meters before auto-detach triggers (§6.1 — two-player leash, not a recall; see server/main.lua and client/movement.lua headers for the corrected model)
+-- Base/reference leash range in meters (§6.1 — two-player leash, not a
+-- recall; see server/main.lua and client/movement.lua headers for the
+-- corrected model). NOT itself the auto-detach threshold — that's a
+-- common misreading of this field's old comment. Three different
+-- call sites derive or reuse this single value for three distinct
+-- purposes, each documented in full where it's used:
+--   - client/movement.lua derives the elastic pull-back START (75% of
+--     this value, LEASH_PULL_ZONE_FACTOR) and the actual hard-cap
+--     safety-valve auto-detach (150% of this value, LEASH_HARD_CAP_FACTOR)
+--     from it — for the default below, real auto-detach fires around 12m,
+--     not 8m.
+--   - server/main.lua's CheckLeashEligibility reuses this raw value
+--     directly as the max range to even INITIATE a leash request (a
+--     separate "too far to request" check, distinct from auto-detach).
+--   - client/radial.lua's FindNearestLeashCandidate reuses this raw value
+--     directly as its nearby-partner search radius.
+-- Reusing the raw value (rather than dedicated constants) for the latter
+-- two is a deliberate Phase 1 default, not an oversight — see server/
+-- main.lua's header for the open question on whether a separate,
+-- smaller "attach range" constant would be worth adding later.
+Config.LeashMaxDistance = 8.0
 
 -- ======================================================================
 -- NOTE (coder-architect, Phase 1 rewrite): Config.K9DespawnGraceSeconds

@@ -83,8 +83,10 @@ local function DenyNotify()
     lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
 end
 
---- Finds the nearest OTHER player within Config.LeashMaxDistance (reused
---- as the attach-initiate range per client/movement.lua's header note),
+--- Finds the nearest OTHER player within Config.LeashMaxDistance (the base
+--- leash range, reused directly here as a search radius rather than via
+--- a derived factor — see config.lua's comment on that field and
+--- server/main.lua's header for the initiate-range check this mirrors),
 --- for the Attach/Detach Leash radial item's self-initiated entry point.
 --- Model plausibility isn't filtered here — the server independently
 --- re-validates via CheckLeashEligibility (server/main.lua) regardless.

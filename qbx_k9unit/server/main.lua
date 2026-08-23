@@ -147,11 +147,14 @@
     CONFIRMED below: the request target is the constrained/K9 role when
     both are K9-modeled.
 
-    No config constant exists yet for "max range to INITIATE an attach
-    request" (Config.LeashMaxDistance is documented as the post-attach
-    AUTO-DETACH threshold). This scaffold reuses Config.LeashMaxDistance
-    for the initiate-range check too as a reasonable Phase 1 default —
-    flag if a separate, smaller "attach range" constant is wanted instead.
+    No dedicated config constant exists for "max range to INITIATE an
+    attach request" — Config.LeashMaxDistance is the base leash range that
+    client/movement.lua derives its actual pull-back-start/auto-detach
+    thresholds from (see config.lua's comment on that field for the full
+    picture across all three call sites). This scaffold reuses the raw
+    Config.LeashMaxDistance value for the initiate-range check too, as a
+    reasonable Phase 1 default — flag if a separate, smaller "attach
+    range" constant is wanted instead.
 ]]
 
 -- Ephemeral, in-memory only leash pairing — NOT persisted, does not
@@ -336,9 +339,11 @@ local function CheckLeashEligibility(initiatorSrc, targetSrc)
         return false, nil, nil, 'offline'
     end
 
-    -- Proximity: see this file's header for why LeashMaxDistance does
-    -- double duty as both the post-attach auto-detach threshold and the
-    -- initiate-range check.
+    -- Proximity: see this file's header (and config.lua's comment on
+    -- Config.LeashMaxDistance) for why the raw base leash range is reused
+    -- directly here as the initiate-range check, rather than the derived
+    -- pull-back/auto-detach thresholds client/movement.lua computes from
+    -- it.
     local dist = #(GetEntityCoords(initiatorPed) - GetEntityCoords(targetPed))
     if dist > Config.LeashMaxDistance then
         return false, nil, nil, 'too_far'
