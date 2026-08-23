@@ -86,33 +86,46 @@
     way.
 ]]
 
+--- Precomputed set of Config.Peds model hashes, built once at file load.
+--- Mirrors server/certifications.lua's K9ModelHashes approach so both
+--- sides stay generic over the config (SPEC.md §3 acceptance bullet 3) —
+--- no hardcoded model name anywhere, including custom streamed entries.
+local K9ModelHashes = {}
+for _, pedEntry in ipairs(Config.Peds) do
+    K9ModelHashes[GetHashKey(pedEntry.model)] = true
+end
+
 --- Pure client-side, display-only check: is the local player's OWN
 --- character currently a recognized K9 model? Never used for security —
 --- see SPEC.md §4.5 ("Convenience (client)" bullet).
---- TODO(coder-frontend): build a hash set from Config.Peds once (mirror
---- server/certifications.lua's K9ModelHashes approach so both sides stay
---- generic over the config, no hardcoded model name anywhere — SPEC.md §3
---- acceptance bullet 3), then compare GetEntityModel(PlayerPedId()).
 --- @return boolean
 function IsOwnModelK9()
-    return false
+    return K9ModelHashes[GetEntityModel(PlayerPedId())] == true
 end
 
--- TODO(coder-frontend): lightweight cache for HasK9Access() below — e.g.
--- a module-local `{ value: boolean, checkedAt: number }` with a ~1000ms
--- TTL (GetGameTimer()-based), so a hot call site (ox_target canInteract
--- predicates in client/vehicle.lua and client/movement.lua's leash
--- option, in particular) doesn't re-await the server callback on every
--- hover frame. Keep the TTL short enough that "checked... not just once"
--- (SPEC.md §4.1) still holds in spirit — this is a debounce, not a
--- permanent cache.
+-- Lightweight TTL cache for HasK9Access() below. Hot call sites (ox_target
+-- canInteract predicates in client/vehicle.lua and client/movement.lua's
+-- leash option in particular) can run several times a second while
+-- hovering — without this, each of those would re-await the server
+-- callback on every frame. ~1000ms keeps "checked... not just once"
+-- (SPEC.md §4.1) true in spirit: this is a debounce, not a permanent
+-- cache, and every gated server-side action independently re-verifies
+-- access regardless of what this cache currently believes.
+local HAS_K9_ACCESS_CACHE_TTL_MS = 1000
+local hasK9AccessCache = { value = false, checkedAt = -HAS_K9_ACCESS_CACHE_TTL_MS }
 
 --- Awaits the server's authoritative access check for the LOCAL player.
 --- @return boolean
 function HasK9Access()
-    -- TODO(coder-frontend): return lib.callback.await('qbx_k9unit:server:hasK9Access', false)
-    -- (through the TTL cache described above once it exists).
-    return false
+    local now = GetGameTimer()
+    if (now - hasK9AccessCache.checkedAt) < HAS_K9_ACCESS_CACHE_TTL_MS then
+        return hasK9AccessCache.value
+    end
+
+    local result = lib.callback.await('qbx_k9unit:server:hasK9Access', false)
+    hasK9AccessCache.value = result == true
+    hasK9AccessCache.checkedAt = now
+    return hasK9AccessCache.value
 end
 
 --- Combinator every other client file should call for K9 UI/feature
@@ -122,20 +135,37 @@ function CanShowK9UI()
     return IsOwnModelK9() and HasK9Access()
 end
 
+-- Placeholder sound reference. SPEC.md §7 flags that "bark sounds" need
+-- bundled audio asset files (bark .ogg/.wav) that do not exist anywhere in
+-- this resource yet, and that there's no native "make this canine ped
+-- emit a bark voice line" the way human ped speech works — this is not a
+-- zero-asset feature. The full playback path (network entity resolution +
+-- native call) is wired for real below so dropping in a real sound bank
+-- later is a one-line constant change, not new plumbing; until a real
+-- asset/soundset exists, PlaySoundFromEntity with an unrecognized sound
+-- name/set is a harmless no-op (it does not error), so this is safe to
+-- ship as-is rather than gating the whole handler out. Coordinate with
+-- asset-pipeline-agent on where real audio files should live.
+local BARK_SOUND_NAME = 'Bark'
+local BARK_SOUND_SET = 'qbx_k9unit_sounds' -- placeholder; not a real shipped soundset yet
+
 --- Plays a bark on the K9 identified by netId, for any client that has it
 --- streamed in (broadcast via TriggerClientEvent(..., -1, ...) from
 --- server/main.lua's relayBark handler).
 --- @param netId number
 --- @param barkType string
 RegisterNetEvent('qbx_k9unit:client:playBark', function(netId, barkType)
-    -- TODO(coder-frontend): guard with
-    -- NetworkDoesEntityExistWithNetworkId(netId) (this client may not have
-    -- the ped streamed in at all), resolve the entity via
-    -- NetworkGetEntityFromNetworkId(netId), then PlaySoundFromEntity (or
-    -- equivalent) using an asset keyed by barkType. Phase 1 only needs one
-    -- generic bark asset (see client/radial.lua's Bark item for the
-    -- literal barkType string it sends — keep both ends in sync). SPEC.md
-    -- §7 notes bark sounds need bundled audio asset files (not
-    -- zero-asset) — coordinate with asset-pipeline-agent on where those
-    -- files live if they don't exist yet.
+    if not NetworkDoesEntityExistWithNetworkId(netId) then
+        return -- this client doesn't have the K9 ped streamed in at all
+    end
+
+    local entity = NetworkGetEntityFromNetworkId(netId)
+    if not DoesEntityExist(entity) then return end
+
+    -- `barkType` is treated as an opaque passthrough string for Phase 1 —
+    -- only one generic bark exists ('bark', see client/radial.lua's Bark
+    -- item), so it isn't yet used to select between distinct assets.
+    -- Phase 5's AdvancedBarkRadial is where per-type sound selection would
+    -- get added.
+    PlaySoundFromEntity(-1, BARK_SOUND_NAME, entity, BARK_SOUND_SET, false, 0)
 end)
