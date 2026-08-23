@@ -520,10 +520,42 @@ exports.ox_target:addGlobalPlayer({
     },
 })
 
--- NOTE on AgilityBasicJump (Config.Features.AgilityBasicJump): SPEC.md
--- §6.1 describes this as "native jump/crouch only, no fence-vault logic
--- yet" — i.e. Phase 1 doesn't add any custom jump/crouch code at all, the
--- flag exists so Phase 3's AgilityAdvanced has something to sit alongside
--- later. No stub function is needed here for it; if a future pass wants
--- to gate jump input itself behind this flag (e.g. disable jump entirely
--- when false), that's a deliberate addition, not implied by Phase 1.
+-- AgilityBasicJump (Config.Features.AgilityBasicJump): SPEC.md §6.1 bullet
+-- 3 bundles jump AND crouch together ("The K9 player can run, jump, and
+-- crouch using the native quadruped locomotion..."), matching this flag's
+-- own inline comment ("native jump/crouch only, no fence-vault logic
+-- yet") — so both controls are gated together here, not just jump.
+--
+-- When the flag is true (the Phase 1 default), native jump/crouch just
+-- works via the ped model's own locomotion — no code needed, so no thread
+-- is started at all in that case (avoiding an unnecessary always-on loop
+-- for the common/default case).
+--
+-- When the flag is false, jump/crouch must be actively suppressed for a
+-- K9-modeled player, otherwise the flag is a no-op (the gap
+-- correctness-overseer flagged: setting this to false previously changed
+-- nothing, since jump/crouch are inherent to any ped's native locomotion
+-- and nothing gated them). DisableControlAction(0, <control>, true) every
+-- frame is the standard FiveM pattern for suppressing a specific native
+-- control action.
+--
+-- Control indices (HIGH confidence, standard/well-established GTA V
+-- control mapping used throughout the FiveM ecosystem):
+--   22 = INPUT_JUMP
+--   36 = INPUT_DUCK (crouch)
+if not Config.Features.AgilityBasicJump then
+    local INPUT_JUMP = 22
+    local INPUT_DUCK = 36
+
+    CreateThread(function()
+        while true do
+            if IsOwnModelK9() then
+                DisableControlAction(0, INPUT_JUMP, true)
+                DisableControlAction(0, INPUT_DUCK, true)
+                Wait(0) -- must disable every frame while active, per DisableControlAction's own contract
+            else
+                Wait(1000) -- cheap idle poll while not currently a K9-modeled ped
+            end
+        end
+    end)
+end
