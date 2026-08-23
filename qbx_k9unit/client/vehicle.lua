@@ -43,44 +43,150 @@ function IsInK9Vehicle()
     return vehicleState ~= nil
 end
 
+-- Precomputed set of Config.K9Vehicles model hashes, built once at file
+-- load — no hardcoded model name anywhere, generic over the config
+-- (SPEC.md §3 acceptance bullet 3 spirit, applied here to vehicles too).
+local K9VehicleHashes = {}
+for _, model in ipairs(Config.K9Vehicles) do
+    K9VehicleHashes[GetHashKey(model)] = true
+end
+
+--- @param maxDistance number
+--- @return number? vehicle
+local function FindNearestK9Vehicle(maxDistance)
+    local myCoords = GetEntityCoords(PlayerPedId())
+    local vehicles = GetGamePool('CVehicle')
+    local nearestVehicle, nearestDist
+
+    for i = 1, #vehicles do
+        local vehicle = vehicles[i]
+        if K9VehicleHashes[GetEntityModel(vehicle)] then
+            local dist = #(myCoords - GetEntityCoords(vehicle))
+            if dist <= maxDistance and (not nearestDist or dist < nearestDist) then
+                nearestVehicle, nearestDist = vehicle, dist
+            end
+        end
+    end
+
+    return nearestVehicle
+end
+
 --- Finds the nearest vehicle within Config.VehicleInteractMeters whose
 --- model is in Config.K9Vehicles and enters it (hides/freezes the K9's
 --- own ped, per SPEC.md §6.1 vehicle bullet).
---- TODO(coder-frontend): SPEC.md §6.1 vehicle bullet, §8 step 8.
---   1. if not Config.Features.VehicleEntryExit then return end
---   2. if not CanShowK9UI() then notify + return end
---   3. if IsInK9Vehicle() then return end -- already in one
---   4. Iterate nearby vehicles (e.g. lib.getNearbyVehicles or a manual
---      GetGamePool('CVehicle') scan), filter to GetEntityModel(v) matching
---      one of Config.K9Vehicles (compare by hash — build the hash set
---      once, don't re-hash every call; no hardcoded model name, iterate
---      Config.K9Vehicles generically per the same §3 spirit applied
---      elsewhere), within Config.VehicleInteractMeters of PlayerPedId().
---   5. If found: FreezeEntityPosition(PlayerPedId(), true),
---      SetEntityVisible(PlayerPedId(), false, false) (or an equivalent
---      "tucked away" treatment — coder-frontend's call on exact natives),
---      vehicleState = { vehicle = foundVehicle, doorIndex = <chosen door> }.
---   6. If not found: notify "no K9 vehicle nearby."
 function EnterNearestK9Vehicle()
+    if not Config.Features.VehicleEntryExit then return end
+
+    if not CanShowK9UI() then
+        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        return
+    end
+
+    if IsInK9Vehicle() then return end -- already in one
+
+    local vehicle = FindNearestK9Vehicle(Config.VehicleInteractMeters)
+    if not vehicle then
+        lib.notify({ title = 'K9 Unit', description = 'No K9 vehicle nearby.', type = 'error' })
+        return
+    end
+
+    local ped = PlayerPedId()
+    -- "Tucked away" treatment: frozen, invisible, no collision, AND
+    -- attached to the vehicle. SPEC.md §6.1 only says "hidden/frozen," but
+    -- freezing in place without attaching would leave the K9 stranded,
+    -- motionless, in world space the instant the vehicle actually drives
+    -- anywhere — defeating the entire real-world point of "loading" a K9
+    -- into a cruiser (riding along to a scene). Attaching at a rear/boot
+    -- offset is a reasonable Phase 1 approximation since the ped is
+    -- invisible anyway; exact bone precision doesn't matter here.
+    SetEntityCollision(ped, false, false)
+    FreezeEntityPosition(ped, true)
+    SetEntityVisible(ped, false, false)
+    AttachEntityToEntity(ped, vehicle, 0, 0.0, -1.5, 0.0, 0.0, 0.0, 0.0, false, false, false, false, 2, true)
+
+    vehicleState = { vehicle = vehicle, doorIndex = 5 } -- boot/trunk, a reasonable default "loaded" spot
+    lib.notify({ title = 'K9 Unit', description = 'Loaded into the vehicle.', type = 'success' })
 end
 
 --- Restores the K9's ped at the vehicle's door and clears vehicleState.
---- No-op if not currently in a vehicle.
---- TODO(coder-frontend): unfreeze/re-show the ped at an appropriate
---- position near vehicleState.vehicle's door, then vehicleState = nil.
+--- No-op if not currently in a vehicle. Deliberately NOT gated behind
+--- CanShowK9UI() — a K9 whose certification lapses mid-ride must always
+--- be able to un-freeze/un-hide themselves; this mirrors the same
+--- "never leave a player stuck" principle SPEC.md §9 item 3b establishes
+--- as a hard requirement for leash detach, applied here by extension
+--- since unfreezing your own visible ped isn't itself a security-relevant
+--- capability grant. Not spelled out verbatim in SPEC.md — a deliberate
+--- client-logic judgment call, flagged here rather than made silently.
 function ExitK9Vehicle()
+    if not IsInK9Vehicle() then return end
+
+    local ped = PlayerPedId()
+    local vehicle = vehicleState.vehicle
+
+    DetachEntity(ped, true, false)
+    FreezeEntityPosition(ped, false)
+    SetEntityVisible(ped, true, false)
+    SetEntityCollision(ped, true, true)
+
+    if DoesEntityExist(vehicle) then
+        local exitCoords = GetOffsetFromEntityInWorldCoords(vehicle, 0.0, -3.0, 0.0)
+        SetEntityCoords(ped, exitCoords.x, exitCoords.y, exitCoords.z, false, false, false, true)
+        SetEntityHeading(ped, GetEntityHeading(vehicle))
+    end
+    -- If the vehicle itself no longer exists (despawned while "loaded"),
+    -- just restore the ped in place rather than erroring — better than
+    -- leaving the player permanently frozen/invisible with no vehicle to
+    -- reference.
+
+    vehicleState = nil
+    lib.notify({ title = 'K9 Unit', description = 'Released from the vehicle.', type = 'success' })
 end
 
--- TODO(coder-frontend): register the ox_target vehicle option (e.g.
--- exports.ox_target:addModel or addGlobalVehicle, coder-frontend's call
--- on which ox_target API fits best) for every model in Config.K9Vehicles,
--- within Config.VehicleInteractMeters, labeled contextually ("Load Into
--- Vehicle" / "Release From Vehicle" depending on IsInK9Vehicle()). Gate
--- visibility with Config.Features.VehicleEntryExit AND a client-side
--- CanShowK9UI() check in the option's canInteract predicate — this is a
--- DISPLAY optimization per SPEC.md §3/§4.5, not the security boundary
--- (there's no server round-trip to independently re-verify here since
--- this action has no server event at all, per this file's header note —
--- if that turns out to be the wrong call, the fix is adding a thin
--- gated server event here the same way leash ended up needing one, not
--- silently trusting the client further than intended).
+-- Register the ox_target vehicle options for every model in
+-- Config.K9Vehicles, labeled contextually ("Load Into Vehicle" /
+-- "Release From Vehicle" via two separate canInteract predicates rather
+-- than one dynamic label, since ox_lib/ox_target options don't have a
+-- documented live "recompute this label" hook this session verified).
+-- The enter option's canInteract uses CanShowK9UI() (not just
+-- IsOwnModelK9()) — this is EXACTLY the "hot call site" client/main.lua's
+-- header names as the reason HasK9Access() has a short TTL cache, since
+-- canInteract can run several times a second while hovering.
+-- Gate visibility with Config.Features.VehicleEntryExit AND the access
+-- check above — this is a DISPLAY optimization per SPEC.md §3/§4.5, not
+-- the security boundary (there's no server round-trip to independently
+-- re-verify here since this action has no server event at all, per this
+-- file's header note — if that turns out to be the wrong call per
+-- coder-security's review, the fix is adding a thin gated server event
+-- here the same way leash ended up needing one, not silently trusting
+-- the client further than intended; nothing below forecloses adding one
+-- later).
+exports.ox_target:addGlobalVehicle({
+    {
+        name = 'qbx_k9unit:enterVehicle',
+        icon = 'fas fa-dog',
+        label = 'Load K9 Into Vehicle',
+        distance = Config.VehicleInteractMeters,
+        canInteract = function(entity, distance, coords, name)
+            if not Config.Features.VehicleEntryExit then return false end
+            if IsInK9Vehicle() then return false end
+            if not K9VehicleHashes[GetEntityModel(entity)] then return false end
+            return CanShowK9UI()
+        end,
+        onSelect = function()
+            EnterNearestK9Vehicle()
+        end,
+    },
+    {
+        name = 'qbx_k9unit:exitVehicle',
+        icon = 'fas fa-dog',
+        label = 'Release K9 From Vehicle',
+        distance = Config.VehicleInteractMeters,
+        canInteract = function(entity, distance, coords, name)
+            if not Config.Features.VehicleEntryExit then return false end
+            return IsInK9Vehicle() and vehicleState.vehicle == entity
+        end,
+        onSelect = function()
+            ExitK9Vehicle()
+        end,
+    },
+})

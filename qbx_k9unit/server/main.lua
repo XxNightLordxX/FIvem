@@ -120,11 +120,27 @@
     scaffold assumption: any nearby player may be the anchor/officer side,
     no department check on them. Flag if a same-department (or "must hold
     a job at all") requirement on the partner is actually wanted.
+
+    IMPLEMENTATION NOTE (coder-backend): the "Role assignment" paragraph
+    above is now STALE relative to SPEC.md's current text and is
+    superseded below, not followed as-is — see the DEVIATION comment
+    inside CheckLeashEligibility for the full reasoning. SPEC.md §6.1
+    explicitly states "The non-K9 side ('handler') must also satisfy
+    job.name ∈ Config.Departments" and §9 item 9 marks this **Resolved**
+    (department membership required, no active K9 cert of their own
+    required). That resolved text is more specific and more current than
+    this header's hedge, so the implementation below enforces department
+    membership on the officer/handler side. Flagging this header itself as
+    needing a follow-up correction pass to stay in sync with SPEC.md,
+    rather than silently leaving the contradiction for the next reader.
+
     EDGE CASE flagged, not resolved: if BOTH parties are K9-modeled and
     both hold access, which one is "constrained" is arbitrary — this
     scaffold suggests defaulting the REQUEST TARGET to the constrained
     role (i.e. whoever gets asked ends up "on the leash"), but that's a
     judgment call for coder-backend to confirm, not a spec mandate.
+    CONFIRMED below: the request target is the constrained/K9 role when
+    both are K9-modeled.
 
     No config constant exists yet for "max range to INITIATE an attach
     request" (Config.LeashMaxDistance is documented as the post-attach
@@ -141,27 +157,55 @@
 -- Local: nothing outside this file needs it directly.
 local LeashPairs = {}
 
--- TODO(coder-backend): STRUCTURAL GAP flagged by coder-architect, not
--- explicit in SPEC.md itself — server/certifications.lua's cache
--- populates per-player on a player-loaded event (see that file's last
--- TODO), which only fires for players who connect/load AFTER that
--- handler is registered. On a `/restart qbx_k9unit` (or a crash-restart)
--- while players are already online, nobody re-fires that event for them,
--- so their cache entry would sit empty (= "no access") until their next
--- job change or reconnect — a certified officer could be silently locked
--- out of K9 features for the remainder of their session. Backfill here:
---   AddEventHandler('onResourceStart', function(resourceName)
---       if GetCurrentResourceName() ~= resourceName then return end
---       for _, playerId in ipairs(GetPlayers()) do
---           -- resolve citizenid + current job.name for playerId via the
---           -- qbx_core player object, then:
---           -- RefreshCertificationCache(citizenid, job.name)
---       end
---   end)
--- Confirm GetPlayers() (a server native returning connected player ids as
--- strings) is the right source here vs. an equivalent qbx_core export —
--- either is fine as long as it covers everyone already connected at the
--- moment this resource (re)starts.
+-- Ephemeral pending leash requests: PendingLeashRequests[targetSrc] = {
+-- from = initiatorSrc, expiresAt = <GetGameTimer() timestamp> }.
+-- JUDGMENT CALL (this file originally flagged a pending-request expiry as
+-- optional/coder-backend's call): added so a request nobody ever answers
+-- doesn't linger indefinitely available for a stale accept far later
+-- (e.g. after the initiator has moved away, disconnected, or paired with
+-- someone else in the meantime) — consumed (cleared) on any response,
+-- valid or not. Local: nothing outside this file needs it.
+local PendingLeashRequests = {}
+local LEASH_REQUEST_TTL_MS = 30000
+
+--- Sends an ox_lib notification to a specific player — see
+--- server/certifications.lua's NotifyPlayer for why `ox_lib:notify` was
+--- chosen over exports.qbx_core:Notify. Duplicated here rather than
+--- shared across files since it's a tiny, generic UI-plumbing helper, not
+--- certification/permission logic that must stay a single source of truth.
+--- @param target number
+--- @param description string
+--- @param notifyType string?
+local function NotifyPlayer(target, description, notifyType)
+    TriggerClientEvent('ox_lib:notify', target, {
+        title = 'K9 Unit',
+        description = description,
+        type = notifyType or 'inform',
+    })
+end
+
+-- STRUCTURAL GAP backfill (flagged by coder-architect, not explicit in
+-- SPEC.md itself): server/certifications.lua's cache populates per-player
+-- on a player-loaded event, which only fires for players who connect/load
+-- AFTER that handler is registered. On a `/restart qbx_k9unit` (or a
+-- crash-restart) while players are already online, nobody re-fires that
+-- event for them, so their cache entry would sit empty (= "no access")
+-- until their next job change or reconnect — a certified officer could be
+-- silently locked out of K9 features for the remainder of their session.
+-- GetPlayers() returns connected player ids as strings; tonumber'd below.
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    for _, playerId in ipairs(GetPlayers()) do
+        local src = tonumber(playerId)
+        if src then
+            local Player = exports.qbx_core:GetPlayer(src)
+            if Player and Player.PlayerData and Player.PlayerData.job then
+                RefreshCertificationCache(Player.PlayerData.citizenid, Player.PlayerData.job.name)
+            end
+        end
+    end
+end)
 
 --- Relays a bark to every client so anyone near the K9 entity hears it.
 --- Gated by Config.Features.BasicBarkSounds AND HasK9Access(source) —
@@ -172,27 +216,45 @@ local LeashPairs = {}
 --- @param barkType string
 RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     local src = source
-    -- TODO(coder-backend): SPEC.md §6.1 bark bullet + §3 (feature gating).
-    --   1. if not Config.Features.BasicBarkSounds then return end -- silent no-op
-    --   2. if not HasK9Access(src) then return end -- reuse the global from
-    --      server/certifications.lua, do not re-derive the job/cert check here.
-    --   3. local ped = GetPlayerPed(src)
-    --      local netId = NetworkGetNetworkIdFromEntity(ped)
-    --   4. TriggerClientEvent('qbx_k9unit:client:playBark', -1, netId, barkType)
-    --
-    --   NOTE on `barkType`: no enum is defined anywhere yet in SPEC.md or
-    --   config.lua — Phase 1 only needs a single generic bark per §6.1
-    --   ("Basic bark sound plays on a radial-triggered 'Bark' action"),
-    --   see client/radial.lua for the literal string it sends. Treat
-    --   barkType as an opaque passthrough string here; don't invent a
-    --   validation enum unless client/radial.lua's comment says otherwise
-    --   for Phase 5's AdvancedBarkRadial.
+
+    if not Config.Features.BasicBarkSounds then return end -- silent no-op
+    if type(barkType) ~= 'string' then return end -- defensive: never trust client payload shape
+    if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
+
+    local ped = GetPlayerPed(src)
+    local netId = NetworkGetNetworkIdFromEntity(ped)
+
+    -- NOTE on `barkType`: no enum is defined anywhere yet in SPEC.md or
+    -- config.lua — Phase 1 only needs a single generic bark per §6.1.
+    -- Treat barkType as an opaque passthrough string, don't invent a
+    -- validation enum unless client/radial.lua's comment says otherwise
+    -- for Phase 5's AdvancedBarkRadial.
+    TriggerClientEvent('qbx_k9unit:client:playBark', -1, netId, barkType)
 end)
 
 --- @param source number
 --- @return boolean
 local function IsAlreadyLeashed(source)
     return LeashPairs[source] ~= nil
+end
+
+--- Human-readable rejection messages for CheckLeashEligibility's `reason`
+--- return value.
+local LEASH_REJECT_MESSAGES = {
+    feature_disabled          = 'Leash mechanics are disabled on this server.',
+    invalid_target            = 'Invalid leash target.',
+    already_leashed           = 'One of you is already leashed to someone else.',
+    offline                   = 'That player is no longer online.',
+    too_far                   = 'You are too far apart to attach a leash.',
+    no_k9_party               = 'Neither party is playing a recognized K9 model.',
+    not_certified             = 'The K9 is not certified for K9 duty.',
+    officer_not_in_department = 'The handler must be employed by an eligible department.',
+}
+
+--- @param reason string?
+--- @return string
+local function LeashRejectReasonMessage(reason)
+    return LEASH_REJECT_MESSAGES[reason] or 'Unable to attach leash.'
 end
 
 --- Shared eligibility/proximity checks for forming a leash pair, run at
@@ -205,27 +267,71 @@ end
 --- @return number? officerSrc   -- the other party
 --- @return string? reason       -- present when ok == false
 local function CheckLeashEligibility(initiatorSrc, targetSrc)
-    -- TODO(coder-backend): SPEC.md §6.1 leash bullet + §9 item 3b resolution.
-    --   1. if not Config.Features.LeashMechanics then return false, nil, nil, 'feature_disabled' end
-    --   2. if IsAlreadyLeashed(initiatorSrc) or IsAlreadyLeashed(targetSrc) then
-    --          return false, nil, nil, 'already_leashed'
-    --      end
-    --   3. Proximity: GetEntityCoords on both peds, must be within
-    --      Config.LeashMaxDistance of each other (see the "No config
-    --      constant" note in this file's header for why LeashMaxDistance
-    --      does double duty here).
-    --   4. Determine roles via live model check (never client-claimed):
-    --      local initiatorIsK9 = IsConfiguredK9Model(GetEntityModel(GetPlayerPed(initiatorSrc)))
-    --      local targetIsK9 = IsConfiguredK9Model(GetEntityModel(GetPlayerPed(targetSrc)))
-    --      If NEITHER is a K9 model, reject ('no_k9_party'). If BOTH are,
-    --      see the header's EDGE CASE note (this scaffold suggests
-    --      defaulting targetSrc to the constrained role — confirm before
-    --      relying on that).
-    --   5. Whichever src is the K9-role party MUST pass HasK9Access(k9Src)
-    --      — reject ('not_certified') otherwise. The other party (officer
-    --      role) has no access requirement per this file's header note.
-    --   6. Return true, k9Src, officerSrc.
-    return false, nil, nil, 'not_implemented'
+    if not Config.Features.LeashMechanics then
+        return false, nil, nil, 'feature_disabled'
+    end
+
+    if type(initiatorSrc) ~= 'number' or type(targetSrc) ~= 'number' or initiatorSrc == targetSrc then
+        return false, nil, nil, 'invalid_target'
+    end
+
+    if IsAlreadyLeashed(initiatorSrc) or IsAlreadyLeashed(targetSrc) then
+        return false, nil, nil, 'already_leashed'
+    end
+
+    local initiatorPed = GetPlayerPed(initiatorSrc)
+    local targetPed = GetPlayerPed(targetSrc)
+    if initiatorPed == 0 or targetPed == 0 then
+        return false, nil, nil, 'offline'
+    end
+
+    -- Proximity: see this file's header for why LeashMaxDistance does
+    -- double duty as both the post-attach auto-detach threshold and the
+    -- initiate-range check.
+    local dist = #(GetEntityCoords(initiatorPed) - GetEntityCoords(targetPed))
+    if dist > Config.LeashMaxDistance then
+        return false, nil, nil, 'too_far'
+    end
+
+    -- Roles via live model check (never client-claimed).
+    local initiatorIsK9 = IsConfiguredK9Model(GetEntityModel(initiatorPed))
+    local targetIsK9 = IsConfiguredK9Model(GetEntityModel(targetPed))
+
+    if not initiatorIsK9 and not targetIsK9 then
+        return false, nil, nil, 'no_k9_party'
+    end
+
+    -- EDGE CASE (flagged in this file's header, judgment call confirmed
+    -- here): if BOTH are K9-modeled, default the REQUEST TARGET to the
+    -- constrained role — whoever gets asked ends up "on the leash." Not a
+    -- spec mandate, just a low-surprise default given none is specified.
+    local k9Src, officerSrc
+    if targetIsK9 then
+        k9Src, officerSrc = targetSrc, initiatorSrc
+    else
+        k9Src, officerSrc = initiatorSrc, targetSrc
+    end
+
+    if not HasK9Access(k9Src) then
+        return false, nil, nil, 'not_certified'
+    end
+
+    -- DEVIATION FROM THIS FILE'S OWN HEADER, FLAGGED (see the
+    -- IMPLEMENTATION NOTE near the top of this file): SPEC.md §6.1 states
+    -- "The non-K9 side ('handler') must also satisfy job.name ∈
+    -- Config.Departments" and §9 item 9 marks this **Resolved** — department
+    -- membership required on the officer/handler side, but NOT an active
+    -- K9 certification of their own (the cert is specifically the "I am a
+    -- working K9" credential, not "I am allowed near one"). Implementing
+    -- per the resolved SPEC.md text rather than this header's older,
+    -- looser "no department check" assumption.
+    local officerPlayer = exports.qbx_core:GetPlayer(officerSrc)
+    local officerJob = officerPlayer and officerPlayer.PlayerData and officerPlayer.PlayerData.job
+    if not officerJob or not Config.Departments[officerJob.name] then
+        return false, nil, nil, 'officer_not_in_department'
+    end
+
+    return true, k9Src, officerSrc
 end
 
 --- Step 1 of the consent handshake: initiator asks to attach to target.
@@ -234,14 +340,22 @@ end
 --- @param targetServerId number
 RegisterNetEvent('qbx_k9unit:server:requestLeashAttach', function(targetServerId)
     local src = source
-    -- TODO(coder-backend):
-    --   local ok, _, _, reason = CheckLeashEligibility(src, targetServerId)
-    --   if not ok then notify src with `reason` and return end
-    --   TriggerClientEvent('qbx_k9unit:client:leashAttachRequest', targetServerId, src)
-    --   (Consider a short server-side pending-request expiry/timeout so a
-    --   request that's never answered doesn't linger indefinitely — not
-    --   spelled out in SPEC.md, coder-backend's call whether Phase 1 needs
-    --   one or whether relying on the player simply not accepting is fine.)
+
+    if type(targetServerId) ~= 'number' then
+        NotifyPlayer(src, 'Invalid leash target.', 'error')
+        return
+    end
+
+    local ok, _, _, reason = CheckLeashEligibility(src, targetServerId)
+    if not ok then
+        NotifyPlayer(src, LeashRejectReasonMessage(reason), 'error')
+        return
+    end
+
+    PendingLeashRequests[targetServerId] = { from = src, expiresAt = GetGameTimer() + LEASH_REQUEST_TTL_MS }
+
+    TriggerClientEvent('qbx_k9unit:client:leashAttachRequest', targetServerId, src)
+    NotifyPlayer(src, 'Leash request sent.', 'inform')
 end)
 
 --- Step 2 of the consent handshake: target's response.
@@ -249,33 +363,53 @@ end)
 --- @param accepted boolean
 RegisterNetEvent('qbx_k9unit:server:respondLeashAttach', function(fromServerId, accepted)
     local src = source -- the target, responding
-    -- TODO(coder-backend):
-    --   if not accepted then
-    --       TriggerClientEvent's the requester with a "declined" notify and return
-    --   end
-    --   -- RE-VALIDATE — do not trust that nothing changed since the
-    --   -- request was sent (classic TOCTOU: either party could have
-    --   -- disconnected, moved out of range, or gotten leashed to someone
-    --   -- else in the meantime):
-    --   local ok, k9Src, officerSrc, reason = CheckLeashEligibility(fromServerId, src)
-    --   if not ok then notify both sides with `reason` and return end
-    --   LeashPairs[fromServerId] = src
-    --   LeashPairs[src] = fromServerId
-    --   TriggerClientEvent('qbx_k9unit:client:leashAttached', k9Src, officerSrc, true)  -- isConstrained = true
-    --   TriggerClientEvent('qbx_k9unit:client:leashAttached', officerSrc, k9Src, false) -- isConstrained = false
+
+    if type(fromServerId) ~= 'number' then return end
+
+    local pending = PendingLeashRequests[src]
+    PendingLeashRequests[src] = nil -- consumed either way, accept or decline
+
+    if not accepted then
+        NotifyPlayer(fromServerId, 'Your leash request was declined.', 'inform')
+        return
+    end
+
+    if not pending or pending.from ~= fromServerId or GetGameTimer() > pending.expiresAt then
+        NotifyPlayer(src, 'That leash request is no longer valid.', 'error')
+        NotifyPlayer(fromServerId, 'Your leash request is no longer valid.', 'error')
+        return
+    end
+
+    -- RE-VALIDATE — do not trust that nothing changed since the request
+    -- was sent (classic TOCTOU: either party could have disconnected,
+    -- moved out of range, or gotten leashed to someone else in the
+    -- meantime).
+    local ok, k9Src, officerSrc, reason = CheckLeashEligibility(fromServerId, src)
+    if not ok then
+        NotifyPlayer(fromServerId, LeashRejectReasonMessage(reason), 'error')
+        NotifyPlayer(src, LeashRejectReasonMessage(reason), 'error')
+        return
+    end
+
+    LeashPairs[fromServerId] = src
+    LeashPairs[src] = fromServerId
+
+    TriggerClientEvent('qbx_k9unit:client:leashAttached', k9Src, officerSrc, true)  -- isConstrained = true
+    TriggerClientEvent('qbx_k9unit:client:leashAttached', officerSrc, k9Src, false) -- isConstrained = false
 end)
 
 --- Either party detaches unilaterally, no consent required. No-op if the
 --- caller isn't currently leashed to anyone.
 RegisterNetEvent('qbx_k9unit:server:detachLeash', function()
     local src = source
-    -- TODO(coder-backend):
-    --   local partner = LeashPairs[src]
-    --   if not partner then return end -- no-op, not an error
-    --   LeashPairs[src] = nil
-    --   LeashPairs[partner] = nil
-    --   TriggerClientEvent('qbx_k9unit:client:leashDetached', src, 'detached')
-    --   TriggerClientEvent('qbx_k9unit:client:leashDetached', partner, 'detached')
+    local partner = LeashPairs[src]
+    if not partner then return end -- no-op, not an error
+
+    LeashPairs[src] = nil
+    LeashPairs[partner] = nil
+
+    TriggerClientEvent('qbx_k9unit:client:leashDetached', src, 'detached')
+    TriggerClientEvent('qbx_k9unit:client:leashDetached', partner, 'detached')
 end)
 
 --- Cleans up an orphaned leash pairing if one half disconnects, so the
@@ -285,12 +419,16 @@ end)
 --- introduced specifically by the leash subsystem above.
 AddEventHandler('playerDropped', function(reason)
     local src = source
-    -- TODO(coder-backend):
-    --   local partner = LeashPairs[src]
-    --   if not partner then return end
-    --   LeashPairs[src] = nil
-    --   LeashPairs[partner] = nil
-    --   TriggerClientEvent('qbx_k9unit:client:leashDetached', partner, 'partner_disconnected')
+
+    PendingLeashRequests[src] = nil
+
+    local partner = LeashPairs[src]
+    if not partner then return end
+
+    LeashPairs[src] = nil
+    LeashPairs[partner] = nil
+
+    TriggerClientEvent('qbx_k9unit:client:leashDetached', partner, 'partner_disconnected')
 end)
 
 -- Reserved for future Phase 2+ small, access-gated K9 actions that need

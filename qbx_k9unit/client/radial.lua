@@ -59,23 +59,96 @@
     promoted to a real config-driven enum (flagged in those files too).
 ]]
 
--- TODO(coder-frontend): register the "K9 Unit" radial submenu via
--- lib.addRadialItem, per the OPEN STRUCTURAL QUESTION above for how its
--- overall visibility is gated. Sub-items below.
+-- OPEN STRUCTURAL QUESTION resolution: option (b) was chosen — the "K9
+-- Unit" submenu and its sub-items are registered ONCE, unconditionally
+-- (subject to each item's own Config.Features flag at registration time,
+-- satisfying SPEC.md §3's "read at the point... menu item visibility"),
+-- and every onSelect below independently re-checks CanShowK9UI() before
+-- doing anything, notifying+denying on failure. Rationale for (b) over
+-- (a) here: every one of coder-architect's own onSelect TODO snippets
+-- already assumed this exact "if not CanShowK9UI() then notify + return"
+-- shape, which only makes sense if the item can actually be seen/selected
+-- by a non-qualifying player in the first place; (a) would make that
+-- branch largely unreachable. (b) also avoids a polling thread that
+-- would otherwise re-await the server's hasK9Access callback every couple
+-- of seconds for every player near a PD, and avoids depending on
+-- lib.addRadialItem/lib.removeRadialItem ordering semantics for a
+-- submenu-then-children relationship that isn't verified against ox_lib's
+-- source from this session. Documented here for qa-tester/
+-- integration-verifier: "appears" in this file means "is present in the
+-- radial wheel," not "is currently usable" — usability is enforced at
+-- onSelect time, same as every gated server event is independently
+-- re-verified server-side regardless of what the client shows.
+local function DenyNotify()
+    lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+end
+
+--- Finds the nearest OTHER player within Config.LeashMaxDistance (reused
+--- as the attach-initiate range per client/movement.lua's header note),
+--- for the Attach/Detach Leash radial item's self-initiated entry point.
+--- Model plausibility isn't filtered here — the server independently
+--- re-validates via CheckLeashEligibility (server/main.lua) regardless.
+--- @return number? candidateServerId
+local function FindNearestLeashCandidate()
+    local myPed = PlayerPedId()
+    local myCoords = GetEntityCoords(myPed)
+    local nearestPlayer, nearestDist
+
+    for _, playerId in ipairs(GetActivePlayers()) do
+        if playerId ~= PlayerId() then
+            local targetPed = GetPlayerPed(playerId)
+            if targetPed ~= 0 and DoesEntityExist(targetPed) then
+                local dist = #(myCoords - GetEntityCoords(targetPed))
+                if dist <= Config.LeashMaxDistance and (not nearestDist or dist < nearestDist) then
+                    nearestPlayer, nearestDist = playerId, dist
+                end
+            end
+        end
+    end
+
+    if not nearestPlayer then return nil end
+    return GetPlayerServerId(nearestPlayer)
+end
+
+local k9RadialItems = {
+    { id = 'k9unit', label = 'K9 Unit', icon = 'dog' },
+
+    --- Sit — SPEC.md §6.1. No dedicated Config.Features flag (bundled
+    --- under the general RadialMenu flag + access check, same as every
+    --- other Phase 1 item here).
+    {
+        id = 'k9_sit',
+        label = 'Sit',
+        icon = 'couch',
+        menu = 'k9unit',
+        onSelect = function()
+            if not CanShowK9UI() then
+                DenyNotify()
+                return
+            end
+            K9Sit()
+        end,
+    },
+}
 
 --- Bark — SPEC.md §6.1, §8 step 9. Config.Features.BasicBarkSounds gate.
---- TODO(coder-frontend):
---   1. if not Config.Features.BasicBarkSounds then don't register/show this item end
---   2. onSelect: if not CanShowK9UI() then notify + return end
---      TriggerServerEvent('qbx_k9unit:server:relayBark', 'bark')
---      (server re-validates Config.Features.BasicBarkSounds and
---      HasK9Access independently regardless — see server/main.lua).
-
---- Sit — SPEC.md §6.1. No dedicated Config.Features flag (bundled under
---- the general RadialMenu flag + access check, same as every other
---- Phase 1 item here).
---- TODO(coder-frontend):
---   onSelect: if not CanShowK9UI() then notify + return end; K9Sit()
+if Config.Features.BasicBarkSounds then
+    k9RadialItems[#k9RadialItems + 1] = {
+        id = 'k9_bark',
+        label = 'Bark',
+        icon = 'volume-high',
+        menu = 'k9unit',
+        onSelect = function()
+            if not CanShowK9UI() then
+                DenyNotify()
+                return
+            end
+            -- server re-validates Config.Features.BasicBarkSounds and
+            -- HasK9Access independently regardless — see server/main.lua.
+            TriggerServerEvent('qbx_k9unit:server:relayBark', 'bark')
+        end,
+    }
+end
 
 --- Attach/Detach Leash — SPEC.md §6.1, §8 step 6-7. A single
 --- context-sensitive item: behaves as "Attach" when not currently
@@ -85,27 +158,64 @@
 --- does) — this item is one of two entry points into that same system
 --- (the other being the ox_target option client/movement.lua registers
 --- directly on nearby players).
---- TODO(coder-frontend):
---   onSelect:
---     if not Config.Features.LeashMechanics then return end
---     if IsLeashed() then DetachLeash() return end
---     if not CanShowK9UI() then notify + return end
---     -- find a nearby candidate partner (nearest other player within
---     -- Config.LeashMaxDistance is a reasonable Phase 1 default — see
---     -- client/movement.lua's header for why that constant does double
---     -- duty as both the attach-initiate range and the post-attach
---     -- auto-detach threshold) and call:
---     RequestLeashAttach(candidateServerId)
---   NOTE: this only SENDS a request — per the consent design, nothing
---   attaches until the target accepts on their own client. Notify the
---   local player "request sent," don't assume success here.
+if Config.Features.LeashMechanics then
+    k9RadialItems[#k9RadialItems + 1] = {
+        id = 'k9_leash',
+        label = 'Attach/Detach Leash',
+        icon = 'link',
+        menu = 'k9unit',
+        onSelect = function()
+            -- Detach never requires consent/access — always available
+            -- while leashed, per SPEC.md §9 item 3b's hard requirement.
+            if IsLeashed() then
+                DetachLeash()
+                return
+            end
+
+            if not CanShowK9UI() then
+                DenyNotify()
+                return
+            end
+
+            local candidateServerId = FindNearestLeashCandidate()
+            if not candidateServerId then
+                lib.notify({ title = 'K9 Unit', description = 'No nearby player to leash to.', type = 'error' })
+                return
+            end
+
+            -- This only SENDS a request — per the consent design, nothing
+            -- attaches until the target accepts on their own client.
+            -- RequestLeashAttach() itself notifies "request sent."
+            RequestLeashAttach(candidateServerId)
+        end,
+    }
+end
 
 --- Enter/Exit Vehicle — SPEC.md §6.1, §8 step 8. A single
 --- context-sensitive item mirroring the ox_target vehicle option
 --- client/vehicle.lua registers directly. Config.Features.VehicleEntryExit
 --- gate.
---- TODO(coder-frontend):
---   onSelect:
---     if not Config.Features.VehicleEntryExit then return end
---     if not CanShowK9UI() then notify + return end
---     if IsInK9Vehicle() then ExitK9Vehicle() else EnterNearestK9Vehicle() end
+if Config.Features.VehicleEntryExit then
+    k9RadialItems[#k9RadialItems + 1] = {
+        id = 'k9_vehicle',
+        label = 'Enter/Exit Vehicle',
+        icon = 'car',
+        menu = 'k9unit',
+        onSelect = function()
+            if not CanShowK9UI() then
+                DenyNotify()
+                return
+            end
+
+            if IsInK9Vehicle() then
+                ExitK9Vehicle()
+            else
+                EnterNearestK9Vehicle()
+            end
+        end,
+    }
+end
+
+if Config.Features.RadialMenu then
+    lib.addRadialItem(k9RadialItems)
+end

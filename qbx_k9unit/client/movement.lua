@@ -81,23 +81,75 @@
        reuse this exact function, don't build a second detach code path.
 ]]
 
+-- Local-only view-mode state for the camera toggle below. Not exposed —
+-- ToggleK9Camera() is the only entry point.
+local isFirstPersonK9View = false
+
 --- Toggles first/third-person camera at the K9's eye height while playing
 --- a K9 character. See client/main.lua's OPEN QUESTION about whether this
---- needs to be gated by CanShowK9UI() at all — this scaffold's lean is no.
---- TODO(coder-frontend): SPEC.md §6.1 bullet 2, §8 step 5. Likely a
---- CreateCam/SetCamActive toggle bound to a keybind (RegisterKeyMapping)
---- or a client/radial.lua item — pick one and note the choice here.
+--- needs to be gated by CanShowK9UI() at all — per this scaffold's lean
+--- (and the top-level task's explicit direction) this does NOT gate on
+--- CanShowK9UI() (a QoL toggle, not a granted capability); it DOES gate on
+--- the cheap, local, free IsOwnModelK9() check, since "while playing their
+--- K9 character" (SPEC.md §6.1 bullet 2) implies it's meaningless for a
+--- human-model character, not that it requires job/cert.
+--- SPEC.md §6.1 bullet 2, §8 step 5. Bound to a rebindable keymapping
+--- (FiveM's own Settings > Key Bindings screen lets a player/server change
+--- the default) rather than a radial item — camera toggle isn't in the
+--- Phase 1 radial item list (Bark/Sit/Leash/Vehicle only, see
+--- client/radial.lua), so it needs its own input path.
+--- SetFollowPedCamViewMode drives the game's OWN built-in first/third
+--- person camera system, which already derives eye/vantage height from
+--- the CURRENT ped model's actual skeleton (including quadruped models)
+--- generically — this is why no manual CreateCam/AttachCamToEntity rig is
+--- needed to satisfy "camera at the dog's eye height": the native camera
+--- modes already do that for any ped model without per-model tuning.
 function ToggleK9Camera()
+    if not IsOwnModelK9() then
+        lib.notify({ title = 'K9 Unit', description = 'This only works while playing a K9 character.', type = 'error' })
+        return
+    end
+
+    isFirstPersonK9View = not isFirstPersonK9View
+    SetFollowPedCamViewMode(isFirstPersonK9View and 4 or 1)
+    lib.notify({
+        title = 'K9 Unit',
+        description = isFirstPersonK9View and 'First-person view.' or 'Third-person view.',
+        type = 'inform',
+    })
 end
 
---- Self-emote "Sit" action triggered from the radial menu.
---- TODO(coder-frontend): SPEC.md §6.1 radial bullet, §8 step 7. Play an
---- appropriate anim/task on PlayerPedId() (e.g. TaskPlayAnim with a
---- quadruped sit clip if one exists on the current model, else a
---- reasonable native fallback). Gate with CanShowK9UI() at the top —
---- return early (and notify) if false, don't just rely on radial.lua
---- having already hidden the item.
+RegisterCommand('qbx_k9unit:toggleCamera', function()
+    ToggleK9Camera()
+end, false)
+
+RegisterKeyMapping('qbx_k9unit:toggleCamera', 'Toggle K9 First/Third Person Camera', 'keyboard', 'L')
+
+--- Self-emote "Sit" action triggered from the radial menu. SPEC.md §6.1
+--- radial bullet, §8 step 7. Gated with CanShowK9UI() at the top (per
+--- radial.lua's own contract, every Phase 1 radial item is a real granted
+--- capability check, unlike camera/locomotion above) — return early (and
+--- notify) if false, don't just rely on radial.lua having already hidden
+--- the item.
+--- NOTE: "WORLD_DOG_SIT" below is this scaffold's best-effort native-only
+--- approximation of a quadruped sit pose, via the same ambient-scenario
+--- system the base game already uses to make stray/ambient dog peds sit.
+--- SPEC.md §7 assumes no bespoke sit animation work is available for
+--- Phase 1, and there's no confirmed dedicated "sit" native. This exact
+--- scenario string is UNVERIFIED against documentation (native-api-
+--- assistant was unreachable this session to confirm it) — flagged for a
+--- documentation-verified follow-up pass. If the string is wrong the
+--- failure mode is silent (the ped simply doesn't visibly change pose),
+--- never a crash or broken state.
 function K9Sit()
+    if not CanShowK9UI() then
+        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        return
+    end
+
+    local ped = PlayerPedId()
+    ClearPedTasksImmediately(ped)
+    TaskStartScenarioInPlace(ped, 'WORLD_DOG_SIT', 0, true)
 end
 
 --- Local-only UI/role bookkeeping for the CURRENT leash pairing, if any.
@@ -117,48 +169,62 @@ end
 --- anything by itself — see leashAttached event handler below for where
 --- the pairing actually activates, after the target accepts.
 --- @param targetPlayerServerId number
---- TODO(coder-frontend): SPEC.md §6.1 leash bullet, §8 step 6.
---   1. if not CanShowK9UI() then notify + return end -- re-check, don't
---      trust that the caller (ox_target predicate or radial item) already
---      verified this — cheap client-side sanity check before bothering
---      the server (which re-validates authoritatively regardless).
---   2. if IsLeashed() then notify "already leashed" + return end
---   3. TriggerServerEvent('qbx_k9unit:server:requestLeashAttach', targetPlayerServerId)
---   4. Optionally notify the local player "request sent" — the target's
---      client is the one that shows the actual accept/decline prompt (see
---      the leashAttachRequest handler below), not this client.
 function RequestLeashAttach(targetPlayerServerId)
+    -- Re-check, don't trust that the caller (ox_target predicate or
+    -- radial item) already verified this — cheap client-side sanity check
+    -- before bothering the server (which re-validates authoritatively
+    -- regardless, see server/main.lua's CheckLeashEligibility).
+    if not CanShowK9UI() then
+        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        return
+    end
+
+    if IsLeashed() then
+        lib.notify({ title = 'K9 Unit', description = 'You are already leashed.', type = 'error' })
+        return
+    end
+
+    TriggerServerEvent('qbx_k9unit:server:requestLeashAttach', targetPlayerServerId)
+    -- The target's client is the one that shows the actual accept/decline
+    -- prompt (see leashAttachRequest below), not this one.
+    lib.notify({ title = 'K9 Unit', description = 'Leash request sent.', type = 'inform' })
 end
 
 --- Detaches the current leash, if any, with ZERO consent required from
 --- the other party. No-op (locally and server-side) if not currently
 --- leashed. This is the SAME function the elastic-restriction safety
 --- valve calls automatically — see the CreateThread below.
---- TODO(coder-frontend): TriggerServerEvent('qbx_k9unit:server:detachLeash')
---- — let the server-authoritative leashDetached broadcast (handled below)
---- be what actually clears leashState/stops the thread, rather than
---- clearing local state immediately here, so this client's view stays in
---- sync with whatever the server decides (e.g. if this was already a
---- no-op server-side because the pairing had already ended for some other
---- reason, the local state should reflect that reality, not what this
---- function optimistically assumed).
 function DetachLeash()
+    if not IsLeashed() then return end
+
+    -- Let the server-authoritative leashDetached broadcast (handled
+    -- below) be what actually clears leashState/stops the thread, rather
+    -- than clearing local state immediately here, so this client's view
+    -- stays in sync with whatever the server decides.
+    TriggerServerEvent('qbx_k9unit:server:detachLeash')
 end
 
 --- Step 1 of the consent handshake, received on the TARGET's client.
 --- @param fromServerId number
 RegisterNetEvent('qbx_k9unit:client:leashAttachRequest', function(fromServerId)
-    -- TODO(coder-frontend): show an ox_lib prompt (e.g. lib.alertDialog or
-    -- a small registerContext with Accept/Decline) naming the requester.
-    -- On the player's choice:
-    --   TriggerServerEvent('qbx_k9unit:server:respondLeashAttach', fromServerId, accepted)
-    -- Consider what happens if the local player is already leashed to
-    -- someone else, or leashes/unleashes mid-prompt, by the time they
-    -- answer — the server re-validates everything at accept time
-    -- regardless (see server/main.lua), so an accept that's now invalid
-    -- will simply be rejected server-side; this client just needs to
-    -- handle that gracefully (e.g. a "no longer possible" notify) rather
-    -- than assuming acceptance always succeeds.
+    local fromPlayer = GetPlayerFromServerId(fromServerId)
+    local fromName = (fromPlayer ~= -1 and GetPlayerName(fromPlayer)) or ('Officer #' .. fromServerId)
+
+    -- If the local player leashes/unleashes/disconnects mid-prompt, or
+    -- either side is no longer eligible by the time they answer, the
+    -- server re-validates everything at accept time regardless (see
+    -- server/main.lua's CheckLeashEligibility TOCTOU note) — this client
+    -- just needs to send the response and handle a later rejection
+    -- gracefully, not assume acceptance always succeeds.
+    local response = lib.alertDialog({
+        header = 'K9 Leash Request',
+        content = ('%s wants to attach a leash to you. Accept?'):format(fromName),
+        centered = true,
+        cancel = true,
+        labels = { confirm = 'Accept', cancel = 'Decline' },
+    })
+
+    TriggerServerEvent('qbx_k9unit:server:respondLeashAttach', fromServerId, response == 'confirm')
 end)
 
 --- Step 2 of the consent handshake: the server has confirmed the pairing
@@ -168,13 +234,16 @@ end)
 --- @param partnerServerId number
 --- @param isConstrained boolean  -- true only on the K9-role party's client
 RegisterNetEvent('qbx_k9unit:client:leashAttached', function(partnerServerId, isConstrained)
-    -- TODO(coder-frontend):
-    --   leashState = { partnerServerId = partnerServerId, isConstrained = isConstrained }
-    --   Notify locally ("Leashed to <partner>").
-    --   If isConstrained, ensure the elastic-restriction thread below is
-    --   running (it should already be gated on IsLeashed(), so setting
-    --   leashState is likely sufficient to wake it — coder-frontend's
-    --   call on the exact thread-lifecycle pattern used).
+    leashState = { partnerServerId = partnerServerId, isConstrained = isConstrained }
+    lib.notify({
+        title = 'K9 Unit',
+        description = isConstrained and 'You are now leashed.' or 'You are now anchoring the leash.',
+        type = 'success',
+    })
+    -- The elastic-restriction thread below is a perpetual loop that reads
+    -- `leashState` fresh every iteration, so simply setting it here is
+    -- sufficient to "wake" the tighter-interval pulling behavior on the
+    -- constrained client — no separate thread-start call needed.
 end)
 
 --- The pairing has ended — manual detach by either side, the constrained
@@ -182,42 +251,130 @@ end)
 --- playerDropped cleanup). Sent to whichever client(s) are still around.
 --- @param reason string  -- e.g. 'detached' | 'partner_disconnected'
 RegisterNetEvent('qbx_k9unit:client:leashDetached', function(reason)
-    -- TODO(coder-frontend): leashState = nil; notify locally with a
-    -- message appropriate to `reason`. The elastic-restriction thread
-    -- should naturally stop doing anything once IsLeashed() is false —
-    -- don't leave a dangling loop still trying to read a partner ped that
-    -- may no longer be valid.
+    leashState = nil
+
+    local description = 'Leash detached.'
+    if reason == 'partner_disconnected' then
+        description = 'Leash detached — your partner disconnected.'
+    end
+    lib.notify({ title = 'K9 Unit', description = description, type = 'inform' })
+    -- The elastic-restriction thread below naturally stops doing anything
+    -- once IsLeashed() is false — nothing else to tear down here.
 end)
 
--- TODO(coder-frontend): elastic movement-restriction thread — this is the
--- part of the leash mechanic coder-security specifically asked to see be
--- an actual constraint, not a passive monitor. Runs only while
--- IsLeashed() AND leashState.isConstrained is true (the anchor/officer
--- side does nothing here beyond tracking the pairing for its own UI).
--- Per-tick (or a short fixed interval — your call on the smoothness/perf
--- tradeoff), resolve the partner ped from leashState.partnerServerId
--- (GetPlayerPed(GetPlayerFromServerId(partnerServerId)) — re-resolve each
--- check, don't cache the ped handle across a respawn), measure distance
--- to it, and as it approaches Config.LeashMaxDistance, apply a
--- proportional soft pull-back on the LOCAL ped (this client's own —
--- perfectly fine to move, per point 2 above) rather than a hard snap at
--- the exact threshold. If distance still exceeds some larger hard cap
--- despite that (disconnect/teleport/desync — point 4 above), call
--- DetachLeash() and notify locally as the safety-valve fallback. The
--- exact natives/easing curve for the pull-back are a client-native
--- feasibility question — coder-frontend's call, not dictated here.
+-- Elastic movement-restriction thread — the part of the leash mechanic
+-- that must be an actual constraint, not a passive monitor. Only does
+-- anything while IsLeashed() AND leashState.isConstrained is true (the
+-- anchor/officer side does nothing here beyond having already received
+-- its own notify above). Re-resolves the partner ped from
+-- leashState.partnerServerId every tick rather than caching the handle,
+-- since a cached ped handle can go stale across a respawn/reconnect.
+local LEASH_TICK_MS = 250
+local LEASH_IDLE_TICK_MS = 1000
+local LEASH_PULL_ZONE_FACTOR = 0.75 -- start elastic pull-back at 75% of Config.LeashMaxDistance
+local LEASH_HARD_CAP_FACTOR = 1.5   -- safety-valve auto-detach threshold, relative to Config.LeashMaxDistance
+local LEASH_PULL_EASE = 0.20        -- fraction of the excess distance corrected per tick (feel/tuning knob)
 
--- TODO(coder-frontend): register the "Attach Leash" ox_target option on
--- nearby player peds (exports.ox_target:addModel is wrong here since the
--- target is a PLAYER ped, not a vehicle/prop model — use ox_target's
--- player-targeting API, e.g. addGlobalPlayer with a canInteract
--- predicate). Gate visibility with: Config.Features.LeashMechanics AND a
--- cheap client-side plausibility check (e.g. neither party already
--- IsLeashed(), at least one of us plausibly a K9 via IsOwnModelK9()/the
--- target's model if inspectable) — this is a DISPLAY optimization only,
--- the server independently re-validates everything for real in
--- CheckLeashEligibility (server/main.lua), so don't over-invest in
--- perfecting the client-side predicate.
+CreateThread(function()
+    while true do
+        local sleepMs = LEASH_IDLE_TICK_MS
+
+        if leashState and leashState.isConstrained then
+            sleepMs = LEASH_TICK_MS
+
+            local partnerPlayer = GetPlayerFromServerId(leashState.partnerServerId)
+            local partnerPed = partnerPlayer ~= -1 and GetPlayerPed(partnerPlayer) or 0
+
+            if partnerPed ~= 0 and DoesEntityExist(partnerPed) then
+                local myPed = PlayerPedId()
+                local myCoords = GetEntityCoords(myPed)
+                local partnerCoords = GetEntityCoords(partnerPed)
+                local dist = #(myCoords - partnerCoords)
+
+                local softLimit = Config.LeashMaxDistance
+                local hardCap = softLimit * LEASH_HARD_CAP_FACTOR
+                local pullZoneStart = softLimit * LEASH_PULL_ZONE_FACTOR
+
+                if dist >= hardCap then
+                    -- Safety-valve fallback (point 4 in this file's
+                    -- header): the elastic pull-back below couldn't keep
+                    -- distance under control (disconnect/teleport/desync).
+                    -- Reuse the exact same detach path, don't build a
+                    -- second one.
+                    lib.notify({ title = 'K9 Unit', description = 'Leash snapped — you got too far from your handler.', type = 'error' })
+                    DetachLeash()
+                elseif dist > pullZoneStart and not IsPedInAnyVehicle(myPed, false) then
+                    -- Proportional soft pull-back, not a hard snap at the
+                    -- exact threshold: the closer to hardCap, the stronger
+                    -- the correction applied this tick. Skipped while in a
+                    -- vehicle to avoid teleporting a seated ped out from
+                    -- under itself — a defensive edge case, not spelled
+                    -- out in SPEC.md.
+                    local excess = dist - pullZoneStart
+                    local zoneSize = math.max(hardCap - pullZoneStart, 0.1)
+                    local pullFactor = math.min(excess / zoneSize, 1.0)
+                    local pullAmount = excess * pullFactor * LEASH_PULL_EASE
+                    local dir = (partnerCoords - myCoords) / dist
+                    local newCoords = myCoords + dir * pullAmount
+                    SetEntityCoords(myPed, newCoords.x, newCoords.y, newCoords.z, false, false, false, true)
+                end
+            end
+            -- If the partner ped isn't resolvable this tick (streamed
+            -- out/not yet loaded), just skip pulling for now — a real
+            -- disconnect is independently handled by server/main.lua's
+            -- playerDropped cleanup broadcasting leashDetached.
+        end
+
+        Wait(sleepMs)
+    end
+end)
+
+-- Client-side hash set for the leash ox_target option's display-only
+-- plausibility check below. client/main.lua only exposes IsOwnModelK9()
+-- (not its private model-hash table) per its documented three-function
+-- contract, so this is a small local copy of the same generic
+-- Config.Peds-driven check for THIS file's own convenience use — not a
+-- security check, so a second small local copy (vs. expanding
+-- client/main.lua's contract) is an acceptable, deliberate tradeoff here.
+local k9ModelHashesForTargeting = {}
+for _, pedEntry in ipairs(Config.Peds) do
+    k9ModelHashesForTargeting[GetHashKey(pedEntry.model)] = true
+end
+
+local function IsEntityModelK9(entity)
+    return k9ModelHashesForTargeting[GetEntityModel(entity)] == true
+end
+
+-- Register the "Attach Leash" ox_target option on nearby player peds
+-- (SPEC.md §6.1 leash bullet's "either the K9 or a nearby officer
+-- initiates 'Attach Leash' (ox_target) on the other"). This is a DISPLAY
+-- optimization only — the server independently re-validates everything
+-- for real in CheckLeashEligibility (server/main.lua), so this predicate
+-- doesn't need to be perfect.
+exports.ox_target:addGlobalPlayer({
+    {
+        name = 'qbx_k9unit:attachLeash',
+        icon = 'fas fa-link',
+        label = 'Attach Leash',
+        distance = 2.5,
+        canInteract = function(entity, distance, coords, name)
+            if not Config.Features.LeashMechanics then return false end
+            if IsLeashed() then return false end
+            if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't target self
+
+            -- At least one side should plausibly be a K9 (either us, or
+            -- the target's live model) — cheap client-side plausibility
+            -- only, per this file's header note not to over-invest here.
+            return IsOwnModelK9() or IsEntityModelK9(entity)
+        end,
+        onSelect = function(data)
+            local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
+            if not targetPlayer or targetPlayer == -1 then return end
+
+            RequestLeashAttach(GetPlayerServerId(targetPlayer))
+        end,
+    },
+})
 
 -- NOTE on AgilityBasicJump (Config.Features.AgilityBasicJump): SPEC.md
 -- §6.1 describes this as "native jump/crouch only, no fence-vault logic

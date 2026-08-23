@@ -125,11 +125,12 @@ local Certifications = {}
 --- Precomputed set of Config.Peds model hashes, built once at file load.
 --- Used ONLY by the grant-time model check (§4.2 condition 5) — per
 --- §4.1/§4.5, ordinary access checks (HasK9Access) never consult this.
---- TODO(coder-backend): build via GetHashKey(pedEntry.model) for each
---- entry in Config.Peds, e.g. K9ModelHashes[GetHashKey(model)] = true.
---- Keep this generic over Config.Peds — no hardcoded model name anywhere
---- (SPEC.md §3 acceptance bullet 3), including custom streamed entries.
+--- Generic over Config.Peds — no hardcoded model name anywhere (SPEC.md §3
+--- acceptance bullet 3), including custom streamed entries.
 local K9ModelHashes = {}
+for _, pedEntry in ipairs(Config.Peds) do
+    K9ModelHashes[GetHashKey(pedEntry.model)] = true
+end
 
 --- @param modelHash number
 --- @return boolean
@@ -137,8 +138,25 @@ local K9ModelHashes = {}
 --- determination (§6.1/§9 item 3b) reuses this same model check rather
 --- than re-deriving its own copy from Config.Peds.
 function IsConfiguredK9Model(modelHash)
-    -- TODO(coder-backend): return K9ModelHashes[modelHash] == true
-    return false
+    return K9ModelHashes[modelHash] == true
+end
+
+--- Sends an ox_lib notification to a specific player. Chosen over
+--- exports.qbx_core:Notify because ox_lib's `ox_lib:notify` client event
+--- is a stable, publicly documented API of an already-declared dependency
+--- (ox_lib) — qbx_core's own Notify export name/signature could not be
+--- independently confirmed in this sandbox (no qbx_core install was
+--- reachable here to inspect; see the CONFIDENCE NOTE near the bottom of
+--- this file for the same caveat applied to the player-loaded event name).
+--- @param target number
+--- @param description string
+--- @param notifyType string?
+local function NotifyPlayer(target, description, notifyType)
+    TriggerClientEvent('ox_lib:notify', target, {
+        title = 'K9 Unit',
+        description = description,
+        type = notifyType or 'inform',
+    })
 end
 
 --- Server-authoritative check: is `source` currently allowed to use K9
@@ -150,21 +168,27 @@ end
 --- @param source number
 --- @return boolean
 function HasK9Access(source)
-    -- TODO(coder-backend): SPEC.md §4.1.
-    --   1. Get the player's job (qbx_core player object: Player.PlayerData.job).
-    --   2. If job.name is not a key in Config.Departments, return false.
-    --   3. local cached = Certifications[citizenid]
-    --      if cached and cached.active and cached.job == job.name then
-    --          return true
-    --      end
-    --      (the `cached.job == job.name` re-check matters right around a
-    --      job change, before RefreshCertificationCache has run for the
-    --      new job — don't trust a stale cache entry scoped to an old job.)
-    --   4. Else, if Config.Departments[job.name].autoAccessGrade is a
-    --      number AND job.grade.level >= that number, return true (opt-in
-    --      bypass, defaults to nil/disabled per shipped config — do not
-    --      change the default).
-    --   5. Otherwise return false.
+    local Player = exports.qbx_core:GetPlayer(source)
+    if not Player or not Player.PlayerData then return false end
+
+    local job = Player.PlayerData.job
+    if not job or not Config.Departments[job.name] then return false end
+
+    -- The `cached.job == job.name` re-check matters right around a job
+    -- change, before RefreshCertificationCache has run for the new job —
+    -- don't trust a stale cache entry scoped to an old job.
+    local cached = Certifications[Player.PlayerData.citizenid]
+    if cached and cached.active and cached.job == job.name then
+        return true
+    end
+
+    -- Opt-in bypass, defaults to nil/disabled per shipped config — do not
+    -- change the default.
+    local dept = Config.Departments[job.name]
+    if type(dept.autoAccessGrade) == 'number' and job.grade and job.grade.level and job.grade.level >= dept.autoAccessGrade then
+        return true
+    end
+
     return false
 end
 
@@ -174,9 +198,10 @@ end
 --- @param citizenid string
 --- @param jobName string
 function RefreshCertificationCache(citizenid, jobName)
-    -- TODO(coder-backend): SPEC.md §4.3 "Exact query patterns" hot-path check:
-    --   SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1;
-    -- Certifications[citizenid] = { active = (row found), job = jobName }
+    local activeId = MySQL.scalar.await('SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
+        citizenid, jobName,
+    })
+    Certifications[citizenid] = { active = activeId ~= nil, job = jobName }
 end
 
 --- SPEC.md §4.2 certifier eligibility check (granter side only — does not
@@ -184,11 +209,42 @@ end
 --- @param source number
 --- @return boolean
 local function IsEligibleCertifier(source)
-    -- TODO(coder-backend): SPEC.md §4.2 points 1-2.
-    --   1. job.name must be a key in Config.Departments.
-    --   2. job.grade.level >= Config.Departments[job.name].certifierGrade
-    --      OR job.isboss == true (boss always qualifies regardless of the
-    --      configured numeric threshold).
+    local Player = exports.qbx_core:GetPlayer(source)
+    if not Player or not Player.PlayerData then return false end
+
+    local job = Player.PlayerData.job
+    if not job or not Config.Departments[job.name] then return false end
+
+    -- job.isboss always qualifies regardless of the configured numeric
+    -- threshold.
+    if job.isboss then return true end
+
+    local dept = Config.Departments[job.name]
+    return job.grade ~= nil and job.grade.level ~= nil and job.grade.level >= dept.certifierGrade
+end
+
+--- Returns true if `err` (the value pcall caught around the grant INSERT)
+--- represents a MySQL/MariaDB duplicate-key error (1062) on
+--- `uq_one_active_cert_per_job`. The exact shape of an error surfaced
+--- through oxmysql's `.await` wrapper could not be confirmed against a
+--- live oxmysql install in this sandbox, so this checks every shape the
+--- underlying mysql2 driver is documented to use (a table with an
+--- `.errno`/`.code` field, or a plain string containing the code) rather
+--- than assuming one specific shape.
+--- @param err any
+--- @return boolean
+local function IsDuplicateKeyError(err)
+    if type(err) == 'table' then
+        if err.errno == 1062 or err.code == 1062 then return true end
+        local message = err.message or err.sqlMessage
+        if type(message) == 'string' and (message:find('1062', 1, true) or message:find('ER_DUP_ENTRY', 1, true)) then
+            return true
+        end
+    elseif type(err) == 'string' then
+        if err:find('1062', 1, true) or err:find('ER_DUP_ENTRY', 1, true) or err:find('Duplicate entry', 1, true) then
+            return true
+        end
+    end
     return false
 end
 
@@ -196,53 +252,112 @@ end
 --- @param granterSrc number
 --- @param targetServerId number
 local function GrantCertification(granterSrc, targetServerId)
-    -- TODO(coder-backend): SPEC.md §4.2 + §4.3 flow table ("Grant" row).
-    --   1. IsEligibleCertifier(granterSrc) — reject with a notify if false.
-    --   2. Special case: granterSrc == targetServerId is self-certification
-    --      — only allowed if Config.AllowSelfCertification == true (§4.1).
-    --      If self-cert and the flag is false, reject.
-    --   3. Resolve target player object for targetServerId; reject if
-    --      offline (grant requires an online target — unlike revoke, which
-    --      SPEC.md §4.3's flow table explicitly says "works offline").
-    --   4. Target's job.name must be a key in Config.Departments (§4.2.3 —
-    --      cross-department granting IS currently allowed per spec; this is
-    --      flagged as an open question in SPEC.md §9.2, not resolved here —
-    --      do not silently restrict to same-department without flagging it
-    --      back up if you decide to change this).
-    --   5. Unless self-certifying, enforce Config.CertifyProximityMeters
-    --      between granter's and target's LIVE server-side coordinates
-    --      (GetEntityCoords on both peds) — never trust client-claimed
-    --      proximity.
-    --   6. (New, §4.2.5) Target model check: IsConfiguredK9Model(
-    --      GetEntityModel(GetPlayerPed(targetServerId))) must be true —
-    --      read live server-side, NEVER a client-reported model. Applies
-    --      UNIFORMLY whether or not this is a self-certification (granter
-    --      == target) — do not skip it for the self-cert case; a
-    --      certifier-grade officer bootstrapping their own cert must
-    --      themselves be playing a K9-model character for this to pass.
-    --      Grant-only per §4.2.5 — RevokeCertification must NOT run this
-    --      check.
-    --   7. Check for an existing active row for (targetCitizenid, job) —
-    --      SPEC.md §4.3 invariant: at most one active=1 row per
-    --      (citizenid, job), backstopped by the DB's
-    --      `uq_one_active_cert_per_job` unique index. If a pre-check finds
-    --      one, this is a no-op ("already certified" reply), not an error.
-    --   8. INSERT INTO k9_certifications (citizenid, job, granted_by)
-    --      VALUES (?, ?, ?); — MUST catch MySQL duplicate-key error 1062
-    --      on this INSERT and treat it as the same "already certified"
-    --      no-op (closes the check-then-act race the app-level pre-check
-    --      alone leaves open — see SPEC.md §4.3 "DB-level backstop").
-    --      See qbx_k9unit/sql/install.sql for the exact shipped column
-    --      set (db-schema-reviewed) rather than re-deriving it from
-    --      SPEC.md's copy in case of drift.
-    --   9. RefreshCertificationCache(targetCitizenid, job.name) if target
-    --      is online (keeps the cache authoritative rather than
-    --      hand-rolling `Certifications[targetCitizenid] = {...}` here).
-    --   10. Write the read-only metadata.k9certified = true mirror on the
-    --      target's qbx_core metadata for client HUD display ONLY (§4.3 —
-    --      "never read by any server-side authorization check"; add a code
-    --      comment at the write site repeating that constraint).
-    --   11. Notify both granter and (if online) target.
+    if type(targetServerId) ~= 'number' then
+        NotifyPlayer(granterSrc, 'Invalid target.', 'error')
+        return
+    end
+
+    if not IsEligibleCertifier(granterSrc) then
+        NotifyPlayer(granterSrc, 'You are not authorized to certify K9 handlers.', 'error')
+        return
+    end
+
+    -- §4.1: self-certification only allowed if the flag is enabled.
+    local isSelfCert = granterSrc == targetServerId
+    if isSelfCert and not Config.AllowSelfCertification then
+        NotifyPlayer(granterSrc, 'Self-certification is disabled on this server.', 'error')
+        return
+    end
+
+    -- Grant requires an online target — unlike revoke, which SPEC.md
+    -- §4.3's flow table explicitly documents as working offline.
+    local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
+    if not targetPlayer or not targetPlayer.PlayerData then
+        NotifyPlayer(granterSrc, 'Target must be online to be certified.', 'error')
+        return
+    end
+
+    -- §4.2.3: cross-department granting IS currently allowed (open
+    -- question §9.2 in SPEC.md, not resolved here) — this only requires
+    -- the target be in *some* configured department, not the SAME one as
+    -- the granter. Do not silently restrict to same-department.
+    local targetJob = targetPlayer.PlayerData.job
+    if not targetJob or not Config.Departments[targetJob.name] then
+        NotifyPlayer(granterSrc, 'Target is not employed by an eligible department.', 'error')
+        return
+    end
+
+    -- §4.2.4 proximity — skipped only for self-cert (nothing to measure
+    -- distance to). Live server-side coordinates only, never client-claimed.
+    if not isSelfCert then
+        local granterPed = GetPlayerPed(granterSrc)
+        local targetPed = GetPlayerPed(targetServerId)
+        local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
+        if dist > Config.CertifyProximityMeters then
+            NotifyPlayer(granterSrc, 'Target is too far away to certify.', 'error')
+            return
+        end
+    end
+
+    -- §4.2.5 (grant-only, applies UNIFORMLY even to self-certification):
+    -- target's LIVE server-side ped model must be a configured K9 model.
+    local targetModel = GetEntityModel(GetPlayerPed(targetServerId))
+    if not IsConfiguredK9Model(targetModel) then
+        NotifyPlayer(granterSrc, 'Target is not playing a recognized K9 model.', 'error')
+        return
+    end
+
+    local targetCitizenid = targetPlayer.PlayerData.citizenid
+    local jobName = targetJob.name
+
+    -- App-level pre-check (§4.3 invariant: at most one active row per
+    -- (citizenid, job)) — backstopped below by the DB's unique index in
+    -- case of a check-then-act race.
+    local existingId = MySQL.scalar.await('SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
+        targetCitizenid, jobName,
+    })
+    if existingId then
+        NotifyPlayer(granterSrc, 'Target already holds an active certification for this department.', 'inform')
+        return
+    end
+
+    local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
+    local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
+    if not granterCitizenid then
+        NotifyPlayer(granterSrc, 'Unable to resolve your own citizen ID.', 'error')
+        return
+    end
+
+    local insertOk, insertResultOrErr = pcall(MySQL.insert.await, 'INSERT INTO k9_certifications (citizenid, job, granted_by) VALUES (?, ?, ?)', {
+        targetCitizenid, jobName, granterCitizenid,
+    })
+
+    if not insertOk then
+        if IsDuplicateKeyError(insertResultOrErr) then
+            -- Another request won the check-then-act race between the
+            -- pre-check above and this INSERT (SPEC.md §4.3 DB-level
+            -- backstop, `uq_one_active_cert_per_job`) — treat identically
+            -- to the normal "already certified" no-op, not as an
+            -- unhandled error.
+            RefreshCertificationCache(targetCitizenid, jobName)
+            NotifyPlayer(granterSrc, 'Target already holds an active certification for this department.', 'inform')
+            return
+        end
+
+        print(('[qbx_k9unit] GrantCertification INSERT failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(insertResultOrErr)))
+        NotifyPlayer(granterSrc, 'An error occurred while certifying the target.', 'error')
+        return
+    end
+
+    RefreshCertificationCache(targetCitizenid, jobName)
+
+    -- Read-only mirror for client HUD display ONLY (SPEC.md §4.3) — NEVER
+    -- read by any server-side authorization check. Do not add a read of
+    -- this field to HasK9Access or any other gate.
+    targetPlayer.Functions.SetMetaData('k9certified', true)
+
+    NotifyPlayer(granterSrc, 'Target has been certified as a K9 handler.', 'success')
+    NotifyPlayer(targetServerId, 'You have been certified as a K9 handler.', 'success')
 end
 
 --- SPEC.md §4.2/§4.3 revoke flow (manual). Called by both event 3 and
@@ -251,28 +366,104 @@ end
 --- @param granterSrc number
 --- @param targetServerId number
 local function RevokeCertification(granterSrc, targetServerId)
-    -- TODO(coder-backend): SPEC.md §4.3 flow table ("Revoke (manual)" row).
-    -- Same eligibility/self-cert/proximity rules as GrantCertification
-    -- (minus the model check) EXCEPT: `targetServerId` here may need to
-    -- resolve an OFFLINE citizen (the command form takes an id that "works
-    -- offline" per the flow table — clarify whether offline revoke uses a
-    -- server id, citizenid, or a name lookup, since a disconnected player
-    -- has no live server id; this scaffold assumes targetServerId per the
-    -- given contract signature, but if the target is offline there IS no
-    -- server id to check proximity against — in that case the proximity
-    -- check in §4.2 point 4 cannot apply, and revoking an offline target
-    -- is presumably exempt from proximity by necessity. This is implied,
-    -- not spelled out verbatim in SPEC.md — confirm this reading rather
-    -- than silently assuming further than this note).
-    --   1. IsEligibleCertifier(granterSrc).
-    --   2. UPDATE k9_certifications SET active = 0, revoked_by = ?,
-    --      revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ?
-    --      AND active = 1; (no LIMIT needed — the unique constraint
-    --      guarantees at most one row matches, per SPEC.md §4.3).
-    --   3. RefreshCertificationCache(targetCitizenid, job) if target is
-    --      online and their cache is scoped to that job.
-    --   4. Update/clear metadata.k9certified mirror if target is online.
-    --   5. Notify granter, and target if online.
+    if type(targetServerId) ~= 'number' then
+        NotifyPlayer(granterSrc, 'Invalid target.', 'error')
+        return
+    end
+
+    if not IsEligibleCertifier(granterSrc) then
+        NotifyPlayer(granterSrc, 'You are not authorized to revoke K9 certifications.', 'error')
+        return
+    end
+
+    local isSelfCert = granterSrc == targetServerId
+    if isSelfCert and not Config.AllowSelfCertification then
+        NotifyPlayer(granterSrc, 'Self-certification is disabled on this server.', 'error')
+        return
+    end
+
+    local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
+    local targetCitizenid, targetJobName, targetIsOnline
+
+    if targetPlayer and targetPlayer.PlayerData then
+        targetIsOnline = true
+        targetCitizenid = targetPlayer.PlayerData.citizenid
+        targetJobName = targetPlayer.PlayerData.job and targetPlayer.PlayerData.job.name
+
+        -- Online target: same proximity rule as grant (§4.2.4), skipped
+        -- only for self-cert (nothing to measure distance to).
+        if not isSelfCert then
+            local granterPed = GetPlayerPed(granterSrc)
+            local targetPed = GetPlayerPed(targetServerId)
+            local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
+            if dist > Config.CertifyProximityMeters then
+                NotifyPlayer(granterSrc, 'Target is too far away to revoke their certification.', 'error')
+                return
+            end
+        end
+    else
+        -- JUDGMENT CALL (flagged in this function's original TODO,
+        -- confirmed per instructions from the calling session): a
+        -- disconnected player has no live server id / ped at all —
+        -- GetPlayer(source) only ever resolves a CURRENTLY CONNECTED
+        -- player, and FiveM invalidates/recycles numeric source ids on
+        -- disconnect. §4.2 point 4's proximity check is inherently a
+        -- comparison of two LIVE ped coordinates; with no live target ped
+        -- to read a position from, that check cannot apply and is skipped
+        -- by necessity for a genuinely offline target — that reading is
+        -- confirmed here.
+        --
+        -- What this does NOT resolve: this event/command's contract only
+        -- ever hands this function a bare numeric targetServerId, never a
+        -- citizenid, and there is no way to translate a stale/disconnected
+        -- numeric id back into a citizenid + job to run the revoke UPDATE
+        -- against. SPEC.md §4.3's flow table describes manual revoke as
+        -- working "offline," but that capability would require this
+        -- event/command to accept a citizenid (or another persistent
+        -- identifier) instead of a server id — a bigger contract change
+        -- than confirming the proximity reading calls for. Rather than
+        -- silently inventing an undocumented fallback (e.g. treating the
+        -- raw number as some other kind of id), this reports the
+        -- limitation back to the granter. Flagging back to
+        -- coder-architect/team-leader: a true offline-by-citizenid revoke
+        -- would need its own command/event, e.g.
+        -- `/k9decertifyoffline [citizenid]`.
+        NotifyPlayer(granterSrc, 'That player is not currently connected; revoking an offline handler by ID is not supported by this command.', 'error')
+        return
+    end
+
+    if not targetJobName or not Config.Departments[targetJobName] then
+        NotifyPlayer(granterSrc, 'Target does not hold a certification for an eligible department.', 'error')
+        return
+    end
+
+    local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
+    local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
+    if not granterCitizenid then
+        NotifyPlayer(granterSrc, 'Unable to resolve your own citizen ID.', 'error')
+        return
+    end
+
+    -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
+    -- row matches (SPEC.md §4.3).
+    local affectedRows = MySQL.update.await(
+        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
+        { granterCitizenid, targetCitizenid, targetJobName }
+    )
+
+    if not affectedRows or affectedRows == 0 then
+        NotifyPlayer(granterSrc, 'Target does not hold an active certification for this department.', 'inform')
+        return
+    end
+
+    if targetIsOnline then
+        RefreshCertificationCache(targetCitizenid, targetJobName)
+        -- HUD display mirror only (SPEC.md §4.3) — never read for authorization.
+        targetPlayer.Functions.SetMetaData('k9certified', false)
+        NotifyPlayer(targetServerId, 'Your K9 certification has been revoked.', 'error')
+    end
+
+    NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')
 end
 
 --- SPEC.md §4.4 (NEW): automatic revoke when actually leaving the
@@ -281,31 +472,37 @@ end
 --- @param source number
 --- @param job table  -- new PlayerJob object, per qbx_core's event payload
 AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
-    -- TODO(coder-backend): SPEC.md §4.4 handler logic.
-    --   1. Resolve citizenid for `source`.
-    --   2. local cached = Certifications[citizenid] — this already tracks
-    --      which job the cached cert was scoped to (see the STRUCTURAL
-    --      NOTE at the top of this file for why the cache stores `.job`).
-    --   3. Guard: if not (cached and cached.active) then return end — no
-    --      active cert to revoke, nothing to do.
-    --   4. Guard: if job.name == cached.job then return end — SAME
-    --      department, this is a grade/promotion change, NOT a
-    --      department change. Per §4.4 "Important consequences": a
-    --      promotion/demotion must NOT revoke the certification. This
-    --      guard is the entire point of storing `.job` on the cache —
-    --      do not remove it or every promotion silently strips certs.
-    --   5. UPDATE k9_certifications SET active = 0,
-    --      revoked_by = 'system:job_change', revoked_at = CURRENT_TIMESTAMP
-    --      WHERE citizenid = ? AND job = ? AND active = 1; (job = cached.job,
-    --      the OLD department, not the new one).
-    --   6. RefreshCertificationCache(citizenid, job.name) — repopulate the
-    --      cache scoped to the NEW job (almost certainly `active = false`
-    --      unless they happen to already hold a separate active cert for
-    --      that new department from a prior stint — a fresh grant is
-    --      required either way per §9 item 3, this just keeps the cache
-    --      accurate for whatever the new job actually is).
-    --   7. Notify the player if online: "Your K9 certification has been
-    --      revoked — you are no longer employed by <department>."
+    local Player = exports.qbx_core:GetPlayer(source)
+    if not Player or not Player.PlayerData then return end
+
+    local citizenid = Player.PlayerData.citizenid
+    local cached = Certifications[citizenid]
+
+    -- No active cert to revoke, nothing to do.
+    if not (cached and cached.active) then return end
+
+    -- SAME department, this is a grade/promotion change, NOT a department
+    -- change (§4.4 "Important consequences": a promotion/demotion must
+    -- NOT revoke the certification). This guard is the entire point of
+    -- storing `.job` on the cache — do not remove it or every promotion
+    -- silently strips certs.
+    if not job or job.name == cached.job then return end
+
+    local oldJob = cached.job
+
+    MySQL.update.await(
+        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
+        { 'system:job_change', citizenid, oldJob }
+    )
+
+    -- Repopulate the cache scoped to the NEW job (almost certainly
+    -- active = false unless they already hold a separate active cert for
+    -- that new department from a prior stint — a fresh grant is required
+    -- either way per SPEC.md §9 item 3).
+    RefreshCertificationCache(citizenid, job.name)
+
+    local deptLabel = (Config.Departments[oldJob] and Config.Departments[oldJob].label) or oldJob
+    NotifyPlayer(source, ('Your K9 certification has been revoked — you are no longer employed by %s.'):format(deptLabel), 'error')
 end)
 
 lib.callback.register('qbx_k9unit:server:hasK9Access', function(source)
@@ -321,20 +518,49 @@ RegisterNetEvent('qbx_k9unit:server:revokeHandler', function(targetServerId)
 end)
 
 RegisterCommand('k9certify', function(source, args)
-    -- TODO(coder-backend): parse/validate args[1] as a number before
-    -- calling GrantCertification; reject non-numeric input with a usage
-    -- message rather than letting a bad value reach the grant flow.
-    GrantCertification(source, tonumber(args[1]))
+    -- Validate args[1] is actually numeric before calling into the grant
+    -- flow — a modified/careless caller could hand this a non-numeric
+    -- string, and GrantCertification's own `type(targetServerId) ~=
+    -- 'number'` guard exists for the net-event path, but the command path
+    -- should reject with a clear usage message instead of silently
+    -- forwarding nil.
+    local targetServerId = tonumber(args[1])
+    if not targetServerId then
+        NotifyPlayer(source, 'Usage: /k9certify [server id]', 'error')
+        return
+    end
+    GrantCertification(source, targetServerId)
 end, false)
 
 RegisterCommand('k9decertify', function(source, args)
-    -- TODO(coder-backend): same arg validation as k9certify above.
-    RevokeCertification(source, tonumber(args[1]))
+    -- Same arg validation as k9certify above.
+    local targetServerId = tonumber(args[1])
+    if not targetServerId then
+        NotifyPlayer(source, 'Usage: /k9decertify [server id]', 'error')
+        return
+    end
+    RevokeCertification(source, targetServerId)
 end, false)
 
--- TODO(coder-backend): SPEC.md §4.3 "Server-side cache" — on player load,
--- call RefreshCertificationCache(citizenid, job.name) for the player's
--- CURRENT job. Use qbx_core's actual player-loaded event/payload (confirm
--- the exact name against qbx_core itself rather than assuming — e.g.
--- `QBCore:Server:PlayerLoaded`).
--- AddEventHandler('QBCore:Server:PlayerLoaded', function(Player) end)
+-- CONFIDENCE NOTE (not silently asserted as verified fact): no qbx_core
+-- install was reachable in this sandbox to inspect its actual
+-- exports/events against (the filesystem was searched; only this
+-- resource's own files exist here). SPEC.md §4.4 already confirms
+-- 'QBCore:Server:OnJobUpdate' as a real, current qbx_core
+-- compatibility-bridge event. The player-load equivalent below,
+-- 'QBCore:Server:PlayerLoaded', is used here with MEDIUM-HIGH confidence
+-- based on established Qbox/QBCore convention — it is the same
+-- foundational legacy event name every pre-existing QB job/feature
+-- resource depends on, and the same compatibility bridge confirmed to
+-- preserve OnJobUpdate is documented (docs.qbox.re) to preserve this one
+-- too — but it is NOT independently verified against live qbx_core source
+-- in this session. If the cache silently stays empty for freshly-loaded
+-- players (they show as uncertified despite holding a real active row),
+-- check this event name against the actual installed qbx_core version
+-- first.
+AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
+    if not Player or not Player.PlayerData then return end
+    local job = Player.PlayerData.job
+    if not job then return end
+    RefreshCertificationCache(Player.PlayerData.citizenid, job.name)
+end)
