@@ -20,6 +20,15 @@ coder-ui's call, not decided here — coordinate with coder-ui before
 building `html/` against this so the two sides don't diverge on the one
 thing that must match exactly: the payload shape in §3 below.
 
+> **Update (product-agent, 2026-08-23, reconciliation pass):**
+> `phase2_notes/phase4_hud_early_design.md` now does exist and independently
+> arrived at a lean toward the same gate this note originally recommended
+> (`IsOwnModelK9()`), while leaving it explicitly open. Both notes turned out
+> to be reasoning from the wrong precedent — see the corrected §6 below.
+> Nothing in §1-§5 or §7 changes as a result: naming, payload shape, focus
+> policy, and push cadence are all independent of which local predicate
+> ultimately feeds `visible`.
+
 ---
 
 ## 1. Why this HUD does not fit the Phase 1 naming convention as-is
@@ -227,7 +236,19 @@ in `client/movement.lua`):
    costs nothing meaningful — this is not the same class of cost as
    re-awaiting a server callback every 250ms, and should not be conflated
    with that concern even though the interval looks similar to
-   `LEASH_TICK_MS`.
+   `LEASH_TICK_MS`. **Footnote added after §6's resolution:** the gate
+   itself (§6, now `CanShowK9UI()`) *does* call through to `HasK9Access()`,
+   which has a real server round trip behind it — but `client/main.lua`'s
+   existing `HAS_K9_ACCESS_CACHE_TTL_MS = 1000` debounce means
+   re-evaluating `CanShowK9UI()` once per 250ms poll tick triggers at most
+   one fresh `lib.callback.await` per second, not one per poll tick — the
+   same cache every other `CanShowK9UI()`/`HasK9Access()` call site in this
+   codebase (every radial item's `onSelect`, `client/vehicle.lua`'s
+   `canInteract`) already relies on for exactly this reason. This does not
+   reintroduce the "hot-path callback" cost class this paragraph is
+   drawing a distinction against; it's specifically the four vitals reads
+   that are unconditionally free regardless of gate, not a claim that
+   nothing in the tick ever touches the network.
 2. **Only actually call `SendNUIMessage` when something worth repainting
    changed**: compare each of the four values against what was last sent,
    using a small change-threshold (epsilon) per field rather than exact
@@ -275,44 +296,72 @@ constants local to `client/hud.lua`, the same way `LEASH_PULL_ZONE_FACTOR`/
 
 ---
 
-## 6. Visibility predicate — open question, flagged not resolved here
+## 6. Visibility predicate — RESOLVED: `CanShowK9UI()`, not `IsOwnModelK9()` alone
+
+> **Correction (product-agent, 2026-08-23, reconciliation pass):** this
+> section originally recommended gating "controlled" on `IsOwnModelK9()`
+> alone, reasoning by analogy to `ToggleK9Camera()`/thermal-night-vision's
+> settled precedent (§11.5: "innate perception, not a granted departmental
+> privilege"). That analogy does not hold for this feature — the
+> resolution below reverses that recommendation. Nothing about naming,
+> payload shape (§2-§3), focus policy (§4), or push cadence (§5, aside from
+> the footnote added there) changes as a result; only the boolean that
+> feeds `visible` changes.
 
 SPEC.md §6.6's exact wording: "visible only while a K9 is spawned and
 controlled/nearby, and only if `Config.Features.HealthStaminaHUD` is true."
-The `Config.Features.HealthStaminaHUD` half is unambiguous (gate the whole
-poll loop on it per §5 point 4/idle-backoff — when false, never poll faster
-than idle and never push `visible = true`). The "controlled/**nearby**"
-half is not fully unambiguous, and is a scope decision, not a wiring one:
+This note originally treated "controlled" as unambiguous and mapped it
+straight to `IsOwnModelK9()`. It isn't unambiguous, and SPEC.md already
+settles it elsewhere — a cross-reference this note missed on first draft:
 
-- **"Controlled"** clearly means "while the local player is themselves
-  playing a K9-model character" — this maps directly to the existing,
-  free, local `IsOwnModelK9()` from `client/main.lua`. Recommend gating
-  visibility on `IsOwnModelK9()` alone (not `CanShowK9UI()` /
-  `HasK9Access()`), for the same reason `client/movement.lua`'s
-  `ToggleK9Camera` already gates on `IsOwnModelK9()` only and explicitly
-  declines to require certification for a personal, cosmetic status
-  readout: no network round trip needed just to decide whether to show
-  the player their own vitals, and it's meaningless (not a security
-  concern) for a human-model character regardless of job/cert. This
-  mirrors `client/main.lua`'s own documented open-question precedent for
-  the camera toggle rather than inventing new reasoning.
-- **"...or nearby"** is genuinely ambiguous and not resolved here: it
-  could mean a handler/officer partner (the leash-anchor role from
-  `client/movement.lua`'s consent system) sees *their K9's* vitals while
-  nearby/leashed to them, which `IsOwnModelK9()` alone cannot satisfy —
-  that would need the payload to identify *whose* vitals are being shown
-  (e.g. an added `subjectNetId`/`isSelf` field) and a second local
-  predicate (something like "am I currently leashed as the officer role to
-  a K9 whose vitals I should see," reusing `IsLeashed()`'s existing state
-  from `client/movement.lua` rather than inventing new leash-adjacent
-  state). **Flagged for coder-ui/coder-architect to resolve, not decided
-  in this note** — the bridge mechanics above (message shape, throttle,
-  focus policy) work identically either way; only the local
-  boolean/predicate feeding `visible` and the identity of whose numbers
-  get read in §3 would change. Do not block wiring `client/hud.lua`'s own
-  self-vitals case on this question being resolved — ship "controlled"
-  first, extend to "nearby" as a additive, non-breaking payload field
-  later if that's confirmed in scope.
+- **SPEC.md §6.1's own Phase 1 acceptance criterion** (the "Core Systems &
+  Controls" group, not §6.6) already states: "A player whose character is
+  a K9 ... whose job is in `Config.Departments`, and who holds an active
+  certification for that job (§4) sees K9-specific UI (**radial menu, HUD
+  once Phase 4 lands**); an uncertified K9-model player or a certified
+  player whose job isn't in `Config.Departments` does not." That sentence
+  puts the vitality HUD in the **same clause, gated the same way**, as the
+  radial menu (Bark/Sit/Leash/Vehicle) — which is unambiguously
+  `CanShowK9UI()`-gated, never `IsOwnModelK9()`-only. This is a standing,
+  already-checkable acceptance criterion, not a new call being made in
+  this reconciliation pass.
+- **Applying §11.5's own "innate perception vs. granted privilege" test,
+  landing the other way this time:** thermal/night vision is the K9's own
+  sense organs — any player wearing the model perceives heat/darkness
+  regardless of whether they're on-duty, certified, or even employed by a
+  department at all; gating it on certification would mean denying someone
+  their own eyesight, which is why §11.5 landed on `IsOwnModelK9()` alone.
+  The vitality HUD is not perception, it's a **department-issued
+  monitoring instrument** — §6.6 groups it with the XP/progression system
+  (§6.5's `speedMultiplier`/`scentRange` tiers) and the mood/fatigue/
+  fear-stress systems, all framed around a K9's *working* status for a
+  department, not its bare biological existence. An uncertified player who
+  happens to be wearing a K9 model (or one whose job just left the
+  department) has no in-fiction standing to see an official department
+  vitals readout, for the same reason they don't get the radial menu's
+  Leash/Vehicle actions either.
+- **Practical consequence:** `client/hud.lua`'s gate is `CanShowK9UI()`
+  (the existing combinator in `client/main.lua`, already used by every
+  radial item's `onSelect` re-check), evaluated on the same per-tick
+  cadence §5 already describes — see §5 point 1's added footnote for why
+  this doesn't reintroduce a server-hot-path cost.
+
+**"...or nearby" remains genuinely open, not resolved by this pass**: it
+could mean a handler/officer partner sees *their K9's* vitals while
+nearby/leashed to them, which `CanShowK9UI()` alone (evaluated against the
+*local* player) cannot satisfy on its own — that would still need the
+payload to identify *whose* vitals are being shown (e.g. an added
+`subjectNetId`/`isSelf` field) and a second local predicate reusing
+`IsLeashed()`'s existing state from `client/movement.lua` rather than
+inventing new leash-adjacent state. **Flagged for coder-ui/coder-architect
+to resolve, not decided here** — the bridge mechanics above (message shape,
+throttle, focus policy) work identically either way; only the local
+boolean/predicate feeding `visible` and the identity of whose numbers get
+read in §3 would change. Do not block wiring `client/hud.lua`'s own
+self-vitals case (now unambiguously `CanShowK9UI()`-gated) on this question
+being resolved — ship "controlled" first, extend to "nearby" as an
+additive, non-breaking payload field later if that's confirmed in scope.
+
 - **Ecosystem overlap, flagged not resolved**: most Qbox/QBCore servers
   already run a separate core HUD resource showing the *human* character's
   own hunger/thirst/health/armor persistently on screen. Since hunger/
@@ -357,8 +406,9 @@ implementation will need, for whoever picks this up:
 
 - **coder-ui** — confirm/replace this note's payload shape (§3) against
   whatever `phase4_hud_early_design.md` ends up containing once it exists;
-  resolve §6's "nearby"/partner-visibility scope and the core-HUD overlap
-  question; confirm `pointer-events: none` gets applied in `html/`'s CSS
+  the self-visibility gate is now resolved (`CanShowK9UI()`, §6) — only
+  the "nearby"/partner-visibility scope and the core-HUD overlap question
+  remain open; confirm `pointer-events: none` gets applied in `html/`'s CSS
   (§4) — this is the one item here with a real, easy-to-miss failure mode
   if skipped.
 - **coder-architect** — confirm the `hunger`/`thirst` metadata field names
@@ -378,5 +428,7 @@ implementation will need, for whoever picks this up:
 - **integration-verifier** — once `client/hud.lua` and `html/` exist, verify
   `hud:ready`/`hud:updateVitals` are spelled identically on both sides
   (this is exactly the "callback name mismatch" failure class this agent's
-  own process explicitly exists to prevent) and that no `SetNuiFocus` call
-  was accidentally added anywhere in `client/hud.lua`.
+  own process explicitly exists to prevent), that `client/hud.lua`'s gate
+  is actually `CanShowK9UI()` per §6's resolution (not a regression back to
+  `IsOwnModelK9()` alone), and that no `SetNuiFocus` call was accidentally
+  added anywhere in `client/hud.lua`.

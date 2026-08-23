@@ -21,6 +21,16 @@ Phase 2 notes. Treat every "OPEN" item below as needing an actual product/
 architecture decision before implementation, not just a reconciliation
 pass against an already-written detailed spec.
 
+> **Update (product-agent, 2026-08-23, reconciliation pass):** §5's
+> visibility-gate question below is now **RESOLVED** — see the callout
+> inserted at the top of §5. It turns out no new Phase 4 §11-equivalent
+> detail section was actually needed to settle this one: SPEC.md §6.1 (a
+> *Phase 1* acceptance criterion) already answers it, and this note (like
+> its sibling `phase2_notes/phase4_hud_bridge_design.md`) simply didn't
+> cross-reference that line before drafting option (b)'s "tentative lean."
+> Nothing else in this note changes as a result of that resolution — see
+> §5's callout for exactly what's affected and what isn't.
+
 **Scope of this note:** `Config.Features.HealthStaminaHUD` only — the
 first bullet of SPEC.md §6.6 (health/stamina/hunger/thirst). §6.6's other
 six bullets (fatigue, mood, fear/stress, distraction, injury/limping, K9
@@ -205,7 +215,20 @@ requires a new server round trip (see §6 for why):
 
 ---
 
-## 5. OPEN QUESTION — when should the HUD actually be visible? (flagged per explicit instruction, not guessed)
+## 5. Visibility gate — RESOLVED: `CanShowK9UI()`
+
+> **Resolution (product-agent, 2026-08-23, reconciliation pass):** this
+> section originally posed four candidate readings for SPEC.md §6.6's
+> "controlled/nearby" language and tentatively leaned toward option (b),
+> `IsOwnModelK9()`, by analogy to the camera-toggle/vision precedent. That
+> lean is **overturned** — the correct answer is option **(a)**,
+> `CanShowK9UI()`. The four original options are kept below verbatim as a
+> record of what was actually considered, with the resolution and its
+> reasoning appended after them rather than silently rewritten — matching
+> `phase2_notes/thermal_night_vision.md`'s own convention for how a
+> corrected earlier guess gets documented (called out explicitly, not
+> quietly edited away). Only the "controlled" half is resolved here; see
+> the final bullet below for what's still open.
 
 SPEC.md §6.6's own bullet text: "visible only while a K9 is spawned and
 controlled/nearby." This phrasing does not map cleanly onto the corrected,
@@ -213,8 +236,8 @@ no-spawn model (SPEC.md §1/§4.5/§9's repeated "REMOVED... do not
 resurrect... SpawnK9/DespawnK9" framing) — it reads like leftover language
 from the pre-correction draft that §6.6 was never revisited to fix, the
 same category of stale wording the top-of-file revision notes call out
-elsewhere in SPEC.md. Four candidate readings, laid out without picking one
-as final:
+elsewhere in SPEC.md. Four candidate readings, as originally laid out
+without picking one as final:
 
 **(a) Whenever `CanShowK9UI()` is true** — mirrors the radial menu's exact
 gate (certified K9-model player, in a valid department, server-verified
@@ -248,20 +271,85 @@ the camera/vision-toggle precedent's "player-controlled QoL" framing, but
 over-reading toggleability into a bullet that intends an always-on element
 once the gating condition ((a)/(b)/(c)) holds.
 
-**Recommendation:** get an explicit answer from product-agent/team-leader
-before implementation, the same way Phase 2's vision-gating question
-(`CanShowK9UI()` vs. `IsOwnModelK9()`, `phase2_notes/EXPORT_TRACKING.md`'s
-"Outstanding, unresolved" item 3) needed one rather than being guessed
-independently by two design notes. This note's lean is (b), but
-implementation should not proceed on that lean alone without confirmation.
+**Resolution: (a), `CanShowK9UI()`.** The original recommendation to get an
+explicit answer before implementation (rather than guessing independently,
+the way Phase 2's vision-gating question needed one) turned out not to
+require a *new* decision at all — SPEC.md already contains one, in a
+section this note didn't cross-check against before leaning toward (b):
+
+- **SPEC.md §6.1** (Phase 1's "Core Systems & Controls" acceptance
+  criteria, not §6.6) already states: "A player whose character is a K9 ...
+  whose job is in `Config.Departments`, and who holds an active
+  certification for that job (§4) sees K9-specific UI (**radial menu, HUD
+  once Phase 4 lands**); an uncertified K9-model player or a certified
+  player whose job isn't in `Config.Departments` does not." The vitality
+  HUD is named in the *same clause, under the same gate*, as the radial
+  menu — which is unambiguously `CanShowK9UI()`, never `IsOwnModelK9()`
+  alone. This is a standing, already-checkable Phase 1 acceptance
+  criterion, not a fresh product call being made in this reconciliation
+  pass.
+- **Why (b)'s vision analogy was the wrong one to draw**: thermal/night
+  vision is the K9's own sense organs — perceived regardless of on-duty
+  status, certification, or department employment; gating it on
+  certification would mean denying someone their own eyesight, which is
+  exactly why §11.5 landed on `IsOwnModelK9()` alone for vision. The
+  vitality HUD is not perception — it is a **department-issued monitoring
+  instrument**, presented in §6.6 alongside the XP/progression tier system
+  (§6.5's `speedMultiplier`/`scentRange`) and the mood/fatigue/fear-stress
+  systems, all of which frame the K9 as a *working* department asset, not
+  a bare biological entity. An uncertified player wearing a K9 model (or
+  one whose job just left the department) has no in-fiction standing to
+  see an official department vitals readout, for the same reason they
+  don't get the radial menu's Leash/Vehicle actions either — this is the
+  same reasoning `phase2_notes/phase4_hud_bridge_design.md`'s §6 now uses
+  after its own correction.
+- **Practical consequence for §6 below and for `client/hud.lua`
+  eventually**: the gate is `CanShowK9UI()`, the existing combinator in
+  `client/main.lua`, re-evaluated every tick per §6's per-cycle
+  re-evaluation design (unaffected by this resolution) — `HasK9Access()`'s
+  existing `HAS_K9_ACCESS_CACHE_TTL_MS = 1000` debounce means this doesn't
+  reintroduce a real per-poll network cost (see
+  `phase2_notes/phase4_hud_bridge_design.md` §5 point 1's footnote for the
+  detailed argument, not re-derived twice here).
+
+**"...or nearby" is still genuinely ambiguous and not resolved by this
+pass**: it could mean a handler/officer partner (the leash-anchor role from
+`client/movement.lua`'s consent system) sees *their K9's* vitals while
+nearby/leashed to them, which `CanShowK9UI()` evaluated against the local
+player alone cannot satisfy — that would need the payload to identify
+*whose* vitals are being shown (e.g. an added `subjectNetId`/`isSelf`
+field) and a second local predicate (something like "am I currently
+leashed as the officer role to a K9 whose vitals I should see," reusing
+`IsLeashed()`'s existing state from `client/movement.lua` rather than
+inventing new leash-adjacent state). **Still flagged for coder-ui/
+coder-architect to resolve, not decided in this note** — the bridge
+mechanics (message shape, throttle, focus policy) work identically either
+way; only the local boolean/predicate feeding `visible` and the identity of
+whose numbers get read in §4 would change. Do not block wiring
+`client/hud.lua`'s own self-vitals case (now unambiguously
+`CanShowK9UI()`-gated) on this question being resolved — ship "controlled"
+first, extend to "nearby" as an additive, non-breaking payload field later
+if that's confirmed in scope.
+
+- **Ecosystem overlap, flagged not resolved**: most Qbox/QBCore servers
+  already run a separate core HUD resource showing the *human* character's
+  own hunger/thirst/health/armor persistently on screen. Since hunger/
+  thirst here are read from the same `QBX.PlayerData.metadata` values that
+  hud resource likely also reads, a K9-model character will, under the
+  naive design above, show **two** overlapping hunger/thirst readouts at
+  once (the server's existing core HUD, plus this one) unless the server's
+  core HUD is itself configured to suppress while the player is
+  K9-modeled, or this HUD's placement/styling is deliberately
+  differentiated. Purely a UX/layout call for coder-ui, not a bridge
+  concern — flagging so it isn't discovered for the first time during a QA
+  pass.
 
 ---
 
 ## 6. Integration with `client/main.lua`'s `CanShowK9UI()`/`IsOwnModelK9()` pattern
 
-Whichever answer §5 lands on, the actual gating call must **reuse** one of
-the two existing resource-global functions `client/main.lua` already
-exposes — never a third, parallel model/access check invented in a new
+Per §5's resolution, the actual gating call is `CanShowK9UI()` — reused
+directly, never a third, parallel model/access check invented in a new
 `client/hud.lua`. This mirrors `client/main.lua`'s own stated rationale for
 `CanShowK9UI()` existing as a single combinator in the first place: "the
 'how do we combine these' policy lives in exactly one place." Concretely:
@@ -277,10 +365,10 @@ exposes — never a third, parallel model/access check invented in a new
   "don't run a loop when the feature isn't in use" principle
   `phase2_notes/thermal_night_vision.md` §2c/§6 already established for
   `client/vision.lua`'s proposed maintenance thread. The thread's own tick
-  re-evaluates the §5 gate every cycle (not a one-time latch) so losing the
-  gate mid-session (job change, model change, cert revoke — whichever
-  applies once §5 is resolved) is caught within one tick, same pattern as
-  vision's maintenance-thread design.
+  re-evaluates the §5 gate (`CanShowK9UI()`) every cycle (not a one-time
+  latch) so losing the gate mid-session (job change, certification revoke,
+  model change — whichever applies) is caught within one tick, same
+  pattern as vision's maintenance-thread design.
 - On the gate's false→true edge: push `k9hud:visibility {visible=true}`,
   *then* start the per-tick `k9hud:update` pushes. On true→false: push
   `{visible=false}` and stop the tick — an explicit pair of pushes, not
@@ -316,8 +404,8 @@ codebase, with one important difference in reasoning called out below:
    loop continuing to report the true (zero) health value — flagging only
    so nobody reflexively force-hides the HUD on death by copying vision's
    pattern without checking whether it actually applies.
-4. **Whichever §5 gate is chosen stops holding mid-session** (job change,
-   cert auto-revoke per §4.4, or a model change per SPEC.md §9 item 8) —
+4. **Whichever §5 gate is chosen stops holding mid-session** (certification
+   revoke, department change, or a model change per SPEC.md §9 item 8) —
    already covered by §6's per-tick re-evaluation, no separate mechanism
    needed.
 
@@ -439,22 +527,28 @@ naming the assumption explicitly).
 
 **Open, needs an explicit decision before implementation (not this note's
 call):**
-1. §5 — exact visibility gate (`CanShowK9UI()` vs. `IsOwnModelK9()` vs.
-   handler-proximity vs. toggleable). Tentative lean: (b) `IsOwnModelK9()`.
-2. §4 — exact stamina native/scale (needs a native-verification pass).
-3. §4 — whether `metadata.hunger`/`.thirst` genuinely applies uniformly to
+1. §4 — exact stamina native/scale (needs a native-verification pass).
+2. §4 — whether `metadata.hunger`/`.thirst` genuinely applies uniformly to
    a K9-model character on the target server (needs coder-backend
    confirmation).
-4. §1/§2/§10 — file/directory layout, `ui_page` path, framework choice
+3. §1/§2/§10 — file/directory layout, `ui_page` path, framework choice
    (needs coder-architect sign-off; vanilla-JS/no-framework is this note's
    recommendation, not a unilateral decision).
+4. §5 — the "...or nearby" partner-visibility scope (handler/officer seeing
+   their K9's vitals) and the core-HUD hunger/thirst overlap question —
+   the *only* part of §5 still open; the "controlled" self-visibility gate
+   itself is resolved (see next list).
 
 **Proposed and reasonably load-bearing (built on existing, already-shipped
 codebase precedent, low risk of needing to change even once the above
 settle):**
+- **§5/§6 — visibility gate is `CanShowK9UI()` (RESOLVED, not a lean).**
+  Grounded directly in SPEC.md §6.1's existing acceptance criterion, which
+  already names the HUD alongside the radial menu under the same
+  certification gate — not `IsOwnModelK9()` alone, unlike thermal/night
+  vision.
 - No `SetNuiFocus` call ever, for this feature (§3).
 - Two-message `SendNUIMessage` contract, normalized 0–100 values (§4).
-- Reuse `IsOwnModelK9()`/`CanShowK9UI()` rather than a third check (§6).
 - A single start/stop (not always-running) low-frequency thread in a new
   `client/hud.lua`, gated on `Config.Features.HealthStaminaHUD` at
   file-load time (§6).
