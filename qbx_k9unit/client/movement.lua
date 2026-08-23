@@ -358,13 +358,17 @@ CreateThread(function()
                         lib.notify({ title = 'K9 Unit', description = 'Leash snapped — you got too far from your handler.', type = 'error' })
                         DetachLeash()
                     end
-                elseif dist > pullZoneStart and not IsPedInAnyVehicle(myPed, false) then
+                elseif dist > pullZoneStart and not IsPedInAnyVehicle(myPed, false) and not (IsInK9Vehicle and IsInK9Vehicle()) then
                     -- Proportional soft pull-back, not a hard snap at the
                     -- exact threshold: the closer to hardCap, the stronger
                     -- the correction applied this tick. Skipped while in a
-                    -- vehicle to avoid teleporting a seated ped out from
-                    -- under itself — a defensive edge case, not spelled
-                    -- out in SPEC.md.
+                    -- vehicle (IsPedInAnyVehicle) or "tucked" into a K9
+                    -- cruiser via client/vehicle.lua's attach-based load-in
+                    -- (IsInK9Vehicle) to avoid fighting the AttachEntityToEntity
+                    -- that's holding the ped in place — a defensive edge
+                    -- case, not spelled out in SPEC.md. The IsInK9Vehicle
+                    -- existence check guards load order between these two
+                    -- client scripts within the resource.
                     local excess = dist - pullZoneStart
                     local zoneSize = math.max(hardCap - pullZoneStart, 0.1)
                     local pullFactor = math.min(excess / zoneSize, 1.0)
