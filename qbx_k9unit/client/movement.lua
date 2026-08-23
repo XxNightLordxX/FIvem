@@ -137,6 +137,21 @@ end, false)
 
 RegisterKeyMapping('qbx_k9unit:toggleCamera', 'Toggle K9 First/Third Person Camera', 'keyboard', 'L')
 
+-- qa-tester finding: a resource restart while isFirstPersonK9View is true
+-- previously left the game's follow-cam stuck in mode 4 (first-person)
+-- with no code left running to ever set it back — the same "sticky native
+-- state must be reversed on stop" class of bug client/vehicle.lua's own
+-- onResourceStop handler already exists to prevent. Only reset when this
+-- resource actually changed the mode, so a player's own unrelated camera
+-- preference is never clobbered by a restart of this resource.
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    if isFirstPersonK9View then
+        SetFollowPedCamViewMode(1)
+        isFirstPersonK9View = false
+    end
+end)
+
 --- Self-emote "Sit" action triggered from the radial menu. SPEC.md §6.1
 --- radial bullet, §8 step 7. Gated with CanShowK9UI() at the top (per
 --- radial.lua's own contract, every Phase 1 radial item is a real granted
