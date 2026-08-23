@@ -5,6 +5,126 @@ All notable changes to `qbx_k9unit` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Phase 2 (tracking, contraband search, vision, door interaction) has landed
+on this branch as a complete feature set with real client and server
+implementations, but it has **not** been through the same release-readiness
+pass Phase 1 got before shipping — there is no version bump yet, and Phase 3
+(combat/action features) hasn't had any implementation start, only design
+scoping. Everything below is pending final packaging.
+
+### Added
+
+- **Scent/blood/gunpowder tracking** — a certified handler can start a
+  self-following trail for any of the three configured scent types from a
+  new "K9 Unit" radial submenu entry per type (Track Scent / Track Blood /
+  Track Gunpowder), each an independent start/cancel toggle gated by its
+  own `Config.Features` flag. Trails render as ground markers with
+  configurable spacing and decay across water crossings, cutting off
+  cleanly at the water's edge rather than vanishing outright.
+- **Contraband search** — a certified handler can search a nearby vehicle
+  or person via ox_target ("Search Vehicle" / "Search Person"), with the
+  server performing the real, container-recursive inventory read and
+  returning a found/clean/failed result. Searches are rate-limited on two
+  independent cooldowns, and any bystander-facing contraband alert is
+  distance-filtered to nearby players in the search zone rather than
+  broadcast server-wide.
+- **Search audit log** — every completed search attempt (found, clean, or
+  failed) is now written to a new `k9_search_log` table for dispute
+  accountability. Early rejections (too far, on cooldown, etc.) are never
+  logged, since they never actually touch the target.
+- **Thermal and night vision** — togglable vision modes for any player while
+  playing a configured K9 character. Deliberately gated on the K9 model
+  alone, not certification — treated as innate perception, not a granted
+  departmental privilege.
+- **Door interaction (scratch-to-alert)** — a certified handler can scratch
+  at a nearby door-like object via ox_target to broadcast an alert sound to
+  everyone with that door streamed in. This is alert-only in this drop;
+  nudge-open is not implemented.
+- **Full Phase 2 config schema** — `Config.Tracking`, `Config.SearchZones`,
+  `Config.SearchContrabandItems`, `Config.DoorInteraction`,
+  `Config.Vision`, and related tuning tables, plus a `Config.Features`
+  flag per Phase 2 feature so each can be enabled independently once ready.
+  New `ox_inventory` dependency (required by contraband search).
+- **Resource-start config safety check** — the resource now refuses to
+  start if `Config.DoorInteraction.nudgeRequiresUnlocked` has been set to
+  `false`. It's documented as a hard safety requirement (nudge-open must
+  never be able to bypass a locked door), not a server-tunable option, so
+  a bad value now fails loudly at startup instead of silently shipping a
+  future lockpick-equivalent bypass once nudge-open is eventually built.
+
+### Security
+
+These were found and fixed during Phase 2's own review passes before this
+work was considered done, in the same spirit as Phase 1's four post-review
+fixes:
+
+- **Fixed a stale-entity-handle reuse in contraband search.** The client
+  used to hold a raw entity handle across the full sniff-animation delay
+  before resolving it to a network id — if the original target
+  disconnected or was streamed out mid-animation, the recycled handle
+  could end up resolving to the wrong player or vehicle. The network id is
+  now captured immediately, before the animation starts.
+- **Fixed trails vanishing outright at a water crossing instead of
+  rendering up to the water's edge.** A redundant same-tick check in the
+  trail-drawing loop set the "broken by water" flag before that same
+  tick's draw pass ran, erasing the entire already-walked trail instantly
+  rather than stopping cleanly at the crossing point as intended.
+- **Added the missing radial menu entry point for tracking.** The
+  scent/blood/gunpowder tracking functions had no in-game way to trigger
+  or cancel a trail at all — nothing called them. Three context-sensitive
+  radial items (start/cancel toggle per type) were added, each gated by
+  its own feature flag. A follow-up bug in that same wiring was then found
+  and fixed: switching to a different track type while already tracking
+  silently canceled the active trail instead of switching to the new one,
+  requiring a second click to actually start it. Clicking a different
+  track type now correctly falls through to the proper "already tracking —
+  stop first" notice instead of silently killing the wrong trail.
+- **Fixed a watchdog-killing unclamped loop.** The trail marker-spacing
+  draw loop advanced by a config-driven step with no lower-bound clamp; a
+  misconfigured spacing value of zero or negative would have spun it
+  forever with no yield. Not triggerable with the shipped default values,
+  but now clamped to match an existing sibling loop's precedent.
+- **Closed a door-scratch abuse vector (sustained broadcast spam).** A
+  per-player cooldown alone didn't stop multiple separate certified
+  accounts from independently hammering the *same* door, sustaining
+  roughly 1,200 broadcasts/hour indefinitely with no cap. A second,
+  door-keyed cooldown now has to pass alongside the per-player one before
+  a scratch alert broadcasts, with its own periodic cleanup sweep since a
+  door has no disconnect event to key cleanup off of.
+- **Closed an entity-type spoofing gap in the same door-scratch handler.**
+  A player standing near a real bystander could previously supply that
+  bystander's own player or vehicle network id instead of a door's,
+  triggering a server-wide alert anchored to the victim. The server now
+  rejects anything that isn't actually an object before broadcasting,
+  never trusting the client's own "is this door-shaped" check as the real
+  gate.
+- **Excluded a vehicle-tucked K9 from the door-scratch interaction.** A K9
+  loaded into a K9 vehicle could still be offered the "Scratch to Alert"
+  option, which made no sense in that state. Mirrors the existing
+  vehicle-tuck exclusion already applied to the leash pull-back logic.
+
+### Known Limitations
+
+- **`Config.Features.ScentTracking` MUST remain `false` on a live server.**
+  Scent tracking's server-side source resolution is not implemented —
+  the server always reports "not found" for a scent trail's origin,
+  pending an unconfirmed `ox_inventory` drop-location hook. This is an
+  explicit, disclosed gap (not a hidden shortcut), tracked as `SPEC.md`
+  §9 item 17, and it ships disabled by default. **Do not flip this flag
+  to `true` until that item is resolved** — doing so will not deliver a
+  working feature and the acceptance criteria for scent tracking are not
+  currently met end-to-end.
+- Door interaction ships as scratch-to-alert only; nudge-open (opening a
+  locked door) is not implemented in this drop, and the config safety
+  guard described above exists specifically to keep it safe to add later.
+- Phase 3 (combat/action features) has design scoping only
+  (`PHASE3_SPEC.md`) — no implementation has started.
+- This batch has not yet had the same end-to-end release-readiness
+  sign-off Phase 1 received; treat everything above as pending final
+  packaging, not a shipped release.
+
 ## [0.1.0] - 2026-08-23
 
 Initial Phase 1 release: a player-controlled K9 unit built on top of a
