@@ -74,7 +74,7 @@ Config.Features = {
 Config.Peds = {
     { model = 'a_c_shepherd',   label = 'German Shepherd' },
     { model = 'a_c_rottweiler', label = 'Rottweiler' },
-    { model = 'a_c_huskie',     label = 'Husky' },
+    { model = 'a_c_husky',      label = 'Husky' },
     { model = 'a_c_chop',       label = 'Chop (K9 Unit)' },
     -- Example custom streamed model (requires the model to exist in a
     -- streamed resource elsewhere on the server; adding this line is the

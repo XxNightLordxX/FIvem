@@ -250,11 +250,17 @@ end
 --- phase2_notes/water_gunpowder_natives.md §1's explicit recommendation
 --- (frame-stable, appropriate for a fixed-step poll like this; plain
 --- GetWaterHeight is wave-jittered and can disagree between adjacent
---- samples on a calm shoreline). Called with a trailing 0.0 "hint" arg for
---- the native's `float* height` out-param, mirroring the exact call shape
---- phase2_notes/scent_blood_natives.md §3 documents for the sibling
---- GetWaterHeight native (`local found, waterZ = GetWaterHeight(x, y, z, 0.0)`)
---- — the height value itself is unused here, only the boolean matters.
+--- samples on a calm shoreline). CORRECTION (final native-correctness
+--- sweep, this session): the native's `float* height` out-param becomes an
+--- extra Lua RETURN value, not an input argument — called here as
+--- `GetWaterHeightNoWaves(x, y, z)` returning `(found, height)`, matching
+--- the real, community-confirmed convention (e.g. the sibling
+--- GetWaterHeight's own documented usage
+--- `local retval, waterHeight = GetWaterHeight(x, y, z)`). The previous
+--- trailing `0.0` argument was inert (Lua silently discards an extra
+--- argument the function doesn't consume) — this was never a behavior
+--- bug, only an inaccurate comment/call-shape cleanup. The height value
+--- itself is still unused here, only the boolean matters.
 --- @param startCoords vector3
 --- @param endCoords vector3
 --- @return number? distanceToWater
@@ -273,7 +279,7 @@ local function FindWaterCrossingDistance(startCoords, endCoords)
 
     while traveled < total do
         local sample = startCoords + dir * traveled
-        local found = GetWaterHeightNoWaves(sample.x, sample.y, sample.z, 0.0)
+        local found = GetWaterHeightNoWaves(sample.x, sample.y, sample.z)
         if found then
             return traveled
         end
