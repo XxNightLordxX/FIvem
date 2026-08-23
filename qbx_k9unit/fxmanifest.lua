@@ -39,6 +39,21 @@ shared_scripts {
     'config.lua',
 }
 
+-- Phase 4: first NUI surface this resource has ever had (the passive
+-- vitality HUD, Config.Features.HealthStaminaHUD — still `false` by
+-- default in config.lua, see client/hud.lua). ui_page is loaded/kept
+-- alive for the entire client session (not opened/closed like a modal —
+-- html/index.html starts hidden and stays that way client-side until
+-- client/hud.lua's poll thread says otherwise), per
+-- phase2_notes/phase4_hud_bridge_design.md §7.
+ui_page 'html/index.html'
+
+files {
+    'html/index.html',
+    'html/style.css',
+    'html/app.js',
+}
+
 client_scripts {
     '@qbx_core/modules/playerdata.lua',
     'client/main.lua',
@@ -48,6 +63,7 @@ client_scripts {
     'client/tracking.lua', -- Phase 2
     'client/search.lua',   -- Phase 2
     'client/vision.lua',   -- Phase 2
+    'client/hud.lua',      -- Phase 4
 }
 
 server_scripts {

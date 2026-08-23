@@ -58,10 +58,15 @@ read_globals = {
     "NetworkGetEntityFromNetworkId", "NetworkGetNetworkIdFromEntity",
     "NetworkDoesEntityExistWithNetworkId",
     "GetVehicleNumberPlateText", "IsPedInAnyVehicle",
+    "GetEntityHealth", "GetEntityMaxHealth", "GetEntityForwardVector",
+    "ApplyForceToEntity",
     -- Timers / misc client natives
     "GetGameTimer", "DrawMarker", "DisableControlAction",
     "ClearPedTasksImmediately", "TaskStartScenarioInPlace", "IsPedShooting",
     "PlaySoundFromEntity", "SetFollowPedCamViewMode",
+    "GetPlayerSprintStaminaRemaining",
+    -- NUI bridge (client/hud.lua)
+    "SendNUIMessage", "RegisterNUICallback",
     -- Vision natives (see client/vision.lua -- these are the actual CFX
     -- native names, distinct from this resource's own IsNightVisionActive/
     -- IsThermalVisionActive wrapper functions declared below)
@@ -70,6 +75,8 @@ read_globals = {
     "source",
     -- ox_lib / oxmysql / export surface
     "lib", "exports", "MySQL",
+    -- qbx_core's client-side player-data cache (client/hud.lua)
+    "QBX",
 }
 
 -- Read+write: this resource's OWN cross-file globals. Every one of these is

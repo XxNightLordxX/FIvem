@@ -2,30 +2,31 @@
     qbx_k9unit/html/app.js
 
     ======================================================================
-    UNWIRED SCAFFOLDING — DO NOT MISTAKE THIS FILE'S EXISTENCE FOR THE
-    FEATURE BEING LIVE.
+    WIRED, BUT STILL FEATURE-FLAGGED OFF — this file is no longer unwired
+    scaffolding. As of this commit:
 
-    This is Phase 4's passive vitality HUD (health/stamina/hunger/thirst
-    for the active K9), scaffolded ahead of its Lua-side wiring per
-    phase2_notes/phase4_hud_bridge_design.md and
-    phase2_notes/phase4_hud_early_design.md. As of this commit, NONE of
-    the following exist yet, and this page cannot actually load or
-    receive anything in-game until they do:
-
-      1. fxmanifest.lua has no `ui_page 'html/index.html'` entry and no
+      1. fxmanifest.lua has a `ui_page 'html/index.html'` entry and a
          `files { 'html/index.html', 'html/style.css', 'html/app.js' }`
-         block — this resource has zero NUI wiring in its manifest today.
-      2. `client/hud.lua` (the Lua-side ~250ms poll/push thread that would
-         call SendNUIMessage with the `hud:updateVitals` action below)
-         does not exist yet.
-      3. `Config.Features.HealthStaminaHUD` is `false` in config.lua —
-         even once #1/#2 land, the feature stays off until this flips.
+         block — this page loads for real in-game now.
+      2. `client/hud.lua` exists — it registers the `hud:ready`
+         RegisterNUICallback handler this file's fetch() calls into, and
+         runs the ~250ms poll/push thread (design note §5) that calls
+         SendNUIMessage with the `hud:updateVitals` action below.
+      3. `Config.Features.HealthStaminaHUD` is STILL `false` in
+         config.lua (its shipped default, deliberately left untouched) —
+         client/hud.lua gates its own NUI callback registration and poll
+         thread on this flag at file-load time (its own header's "GATING"
+         note), so with the flag off, `hud:ready` has nothing registered
+         to call into and no `hud:updateVitals` push ever arrives. This
+         page loading is not the same thing as the feature being live —
+         flip Config.Features.HealthStaminaHUD to actually activate it.
 
-    Do NOT wire this into fxmanifest.lua, and do NOT write
-    `client/hud.lua`, as part of whatever task references this file,
-    unless explicitly asked to move past scaffolding — this file exists
-    "in the tree, not yet activated," mirroring how Phase 2's own Lua
-    files were scaffolded ahead of their config/manifest wiring landing.
+    This page and client/hud.lua were built directly off
+    phase2_notes/phase4_hud_bridge_design.md (naming/payload/focus/cadence
+    — authoritative) and phase2_notes/phase4_hud_early_design.md (earlier
+    exploratory pass, superseded on those points). See
+    phase4_hud_bridge_design.md §6 for the resolved visibility-gate
+    predicate (`CanShowK9UI()`) client/hud.lua now actually implements.
     ======================================================================
 
     CONTRACT (must match client/hud.lua exactly, byte-for-byte, once it's
