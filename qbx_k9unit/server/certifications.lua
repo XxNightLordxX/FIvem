@@ -53,7 +53,15 @@
         client-reachable event equivalent exists, nor should one: a
         disconnected target has no client to trigger anything from, so
         this is command-only, unlike certify/revoke which also expose net
-        events 2/3.
+        events 2/3. SECURITY: this path skips the proximity check only
+        because it's the ONLY way to reach a genuinely disconnected
+        target — RevokeCertificationOffline therefore verifies the
+        citizenid actually resolves to no currently-connected player
+        before doing anything, and refuses (pointing the caller at
+        /k9decertify instead) if the "offline" target turns out to be
+        online right now. Without that guard this command would be a
+        drop-in proximity-check bypass for revoking an online target from
+        anywhere on the map — found and fixed in this pass.
 
     Automatic, server-only path (no client entry point at all):
     8. AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job) ... end)
@@ -512,6 +520,31 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
         return
     end
 
+    -- SECURITY FIX (coder-security review): this command exists ONLY to
+    -- reach a genuinely disconnected target (see this function's header
+    -- and SPEC.md §4.3) — that's the entire justification for skipping
+    -- §4.2 condition 4's proximity check. But nothing previously verified
+    -- the target was actually offline before running the update: an
+    -- eligible certifier could call `/k9decertifyoffline [citizenid] [job]`
+    -- against a target who is CURRENTLY ONLINE and standing anywhere on
+    -- the map (or the other side of it), silently bypassing
+    -- Config.CertifyProximityMeters — the exact "remote/cross-map
+    -- certifying via a spoofed command" scenario §4.2 condition 4 is
+    -- meant to prevent for "both the ox_target flow and the slash-command
+    -- flow." Close that gap: if the citizenid resolves to a currently
+    -- connected player, refuse this path and point the caller at
+    -- `/k9decertify [server id]`, which enforces the real proximity check.
+    -- CONFIDENCE NOTE: exports.qbx_core:GetPlayerByCitizenId(citizenid) is
+    -- used here per established QBCore/Qbox convention (the standard
+    -- citizenid-keyed counterpart to GetPlayer); not independently
+    -- verified against a live qbx_core install in this sandbox — same
+    -- caveat as this file's other qbx_core-export notes.
+    local onlineCheckTarget = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    if onlineCheckTarget and onlineCheckTarget.PlayerData and onlineCheckTarget.PlayerData.source then
+        NotifyPlayer(granterSrc, ('That citizen is currently online (server id %d) — use /k9decertify [server id] instead, which enforces the proximity check.'):format(onlineCheckTarget.PlayerData.source), 'error')
+        return
+    end
+
     -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
     -- row matches (SPEC.md §4.3). Same UPDATE pattern as the online path.
     local affectedRows = MySQL.update.await(
@@ -524,28 +557,6 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
         -- typo'ing a citizenid should not look identical to a real revoke.
         NotifyPlayer(granterSrc, 'That citizen does not hold an active certification for that department.', 'inform')
         return
-    end
-
-    -- The "offline" target might actually be online right now under a
-    -- different server id than the granter has in mind (or the granter
-    -- simply doesn't know/care about their live id) — resolve by
-    -- citizenid and, if found, run the same online-aware follow-up
-    -- (cache refresh, HUD mirror clear, notify) as RevokeCertification's
-    -- online branch above, reusing the same helpers rather than
-    -- duplicating divergent logic.
-    -- CONFIDENCE NOTE: exports.qbx_core:GetPlayerByCitizenId(citizenid) and
-    -- Player.PlayerData.source are used here per established QBCore/Qbox
-    -- convention (the standard citizenid-keyed counterpart to GetPlayer);
-    -- not independently verified against a live qbx_core install in this
-    -- sandbox — same caveat as this file's other qbx_core-export notes.
-    local targetPlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
-    if targetPlayer and targetPlayer.PlayerData then
-        RefreshCertificationCache(citizenid, job)
-        -- HUD display mirror only (SPEC.md §4.3) — never read for authorization.
-        targetPlayer.Functions.SetMetaData('k9certified', false)
-        if targetPlayer.PlayerData.source then
-            NotifyPlayer(targetPlayer.PlayerData.source, 'Your K9 certification has been revoked.', 'error')
-        end
     end
 
     NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')

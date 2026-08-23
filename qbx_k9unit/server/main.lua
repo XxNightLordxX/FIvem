@@ -197,6 +197,19 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 end)
 
+-- coder-security: relayBark broadcasts to EVERY connected client
+-- (TriggerClientEvent(..., -1, ...) below) on every call — with no
+-- per-player throttle, a single modified client spamming this event as
+-- fast as the network allows turns into a server-wide broadcast flood
+-- (network chatter to every player, plus a PlaySoundFromEntity call fired
+-- on every one of their clients), i.e. an abuse-resistance gap per
+-- SPEC.md's general "spammable actions" concern even though a bark itself
+-- has no other gameplay effect. A small per-player cooldown closes this
+-- without needing a config addition — bark has no legitimate reason to be
+-- triggered faster than this.
+local BARK_COOLDOWN_MS = 1000
+local lastBarkAt = {}
+
 --- Relays a bark to every client so anyone near the K9 entity hears it.
 --- Gated by Config.Features.BasicBarkSounds AND HasK9Access(source) —
 --- both re-checked HERE, server-side, regardless of whether the client UI
@@ -210,6 +223,12 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     if not Config.Features.BasicBarkSounds then return end -- silent no-op
     if type(barkType) ~= 'string' then return end -- defensive: never trust client payload shape
     if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
+
+    local now = GetGameTimer()
+    if lastBarkAt[src] and (now - lastBarkAt[src]) < BARK_COOLDOWN_MS then
+        return -- silent no-op: rate-limited, not an error worth notifying about
+    end
+    lastBarkAt[src] = now
 
     local ped = GetPlayerPed(src)
     local netId = NetworkGetNetworkIdFromEntity(ped)
@@ -407,6 +426,7 @@ AddEventHandler('playerDropped', function(reason)
     local src = source
 
     PendingLeashRequests[src] = nil
+    lastBarkAt[src] = nil -- drop the bark-cooldown entry too, don't leak one per session
 
     local partner = LeashPairs[src]
     if not partner then return end
