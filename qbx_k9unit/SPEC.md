@@ -1136,18 +1136,83 @@ implemented):
    resolves `targetNetId` to a live entity server-side
    (`NetworkGetEntityFromNetworkId`) and confirms it still exists and is
    within `Config.SearchZones.<vehicle|person>SearchDistance` of the
-   caller's own live position (never a client-claimed distance). Reads the
-   **actual** inventory contents of that vehicle/ped via an ox_inventory
-   server export — the client never supplies, and the server never trusts,
-   any claim about what contraband is present. Computes `totalWeight` from
-   real ox_inventory item-weight data (never `Config.*`-declared weight —
-   there is none, deliberately, see §11.2) and looks up `alertTier` from
-   `Config.ContrabandAlertTiers`. Enforces
-   `Config.SearchZones.searchCooldownMs` per `(source, targetNetId)` pair.
-   `reason` is populated (e.g. `'too_far'`, `'on_cooldown'`, `'no_access'`)
-   whenever `ok == false`, following the same rejection-reason-string
-   convention `server/main.lua`'s `LEASH_REJECT_MESSAGES` already
-   established.
+   caller's own live position (never a client-claimed distance). **Also
+   cross-checks the resolved entity's actual type against the
+   client-claimed `targetType`** — a `'person'` claim must resolve to
+   `IsPedAPlayer` on a currently-connected player's ped, not an NPC or prop
+   netId; a mismatch is rejected with `reason = 'invalid_target'` before
+   any inventory read happens. Reads the **actual** inventory contents of
+   that vehicle/ped via an ox_inventory server export — the client never
+   supplies, and the server never trusts, any claim about what contraband
+   is present. Computes `totalWeight` from real ox_inventory item-weight
+   data (never `Config.*`-declared weight — there is none, deliberately,
+   see §11.2) and looks up `alertTier` from `Config.ContrabandAlertTiers`.
+   `totalWeight`/`contrabandFound` are returned **only to the requesting
+   caller** via this callback's return value — never broadcast (see the
+   corrected broadcast note in §11.3/§11.5: only `alertTier` is ever sent
+   to anyone else).
+
+   **Cooldown, corrected per coder-security's review** (found during
+   Phase 2 design review, before any code existed to fix — a genuine
+   TOCTOU class specific to this endpoint): enforces **two** independent
+   cooldowns, both keyed by a timestamp written **before** the awaited
+   ox_inventory call starts, not after it resolves — writing it after
+   creates a window where two near-simultaneous calls for the same pair
+   can both pass the check before either completes, causing a
+   double-search/double-broadcast.
+   - `Config.SearchZones.searchCooldownMs` per `(source, targetNetId)`
+     pair (as originally specified).
+   - A new flat per-`source` cooldown (same shape as `server/main.lua`'s
+     existing `BARK_COOLDOWN_MS`/`lastBarkAt` pattern), since a
+     per-pair-only cooldown does nothing to stop one client sweeping many
+     *different* targets back-to-back with zero throttle — each one a
+     real ox_inventory read, and the client-side sniff-animation delay is
+     purely cosmetic pacing, not a real rate limit. Exact duration is an
+     open tuning question (§9), not security-critical to get exactly
+     right, just present.
+   - **Open design question, not resolved here** (§9): the per-pair
+     cooldown has no *target*-side floor, so multiple certified K9s can
+     still tag-team-search the same target back-to-back with no throttle
+     from the target's side. Flagged as a deliberate open decision for
+     whoever implements this to make explicitly, not an accidental gap.
+
+   `reason` is populated (e.g. `'too_far'`, `'on_cooldown'`, `'no_access'`,
+   `'invalid_target'`) whenever `ok == false`, following the same
+   rejection-reason-string convention `server/main.lua`'s
+   `LEASH_REJECT_MESSAGES` already established.
+
+   **Four more must-handle items, found by verifying against the actual
+   `overextended/ox_inventory` source (not assumed) during Phase 2 design
+   review — full detail and exact export names/signatures in
+   `phase2_notes/contraband_search_contract.md`, which supplements this
+   section rather than replacing it:**
+   - **Container recursion is required, not optional.** `GetInventoryItems`
+     only returns top-level slots — contraband hidden inside a registered
+     container item (backpack, bag) placed in a searched trunk/pocket is
+     otherwise invisible to the scan even though it's really there. This is
+     a realistic, trivially-discoverable way to defeat the entire feature
+     ("put the drugs in a bag") if left unhandled. `server/search.lua` must
+     recurse into any container slot (via `GetContainerFromSlot`) to an
+     explicitly chosen max depth (e.g. 3) — not unbounded, and not skipped.
+   - **In-flight mutex per source**, set synchronously before the
+     ox_inventory query (which awaits a real yield point for an uncached
+     vehicle), checked before the cooldown check, cleared on every exit
+     path including errors — closes a same-source concurrent-call race a
+     cooldown timestamp alone can't close if two calls both pass the check
+     before either finishes.
+   - **`search_failed` must be a distinct outcome from
+     `contrabandFound = false`.** An inventory query that errors or returns
+     `nil` (a lazily-loaded vehicle inventory can fail on edge-case timing)
+     must never be collapsed into a "clean" result — conflating "we
+     couldn't check" with "we checked and it's clean" is a correctness bug
+     with real in-fiction consequences (an officer trusting a false-clean
+     result), independent of whether it's separately exploitable.
+   - **`Config.ContrabandAlertTiers` needs an explicit baseline "clean"
+     tier** (e.g. `{ minWeight = 0, alert = 'clean' }` as its first entry)
+     so a genuinely clean search has defined feedback for the requester
+     (never silence) rather than an unhandled fallback case — SPEC's
+     original placeholder table only defined the two found-contraband
+     tiers.
 
 **Server events (client→server, `RegisterNetEvent`):**
 3. `qbx_k9unit:server:relayDamageEvent` () [`server/tracking.lua`] — triggered
@@ -1315,21 +1380,17 @@ already get by calling the same client-only door-prop natives on itself.
       and `relayDoorScratch` is a server-side no-op for any caller.
 
 **Thermal vision** (`Config.Features.ThermalVision`)
-- [ ] Pressing `Config.Vision.Thermal.toggleKey` while `CanShowK9UI()`... —
-      **open question, resolve before implementation, do not guess**: is
-      thermal/night vision gated behind `CanShowK9UI()` (a granted
-      capability) or, like the camera toggle, only behind the cheap local
-      `IsOwnModelK9()` check (a QoL toggle available to anyone playing a K9
-      character)? `movement.lua`'s own header flags this exact question for
-      the camera toggle and leans toward "not gated" for QoL toggles — this
-      spec's lean, for consistency, is the **same answer as the camera
-      toggle** (gate on `IsOwnModelK9()` only, not `CanShowK9UI()`), since
-      thermal/night vision is presented in SPEC.md as the K9's own innate
-      perception, not a granted departmental privilege — but flagging this
-      explicitly rather than asserting it as settled, per this spec's own
-      "flag genuine ambiguity" mandate. Whichever answer is chosen, apply it
-      identically to both Thermal and Night vision for consistency with each
-      other.
+- [ ] **Resolved during Phase 2 review** (api-contract-agent flagged a
+      design note had drifted onto the other answer — settling it here so
+      implementation has one unambiguous source of truth): thermal/night
+      vision gates on `IsOwnModelK9()` only, **not** `CanShowK9UI()` — the
+      same answer as the camera toggle, and for the same reason: this is
+      the K9's own innate perception (a QoL toggle available to anyone
+      playing a K9 character), not a granted departmental privilege like
+      the radial menu's leash/vehicle/certify actions. Apply identically to
+      both Thermal and Night vision for consistency with each other. Any
+      Phase 2 design note gating this on `CanShowK9UI()` should be
+      corrected to match before implementation.
 - [ ] Toggling on calls `SetSeethrough(true)` (§11.6); toggling off calls
       `SetSeethrough(false)`. No custom shader or asset is used.
 - [ ] Thermal vision auto-disables on resource stop (mirrors
