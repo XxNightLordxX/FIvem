@@ -257,6 +257,78 @@ if Config.Features.VehicleEntryExit then
     }
 end
 
+--- Track Scent/Blood/Gunpowder — SPEC.md §11.3/§11.5, Phase 2. Each is a
+--- single context-sensitive item: while a trail of THAT type is active it
+--- becomes a "Stop Tracking" cancel (calling the shared StopTracking()),
+--- otherwise it starts that specific trail type. This is deliberately the
+--- only in-game entry point to client/tracking.lua's Start*Track()/
+--- StopTracking() globals — integration-verifier/correctness-overseer
+--- both flagged that nothing called them, leaving no way to trigger or
+--- cancel a trail at all. Each gated independently by its own
+--- Config.Features flag, same pattern as Bark/Leash/Vehicle above.
+if Config.Features.ScentTracking then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_track_scent',
+        label = 'Track Scent',
+        icon = 'wind',
+        onSelect = function()
+            if IsTracking() then
+                StopTracking()
+                return
+            end
+
+            if not CanShowK9UI() then
+                DenyNotify()
+                return
+            end
+
+            StartScentTrack()
+        end,
+    }
+end
+
+if Config.Features.BloodTracking then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_track_blood',
+        label = 'Track Blood',
+        icon = 'droplet',
+        onSelect = function()
+            if IsTracking() then
+                StopTracking()
+                return
+            end
+
+            if not CanShowK9UI() then
+                DenyNotify()
+                return
+            end
+
+            StartBloodTrack()
+        end,
+    }
+end
+
+if Config.Features.GunpowderSniffing then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_track_gunpowder',
+        label = 'Track Gunpowder',
+        icon = 'crosshairs',
+        onSelect = function()
+            if IsTracking() then
+                StopTracking()
+                return
+            end
+
+            if not CanShowK9UI() then
+                DenyNotify()
+                return
+            end
+
+            StartGunpowderTrack()
+        end,
+    }
+end
+
 if Config.Features.RadialMenu then
     -- Register the actual submenu contents FIRST (lib.registerRadial),
     -- keyed by id 'k9unit' — this is the id the opener item below points

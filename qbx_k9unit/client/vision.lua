@@ -1,22 +1,10 @@
 --[[
     qbx_k9unit/client/vision.lua
 
-    PHASE 2 SCAFFOLD ONLY (coder-frontend) — WRITTEN AHEAD OF GREENLIGHT.
-    Same standing caveat as client/tracking.lua and client/search.lua's
-    headers: written while Phase 1's confirmation wave was still closing
-    out, per SPEC.md §11 already being fully specified, but NOT final
-    implementation and NOT to be merged/wired blindly. In particular:
-      - fxmanifest.lua does NOT yet list this file under client_scripts.
-      - client/radial.lua gets NO items for this feature at all (by
-        design — see below, this is keybind-only).
-      - config.lua does NOT yet contain Config.Vision.Thermal.toggleKey /
-        Config.Vision.Night.toggleKey (SPEC.md §11.2 additions).
-        Config.Features.ThermalVision / .NightVision already exist today
-        (Phase 1 scaffold pass, currently `false`).
-    Mirrors the exact "header contract + function signature + numbered
-    TODO" scaffolding style client/main.lua's ORIGINAL scaffold used (see
-    `git log -- qbx_k9unit/client/main.lua`, commit 66b8aee), not the
-    fully-implemented style Phase 1 files have today.
+    Phase 2 (coder-frontend). fxmanifest.lua lists this file under
+    client_scripts, config.lua's Config.Vision (§11.2) has landed, and
+    client/radial.lua deliberately gets NO items for this feature (this is
+    keybind-only, by design — see below).
 
     Owns the two independent thermal/night vision toggle keybinds —
     SPEC.md §11.1 sub-phase 2a, §11.3's `client/vision.lua` row (new file,
@@ -130,17 +118,90 @@ end
 --- phase2_notes/thermal_night_vision.md §4's explicit implementation-shape
 --- recommendation.
 --- @param keepingActive 'thermal'|'night'  -- the effect about to be turned ON; turn OFF whichever of the two this is NOT
---- TODO(coder-frontend): SPEC.md §11.5's mutual-exclusion bullet,
---- phase2_notes/thermal_night_vision.md §4.
---   if keepingActive == 'thermal' and IsNightVisionActive() then
---       SetNightvision(false)
---   elseif keepingActive == 'night' and IsThermalVisionActive() then
---       SetSeethrough(false)
---   end
---   -- Check via the Is*Active() getters above (authoritative,
---   -- native-backed), never a locally-tracked boolean that could desync
---   -- — same reasoning as the getters themselves.
 local function EnsureOnlyOneVisionEffectActive(keepingActive)
+    -- Checked via the Is*Active() getters above (authoritative,
+    -- native-backed), never a locally-tracked boolean that could desync —
+    -- same reasoning as the getters themselves.
+    if keepingActive == 'thermal' and IsNightVisionActive() then
+        SetNightvision(false)
+    elseif keepingActive == 'night' and IsThermalVisionActive() then
+        SetSeethrough(false)
+    end
+end
+
+-- Maintenance/cleanup thread lifecycle guard — see the thread definition
+-- further below for the full shape. Started explicitly from each
+-- Toggle*Vision() function's "turning on" branch rather than an
+-- always-idling poll (unlike client/movement.lua's leash thread, which can
+-- afford to idle at 1000ms forever since it's a single perpetual thread for
+-- a Phase 1 feature already always loaded) — resource-performance-profiler's
+-- lens: a feature most players never touch should not run any thread at
+-- all until it's actually used at least once.
+local visionMaintenanceThreadRunning = false
+
+--- Starts the maintenance/cleanup thread (see below) if it isn't already
+--- running. Safe to call from both Toggle*Vision() functions on every
+--- "turning on" transition — a no-op if the thread is already active.
+local function EnsureVisionMaintenanceThreadRunning()
+    if visionMaintenanceThreadRunning then return end
+    visionMaintenanceThreadRunning = true
+
+    CreateThread(function()
+        -- Captured once at thread start, then refreshed every tick below —
+        -- this is what makes the HasK9Access() check a TRANSITION check
+        -- (true -> false) rather than a plain "is it currently false"
+        -- check. This distinction matters: the toggle itself is
+        -- deliberately gated on IsOwnModelK9() only (see the RESOLVED
+        -- ACCESS-GATING DECISION in this file's header), so a player who
+        -- never had K9 access at all (always false) must NOT have their
+        -- vision force-cleared by this thread every tick — only a player
+        -- who HAD access and just lost it gets the one-time defensive
+        -- clear.
+        local hadK9Access = HasK9Access()
+
+        while IsThermalVisionActive() or IsNightVisionActive() do
+            Wait(1000) -- cleanup/safety poll, not a rendering concern — no sub-frame precision needed
+
+            if IsEntityDead(PlayerPedId()) then
+                -- §11.6's "player death" exit path — not automatic, the
+                -- natives have "no automatic reset" full stop.
+                SetSeethrough(false)
+                SetNightvision(false)
+            elseif not IsOwnModelK9() then
+                -- The player's live model has stopped being a configured
+                -- K9 model (the same rare appearance-swap edge case SPEC.md
+                -- §9 item 8 flags for certification) — a direct corollary
+                -- of the exact gate Toggle*Vision() already uses: if the
+                -- gate that allows turning it on no longer holds, the same
+                -- check should also be able to turn it back off.
+                SetSeethrough(false)
+                SetNightvision(false)
+            else
+                -- Deliberate ~1s-latency POLLING detection, not an event
+                -- push — a one-time defensive UX courtesy (§11.6: "a player
+                -- left in a stuck thermal/NV view after losing K9 access
+                -- would be a real bug"). Does NOT, and structurally cannot,
+                -- prevent the player from immediately toggling it back on a
+                -- moment later, since the toggle itself is gated on
+                -- IsOwnModelK9() only, never on HasK9Access() — this is not
+                -- a persistent "vision disabled while uncertified" state
+                -- machine.
+                local hasK9Access = HasK9Access()
+                if hadK9Access and not hasK9Access then
+                    SetSeethrough(false)
+                    SetNightvision(false)
+                end
+                hadK9Access = hasK9Access
+            end
+        end
+
+        -- Once both effects are off (checked at the top of the loop above,
+        -- including immediately after this iteration's own force-off), the
+        -- thread exits — no reason to keep polling once there's nothing
+        -- left to clean up. The next Toggle*Vision() call that turns
+        -- something on calls EnsureVisionMaintenanceThreadRunning() again.
+        visionMaintenanceThreadRunning = false
+    end)
 end
 
 --- Toggles GTA's built-in heat-vision effect. SPEC.md §11.5/§11.6:
@@ -148,37 +209,63 @@ end
 --- re-assertion needed to HOLD the effect, only the maintenance/cleanup
 --- thread further below is needed, and only while at least one vision
 --- effect is active).
---- TODO(coder-frontend): SPEC.md §11.5's "Thermal vision" acceptance
---- block.
---   1. if not IsOwnModelK9() then lib.notify(<"only works while playing
---      a K9 character">) return end -- see RESOLVED ACCESS-GATING
---      DECISION above: IsOwnModelK9() only, NOT CanShowK9UI().
---   2. local turningOn = not IsThermalVisionActive()
---   3. if turningOn then EnsureOnlyOneVisionEffectActive('thermal') end
---      -- mutual exclusion happens BEFORE flipping this effect on, per
---      phase2_notes/thermal_night_vision.md §4's ordering.
---   4. SetSeethrough(turningOn)
---   5. lib.notify(<"Thermal vision on/off">)
---   6. If turningOn, ensure the maintenance/cleanup thread further below
---      is running (it should already be gated on "either effect active,"
---      so this may already be sufficient without an explicit start call
---      — coder-frontend's call on the exact thread-lifecycle pattern,
---      mirroring how client/movement.lua's leash thread is woken purely
---      by setting state rather than an explicit start call).
+--- See RESOLVED ACCESS-GATING DECISION above: gates on IsOwnModelK9()
+--- only, NOT CanShowK9UI().
 function ToggleThermalVision()
+    if not IsOwnModelK9() then
+        lib.notify({ title = 'K9 Unit', description = 'This only works while playing a K9 character.', type = 'error' })
+        return
+    end
+
+    local turningOn = not IsThermalVisionActive()
+    -- Mutual exclusion happens BEFORE flipping this effect on, per
+    -- phase2_notes/thermal_night_vision.md §4's ordering.
+    if turningOn then
+        EnsureOnlyOneVisionEffectActive('thermal')
+    end
+
+    SetSeethrough(turningOn)
+    lib.notify({
+        title = 'K9 Unit',
+        description = turningOn and 'Thermal vision on.' or 'Thermal vision off.',
+        type = 'inform',
+    })
+
+    if turningOn then
+        EnsureVisionMaintenanceThreadRunning()
+    end
 end
 
 --- Toggles GTA's built-in night-vision-goggle effect. SPEC.md §11.5/§11.6:
 --- SetNightvision(BOOL) — confirmed real, same toggle-and-forget shape as
---- thermal above.
---- TODO(coder-frontend): identical shape to ToggleThermalVision() above,
+--- thermal above. Identical shape to ToggleThermalVision() above,
 --- substituting SetNightvision/IsNightVisionActive and
 --- EnsureOnlyOneVisionEffectActive('night').
 function ToggleNightVision()
+    if not IsOwnModelK9() then
+        lib.notify({ title = 'K9 Unit', description = 'This only works while playing a K9 character.', type = 'error' })
+        return
+    end
+
+    local turningOn = not IsNightVisionActive()
+    if turningOn then
+        EnsureOnlyOneVisionEffectActive('night')
+    end
+
+    SetNightvision(turningOn)
+    lib.notify({
+        title = 'K9 Unit',
+        description = turningOn and 'Night vision on.' or 'Night vision off.',
+        type = 'inform',
+    })
+
+    if turningOn then
+        EnsureVisionMaintenanceThreadRunning()
+    end
 end
 
--- TODO(coder-frontend): config-gated command + keybind registration for
--- BOTH toggles — SPEC.md §11.2's Config.Vision schema,
+-- Config-gated command + keybind registration for BOTH toggles — SPEC.md
+-- §11.2's Config.Vision schema,
 -- phase2_notes/thermal_night_vision.md §1's "Config-gated registration,
 -- not just config-gated behavior" requirement. THIS IS THE ONE PLACE
 -- this file DELIBERATELY diverges from ToggleK9Camera()'s exact
@@ -198,64 +285,17 @@ end
 -- server can enable exactly one of the two... in which case only that
 -- one keybind/command gets registered at all") — do not couple their
 -- registration together.
---   if Config.Features.ThermalVision then
---       RegisterCommand('qbx_k9unit:toggleThermalVision', function() ToggleThermalVision() end, false)
---       RegisterKeyMapping('qbx_k9unit:toggleThermalVision', 'Toggle K9 Thermal Vision', 'keyboard', Config.Vision.Thermal.toggleKey)
---   end
---   if Config.Features.NightVision then
---       RegisterCommand('qbx_k9unit:toggleNightVision', function() ToggleNightVision() end, false)
---       RegisterKeyMapping('qbx_k9unit:toggleNightVision', 'Toggle K9 Night Vision', 'keyboard', Config.Vision.Night.toggleKey)
---   end
+if Config.Features.ThermalVision then
+    RegisterCommand('qbx_k9unit:toggleThermalVision', function() ToggleThermalVision() end, false)
+    RegisterKeyMapping('qbx_k9unit:toggleThermalVision', 'Toggle K9 Thermal Vision', 'keyboard', Config.Vision.Thermal.toggleKey)
+end
+if Config.Features.NightVision then
+    RegisterCommand('qbx_k9unit:toggleNightVision', function() ToggleNightVision() end, false)
+    RegisterKeyMapping('qbx_k9unit:toggleNightVision', 'Toggle K9 Night Vision', 'keyboard', Config.Vision.Night.toggleKey)
+end
 -- NOT added to client/radial.lua at all — per §11.3's file-plan row,
 -- "Vision toggles and door interaction are not added to the radial...
 -- consistent with the camera toggle's existing precedent."
-
--- TODO(coder-frontend): maintenance/cleanup thread — the piece SPEC.md
--- §11.6 surfaced as a NEW requirement during verification, not present in
--- the original design, and phase2_notes/thermal_night_vision.md §6 works
--- out the exact shape for. A single lightweight thread, started only
--- when either effect transitions to active (NOT running idly at all
--- times — resource-performance-profiler's lens: this must not become a
--- tight always-on loop for a feature most players never touch), that on
--- each ~1000ms tick (a cleanup/safety poll, not a rendering concern — no
--- sub-frame precision needed for any of these three conditions) checks,
--- IN ORDER:
---   1. IsEntityDead(PlayerPedId()) -> if true, force both SetSeethrough(false)
---      and SetNightvision(false) off (§11.6's "player death" exit path —
---      not automatic, the natives have "no automatic reset" full stop).
---   2. not IsOwnModelK9() -> if the player's live model has stopped being
---      a configured K9 model (the same rare appearance-swap edge case
---      SPEC.md §9 item 8 flags for certification, applied here as a
---      direct corollary of the exact gate ToggleThermalVision()/
---      ToggleNightVision() already use in §3 above — "if the gate that
---      allows turning it on no longer holds, the same check should also
---      be able to turn it back off") -> force both off.
---   3. HasK9Access() (client/main.lua's existing global, already
---      TTL-cached ~1000ms per phase2_notes/EXPORT_TRACKING.md's Phase 1
---      contract table — this REUSES that existing cache, does not add a
---      new server round-trip) has transitioned from true to false since
---      this thread's own LAST tick -> force both off. This is a
---      deliberate, accepted ~1s-latency POLLING detection, not an event
---      push, and is a one-time defensive UX courtesy per §11.6's stated
---      rationale ("a player left in a stuck thermal/NV view after losing
---      K9 access would be a real bug") — it does NOT, and structurally
---      cannot, prevent the player from immediately toggling it back on a
---      moment later, since the toggle itself is deliberately gated on
---      IsOwnModelK9() only (§3 above), not on HasK9Access() at all. Do
---      not build this into a persistent "vision disabled while
---      uncertified" state machine — that would contradict the RESOLVED
---      ACCESS-GATING DECISION above. (Open escalation path, not decided
---      here: if ~1s polling latency proves noticeable in QA,
---      phase2_notes/thermal_night_vision.md §6's "Open question flagged
---      for coder-backend" proposes a small additive
---      'qbx_k9unit:client:k9AccessRevoked' broadcast from
---      server/certifications.lua's two revoke paths instead — not the
---      default here, since it means reopening an already-reviewed Phase
---      1 file for a Phase 2 concern.)
---   4. Once BOTH effects are off (checked at the top of each iteration),
---      the thread exits — no reason to keep polling once there's nothing
---      left to clean up; the next Toggle*Vision() call that turns
---      something on restarts it.
 
 -- Resource-stop safety net — mirrors client/vehicle.lua's ALREADY-SHIPPED
 -- onResourceStop pattern for the identical underlying reason: per SPEC.md

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<!--
+    qbx_k9unit/html/index.html
+
+    ======================================================================
+    UNWIRED SCAFFOLDING — Phase 4 vitality HUD. NOT ACTIVATED. See the
+    header comment in app.js for the full status note; short version:
+    fxmanifest.lua has NO `ui_page`/`files` block yet, `client/hud.lua`
+    (the Lua-side poll/push thread) does not exist yet, and
+    `Config.Features.HealthStaminaHUD` is `false` in config.lua. This page
+    will not load in-game until all three of those land. Do not treat this
+    file's existence as the feature being live.
+    ======================================================================
+
+    Design sources (read these before changing the contract below):
+      - phase2_notes/phase4_hud_bridge_design.md  (authoritative naming/shape)
+      - phase2_notes/phase4_hud_early_design.md   (earlier exploratory pass;
+        superseded on naming/message-shape by the bridge design doc above —
+        kept for its OPEN visibility-gate discussion, which is still
+        unresolved)
+
+    This is a plain HTML/CSS/JS page, no framework, no build step — see
+    phase4_hud_early_design.md §2's reasoning (nothing else in this
+    resource has any JS tooling; this is a receive-only four-bar readout,
+    not a component tree that benefits from a reactive framework).
+
+    Structure: one root container (#k9hud) holding four labeled
+    track+fill bar rows (health/stamina/hunger/thirst) plus a numeric
+    readout per row. No interactive elements anywhere on this page — see
+    style.css's header comment for why every element here carries
+    `pointer-events: none`.
+-->
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>qbx_k9unit HUD (unwired scaffold)</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <!--
+        Starts with the `hidden` class applied — see style.css and app.js:
+        the root stays hidden until the first real `hud:updateVitals`
+        message with `data.visible === true` arrives, so nothing
+        default-visible/unstyled flashes on screen before Lua ever sends
+        anything (this page is expected to be loaded, via `ui_page`, for
+        the entire client session once wired, not opened/closed like a
+        modal).
+    -->
+    <div id="k9hud" class="k9hud hidden" aria-hidden="true">
+        <div class="k9hud-row" data-stat-row="health">
+            <span class="k9hud-label">Health</span>
+            <div class="k9hud-bar-track">
+                <div class="k9hud-bar-fill k9hud-bar-fill--health" data-fill="health"></div>
+            </div>
+            <span class="k9hud-value" data-value="health">--</span>
+        </div>
+
+        <div class="k9hud-row" data-stat-row="stamina">
+            <span class="k9hud-label">Stamina</span>
+            <div class="k9hud-bar-track">
+                <div class="k9hud-bar-fill k9hud-bar-fill--stamina" data-fill="stamina"></div>
+            </div>
+            <span class="k9hud-value" data-value="stamina">--</span>
+        </div>
+
+        <div class="k9hud-row" data-stat-row="hunger">
+            <span class="k9hud-label">Hunger</span>
+            <div class="k9hud-bar-track">
+                <div class="k9hud-bar-fill k9hud-bar-fill--hunger" data-fill="hunger"></div>
+            </div>
+            <span class="k9hud-value" data-value="hunger">--</span>
+        </div>
+
+        <div class="k9hud-row" data-stat-row="thirst">
+            <span class="k9hud-label">Thirst</span>
+            <div class="k9hud-bar-track">
+                <div class="k9hud-bar-fill k9hud-bar-fill--thirst" data-fill="thirst"></div>
+            </div>
+            <span class="k9hud-value" data-value="thirst">--</span>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
