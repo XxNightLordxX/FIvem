@@ -102,9 +102,11 @@
       server/tracking.lua's own FILE-TO-FILE CONTRACT note for the same
       reason.
     - THIS FILE exposes NO resource-global functions.
-    - THIS FILE owns `SearchInFlight`, `lastSearchAt`, and
-      `lastTargetSearchAt` below as file-local state — see each table's
-      own doc comment for why each exists.
+    - THIS FILE owns `SearchMutex`, `SearchCooldown`, and
+      `TargetSearchCooldown` below as file-local state (each a
+      server/cooldowns.lua tracker instance, per REFACTOR_ROADMAP.md item 1
+      — see each one's own doc comment for why it exists and which original
+      hand-rolled table it replaced).
     ======================================================================
 ]]
 
@@ -114,8 +116,15 @@
 -- any cooldown/entity-resolution work, cleared on EVERY exit path
 -- (success, failure, AND error) so a thrown error inside the ox_inventory
 -- call doesn't permanently wedge that source out of ever searching again.
--- SearchInFlight[source] = true | nil
-local SearchInFlight = {}
+--
+-- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `SearchInFlight`
+-- boolean table, now a NewMutex() instance (server/cooldowns.lua) — same
+-- per-source key, same "reject outright" semantics (TryAcquire combines
+-- the old table's check-then-set into one atomic call), same
+-- playerDropped-based cleanup (see SearchMutex.RegisterPlayerDropped()
+-- below), behavior unchanged.
+local SearchMutex = NewMutex()
+SearchMutex.RegisterPlayerDropped()
 
 -- Flat per-source cooldown — BLOCKING per
 -- contraband_search_security_review.md §2 ("nothing stops a single
@@ -123,8 +132,17 @@ local SearchInFlight = {}
 -- delay"). Sized around Config.SearchZones.sniffAnimDurationMs (that
 -- finding's own suggestion). Mirrors BARK_COOLDOWN_MS/lastBarkAt's exact
 -- shape in server/main.lua. Cleared on playerDropped.
--- lastSearchAt[source] = <GetGameTimer() ms>
-local lastSearchAt = {}
+--
+-- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastSearchAt`
+-- table, now a NewCooldown() instance — same per-source key, same
+-- playerDropped-based cleanup. NOTE the stamp for this cooldown still
+-- happens inside HandleSearchTarget (via :Touch, alongside the per-target
+-- cooldown), NOT at the point the check below runs — preserved exactly as
+-- the original code was written (the flat cooldown is CHECKED early, in
+-- the callback registration below, but only STAMPED later, once the
+-- search actually proceeds past entity/type/proximity validation).
+local SearchCooldown = NewCooldown()
+SearchCooldown.RegisterPlayerDropped()
 
 -- Per-resolved-target cooldown backing Config.SearchZones.searchCooldownMs
 -- — keyed on the RESOLVED, STABLE identity (plate for vehicles; citizenid
@@ -132,11 +150,15 @@ local lastSearchAt = {}
 -- ped-recreation edge case" note), NOT the raw client-supplied
 -- `targetNetId` (recyclable/spoofable-adjacent, contraband_search_contract.md
 -- §4B). Outlives any single player's connection (a plate persists after
--- the searching officer disconnects), so — unlike lastSearchAt/SearchInFlight
+-- the searching officer disconnects), so — unlike SearchCooldown/SearchMutex
 -- above — this table needs its OWN independent TTL-based sweep instead of
--- playerDropped-based cleanup, see PruneTargetSearchCooldowns below.
--- lastTargetSearchAt['vehicle:<plate>' | 'person:<citizenid>'] = <GetGameTimer() ms>
-local lastTargetSearchAt = {}
+-- playerDropped-based cleanup, see the :StartSweep call below.
+--
+-- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastTargetSearchAt`
+-- table + `PruneTargetSearchCooldowns` sweep thread, now a NewCooldown()
+-- instance with :StartSweep (server/cooldowns.lua) — same resolved-identity
+-- string key, same staleness rule/interval, behavior unchanged.
+local TargetSearchCooldown = NewCooldown()
 
 -- Precomputed set of configured contraband item names, built once at file
 -- load (config.lua is a shared_script loaded before this file). O(1)
@@ -248,21 +270,9 @@ end
 -- threads.
 local TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS = 60000
 
-local function PruneTargetSearchCooldowns()
-    local now = GetGameTimer()
+TargetSearchCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
     local staleAfterMs = Config.SearchZones.searchCooldownMs * 2
-    for key, loggedAt in pairs(lastTargetSearchAt) do
-        if (now - loggedAt) > staleAfterMs then
-            lastTargetSearchAt[key] = nil
-        end
-    end
-end
-
-CreateThread(function()
-    while true do
-        Wait(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS)
-        PruneTargetSearchCooldowns()
-    end
+    return (now - loggedAt) > staleAfterMs
 end)
 
 --- Resolves a ped entity to the currently-connected player's server id it
@@ -499,14 +509,13 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     end
 
     -- Per-resolved-target cooldown check.
-    local lastTargetAt = lastTargetSearchAt[cooldownKey]
-    if lastTargetAt and (requestedAt - lastTargetAt) < Config.SearchZones.searchCooldownMs then
+    if TargetSearchCooldown.IsOnCooldown(cooldownKey, Config.SearchZones.searchCooldownMs, requestedAt) then
         return { ok = false, reason = 'on_cooldown' }
     end
 
     -- Stamp BOTH cooldowns NOW, BEFORE the awaited ox_inventory call below.
-    lastSearchAt[source] = requestedAt
-    lastTargetSearchAt[cooldownKey] = requestedAt
+    SearchCooldown.Touch(source, requestedAt)
+    TargetSearchCooldown.Touch(cooldownKey, requestedAt)
 
     -- Query contents (recursively via SumContrabandWeight below), pcall-
     -- wrapped — a lazily-loaded vehicle inventory can error on edge-case
@@ -610,14 +619,15 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
         return { ok = false, reason = 'no_access' } -- reuse the global from server/certifications.lua, do not re-derive
     end
 
-    if SearchInFlight[source] then
-        return { ok = false, reason = 'search_in_progress' } -- reject outright, never queue/race a concurrent call from the same source
-    end
-
     -- Set the in-flight mutex synchronously, BEFORE any further work that
     -- could yield (contraband_search_contract.md §4A) — cleared on EVERY
-    -- exit path below.
-    SearchInFlight[source] = true
+    -- exit path below. TryAcquire combines the original table's
+    -- check-then-set into one atomic call: false means already held, so
+    -- reject outright, never queue/race a concurrent call from the same
+    -- source.
+    if not SearchMutex.TryAcquire(source) then
+        return { ok = false, reason = 'search_in_progress' }
+    end
 
     local requestedAt = GetGameTimer()
 
@@ -626,14 +636,14 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     -- §11.4's original text (which only specified a per-(source, target)
     -- cooldown). Closes the "sweep every vehicle in a parking lot with
     -- zero delay" flood vector a per-pair-only cooldown leaves open.
-    if lastSearchAt[source] and (requestedAt - lastSearchAt[source]) < Config.SearchZones.sniffAnimDurationMs then
-        SearchInFlight[source] = nil
+    if SearchCooldown.IsOnCooldown(source, Config.SearchZones.sniffAnimDurationMs, requestedAt) then
+        SearchMutex.Release(source)
         return { ok = false, reason = 'on_cooldown' }
     end
 
     local ok, result = pcall(HandleSearchTarget, source, targetType, targetNetId, requestedAt)
 
-    SearchInFlight[source] = nil -- ALWAYS clear, success or error (contraband_search_contract.md §4A "finally")
+    SearchMutex.Release(source) -- ALWAYS clear, success or error (contraband_search_contract.md §4A "finally")
 
     if not ok then
         print(('[qbx_k9unit] searchTarget error for source %s: %s'):format(source, tostring(result)))
@@ -643,12 +653,11 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     return result
 end)
 
---- Cleans up this file's per-SOURCE ephemeral state on disconnect (does
---- NOT touch `lastTargetSearchAt`, which is intentionally NOT keyed by
---- source — see that table's own doc comment on why it needs an
---- independent TTL sweep instead).
-AddEventHandler('playerDropped', function(_reason)
-    local src = source
-    SearchInFlight[src] = nil
-    lastSearchAt[src] = nil
-end)
+-- REFACTOR_ROADMAP.md item 1: SearchMutex/SearchCooldown each already
+-- registered their OWN independent `playerDropped` handler via
+-- :RegisterPlayerDropped() at their own declaration above — same net
+-- effect as the dedicated handler this file used to have (clears each
+-- one's entry for the disconnecting source). `TargetSearchCooldown` is
+-- intentionally NOT registered for playerDropped — it's keyed by a
+-- resolved plate/citizenid identity, not by source, so it needs its own
+-- independent TTL sweep instead (see the :StartSweep call above).

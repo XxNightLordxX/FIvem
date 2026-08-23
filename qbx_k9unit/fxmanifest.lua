@@ -52,6 +52,11 @@ client_scripts {
 
 server_scripts {
     '@oxmysql/lib/MySQL.lua',
+    -- REFACTOR_ROADMAP.md item 1: shared cooldown/mutex helper (NewCooldown/
+    -- NewNestedCooldown/NewMutex), loaded FIRST among this resource's own
+    -- files since main.lua/certifications.lua/tracking.lua/search.lua all
+    -- call these resource-global constructors at their own file-load time.
+    'server/cooldowns.lua',
     'server/main.lua',
     'server/certifications.lua',
     'server/tracking.lua', -- Phase 2

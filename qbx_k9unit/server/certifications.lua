@@ -323,17 +323,23 @@ end
 -- certify/revoke action (online, offline, or self), independent of which
 -- target/department is named.
 local CERTIFY_ACTION_COOLDOWN_MS = 1500
-local lastCertifyActionAt = {}
+
+-- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastCertifyActionAt`
+-- table, now a NewCooldown() instance (server/cooldowns.lua) — same
+-- threshold, same per-granter-source key, same playerDropped-based cleanup
+-- (see CertifyActionCooldown.RegisterPlayerDropped() below), behavior
+-- unchanged. IsCertifyActionOnCooldown below keeps its original name/
+-- boolean-sense ("true" = on cooldown) so its three call sites don't need
+-- to change at all — it's a thin wrapper around
+-- `not CertifyActionCooldown.Consume(...)`, preserving the exact original
+-- "check, and stamp iff not on cooldown" ordering.
+local CertifyActionCooldown = NewCooldown(CERTIFY_ACTION_COOLDOWN_MS)
+CertifyActionCooldown.RegisterPlayerDropped()
 
 --- @param granterSrc number
 --- @return boolean onCooldown
 local function IsCertifyActionOnCooldown(granterSrc)
-    local now = GetGameTimer()
-    if lastCertifyActionAt[granterSrc] and (now - lastCertifyActionAt[granterSrc]) < CERTIFY_ACTION_COOLDOWN_MS then
-        return true
-    end
-    lastCertifyActionAt[granterSrc] = now
-    return false
+    return not CertifyActionCooldown.Consume(granterSrc)
 end
 
 --- SPEC.md §4.2/§4.3 grant flow. Called by both event 2 and command 6.
@@ -871,10 +877,10 @@ AddEventHandler('playerDropped', function(_reason)
         Certifications[citizenid] = nil
     end
 
-    -- Same unbounded-growth reasoning as Certifications above, but keyed by
+    -- REFACTOR_ROADMAP.md item 1: CertifyActionCooldown already registered
+    -- its OWN `playerDropped` handler via :RegisterPlayerDropped() above
+    -- (same unbounded-growth reasoning as Certifications above — keyed by
     -- server id (src) rather than citizenid since CERTIFY_ACTION_COOLDOWN_MS
-    -- throttles the CERTIFIER's connection, not any particular citizenid —
-    -- drop it here rather than letting it accumulate one entry per
-    -- historical source id for the life of the server process.
-    lastCertifyActionAt[src] = nil
+    -- throttles the CERTIFIER's connection, not any particular citizenid),
+    -- so nothing needs to happen here for it anymore.
 end)

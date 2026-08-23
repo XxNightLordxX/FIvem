@@ -215,8 +215,14 @@ local LEASH_REQUEST_TTL_MS = 30000
 -- escalation (every proximity/model/cert check in CheckLeashEligibility
 -- still applies before this ever fires), just a UI-harassment vector.
 -- Mirrors the bark cooldown's exact pattern.
+--
+-- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastLeashRequestAt`
+-- table, now a NewCooldown() instance (server/cooldowns.lua) — same
+-- threshold, same per-source key, same playerDropped-based cleanup (see
+-- LeashRequestCooldown.RegisterPlayerDropped() below), behavior unchanged.
 local LEASH_REQUEST_COOLDOWN_MS = 1000
-local lastLeashRequestAt = {}
+local LeashRequestCooldown = NewCooldown(LEASH_REQUEST_COOLDOWN_MS)
+LeashRequestCooldown.RegisterPlayerDropped()
 
 --- Sends an ox_lib notification to a specific player — see
 --- server/certifications.lua's NotifyPlayer for why `ox_lib:notify` was
@@ -328,8 +334,14 @@ end)
 -- has no other gameplay effect. A small per-player cooldown closes this
 -- without needing a config addition — bark has no legitimate reason to be
 -- triggered faster than this.
+--
+-- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastBarkAt` table,
+-- now a NewCooldown() instance (server/cooldowns.lua) — same threshold,
+-- same per-source key, same playerDropped-based cleanup (see
+-- BarkCooldown.RegisterPlayerDropped() below), behavior unchanged.
 local BARK_COOLDOWN_MS = 1000
-local lastBarkAt = {}
+local BarkCooldown = NewCooldown(BARK_COOLDOWN_MS)
+BarkCooldown.RegisterPlayerDropped()
 
 --- Relays a bark to every client so anyone near the K9 entity hears it.
 --- Gated by Config.Features.BasicBarkSounds AND HasK9Access(source) —
@@ -345,11 +357,9 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     if type(barkType) ~= 'string' then return end -- defensive: never trust client payload shape
     if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
 
-    local now = GetGameTimer()
-    if lastBarkAt[src] and (now - lastBarkAt[src]) < BARK_COOLDOWN_MS then
+    if not BarkCooldown.Consume(src) then
         return -- silent no-op: rate-limited, not an error worth notifying about
     end
-    lastBarkAt[src] = now
 
     local ped = GetPlayerPed(src)
     local netId = NetworkGetNetworkIdFromEntity(ped)
@@ -386,7 +396,16 @@ local DOOR_SCRATCH_DISTANCE_TOLERANCE = 1.0 -- meters of slack over Config.DoorI
 -- cooldowned actions per §11.4/phase2_notes/door_interaction.md §4.2; a
 -- player who just barked should not have that consumed against their
 -- separate door-scratch allowance, or vice versa.
-local lastDoorScratchAt = {}
+--
+-- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastDoorScratchAt`
+-- table, now a NewCooldown() instance (server/cooldowns.lua) — no default
+-- threshold baked in at construction since the check below reads
+-- Config.DoorInteraction.scratchCooldownMs fresh on every call (matching
+-- the original code's own behavior of never caching that config value).
+-- playerDropped cleanup via DoorScratchCooldown.RegisterPlayerDropped()
+-- below, same as before.
+local DoorScratchCooldown = NewCooldown()
+DoorScratchCooldown.RegisterPlayerDropped()
 
 -- SECURITY/ABUSE FIX (exploit-tester finding, 2026-08-23): lastDoorScratchAt
 -- above only rate-limits per SOURCE, so it does nothing to stop MULTIPLE
@@ -414,42 +433,32 @@ local lastDoorScratchAt = {}
 -- are keyed by coordinate/timestamp, not by player), doorNetId has no
 -- natural per-connection cleanup hook — a door doesn't disconnect. Following
 -- server/tracking.lua's own PruneTrackableLogs precedent (a periodic sweep
--- thread, same shape, see PruneDoorScratchCooldowns below) rather than
+-- thread, same shape, see the :StartSweep call below) rather than
 -- prune-on-access, since a dedicated thread keeps the eviction logic in one
 -- place and doesn't add work to the hot broadcast path above.
-local lastDoorScratchAtByDoor = {}
+--
+-- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastDoorScratchAtByDoor`
+-- table + `PruneDoorScratchCooldowns` sweep thread, now a NewCooldown()
+-- instance with :StartSweep (server/cooldowns.lua) — same doorNetId key,
+-- same staleness rule, same interval, behavior unchanged.
+local DoorScratchByDoorCooldown = NewCooldown()
 
--- Prune interval for lastDoorScratchAtByDoor. Deliberately much coarser than
--- server/tracking.lua's TRACKABLE_LOG_PRUNE_INTERVAL_MS (15000ms) — that
--- table backs a live distance search so staleness has a correctness cost;
--- this table only backs a rate-limit check, so a stale entry lingering a
--- little past its usefulness window costs nothing but a few bytes. 10x
--- Config.DoorInteraction.scratchCooldownMs's default (3000ms) keeps the
--- table from growing unbounded across a long-running server (one entry per
--- distinct door ever scratched) without running the sweep needlessly often.
+-- Prune interval for DoorScratchByDoorCooldown. Deliberately much coarser
+-- than server/tracking.lua's TRACKABLE_LOG_PRUNE_INTERVAL_MS (15000ms) —
+-- that table backs a live distance search so staleness has a correctness
+-- cost; this table only backs a rate-limit check, so a stale entry
+-- lingering a little past its usefulness window costs nothing but a few
+-- bytes. 10x Config.DoorInteraction.scratchCooldownMs's default (3000ms)
+-- keeps the table from growing unbounded across a long-running server (one
+-- entry per distinct door ever scratched) without running the sweep
+-- needlessly often.
 local DOOR_SCRATCH_COOLDOWN_PRUNE_INTERVAL_MS = 30000
 
---- Drops any lastDoorScratchAtByDoor entry whose cooldown has already
---- expired — once (now - loggedAt) >= scratchCooldownMs, the entry can no
---- longer affect the cooldown check above, so it's safe to evict. Uses a
---- `pairs` sweep with in-place `nil` removal (safe in Lua: clearing the
---- CURRENT key during a `pairs` traversal is well-defined, unlike adding new
---- keys) rather than tracking.lua's rebuild-a-fresh-array approach, since
---- this table is a plain doorNetId -> timestamp map, not an ordered array.
-local function PruneDoorScratchCooldowns()
-    local now = GetGameTimer()
-    for doorNetId, loggedAt in pairs(lastDoorScratchAtByDoor) do
-        if (now - loggedAt) >= Config.DoorInteraction.scratchCooldownMs then
-            lastDoorScratchAtByDoor[doorNetId] = nil
-        end
-    end
-end
-
-CreateThread(function()
-    while true do
-        Wait(DOOR_SCRATCH_COOLDOWN_PRUNE_INTERVAL_MS)
-        PruneDoorScratchCooldowns()
-    end
+-- Drops any DoorScratchByDoorCooldown entry whose cooldown has already
+-- expired — once (now - loggedAt) >= scratchCooldownMs, the entry can no
+-- longer affect the cooldown check below, so it's safe to evict.
+DoorScratchByDoorCooldown.StartSweep(DOOR_SCRATCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
+    return (now - loggedAt) >= Config.DoorInteraction.scratchCooldownMs
 end)
 
 --- Relays a door-scratch sound to every client so anyone with the door
@@ -494,22 +503,26 @@ RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
         return -- silent no-op: claimed entity isn't an object (e.g. a ped/vehicle), never trust the client's own IsLikelyDoorEntity() UX gate as the real check
     end
 
+    -- Both checks must run BEFORE either stamps (preserved from the
+    -- pre-extraction code: :IsOnCooldown never mutates, so both reads below
+    -- happen against whatever was stamped by a PRIOR call, never against
+    -- each other) — only :Touch both once both checks pass.
     local now = GetGameTimer()
-    if lastDoorScratchAt[src] and (now - lastDoorScratchAt[src]) < Config.DoorInteraction.scratchCooldownMs then
+    if DoorScratchCooldown.IsOnCooldown(src, Config.DoorInteraction.scratchCooldownMs, now) then
         return -- silent no-op: rate-limited, not an error worth notifying about
     end
 
-    -- exploit-tester finding (2026-08-23, see lastDoorScratchAtByDoor's own
-    -- doc comment above for the full writeup): the per-source check above
-    -- does nothing to stop MULTIPLE certified sources from independently
-    -- hammering this SAME door, each staying under their own per-source
-    -- cooldown. Both checks must pass before a broadcast fires.
-    if lastDoorScratchAtByDoor[doorNetId] and (now - lastDoorScratchAtByDoor[doorNetId]) < Config.DoorInteraction.scratchCooldownMs then
+    -- exploit-tester finding (2026-08-23, see DoorScratchByDoorCooldown's
+    -- own doc comment above for the full writeup): the per-source check
+    -- above does nothing to stop MULTIPLE certified sources from
+    -- independently hammering this SAME door, each staying under their own
+    -- per-source cooldown. Both checks must pass before a broadcast fires.
+    if DoorScratchByDoorCooldown.IsOnCooldown(doorNetId, Config.DoorInteraction.scratchCooldownMs, now) then
         return -- silent no-op: this specific door was already scratched recently by ANY source
     end
 
-    lastDoorScratchAt[src] = now
-    lastDoorScratchAtByDoor[doorNetId] = now
+    DoorScratchCooldown.Touch(src, now)
+    DoorScratchByDoorCooldown.Touch(doorNetId, now)
 
     -- DELIBERATE broadcast to EVERYONE (-1), not distance-filtered to nearby
     -- clients server-side, and NOT the pattern to copy if you're touching
@@ -643,11 +656,9 @@ RegisterNetEvent('qbx_k9unit:server:requestLeashAttach', function(targetServerId
     end
 
     -- Rate limit — see LEASH_REQUEST_COOLDOWN_MS above.
-    local now = GetGameTimer()
-    if lastLeashRequestAt[src] and (now - lastLeashRequestAt[src]) < LEASH_REQUEST_COOLDOWN_MS then
+    if not LeashRequestCooldown.Consume(src) then
         return -- silent no-op: rate-limited, not an error worth notifying about
     end
-    lastLeashRequestAt[src] = now
 
     PendingLeashRequests[targetServerId] = { from = src, expiresAt = GetGameTimer() + LEASH_REQUEST_TTL_MS }
 
@@ -817,13 +828,18 @@ AddEventHandler('playerDropped', function(reason)
     local src = source
 
     PendingLeashRequests[src] = nil -- target-side: a request aimed AT the disconnecting player
-    lastBarkAt[src] = nil -- drop the bark-cooldown entry too, don't leak one per session
-    lastLeashRequestAt[src] = nil -- drop the leash-request cooldown entry too, don't leak one per session
-    lastDoorScratchAt[src] = nil -- drop the door-scratch cooldown entry too, don't leak one per session
-    -- lastDoorScratchAtByDoor deliberately has NO cleanup here — it's keyed
-    -- by doorNetId, not by this disconnecting source, so it can't be cleaned
-    -- up on a player-keyed hook at all. See PruneDoorScratchCooldowns above
-    -- (exploit-tester finding, 2026-08-23) for how it's kept bounded instead.
+
+    -- REFACTOR_ROADMAP.md item 1: BarkCooldown/LeashRequestCooldown/
+    -- DoorScratchCooldown each already registered their OWN independent
+    -- `playerDropped` handler via :RegisterPlayerDropped() above (see each
+    -- one's own declaration), so this handler no longer clears them
+    -- manually — same net effect (each drops its entry for this source),
+    -- just no longer hand-written here. DoorScratchByDoorCooldown
+    -- deliberately has NO cleanup here — it's keyed by doorNetId, not by
+    -- this disconnecting source, so it can't be cleaned up on a
+    -- player-keyed hook at all. See its own :StartSweep call above
+    -- (exploit-tester finding, 2026-08-23) for how it's kept bounded
+    -- instead.
 
     -- Initiator-side cleanup (coder-security/QA finding): PendingLeashRequests
     -- is keyed by TARGET server id, so the line above only ever clears an

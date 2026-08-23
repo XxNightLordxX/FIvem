@@ -205,8 +205,17 @@ local TrackableLog = {
 -- relayWeaponFire) — this one throttles how often a K9 can re-run
 -- "Track <Type>", not how often a shooter/victim's own client can report
 -- a source event.
--- LastTrackQueryAt[source] = { scent = ms?, blood = ms?, gunpowder = ms? }
-local LastTrackQueryAt = {}
+--
+-- REFACTOR_ROADMAP.md item 1: was its own hand-rolled
+-- `LastTrackQueryAt[source][trackType]` table, now a NewNestedCooldown()
+-- instance (server/cooldowns.lua) — same two-level (source, trackType) key,
+-- no default threshold baked in (each call site passes the relevant
+-- trackingConfig.searchCooldownMs explicitly, since it varies by
+-- trackType), same playerDropped-based cleanup that drops every trackType
+-- for a disconnecting source in one call (see
+-- TrackQueryCooldown.RegisterPlayerDropped() below), behavior unchanged.
+local TrackQueryCooldown = NewNestedCooldown()
+TrackQueryCooldown.RegisterPlayerDropped()
 
 -- Per-source LOGGING-side rate limits (SPEC.md §11.4 items 3/4, sized by
 -- the coordinator-amendment fields Config.Tracking.Blood/Gunpowder.relayCooldownMs
@@ -218,8 +227,14 @@ local LastTrackQueryAt = {}
 -- (CEventNetworkEntityDamage can legitimately fire multiple times per hit,
 -- and a modified client can call TriggerServerEvent directly, bypassing
 -- the client-side debounce entirely).
-local lastDamageRelayAt = {}
-local lastWeaponFireRelayAt = {}
+--
+-- REFACTOR_ROADMAP.md item 1: both were their own hand-rolled per-source
+-- tables, now NewCooldown() instances (server/cooldowns.lua) — same
+-- per-source key, same playerDropped-based cleanup, behavior unchanged.
+local DamageRelayCooldown = NewCooldown()
+DamageRelayCooldown.RegisterPlayerDropped()
+local WeaponFireRelayCooldown = NewCooldown()
+WeaponFireRelayCooldown.RegisterPlayerDropped()
 
 -- trackType -> the Config.Features flag gating that type, and the
 -- Config.Tracking sub-table holding its tuning values. Built once at file
@@ -305,13 +320,12 @@ RegisterNetEvent('qbx_k9unit:server:relayDamageEvent', function()
     if not Config.Features.BloodTracking then return end -- silent no-op, per SPEC.md §3
 
     -- LOGGING-side rate limit — stamped BEFORE any log-append work (see
-    -- lastDamageRelayAt's own doc comment above for why this ordering
+    -- DamageRelayCooldown's own doc comment above for why this ordering
     -- matters on this specific ingest surface).
     local now = GetGameTimer()
-    if lastDamageRelayAt[src] and (now - lastDamageRelayAt[src]) < Config.Tracking.Blood.relayCooldownMs then
+    if not DamageRelayCooldown.Consume(src, Config.Tracking.Blood.relayCooldownMs, now) then
         return -- silent no-op: rate-limited, not an error worth notifying about
     end
-    lastDamageRelayAt[src] = now
 
     local ped = GetPlayerPed(src)
     if ped == 0 then return end -- defensive: no live ped to read a position from
@@ -350,10 +364,9 @@ RegisterNetEvent('qbx_k9unit:server:relayWeaponFire', function()
     -- from Config.Tracking.Gunpowder.searchCooldownMs (§11.4 item 4's
     -- explicit distinction between query-side and logging-side cooldowns).
     local now = GetGameTimer()
-    if lastWeaponFireRelayAt[src] and (now - lastWeaponFireRelayAt[src]) < Config.Tracking.Gunpowder.relayCooldownMs then
+    if not WeaponFireRelayCooldown.Consume(src, Config.Tracking.Gunpowder.relayCooldownMs, now) then
         return -- silent no-op: rate-limited, not an error worth notifying about
     end
-    lastWeaponFireRelayAt[src] = now
 
     local ped = GetPlayerPed(src)
     if ped == 0 then return end -- defensive: no live ped to read a position from
@@ -414,15 +427,14 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
 
     local trackingConfig = TRACK_TYPE_CONFIG[trackType]
 
-    LastTrackQueryAt[source] = LastTrackQueryAt[source] or {}
+    -- Stamp BEFORE doing any lookup work below — see this function's own
+    -- doc comment (step 4) for why. TrackQueryCooldown.Consume checks and
+    -- (iff allowed) stamps in one call, at the SAME `now` reused for the
+    -- freshness filtering further below.
     local now = GetGameTimer()
-    local lastAt = LastTrackQueryAt[source][trackType]
-    if lastAt and (now - lastAt) < trackingConfig.searchCooldownMs then
+    if not TrackQueryCooldown.Consume(source, trackType, trackingConfig.searchCooldownMs, now) then
         return { found = false }
     end
-    -- Stamp BEFORE doing any lookup work below — see this function's own
-    -- doc comment (step 4) for why.
-    LastTrackQueryAt[source][trackType] = now
 
     local ped = GetPlayerPed(source)
     if ped == 0 then return { found = false } end -- defensive: no live ped to read a position from
@@ -470,18 +482,19 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     }
 end)
 
---- Cleans up this file's per-source ephemeral state on disconnect, same
---- rationale as server/main.lua's playerDropped handler (drop
---- cooldown-table entries so they don't leak one per session) and
---- server/certifications.lua's own "regression-test fix" for unbounded
---- per-citizenid cache growth. `TrackableLog` itself needs NO per-source
---- cleanup here — its entries are keyed by coordinate/timestamp, not by
---- the reporting source, and are already pruned on their own
---- maxAgeSeconds schedule regardless of whether the original reporter is
---- still connected.
-AddEventHandler('playerDropped', function(_reason)
-    local src = source
-    LastTrackQueryAt[src] = nil
-    lastDamageRelayAt[src] = nil
-    lastWeaponFireRelayAt[src] = nil
-end)
+-- Cleans up this file's per-source ephemeral state on disconnect, same
+-- rationale as server/main.lua's playerDropped handler (drop
+-- cooldown-table entries so they don't leak one per session) and
+-- server/certifications.lua's own "regression-test fix" for unbounded
+-- per-citizenid cache growth. `TrackableLog` itself needs NO per-source
+-- cleanup here — its entries are keyed by coordinate/timestamp, not by
+-- the reporting source, and are already pruned on their own
+-- maxAgeSeconds schedule regardless of whether the original reporter is
+-- still connected.
+--
+-- REFACTOR_ROADMAP.md item 1: TrackQueryCooldown/DamageRelayCooldown/
+-- WeaponFireRelayCooldown each already registered their OWN independent
+-- `playerDropped` handler via :RegisterPlayerDropped() at their own
+-- declaration above, so there is no longer a dedicated handler for this
+-- file's cooldown state — each tracker owns clearing its own entry for the
+-- disconnecting source, same net effect as before.
