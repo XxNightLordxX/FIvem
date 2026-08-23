@@ -90,10 +90,13 @@
       currently resolves to a connected server id — SPEC.md §1/§4.4
       "immediately" ending K9 access must also tear down an already-formed
       leash pairing, not just block future attach attempts. No-op (returns
-      false) if that source isn't currently leashed to anyone. Reuses the
-      exact same internal detach path (doDetachLeash) as the player-
-      initiated detachLeash event — do not duplicate the LeashPairs
-      mutation/broadcast logic in certifications.lua.
+      false) if that source isn't currently leashed to anyone, OR if it is
+      leashed but only as the officer/handler-role party of that pairing —
+      see this function's own doc comment below for why role (not mere
+      participation) is what actually gates the detach. Reuses the exact
+      same internal detach path (doDetachLeash) as the player-initiated
+      detachLeash event — do not duplicate the LeashPairs mutation/
+      broadcast logic in certifications.lua.
     - client/movement.lua is the ONLY client file that should register
       handlers for the three leash client events above, or trigger the
       three leash server events above — keep the full leash subsystem
@@ -525,8 +528,9 @@ AddEventHandler('playerDropped', function(reason)
         end
     end
 
-    local partner = LeashPairs[src]
-    if not partner then return end
+    local pairing = LeashPairs[src]
+    if not pairing then return end
+    local partner = pairing.partner
 
     LeashPairs[src] = nil
     LeashPairs[partner] = nil
