@@ -39,7 +39,7 @@
 -- handle can go stale over a ride of unknown length; client/movement.lua's
 -- leash pull-back thread established this exact re-resolve-every-use
 -- pattern for the same reason on a ped handle).
---- @type { vehicleNetId: number, doorIndex: number } | nil
+--- @type { vehicleNetId: number } | nil
 local vehicleState = nil
 
 --- @return boolean
@@ -125,7 +125,7 @@ function EnterNearestK9Vehicle()
     if not Config.Features.VehicleEntryExit then return end
 
     if not CanShowK9UI() then
-        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        DenyK9UIAccess()
         return
     end
 
@@ -154,7 +154,7 @@ function EnterNearestK9Vehicle()
     -- Store the NETWORK id, not the raw `vehicle` handle above — see
     -- ResolveVehicleFromState()'s doc comment for why the handle itself
     -- isn't trusted to stay valid for the whole ride.
-    vehicleState = { vehicleNetId = NetworkGetNetworkIdFromEntity(vehicle), doorIndex = 5 } -- boot/trunk, a reasonable default "loaded" spot
+    vehicleState = { vehicleNetId = NetworkGetNetworkIdFromEntity(vehicle) }
     lib.notify({ title = 'K9 Unit', description = 'Loaded into the vehicle.', type = 'success' })
 end
 

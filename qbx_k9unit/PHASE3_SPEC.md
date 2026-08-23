@@ -49,6 +49,27 @@ requirement). §12.1–§12.7 are updated wherever they depended on the old
 NPC-only framing. No `.lua` file was touched to produce this revision either
 — still planning only, not committed.
 
+**Revision 4 (coder-security resolution pass): coder-security,
+2026-08-23, jlwood17190665@gmail.com.** Revision 3 left §12.0 item 8 —
+whether a non-cooperating target client can be *prevented*, not merely
+detected, from ignoring a relayed Category B combat effect — explicitly
+BLOCKING and routed to coder-security/coder-architect. This revision
+answers it, from a trust-boundary/exploit-resistance lens, with real
+research rather than a restatement: the named network-ownership-migration
+candidate is independently evaluated against FiveM's actual, documented
+network-ownership model (citizenfx/fivem GitHub issues/PRs, not guesswork)
+and **rejected as not viable** — not "needs a prototype," a concrete,
+sourced "no." A full detection-layer design is specified in enough detail
+to implement. And the actual product/architecture ship call Revision 3
+declined to make — does Category B combat ship at all — is made:
+**Category A ships now; Category B ships only under new, binding
+guardrails specified below, never as a claimed enforced restraint against
+a player target.** Item 8 below and §12.7 item 8 are rewritten to reflect
+this; nothing else in §12.1–§12.6 needed rewriting, since those sections
+already correctly deferred to item 8 rather than asserting their own
+answer. No `.lua` file was touched to produce this revision either — this
+remains a design/spec-only pass, not committed.
+
 ## Relationship to `SPEC.md` and to this project's document-scale precedent
 
 This document is written to become `SPEC.md` §12 (immediately after §11,
@@ -75,18 +96,24 @@ against `SPEC.md` directly if the two ever drift. In particular, `SPEC.md`
 bullet when this document is eventually folded in — Revision 3 reverses that
 specific conclusion.
 
-**Read §12.0 first.** It now contains one item (item 8) that this revision
-could not responsibly resolve — a genuine, unresolved technical question
-about whether a non-cooperating client can be prevented (not merely
-detected) from ignoring a relayed combat effect. **No `Config.Features` flag
-in this phase should be flipped to `true` on a live server, and no
-implementation should start on `BiteAndHold`/`NonLethalTakedown`/
-`PropDragging`'s player-target code paths past a design-review pass, until:**
-- **item 8 gets an explicit answer from coder-security and/or
-  coder-architect** — this is the one blocking item in this revision that a
-  product-only pass cannot close, by design (see item 8's own text for why
-  forcing an answer here would violate this project's "never fake a safety
-  check" standard),
+**Read §12.0 first.** Item 8 — whether a non-cooperating client can be
+prevented (not merely detected) from ignoring a relayed combat effect — is
+now **RESOLVED as of Revision 4** (coder-security's analysis; see item 8
+below). **No `Config.Features` flag in this phase should be flipped to
+`true` on a live server, and no implementation should start on
+`BiteAndHold`/`NonLethalTakedown`/`PropDragging`'s player-target code paths,
+until:**
+- **item 8's concrete guardrails are actually built, not merely
+  documented** — the detection layer specified in item 8 exists in real,
+  tested code; `PropDragging`'s attach is re-asserted every tick (never
+  one-shot); no server-authoritative consequence (arrest completion,
+  evidence, currency, items, permissions) is ever gated on a Category B
+  "effect applied successfully" signal for a player target; and every
+  player-facing string describing these three mechanics against a player
+  target is worded as best-effort, never as an unconditional guarantee.
+  This replaces the prior "needs coder-security/coder-architect to answer
+  item 8" gate — that answer now exists; what remains is implementation
+  discipline, not further design,
 - **item 6 (PropDragging's downed-integration contract) is actually built**
   before `PropDragging`'s player-target path ships (NPC-target dragging
   remains unblocked and can proceed independently), and
@@ -391,20 +418,20 @@ an acceptable Phase 3 trade-off, or (b) a scoped design pass for a new "K9
 partnership" registry — (a) remains the lower-cost **default-if-forced**,
 not elevated to a decision here.
 
-#### 8. NEW (Revision 3) — the client-relay architecture problem for a live-player target: BLOCKING, flagged for coder-security/coder-architect, not resolved here
+#### 8. The client-relay architecture problem for a live-player target — RESOLVED (Revision 4, coder-security); was NEW/BLOCKING under Revision 3
 
 This is the item Revision 2's research treated as an argument *against* the
 PvP decision; now that the decision has been made anyway, this document owes
 an honest, concrete answer about how the three target-taking mechanics
 actually work against a live player, and what happens when that player's
-client doesn't cooperate. **This item is written up in full below and is
-explicitly left unresolved where it is genuinely unresolved** — per the
-task this document was written to satisfy, forcing a weak answer here to
-look complete would violate this codebase's own established standard
-(`server/main.lua`'s "never fake a safety check," already applied to reject
-`SET_ENTITY_INVINCIBLE` in §12.5.2 and to the door-interaction lock-state
-non-check in `client/movement.lua`) more than leaving a hard question open
-does.
+client doesn't cooperate. Revision 3 wrote up the architecture problem in
+full and correctly declined to fake an answer it couldn't back up. This
+revision (coder-security, from the trust-boundary/exploit-resistance lens
+this problem actually lives in) closes the two things Revision 3 left
+open: whether the named enforcement candidate is viable (it is not, for
+concrete, sourced reasons below — this is not a restatement of Revision 3's
+own hedge), and what this resource should actually ship given that answer
+(a real decision, made below, not deferred again).
 
 **Why this is fundamentally different from anything already shipped in this
 codebase.** Every existing effect this resource applies to *another* entity
@@ -479,6 +506,35 @@ isn't):
   `qbx_k9unit:client:applyDragSpeedLimit` event), which is where the same
   compliance question below reapplies.
 
+**New finding (Revision 4), sharpening the Category A/B split for
+`PropDragging` specifically — the attach is robust against a passive
+target, but not against an actively resisting one, unless it is
+continuously re-asserted.** `AttachEntityToEntity`/`AttachEntityToEntityPhysically`
+are documented (citizenfx/fivem GitHub issue #3726, "AttachEntityToEntityPhysically
+can be abused to move/attach players") to require **no network ownership or
+authority over the target entity at all** to take initial effect — real,
+independent confirmation that the doc's Category A claim for the initial
+attach is technically sound, and the same property already underlies
+widespread ecosystem cuffing/carry scripts. But `DetachEntity` is the
+symmetric operation on the same entity, and by that same evidence (no
+ownership check gates the attach side) there is no reason to expect the
+detach side is gated any differently — **a hostile target's own client can
+plausibly call `DetachEntity` on itself at any moment to instantly break
+free**, exactly the same way a hostile target ignores a Category B relay
+event, just via a different native. This means `PropDragging`'s attach must
+be **re-asserted every tick from the K9's own client** (call
+`AttachEntityToEntity` again each frame the drag is active, not once at
+drag-start) to survive a target repeatedly self-detaching — mirroring the
+discipline `phase2_notes/phase3_combat_natives.md` §4 already requires for
+`SET_PED_MOVE_RATE_OVERRIDE` (must be looped, not one-shot). Read "the
+attach itself is Category A, no relay problem exists for it" above as true
+only under this every-tick-reassert discipline — a one-shot attach
+implementation would silently degrade dragging's supposedly Category A half
+into something a hostile target can defeat as trivially as a Category B
+effect, for the cost of one line of client Lua. **This is now a concrete,
+binding implementation requirement for `PropDragging`** — see the
+guardrails list at the end of this item.
+
 **The honest answer to "what happens when the target's client simply
 ignores the instruction," worked through rather than hand-waved:**
 
@@ -493,80 +549,295 @@ ignores the instruction," worked through rather than hand-waved:**
    This document will not describe Category B effects as "restraining" a
    player in any player-facing copy without that caveat attached (see the
    recommendation at the end of this item).
-2. **Is a non-cooperating target detectable server-side? Partially, yes —
-   and this is real, buildable work, not a hand-wave.** The server already
+2. **Is a non-cooperating target detectable server-side? Yes — and here is
+   the concrete, implementable design, not a sketch.** The server already
    receives authoritative position updates for every networked entity,
    including a player's own ped (this is the same fact `NonLethalTakedown`'s
    server-computed speed gate in §12.5.2 already relies on for NPCs — it is
    equally true for players, since FiveM's networking model syncs position
    to the server for any entity, not just ones the server itself commands).
-   A concrete, buildable detection layer: record the target's position/
-   velocity at the moment a hold/ragdoll/drag-limit window opens, and flag
-   the case where their observed speed during that window materially
-   exceeds what the intended restriction should have allowed (e.g., still
-   moving at sprint-equivalent speed during an active `BiteAndHold`/
-   `applyDragSpeedLimit` window). If Phase 2's `relayWeaponFire` tracking
-   infra (`server/tracking.lua`) is enabled, a weapon-fire event observed
-   from the target during an active `BiteAndHold` window is an even more
-   direct signal. **This is detection, not enforcement** — it tells the
-   server *after the fact* that the instruction was very likely ignored; it
-   does not stop the ignored effect from having already given that player a
-   real advantage in the moment.
-3. **Is there a third mechanism that actually enforces it?** The one
-   candidate this document is aware of but has not evaluated closely enough
-   to recommend — forcing server-side network-ownership migration of the
-   target's ped to a cooperating client (e.g., the K9 player's own client,
-   or the nearest other client) and having *that* client apply the
-   Category B natives on the target's behalf — is a known FiveM technique
-   in principle, but carries real, unevaluated costs: it fights the
-   target's own client for authority over their ped every frame for as long
-   as the effect is active (a tug-of-war that produces visible rubber-
-   banding/desync even against a *cooperating* target, per the same
-   documented limitation widely reported in the ecosystem's existing
-   cuffing/carry scripts, which suffer exactly this problem today), it has
-   not been prototyped or verified against this codebase's actual OneSync
-   configuration, and it may or may not actually win the fight against a
-   client that's deliberately resisting it. This document does not know
-   whether that cost is worth paying and does not have the standing to
-   decide that unilaterally.
-4. **Conclusion — this is a genuine, unresolved technical gap, stated
-   plainly rather than picked around:** for the Category B half of all
+
+   **State:** add a `compliance` sub-record to the same ephemeral hold/
+   ragdoll/drag-state entry `server/combat.lua` already owns per active
+   effect (do **not** stand up a separate file/table for this — the
+   sampling is inherently keyed to the same per-effect lifecycle, and that
+   entry already has to be cleaned up on release/timeout/disconnect
+   regardless; adding a second, independently-lifecycled table for the same
+   window is the kind of unforced duplication `server/tracking.lua`'s own
+   `TrackableLog`/cooldown-table conventions in this codebase deliberately
+   avoid). `compliance = { baselinePos = vector3, baselineTime = ms, lastPos
+   = vector3, lastTime = ms, consecutiveViolations = 0 }`, stamped at
+   window-open using the target's live `GetEntityCoords`/`GetGameTimer()` —
+   never a client-reported value, same discipline as every other
+   position read in this resource.
+
+   **Sampling:** one ticking thread (not one thread per active effect,
+   mirroring `PruneTrackableLogs`'s single-pass-over-a-shared-table
+   discipline in `server/tracking.lua` rather than spawning per-entry
+   threads) scans every currently-active `BiteAndHold`/`forceRagdoll`/
+   `applyDragSpeedLimit` entry every `Config.Combat.NonComplianceDetection.positionSampleWindowMs`
+   and computes `dist(lastPos, currentPos) / (currentTime - lastTime)` as an
+   effective observed speed for that interval, then updates `lastPos`/
+   `lastTime` for the next tick.
+
+   **Per-effect threshold logic — deliberately not one generic "speed >
+   X" rule, because "compliant" doesn't mean the same thing for all three
+   effects:**
+   - `BiteAndHold`: a compliant held target is near-stationary (may turn in
+     place). Flag when observed speed exceeds an idle-jitter ceiling
+     (~0.3 m/s) by more than `speedTolerance` for **two or more consecutive
+     samples** (not a single sample — one sample alone is exactly the kind
+     of lag/interpolation-jitter false positive this codebase's own
+     "never auto-punish on a single noisy signal" instinct, already visible
+     in `server/tracking.lua`'s FORGED TRAIL DECISION reasoning below,
+     should avoid). **The shipped placeholder `speedTolerance = 1.0` in
+     §12.2 is too loose for this specific check** — 1.0 m/s of slack on top
+     of a ~0.3 m/s ceiling would let a target walk (not even sprint) through
+     most of a hold window undetected. Recommend tightening to ~0.5 m/s for
+     `BiteAndHold` specifically when config-validator reviews §12.2 (this
+     document flags the number, not a final tuned value).
+   - `NonLethalTakedown`: a genuine ragdoll produces noisy, non-directional
+     per-tick velocity (falling, sliding down a slope) that a naive
+     continuous speed check would false-positive on — the same problem
+     `Config.Combat.NonComplianceDetection`'s single flat threshold cannot
+     honestly solve for this effect. Use **net displacement across the
+     whole window** (position at window-open vs. window-close/release) as
+     the primary signal instead: a target who ends up materially farther
+     from their ragdoll-start point than physics-driven tumbling plausibly
+     explains, in a sustained consistent heading rather than random
+     tumbling drift, is the stronger tell. This is a heuristic, not a
+     guarantee, and must be documented as one in `server/combat.lua`'s own
+     comments — do not let it read as more certain than it is.
+   - `PropDragging` speed-limit half: compare the target's position against
+     the **K9's own live position**, not an absolute speed ceiling — while
+     properly attached and rate-limited, the target's position should track
+     the K9's within a small, bounded slack (attachment offset plus normal
+     sync jitter). Flag when that gap grows beyond the slack, **regardless
+     of cause** (self-detach, a bypassed move-rate override, or the K9's own
+     client failing to re-assert the attach) — this is a cleaner, single
+     unified signal than trying to distinguish which specific native the
+     target's client ignored, and it also catches the every-tick-reassert
+     failure mode flagged above as a new finding.
+
+   If Phase 2's `relayWeaponFire` tracking infra (`server/tracking.lua`) is
+   enabled, a weapon-fire event observed from the target during an active
+   `BiteAndHold` window remains an additional, more direct signal, as
+   Revision 3 already noted — reuse it as a second input into the same
+   `compliance` record rather than a separate system.
+
+   **On violation:** `Config.Combat.NonComplianceDetection.action`'s
+   `'log' | 'notify_staff'`-only default (never `'auto_kick'`/`'auto_ban'`)
+   is **confirmed, not just carried over** — this matches
+   `server/tracking.lua`'s own precedent for exactly this class of decision
+   (that file's "FORGED TRAIL DECISION" explicitly accepts a documented,
+   unclosed forgery gap for blood/gunpowder logging rather than degrade a
+   legitimate feature with corroboration that would false-positive on real
+   players wearing armor or switching weapons) — a server-side position/
+   velocity heuristic sampled every 250–500ms over OneSync **will** produce
+   occasional false positives from ordinary lag/desync, and this resource
+   has no standing to auto-punish on that basis. Going one step further
+   than Revision 3's recommendation, though: add
+   `Config.Combat.NonComplianceDetection.OnViolationOverride =
+   function(playerId, effectType, evidence) end` (optional, nil by default)
+   — the same override-hook shape already established twice in this same
+   document (`WantedStatusCheckOverride`, `IsPlayerDownedOverride`) — so a
+   server that *does* want automated response (e.g., wiring flagged
+   accounts into its own anti-cheat/admin-alert resource) can build that
+   themselves on top of real evidence, without this resource ever taking a
+   punitive action on its own initiative.
+
+   **Anti-cheat false-positive note (this reviewer's own lens):** this
+   detection layer is pure server-side bookkeeping against already-synced
+   position data — it calls no new client native, freezes nothing, and
+   teleports nothing. It introduces **zero** new anti-cheat exposure on
+   either the target's or the K9's client, unlike the enforcement candidate
+   evaluated in point 3 below.
+
+3. **Is there a third mechanism that actually enforces it? Evaluated in
+   detail — no, and this is a concrete, sourced "no," not "hasn't been
+   prototyped yet."** Revision 3 named forced server-side network-ownership
+   migration of the target's ped to a cooperating client as an unevaluated
+   candidate. Independently researched against FiveM's actual, documented
+   network-ownership model (citizenfx/fivem GitHub issues/PRs — the closest
+   thing to authoritative source available with the official native-docs
+   site unreachable from this environment) rather than assumed from memory:
+
+   - **The cooperative request path (`NetworkRequestControlOfEntity`,
+     already a confirmed-real native in this codebase's own
+     `phase2_notes/phase3_combat_natives.md`, used there for the *NPC*-target
+     path) is fundamentally a best-effort ask of the current owning
+     client, not a server-forceable operation.** citizenfx/fivem issue
+     #3338 ("Bugged entity ownerships") documents this failing outright
+     "as the current owner is not aware of the entity" under ordinary
+     streaming conditions — for entities the current owner *is* actively
+     running code for (which describes every live player's own ped, by
+     definition, for as long as that player is connected), the migration
+     depends entirely on that owning client's cooperation to relinquish.
+     There is also a documented client-side native
+     (`SetEntityIgnoreRequestControlFilter`-class) that lets the *current*
+     owner opt out of incoming control requests — meaning a hostile,
+     modified client has a first-class, standard way to make itself immune
+     to this technique, with zero server-side visibility into whether it
+     did. A request-based approach cannot be relied on against exactly the
+     adversary this item is about.
+   - **There is no shipped, server-forceable alternative.** The closest
+     candidate, a server-side `NetworkSetEntityOwner` native, was proposed
+     in citizenfx/fivem PR #2312 and **remains unmerged** — FiveM's own
+     maintainers call it "a somewhat undesirable command" carrying "risk of
+     side effects," and testing in that PR's own discussion found it
+     already misbehaves for *population* entities (automatic reassignment
+     fighting the manual one) — a category the maintainers themselves
+     declined to ship reliable forced-ownership tooling for, and that PR's
+     discussion never even reaches the harder case (a live player's own
+     ped) before stalling. If the FiveM project's own maintainers won't
+     ship forced ownership reassignment for the *easier* case, this
+     resource has no basis to assume a workable, unreviewed variant of the
+     same idea exists for the *harder* one.
+   - **The structural reason this isn't merely "unshipped yet," but
+     fundamentally the wrong shape of fix:** a live player's own ped is not
+     "an entity someone happens to own," the way a vehicle or NPC is —
+     the owning client *is* the machine translating that specific human's
+     real input (movement, camera, weapon fire) into that ped's simulated
+     state, every frame, for as long as that human is connected. That is
+     not a flag that migrates; it is what "being that player's client"
+     means in FiveM's architecture. Even in the best case where a control
+     request somehow succeeded, the target's own client keeps existing and
+     keeps processing that human's real local input — because the entire
+     scenario under discussion is a *hostile* client, it has every reason
+     to keep doing so, and to re-request/re-assert control back
+     immediately. This produces, at best, the rubber-banding tug-of-war
+     Revision 3 already flagged even for a *cooperating* target (a real,
+     independently documented ecosystem problem in existing cuffing/carry
+     scripts) — and against a genuinely hostile target, there is no reason
+     to expect the tug-of-war resolves in the officer's favor at all, since
+     the target's client controls exactly the resource (its own
+     re-assertion of local input authority) being contested.
+   - **Anti-cheat angle (this reviewer's own lens, and an independent reason
+     to close this off even setting the above aside):** deliberately
+     fighting another client for entity control every frame — repeated
+     forced position/authority reassignment against that client's own
+     locally-driven input — is precisely the rapid position/authority-
+     change pattern this project's own anti-cheat-false-positive standard
+     warns against normalizing. Here it would not even be a *false*
+     positive: to any anti-cheat heuristic (this server's own or a
+     third-party one), a ped whose position is being externally
+     overridden against its owning client's own input is indistinguishable
+     in shape from an actual teleport/position-desync exploit. Building a
+     combat feature whose enforcement mechanism *is* that pattern is not an
+     acceptable trade against a false-positive risk this project otherwise
+     takes seriously elsewhere.
+
+   **Verdict: forced network-ownership migration is REJECTED as a viable
+   enforcement mechanism for this resource. Not "needs a prototype spike" —
+   a prototype spike is not recommended, because the failure modes above
+   are architectural (what a player's own ped's ownership *means*) and
+   corroborated by FiveM's own maintainers declining to ship the easier
+   version of the same idea, not implementation details a spike would
+   resolve differently.**
+
+4. **Conclusion: detection is real and buildable (point 2); the one
+   enforcement candidate this document was aware of is not viable (point
+   3); nothing else has been identified.** For the Category B half of all
    three mechanics, this codebase can *detect*, after the fact and with
    real but imperfect confidence, that a target's client likely ignored a
-   relayed restriction. It cannot currently *prevent* that non-compliance
-   the way it can for an NPC (which it fully owns) or for the K9 player's
-   own actions (which the K9's own client has every incentive to execute
-   honestly, being the one benefiting from having access at all). This is
-   not unique to `qbx_k9unit` — it is the same limitation every comparable
-   PvP restraint/cuff/ragdoll mechanic in the ecosystem lives with — but
-   this document will not claim otherwise just to close the item.
+   relayed restriction. It cannot *prevent* that non-compliance the way it
+   can for an NPC (which it fully owns) or for the K9 player's own actions
+   (which the K9's own client has every incentive to execute honestly,
+   being the one benefiting from having access at all) — and, per point 3,
+   this is not a temporary gap waiting on more engineering effort, it is a
+   structural property of what a live player's own ped is in FiveM's
+   networking model. This is not unique to `qbx_k9unit` — it is the same
+   limitation every comparable PvP restraint/cuff/ragdoll mechanic in the
+   ecosystem lives with — but this document will not claim otherwise just
+   to close the item.
 
-**What this document recommends, without treating the recommendation as a
-resolution:**
-- Ship the Category A/B relay design above as real, non-cosmetic code
-  against a *cooperating* client (which is the overwhelming majority of
-  real players) — this is not a wasted or fake effort, it's the same
-  standard every ecosystem cuffing/ragdoll/restraint script already meets.
-- Layer the detection signal in point 2 above as an abuse-response tool
-  (log to this resource's own audit trail, notify staff, or apply a
-  time-boxed "flagged" state to the offending account for a human to
-  review) — explicitly labeled detection/response, never framed as
-  prevention, in both code comments and any player-facing text.
-- Do **not** word any player-facing description of `BiteAndHold`/
-  `NonLethalTakedown`/`PropDragging`'s effect on a player target as an
-  unconditional guarantee ("the target cannot escape") — word it as what it
-  actually is against a compliant client, consistent with this project's
-  "never fake a safety check" standard.
-- **Route the actual decision — is detection-plus-response an acceptable
-  ship posture for this gap, is the network-ownership-migration idea in
-  point 3 worth a prototype spike before Phase 3 implementation starts, or
-  should this specific limitation instead push these three mechanics'
-  *player-target* paths back to a follow-up phase while NPC-target versions
-  ship now — to coder-security and coder-architect explicitly.** This is
-  the one item in this revision that a product spec should not resolve by
-  itself; it is a security/architecture tradeoff, not a product-scope one,
-  and the requester's override was about scope (should PvP exist at all),
-  not about this specific mechanism question.
+**The actual ship decision (this is the resolution Revision 3 explicitly
+declined to make, made here):**
+
+Ship it — with binding guardrails, not as an unconditional restraint.
+Reasoning, weighed against this codebase's own established bar (the same
+one applied to block `relayDoorScratch`'s unresolved netId trust gap and
+the contraband-search broadcast leak in `phase2_notes/*_security_review.md`
+until fixed, and to accept `server/tracking.lua`'s forged-trail gap only
+because nothing server-authoritative hinges on it):
+
+- **This is not the same shape of gap as the ones this reviewer has
+  previously blocked.** Those were cases where a client-supplied value was
+  never independently validated at all (an attacker could point
+  `relayDoorScratch` at an arbitrary entity, or leak a search result to
+  bystanders) — a cheap, complete fix existed and simply hadn't been
+  written. Here, the gap is that a Category B effect's real-world guarantee
+  is inherently bounded by physics this resource cannot control (a
+  player's own client executing its own input) — no implementation
+  discipline closes it, only architecture changes could, and point 3 above
+  is why the one available architecture change doesn't work either. Adding
+  the guardrails below is this codebase's actual "no shortcuts, no faked
+  checks" standard applied *honestly* to a case where the honest answer
+  includes a residual gap, not a reason to block shipping outright.
+- **The requester already accepted this specific tradeoff, with eyes open,
+  when overriding NPC-only scope** — Revision 3's own opening paragraph
+  names "the non-cooperating-client limitation inherent to any effect that
+  must be applied to a live player's own ped" as one of the tradeoffs
+  weighed and accepted, not a detail the requester was unaware of. Blocking
+  Category B into a cosmetic-only/deferred posture now, on a technical
+  gap that was already disclosed and accepted at the scope-decision level,
+  would be re-litigating a decision this document (correctly) says isn't
+  this reviewer's call to reopen — the actual open question routed to
+  coder-security was the *mechanism*, not the scope, and the mechanism
+  question is what points 1–4 above resolve.
+- **The blast radius of a successful ignore is bounded, which is the
+  precondition that made `server/tracking.lua`'s own similar acceptance
+  defensible and is reproduced here as a binding requirement, not an
+  assumption:** nothing in this document ties a server-authoritative
+  consequence (an arrest completing, evidence being logged, currency,
+  items, permissions) to a Category B effect having "succeeded." A target
+  who ignores `BiteAndHold`/`forceRagdoll`/`applyDragSpeedLimit` gets an
+  unfair moment of mobility in a fight they were already, independently,
+  eligible to be targeted in (per item 5's wanted-status gate) — a
+  competitive-fairness problem worth taking seriously (hence the detection
+  layer), not a data-integrity or capability-grant one. **This must remain
+  true as a hard, binding constraint on every future extension of these
+  three mechanics** — see the guardrail below.
+- **This matches, not merely resembles, the rest of the ecosystem's own
+  accepted bar** for the identical mechanic shape (cuffing/ragdoll/restraint
+  scripts), which this document's own research already established has no
+  better answer anywhere. Shipping nothing here would put this resource
+  meaningfully behind ecosystem norms for a decision the requester has
+  already made; shipping it honestly labeled matches those norms exactly.
+
+**Binding guardrails — required before any of `BiteAndHold`/
+`NonLethalTakedown`/`PropDragging`'s player-target code paths ship, not
+optional hardening:**
+1. The detection layer specified in point 2 above exists in real, tested
+   code in `server/combat.lua` — not merely the config placeholder table.
+2. `PropDragging`'s `AttachEntityToEntity` call is re-asserted every tick
+   for the duration of an active drag (never one-shot) — see the new
+   finding above on `DetachEntity`'s symmetric lack of an ownership gate.
+3. **No server-authoritative consequence of any kind may ever be
+   conditioned on a Category B effect having been applied successfully to
+   a player target** (only on things this server independently verifies —
+   proximity, `RequireWantedStatus`, cooldowns). This is new to this
+   revision and is the concrete backstop that keeps "detection-plus-log" an
+   acceptable ship posture rather than a fig leaf — flagged explicitly for
+   whoever designs any future feature that consumes a hold/takedown/drag
+   outcome (e.g., a cuffing integration) not to add this coupling later
+   without re-opening this item.
+4. Every player-facing string describing these three mechanics' effect on
+   a player target is worded as best-effort ("attempts to restrain," never
+   "the target cannot escape") — Revision 3's recommendation, now a
+   ship-blocking requirement rather than a suggestion.
+5. `Config.Combat.RequireWantedStatus` stays `true` by default (already
+   decided, item 5) and `Config.Combat.NonComplianceDetection.action`
+   stays `'log'`/`'notify_staff'` by default, never an auto-punitive value,
+   in this resource's own shipped config (confirmed above) — a server
+   owner may still wire stronger automated response themselves via
+   `OnViolationOverride`.
+
+Routed to coder-backend/coder-architect for implementation (the design
+above is concrete enough to build against directly) and to qa-tester/
+correctness-overseer for a follow-up pass once `server/combat.lua` exists,
+specifically checking guardrails 2 and 3 above, which are the two new,
+easy-to-silently-regress requirements this revision adds.
 
 ---
 
@@ -1031,14 +1302,18 @@ approximation, no real climbing animation exists or is expected to exist.
   a client's claim that a target is eligible, or that a target is an NPC
   at all — `IsPedAPlayer` resolved server-side, never client-supplied), (b)
   §12.0 item 2's HandlerDownDefense acceptance criteria are met exactly as
-  written, and (c) — **new, and the most important ask of this revision** —
-  **an explicit answer to §12.0 item 8**, including whether the
-  detection-only posture this document recommends is acceptable to ship
-  with, whether the network-ownership-migration idea sketched there is
-  worth a prototype spike first, or whether the player-target paths of
-  `BiteAndHold`/`NonLethalTakedown`/`PropDragging`'s speed-limit half should
-  be held back to a follow-up phase while NPC-target versions and
-  `PropDragging`'s Category-A attach ship now.
+  written, and (c) — **answered in Revision 4** — §12.0 item 8: ship
+  Category B against a player target under the five binding guardrails item
+  8 now specifies (detection layer built, `PropDragging`'s attach
+  re-asserted every tick, no server-authoritative consequence ever
+  conditioned on a Category B success signal, best-effort-only player-facing
+  copy, non-punitive detection defaults); network-ownership migration is
+  rejected outright, not deferred to a prototype spike. A coder-security
+  pass confirming guardrails 2 and 3 specifically are actually implemented
+  (not merely documented) once `server/combat.lua` exists is still
+  recommended — same "re-review once the file exists" precedent as the
+  door-interaction and contraband-search security reviews in
+  `phase2_notes/`.
 - §12.0 item 7 (handler-partnership link) still needs a human product
   decision or a dedicated design pass before `BiteAndHold`'s Recall actor
   and `HandlerDownDefense`'s handler-lookup can be finalized.
@@ -1079,29 +1354,36 @@ Revision 2, sign-off still needed per the note at the top of §12.0:**
    check + `IsPlayerDownedOverride` hook) is specified and must actually be
    built, not just documented, before player-target dragging ships (§12.0
    item 6).
+7. **The client-relay/non-cooperating-target-client architecture question —
+   RESOLVED (Revision 4, coder-security).** Forced network-ownership
+   migration (the one candidate Revision 3 left unevaluated) is
+   independently researched against FiveM's actual network-ownership model
+   (citizenfx/fivem GitHub issues #3338/#3726, PR #2312) and **rejected as
+   not viable** — not deferred to a prototype spike, a sourced "no," for
+   both engine-behavior reasons (no shipped native forces this even for the
+   easier server-created-entity case) and structural ones (a live player's
+   own ped's local-input authority isn't a migratable flag) and an
+   anti-cheat one (the fight-for-control pattern itself is indistinguishable
+   from a teleport/desync exploit to anti-cheat heuristics). A concrete,
+   implementable detection layer is specified (per-effect thresholds,
+   sampling cadence, non-punitive default response with an
+   `OnViolationOverride` escape hatch). **The ship decision Revision 3
+   declined to make is made: Category B ships, under five binding
+   guardrails** (detection layer built in real code; `PropDragging`'s
+   attach re-asserted every tick, closing a newly-identified
+   `DetachEntity` self-release corollary; no server-authoritative
+   consequence ever conditioned on a Category B success signal; best-
+   effort-only player-facing copy; non-punitive detection defaults) — see
+   §12.0 item 8 for the full analysis and reasoning against this codebase's
+   own established risk bar.
 
 **Still genuinely open — needs a human decision-maker or delegated
 specialist before implementation starts on the affected feature(s):**
-7. Handler-partnership link: reuse active leash pairing, or a new
+8. Handler-partnership link: reuse active leash pairing, or a new
    persistent registry? — **genuinely unresolved, blocks `BiteAndHold`'s
    3b sub-phase and `HandlerDownDefense`'s 3e sub-phase** (§12.0 item 7).
    Unaffected by the PvP reversal; still needs a product decision or a
    dedicated design pass, not a guess.
-8. **NEW (Revision 3) — the client-relay/non-cooperating-target-client
-   architecture question — explicitly BLOCKING, routed to coder-security
-   and coder-architect, not resolved by this document.** Can a target's
-   client be prevented (not merely detected, after the fact, with real but
-   imperfect confidence) from ignoring a relayed `BiteAndHold`/
-   `NonLethalTakedown`/`PropDragging`-speed-limit instruction? This
-   document lays out the concrete relay design, the Category A/B
-   distinction, a real detection-layer sketch, and one unevaluated
-   candidate enforcement mechanism (forced network-ownership migration) —
-   and then declines to pick an answer, because every answer available to
-   a product-only pass either overstates what the mechanic actually
-   guarantees (in violation of this codebase's own "never fake a safety
-   check" standard) or unilaterally narrows scope back toward NPC-only
-   (which would re-litigate a decision the requester already made). This is
-   the single most important open item in this revision (§12.0 item 8).
 9. Native/animation verification still outstanding: the bite/attack anim's
    in-engine visual quality across breeds (§12.5.1) and the vault animation
    for a quadruped skeleton (§12.5.5) — unaffected by the PvP reversal,
@@ -1109,4 +1391,7 @@ specialist before implementation starts on the affected feature(s):**
 10. `Config.Combat`'s numeric placeholders, INCLUDING the new
     `NonComplianceDetection` table's placeholder values, need a
     PvP-balance/config-validator pass before any flag in this phase
-    defaults to `true` (§12.6).
+    defaults to `true` (§12.6) — §12.0 item 8 (Revision 4) specifically
+    flags `speedTolerance = 1.0` as too loose for `BiteAndHold`'s
+    near-stationary compliant baseline; recommend ~0.5 as a starting point
+    for that review, not treated as tuned here.

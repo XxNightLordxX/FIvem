@@ -128,7 +128,7 @@ local function PerformSearch(targetType, targetEntity)
     -- server independently re-validates HasK9Access(source) regardless
     -- (§11.4 item 2 step 3 per the contract note).
     if not CanShowK9UI() then
-        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        DenyK9UIAccess()
         return
     end
 
@@ -182,60 +182,78 @@ local function PerformSearch(targetType, targetEntity)
         return -- player cancelled/moved away mid-sniff; no server call made at all
     end
 
-    local result = lib.callback.await('qbx_k9unit:server:searchTarget', false, targetType, targetNetId)
+    -- qa-tester finding: everything from the awaited callback through the
+    -- result-rendering notifies below is wrapped in pcall so a throw
+    -- anywhere in that span (the callback itself, or anything after it)
+    -- can never leave searchInProgress stuck permanently true — mirrors
+    -- the "always release/reset on every exit, success or error" posture
+    -- server/search.lua's own SearchMutex already follows. searchInProgress
+    -- is reset exactly once, unconditionally, after this pcall regardless
+    -- of which branch inside it ran or whether it threw.
+    local ok = pcall(function()
+        local result = lib.callback.await('qbx_k9unit:server:searchTarget', false, targetType, targetNetId)
 
-    if not result or not result.ok then
-        local reason = result and result.reason
+        if not result or not result.ok then
+            local reason = result and result.reason
 
-        if reason == 'search_failed' then
-            -- Kept structurally distinct from a clean result — NEVER the
-            -- same copy as contrabandFound = false, per this file's
-            -- EVENT/CALLBACK CONTRACT above.
-            lib.notify({ title = 'K9 Unit', description = 'The search could not be completed — try again.', type = 'error' })
-        elseif reason == 'on_cooldown' or reason == 'search_in_progress' then -- luacheck: ignore 542
-            -- Low-key / no notification, per the contract note's Rejection UX note.
-            -- Deliberately empty branch (silent no-op UX), not a missed implementation.
-        else
-            -- 'no_access', 'feature_disabled', 'too_far', 'invalid_target',
-            -- or an unrecognized/missing reason: a plain error notify is
-            -- fine, these are not expected to be routine traffic the way
-            -- cooldown is.
-            lib.notify({ title = 'K9 Unit', description = 'Unable to search right now.', type = 'error' })
+            if reason == 'search_failed' then
+                -- Kept structurally distinct from a clean result — NEVER the
+                -- same copy as contrabandFound = false, per this file's
+                -- EVENT/CALLBACK CONTRACT above.
+                lib.notify({ title = 'K9 Unit', description = 'The search could not be completed — try again.', type = 'error' })
+            elseif reason == 'on_cooldown' or reason == 'search_in_progress' then -- luacheck: ignore 542
+                -- Low-key / no notification, per the contract note's Rejection UX note.
+                -- Deliberately empty branch (silent no-op UX), not a missed implementation.
+            else
+                -- 'no_access', 'feature_disabled', 'too_far', 'invalid_target',
+                -- or an unrecognized/missing reason: a plain error notify is
+                -- fine, these are not expected to be routine traffic the way
+                -- cooldown is.
+                lib.notify({ title = 'K9 Unit', description = 'Unable to search right now.', type = 'error' })
+            end
+
+            return
         end
 
-        searchInProgress = false
-        return
-    end
+        -- Render feedback purely from result.contrabandFound / result.totalWeight
+        -- (private to this requester, per §11.4 item 2 — "returned ONLY to the
+        -- requesting caller... never broadcast").
+        if result.contrabandFound then
+            -- Local success feedback for the requester only. The
+            -- bystander-audible broadcast alert (if Config.Features.ContrabandAlerts)
+            -- is a SEPARATE thing server/search.lua triggers independently (see
+            -- this file's header's RESOLVED note on which event backs it) —
+            -- this function does not (and per §11.4 item 2's "never broadcast"
+            -- language, must NOT) trigger any broadcast itself from the client
+            -- side.
+            lib.notify({
+                title = 'K9 Unit',
+                description = 'Contraband detected!',
+                type = 'success',
+            })
+        else
+            -- Explicit, NON-SILENT "nothing found" notification beat — per
+            -- phase2_notes/contraband_search_contract.md §5's explicit
+            -- requirement ("the requester's own client must render some
+            -- explicit 'nothing found' feedback... this doesn't need a server
+            -- broadcast at all, since it's private feedback to the one client
+            -- who asked and already has the answer in hand"). Do NOT leave
+            -- this case silent.
+            lib.notify({
+                title = 'K9 Unit',
+                description = 'Nothing found.',
+                type = 'inform',
+            })
+        end
+    end)
 
-    -- Render feedback purely from result.contrabandFound / result.totalWeight
-    -- (private to this requester, per §11.4 item 2 — "returned ONLY to the
-    -- requesting caller... never broadcast").
-    if result.contrabandFound then
-        -- Local success feedback for the requester only. The
-        -- bystander-audible broadcast alert (if Config.Features.ContrabandAlerts)
-        -- is a SEPARATE thing server/search.lua triggers independently (see
-        -- this file's header's RESOLVED note on which event backs it) —
-        -- this function does not (and per §11.4 item 2's "never broadcast"
-        -- language, must NOT) trigger any broadcast itself from the client
-        -- side.
-        lib.notify({
-            title = 'K9 Unit',
-            description = 'Contraband detected!',
-            type = 'success',
-        })
-    else
-        -- Explicit, NON-SILENT "nothing found" notification beat — per
-        -- phase2_notes/contraband_search_contract.md §5's explicit
-        -- requirement ("the requester's own client must render some
-        -- explicit 'nothing found' feedback... this doesn't need a server
-        -- broadcast at all, since it's private feedback to the one client
-        -- who asked and already has the answer in hand"). Do NOT leave
-        -- this case silent.
-        lib.notify({
-            title = 'K9 Unit',
-            description = 'Nothing found.',
-            type = 'inform',
-        })
+    if not ok then
+        -- Same "search could not be completed" copy as the search_failed
+        -- branch above — from the player's perspective an unhandled throw
+        -- mid-search is indistinguishable from the server reporting
+        -- search_failed, so it gets the same non-silent, distinct-from-
+        -- "nothing found" treatment.
+        lib.notify({ title = 'K9 Unit', description = 'The search could not be completed — try again.', type = 'error' })
     end
 
     searchInProgress = false
@@ -303,13 +321,6 @@ exports.ox_target:addGlobalPlayer({
 -- 'whine' / 'aggressive_bark') — deliberately never the requester's private
 -- totalWeight/contrabandFound (those never leave the callback above).
 RegisterNetEvent('qbx_k9unit:client:playContrabandAlert', function(netId, alertTier)
-    if not NetworkDoesEntityExistWithNetworkId(netId) then
-        return -- this client doesn't have the searched entity streamed in at all
-    end
-
-    local entity = NetworkGetEntityFromNetworkId(netId)
-    if not DoesEntityExist(entity) then return end
-
     -- Reuses the same placeholder sound-bank plumbing client/main.lua's
     -- playBark handler already establishes (SPEC.md §7: bark/alert audio
     -- needs bundled asset files that don't exist in this resource yet;
@@ -322,5 +333,5 @@ RegisterNetEvent('qbx_k9unit:client:playContrabandAlert', function(netId, alertT
     -- whether 'clean' should ALSO broadcast for bystander symmetry is a
     -- server/search.lua decision (contraband_search_contract.md §5), not
     -- something this receiver needs to special-case either way.
-    PlaySoundFromEntity(-1, alertTier, entity, 'qbx_k9unit_sounds', false, 0)
+    PlaySoundOnNetworkEntity(netId, alertTier)
 end)

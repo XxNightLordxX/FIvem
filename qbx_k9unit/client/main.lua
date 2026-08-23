@@ -135,6 +135,17 @@ function CanShowK9UI()
     return IsOwnModelK9() and HasK9Access()
 end
 
+--- Shared denial notification for the "you cannot use K9 features right
+--- now" case. Refactor pass (dedup): this exact lib.notify() call was
+--- previously duplicated verbatim across client/radial.lua, client/search.lua,
+--- and client/vehicle.lua (client/movement.lua and client/tracking.lua also
+--- have their own copy, out of scope for this pass — left as-is). Declared
+--- as a bare global here per this file's own established "declare once,
+--- reuse everywhere" convention (see CanShowK9UI/IsOwnModelK9 above).
+function DenyK9UIAccess()
+    lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+end
+
 -- Placeholder sound reference. SPEC.md §7 flags that "bark sounds" need
 -- bundled audio asset files (bark .ogg/.wav) that do not exist anywhere in
 -- this resource yet, and that there's no native "make this canine ped
@@ -147,7 +158,31 @@ end
 -- ship as-is rather than gating the whole handler out. Coordinate with
 -- asset-pipeline-agent on where real audio files should live.
 local BARK_SOUND_NAME = 'Bark'
-local BARK_SOUND_SET = 'qbx_k9unit_sounds' -- placeholder; not a real shipped soundset yet
+
+--- Shared placeholder sound-bank name for every bark/alert-style sound
+--- played on a network-resolved entity in this resource (this file's own
+--- playBark handler below, and client/search.lua's contraband-alert
+--- handler). Not a real shipped soundset yet — see the comment above.
+local K9_SOUND_SET = 'qbx_k9unit_sounds'
+
+--- Resolves netId to a live, currently-streamed-in entity and plays
+--- soundName from it via this resource's shared placeholder sound set.
+--- Refactor pass (dedup): this exact "resolve netId -> guard
+--- DoesEntityExist -> PlaySoundFromEntity" sequence was previously
+--- duplicated between this file's playBark handler and
+--- client/search.lua's contraband-alert handler.
+--- @param netId number
+--- @param soundName string
+function PlaySoundOnNetworkEntity(netId, soundName)
+    if not NetworkDoesEntityExistWithNetworkId(netId) then
+        return -- this client doesn't have the entity streamed in at all
+    end
+
+    local entity = NetworkGetEntityFromNetworkId(netId)
+    if not DoesEntityExist(entity) then return end
+
+    PlaySoundFromEntity(-1, soundName, entity, K9_SOUND_SET, false, 0)
+end
 
 --- Plays a bark on the K9 identified by netId, for any client that has it
 --- streamed in (broadcast via TriggerClientEvent(..., -1, ...) from
@@ -155,17 +190,10 @@ local BARK_SOUND_SET = 'qbx_k9unit_sounds' -- placeholder; not a real shipped so
 --- @param netId number
 --- @param barkType string
 RegisterNetEvent('qbx_k9unit:client:playBark', function(netId, barkType)
-    if not NetworkDoesEntityExistWithNetworkId(netId) then
-        return -- this client doesn't have the K9 ped streamed in at all
-    end
-
-    local entity = NetworkGetEntityFromNetworkId(netId)
-    if not DoesEntityExist(entity) then return end
-
     -- `barkType` is treated as an opaque passthrough string for Phase 1 —
     -- only one generic bark exists ('bark', see client/radial.lua's Bark
     -- item), so it isn't yet used to select between distinct assets.
     -- Phase 5's AdvancedBarkRadial is where per-type sound selection would
     -- get added.
-    PlaySoundFromEntity(-1, BARK_SOUND_NAME, entity, BARK_SOUND_SET, false, 0)
+    PlaySoundOnNetworkEntity(netId, BARK_SOUND_NAME)
 end)

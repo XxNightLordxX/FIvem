@@ -117,10 +117,6 @@
 -- radial wheel," not "is currently usable" — usability is enforced at
 -- onSelect time, same as every gated server event is independently
 -- re-verified server-side regardless of what the client shows.
-local function DenyNotify()
-    lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
-end
-
 --- Finds the nearest OTHER player within Config.LeashMaxDistance (the base
 --- leash range, reused directly here as a search radius rather than via
 --- a derived factor — see config.lua's comment on that field and
@@ -167,7 +163,7 @@ local k9SubmenuItems = {
         icon = 'couch',
         onSelect = function()
             if not CanShowK9UI() then
-                DenyNotify()
+                DenyK9UIAccess()
                 return
             end
             K9Sit()
@@ -183,7 +179,7 @@ if Config.Features.BasicBarkSounds then
         icon = 'volume-high',
         onSelect = function()
             if not CanShowK9UI() then
-                DenyNotify()
+                DenyK9UIAccess()
                 return
             end
             -- server re-validates Config.Features.BasicBarkSounds and
@@ -215,7 +211,7 @@ if Config.Features.LeashMechanics then
             end
 
             if not CanShowK9UI() then
-                DenyNotify()
+                DenyK9UIAccess()
                 return
             end
 
@@ -244,7 +240,7 @@ if Config.Features.VehicleEntryExit then
         icon = 'car',
         onSelect = function()
             if not CanShowK9UI() then
-                DenyNotify()
+                DenyK9UIAccess()
                 return
             end
 
@@ -289,7 +285,7 @@ if Config.Features.ScentTracking then
             end
 
             if not CanShowK9UI() then
-                DenyNotify()
+                DenyK9UIAccess()
                 return
             end
 
@@ -310,7 +306,7 @@ if Config.Features.BloodTracking then
             end
 
             if not CanShowK9UI() then
-                DenyNotify()
+                DenyK9UIAccess()
                 return
             end
 
@@ -331,7 +327,7 @@ if Config.Features.GunpowderSniffing then
             end
 
             if not CanShowK9UI() then
-                DenyNotify()
+                DenyK9UIAccess()
                 return
             end
 

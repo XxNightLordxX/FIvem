@@ -167,6 +167,19 @@ local hudState = {
     lastPushAt = -HUD_HEARTBEAT_MS, -- forces the very first real push to count as heartbeat-due
 }
 
+--- Clamps a single stat value to the 0-100 range this HUD's payload
+--- contract uses for all four fields (design note §3). Refactor pass
+--- (dedup/consistency): the four fields below previously clamped via two
+--- different idioms (a two-statement if/if pair vs. a single if/elseif) —
+--- unified on this one helper so every field clamps identically.
+--- @param v number
+--- @return number
+local function clamp01to100(v)
+    if v < 0 then return 0.0 end
+    if v > 100 then return 100.0 end
+    return v
+end
+
 --- Reads all four vitals fresh from their real client-local sources. Pure
 --- reads, no network round trip (design note §3: "structurally simpler
 --- bridge... all four source values are already known to the client with
@@ -183,17 +196,20 @@ local function ReadVitals()
     if maxHealth > 0 then
         health = (GetEntityHealth(ped) / maxHealth) * 100.0
     end
-    if health < 0 then health = 0.0 end
-    if health > 100 then health = 100.0 end
+    health = clamp01to100(health)
 
     -- stamina — see this file's header "STAMINA NATIVE — CONFIDENCE NOTE,
     -- RESOLVED" for why this is inverted from the raw native's own value
     -- (the native tracks exertion, rising as the K9 tires, not stamina
     -- remaining).
+    -- qa-tester finding: default to 100.0 (full stamina) when the native
+    -- doesn't return a number, matching the same "never paints as
+    -- starving/depleted" fallback philosophy health/hunger/thirst already
+    -- follow above/below — a malformed read should never look like an
+    -- empty stamina bar.
     local staminaRemaining = GetPlayerSprintStaminaRemaining(PlayerId())
-    local stamina = type(staminaRemaining) == 'number' and (100.0 - staminaRemaining) or 0.0
-    if stamina < 0 then stamina = 0.0 end
-    if stamina > 100 then stamina = 100.0 end
+    local stamina = type(staminaRemaining) == 'number' and (100.0 - staminaRemaining) or 100.0
+    stamina = clamp01to100(stamina)
 
     -- hunger/thirst — see this file's header "HUNGER/THIRST SOURCE" note
     -- on field-name/scale confidence. Defensive nil-chained read since
@@ -204,8 +220,8 @@ local function ReadVitals()
     local metadata = QBX.PlayerData and QBX.PlayerData.metadata
     local hunger = (metadata and type(metadata.hunger) == 'number') and metadata.hunger or 100.0
     local thirst = (metadata and type(metadata.thirst) == 'number') and metadata.thirst or 100.0
-    if hunger < 0 then hunger = 0.0 elseif hunger > 100 then hunger = 100.0 end
-    if thirst < 0 then thirst = 0.0 elseif thirst > 100 then thirst = 100.0 end
+    hunger = clamp01to100(hunger)
+    thirst = clamp01to100(thirst)
 
     return health, stamina, hunger, thirst
 end
