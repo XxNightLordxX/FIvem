@@ -82,6 +82,18 @@
     - THIS FILE calls `RefreshCertificationCache(citizenid, jobName)`,
       also exposed by server/certifications.lua, from the resource-start
       backfill loop below.
+    - THIS FILE exposes `ForceDetachLeashForSource(src, reason)` (resource-
+      global, no `local`) for server/certifications.lua to call whenever a
+      K9-role party's certification transitions from active to revoked
+      (manual RevokeCertification, offline RevokeCertificationOffline, or
+      the QBCore:Server:OnJobUpdate auto-revoke) while that citizenid
+      currently resolves to a connected server id — SPEC.md §1/§4.4
+      "immediately" ending K9 access must also tear down an already-formed
+      leash pairing, not just block future attach attempts. No-op (returns
+      false) if that source isn't currently leashed to anyone. Reuses the
+      exact same internal detach path (doDetachLeash) as the player-
+      initiated detachLeash event — do not duplicate the LeashPairs
+      mutation/broadcast logic in certifications.lua.
     - client/movement.lua is the ONLY client file that should register
       handlers for the three leash client events above, or trigger the
       three leash server events above — keep the full leash subsystem
@@ -403,19 +415,48 @@ RegisterNetEvent('qbx_k9unit:server:respondLeashAttach', function(fromServerId, 
     TriggerClientEvent('qbx_k9unit:client:leashAttached', officerSrc, k9Src, false) -- isConstrained = false
 end)
 
---- Either party detaches unilaterally, no consent required. No-op if the
---- caller isn't currently leashed to anyone.
-RegisterNetEvent('qbx_k9unit:server:detachLeash', function()
-    local src = source
+--- Internal detach helper — clears both halves of a pairing (if one exists)
+--- and broadcasts the detach event to both parties with the given reason.
+--- Shared by the player-initiated detachLeash event below and by
+--- ForceDetachLeashForSource (server-triggered, e.g. cert revocation) so
+--- there is exactly one place that mutates LeashPairs on detach.
+--- @param src number
+--- @param reason string
+--- @return boolean detached -- false if `src` wasn't leashed to anyone (no-op)
+local function doDetachLeash(src, reason)
     local partner = LeashPairs[src]
-    if not partner then return end -- no-op, not an error
+    if not partner then return false end -- no-op, not an error
 
     LeashPairs[src] = nil
     LeashPairs[partner] = nil
 
-    TriggerClientEvent('qbx_k9unit:client:leashDetached', src, 'detached')
-    TriggerClientEvent('qbx_k9unit:client:leashDetached', partner, 'detached')
+    TriggerClientEvent('qbx_k9unit:client:leashDetached', src, reason)
+    TriggerClientEvent('qbx_k9unit:client:leashDetached', partner, reason)
+    return true
+end
+
+--- Either party detaches unilaterally, no consent required. No-op if the
+--- caller isn't currently leashed to anyone.
+RegisterNetEvent('qbx_k9unit:server:detachLeash', function()
+    doDetachLeash(source, 'detached')
 end)
+
+--- Resource-global (no `local`) — exposed for server/certifications.lua to
+--- call when a K9-role party's certification is revoked (manually or via
+--- the QBCore:Server:OnJobUpdate auto-revoke) while they're actively
+--- leashed. SPEC.md §1/§4.4: losing department employment or certification
+--- must end K9 access "immediately" — without this, an already-formed
+--- leash pairing would keep running untouched until someone manually
+--- detaches or the distance safety-valve trips, even though the K9-role
+--- party is no longer eligible per CheckLeashEligibility. No-op if `src`
+--- isn't currently leashed to anyone (covers the common case where the
+--- revoked player never had an active pairing at all).
+--- @param src number
+--- @param reason string?
+function ForceDetachLeashForSource(src, reason)
+    if type(src) ~= 'number' then return false end
+    return doDetachLeash(src, reason or 'certification_revoked')
+end
 
 --- Cleans up an orphaned leash pairing if one half disconnects, so the
 --- remaining party's client isn't left thinking it's still leashed to
@@ -425,8 +466,28 @@ end)
 AddEventHandler('playerDropped', function(reason)
     local src = source
 
-    PendingLeashRequests[src] = nil
+    PendingLeashRequests[src] = nil -- target-side: a request aimed AT the disconnecting player
     lastBarkAt[src] = nil -- drop the bark-cooldown entry too, don't leak one per session
+
+    -- Initiator-side cleanup (coder-security/QA finding): PendingLeashRequests
+    -- is keyed by TARGET server id, so the line above only ever clears an
+    -- entry where the disconnecting player was the one being asked. It never
+    -- catches the case where the disconnecting player was instead the
+    -- INITIATOR of a still-open request aimed at someone else. Left
+    -- unscanned, that stale entry (`.from` = this now-freed server id)
+    -- survives until its TTL — and FiveM recycles numeric server ids, so a
+    -- newly-connected, unrelated player could be assigned that same id
+    -- before the TTL expires. If the original target then accepts,
+    -- respondLeashAttach's re-validation would resolve `fromServerId` to
+    -- the NEW player's live ped/job, not the original initiator's, forming
+    -- a pair neither side of that stale request actually consented to.
+    -- Scan-and-clear closes that window; the table is small and short-lived
+    -- (30s TTL) so a linear scan here is not a performance concern.
+    for targetSrc, pending in pairs(PendingLeashRequests) do
+        if pending.from == src then
+            PendingLeashRequests[targetSrc] = nil
+        end
+    end
 
     local partner = LeashPairs[src]
     if not partner then return end

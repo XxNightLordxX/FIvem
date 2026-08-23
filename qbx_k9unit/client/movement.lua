@@ -163,12 +163,19 @@ RegisterKeyMapping('qbx_k9unit:toggleCamera', 'Toggle K9 First/Third Person Came
 --- which is the desired "self-emote until you move" behavior for this
 --- radial item, not a bug — no anim-dict/TaskPlayAnim fallback is needed
 --- since a real scripted scenario exists for every configured breed.
-local K9_SIT_SCENARIO_BY_MODEL = {
+--- Precomputed model-hash -> scenario lookup, built once at file load.
+--- Mirrors the precomputed-hash-table convention already used elsewhere
+--- in this codebase (client/main.lua's K9ModelHashes, this file's own
+--- k9ModelHashesForTargeting) rather than calling GetHashKey per lookup.
+local K9_SIT_SCENARIO_BY_MODEL_HASH = {}
+for model, scenario in pairs({
     a_c_shepherd = 'WORLD_DOG_SITTING_SHEPHERD',
     a_c_rottweiler = 'WORLD_DOG_SITTING_ROTTWEILER',
     a_c_chop = 'WORLD_DOG_SITTING_ROTTWEILER', -- Chop is Rottweiler-framed; no Chop-specific scenario exists
     a_c_huskie = 'WORLD_DOG_SITTING_RETRIEVER', -- no husky-specific scenario; RETRIEVER is the closest general/medium-dog sit
-}
+}) do
+    K9_SIT_SCENARIO_BY_MODEL_HASH[GetHashKey(model)] = scenario
+end
 local K9_SIT_DEFAULT_SCENARIO = 'WORLD_DOG_SITTING_SHEPHERD' -- fallback if playing an unmapped/future Config.Peds model
 
 function K9Sit()
@@ -178,14 +185,7 @@ function K9Sit()
     end
 
     local ped = PlayerPedId()
-    local modelHash = GetEntityModel(ped)
-    local scenarioName = K9_SIT_DEFAULT_SCENARIO
-    for model, scenario in pairs(K9_SIT_SCENARIO_BY_MODEL) do
-        if modelHash == GetHashKey(model) then
-            scenarioName = scenario
-            break
-        end
-    end
+    local scenarioName = K9_SIT_SCENARIO_BY_MODEL_HASH[GetEntityModel(ped)] or K9_SIT_DEFAULT_SCENARIO
 
     ClearPedTasksImmediately(ped)
     TaskStartScenarioInPlace(ped, scenarioName, 0, true)
@@ -198,6 +198,14 @@ end
 --- directly — always go through IsLeashed()/DetachLeash().
 --- @type { partnerServerId: number, isConstrained: boolean }|nil
 local leashState = nil
+
+--- Guards the hard-cap safety-valve branch below from firing more than
+--- once per attach: the pull-back thread ticks every LEASH_TICK_MS, so
+--- under latency the server's detach round-trip can take longer than one
+--- tick, and without this flag the branch would re-fire and duplicate the
+--- notification/DetachLeash() call every tick until leashState actually
+--- clears. Reset in the leashAttached/leashDetached handlers below.
+local detachRequestedForSafety = false
 
 --- @return boolean
 function IsLeashed()
@@ -274,6 +282,7 @@ end)
 --- @param isConstrained boolean  -- true only on the K9-role party's client
 RegisterNetEvent('qbx_k9unit:client:leashAttached', function(partnerServerId, isConstrained)
     leashState = { partnerServerId = partnerServerId, isConstrained = isConstrained }
+    detachRequestedForSafety = false
     lib.notify({
         title = 'K9 Unit',
         description = isConstrained and 'You are now leashed.' or 'You are now anchoring the leash.',
@@ -291,6 +300,7 @@ end)
 --- @param reason string  -- e.g. 'detached' | 'partner_disconnected'
 RegisterNetEvent('qbx_k9unit:client:leashDetached', function(reason)
     leashState = nil
+    detachRequestedForSafety = false
 
     local description = 'Leash detached.'
     if reason == 'partner_disconnected' then
@@ -339,9 +349,15 @@ CreateThread(function()
                     -- header): the elastic pull-back below couldn't keep
                     -- distance under control (disconnect/teleport/desync).
                     -- Reuse the exact same detach path, don't build a
-                    -- second one.
-                    lib.notify({ title = 'K9 Unit', description = 'Leash snapped — you got too far from your handler.', type = 'error' })
-                    DetachLeash()
+                    -- second one. Guarded so this only fires once per
+                    -- attach — the server round-trip can outlast one tick
+                    -- under latency, and leashState doesn't clear until
+                    -- the server confirms via leashDetached.
+                    if not detachRequestedForSafety then
+                        detachRequestedForSafety = true
+                        lib.notify({ title = 'K9 Unit', description = 'Leash snapped — you got too far from your handler.', type = 'error' })
+                        DetachLeash()
+                    end
                 elseif dist > pullZoneStart and not IsPedInAnyVehicle(myPed, false) then
                     -- Proportional soft pull-back, not a hard snap at the
                     -- exact threshold: the closer to hardCap, the stronger

@@ -121,6 +121,13 @@
             leash roles are assigned by which party is actually K9-modeled,
             server-verified, never client-claimed) — one shared model
             check instead of two independent copies of Config.Peds logic.
+    - THIS FILE calls `ForceDetachLeashForSource(src, reason)`, exposed by
+      server/main.lua, from every path that flips an active cert to
+      revoked for a K9-role party (RevokeCertification's online branch,
+      RevokeCertificationOffline via the ForceDetachLeashIfOnline wrapper
+      below, and the QBCore:Server:OnJobUpdate auto-revoke handler) — see
+      ForceDetachLeashIfOnline's own doc comment and server/main.lua's
+      header for the full rationale (SPEC.md §1/§4.4 "immediately").
     - THIS FILE owns `Certifications` (citizenid -> { active: boolean,
       job: string }) as a local table. STRUCTURAL NOTE: SPEC.md §4.3's
       prose describes this cache as a bare `Certifications[citizenid] =
@@ -238,6 +245,35 @@ local function IsEligibleCertifier(source)
 
     local dept = Config.Departments[job.name]
     return job.grade ~= nil and job.grade.level ~= nil and job.grade.level >= dept.certifierGrade
+end
+
+--- QA/coder-security finding (leash subsystem gap): losing K9 certification
+--- must end an already-formed leash pairing "immediately" per SPEC.md
+--- §1/§4.4, not just block future attach attempts — CheckLeashEligibility
+--- in server/main.lua is only consulted at attach time, so a K9-role party
+--- who gets decertified mid-session while actively leashed would otherwise
+--- stay paired until someone manually detaches or the distance
+--- safety-valve trips. Called from every path that actually flips an
+--- active cert to revoked for a K9-role party: RevokeCertification (online),
+--- RevokeCertificationOffline, and the QBCore:Server:OnJobUpdate
+--- auto-revoke handler.
+---
+--- Resolves citizenid -> current server id via
+--- exports.qbx_core:GetPlayerByCitizenId and calls
+--- server/main.lua's exposed ForceDetachLeashForSource. Naturally a no-op
+--- for a genuinely offline target: LeashPairs is in-memory/ephemeral only
+--- (never persisted, per server/main.lua's header), so an offline citizenid
+--- cannot have an active pairing to tear down in the first place — this
+--- function only does anything when the citizenid resolves to a currently
+--- connected server id.
+--- @param citizenid string
+--- @param reason string
+local function ForceDetachLeashIfOnline(citizenid, reason)
+    local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+    if onlineSrc then
+        ForceDetachLeashForSource(onlineSrc, reason)
+    end
 end
 
 --- Returns true if `err` (the value pcall caught around the grant INSERT)
@@ -471,6 +507,14 @@ local function RevokeCertification(granterSrc, targetServerId)
         -- HUD display mirror only (SPEC.md §4.3) — never read for authorization.
         targetPlayer.Functions.SetMetaData('k9certified', false)
         NotifyPlayer(targetServerId, 'Your K9 certification has been revoked.', 'error')
+
+        -- QA finding fix: an active leash pairing must not outlive the
+        -- K9-role party's certification (SPEC.md §1/§4.4 "immediately") —
+        -- see ForceDetachLeashIfOnline's doc comment above. `targetServerId`
+        -- is already a live, currently-connected server id here (we're
+        -- inside the `targetIsOnline` branch), so force-detach directly
+        -- rather than re-resolving by citizenid.
+        ForceDetachLeashForSource(targetServerId, 'certification_revoked')
     end
 
     NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')
@@ -559,6 +603,18 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
         return
     end
 
+    -- QA finding fix (SPEC.md §1/§4.4): tear down an active leash pairing
+    -- for this citizenid if one exists. In the overwhelmingly common case
+    -- this is a genuine no-op — the online guard above already refused
+    -- this path if the citizenid resolved to a connected player at that
+    -- point, and LeashPairs is in-memory-only so a genuinely offline
+    -- target cannot have an active pairing to begin with. It's still
+    -- called here (rather than assumed unreachable) to close the narrow
+    -- TOCTOU window where the target reconnects between the online guard
+    -- above and this UPDATE completing — see ForceDetachLeashIfOnline's
+    -- doc comment.
+    ForceDetachLeashIfOnline(citizenid, 'certification_revoked')
+
     NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')
 end
 
@@ -599,6 +655,12 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
 
     local deptLabel = (Config.Departments[oldJob] and Config.Departments[oldJob].label) or oldJob
     NotifyPlayer(source, ('Your K9 certification has been revoked — you are no longer employed by %s.'):format(deptLabel), 'error')
+
+    -- QA finding fix (SPEC.md §1/§4.4 "immediately"): this player is
+    -- online by definition (OnJobUpdate fired for their live `source`), so
+    -- force-detach directly rather than re-resolving by citizenid — same
+    -- reasoning as the online branch of RevokeCertification above.
+    ForceDetachLeashForSource(source, 'certification_revoked')
 end)
 
 lib.callback.register('qbx_k9unit:server:hasK9Access', function(source)
