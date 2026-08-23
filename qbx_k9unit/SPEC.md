@@ -933,7 +933,11 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     — same caveat pattern as Phase 1's qbx_core export notes in
     `server/certifications.lua`. Whoever implements `server/search.lua` and
     `server/tracking.lua` (§11.3) should confirm the exact exports before
-    writing final code.
+    writing final code. **Update (tech-scout pass, 2026-08-23): the
+    item-drop half of this is now resolved — see item 17 below and
+    `phase2_notes/scent_source_resolution.md`.** The search/contraband-read
+    half was separately already confirmed by
+    `phase2_notes/contraband_search_contract.md`.
 12. **(NEW, Phase 2) Door interaction's "nudge-open" needs a real door-lock
     resource to integrate with** (no such resource is in this spec's scope).
     GTA has no generic native for arbitrary map-door lock state. Scoped in
@@ -1020,6 +1024,29 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     or implementing the documented client-side world-entity-scan fallback —
     neither has been done. **Do not enable `Config.Features.ScentTracking`
     on a live server until this item is closed.**
+
+    **Update (tech-scout pass, 2026-08-23) — the blocking research is now
+    done; the `.lua` implementation still is not.** A real, confirmed,
+    documented `ox_inventory` mechanism for "an item was dropped at this
+    world coordinate" exists:
+    `exports.ox_inventory:registerHook('swapItems', callback)`, a
+    server-side hook (verified directly against `overextended/ox_inventory`
+    source, `modules/inventory/server.lua`'s `dropItem` function and
+    `modules/hooks/server.lua`'s `registerHook` export) that fires
+    synchronously, server-side, whenever a player drops an item
+    (`payload.toType == 'drop'`), carrying `payload.source` — which this
+    resource can resolve to a live position via
+    `GetEntityCoords(GetPlayerPed(payload.source))`, the exact same
+    "reporting party's own live server-side position, never a
+    client-claimed coordinate" pattern this file already uses for
+    `relayDamageEvent`/`relayWeaponFire`. Full detail, exact code shape,
+    the confirmed `'drop'`-type queryable ground inventory (a secondary,
+    not-recommended alternative path), and why the client-side
+    world-entity-scan fallback is no longer needed are in
+    **`phase2_notes/scent_source_resolution.md`**. This does not flip
+    `Config.Features.ScentTracking` to enabled by itself — the branch in
+    `server/tracking.lua` still needs to be written per that note's §4/§7
+    before this item can be closed out and the flag safely enabled.
 
 ---
 
@@ -1542,17 +1569,23 @@ Applying §7's same rigor to every Phase 2 item:
   victim's own client is the one guaranteed to witness damage to itself, so
   it relays a small event to the server (§11.4 item 3), same "authored relay
   code, still fully native" shape as gunpowder above.
-- **Scent tracking (item-drop location) — genuinely uncertain, flagged, not
-  guessed.** Whether ox_inventory exposes a server-side hook/export for "an
-  item was just dropped in the world at coordinate X" was not verified
-  against a live ox_inventory install this session (§9 item 11) — same
-  confidence-caveat pattern Phase 1 already used for qbx_core exports in
-  `server/certifications.lua`. If no such hook exists, the fallback plan
-  (not yet chosen, a decision for whoever implements `server/tracking.lua`)
-  is a client-side world-entity proximity scan for ox_inventory's known drop
-  prop model/hash — dropped items are real networked world objects either
-  way, so this is achievable either through an event hook (if one exists)
-  or a scan (if one doesn't), not a hard blocker either way.
+- **Scent tracking (item-drop location) — RESOLVED (tech-scout pass,
+  2026-08-23), previously flagged as genuinely uncertain.** Whether
+  ox_inventory exposes a server-side hook/export for "an item was just
+  dropped in the world at coordinate X" is now confirmed against the real
+  `overextended/ox_inventory` source (not a live install, but the same
+  source that install runs): `exports.ox_inventory:registerHook('swapItems',
+  ...)` fires server-side, synchronously, on every item drop
+  (`payload.toType == 'drop'`), carrying `payload.source` — resolvable to a
+  live position the same way `relayDamageEvent`/`relayWeaponFire` already
+  resolve theirs. **The originally-sketched client-side world-entity-scan
+  fallback is no longer needed and should not be built** — see
+  `phase2_notes/scent_source_resolution.md` for the full mechanism, exact
+  code shape, and why the hook-based approach is strictly better than the
+  scan fallback would have been (no client-supplied coordinate at any
+  point). SPEC.md §9 item 11's item-drop half and item 17 are updated
+  accordingly; this remains an *implementation* task, not yet done in
+  `server/tracking.lua`.
 - **Search vehicle/person contraband reading — genuinely uncertain export
   names, not a feasibility blocker.** Reading a vehicle trunk's or a
   player's real ox_inventory contents server-side is unambiguously possible
@@ -1611,4 +1644,7 @@ testing found once real code existed) — both had been discussed in §11.4's
 own text without actually being carried into §9 until that pass, which this
 cross-reference now reflects. Item 17 was added during the final Phase 2
 sign-off pass (correctness-overseer) — an explicit, visible deferral of
-scent tracking's server-side source resolution, not a newly-found gap.
+scent tracking's server-side source resolution, not a newly-found gap; a
+tech-scout pass (2026-08-23) subsequently closed the *research* half of
+item 17 (see item 17's own update and `phase2_notes/scent_source_resolution.md`)
+— the *implementation* half is still open.
