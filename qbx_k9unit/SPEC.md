@@ -150,9 +150,21 @@ this requirement is structural, not just "the flag exists":
 
 **Access rule:** `player.job.name ∈ Config.Departments` **AND** the player
 holds an **active** K9 certification for that job, checked **server-side**
-on every gated action independently (radial menu access, leash
-grant/detach, vehicle entry, etc.) — not cached client-side as a one-time
+on every gated action that grants a real capability (radial menu access,
+leash grant/detach, certify/revoke) — not cached client-side as a one-time
 pass.
+
+**Exception, confirmed after security review:** K9 vehicle entry/exit
+(`client/vehicle.lua`) is deliberately **client-only**, with no
+server-side re-check. Unlike every other gated action, it grants no real
+capability — it only freezes/hides/repositions the acting player's own
+ped, and no server-authoritative state (DB row, cache, or any other
+gated check) reads whether a player is "in" a K9 vehicle in Phase 1. A
+modified client gains nothing here it couldn't already get by calling the
+same client-only natives on itself directly, so a server round-trip would
+add complexity/latency for no actual security benefit. This should be
+revisited if a later phase (e.g. Phase 4's K9 stash) ever conditions
+something server-authoritative on vehicle state — see §7.
 
 **Assumption on rank auto-bypass (stated explicitly, per the ask):** by
 default, **no rank auto-bypasses certification**, including the department's

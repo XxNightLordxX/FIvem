@@ -4,11 +4,11 @@ Player-controlled K9 unit for Qbox police/security departments — the K9 is
 a player's own persistent character (see `SPEC.md` §1), not an NPC spawned
 by a "handler." Certification-gated access, config-driven feature toggles.
 
-**Status:** Phase 1 scaffold (manifest, config, folder layout, stub files
-with contract comments). No feature logic is implemented yet — see the
-`-- TODO(coder-backend): ...` / `-- TODO(coder-frontend): ...` markers
-throughout `server/*.lua` and `client/*.lua`. This README is intentionally
-short; a docs-agent pass will expand it once Phase 1 lands.
+**Status:** Phase 1 feature-complete and reviewed (certification grant/
+revoke/check, the consensual leash system, radial menu, vehicle entry/
+exit, bark relay) — QA, integration, and security passes done. This
+README is intentionally short; a docs-agent pass will expand it into full
+install/config documentation next.
 
 ## Dependencies
 
