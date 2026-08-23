@@ -57,6 +57,18 @@
       if IsLeashed(), it calls DetachLeash(). Both surfaces (ox_target and
       radial) end up calling the SAME two functions — don't let a second,
       divergent leash-request code path grow in radial.lua.
+    - THIS FILE also registers the "Certify K9 Handler" / "Revoke K9
+      Certification" ox_target options on nearby player peds (SPEC.md
+      §4.3's flow table, §8 step 3 — the previously-missing entry point;
+      the events themselves were always reachable via /k9certify /
+      /k9decertify). These directly TriggerServerEvent the two events
+      documented in full in server/certifications.lua's header
+      ('qbx_k9unit:server:certifyHandler' / '...:revokeHandler', both
+      (targetServerId: number)) — no new client-side contract of THIS
+      FILE's own is introduced, just another entry point into that
+      existing, unchanged server contract. Mirrors the "Attach Leash"
+      option's structure directly (display-only plausibility gate via
+      IsEntityModelK9, server re-validates everything authoritatively).
 
     LEASH SUBSYSTEM DESIGN (per requester's confirmation, resolving
     SPEC.md §9 item 3b — see server/main.lua's header for the full
@@ -399,6 +411,91 @@ exports.ox_target:addGlobalPlayer({
             if not targetPlayer or targetPlayer == -1 then return end
 
             RequestLeashAttach(GetPlayerServerId(targetPlayer))
+        end,
+    },
+})
+
+-- Register the "Certify K9 Handler" / "Revoke K9 Certification" ox_target
+-- options on nearby player peds (SPEC.md §4.3's flow table, §8 step 3 —
+-- this is the gap integration-verifier flagged: the server-side grant/
+-- revoke system in server/certifications.lua was fully implemented and
+-- correct, but was only reachable via /k9certify [id] / /k9decertify [id],
+-- never through any in-world interaction). Mirrors the "Attach Leash"
+-- option's structure immediately above: DISPLAY-ONLY plausibility gates
+-- here, the server independently re-validates granter eligibility
+-- (IsEligibleCertifier), proximity (Config.CertifyProximityMeters), and
+-- (grant-only) the target's live model in GrantCertification /
+-- RevokeCertification — see server/certifications.lua's header for the
+-- full contract and its quoted SPEC.md §4.3 security note. Deliberately
+-- does NOT attempt to check "is the local player an eligible certifier"
+-- client-side: IsEligibleCertifier is a server-only check with no cheap
+-- client-side equivalent (it reads qbx_core job/grade data this client
+-- doesn't have), and a new callback purely to gate visibility isn't worth
+-- adding here — showing the option broadly (to any player near a
+-- K9-modeled ped) and letting the server accept-or-reject-with-notification
+-- is the exact same tradeoff the leash option above already makes.
+--
+-- No Config.Features flag gates this pair, unlike every other ox_target
+-- option in this resource (LeashMechanics above, VehicleEntryExit in
+-- client/vehicle.lua, etc.): certify/revoke IS the access-control system
+-- itself (SPEC.md hard requirement 2), not a togglable *feature area* sitting
+-- behind that system the way Phase 1+'s other leaf features are framed in
+-- §3's acceptance criteria ("every leaf feature... has a corresponding
+-- Config.Features.X"). config.lua has no Certifications/CertifyHandler
+-- entry in Config.Features, and the existing /k9certify, /k9decertify,
+-- /k9decertifyoffline commands are likewise registered unconditionally —
+-- this follows that same, already-established convention rather than
+-- inventing a new toggle for it.
+exports.ox_target:addGlobalPlayer({
+    {
+        name = 'qbx_k9unit:certifyHandler',
+        icon = 'fas fa-id-badge',
+        label = 'Certify K9 Handler',
+        distance = 2.5,
+        canInteract = function(entity, distance, coords, name)
+            if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-cert stays command-only (/k9certify [own id]), matches the leash option's self-exclusion above
+
+            -- SPEC.md §4.2 condition 5: grant requires the TARGET's live
+            -- ped model to be a configured K9 model. Cheap client-side
+            -- plausibility check only — the server independently
+            -- re-verifies via GetEntityModel(GetPlayerPed(targetServerId))
+            -- regardless, see GrantCertification.
+            return IsEntityModelK9(entity)
+        end,
+        onSelect = function(data)
+            local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
+            if not targetPlayer or targetPlayer == -1 then return end
+
+            TriggerServerEvent('qbx_k9unit:server:certifyHandler', GetPlayerServerId(targetPlayer))
+        end,
+    },
+    {
+        name = 'qbx_k9unit:revokeHandler',
+        icon = 'fas fa-id-badge',
+        label = 'Revoke K9 Certification',
+        distance = 2.5,
+        canInteract = function(entity, distance, coords, name)
+            if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-decert stays command-only, matches certify above
+
+            -- SPEC.md §4.2.5: the model check applies to GRANT only, not
+            -- revoke (revoking must remain possible even if the target has
+            -- already left K9 form) — but this predicate still reuses
+            -- IsEntityModelK9 as the display-only plausibility gate rather
+            -- than showing this option on every nearby player regardless
+            -- of appearance, per this block's header note above (no new
+            -- eligibility-check callback added this pass). A handler who
+            -- has already left K9 form and needs their cert pulled remains
+            -- reachable via /k9decertify [id] (or /k9decertifyoffline if
+            -- they've since disconnected), neither of which has any model
+            -- restriction at all — this ox_target option is a convenience
+            -- entry point, not the only way to revoke.
+            return IsEntityModelK9(entity)
+        end,
+        onSelect = function(data)
+            local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
+            if not targetPlayer or targetPlayer == -1 then return end
+
+            TriggerServerEvent('qbx_k9unit:server:revokeHandler', GetPlayerServerId(targetPlayer))
         end,
     },
 })
