@@ -77,6 +77,16 @@
       new resource-global function of its own (ox_target-only entry point,
       same shape as client/search.lua's search options — nothing else in
       this resource needs to call into door interaction directly).
+    - THIS FILE also registers a SEPARATE "Nudge Door" ox_target option
+      alongside "Scratch to Alert" on the same door-like objects (the
+      previously-deferred nudge-open sub-feature, now implemented — see the
+      DOOR INTERACTION block below for the full safety reasoning). Unlike
+      every other ox_target option in this file, NudgeDoor() has ZERO server
+      involvement of any kind: no TriggerServerEvent, no callback, nothing
+      server-authoritative at stake — the entire feature is a local
+      self-impulse on the K9's own ped, never touching the door entity's
+      state in any way. Exposes no new resource-global function either
+      (same ox_target-only entry point shape as ScratchAtDoor above it).
 
     LEASH SUBSYSTEM DESIGN (per requester's confirmation, resolving
     SPEC.md §9 item 3b — see server/main.lua's header for the full
@@ -101,9 +111,9 @@
        reuse this exact function, don't build a second detach code path.
 
     ======================================================================
-    DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT ONLY. SPEC.md §11.1
-    sub-phase 2a, §11.3's file/module plan (this file's row), §11.4 items
-    5/6, §11.5's door-interaction acceptance criteria;
+    DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT + NUDGE-OPEN. SPEC.md
+    §11.1 sub-phase 2a/2b, §11.3's file/module plan (this file's row), §11.4
+    items 5/6, §11.5's door-interaction acceptance criteria;
     phase2_notes/door_interaction.md, phase2_notes/door_interaction_natives.md,
     and phase2_notes/door_interaction_security_review.md (all read in full
     before this section was written — the security review in particular was
@@ -111,11 +121,20 @@
     relayDoorScratch handler, so this file is built to that handler's exact,
     fixed contract rather than re-deriving it).
 
-    "Nudge-open" is DELIBERATELY NOT implemented anywhere in this file — see
-    the "NUDGE-OPEN NOT IMPLEMENTED" comment further down, immediately above
-    the door-interaction code itself, for the full reasoning and the
-    still-open config-safety gap that comment deliberately does not attempt
-    to close.
+    "Nudge-open" is now implemented — see the "NUDGE-OPEN" comment further
+    down, immediately above the door-interaction code itself, for the full
+    reasoning, the hard safety constraint it follows (never consults GTA's
+    native door-lock/CDoor system, by design), and which of the two
+    design-note-flagged implementation paths was actually taken (the
+    zero-gating cosmetic-only fallback, since a real "already passable"
+    detection method was never confirmed to exist in any of the three
+    phase2_notes documents).
+
+    Nudge-open has NO server event of its own — it is 100% client-local
+    (ZERO TriggerServerEvent, ZERO callback, nothing server-authoritative
+    touched at all), unlike scratch-to-alert below. Do not add one; that
+    would be a structural deviation from SPEC.md §11.3/§11.5/§11.6's
+    explicit, repeated framing, not a judgment call left open by this file.
 
     Server events (client->server):
     - 'qbx_k9unit:server:relayDoorScratch' (doorNetId: number)
@@ -620,50 +639,84 @@ if not Config.Features.AgilityBasicJump then
 end
 
 -- ======================================================================
--- DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT ONLY (Config.Features.DoorInteraction).
--- See this file's header DOOR INTERACTION block for the full event
--- contract and source-document list. Built directly against
--- server/main.lua's ALREADY-SHIPPED 'qbx_k9unit:server:relayDoorScratch'
--- handler (search that file for "relayDoorScratch" for the exact,
--- currently-live contract this code targets) rather than re-deriving the
--- server side from the design notes alone — the design notes and the
--- shipped handler agree, but the handler is the actual source of truth.
+-- DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT + NUDGE-OPEN
+-- (Config.Features.DoorInteraction). See this file's header DOOR
+-- INTERACTION block for the full event contract and source-document list.
+-- Scratch-to-alert is built directly against server/main.lua's
+-- ALREADY-SHIPPED 'qbx_k9unit:server:relayDoorScratch' handler (search that
+-- file for "relayDoorScratch" for the exact, currently-live contract this
+-- code targets) rather than re-deriving the server side from the design
+-- notes alone — the design notes and the shipped handler agree, but the
+-- handler is the actual source of truth.
 --
--- NUDGE-OPEN NOT IMPLEMENTED (deliberately, this pass): SPEC.md §11.1
--- splits nudge-open out as its own row, explicitly scoped as "a stretch
--- item within DoorInteraction, not a blocker for shipping scratch-to-alert"
--- — and phase2_notes/door_interaction_natives.md §0.5/§4 (the native
--- verification pass) concludes any safe version of nudge-open would need to
--- stay purely cosmetic (a push animation as the K9 walks through a door it
--- can ALREADY physically pass) and must NEVER consult GTA's native CDoor
--- lock-state system as a safety check, since an unregistered door (the
--- common case for a real door-lock resource's doors) reads as "nothing to
--- say" there, which risks being misread as "unlocked." That's a real design
--- exercise of its own (what counts as "already passable," how to detect it
--- without touching lock state) that this pass does not attempt — only
--- "Scratch to Alert" is implemented below, per this task's explicit scope.
+-- NUDGE-OPEN — DESIGN PATH TAKEN (read this before touching NudgeDoor()):
 --
--- KNOWN, STILL-UNADDRESSED CONFIG-SAFETY GAP (not solved here — see
--- phase2_notes/door_interaction_security_review.md Finding 3 for the full
--- writeup): Config.DoorInteraction.nudgeRequiresUnlocked is documented, in
--- both config.lua's own inline comment and README.md, as "a hard
--- requirement, not a toggle" — but as of this pass it is an ordinary
--- editable boolean with NO code anywhere (this file included) that actually
--- reads or enforces it. That's harmless today (nudge-open doesn't exist at
--- all yet, so the flag is an inert no-op either way), but the security
--- review flags a real future risk: the first implementer of a richer,
--- lock-state-integration-backed nudge-open could easily wire a branch off
--- this flag that does exactly what its name promises never to allow (a
--- lockpick-equivalent bypass), and a server owner who long ago flipped it
--- to `false` for an unrelated reason (testing, a copied "permissive"
--- example config) would silently inherit that exploit with nobody having
--- deliberately, reviewedly wired it for that purpose. The review's
--- recommended fix (a resource-start
--- `assert(Config.DoorInteraction.nudgeRequiresUnlocked == true, ...)`) is
--- intentionally NOT added here — it belongs alongside nudge-open's own
--- implementation (or a standalone config-validation pass), not bundled into
--- this scratch-only change. Flagging it again here so it isn't lost between
--- passes.
+-- The hard, non-negotiable constraint (SPEC.md §11.5/§11.6,
+-- phase2_notes/door_interaction_natives.md §0.5/§4,
+-- phase2_notes/door_interaction_security_review.md Finding 3): nudge-open
+-- must NEVER consult GTA's native door-lock/CDoor system
+-- (DoorSystemGetDoorState / IsDoorClosed / GetStateOfClosestDoorOfType /
+-- etc.) as a safety check. An unregistered door — the common case, since
+-- most real FiveM door-lock resources (ox_doorlock-style, custom MLOs)
+-- manage their own lock flag entirely outside GTA's CDoor system — reads as
+-- "nothing to say" to every one of those natives, which risks being
+-- misread as "unlocked." Treating "not registered" as license to nudge
+-- would make this a concrete lockpick-equivalent bypass, not a theoretical
+-- one (native_natives.md §0.5 spells out exactly this failure mode). This
+-- file does not call ANY door-system native anywhere, for any purpose —
+-- not even the read-only ones — full stop.
+--
+-- Given that constraint, the only structurally safe design is purely
+-- cosmetic: something that can NEVER open a door a lock resource considers
+-- closed, because it never touches door state (position, heading, freeze
+-- flag, CDoor registration, anything) at all. This mirrors
+-- client/vehicle.lua's documented "no real capability granted" exception
+-- (vehicle entry/exit grants nothing a modified client couldn't already do
+-- to itself) — same reasoning, applied to a door instead of a vehicle seat.
+--
+-- WHICH FALLBACK WAS ACTUALLY TAKEN — flagged explicitly per this task's
+-- own instruction, for exploit-tester to verify against: none of the three
+-- phase2_notes documents ever settled on a confirmed "is this door already
+-- passable" detection method beyond distance.
+--   - door_interaction.md §7/§8 explicitly leaves "the exact model-hash
+--     list (or alternative detection method)" as "a real implementation
+--     task, not a design-note-level decision" — i.e. still open, not
+--     resolved.
+--   - door_interaction_natives.md §7 explicitly flags "whether there's any
+--     lighter-weight way to detect 'this CObject is currently a
+--     swinging/hinged door' (vs. a static prop)... Not verified."
+--   - door_interaction_natives.md §4's own "Practical recommendation" (the
+--     most concrete guidance that exists) describes the walk-through-able
+--     framing at a CONCEPTUAL level only ("play the K9's push animation as
+--     it passes through a door the player can already physically walk
+--     through") — it does not supply a concrete native/algorithm for
+--     confirming that a specific, arbitrary door object is in that state
+--     ahead of time, only for the (separately unavailable, CDoor-only)
+--     registered-door subset this design deliberately avoids relying on.
+-- Since no confirmed "already passable" detection method exists to gate
+-- on, this implements the SIMPLEST SAFE VERSION explicitly named as the
+-- fallback: NudgeDoor() plays a push impulse/animation ONLY, gated by
+-- nothing beyond distance (Config.DoorInteraction.interactDistance, via
+-- ox_target's own `distance` option) and CanShowK9UI() — see NudgeDoor()'s
+-- own header comment below for exactly why zero additional gating is safe
+-- here regardless of the target door's real state.
+--
+-- Config.DoorInteraction.nudgeRequiresUnlocked (Finding 3): this field's own
+-- inline comment says "hard requirement, not a toggle" — but per the hard
+-- constraint above, there is no real lock-state read anywhere in this file
+-- for that flag to gate. Building a branch off it that behaves differently
+-- based on its value would require somehow determining real lock state,
+-- which is exactly the thing this design must never do. Rather than leave
+-- it as a silent, unenforced no-op that could look load-bearing to a server
+-- owner (the exact risk Finding 3 raises) or invent a fake lock check just
+-- to give it something to gate, this ships the review's recommended
+-- Option A: a resource-start assertion (see below, immediately before the
+-- ox_target registration) that fails loudly if the field is ever set to
+-- anything other than `true`. That is the full extent to which this flag is
+-- "applied as a config gate" — it gates whether this ENTIRE RESOURCE starts
+-- at all, not a runtime branch inside NudgeDoor() — which is the only way to
+-- honor both "this field must do something real" and "nudge-open must never
+-- branch on believed lock state."
 -- ======================================================================
 
 --- Best-effort "is this object entity plausibly a door" heuristic, used
@@ -799,6 +852,118 @@ local function ScratchAtDoor(entity)
     TriggerServerEvent('qbx_k9unit:server:relayDoorScratch', doorNetId)
 end
 
+-- Placeholder sound reference for the nudge-open cosmetic cue, played
+-- locally on the ACTING player's own K9 ONLY — there is no broadcast/relay
+-- of any kind for nudge (unlike DOOR_SCRATCH_SOUND_NAME above, which is
+-- also played on the door itself for every OTHER client once the server
+-- round-trips it back). Same "harmless no-op until a real asset exists" /
+-- shared-placeholder-soundset reasoning as DOOR_SCRATCH_SOUND_NAME.
+local DOOR_NUDGE_SOUND_NAME = 'DoorNudge'
+
+-- Feel/tuning knob for the cosmetic push impulse below — NOT a structural
+-- decision (phase2_notes/door_interaction.md §8 explicitly lists "the exact
+-- push-force magnitude/direction tuning for a convincing nudge animation"
+-- as a tuning knob, not a design-level choice) and has zero bearing on this
+-- function's safety properties either way, since it only ever scales a
+-- force applied to the K9's OWN ped (see NudgeDoor()'s header comment).
+local NUDGE_IMPULSE_FORCE = 2.0
+
+--- Shared implementation behind the "Nudge Door" ox_target option's
+--- onSelect below.
+---
+--- SAFETY DESIGN — read this file's "NUDGE-OPEN — DESIGN PATH TAKEN" header
+--- comment above the door-interaction registration block further down for
+--- the full writeup; summarized here at the actual point of implementation:
+--- - This function NEVER calls any door-lock/CDoor native
+---   (DoorSystemGetDoorState, IsDoorClosed, GetStateOfClosestDoorOfType, or
+---   any sibling) and NEVER reads/writes/freezes/moves/rotates the door
+---   `entity` argument in any way. The ONLY thing this function does with
+---   `entity` at all is read its CURRENT POSITION (GetEntityCoords), purely
+---   to compute which direction the K9's own cosmetic push impulse should
+---   face — reading a position is not a lock-state check and cannot itself
+---   reveal or change lock state.
+--- - The impulse below is applied to the K9's OWN PED, never to `entity` —
+---   deliberately more conservative than "push the door and trust a
+---   door-lock resource's freeze flag to make that push a no-op when
+---   locked," since that would still depend on an assumption about how some
+---   unknown, unintegrated door-lock resource happens to implement its lock
+---   (freezing the object is common but not guaranteed for every such
+---   resource). Never touching the door object at all removes that
+---   assumption entirely — there is structurally nothing for a locked door
+---   to "defend against" here, regardless of how any given server's
+---   door-lock resource works internally.
+--- - Gating is ONLY distance (via the ox_target option's own `distance`
+---   field below, Config.DoorInteraction.interactDistance) and
+---   CanShowK9UI() — no reachability/"already passable" check of any kind.
+---   This is the explicit fallback this file's header comment names: none
+---   of the three phase2_notes documents (door_interaction.md §7/§8,
+---   door_interaction_natives.md §7) ever settled on a confirmed method for
+---   detecting "is this specific door object already passable" beyond the
+---   conceptual framing itself, so there is nothing concrete to gate on
+---   instead — and a self-only cosmetic impulse cannot grant any capability
+---   regardless of the target door's real state, so skipping that gate adds
+---   no risk.
+--- - ZERO server involvement: no TriggerServerEvent, no callback, nothing
+---   server-authoritative touched anywhere in this function — confirmed by
+---   inspection (there is no TriggerServerEvent call below at all, unlike
+---   ScratchAtDoor above it).
+---
+--- CONFIDENCE NOTE on ApplyForceToEntity's exact parameter semantics: MEDIUM
+--- (a very commonly used FiveM native with a well-established call shape in
+--- community scripts, but not independently re-verified against
+--- raw.githubusercontent.com/citizenfx/natives this session the way
+--- phase2_notes/door_interaction_natives.md verified the door-system
+--- natives) — worth a native-api-assistant pass before shipping if the feel
+--- is off in testing, same standard this file's own K9Sit()/ScratchAtDoor()
+--- scenario-name comments already apply to themselves. This has NO bearing
+--- on the safety properties above either way, since the target of the force
+--- is always the K9's own ped, never the door.
+--- @param entity number -- resolved live entity handle from the ox_target callback's own `data.entity`
+local function NudgeDoor(entity)
+    -- Defensive re-check, same posture as ScratchAtDoor/every other gated
+    -- action in this file — canInteract below is a DISPLAY optimization
+    -- only. Unlike ScratchAtDoor there is no server round-trip afterward to
+    -- ALSO independently re-validate anything (nudge is fully client-local
+    -- by design, see this file's header comment) — so this local check is
+    -- the only gate that will ever run for this action, which is fine
+    -- precisely because nothing below grants any real capability regardless
+    -- (see the SAFETY DESIGN notes above).
+    if not CanShowK9UI() then
+        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        return
+    end
+
+    if not DoesEntityExist(entity) then
+        lib.notify({ title = 'K9 Unit', description = 'Nothing there to nudge.', type = 'error' })
+        return
+    end
+
+    local ped = PlayerPedId()
+    local pedCoords = GetEntityCoords(ped)
+    local doorCoords = GetEntityCoords(entity) -- POSITION ONLY -- never lock/open state, see header comment above
+    local toDoor = doorCoords - pedCoords
+    local dist = #toDoor
+
+    -- Degenerate-distance guard (ped and door coordinates coincide almost
+    -- exactly — a bugged/zero-size prop, or the door entity resolving to
+    -- the same spot as the ped) -- fall back to the ped's own current
+    -- facing direction rather than dividing by ~0.
+    local dir
+    if dist > 0.05 then
+        dir = toDoor / dist
+    else
+        dir = GetEntityForwardVector(ped)
+    end
+
+    -- Cosmetic forward impulse on the K9's OWN body only (never on
+    -- `entity`, per the SAFETY DESIGN notes above). forceType 3 =
+    -- APPLY_TYPE_IMPULSE (a single instantaneous push, not a continuous
+    -- force); offset (0,0,0)/component 0 = applied at the ped's own center
+    -- of mass, not an off-center torque.
+    ApplyForceToEntity(ped, 3, dir.x * NUDGE_IMPULSE_FORCE, dir.y * NUDGE_IMPULSE_FORCE, 0.0, 0.0, 0.0, 0.0, 0, false, true, true, false, true)
+    PlaySoundFromEntity(-1, DOOR_NUDGE_SOUND_NAME, ped, DOOR_SCRATCH_SOUND_SET, false, 0)
+end
+
 -- Register the "Scratch to Alert" ox_target option on nearby door-like
 -- objects (SPEC.md §11.5: "available on any door within
 -- Config.DoorInteraction.interactDistance regardless of lock state").
@@ -814,6 +979,29 @@ end
 -- already coexist in this codebase; this option follows the stricter one on
 -- purpose, per this task's explicit direction for this specific feature.
 if Config.Features.DoorInteraction then
+    -- Config.DoorInteraction.nudgeRequiresUnlocked "applied as a config
+    -- gate" (Finding 3, phase2_notes/door_interaction_security_review.md):
+    -- per this file's "NUDGE-OPEN — DESIGN PATH TAKEN" header comment
+    -- above, NudgeDoor() has no real lock-state read anywhere to build a
+    -- runtime branch off this flag with — doing so would require exactly
+    -- the kind of believed-lock-state check this design must never perform.
+    -- Instead of leaving the flag as a silent, unenforced no-op (Finding
+    -- 3's core complaint — a field whose own comment claims "hard
+    -- requirement, not a toggle" but that no code anywhere reads), this
+    -- ships the review's recommended Option A: fail resource start LOUDLY
+    -- if it's ever set to anything other than `true`, converting it from
+    -- "looks load-bearing but isn't" into an active guardrail against a
+    -- FUTURE implementer wiring a real (dangerous) lock-state branch off it
+    -- without deliberately, reviewedly removing this assertion first.
+    assert(Config.DoorInteraction.nudgeRequiresUnlocked == true,
+        'Config.DoorInteraction.nudgeRequiresUnlocked must remain true -- ' ..
+        'nudge-open (client/movement.lua NudgeDoor) has no lock-state check ' ..
+        'of any kind, by design (it never consults GTA\'s door-lock/CDoor ' ..
+        'system, see this file\'s "NUDGE-OPEN" header comment) -- this ' ..
+        'assertion exists solely to fail loudly if this field is ever ' ..
+        'repurposed as a real gate without a reviewed code change. See ' ..
+        'phase2_notes/door_interaction_security_review.md Finding 3.')
+
     exports.ox_target:addGlobalObject({
         {
             name = 'qbx_k9unit:scratchDoor',
@@ -835,6 +1023,30 @@ if Config.Features.DoorInteraction then
             end,
             onSelect = function(data)
                 ScratchAtDoor(data.entity)
+            end,
+        },
+        {
+            -- SEPARATE ox_target option from "Scratch to Alert" above (per
+            -- this task's explicit direction), registered on the SAME
+            -- door-like objects, gated behind the same
+            -- Config.Features.DoorInteraction check at registration (this
+            -- whole block). See NudgeDoor()'s own header comment for the
+            -- full safety design this option's canInteract/onSelect below
+            -- are deliberately minimal because of.
+            name = 'qbx_k9unit:nudgeDoor',
+            icon = 'fas fa-hand-paper',
+            label = 'Nudge Door',
+            distance = Config.DoorInteraction.interactDistance,
+            canInteract = function(entity, distance, coords, name)
+                if not CanShowK9UI() then return false end
+                -- Same vehicle-tucked-K9 exclusion as "Scratch to Alert"
+                -- above, same reasoning — a tucked K9 is nowhere near this
+                -- door in any way that should let it play a push impulse.
+                if IsInK9Vehicle and IsInK9Vehicle() then return false end
+                return IsLikelyDoorEntity(entity)
+            end,
+            onSelect = function(data)
+                NudgeDoor(data.entity)
             end,
         },
     })
