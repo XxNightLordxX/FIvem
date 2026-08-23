@@ -2,10 +2,16 @@
     qbx_k9unit/config.lua
 
     Transcribed verbatim from SPEC.md §5 ("Config schema (concrete shape)"),
-    with one addition flagged below (Config.K9DespawnGraceSeconds) that the
-    Phase 1 event/callback contract needs but SPEC.md §5 did not yet define.
-    If SPEC.md is later revised, re-diff this file against §5 before trusting
-    it as still in sync.
+    which is unchanged by the post-draft correction (§1/§2/§4.4/§4.5) — no
+    additions or removals beyond what's noted inline below. If SPEC.md §5
+    is revised again, re-diff this file against it before trusting it as
+    still in sync.
+
+    HISTORY: an earlier draft of this file added a Config.K9DespawnGraceSeconds
+    field for a handler->K9 spawn-registry grace timer. That concept was
+    removed entirely once SPEC.md's post-draft correction established the
+    K9 is a player's own persistent character with no spawn/despawn/registry
+    at all (see the NOTE further down where that field used to live).
 ]]
 
 Config = {}

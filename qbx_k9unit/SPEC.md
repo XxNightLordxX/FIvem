@@ -150,8 +150,9 @@ this requirement is structural, not just "the flag exists":
 
 **Access rule:** `player.job.name ∈ Config.Departments` **AND** the player
 holds an **active** K9 certification for that job, checked **server-side**
-on every access point (menu open request *and* the actual spawn request —
-not just once).
+on every gated action independently (radial menu access, leash
+grant/detach, vehicle entry, etc.) — not cached client-side as a one-time
+pass.
 
 **Assumption on rank auto-bypass (stated explicitly, per the ask):** by
 default, **no rank auto-bypasses certification**, including the department's
@@ -355,10 +356,13 @@ There is **no spawn step** to hang model detection off, so recognition works
 as follows:
 
 - **Authoritative (server):** wherever the model actually matters for a
-  security decision — currently only the certify-eligibility check in
-  §4.2.5 — the server reads it live via
+  security or role-assignment decision — the certify-eligibility check in
+  §4.2.5, and leash role-assignment (§6.1: determining which party in a
+  leash pair is the constrained K9 side) — the server reads it live via
   `GetEntityModel(GetPlayerPed(targetServerId))` and compares against the
-  hashes of `Config.Peds` entries. Never trust a client-reported model.
+  hashes of `Config.Peds` entries. Never trust a client-reported model. One
+  shared helper (`IsConfiguredK9Model`) backs every such check rather than
+  duplicating the comparison logic per call site.
 - **Convenience (client):** the client may check its own
   `GetEntityModel(PlayerPedId())` against `Config.Peds` purely to decide
   whether to show K9-specific UI (radial entries, HUD) at all. This is a
@@ -369,8 +373,8 @@ as follows:
   server's existing character-creation/appearance system, so this resource
   reads it rather than duplicating it. If a specific server's appearance
   resource makes the live model unreliable at the moment of the check (e.g.
-  during a model swap), that's flagged as an open question in §9 rather than
-  worked around speculatively here.
+  during a model swap), that's flagged as §9 item 8 rather than worked
+  around speculatively here.
 
 ---
 
@@ -545,7 +549,12 @@ check against whenever that phase lands, but they are not blocking Phase 1.
         initiates "Attach Leash" (ox_target) on the other; the *target* of
         that request gets an accept/decline prompt (ox_lib alert/context),
         and the leash only activates on acceptance. Nobody can be leashed
-        without agreeing to it first.
+        without agreeing to it first. The non-K9 side ("handler") must also
+        satisfy `job.name ∈ Config.Departments` (§9 item 9) — an arbitrary
+        non-department player cannot hold the other end of a working K9's
+        leash, even with consent. Server determines which side is the K9
+        (constrained) party via the live model check (§4.5), never a
+        client-asserted role.
       - **While attached, movement is actually restricted**, not just
         monitored: the leashed player cannot move more than
         `Config.LeashMaxDistance` (default 8m) from the handler — enforced
@@ -806,6 +815,26 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
    requirements that need someone to source (not necessarily commission)
    royalty-free sound/prop assets; flagging so it isn't assumed to be a
    zero-asset, code-only task.
+8. **Live model reliability across an appearance/model swap (§4.5).** If a
+   server's separate appearance/character-customization resource can change
+   a player's base ped model mid-session (not just clothing/texture), the
+   live `GetEntityModel` check could theoretically read a stale-relative-to-
+   intent value in the instant right around such a swap. Not addressed
+   speculatively here — flagged for whoever integrates this on a specific
+   server to confirm their appearance system's actual behavior, since it
+   varies by server and no fix should be guessed without knowing what it's
+   guarding against.
+9. ~~Does the non-K9 leash partner ("handler") need to be in an allowed
+   department too, or can any player hold the other end of the leash?~~
+   **Resolved** — yes, the handler side must also satisfy
+   `job.name ∈ Config.Departments` (does **not** require its own active K9
+   certification, just department membership — the cert is specifically the
+   "I am a working K9" credential, not "I am allowed near one"). Rationale:
+   "handler" is defined throughout this spec (§1) as a partnered officer:
+   letting an arbitrary non-department player hold the other end of a
+   working K9's leash doesn't match that framing, and department membership
+   is a cheap, already-available check reusing the exact same
+   `Config.Departments` list.
 
 ---
 
