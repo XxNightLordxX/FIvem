@@ -1041,7 +1041,7 @@ Config.Tracking = {
 -- gunpowder) -- not a separate trackable type of its own, which is why it
 -- has no maxRange/searchCooldownMs of its own above.
 Config.WaterTrackingDecay = {
-    sampleIntervalMeters = 2.0,  -- how often the rendered path is sampled for water (GetWaterHeight / water-flag natives) while drawing it
+    sampleIntervalMeters = 2.0,  -- how often the rendered path is sampled for water while drawing it. Use GetWaterHeightNoWaves (0x8EE6B53CE13A9794), NOT plain GetWaterHeight -- confirmed by two independent native-verification passes that the wave-motion jitter in plain GetWaterHeight can cause inconsistent water/no-water reads between adjacent samples on calm shorelines; NoWaves gives a frame-stable read appropriate for a fixed-step poll like this.
     breaksTrail          = true, -- true: water fully breaks the trail, handler must re-search on the far bank (§6.3's stated behavior); false: only fades marker opacity near/in water instead of a hard break -- a softer alternative flagged here as a one-line config choice, not a spec mandate either way
 }
 
@@ -1437,6 +1437,19 @@ Applying §7's same rigor to every Phase 2 item:
   speculatively here, since guessing at a specific resource's API without
   confirming it exists on the target server would be worse than shipping
   the narrower, safe version.
+  **Confirmed correct by native verification**: GTA's native `CDoor` system
+  (`DoorSystemGetDoorState`, `DoorSystemFindExistingDoor`, etc.) only covers
+  doors R* registered via IPL or a script's own `AddDoorToSystem` call —
+  most real door-lock resources (`ox_doorlock` and similar) manage lock
+  state as their own data entirely outside `CDoor`. This means nudge-open
+  must **never** gate on the native lock-state query at all, even as a
+  belt-and-suspenders check: an unregistered door (the common case for a
+  door-lock resource's doors) reads as "nothing to say" from `CDoor`, which
+  risks being misread as "unlocked" — a false-negative read there would be
+  a concrete way to violate the hard `nudgeRequiresUnlocked` guarantee.
+  Implementation must stay purely cosmetic (a push animation triggered by
+  the K9 walking through a door it can already physically pass), never
+  consulting `CDoor` state as a safety check.
 - **"Scratch to alert" — CONFIRMED achievable, no caveats.** Pure sound cue,
   identical shape to the already-shipped `relayBark`. No native uncertainty,
   no integration dependency.
