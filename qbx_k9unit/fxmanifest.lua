@@ -30,6 +30,7 @@ dependencies {
     'ox_lib',
     'ox_target',
     'oxmysql',
+    'ox_inventory', -- Phase 2: server/search.lua reads item weights/contents via ox_inventory exports (GetInventoryItems/GetContainerFromSlot); Phase 1 never touched inventory.
 }
 
 shared_scripts {
@@ -44,12 +45,17 @@ client_scripts {
     'client/movement.lua',
     'client/radial.lua',
     'client/vehicle.lua',
+    'client/tracking.lua', -- Phase 2
+    'client/search.lua',   -- Phase 2
+    'client/vision.lua',   -- Phase 2
 }
 
 server_scripts {
     '@oxmysql/lib/MySQL.lua',
     'server/main.lua',
     'server/certifications.lua',
+    'server/tracking.lua', -- Phase 2
+    'server/search.lua',   -- Phase 2
 }
 
 lua54 'yes'
