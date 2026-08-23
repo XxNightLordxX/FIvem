@@ -50,6 +50,41 @@
     wanted — your call, but document whichever is chosen so
     qa-tester/integration-verifier know what "appears" means here.
 
+    QBOX/OX_LIB API FIX (framework-compatibility pass, verified against
+    ox_lib's actual source — overextended/ox_lib
+    resource/interface/client/radial.lua's registerRadial/addRadialItem/
+    radialClick — not just the docs prose): the earlier draft of this file
+    built ONE FLAT ARRAY containing an "opener" item (id='k9unit', no
+    onSelect, no menu) plus the four action items, each of THOSE carrying
+    `menu = 'k9unit'`, and passed the whole array to a single
+    `lib.addRadialItem(k9RadialItems)` call with no `parentMenuId` and no
+    matching `lib.registerRadial` call anywhere. That is not what `menu`
+    means on an item: `menu` does not mean "this item lives inside
+    submenu X" (grouping), it means "selecting this item navigates to the
+    ALREADY-REGISTERED submenu with this id" — ox_lib's own radialClick
+    NUI handler runs `if item.menu then ... showRadial(item.menu) end`
+    BEFORE it ever calls the item's own `onSelect`, and `showRadial` on an
+    id nobody registered via `lib.registerRadial` does
+    `return error('No radial menu with such id found.')` — a hard Lua
+    error that aborts the callback right there, so `onSelect` (the line
+    that would have actually run K9Sit()/relayBark/RequestLeashAttach()/
+    EnterNearestK9Vehicle()) never executes at all. On top of that, with
+    no `parentMenuId` every one of these items (including the would-be
+    "opener") lands in the GLOBAL root wheel `menuItems`, not tucked under
+    a submenu — mixed in with every other resource's global radial items,
+    not the single "K9 Unit" icon the rest of this file's comments
+    describe. Net effect of the old code: every Phase 1 radial action was
+    completely non-functional (hard error on select), not merely
+    mis-labeled. Fixed below by actually calling `lib.registerRadial({id
+    = 'k9unit', items = k9SubmenuItems})` for the real submenu contents
+    (none of which carry their own `menu` field — they're terminal
+    actions, not further navigation links) and a separate
+    `lib.addRadialItem({...})` call for the single opener item that
+    carries `menu = 'k9unit'` to link into it. Option (b)'s reasoning
+    above (register unconditionally, gate in onSelect) is unchanged by
+    this fix — only the registration mechanics were wrong, not the
+    gating design.
+
     BARK TYPE NOTE: Phase 1 needs exactly one generic bark (§6.1: "Basic
     bark sound plays on a radial-triggered 'Bark' action" — the
     aggressive/alert/calm variety is Phase 5's AdvancedBarkRadial, not
@@ -71,10 +106,13 @@
 -- by a non-qualifying player in the first place; (a) would make that
 -- branch largely unreachable. (b) also avoids a polling thread that
 -- would otherwise re-await the server's hasK9Access callback every couple
--- of seconds for every player near a PD, and avoids depending on
--- lib.addRadialItem/lib.removeRadialItem ordering semantics for a
--- submenu-then-children relationship that isn't verified against ox_lib's
--- source from this session. Documented here for qa-tester/
+-- of seconds for every player near a PD. (NOTE: a later
+-- framework-compatibility pass DID verify the actual
+-- lib.registerRadial/lib.addRadialItem submenu-then-children mechanics
+-- against ox_lib's own source — see the QBOX/OX_LIB API FIX note above —
+-- and found the original registration call itself was broken; that is
+-- now fixed independently of this option-(b)-vs-(a) choice, which still
+-- stands.) Documented here for qa-tester/
 -- integration-verifier: "appears" in this file means "is present in the
 -- radial wheel," not "is currently usable" — usability is enforced at
 -- onSelect time, same as every gated server event is independently
@@ -112,9 +150,14 @@ local function FindNearestLeashCandidate()
     return GetPlayerServerId(nearestPlayer)
 end
 
-local k9RadialItems = {
-    { id = 'k9unit', label = 'K9 Unit', icon = 'dog' },
-
+-- Contents of the "K9 Unit" SUBMENU (registered via lib.registerRadial
+-- below) — none of these carry their own `menu` field. On an item, `menu`
+-- means "selecting this navigates to another already-registered menu,"
+-- not "this item belongs to submenu X" — see this file's header for the
+-- verified ox_lib source behind that distinction. These are terminal
+-- actions with their own onSelect, so `menu` must stay unset on all of
+-- them.
+local k9SubmenuItems = {
     --- Sit — SPEC.md §6.1. No dedicated Config.Features flag (bundled
     --- under the general RadialMenu flag + access check, same as every
     --- other Phase 1 item here).
@@ -122,7 +165,6 @@ local k9RadialItems = {
         id = 'k9_sit',
         label = 'Sit',
         icon = 'couch',
-        menu = 'k9unit',
         onSelect = function()
             if not CanShowK9UI() then
                 DenyNotify()
@@ -135,11 +177,10 @@ local k9RadialItems = {
 
 --- Bark — SPEC.md §6.1, §8 step 9. Config.Features.BasicBarkSounds gate.
 if Config.Features.BasicBarkSounds then
-    k9RadialItems[#k9RadialItems + 1] = {
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_bark',
         label = 'Bark',
         icon = 'volume-high',
-        menu = 'k9unit',
         onSelect = function()
             if not CanShowK9UI() then
                 DenyNotify()
@@ -161,11 +202,10 @@ end
 --- (the other being the ox_target option client/movement.lua registers
 --- directly on nearby players).
 if Config.Features.LeashMechanics then
-    k9RadialItems[#k9RadialItems + 1] = {
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_leash',
         label = 'Attach/Detach Leash',
         icon = 'link',
-        menu = 'k9unit',
         onSelect = function()
             -- Detach never requires consent/access — always available
             -- while leashed, per SPEC.md §9 item 3b's hard requirement.
@@ -198,11 +238,10 @@ end
 --- client/vehicle.lua registers directly. Config.Features.VehicleEntryExit
 --- gate.
 if Config.Features.VehicleEntryExit then
-    k9RadialItems[#k9RadialItems + 1] = {
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_vehicle',
         label = 'Enter/Exit Vehicle',
         icon = 'car',
-        menu = 'k9unit',
         onSelect = function()
             if not CanShowK9UI() then
                 DenyNotify()
@@ -219,5 +258,25 @@ if Config.Features.VehicleEntryExit then
 end
 
 if Config.Features.RadialMenu then
-    lib.addRadialItem(k9RadialItems)
+    -- Register the actual submenu contents FIRST (lib.registerRadial),
+    -- keyed by id 'k9unit' — this is the id the opener item below points
+    -- to via its own `menu` field.
+    lib.registerRadial({
+        id = 'k9unit',
+        items = k9SubmenuItems,
+    })
+
+    -- Then add ONE opener item to the GLOBAL root radial wheel. This is
+    -- the only k9unit-related item that belongs in the flat top-level
+    -- menuItems list; selecting it navigates into the 'k9unit' submenu
+    -- just registered above. Do not add k9SubmenuItems' contents here too
+    -- — that was the original bug (see this file's header).
+    lib.addRadialItem({
+        {
+            id = 'k9unit_open',
+            label = 'K9 Unit',
+            icon = 'dog',
+            menu = 'k9unit',
+        },
+    })
 end

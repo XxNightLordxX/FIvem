@@ -10,6 +10,21 @@ Status: LIVE — polling phase2_notes/ as design notes land. Last updated
 after `thermal_night_vision_natives.md` appeared (native-verification note,
 no proposed function/event names of its own — see log below).
 
+**SUPERSEDED BY THE FINAL RECONCILIATION PASS AT THE BOTTOM OF THIS FILE
+(api-contract-agent, 2026-08-23).** Every file in `phase2_notes/` has since
+been re-read against SPEC.md §11 in its current (post-revision) form. The
+"FINAL VALIDATION PASS" and "Collisions / duplication flagged" sections
+below were written against **stale/pre-reconciliation versions** of
+`scent_blood_tracking.md`, `water_gunpowder_tracking.md`, and
+`contraband_search_security_review.md` — all three have since been
+rewritten in place to track SPEC.md §11 (which itself was independently
+revised to absorb `contraband_search_contract.md`'s and
+`contraband_search_security_review.md`'s findings almost verbatim). Do not
+treat the "MISMATCH"/"OPEN" rows below as current status — jump to the
+final section for the up-to-date read. Left in place, not deleted, per
+this file's own established convention of showing corrections rather than
+silently rewriting history.
+
 ## Files seen so far / log
 
 - `water_gunpowder_tracking.md` (coder-frontend) — **written before SPEC.md
@@ -339,7 +354,7 @@ a currently-shipping contract violation.
 
 ## Collisions / duplication flagged
 
-### 1. OPEN — `contraband_search_security_review.md` (coder-security) proposes an event shape that CONTRADICTS SPEC.md §11.4's already-established contract for the same feature
+### 1. RESOLVED (see FINAL RECONCILIATION PASS at bottom) — `contraband_search_security_review.md` (coder-security) proposes an event shape that CONTRADICTS SPEC.md §11.4's already-established contract for the same feature
 
 **Severity: high — needs resolution before `contraband_search_contract.md` (coder-backend's contract doc, referenced but not yet written) is finalized.**
 
@@ -425,3 +440,176 @@ in client/radial.lua, and the K9-model-hash precompute pattern repeated in
 three files) — Phase 2 should not add a fourth/fifth divergent copy of the
 same shape of helper without at least flagging that as a possible shared
 utility candidate._
+
+---
+
+## FINAL RECONCILIATION PASS (api-contract-agent, 2026-08-23)
+
+**Trigger:** SPEC.md §11 has been revised several times since the "FINAL
+VALIDATION PASS" section above was written (broadcast-leak fix,
+cooldown-race fix, container-recursion requirement, entity-type check on
+`searchTarget`; vision access-gating explicitly resolved to
+`IsOwnModelK9()` only). This pass re-reads every file currently in
+`phase2_notes/` against §11's *current* text, file by file, treating §11 as
+the corrected authoritative contract. Cross-checked in parallel with
+`integration-verifier`'s pass over Phase 1's actual shipped `.lua` wiring
+(see `WATCHDOG_LOG.md`) — every Phase 1 global/event/pattern a Phase 2 note
+leans on (`HasK9Access`, `CanShowK9UI`, `IsOwnModelK9`, `relayBark`/
+`playBark`, `LeashPairs`, `BARK_COOLDOWN_MS`/`lastBarkAt`,
+`LEASH_REJECT_MESSAGES`, `playerDropped`, `onResourceStop`,
+`ForceDetachLeashForSource`) was confirmed to actually exist in the real
+`client/*.lua`/`server/*.lua` files by direct grep, not just assumed —
+**no Phase 2 note references a Phase 1 global that doesn't exist.**
+
+### Result: every previously-flagged mismatch is now resolved
+
+**1. `scent_blood_tracking.md` function names/callback shape — RESOLVED.**
+The file has been rewritten in place (its own header now reads
+"Status: SUPERSEDED-AND-REALIGNED... rewritten from scratch to track §11
+exactly rather than offer a competing design"). Current content:
+- Client globals: `StartScentTrack()` / `StartBloodTrack()` /
+  (`StartGunpowderTrack()`, out of this note's scope) — **exact match** to
+  §11.3's naming (`...Track`, not the earlier draft's `...Tracking`).
+- Server callback: cites the single parameterized
+  `qbx_k9unit:server:findTrackableSource(trackType)` (§11.4 item 1) —
+  **exact match**, no longer proposes the two separate
+  `findNearestScentSource`/`findNearestBloodSource` callbacks the earlier
+  draft had.
+- Adds `StopTracking()`/`IsTracking()` as a **new, non-conflicting**
+  proposal filling an open slot §11 never named — reasonable, no collision.
+
+**2. `water_gunpowder_tracking.md` file-split suggestion — RESOLVED.** Also
+rewritten in place ("v2 — rewritten against the now-landed detailed spec").
+Current content explicitly states both corrections from its own v1: water
+tracking is a cross-cutting trail modifier, not a fourth standalone type
+with its own file/command, and gunpowder is a third `findTrackableSource`
+trail type living in the shared `client/tracking.lua`/`server/tracking.lua`
+pair — **exact match** to §11.3's single-file-pair plan, no more
+split-file suggestion anywhere in the current text.
+
+**3. Contraband search event-shape conflict — RESOLVED, and unusually
+thoroughly.** `contraband_search_security_review.md` has been rewritten
+("Status: REVIEWING THE REAL CONTRACT... An earlier draft of this file
+(pre-dating discovery of §11)... is superseded") to review §11.4 item 2's
+actual single-`lib.callback` `searchTarget` shape directly and
+adversarially, rather than propose the competing two-`RegisterNetEvent`
+pair (`requestContrabandSearch`/`contrabandSearchResult`) the earlier draft
+had. It no longer contradicts §11.4's architecture at all — its findings
+are now gap analysis *on top of* that shape. Separately,
+`contraband_search_contract.md` (previously "referenced but never
+appeared") has landed with the real `overextended/ox_inventory` export
+verification.
+
+**Cross-checked line-by-line: SPEC.md §11.4 item 2's current text has
+absorbed essentially every finding from both documents, often near
+verbatim:**
+
+| Finding | Source | SPEC.md §11.4 item 2 status |
+|---|---|---|
+| Container recursion (bag-in-trunk defeats the scan) required, explicit max depth (e.g. 3) | `contraband_search_contract.md` §2 | **Adopted verbatim** — "recurse into any container slot... to an explicitly chosen max depth (e.g. 3)" |
+| In-flight mutex per source, set before the await, cleared on every exit path incl. errors | Both docs (contract §4A, security review §3) | **Adopted** — "a genuine TOCTOU class... enforces two independent cooldowns, both keyed by a timestamp written before the awaited ox_inventory call starts" |
+| Flat per-source cooldown, independent of the per-(source,target) one | security review §2 | **Adopted verbatim** — "a new flat per-source cooldown (same shape as... `BARK_COOLDOWN_MS`/`lastBarkAt`)" |
+| Cooldown timestamp written before the awaited call, not after (TOCTOU) | security review §3 | **Adopted** — explicit "corrected per coder-security's review" callout |
+| Entity-type cross-check: claimed `targetType` must match `GetEntityType`/`IsPedAPlayer` + connected-player check | security review §4 | **Adopted** — "cross-checks the resolved entity's actual type against the client-claimed `targetType`... must resolve to `IsPedAPlayer` on a currently-connected player's ped... rejected with `reason = 'invalid_target'`" |
+| `search_failed` must be a distinct outcome from `contrabandFound = false` | contract §3 step 10 | **Adopted verbatim** as one of the "four more must-handle items" |
+| Explicit baseline "clean" tier, option (a) (`{minWeight=0, alert='clean'}`) | contract §5, offered as a choice | **Adopted, and the choice is now made** — SPEC explicitly specifies option (a)'s exact shape, no longer an open pick for coder-architect |
+| `totalWeight`/`contrabandFound` never broadcast, requester-only | security review §1 (second half) | **Adopted, and gone further** — "never broadcast... only `alertTier` is ever sent to anyone else" (stronger than the review's ask, which only demanded `totalWeight` be excluded) |
+| Per-target-only backstop cooldown (multi-K9 tag-team) | security review §5 | **Explicitly left open**, matching the review's own "flagging so it's a decision, not a default" framing — not a gap, a deliberately deferred call, logged in §9 |
+
+**One residual precision gap, not a contradiction — worth one line in
+whoever writes `server/search.lua`'s header:** the security review's
+Finding 1 had *two* parts — (a) the broadcast must not leak `totalWeight`,
+and (b) the broadcast must be distance-filtered because a raw `-1`
+broadcast plus the target's `netId` lets anyone on the map resolve which
+vehicle/person was searched. SPEC.md's fix for (a) is unambiguous ("only
+`alertTier` is ever sent to anyone else"). For (b), §11.3/§11.5 still say
+the broadcast "mirrors how `relayBark` already broadcasts" (`relayBark`'s
+own shape is `TriggerClientEvent(event, -1, netId, barkType)`, where
+`netId` is the *sender's own* ped, never a target's). Read together, the
+coherent implication is that the contraband-alert broadcast should carry
+**the searching K9's own netId** (safe — same trust level as bark) **plus
+`alertTier`**, never the target's netId or coords — which would fully
+close finding 1(b) without needing an explicit server-side distance
+filter, since no target-identifying data would ever be broadcast at all.
+This reading is strongly supported by the text but not spelled out in so
+many words anywhere in §11. **Recommend `server/search.lua`'s header
+comment state explicitly "broadcast payload = (own netId, alertTier),
+never the target's netId/coords"** so an implementer reaching for "just
+pass the whole result plus targetNetId for convenience" doesn't
+accidentally reopen the exact leak §11.4 item 2 was revised to close. Not
+blocking — flagging for whoever writes the file, and for coder-security to
+confirm on first review of that file.
+
+**Minor, non-blocking, not adopted into SPEC.md (fine either way):**
+`contraband_search_contract.md` §4B's suggestion to key the cooldown table
+by resolved identity (plate/citizenid) rather than raw `targetNetId` was
+not picked up — §11.4 item 2 still reads "per `(source, targetNetId)` pair
+(as originally specified)." The note itself frames this as "a refinement...
+not a contradiction... the *behavior* is identical, only the table key is
+more precise" — an implementer nicety, not a contract mismatch, left to
+coder-backend's discretion per the note's own framing.
+
+**4. Vision access-gating fork — RESOLVED on both sides.** SPEC.md §11.5
+now states explicitly: "Resolved during Phase 2 review (api-contract-agent
+flagged a design note had drifted onto the other answer — settling it here
+so implementation has one unambiguous source of truth): thermal/night
+vision gates on `IsOwnModelK9()` only, **not** `CanShowK9UI()`." And
+`thermal_night_vision.md` has been updated to match: "Correction to this
+note's own earlier draft: the first pass of this note recommended the
+*opposite*... Deferring to §11.5 as the settled answer." Both documents now
+agree on `IsOwnModelK9()` only, applied identically to Thermal and Night.
+**No remaining fork.**
+
+**5. Door-scratch broadcast recipient scope — RESOLVED (settled as global,
+not targeted).** `door_interaction.md` previously flagged this as needing
+coder-backend's sign-off (leash-partner-only vs. broader dispatch). Its
+current text accepts §11.3/§11.4 item 5 as settling it: "it's a plain
+server-wide broadcast, structurally identical to `relayBark`... despite the
+feature's own name." Consistent with SPEC.md §11.4 item 5's unchanged
+"structurally identical to relayBark" wording. This one *is* a plain global
+broadcast with no fix analogous to the contraband alert's, but that's
+correct and intentional — the payload is only a door's `netId` (no
+person/vehicle/contraband identity at stake), the same low-stakes category
+`relayBark` itself is in, not the search feature's category.
+
+### Everything else — no new drift found on this pass
+
+- `door_interaction.md` / `door_interaction_natives.md`: file placement,
+  `relayDoorScratch(doorNetId)` name, nudge-open's client-only/no-event
+  scoping, and the corrected door-system native names all still match
+  §11.3/§11.4/§11.5/§11.6 exactly. The one open item (exact push-force
+  native, model-hash list, scratch scenario name) is implementation-detail,
+  not contract-shape, and both notes already flag it as such.
+- `thermal_night_vision_natives.md`, `water_gunpowder_natives.md`,
+  `scent_blood_natives.md`: pure native-verification notes, propose no
+  contract names, nothing to reconcile — all three independently confirm
+  `SetSeethrough`/`SetNightvision` (three-way agreement, settled) and the
+  `IsPedShooting`/`CEventNetworkEntityDamage` relay approach behind
+  `findTrackableSource`'s gunpowder/blood sources.
+- File/module plan (§11.3): every new-file assignment
+  (`client/tracking.lua`, `client/search.lua`, `client/vision.lua`,
+  `server/tracking.lua`, `server/search.lua`) and every extend-in-place
+  assignment (`client/movement.lua` for doors, `server/main.lua` for
+  `relayDoorScratch` only) is now consistently reflected across every
+  design note that touches it. No two notes claim the same file for
+  different purposes, no note contradicts §11.3's split.
+- Naming convention (PascalCase verb-first globals,
+  `qbx_k9unit:server:<verbNoun>`/`qbx_k9unit:client:<verbNoun>` events) is
+  followed consistently by every reconciled note.
+
+### Outstanding — needs a design-note correction before implementation starts
+
+**None.** Every mismatch this tracking doc previously flagged as open has
+been resolved either by SPEC.md §11 being revised to match the notes'
+findings, or by the notes being rewritten to match SPEC.md §11. The one
+residual item (broadcast payload precision, above) is a documentation
+clarity gap worth closing in `server/search.lua`'s header comment when
+written, not a design-note correction — no `.md` file in `phase2_notes/`
+currently asserts anything that contradicts SPEC.md §11's current text.
+
+Standing, not-blocking items already tracked elsewhere and not duplicated
+here: §9 items 10-14 (relay-code effort, ox_inventory export names beyond
+what `contraband_search_contract.md` already confirmed, tracking abuse
+limits, `Config.SearchContrabandItems` placeholder values, door-lock
+integration), the per-target-only search cooldown decision (§11.4 item 2),
+and the citizenid-vs-netId cooldown-key nicety above.

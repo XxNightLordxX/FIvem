@@ -221,11 +221,17 @@ end
 --- CONTRACT above for every call site.
 --- @param citizenid string
 --- @param jobName string
+--- @return boolean active — the freshly-cached value, so callers (e.g.
+--- server/main.lua's onResourceStart backfill, which has no access to the
+--- local Certifications table below) don't need their own accessor just
+--- to resync a dependent value like the k9certified metadata mirror.
 function RefreshCertificationCache(citizenid, jobName)
     local activeId = MySQL.scalar.await('SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
         citizenid, jobName,
     })
-    Certifications[citizenid] = { active = activeId ~= nil, job = jobName }
+    local active = activeId ~= nil
+    Certifications[citizenid] = { active = active, job = jobName }
+    return active
 end
 
 --- SPEC.md §4.2 certifier eligibility check (granter side only — does not
@@ -301,6 +307,35 @@ local function IsDuplicateKeyError(err)
     return false
 end
 
+-- SECURITY FIX (coder-security, final pass): grant/revoke are the single
+-- most sensitive server-authoritative actions this resource exposes (they
+-- ARE the permission system, per this file's header) — yet, unlike
+-- server/main.lua's bark relay (BARK_COOLDOWN_MS) and leash-request
+-- (LEASH_REQUEST_COOLDOWN_MS), nothing rate-limited them at all. An already
+-- eligible certifier-grade officer (or one who self-certifies, per
+-- Config.AllowSelfCertification) could otherwise script a tight
+-- grant/revoke toggle loop against a nearby target — each iteration costs
+-- at least one DB round trip, and on a real state flip, an INSERT/UPDATE
+-- plus notifications to two players plus a leash force-detach check. Mirror
+-- the exact same per-source cooldown pattern already established elsewhere
+-- in this resource. Keyed by the CERTIFIER's own source (granterSrc), not
+-- the target, so it throttles how often a given officer can issue ANY
+-- certify/revoke action (online, offline, or self), independent of which
+-- target/department is named.
+local CERTIFY_ACTION_COOLDOWN_MS = 1500
+local lastCertifyActionAt = {}
+
+--- @param granterSrc number
+--- @return boolean onCooldown
+local function IsCertifyActionOnCooldown(granterSrc)
+    local now = GetGameTimer()
+    if lastCertifyActionAt[granterSrc] and (now - lastCertifyActionAt[granterSrc]) < CERTIFY_ACTION_COOLDOWN_MS then
+        return true
+    end
+    lastCertifyActionAt[granterSrc] = now
+    return false
+end
+
 --- SPEC.md §4.2/§4.3 grant flow. Called by both event 2 and command 6.
 --- @param granterSrc number
 --- @param targetServerId number
@@ -313,6 +348,10 @@ local function GrantCertification(granterSrc, targetServerId)
     if not IsEligibleCertifier(granterSrc) then
         NotifyPlayer(granterSrc, 'You are not authorized to certify K9 handlers.', 'error')
         return
+    end
+
+    if IsCertifyActionOnCooldown(granterSrc) then
+        return -- silent no-op: rate-limited, not an error worth notifying about (matches bark/leash-request convention)
     end
 
     -- §4.1: self-certification only allowed if the flag is enabled.
@@ -429,6 +468,10 @@ local function RevokeCertification(granterSrc, targetServerId)
         return
     end
 
+    if IsCertifyActionOnCooldown(granterSrc) then
+        return -- silent no-op: rate-limited, not an error worth notifying about (matches bark/leash-request convention)
+    end
+
     local isSelfCert = granterSrc == targetServerId
     if isSelfCert and not Config.AllowSelfCertification then
         NotifyPlayer(granterSrc, 'Self-certification is disabled on this server.', 'error')
@@ -543,6 +586,10 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
     if not IsEligibleCertifier(granterSrc) then
         NotifyPlayer(granterSrc, 'You are not authorized to revoke K9 certifications.', 'error')
         return
+    end
+
+    if IsCertifyActionOnCooldown(granterSrc) then
+        return -- silent no-op: rate-limited, not an error worth notifying about (matches bark/leash-request convention)
     end
 
     if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
@@ -823,4 +870,11 @@ AddEventHandler('playerDropped', function(_reason)
     if citizenid then
         Certifications[citizenid] = nil
     end
+
+    -- Same unbounded-growth reasoning as Certifications above, but keyed by
+    -- server id (src) rather than citizenid since CERTIFY_ACTION_COOLDOWN_MS
+    -- throttles the CERTIFIER's connection, not any particular citizenid —
+    -- drop it here rather than letting it accumulate one entry per
+    -- historical source id for the life of the server process.
+    lastCertifyActionAt[src] = nil
 end)

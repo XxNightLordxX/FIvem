@@ -331,8 +331,8 @@ item.
 ### `Config.LeashMaxDistance`
 
 `number` (meters), default `8.0`. Read as a "target/working leash range,"
-not a literal detach threshold — despite its in-code comment, it does
-**three** distinct jobs, none of which is "detach exactly at this
+not a literal detach threshold — as its in-code comment now spells out, it
+does **three** distinct jobs, none of which is "detach exactly at this
 distance":
 
 1. **Initiate range** — the maximum distance between two players allowed

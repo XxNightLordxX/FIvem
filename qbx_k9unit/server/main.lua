@@ -228,6 +228,20 @@ end
 -- until their next job change or reconnect — a certified officer could be
 -- silently locked out of K9 features for the remainder of their session.
 -- GetPlayers() returns connected player ids as strings; tonumber'd below.
+--
+-- Regression-test fix (found by regression-tester, cross-referencing this
+-- loop against the metadata.k9certified sync points added to
+-- certifications.lua's GrantCertification/RevokeCertification/
+-- RevokeCertificationOffline/OnJobUpdate/PlayerLoaded after this loop was
+-- first written): this backfill correctly repaired the real access cache
+-- but never resynced the read-only k9certified HUD mirror, so a mirror
+-- that drifted before a restart (e.g. an out-of-band DB edit, or a crash
+-- between a grant/revoke's DB write and its paired SetMetaData call)
+-- would keep its stale value indefinitely for an already-connected player
+-- — not an auth bypass (HasK9Access never reads metadata), but a real,
+-- undocumented HUD-accuracy gap. Now resyncs the mirror the same way
+-- PlayerLoaded's own backfill does, from the value RefreshCertificationCache
+-- just determined.
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
@@ -236,7 +250,29 @@ AddEventHandler('onResourceStart', function(resourceName)
         if src then
             local Player = exports.qbx_core:GetPlayer(src)
             if Player and Player.PlayerData and Player.PlayerData.job then
-                RefreshCertificationCache(Player.PlayerData.citizenid, Player.PlayerData.job.name)
+                local citizenid = Player.PlayerData.citizenid
+                -- SECURITY/CORRECTNESS FIX (coder-security, final pass): this
+                -- used to index `Certifications[citizenid]` directly, but
+                -- `Certifications` is a `local` table scoped to
+                -- certifications.lua's own chunk — it is NOT a shared global
+                -- and was never visible here. That indexed a nil global,
+                -- throwing an uncaught Lua error on the very first
+                -- qualifying player, which aborted this ENTIRE for loop
+                -- (FXServer's event dispatch pcalls the whole handler
+                -- invocation, not each iteration) — silently breaking not
+                -- just the new k9certified mirror resync but the loop's
+                -- original, more important purpose: re-warming
+                -- RefreshCertificationCache's real access cache for every
+                -- already-connected player after a resource restart. That
+                -- reintroduced exactly the "certified officer silently
+                -- locked out of K9 features for the remainder of their
+                -- session" gap this handler exists to prevent, for every
+                -- player after the first one processed. Use
+                -- RefreshCertificationCache's own return value (the `active`
+                -- boolean it already computed) instead of reaching into a
+                -- table this file was never able to see.
+                local isActive = RefreshCertificationCache(citizenid, Player.PlayerData.job.name)
+                Player.Functions.SetMetaData('k9certified', isActive)
             end
         end
     end
@@ -425,17 +461,44 @@ RegisterNetEvent('qbx_k9unit:server:respondLeashAttach', function(fromServerId, 
 
     if type(fromServerId) ~= 'number' then return end
 
+    -- SECURITY FIX (coder-security, final pass): the decline branch below
+    -- used to fire NotifyPlayer(fromServerId, ...) — an entirely
+    -- client-supplied, unvalidated number — BEFORE ever checking that a
+    -- real pending request from that id existed, and unconditionally
+    -- cleared PendingLeashRequests[src] regardless of whether fromServerId
+    -- matched the actual pending request's initiator. That let a modified
+    -- client call this event with an arbitrary/every online server id and
+    -- accepted = false, with NO rate limit anywhere on this path, to spam
+    -- every other connected player with a fake "Your leash request was
+    -- declined" notification indefinitely — and, as a side effect, silently
+    -- swallow a genuine pending request aimed at `src` by citing a
+    -- different id, so the real requester never learns their request was
+    -- consumed. Validate the pending request FIRST (same match+TTL check
+    -- previously only run on the accept path) and only notify/consume once
+    -- confirmed genuine; an invalid/spoofed/expired claim now only ever
+    -- results in an error notice to the caller themselves (self-limiting —
+    -- rate abuse only degrades their own client, not anyone else's).
     local pending = PendingLeashRequests[src]
-    PendingLeashRequests[src] = nil -- consumed either way, accept or decline
+    local verifiedMatch = pending ~= nil and pending.from == fromServerId
 
-    if not accepted then
-        NotifyPlayer(fromServerId, 'Your leash request was declined.', 'inform')
+    if not verifiedMatch or GetGameTimer() > pending.expiresAt then
+        PendingLeashRequests[src] = nil -- drop a stale/expired entry, if any, so it doesn't linger
+        NotifyPlayer(src, 'That leash request is no longer valid.', 'error')
+        -- Only echo the "no longer valid" notice back to fromServerId when
+        -- it's a VERIFIED match to a real (if now-expired) pending request
+        -- from that exact id — never for an unmatched/spoofed claim, or
+        -- this reintroduces the same arbitrary-target notify the fix above
+        -- closes.
+        if verifiedMatch then
+            NotifyPlayer(fromServerId, 'Your leash request is no longer valid.', 'error')
+        end
         return
     end
 
-    if not pending or pending.from ~= fromServerId or GetGameTimer() > pending.expiresAt then
-        NotifyPlayer(src, 'That leash request is no longer valid.', 'error')
-        NotifyPlayer(fromServerId, 'Your leash request is no longer valid.', 'error')
+    PendingLeashRequests[src] = nil -- consumed either way, accept or decline, now that it's confirmed genuine
+
+    if not accepted then
+        NotifyPlayer(fromServerId, 'Your leash request was declined.', 'inform')
         return
     end
 

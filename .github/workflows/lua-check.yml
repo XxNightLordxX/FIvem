@@ -1,0 +1,37 @@
+name: Lua Check
+
+on:
+  push:
+    paths:
+      - 'qbx_k9unit/**'
+      - '.github/workflows/lua-check.yml'
+  pull_request:
+    paths:
+      - 'qbx_k9unit/**'
+      - '.github/workflows/lua-check.yml'
+
+jobs:
+  luac-syntax:
+    name: luac5.4 syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.4 (provides luac5.4)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: luac5.4 -p on every .lua file under qbx_k9unit/
+        run: |
+          set -uo pipefail
+          status=0
+          while IFS= read -r -d '' file; do
+            echo "Checking: $file"
+            if ! luac5.4 -p "$file"; then
+              echo "::error file=$file::luac5.4 -p reported a syntax error in this file"
+              status=1
+            fi
+          done < <(find qbx_k9unit -type f -name '*.lua' -print0)
+          exit "$status"
