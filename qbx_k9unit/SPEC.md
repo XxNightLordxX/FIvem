@@ -553,8 +553,17 @@ check against whenever that phase lands, but they are not blocking Phase 1.
 - [ ] A radial menu (ox_lib `lib.addRadialItem`, grouped under a "K9 Unit"
       submenu) exposes the K9 player's own actions: Bark, Sit (self
       animation), Attach/Detach Leash (with a nearby partnered officer),
-      Enter/Exit Vehicle — each item only appears if its owning
-      `Config.Features` flag is `true` AND the access check above passes.
+      Enter/Exit Vehicle. **Implementation note, resolved during review**:
+      each item's *registration* is gated on its owning `Config.Features`
+      flag (a disabled feature's item is never added to the menu at all),
+      but the *access check* (`CanShowK9UI()`) is re-verified independently
+      at `onSelect` time for each item rather than hiding/showing the item
+      live as access changes — chosen to avoid submenu-visibility polling
+      chatter and reliance on unverified `lib.addRadialItem`/
+      `removeRadialItem` ordering semantics. Functionally equivalent
+      (nothing usable without access, server independently re-verifies
+      regardless) but visibly different from a literal "only appears if
+      access passes" reading — accepted as the shipped behavior.
 - [ ] Leash mode is a **consensual** two-player interaction with a **real
       movement restriction** while active (confirmed by the requester,
       resolving §9 item 3b — no longer an open question):
