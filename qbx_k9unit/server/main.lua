@@ -548,6 +548,7 @@ AddEventHandler('playerDropped', function(reason)
 
     PendingLeashRequests[src] = nil -- target-side: a request aimed AT the disconnecting player
     lastBarkAt[src] = nil -- drop the bark-cooldown entry too, don't leak one per session
+    lastLeashRequestAt[src] = nil -- drop the leash-request cooldown entry too, don't leak one per session
 
     -- Initiator-side cleanup (coder-security/QA finding): PendingLeashRequests
     -- is keyed by TARGET server id, so the line above only ever clears an
