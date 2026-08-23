@@ -538,13 +538,30 @@ check against whenever that phase lands, but they are not blocking Phase 1.
       animation), Attach/Detach Leash (with a nearby partnered officer),
       Enter/Exit Vehicle — each item only appears if its owning
       `Config.Features` flag is `true` AND the access check above passes.
-- [ ] Leash mode is a two-player interaction: either the K9 or a nearby
-      officer initiates "Attach Leash" (ox_target) on the other; once
-      attached, if the pair exceeds `Config.LeashMaxDistance` (default 8m)
-      apart, the leash automatically detaches with a notification to both
-      (Phase 1 does not forcibly move either player's character — that's a
-      heavier-handed mechanic flagged as an open question in §9 if a hard
-      pull/restrict behavior is actually wanted instead).
+- [ ] Leash mode is a **consensual** two-player interaction with a **real
+      movement restriction** while active (confirmed by the requester,
+      resolving §9 item 3b — no longer an open question):
+      - **Attach requires consent.** Either the K9 or a nearby officer
+        initiates "Attach Leash" (ox_target) on the other; the *target* of
+        that request gets an accept/decline prompt (ox_lib alert/context),
+        and the leash only activates on acceptance. Nobody can be leashed
+        without agreeing to it first.
+      - **While attached, movement is actually restricted**, not just
+        monitored: the leashed player cannot move more than
+        `Config.LeashMaxDistance` (default 8m) from the handler — enforced
+        by continuously clamping/pulling the leashed player's position back
+        toward the handler as they approach that limit (a soft elastic
+        constraint), not merely a notify-then-auto-detach.
+      - **Either party can detach at will, with no consent required to
+        detach.** A "Detach Leash" action is available to both the K9 and
+        the handler at all times while leashed — consent gates getting
+        leashed, never getting free of it. This is a hard requirement: a
+        mechanic that could trap a player leashed with no self-service way
+        out is not acceptable.
+      - Exceeding `Config.LeashMaxDistance` despite the pull-back (e.g. one
+        side disconnects, teleports, or desyncs) is a safety-valve
+        auto-detach with a notification to both, distinct from the normal
+        in-range pull behavior above.
 - [ ] The K9 player can enter/exit any vehicle whose model is in
       `Config.K9Vehicles` via an ox_target option on the vehicle within
       `Config.VehicleInteractMeters` (default 3m), self-administered (they
@@ -763,18 +780,16 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
    **Resolved by explicit correction** — no: leaving the department
    automatically revokes the cert (§4.4); a fresh grant is required to
    return, even if they rejoin the same department later.
-3b. **(New) Two-player leash/command semantics (§6.1, §8).** With the
-   corrected persistent-player model, "Sit/Stay/Heel/Follow/Recall" as
-   *handler-issued commands to the dog* no longer make sense — the K9 player
-   controls themselves. This spec's working interpretation: leash is a
-   mutual attach/detach interaction between the K9 and a partnered officer
-   that auto-detaches past `Config.LeashMaxDistance` without forcibly moving
-   either character, and "Sit" becomes the K9 player's own emote. **This is
-   an interpretation, not a confirmed requirement** — if the actual intent
-   is closer to a hard physical restraint (like a cuffing/escort mechanic
-   that does restrict the leashed player's movement), that's a materially
-   different and more invasive implementation and should be confirmed before
-   Phase 1's leash feature is built, not assumed silently.
+3b. ~~Two-player leash/command semantics (§6.1, §8).~~ **Resolved by
+   explicit confirmation** — leash attach requires consent from whoever is
+   being leashed (an accept/decline prompt, never forced), but once
+   attached it's a **real movement restriction** (the leashed player is
+   actively clamped/pulled back within `Config.LeashMaxDistance`, not just
+   monitored-and-notified), and **either party can detach at will with no
+   consent needed to do so** — consent gates getting leashed, never getting
+   free of it. "Sit" and other self-actions remain the K9 player's own
+   emotes (unaffected by this resolution). See §6.1 for the full corrected
+   acceptance criteria.
 4. **Contraband alert weight thresholds and XP values (`Config.XPTiers`,
    `Config.ContrabandAlertTiers`).** Placeholder numbers only — needs
    economy-balance-agent review against real ox_inventory item weights and

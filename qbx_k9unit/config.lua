@@ -113,19 +113,16 @@ Config.VehicleInteractMeters = 3.0
 -- ======================================================================
 -- LEASH — Phase 1
 -- ======================================================================
-Config.LeashMaxDistance = 8.0   -- meters before auto-recall-to-heel triggers
+Config.LeashMaxDistance = 8.0   -- meters before auto-detach triggers (§6.1 — two-player leash, not a recall; see server/main.lua and client/movement.lua headers for the corrected model)
 
 -- ======================================================================
--- HANDLER-K9 REGISTRY — Phase 1 scaffolding addition, NOT in SPEC.md §5.
---
--- Added by coder-architect to satisfy the event/callback contract's
--- "player disconnect" clause (see server/main.lua): on `playerDropped`,
--- the server should not instantly wipe a handler's K9 registry entry
--- (netId -> citizenid link), since a quick reconnect should be able to
--- reclaim the same K9 rather than being forced to spawn a new one. This
--- is the grace window before that registry entry is cleared.
+-- NOTE (coder-architect, Phase 1 rewrite): Config.K9DespawnGraceSeconds
+-- was added in the first scaffolding pass for a handler->K9 netId
+-- registry that no longer exists — SPEC.md's post-draft correction
+-- established the K9 is a player's own persistent character (§1, §4.5),
+-- with no spawn/despawn/registry concept at all. Removed; do not re-add
+-- without a new documented reason, since nothing currently consumes it.
 -- ======================================================================
-Config.K9DespawnGraceSeconds = 60
 
 -- ======================================================================
 -- XP TIERS — Phase 4, placeholder numbers pending economy-balance-agent review

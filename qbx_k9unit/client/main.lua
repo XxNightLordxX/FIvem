@@ -1,167 +1,141 @@
 --[[
     qbx_k9unit/client/main.lua
 
-    Phase 1 scaffold only (coder-architect). Owns the ped-selection UI,
-    the actual spawn/despawn of the K9 entity, and the single source of
-    truth for "which K9 is this client currently controlling" — every
-    other client file reads/writes that state through the accessor
-    functions below, never a raw shared variable.
+    Phase 1 scaffold only (coder-architect). REWRITTEN after SPEC.md's
+    post-draft correction. Owns the two building-block checks every other
+    client file gates on — "is my own character a K9 model" (display-only,
+    client-side) and "does the server say I have K9 access" (the real
+    security boundary) — plus the combinator both radial.lua and
+    vehicle.lua should call before showing/allowing anything. Also owns
+    the bark-playback receiver, since it's about the K9 ped/entity in
+    general rather than any one specific subsystem (movement/radial/vehicle).
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT (full copy — identical in every stub file so
-    coder-backend and coder-frontend can work in parallel without live
-    coordination):
+    EVENT/CALLBACK CONTRACT — Phase 1 (full copy; see
+    server/certifications.lua for the most detailed version of this same
+    block):
 
     Callbacks (ox_lib lib.callback):
     1. 'qbx_k9unit:server:hasK9Access' () -> boolean [server/certifications.lua]
-    2. 'qbx_k9unit:server:requestSpawnK9' (pedKey: string) -> { ok: bool, reason?: string }
-       [server/main.lua] Re-check hasK9Access logic AND that pedKey exists
-       in Config.Peds. Server does NOT spawn anything — only authorizes
-       THIS FILE to create+network the ped locally.
+       job.name ∈ Config.Departments AND active cert for that job (or
+       autoAccessGrade bypass). Does NOT check ped model (§4.1/§4.5) —
+       model is a grant-time-only check server-side, and a display-only
+       self-check client-side (see IsOwnModelK9() below).
 
     Server events (RegisterNetEvent, client->server):
-    3. 'qbx_k9unit:server:registerK9' (netId: number) [server/main.lua] —
-       THIS FILE triggers it after locally creating+networking the ped.
-    4. 'qbx_k9unit:server:unregisterK9' () [server/main.lua] — THIS FILE
-       triggers it when voluntarily dismissing the current K9.
-    5. 'qbx_k9unit:server:certifyHandler' (targetServerId: number) [server/certifications.lua]
-    6. 'qbx_k9unit:server:revokeHandler' (targetServerId: number) [server/certifications.lua]
-    7. 'qbx_k9unit:server:relayBark' (netId: number, barkType: string)
-       [client/radial.lua triggers it; server/main.lua handles it]
+    2. 'qbx_k9unit:server:certifyHandler' (targetServerId: number) [server/certifications.lua]
+    3. 'qbx_k9unit:server:revokeHandler' (targetServerId: number) [server/certifications.lua]
+    4. 'qbx_k9unit:server:relayBark' (barkType: string) [server/main.lua]
+       Triggered from client/radial.lua's Bark item — no netId argument,
+       the server resolves the sender's own ped.
 
     Client events (RegisterNetEvent, server->client):
-    8. 'qbx_k9unit:client:despawnK9' (netId: number) [THIS FILE]
-    9. 'qbx_k9unit:client:playBark' (netId: number, barkType: string) [THIS FILE]
+    5. 'qbx_k9unit:client:playBark' (netId: number, barkType: string) [THIS FILE]
 
-    Commands (server-registered, call the same internal function as events 5/6):
-    10. '/k9certify [targetServerId]' [server/certifications.lua]
-    11. '/k9decertify [targetServerId]' [server/certifications.lua]
+    Commands: both live in server/certifications.lua.
 
-    Player disconnect: handled server-side in server/main.lua; THIS FILE
-    only needs to react to the resulting 'qbx_k9unit:client:despawnK9'
-    broadcast like any other despawn trigger.
+    REMOVED from the original (pre-correction) scaffold — do not
+    resurrect: ped-selection context menu, SpawnK9/DespawnK9,
+    GetCurrentK9/SetCurrentK9/ClearCurrentK9 "current K9" state,
+    'qbx_k9unit:server:requestSpawnK9' callback,
+    'qbx_k9unit:server:registerK9'/'unregisterK9' events,
+    'qbx_k9unit:client:despawnK9' event. There is no ped to select, spawn,
+    register, or despawn — the K9 player plays their own persistent
+    character at all times (SPEC.md §1, §2).
     ======================================================================
 
     FILE-TO-FILE CONTRACT (client side):
-    - THIS FILE exposes resource-global (no `local`) accessor functions
-      for the single active-K9 state, used by client/movement.lua,
-      client/radial.lua, and client/vehicle.lua:
-        GetCurrentK9() -> { ped: entity, netId: number, pedKey: string, inVehicle: boolean }|nil
-        SetCurrentK9(data: table)
-        ClearCurrentK9()
-      Do NOT introduce a second/parallel "which K9 is active" variable in
-      any other file — always go through these three functions, or the
-      "only one active K9 per handler" invariant (SPEC.md §6.1 bullet 3)
-      becomes impossible to enforce consistently across files.
-    - client/vehicle.lua sets/reads `inVehicle` on the table returned by
-      GetCurrentK9() to know whether to render/freeze the ped.
+    - THIS FILE exposes three resource-global (no `local`) functions,
+      used by client/movement.lua, client/radial.lua, and client/vehicle.lua:
+        IsOwnModelK9() -> boolean
+            Pure local check (GetEntityModel(PlayerPedId()) against
+            Config.Peds) — display-only, per §4.5, never treat this as a
+            security boundary.
+        HasK9Access() -> boolean
+            Awaits the 'qbx_k9unit:server:hasK9Access' callback for the
+            LOCAL player. This is a real network round-trip; per SPEC.md
+            §4.1 ("checked... on every access point... not just once") it
+            must be re-awaited at each point of use, not cached forever —
+            but DO cache it briefly (a TODO below) so a hot call site like
+            an ox_target `canInteract` predicate (which can run many times
+            a second while hovering) doesn't flood the server.
+        CanShowK9UI() -> boolean
+            Combinator: IsOwnModelK9() and HasK9Access(). THIS is the
+            function radial.lua/vehicle.lua/movement.lua should actually
+            call for their gating decisions — don't call the other two
+            directly from other files, so the "how do we combine these"
+            policy lives in exactly one place.
+      NOTE: server/certifications.lua also exposes a function named
+      `HasK9Access(source)`, on the SERVER side. These are different Lua
+      VMs (client vs. server) so there's no actual name collision — the
+      shared name is intentional, for readability (same concept, mirrored
+      API), not a shared symbol.
 
-    OPEN QUESTION flagged for coder-frontend (not decided here): SPEC.md's
-    Phase 1 radial item list (§6.1, §8 step 8) is Leash/Unleash, Sit/Stay,
-    Heel/Follow, Recall, Load/Release Vehicle, Bark — there is no explicit
-    "dismiss/despawn K9" item. The only documented despawn triggers are (a)
-    selecting a NEW ped from the roster (which despawns the old one first,
-    §6.1 bullet 3) and (b) the forced server-driven despawn event. Decide
-    whether Phase 1 needs an explicit "Dismiss K9" action of its own, or
-    whether re-opening ped selection and picking any ped (even the same
-    one) is an acceptable stand-in for now.
+    OPEN QUESTION flagged for coder-frontend (not decided here): does the
+    first/third-person eye-height camera toggle (SPEC.md §6.1 bullet 2)
+    and native run/jump/crouch (bullet 3) need to be gated by CanShowK9UI()
+    at all, or are they baseline behavior available to anyone playing a
+    K9-model character regardless of job/cert (the game already gives any
+    ped model its native locomotion for free; gating a QoL camera toggle
+    behind certification arguably adds friction without protecting
+    anything, since the player is visibly a dog either way)? This
+    scaffold's lean: do NOT gate camera/locomotion behind CanShowK9UI(),
+    only gate the radial menu (leash/vehicle/bark, which are the actual
+    granted capabilities) — but this is a judgment call, not a spec
+    mandate; flag disagreement rather than silently building it the other
+    way.
 ]]
 
---- Single source of truth for the locally controlled K9, or nil if none.
---- @type { ped: number, netId: number, pedKey: string, inVehicle: boolean }|nil
-local currentK9 = nil
-
-function GetCurrentK9()
-    return currentK9
+--- Pure client-side, display-only check: is the local player's OWN
+--- character currently a recognized K9 model? Never used for security —
+--- see SPEC.md §4.5 ("Convenience (client)" bullet).
+--- TODO(coder-frontend): build a hash set from Config.Peds once (mirror
+--- server/certifications.lua's K9ModelHashes approach so both sides stay
+--- generic over the config, no hardcoded model name anywhere — SPEC.md §3
+--- acceptance bullet 3), then compare GetEntityModel(PlayerPedId()).
+--- @return boolean
+function IsOwnModelK9()
+    return false
 end
 
-function SetCurrentK9(data)
-    currentK9 = data
+-- TODO(coder-frontend): lightweight cache for HasK9Access() below — e.g.
+-- a module-local `{ value: boolean, checkedAt: number }` with a ~1000ms
+-- TTL (GetGameTimer()-based), so a hot call site (ox_target canInteract
+-- predicates in client/vehicle.lua and client/movement.lua's leash
+-- option, in particular) doesn't re-await the server callback on every
+-- hover frame. Keep the TTL short enough that "checked... not just once"
+-- (SPEC.md §4.1) still holds in spirit — this is a debounce, not a
+-- permanent cache.
+
+--- Awaits the server's authoritative access check for the LOCAL player.
+--- @return boolean
+function HasK9Access()
+    -- TODO(coder-frontend): return lib.callback.await('qbx_k9unit:server:hasK9Access', false)
+    -- (through the TTL cache described above once it exists).
+    return false
 end
 
-function ClearCurrentK9()
-    currentK9 = nil
+--- Combinator every other client file should call for K9 UI/feature
+--- gating decisions. See FILE-TO-FILE CONTRACT above.
+--- @return boolean
+function CanShowK9UI()
+    return IsOwnModelK9() and HasK9Access()
 end
-
---- Opens the ox_lib context menu listing every Config.Peds entry, gated by
---- the server-authoritative access check.
---- TODO(coder-frontend): SPEC.md §6.1 bullet 1, §8 step 4.
---   1. local hasAccess = lib.callback.await('qbx_k9unit:server:hasK9Access', false)
---      — if false, lib.notify(...) and return.
---   2. Build an ox_lib `lib.registerContext` menu with one option per
---      Config.Peds entry (model + label), `onSelect` calling SpawnK9(model).
---      No hardcoded model name anywhere here — iterate Config.Peds
---      generically (SPEC.md §3 acceptance bullet 3).
---   3. lib.showContext with that menu's id.
---   OPEN QUESTION (not decided here, coder-frontend's call): what actually
---   triggers OpenK9PedSelection() in Phase 1 — a command, a keybind, an
---   ox_target option on self, an item? SPEC.md doesn't pin this down.
---   Pick one, register it in THIS FILE (or a dedicated place), and note
---   the choice here in a follow-up comment so it isn't re-litigated later.
-local function OpenK9PedSelection()
-end
-
---- Requests server authorization, then locally creates+networks the ped.
---- @param pedKey string  -- must be one of Config.Peds[i].model
---- TODO(coder-frontend): SPEC.md §6.1 bullets 2-3, §8 step 5.
---   1. local result = lib.callback.await('qbx_k9unit:server:requestSpawnK9', false, pedKey)
---      if not result.ok then lib.notify(...) return end
---   2. If GetCurrentK9() is already set, despawn/delete that ped LOCALLY
---      first (client-side mirror of the "one active K9" rule — the server
---      will also emit despawnK9 for the old netId once registerK9 fires,
---      but don't rely solely on that round-trip to avoid a visible frame
---      of two dogs existing).
---   3. RequestModel(pedKey) / IsModelInCdimage(pedKey) generically — no
---      hardcoded model name (SPEC.md §3 acceptance bullet 3) — wait for
---      HasModelLoaded before CreatePed.
---   4. CreatePed(...), SetEntityAsMissionEntity / NetworkRegisterEntityAsNetworked
---      as appropriate so it has a netId, then
---      NetworkGetNetworkIdFromEntity(ped) to get that netId.
---   5. SetCurrentK9({ ped = ped, netId = netId, pedKey = pedKey, inVehicle = false })
---   6. TriggerServerEvent('qbx_k9unit:server:registerK9', netId)
-local function SpawnK9(pedKey)
-end
-
---- Locally deletes the currently controlled K9 ped and clears state, then
---- tells the server. Use for a VOLUNTARY dismiss (not for reacting to the
---- server's despawnK9 broadcast — see the RegisterNetEvent below, which
---- must NOT call this, to avoid an unregisterK9 -> despawnK9 -> unregisterK9
---- event loop).
---- TODO(coder-frontend): delete/cleanup the ped entity, ClearCurrentK9(),
---- TriggerServerEvent('qbx_k9unit:server:unregisterK9').
-local function DismissCurrentK9()
-end
-
---- Server-forced despawn (e.g. stale netId being replaced per contract
---- item 3, or a disconnect-grace-period cleanup broadcast — see
---- server/main.lua's playerDropped TODO for whether this fires there too).
---- Do NOT TriggerServerEvent('qbx_k9unit:server:unregisterK9') from here —
---- the server already knows, that's WHY it sent this event.
-RegisterNetEvent('qbx_k9unit:client:despawnK9', function(netId)
-    -- TODO(coder-frontend): resolve the entity via
-    -- NetworkGetEntityFromNetworkId(netId) — guard with
-    -- NetworkDoesEntityExistWithNetworkId(netId) first, it may not exist
-    -- for this client at all. Delete it if it does. If it matches
-    -- GetCurrentK9()?.netId, ClearCurrentK9() too.
-end)
 
 --- Plays a bark on the K9 identified by netId, for any client that has it
---- streamed in (broadcast via TriggerClientEvent(..., -1, ...)).
+--- streamed in (broadcast via TriggerClientEvent(..., -1, ...) from
+--- server/main.lua's relayBark handler).
 --- @param netId number
 --- @param barkType string
---- TODO(coder-frontend): NOTE the same barkType-enum gap flagged in
---- server/main.lua's relayBark TODO — SPEC.md/config.lua do not yet define
---- valid barkType values or their sound assets. Whatever enum/asset
---- mapping client/radial.lua uses to trigger a bark must be the SAME one
---- this handler uses to play it (they're two ends of one contract item,
---- 7+9) — keep them in the same place (e.g. a small local table at the
---- top of this file, or promote it to Config.BarkSounds in config.lua if
---- it should be server-owner-editable) rather than hardcoding matching
---- strings independently in two files.
 RegisterNetEvent('qbx_k9unit:client:playBark', function(netId, barkType)
-    -- TODO(coder-frontend): guard with NetworkDoesEntityExistWithNetworkId,
-    -- resolve entity, PlaySoundFromEntity (or equivalent) using an asset
-    -- keyed by barkType. SPEC.md §7 notes bark sounds need bundled audio
-    -- asset files (not zero-asset) — coordinate with asset-pipeline-agent
-    -- on where those files live if they don't exist yet.
+    -- TODO(coder-frontend): guard with
+    -- NetworkDoesEntityExistWithNetworkId(netId) (this client may not have
+    -- the ped streamed in at all), resolve the entity via
+    -- NetworkGetEntityFromNetworkId(netId), then PlaySoundFromEntity (or
+    -- equivalent) using an asset keyed by barkType. Phase 1 only needs one
+    -- generic bark asset (see client/radial.lua's Bark item for the
+    -- literal barkType string it sends — keep both ends in sync). SPEC.md
+    -- §7 notes bark sounds need bundled audio asset files (not
+    -- zero-asset) — coordinate with asset-pipeline-agent on where those
+    -- files live if they don't exist yet.
 end)
