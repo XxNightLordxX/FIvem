@@ -21,7 +21,10 @@ version '0.1.0'
 --     require -- they're consumed purely through their exports/wrapper --
 --     so they only need to appear in `dependencies` below (oxmysql also
 --     gets its `@oxmysql/lib/MySQL.lua` wrapper in server_scripts since
---     server/certifications.lua and server/main.lua do direct SQL work).
+--     server/certifications.lua and server/search.lua do direct SQL work
+--     -- server/main.lua does not call MySQL.* at all, it only calls
+--     RefreshCertificationCache/HasK9Access, exposed globals owned by
+--     server/certifications.lua).
 -- ----------------------------------------------------------------------
 ox_lib 'locale'
 
