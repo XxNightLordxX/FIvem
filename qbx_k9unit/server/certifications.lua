@@ -83,7 +83,7 @@
     from a coder-architect scaffold.
 
     FILE-TO-FILE CONTRACT:
-    - THIS FILE exposes two resource-global (no `local`) functions:
+    - THIS FILE exposes three resource-global (no `local`) functions:
         HasK9Access(source) -> boolean
             Called by server/main.lua's relayBark handler (and any future
             Phase 2+ gated action added there) and by the hasK9Access
@@ -98,6 +98,12 @@
             restart while players are already online needs to warm the
             cache for them too, since no fresh player-loaded event fires
             for already-connected players).
+        IsConfiguredK9Model(modelHash) -> boolean
+            Used here for the §4.2.5 grant-time model check, and reused by
+            server/main.lua's leash-role determination (§6.1/§9 item 3b —
+            leash roles are assigned by which party is actually K9-modeled,
+            server-verified, never client-claimed) — one shared model
+            check instead of two independent copies of Config.Peds logic.
     - THIS FILE owns `Certifications` (citizenid -> { active: boolean,
       job: string }) as a local table. STRUCTURAL NOTE: SPEC.md §4.3's
       prose describes this cache as a bare `Certifications[citizenid] =
@@ -127,7 +133,10 @@ local K9ModelHashes = {}
 
 --- @param modelHash number
 --- @return boolean
-local function IsConfiguredK9Model(modelHash)
+--- Exposed globally (no `local`) — server/main.lua's leash-role
+--- determination (§6.1/§9 item 3b) reuses this same model check rather
+--- than re-deriving its own copy from Config.Peds.
+function IsConfiguredK9Model(modelHash)
     -- TODO(coder-backend): return K9ModelHashes[modelHash] == true
     return false
 end
