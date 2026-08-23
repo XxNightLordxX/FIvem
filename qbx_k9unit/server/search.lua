@@ -100,7 +100,13 @@
       `IsConfiguredK9Model` — a search requester's eligibility is pure
       job+certification (HasK9Access), same posture as
       server/tracking.lua's own FILE-TO-FILE CONTRACT note for the same
-      reason.
+      reason. Called TWICE per search: once at the top of the callback
+      registration (cheap request-time gate) and once more inside
+      HandleSearchTarget immediately after the awaited
+      `GetInventoryItems` call returns (mid-flight revocation re-check —
+      see HandleSearchTarget's own doc comment, step 8) — deliberate,
+      not a duplicate-by-accident, since certification.lua's revoke path
+      can run to completion during that same await window.
     - THIS FILE exposes NO resource-global functions.
     - THIS FILE owns `SearchMutex`, `SearchCooldown`, and
       `TargetSearchCooldown` below as file-local state (each a
@@ -399,11 +405,24 @@ end
 ---      `contrabandFound = false` (conflating "we couldn't check" with
 ---      "we checked and it's clean" is a correctness bug with real
 ---      in-fiction consequences).
----   8. Recurse into containers (SumContrabandWeight), sum weight, resolve
+---   8. RE-CHECK `HasK9Access(source)` immediately after that awaited
+---      ox_inventory call returns, before computing/broadcasting anything
+---      below — the earlier callback-registration check only proves
+---      access at REQUEST time, and a supervisor can revoke certification
+---      during the genuinely-yielding lazy DB load step 7 can trigger for
+---      an uncached vehicle trunk. Reject with the distinct `access_revoked`
+---      reason (logged as `search_failed` in k9_search_log, since a real
+---      inventory-read attempt did happen) if access was revoked mid-flight
+---      — same posture server/certifications.lua's revoke paths already
+---      take for an in-progress leash via
+---      ForceDetachLeashForSource/ForceDetachOfficerLeashForSource, since
+---      this file's own header claims that file's level of scrutiny for
+---      this exact kind of real capability grant.
+---   9. Recurse into containers (SumContrabandWeight), sum weight, resolve
 ---      the alert tier.
----   9. If Config.Features.ContrabandAlerts and the tier isn't 'clean',
+---  10. If Config.Features.ContrabandAlerts and the tier isn't 'clean',
 ---      broadcast (distance-filtered, tier-only payload).
----  10. Return the full result (including totalWeight) to the CALLER
+---  11. Return the full result (including totalWeight) to the CALLER
 ---      ONLY — this is the one place totalWeight is allowed to appear.
 ---
 --- EXPLICIT DECISION, not a silent default (security review §5): this
@@ -538,6 +557,50 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     local queryOk, items = pcall(function()
         return exports.ox_inventory:GetInventoryItems(inventoryId)
     end)
+
+    -- RE-CHECK HasK9Access(source) NOW, immediately after the awaited
+    -- ox_inventory call above returns, before any of totalWeight/
+    -- contrabandFound/alertTier is computed or broadcast. The ONLY earlier
+    -- check (in the callback registration below) proves the officer was
+    -- certified at REQUEST time — it does not prove they still are by the
+    -- time this line runs, and the gap between those two moments is real,
+    -- not theoretical: GetInventoryItems above can yield on a genuine
+    -- ox_inventory lazy DB load for an uncached vehicle trunk (see the
+    -- pcall's own doc comment above), during which a supervisor can revoke
+    -- this exact officer's certification via server/certifications.lua.
+    -- Without this re-check, a decertified officer would still receive the
+    -- full result AND still trigger BroadcastContrabandAlert to bystanders
+    -- below if the tier isn't 'clean' — after already losing access.
+    --
+    -- This file's own header (top of this file) claims explicit
+    -- certifications.lua-level scrutiny BECAUSE reading a target's real
+    -- live inventory is "the same category of real capability grant as
+    -- server/certifications.lua's grant/revoke" — and certifications.lua
+    -- itself refuses to leave an equivalent window open for the leash
+    -- capability: its revoke paths call
+    -- ForceDetachLeashForSource/ForceDetachOfficerLeashForSource to tear
+    -- down an in-progress leash the instant access is revoked, rather than
+    -- letting an already-in-flight grant run to completion. A search
+    -- result/broadcast is this file's equivalent of an in-progress leash,
+    -- so it gets the same treatment: reject rather than let a revoked
+    -- officer's in-flight search complete. (This is intentionally
+    -- DIFFERENT from server/tracking.lua's header, which explicitly
+    -- accepts a bounded, one-request risk for its own feature — that
+    -- acceptance is specific to tracking.lua's no-real-capability,
+    -- client-cosmetic marker trail and does not transfer here.)
+    --
+    -- Logged as 'search_failed' (a real inventory-read attempt DID
+    -- complete/was attempted, so it's in k9_search_log's documented scope
+    -- — see LogSearchAttempt's own doc comment), but returned to the
+    -- caller with the distinct 'access_revoked' reason (not folded into
+    -- 'search_failed') so this is never confused with a genuine
+    -- ox_inventory error. client/search.lua's reason-handling `else`
+    -- branch already treats any unrecognized reason as a plain error
+    -- notify, so no client-side change is required for this new value.
+    if not HasK9Access(source) then
+        LogSearchAttempt(source, targetType, plate, citizenid, 'search_failed', nil, nil)
+        return { ok = false, reason = 'access_revoked' }
+    end
 
     if not queryOk or items == nil then
         -- k9_search_log audit row — regression-tester correction: this
