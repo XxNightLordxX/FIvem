@@ -258,21 +258,32 @@ if Config.Features.VehicleEntryExit then
 end
 
 --- Track Scent/Blood/Gunpowder — SPEC.md §11.3/§11.5, Phase 2. Each is a
---- single context-sensitive item: while a trail of THAT type is active it
---- becomes a "Stop Tracking" cancel (calling the shared StopTracking()),
---- otherwise it starts that specific trail type. This is deliberately the
---- only in-game entry point to client/tracking.lua's Start*Track()/
---- StopTracking() globals — integration-verifier/correctness-overseer
---- both flagged that nothing called them, leaving no way to trigger or
---- cancel a trail at all. Each gated independently by its own
---- Config.Features flag, same pattern as Bark/Leash/Vehicle above.
+--- single context-sensitive item: while a trail of THAT SPECIFIC type is
+--- active it becomes a "Stop Tracking" cancel (calling the shared
+--- StopTracking()); while tracking a DIFFERENT type is active, it defers to
+--- Start*Track()'s own "already tracking — stop first" rejection/notify
+--- rather than silently canceling the wrong trail; otherwise it starts that
+--- specific trail type. This is deliberately the only in-game entry point
+--- to client/tracking.lua's Start*Track()/StopTracking() globals —
+--- integration-verifier/correctness-overseer both flagged that nothing
+--- called them, leaving no way to trigger or cancel a trail at all.
+--- regression-tester finding on the FIRST version of this wiring: a bare
+--- `if IsTracking() then StopTracking()` check here (not gated on the
+--- item's OWN type) meant clicking, say, "Track Gunpowder" while already
+--- tracking blood would silently cancel the blood trail and do nothing
+--- else — the click was swallowed by the wrong item's toggle branch, with
+--- zero notification, and Track Gunpowder had to be clicked a SECOND time
+--- to actually start. Fixed below via GetActiveTrackType() — each item now
+--- only self-toggles when it's already the active type. Each gated
+--- independently by its own Config.Features flag, same pattern as
+--- Bark/Leash/Vehicle above.
 if Config.Features.ScentTracking then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_track_scent',
         label = 'Track Scent',
         icon = 'wind',
         onSelect = function()
-            if IsTracking() then
+            if GetActiveTrackType() == 'scent' then
                 StopTracking()
                 return
             end
@@ -293,7 +304,7 @@ if Config.Features.BloodTracking then
         label = 'Track Blood',
         icon = 'droplet',
         onSelect = function()
-            if IsTracking() then
+            if GetActiveTrackType() == 'blood' then
                 StopTracking()
                 return
             end
@@ -314,7 +325,7 @@ if Config.Features.GunpowderSniffing then
         label = 'Track Gunpowder',
         icon = 'crosshairs',
         onSelect = function()
-            if IsTracking() then
+            if GetActiveTrackType() == 'gunpowder' then
                 StopTracking()
                 return
             end

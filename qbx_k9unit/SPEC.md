@@ -968,9 +968,24 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     `relayWeaponFire` handlers, with the timestamp stamped **before** any
     log-append work in both, per the same TOCTOU discipline §11.4 item 2
     already established for the search cooldown.
-16. **(NEW, Phase 2, found during §11.4's event-contract hardening pass, not
+16. ~~**(NEW, Phase 2, found during §11.4's event-contract hardening pass, not
     yet resolved) Does `relayDoorScratch`'s `doorNetId` need an
-    existence/proximity check before broadcasting?** Unlike `relayBark`
+    existence/proximity check before broadcasting?**~~ **Resolved.**
+    `server/main.lua`'s shipped `relayDoorScratch` handler resolves
+    `doorNetId` via `NetworkGetEntityFromNetworkId`, confirms existence,
+    checks live proximity to the caller (with a documented latency-tolerance
+    margin), and cross-checks the resolved entity's type (objects only,
+    rejecting a ped/vehicle netId substitution a coder-security pass found
+    the first version of this fix still allowed) — all before ever
+    broadcasting. It also closes a second gap (exploit-tester finding, not
+    originally anticipated here): a per-source cooldown alone doesn't stop
+    multiple certified accounts independently hammering the *same* door, so
+    a second, door-keyed cooldown (with its own periodic prune thread, since
+    a door has no `playerDropped`-style cleanup hook) now gates the
+    broadcast alongside the per-source one. Original description of the gap
+    below, unchanged, for context:
+
+    Unlike `relayBark`
     (which always resolves and broadcasts the *sender's own* already-verified
     ped), `relayDoorScratch`'s `doorNetId` (§11.4 item 5) is an arbitrary
     client-supplied network id identifying a *different* entity (a door).
@@ -988,6 +1003,23 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     id" standard (§4.3). `server/main.lua`'s `relayDoorScratch` handler does
     not exist yet in the codebase as of this pass, so this should be closed
     out as part of writing it, not discovered afterward as a regression.
+17. **(NEW, Phase 2, found during correctness-overseer's final §11.5
+    sign-off pass, EXPLICITLY DEFERRED, not a hidden shortcut) Scent
+    tracking's server-side source resolution is not implemented.**
+    `server/tracking.lua`'s `findTrackableSource` callback's `'scent'`
+    branch always returns `{ found = false }` unconditionally — this was
+    already honestly disclosed in that file's own header comment (tied to
+    item 11 above, the unconfirmed `ox_inventory` drop-location export), not
+    a disguised stub, but it means the Scent Tracking acceptance criteria in
+    §11.5 are currently unmet end-to-end if `Config.Features.ScentTracking`
+    is ever set to `true` (it ships `false` by default, so this is dormant
+    today, not a live gap). Recorded here explicitly, per correctness-overseer's
+    request, so this deferral is visible at the spec level and not only
+    inside one file's comment. Resolving it requires either confirming a
+    real `ox_inventory` "item dropped at coordinate X" hook exists (item 11)
+    or implementing the documented client-side world-entity-scan fallback —
+    neither has been done. **Do not enable `Config.Features.ScentTracking`
+    on a live server until this item is closed.**
 
 ---
 
@@ -1569,11 +1601,14 @@ Applying §7's same rigor to every Phase 2 item:
 ### 11.7 Cross-reference
 
 New open questions raised by this section have been appended to §9 (items
-10–16) rather than duplicated here, so §9 remains the single running list
-correctness-overseer and team-leader can check against. Items 10–14 came
+10–17) rather than duplicated here, so §9 remains the single running list
+correctness-overseer and project-lead can check against. Items 10–14 came
 from the initial Phase 2 detailed-scoping pass; items 15–16 were added
 later, during §11.4's event-contract hardening pass (item 15's rate-limit
-parity gap, now resolved; item 16's `relayDoorScratch` existence/proximity
-gap, still open) — both had been discussed in §11.4's own text without
-actually being carried into §9 until this pass, which this cross-reference
-now reflects.
+parity gap and item 16's `relayDoorScratch` existence/proximity gap — both
+now resolved, the latter closed alongside a second cooldown gap exploit-
+testing found once real code existed) — both had been discussed in §11.4's
+own text without actually being carried into §9 until that pass, which this
+cross-reference now reflects. Item 17 was added during the final Phase 2
+sign-off pass (correctness-overseer) — an explicit, visible deferral of
+scent tracking's server-side source resolution, not a newly-found gap.

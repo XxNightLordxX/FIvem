@@ -363,6 +363,70 @@ local DOOR_SCRATCH_DISTANCE_TOLERANCE = 1.0 -- meters of slack over Config.DoorI
 -- separate door-scratch allowance, or vice versa.
 local lastDoorScratchAt = {}
 
+-- SECURITY/ABUSE FIX (exploit-tester finding, 2026-08-23): lastDoorScratchAt
+-- above only rate-limits per SOURCE, so it does nothing to stop MULTIPLE
+-- distinct certified accounts from each independently respecting their own
+-- per-source cooldown while all hammering the SAME doorNetId — confirmed
+-- reproducible as a sustained, indefinite ~1,200 broadcasts/hour flood
+-- against any single real door from just one modified-but-certified client,
+-- and it only gets worse with colluding accounts. This second, INDEPENDENT
+-- cooldown is keyed by the resolved doorNetId instead of src — BOTH this
+-- table and lastDoorScratchAt above must pass their cooldown check for a
+-- broadcast to fire: lastDoorScratchAt stops one player spamming across many
+-- doors, this one stops many (possibly colluding) players hammering one
+-- door. Reuses Config.DoorInteraction.scratchCooldownMs rather than
+-- introducing a separate constant — the abuse this closes is volume of
+-- broadcasts for a given door, which scratchCooldownMs already expresses
+-- ("how often should this door plausibly make this sound"); a distinct,
+-- larger value isn't obviously better since a single legitimate K9 handler
+-- is already expected to scratch the same real door at most once per
+-- scratchCooldownMs, so the per-door and per-source windows naturally
+-- coincide in the common, non-abusive case.
+--
+-- Unlike lastDoorScratchAt (cleaned up in the playerDropped handler below,
+-- since it's keyed by a player source) or TrackableLog in
+-- server/tracking.lua (which uses a periodic prune thread since its entries
+-- are keyed by coordinate/timestamp, not by player), doorNetId has no
+-- natural per-connection cleanup hook — a door doesn't disconnect. Following
+-- server/tracking.lua's own PruneTrackableLogs precedent (a periodic sweep
+-- thread, same shape, see PruneDoorScratchCooldowns below) rather than
+-- prune-on-access, since a dedicated thread keeps the eviction logic in one
+-- place and doesn't add work to the hot broadcast path above.
+local lastDoorScratchAtByDoor = {}
+
+-- Prune interval for lastDoorScratchAtByDoor. Deliberately much coarser than
+-- server/tracking.lua's TRACKABLE_LOG_PRUNE_INTERVAL_MS (15000ms) — that
+-- table backs a live distance search so staleness has a correctness cost;
+-- this table only backs a rate-limit check, so a stale entry lingering a
+-- little past its usefulness window costs nothing but a few bytes. 10x
+-- Config.DoorInteraction.scratchCooldownMs's default (3000ms) keeps the
+-- table from growing unbounded across a long-running server (one entry per
+-- distinct door ever scratched) without running the sweep needlessly often.
+local DOOR_SCRATCH_COOLDOWN_PRUNE_INTERVAL_MS = 30000
+
+--- Drops any lastDoorScratchAtByDoor entry whose cooldown has already
+--- expired — once (now - loggedAt) >= scratchCooldownMs, the entry can no
+--- longer affect the cooldown check above, so it's safe to evict. Uses a
+--- `pairs` sweep with in-place `nil` removal (safe in Lua: clearing the
+--- CURRENT key during a `pairs` traversal is well-defined, unlike adding new
+--- keys) rather than tracking.lua's rebuild-a-fresh-array approach, since
+--- this table is a plain doorNetId -> timestamp map, not an ordered array.
+local function PruneDoorScratchCooldowns()
+    local now = GetGameTimer()
+    for doorNetId, loggedAt in pairs(lastDoorScratchAtByDoor) do
+        if (now - loggedAt) >= Config.DoorInteraction.scratchCooldownMs then
+            lastDoorScratchAtByDoor[doorNetId] = nil
+        end
+    end
+end
+
+CreateThread(function()
+    while true do
+        Wait(DOOR_SCRATCH_COOLDOWN_PRUNE_INTERVAL_MS)
+        PruneDoorScratchCooldowns()
+    end
+end)
+
 --- Relays a door-scratch sound to every client so anyone with the door
 --- entity streamed in hears it. Gated by Config.Features.DoorInteraction AND
 --- HasK9Access(source) — both re-checked HERE, server-side, same standard as
@@ -409,7 +473,18 @@ RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
     if lastDoorScratchAt[src] and (now - lastDoorScratchAt[src]) < Config.DoorInteraction.scratchCooldownMs then
         return -- silent no-op: rate-limited, not an error worth notifying about
     end
+
+    -- exploit-tester finding (2026-08-23, see lastDoorScratchAtByDoor's own
+    -- doc comment above for the full writeup): the per-source check above
+    -- does nothing to stop MULTIPLE certified sources from independently
+    -- hammering this SAME door, each staying under their own per-source
+    -- cooldown. Both checks must pass before a broadcast fires.
+    if lastDoorScratchAtByDoor[doorNetId] and (now - lastDoorScratchAtByDoor[doorNetId]) < Config.DoorInteraction.scratchCooldownMs then
+        return -- silent no-op: this specific door was already scratched recently by ANY source
+    end
+
     lastDoorScratchAt[src] = now
+    lastDoorScratchAtByDoor[doorNetId] = now
 
     -- DELIBERATE broadcast to EVERYONE (-1), not distance-filtered to nearby
     -- clients server-side, and NOT the pattern to copy if you're touching
@@ -720,6 +795,10 @@ AddEventHandler('playerDropped', function(reason)
     lastBarkAt[src] = nil -- drop the bark-cooldown entry too, don't leak one per session
     lastLeashRequestAt[src] = nil -- drop the leash-request cooldown entry too, don't leak one per session
     lastDoorScratchAt[src] = nil -- drop the door-scratch cooldown entry too, don't leak one per session
+    -- lastDoorScratchAtByDoor deliberately has NO cleanup here — it's keyed
+    -- by doorNetId, not by this disconnecting source, so it can't be cleaned
+    -- up on a player-keyed hook at all. See PruneDoorScratchCooldowns above
+    -- (exploit-tester finding, 2026-08-23) for how it's kept bounded instead.
 
     -- Initiator-side cleanup (coder-security/QA finding): PendingLeashRequests
     -- is keyed by TARGET server id, so the line above only ever clears an

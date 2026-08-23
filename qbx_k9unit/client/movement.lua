@@ -822,6 +822,15 @@ if Config.Features.DoorInteraction then
             distance = Config.DoorInteraction.interactDistance,
             canInteract = function(entity, distance, coords, name)
                 if not CanShowK9UI() then return false end
+                -- qa-tester finding: a vehicle-tucked K9 (frozen/invisible/
+                -- attached, client/vehicle.lua's EnterNearestK9Vehicle) is
+                -- nowhere near this door in any way that should let it play
+                -- a scratch scenario and broadcast an alert — mirrors the
+                -- leash pull-back thread's own `IsInK9Vehicle and
+                -- IsInK9Vehicle()` exclusion for the identical state
+                -- (client/vehicle.lua loads after this file, hence the
+                -- existence guard, same reason that thread uses it).
+                if IsInK9Vehicle and IsInK9Vehicle() then return false end
                 return IsLikelyDoorEntity(entity)
             end,
             onSelect = function(data)

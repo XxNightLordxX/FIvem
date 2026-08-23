@@ -98,6 +98,16 @@ function IsTracking()
     return trackingState ~= nil
 end
 
+--- @return 'scent'|'blood'|'gunpowder'|nil
+--- regression-tester finding: client/radial.lua's three Track items each
+--- need to tell "currently tracking THIS type (real toggle-off)" apart from
+--- "currently tracking a DIFFERENT type (should hit StartTrack()'s own
+--- 'already tracking — stop first' rejection/notify, not silently cancel
+--- the wrong trail)". IsTracking() alone can't make that distinction.
+function GetActiveTrackType()
+    return trackingState and trackingState.trackType or nil
+end
+
 --- Shared implementation behind StartScentTrack()/StartBloodTrack()/
 --- StartGunpowderTrack() below. SPEC.md §11.5's three trail-type
 --- acceptance-criteria blocks are textually identical (only the trackType
