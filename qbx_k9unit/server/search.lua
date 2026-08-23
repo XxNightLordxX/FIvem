@@ -550,9 +550,27 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
         return { ok = false, reason = 'search_failed' } -- NEVER collapse into contrabandFound = false
     end
 
-    local totalWeight = SumContrabandWeight(inventoryId, items, 1)
+    -- pcall-wrapped (regression-tester finding): SumContrabandWeight/
+    -- ResolveAlertTier run AFTER a real inventory read already succeeded,
+    -- so a throw here must still reach the 'search_failed' LogSearchAttempt
+    -- call site above (the one keyed to a real inventory-read attempt),
+    -- not fall through uncaught to the outer catch-all pcall(HandleSearchTarget, ...)
+    -- in the callback registration below, which would report the same
+    -- search_failed reason to the caller but WITHOUT an audit row, even
+    -- though the inventory was, in fact, read.
+    local sumOk, totalWeight = pcall(SumContrabandWeight, inventoryId, items, 1)
+    if not sumOk then
+        LogSearchAttempt(source, targetType, plate, citizenid, 'search_failed', nil, nil)
+        return { ok = false, reason = 'search_failed' }
+    end
+
     local contrabandFound = totalWeight > 0
-    local alertTier = ResolveAlertTier(totalWeight)
+
+    local tierOk, alertTier = pcall(ResolveAlertTier, totalWeight)
+    if not tierOk then
+        LogSearchAttempt(source, targetType, plate, citizenid, 'search_failed', nil, nil)
+        return { ok = false, reason = 'search_failed' }
+    end
 
     if Config.Features.ContrabandAlerts and alertTier.alert ~= 'clean' then
         BroadcastContrabandAlert(GetEntityCoords(entity), targetNetId, alertTier.alert)
