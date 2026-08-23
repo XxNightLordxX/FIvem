@@ -155,8 +155,25 @@
 -- survive a resource restart (nor should it need to; this is a live
 -- session mechanic, not part of the certification/permission system).
 -- Keyed by server id (source), one entry per participant, mirrored both
--- directions: LeashPairs[a] = b and LeashPairs[b] = a while attached.
--- Local: nothing outside this file needs it directly.
+-- directions while attached: LeashPairs[a] = { partner = b, isK9 = <bool> }
+-- and LeashPairs[b] = { partner = a, isK9 = <bool> }.
+--
+-- Regression-test fix: previously this stored the partner id directly
+-- (LeashPairs[a] = b), with no record of which server id is the K9-role
+-- party vs. the officer/handler-role party for that pairing — role was
+-- only ever communicated to each client individually via the
+-- `isConstrained` boolean at attach time, never retained server-side. That
+-- meant ForceDetachLeashForSource could only key off "is this id a
+-- participant in ANY pairing" and would force-detach regardless of role.
+-- Since HasK9Access deliberately doesn't check ped model (see
+-- server/certifications.lua's header — a certified handler keeps their
+-- cert after switching away from a K9 model, a documented tradeoff), a
+-- revoked citizenid's stale cert can resolve to a server id that is
+-- CURRENTLY anchoring (officer role) someone else's legitimate, unrelated
+-- K9 pairing. Revoking that person's cert must not tear down a leash they
+-- are only anchoring, not being constrained by — hence storing `isK9`
+-- alongside each pairing so ForceDetachLeashForSource can tell the two
+-- roles apart. Local: nothing outside this file needs it directly.
 local LeashPairs = {}
 
 -- Ephemeral pending leash requests: PendingLeashRequests[targetSrc] = {
@@ -408,8 +425,8 @@ RegisterNetEvent('qbx_k9unit:server:respondLeashAttach', function(fromServerId, 
         return
     end
 
-    LeashPairs[fromServerId] = src
-    LeashPairs[src] = fromServerId
+    LeashPairs[k9Src] = { partner = officerSrc, isK9 = true }
+    LeashPairs[officerSrc] = { partner = k9Src, isK9 = false }
 
     TriggerClientEvent('qbx_k9unit:client:leashAttached', k9Src, officerSrc, true)  -- isConstrained = true
     TriggerClientEvent('qbx_k9unit:client:leashAttached', officerSrc, k9Src, false) -- isConstrained = false
@@ -424,8 +441,9 @@ end)
 --- @param reason string
 --- @return boolean detached -- false if `src` wasn't leashed to anyone (no-op)
 local function doDetachLeash(src, reason)
-    local partner = LeashPairs[src]
-    if not partner then return false end -- no-op, not an error
+    local pairing = LeashPairs[src]
+    if not pairing then return false end -- no-op, not an error
+    local partner = pairing.partner
 
     LeashPairs[src] = nil
     LeashPairs[partner] = nil
@@ -451,10 +469,28 @@ end)
 --- party is no longer eligible per CheckLeashEligibility. No-op if `src`
 --- isn't currently leashed to anyone (covers the common case where the
 --- revoked player never had an active pairing at all).
+---
+--- Regression-test fix: role-blind by id membership alone is not enough.
+--- Certifications.lua's callers intend this to fire specifically when "a
+--- K9-role party's certification transitions from active to revoked" (see
+--- this function's own doc comment above and certifications.lua's
+--- FILE-TO-FILE CONTRACT), but HasK9Access deliberately never checks ped
+--- model, so a revoked citizenid can resolve to a server id that is
+--- CURRENTLY the officer/handler-role party of an unrelated, still-valid
+--- pairing. Detaching that pairing would be an incorrect side effect of an
+--- unrelated cert revocation. Only actually detach when `src` is the
+--- K9-role (`isK9 = true`) half of its own pairing; if `src` is a
+--- participant but only in the officer/handler role, do nothing — their
+--- revoked cert doesn't affect a leash they're merely anchoring, not being
+--- constrained by.
 --- @param src number
 --- @param reason string?
 function ForceDetachLeashForSource(src, reason)
     if type(src) ~= 'number' then return false end
+
+    local pairing = LeashPairs[src]
+    if not pairing or not pairing.isK9 then return false end -- not leashed, or leashed only as the officer/handler role — no-op
+
     return doDetachLeash(src, reason or 'certification_revoked')
 end
 

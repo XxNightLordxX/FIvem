@@ -603,6 +603,20 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
         return
     end
 
+    -- Regression-test fix: unlike RevokeCertification's online branch and
+    -- the QBCore:Server:OnJobUpdate auto-revoke handler (both of which call
+    -- RefreshCertificationCache immediately after their UPDATE), this path
+    -- previously left a stale `active = true` in-memory cache entry behind
+    -- for a citizenid who was online, disconnected, and then got
+    -- offline-revoked — until their next PlayerLoaded fires and re-queries
+    -- fresh. RefreshCertificationCache is a plain DB-query-and-cache-write
+    -- function with no live-source requirement, so it's safe to call
+    -- unconditionally here even for a genuinely offline citizenid: it will
+    -- simply cache `active = false` for whenever they next connect, rather
+    -- than leaving a drifted entry around. Matches SPEC.md §4.3's
+    -- "invalidated/updated immediately on grant/revoke events".
+    RefreshCertificationCache(citizenid, job)
+
     -- QA finding fix (SPEC.md §1/§4.4): tear down an active leash pairing
     -- for this citizenid if one exists. In the overwhelmingly common case
     -- this is a genuine no-op — the online guard above already refused
