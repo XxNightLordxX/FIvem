@@ -2,9 +2,10 @@
     qbx_k9unit/html/style.css
 
     ======================================================================
-    UNWIRED SCAFFOLDING — Phase 4 vitality HUD. NOT ACTIVATED. See
-    app.js's header comment for the full status note. This CSS is not
-    referenced by any live `ui_page` yet.
+    WIRED, BUT STILL FEATURE-FLAGGED OFF — Phase 4 vitality HUD. See
+    app.js's header comment for the full status note. This CSS is now
+    referenced by a live `ui_page` (fxmanifest.lua); the feature itself
+    stays off only via `Config.Features.HealthStaminaHUD = false`.
     ======================================================================
 
     THE ONE RULE THAT MATTERS MORE THAN ANYTHING ELSE IN THIS FILE, per

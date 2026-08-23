@@ -3,13 +3,14 @@
     qbx_k9unit/html/index.html
 
     ======================================================================
-    UNWIRED SCAFFOLDING — Phase 4 vitality HUD. NOT ACTIVATED. See the
+    WIRED, BUT STILL FEATURE-FLAGGED OFF — Phase 4 vitality HUD. See the
     header comment in app.js for the full status note; short version:
-    fxmanifest.lua has NO `ui_page`/`files` block yet, `client/hud.lua`
-    (the Lua-side poll/push thread) does not exist yet, and
-    `Config.Features.HealthStaminaHUD` is `false` in config.lua. This page
-    will not load in-game until all three of those land. Do not treat this
-    file's existence as the feature being live.
+    fxmanifest.lua's `ui_page`/`files` block and `client/hud.lua` (the
+    Lua-side poll/push thread) both exist and are live. The one thing
+    still gating this off is `Config.Features.HealthStaminaHUD`, which is
+    `false` in config.lua — flip that (once its two lower-confidence
+    natives are independently verified, see client/hud.lua's own header)
+    to actually enable the feature.
     ======================================================================
 
     Design sources (read these before changing the contract below):
