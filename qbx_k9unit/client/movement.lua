@@ -69,6 +69,14 @@
       existing, unchanged server contract. Mirrors the "Attach Leash"
       option's structure directly (display-only plausibility gate via
       IsEntityModelK9, server re-validates everything authoritatively).
+    - THIS FILE also registers the "Scratch to Alert" ox_target option on
+      nearby door-shaped objects (Phase 2, SPEC.md §11.3's file/module plan
+      row for this file) and the 'qbx_k9unit:client:playDoorScratch'
+      broadcast receiver — see the DOOR INTERACTION block near the header
+      above and the implementation near the bottom of this file. Exposes NO
+      new resource-global function of its own (ox_target-only entry point,
+      same shape as client/search.lua's search options — nothing else in
+      this resource needs to call into door interaction directly).
 
     LEASH SUBSYSTEM DESIGN (per requester's confirmation, resolving
     SPEC.md §9 item 3b — see server/main.lua's header for the full
@@ -91,6 +99,42 @@
        (disconnect, teleport, desync) and a hard cap is exceeded, the
        CONSTRAINED client calls DetachLeash() itself as a safety valve —
        reuse this exact function, don't build a second detach code path.
+
+    ======================================================================
+    DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT ONLY. SPEC.md §11.1
+    sub-phase 2a, §11.3's file/module plan (this file's row), §11.4 items
+    5/6, §11.5's door-interaction acceptance criteria;
+    phase2_notes/door_interaction.md, phase2_notes/door_interaction_natives.md,
+    and phase2_notes/door_interaction_security_review.md (all read in full
+    before this section was written — the security review in particular was
+    written pre-implementation against server/main.lua's ALREADY-SHIPPED
+    relayDoorScratch handler, so this file is built to that handler's exact,
+    fixed contract rather than re-deriving it).
+
+    "Nudge-open" is DELIBERATELY NOT implemented anywhere in this file — see
+    the "NUDGE-OPEN NOT IMPLEMENTED" comment further down, immediately above
+    the door-interaction code itself, for the full reasoning and the
+    still-open config-safety gap that comment deliberately does not attempt
+    to close.
+
+    Server events (client->server):
+    - 'qbx_k9unit:server:relayDoorScratch' (doorNetId: number)
+      [server/main.lua, already implemented — THIS FILE only triggers it].
+      Structurally mirrors 'qbx_k9unit:server:relayBark' above, EXCEPT the
+      payload names a DIFFERENT entity (the door) than the sender's own ped
+      — the server independently resolves/existence-checks/proximity-checks
+      doorNetId before ever broadcasting it (closes SPEC.md §9 item 16, per
+      server/main.lua's own header comment on that handler). This file's own
+      pre-send checks (CanShowK9UI(), DoesEntityExist(entity)) are UX only,
+      never the security boundary — the server re-validates everything
+      regardless of what this client claims.
+
+    Client events (server->client):
+    - 'qbx_k9unit:client:playDoorScratch' (doorNetId: number) [THIS FILE]
+      Mirrors client/main.lua's existing playBark handler exactly (resolve
+      the network entity, no-op if not streamed in/nonexistent, play a
+      sound) — per SPEC.md §11.4 item 6.
+    ======================================================================
 ]]
 
 -- Local-only view-mode state for the camera toggle below. Not exposed —
@@ -574,3 +618,237 @@ if not Config.Features.AgilityBasicJump then
         end
     end)
 end
+
+-- ======================================================================
+-- DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT ONLY (Config.Features.DoorInteraction).
+-- See this file's header DOOR INTERACTION block for the full event
+-- contract and source-document list. Built directly against
+-- server/main.lua's ALREADY-SHIPPED 'qbx_k9unit:server:relayDoorScratch'
+-- handler (search that file for "relayDoorScratch" for the exact,
+-- currently-live contract this code targets) rather than re-deriving the
+-- server side from the design notes alone — the design notes and the
+-- shipped handler agree, but the handler is the actual source of truth.
+--
+-- NUDGE-OPEN NOT IMPLEMENTED (deliberately, this pass): SPEC.md §11.1
+-- splits nudge-open out as its own row, explicitly scoped as "a stretch
+-- item within DoorInteraction, not a blocker for shipping scratch-to-alert"
+-- — and phase2_notes/door_interaction_natives.md §0.5/§4 (the native
+-- verification pass) concludes any safe version of nudge-open would need to
+-- stay purely cosmetic (a push animation as the K9 walks through a door it
+-- can ALREADY physically pass) and must NEVER consult GTA's native CDoor
+-- lock-state system as a safety check, since an unregistered door (the
+-- common case for a real door-lock resource's doors) reads as "nothing to
+-- say" there, which risks being misread as "unlocked." That's a real design
+-- exercise of its own (what counts as "already passable," how to detect it
+-- without touching lock state) that this pass does not attempt — only
+-- "Scratch to Alert" is implemented below, per this task's explicit scope.
+--
+-- KNOWN, STILL-UNADDRESSED CONFIG-SAFETY GAP (not solved here — see
+-- phase2_notes/door_interaction_security_review.md Finding 3 for the full
+-- writeup): Config.DoorInteraction.nudgeRequiresUnlocked is documented, in
+-- both config.lua's own inline comment and README.md, as "a hard
+-- requirement, not a toggle" — but as of this pass it is an ordinary
+-- editable boolean with NO code anywhere (this file included) that actually
+-- reads or enforces it. That's harmless today (nudge-open doesn't exist at
+-- all yet, so the flag is an inert no-op either way), but the security
+-- review flags a real future risk: the first implementer of a richer,
+-- lock-state-integration-backed nudge-open could easily wire a branch off
+-- this flag that does exactly what its name promises never to allow (a
+-- lockpick-equivalent bypass), and a server owner who long ago flipped it
+-- to `false` for an unrelated reason (testing, a copied "permissive"
+-- example config) would silently inherit that exploit with nobody having
+-- deliberately, reviewedly wired it for that purpose. The review's
+-- recommended fix (a resource-start
+-- `assert(Config.DoorInteraction.nudgeRequiresUnlocked == true, ...)`) is
+-- intentionally NOT added here — it belongs alongside nudge-open's own
+-- implementation (or a standalone config-validation pass), not bundled into
+-- this scratch-only change. Flagging it again here so it isn't lost between
+-- passes.
+-- ======================================================================
+
+--- Best-effort "is this object entity plausibly a door" heuristic, used
+--- ONLY to decide whether to offer the "Scratch to Alert" ox_target option
+--- on a given nearby object — NOT a security check of any kind. The server
+--- (server/main.lua's relayDoorScratch handler) independently resolves,
+--- existence-checks, and proximity-checks whatever netId this file ends up
+--- sending regardless of what this predicate decided, so a wrong answer
+--- here is a UX miss (option doesn't appear on a real door, or appears on
+--- something that isn't one), never a security gap — this is the same
+--- "display-only plausibility gate" framing this file's header already
+--- applies to IsEntityModelK9() for the leash/certify options above.
+---
+--- No generic "is this entity a door" native/predicate exists (confirmed by
+--- phase2_notes/door_interaction_natives.md — GTA's native door SYSTEM only
+--- covers doors explicitly registered via AddDoorToSystem/IPL data, a small
+--- fraction of visible door props on a typical interior-heavy server, and
+--- is unsuitable here anyway since Scratch-to-alert must work "on any door
+--- ... regardless of lock state" per SPEC.md §11.5, i.e. registered or not).
+--- Rather than hand-maintain a model-hash allow-list of specific door prop
+--- names (phase2_notes/door_interaction.md §3.1's "Option 1" — flagged
+--- there as LOW-MEDIUM confidence and something that would need updating
+--- for every interior/MLO a server adds), this checks the entity's own
+--- model name STRING for the substring "door", via GetEntityArchetypeName —
+--- the same naming-pattern observation that design note makes
+--- ("v_ilev_*door*, prop_*_door_*, plyr_dlc_gengarage_door" all contain the
+--- literal word "door") applied generically instead of enumerated exactly.
+--- CONFIDENCE: MEDIUM that GetEntityArchetypeName behaves as documented
+--- (a FiveM-added native returning the entity's model/archetype name as a
+--- string) — not independently re-confirmed against a live client this
+--- session; LOW-MEDIUM that the substring check covers "most doors a player
+--- would expect this to work on" for the same reason
+--- phase2_notes/door_interaction.md §3.1 grades its own model-list approach
+--- LOW-MEDIUM (door prop naming isn't fully standardized across the base
+--- map). If this predicate turns out to under/over-match badly in
+--- real-world testing, that's the first place to revisit — ideally with
+--- native-api-assistant confirming GetEntityArchetypeName's exact behavior,
+--- same verification standard this file's own K9Sit() scenario-name comment
+--- already applies to itself.
+--- @param entity number
+--- @return boolean
+local function IsLikelyDoorEntity(entity)
+    local archetypeName = GetEntityArchetypeName(entity)
+    return type(archetypeName) == 'string' and archetypeName:lower():find('door', 1, true) ~= nil
+end
+
+--- Precomputed model-hash -> scenario lookup for the scratch-to-alert
+--- action's local visual cue on the K9 itself, built the exact same way
+--- K9_SIT_SCENARIO_BY_MODEL_HASH is above. No "dog scratches at a door"
+--- scenario has been confirmed to exist anywhere this session —
+--- phase2_notes/door_interaction.md §4.2/§7 flags this explicitly ("no ...
+--- scenario/clipset name ... has been confirmed to exist at all this
+--- session — treat as unconfirmed, not assumed absent, same caveat
+--- movement.lua's Sit-action header already applies to its own scenario
+--- names"). Rather than fabricate an unverified "scratch" scenario name,
+--- this reuses the SAME confirmed-real WORLD_DOG_BARKING_* scenarios
+--- K9_SIT_SCENARIO_BY_MODEL_HASH's own comment above already names as
+--- existing siblings of the sitting scenarios ("plus WORLD_DOG_BARKING_*
+--- siblings, not used here" — now used here instead of an unverified
+--- scratch anim). Thematically apt for an "alert" action (drawing
+--- attention, per the feature's own name), and inherits that comment's
+--- exact confidence grading: HIGH the scenario strings themselves exist
+--- (two independently-maintained community scenario dumps agree), MEDIUM on
+--- the breed-to-scenario mapping for a_c_chop/a_c_huskie specifically
+--- (shared substitutions, same reasoning as K9_SIT_SCENARIO_BY_MODEL_HASH).
+local K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH = {}
+for model, scenario in pairs({
+    a_c_shepherd = 'WORLD_DOG_BARKING_SHEPHERD',
+    a_c_rottweiler = 'WORLD_DOG_BARKING_ROTTWEILER',
+    a_c_chop = 'WORLD_DOG_BARKING_ROTTWEILER', -- Chop is Rottweiler-framed, same substitution as K9_SIT_SCENARIO_BY_MODEL_HASH
+    a_c_huskie = 'WORLD_DOG_BARKING_RETRIEVER', -- no husky-specific scenario, same substitution as K9_SIT_SCENARIO_BY_MODEL_HASH
+}) do
+    K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH[GetHashKey(model)] = scenario
+end
+local K9_DOOR_SCRATCH_DEFAULT_SCENARIO = 'WORLD_DOG_BARKING_SHEPHERD' -- fallback for an unmapped/future Config.Peds model, mirrors K9_SIT_DEFAULT_SCENARIO
+
+-- Placeholder sound reference for the ACTING player's own local cue, played
+-- immediately on the K9 itself (distinct from the shared/broadcast alert
+-- cue played on the DOOR via the playDoorScratch receiver further below).
+-- Same "harmless no-op until a real asset exists" reasoning as
+-- client/main.lua's BARK_SOUND_NAME/BARK_SOUND_SET — reuses the SAME
+-- placeholder soundset name ('qbx_k9unit_sounds') client/search.lua's
+-- contraband-alert sound already uses, rather than inventing a second
+-- placeholder soundset, since neither is a real shipped audio bank yet
+-- either way (SPEC.md §7's bark-sounds asset-gap note applies identically
+-- here — this is not a zero-asset feature in the end, just not a scripting
+-- blocker).
+local DOOR_SCRATCH_SOUND_NAME = 'DoorScratch'
+local DOOR_SCRATCH_SOUND_SET = 'qbx_k9unit_sounds'
+
+--- Shared implementation behind the "Scratch to Alert" ox_target option's
+--- onSelect below.
+--- @param entity number  -- resolved live entity handle from the ox_target callback's own `data.entity`
+local function ScratchAtDoor(entity)
+    -- Defensive re-check, same posture as every other gated action in this
+    -- file (RequestLeashAttach, K9Sit, etc.) — canInteract below is a
+    -- DISPLAY optimization only; server/main.lua's relayDoorScratch handler
+    -- independently re-verifies Config.Features.DoorInteraction AND
+    -- HasK9Access(source) regardless of what this client claims.
+    if not CanShowK9UI() then
+        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        return
+    end
+
+    if not DoesEntityExist(entity) then
+        lib.notify({ title = 'K9 Unit', description = 'Nothing there to scratch at.', type = 'error' })
+        return
+    end
+
+    -- Resolve the netId NOW, before doing anything else — same
+    -- handle-can-go-stale reasoning client/search.lua's PerformSearch()
+    -- documents for its own identical capture-up-front pattern (entity
+    -- handles get recycled once an entity is deleted/streamed out).
+    local doorNetId = NetworkGetNetworkIdFromEntity(entity)
+
+    -- Local visual/audio feedback cue on the ACTING player's own K9,
+    -- per phase2_notes/door_interaction.md §4.2 ("Play a scratch/paw
+    -- animation + sound cue locally on the K9 ... TriggerServerEvent(...)").
+    -- This plays immediately and unconditionally (unlike client/radial.lua's
+    -- Bark item, which plays no local cue at all and relies entirely on the
+    -- eventual broadcast) — deliberately different from Bark's shape here,
+    -- per this feature's own design note, not an inconsistency to "fix"
+    -- later. The shared/broadcast alert cue (anchored to the DOOR, for
+    -- every client that has it streamed in, including this one) is a
+    -- SEPARATE sound played by the playDoorScratch receiver below once the
+    -- server round-trips it back — this call does not substitute for that.
+    local ped = PlayerPedId()
+    local scenarioName = K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH[GetEntityModel(ped)] or K9_DOOR_SCRATCH_DEFAULT_SCENARIO
+    ClearPedTasksImmediately(ped)
+    TaskStartScenarioInPlace(ped, scenarioName, 0, true)
+    PlaySoundFromEntity(-1, DOOR_SCRATCH_SOUND_NAME, ped, DOOR_SCRATCH_SOUND_SET, false, 0)
+
+    TriggerServerEvent('qbx_k9unit:server:relayDoorScratch', doorNetId)
+end
+
+-- Register the "Scratch to Alert" ox_target option on nearby door-like
+-- objects (SPEC.md §11.5: "available on any door within
+-- Config.DoorInteraction.interactDistance regardless of lock state").
+-- Config-gated AT REGISTRATION (the whole exports.ox_target:addGlobalObject
+-- call below is wrapped in `if Config.Features.DoorInteraction`), not just
+-- inside canInteract/onSelect — mirrors client/vision.lua's "config-gated
+-- registration, not just config-gated behavior" precedent
+-- (Config.Features.ThermalVision/NightVision gating RegisterCommand/
+-- RegisterKeyMapping directly), a stricter pattern than this file's OWN
+-- earlier convention of registering unconditionally and checking the flag
+-- only inside canInteract (see the "Attach Leash" option above, gated by
+-- Config.Features.LeashMechanics only inside canInteract). Both patterns
+-- already coexist in this codebase; this option follows the stricter one on
+-- purpose, per this task's explicit direction for this specific feature.
+if Config.Features.DoorInteraction then
+    exports.ox_target:addGlobalObject({
+        {
+            name = 'qbx_k9unit:scratchDoor',
+            icon = 'fas fa-paw',
+            label = 'Scratch to Alert',
+            distance = Config.DoorInteraction.interactDistance,
+            canInteract = function(entity, distance, coords, name)
+                if not CanShowK9UI() then return false end
+                return IsLikelyDoorEntity(entity)
+            end,
+            onSelect = function(data)
+                ScratchAtDoor(data.entity)
+            end,
+        },
+    })
+end
+
+--- Broadcast receiver for the shared "door was scratched" alert cue —
+--- mirrors client/main.lua's existing playBark handler EXACTLY per SPEC.md
+--- §11.4 item 6 (resolve the network entity, no-op if not streamed in, play
+--- a sound), including the same defensive "0 or nonexistent" guard
+--- server/main.lua's own relayDoorScratch handler already applies to this
+--- SAME netId server-side before ever broadcasting it — belt-and-suspenders
+--- here, since a client should never assume a netId it receives over the
+--- network still resolves to something real by the time this fires
+--- (streamed out between broadcast and receipt is a normal, expected race,
+--- not an error worth logging/notifying about).
+--- @param doorNetId number
+RegisterNetEvent('qbx_k9unit:client:playDoorScratch', function(doorNetId)
+    if not NetworkDoesEntityExistWithNetworkId(doorNetId) then
+        return -- this client doesn't have the door entity streamed in at all
+    end
+
+    local entity = NetworkGetEntityFromNetworkId(doorNetId)
+    if entity == 0 or not DoesEntityExist(entity) then return end
+
+    PlaySoundFromEntity(-1, DOOR_SCRATCH_SOUND_NAME, entity, DOOR_SCRATCH_SOUND_SET, false, 0)
+end)
