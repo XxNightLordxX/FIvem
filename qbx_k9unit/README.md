@@ -15,11 +15,21 @@ top of a player who is already playing as a dog.
 **Status:** Phase 1 (vertical slice) is feature-complete and reviewed:
 certification grant/revoke/check, a consensual two-player leash system,
 the "K9 Unit" radial menu, K9 vehicle load/release, and a bark relay.
-Everything described below is what Phase 1 actually ships — later phases
-(scent tracking, bite-and-hold, inventory/XP, audio/prop polish; see
-`SPEC.md` §8) are not implemented yet, and several `Config.Features` flags
-and config blocks that belong to those later phases already exist in
-`config.lua` but currently have no code behind them (see
+**Phase 2 (tracking, search zones/contraband alerts, vision, door
+interaction) has its full config schema landed in `config.lua`** — see
+[Phase 2 configuration](#phase-2-configuration-not-yet-enabled-by-default)
+below for every new option — and its corresponding source files
+(`client/tracking.lua`, `client/search.lua`, `client/vision.lua`,
+`server/tracking.lua`, `server/search.lua`) already exist in the tree and
+are wired into `fxmanifest.lua`'s script lists. **None of it is active
+yet**: those files are work-ahead scaffolding (per `SPEC.md` §11) still
+under implementation and review, not finished/audited code, and every
+Phase 2 `Config.Features` flag ships `false` by default — nothing changes
+for an existing install until that work is finished and a server owner
+deliberately opts in, flag by flag. Later phases beyond that (bite-and-
+hold, inventory/XP, audio/prop polish; see `SPEC.md` §8) have no code at
+all yet, and several `Config.Features` flags and config blocks that belong
+to those phases exist in `config.lua` purely as placeholders (see
 [Config options not yet wired up](#config-options-not-yet-wired-up)).
 
 ## Dependencies
@@ -33,6 +43,7 @@ Install and **start these before** `qbx_k9unit` (declared in
 | [`ox_lib`](https://github.com/overextended/ox_lib) | overextended | `lib.callback`, `lib.notify`, `lib.alertDialog`, `lib.addRadialItem` |
 | [`ox_target`](https://github.com/overextended/ox_target) | overextended | In-world interaction options (leash, certify/revoke, vehicle load) |
 | [`oxmysql`](https://github.com/overextended/oxmysql) | overextended | Database access for the certification table |
+| [`ox_inventory`](https://github.com/overextended/ox_inventory) | overextended | **Phase 2 only** (`server/search.lua`) — reads a searched vehicle's/person's real inventory contents and live item weights for the contraband-search feature. Phase 1 never touched inventory at all; this dependency exists solely to support `Config.Features.SearchZones`/`ContrabandAlerts` once that work lands and is reviewed. Still required to be **started** (declared in `fxmanifest.lua`'s `dependencies`) even while those flags are `false`. |
 
 Qbox/QBCore data model only — there is no ESX support.
 
@@ -45,7 +56,11 @@ Qbox/QBCore data model only — there is no ESX support.
    not auto-execute it. It creates one table, `k9_certifications`, and is
    idempotent (`CREATE TABLE IF NOT EXISTS`) if you accidentally run it
    twice.
-3. Add to `server.cfg`, after the four dependencies above:
+3. Add to `server.cfg`, after the five dependencies above (`ox_inventory`
+   must be started too, even though nothing in this resource uses it until
+   Phase 2's `SearchZones`/`ContrabandAlerts` ship — it's still declared in
+   `fxmanifest.lua`'s `dependencies` block, so the resource won't start
+   without it running):
    ```
    ensure qbx_k9unit
    ```
@@ -355,14 +370,22 @@ independently from the pull-back/detach distances.
 
 ### Config options not yet wired up
 
-These exist in `config.lua` (carried over verbatim from the original design
-spec for later phases) but **no code in this resource currently reads
-them**. Changing them has no effect until the corresponding phase is
-implemented:
+These exist in `config.lua` but **no finished/reviewed code in this
+resource currently reads them** — the corresponding `Config.Features` flag
+gates nothing yet because the phase that would gate on it hasn't shipped:
 
 - `Config.Features.ScentTracking`, `BloodTracking`, `WaterTrackingDecay`,
   `GunpowderSniffing`, `SearchZones`, `ContrabandAlerts`, `ThermalVision`,
-  `NightVision`, `DoorInteraction` (Phase 2)
+  `NightVision`, `DoorInteraction` (Phase 2 — listed here only because
+  these **feature flags** aren't consumed by finished/reviewed code yet.
+  The *tuning tables* they'll eventually gate — `Config.Tracking`,
+  `Config.WaterTrackingDecay`, `Config.SearchContrabandItems`,
+  `Config.SearchZones`, `Config.DoorInteraction`, `Config.Vision`,
+  `Config.ContrabandAlertTiers` — already exist in `config.lua` in full and
+  are documented in detail, with their source files already wired into
+  `fxmanifest.lua`'s script lists as work-ahead scaffolding; see
+  [Phase 2 configuration](#phase-2-configuration-not-yet-enabled-by-default)
+  below)
 - `Config.Features.BiteAndHold`, `NonLethalTakedown`, `HandlerDownDefense`,
   `PropDragging`, `AgilityAdvanced` (Phase 3)
 - `Config.Features.K9Inventory`, `XPProgression`, `HealthStaminaHUD`,
@@ -372,10 +395,254 @@ implemented:
   `PropAttachments`, `FetchMechanic`, `DeployableKennel`, `CameraFeedPiP`
   (Phase 5)
 - `Config.XPTiers` (Phase 4 — XP thresholds/speed/scent-range tiers)
-- `Config.ContrabandAlertTiers` (Phase 2 — contraband weight thresholds)
 
-They're left `false`/present in the shipped config as a placeholder for
-future phases; there is no harm in leaving them at their defaults.
+The Phase 3/4/5 blocks above are carried over verbatim from the original
+design spec with no code behind them at all yet. All of the above are left
+`false`/present in the shipped config as a placeholder for future work;
+there is no harm in leaving any of them at their defaults.
+
+## Phase 2 configuration (not yet enabled by default)
+
+Every table in this section lives in `config.lua` today and is documented
+here so a server owner can plan ahead, but **nothing in this section is
+active in this build**. The client/server logic that would read these
+tables — `client/tracking.lua`, `client/search.lua`, `client/vision.lua`,
+`server/tracking.lua`, `server/search.lua` — exists in the resource only as
+work-ahead scaffolding written against `SPEC.md` §11 (every function body
+is a `-- TODO` stub citing its source-of-truth section); it is not yet
+implemented, not security-reviewed (`server/search.lua` in particular is
+flagged in-code as the security-critical file of this phase), and does not
+actually gate on `Config.Features` yet. Every gating flag below ships
+`false`. Do not flip any of them to `true` until a release note says Phase
+2 has shipped and been reviewed.
+
+### `Config.Tracking`
+
+```lua
+Config.Tracking = {
+    Scent     = { maxRange = 40.0, markerSpacing = 3.0, searchCooldownMs = 5000 },
+    Blood     = { maxRange = 40.0, maxAgeSeconds = 300, markerSpacing = 3.0, searchCooldownMs = 5000, relayCooldownMs = 500 },
+    Gunpowder = { maxRange = 40.0, maxAgeSeconds = 120, markerSpacing = 3.0, searchCooldownMs = 5000, relayCooldownMs = 300 },
+}
+```
+
+Tuning for the three self-search "Track Scent" / "Track Blood" / "Track
+Gunpowder" K9 actions (one planned radial item per type, each behind its
+own `Config.Features` flag). Ranges are in meters; ages and cooldowns are
+in seconds/milliseconds as labeled below.
+
+- **`Scent`** (`Config.Features.ScentTracking`) — trail source is a
+  dropped/ground-placed item.
+  - `maxRange` (meters, default `40.0`) — max distance from the K9's own
+    live position to a valid scent source at search time.
+  - `markerSpacing` (meters, default `3.0`) — spacing between rendered
+    trail markers/checkpoints.
+  - `searchCooldownMs` (ms, default `5000`) — per-player cooldown between
+    "Track Scent" attempts, meant to be enforced server-side, not just
+    hidden client-side.
+- **`Blood`** (`Config.Features.BloodTracking`) — trail source is the most
+  recently logged damage-event location for a victim.
+  - `maxRange`, `markerSpacing`, `searchCooldownMs` — same meaning and
+    defaults as `Scent`.
+  - `maxAgeSeconds` (default `300`) — damage events older than this are
+    pruned from the server-side log and can no longer be returned as a
+    valid trail source.
+  - `relayCooldownMs` (default `500`) — a **separate, ingest-side**
+    cooldown: caps how often a single victim's damage events are logged
+    into the trail at all, distinct from `searchCooldownMs` (which
+    throttles *querying* the log, not writing to it). Guards against a
+    flood of legitimate rapid hits (multiple pellets/DoT ticks) or a
+    modified client spamming the relay event. Marked in `config.lua` as a
+    placeholder pending a dedicated tuning pass.
+- **`Gunpowder`** (`Config.Features.GunpowderSniffing`) — trail source is
+  the most recently logged weapon-fire location.
+  - `maxRange`, `markerSpacing`, `searchCooldownMs` — same meaning as
+    `Scent`.
+  - `maxAgeSeconds` (default `120`, deliberately shorter than blood —
+    residue is more time-sensitive).
+  - `relayCooldownMs` (default `300`) — per-shooter ingest-side cooldown,
+    same rationale as `Blood.relayCooldownMs`; also a placeholder pending
+    tuning.
+
+### `Config.WaterTrackingDecay`
+
+```lua
+Config.WaterTrackingDecay = {
+    sampleIntervalMeters = 2.0,
+    breaksTrail          = true,
+}
+```
+
+Gated by `Config.Features.WaterTrackingDecay`. This is **not** a
+trackable type of its own — it's a modifier applied to whichever trail
+(scent, blood, or gunpowder) is currently being rendered, so it only takes
+effect when at least one of those three tracking flags is also enabled and
+a trail is actively drawing.
+
+- `sampleIntervalMeters` (meters, default `2.0`) — how often the rendered
+  trail path is sampled for water presence while it's being drawn.
+- `breaksTrail` (boolean, default `true`) — `true`: crossing water fully
+  breaks the trail; a fresh "Track <Type>" command is required to
+  re-acquire a trail on the far bank, it does not silently resume. `false`:
+  markers within/near the water instead render at reduced opacity and the
+  trail continues uninterrupted — a softer alternative.
+
+### `Config.SearchContrabandItems`
+
+```lua
+Config.SearchContrabandItems = {
+    'weed_bud', 'coke_brick', 'meth_bag', 'weapon_pistol',
+}
+```
+
+List of `ox_inventory` item names to be cross-referenced against a
+searched vehicle's or person's **actual, live** inventory contents once
+`Config.Features.SearchZones` ships. Item weight is intentionally **never**
+duplicated into this config — it's meant to be read live from
+`ox_inventory`'s own item registry at search time, so this list can never
+drift out of sync with a server's real `items.lua` weight values.
+
+> **Placeholder — not production data.** The four item names above are
+> illustrative examples only and have not been reviewed against any real
+> item economy. Replace this list with the actual contraband item names
+> from your own server's `ox_inventory` `items.lua` before ever enabling
+> `SearchZones`/`ContrabandAlerts` — shipped as-is, a search will either
+> find nothing (if these item names don't exist on your server) or match
+> items you never intended to flag as contraband (if they happen to exist
+> under these exact names for an unrelated purpose).
+
+### `Config.SearchZones`
+
+```lua
+Config.SearchZones = {
+    vehicleSearchDistance = 2.0,
+    personSearchDistance  = 2.0,
+    sniffAnimDurationMs   = 4000,
+    searchCooldownMs      = 10000,
+    alertBroadcastRadius  = 15.0,
+}
+```
+
+Gated by `Config.Features.SearchZones` (the search action itself).
+`Config.Features.ContrabandAlerts` is a **separate** flag that additionally
+gates the alert *broadcast* described under `alertBroadcastRadius` below —
+per the design, a search can still privately report its result to the
+searching K9 player with `ContrabandAlerts` off; that flag only controls
+whether nearby players also get an audible/visual reaction.
+
+- `vehicleSearchDistance` / `personSearchDistance` (meters, default `2.0`
+  each) — the ox_target zone radius for the planned "Search Vehicle" /
+  "Search Person" options respectively.
+- `sniffAnimDurationMs` (ms, default `4000`) — how long the sniff
+  interaction plays before a result is revealed; purely cosmetic pacing —
+  the real result is meant to be computed server-side regardless of this
+  delay, never client-side.
+- `searchCooldownMs` (ms, default `10000`) — per-`(K9, target)` pair
+  cooldown, meant to prevent repeat searches of the same vehicle/person to
+  fish for a different roll or simply to harass.
+- `alertBroadcastRadius` (meters, default `15.0`) — **new field added in
+  Phase 2's config.** Max distance from the searched target's own live
+  coordinates within which a bystander would receive the `ContrabandAlerts`
+  sound/reaction broadcast. Deliberately **not** designed as a server-wide
+  broadcast the way the bark relay is — unlike a bark, this payload
+  identifies a specific vehicle/person just flagged for contraband, so a
+  map-wide broadcast would leak that fact to a potential accomplice
+  anywhere on the server.
+
+### `Config.ContrabandAlertTiers`
+
+```lua
+Config.ContrabandAlertTiers = {
+    { minWeight = 0,   alert = 'clean' },
+    { minWeight = 1,   alert = 'whine' },
+    { minWeight = 250, alert = 'aggressive_bark' },
+}
+```
+
+Meant to be consulted whenever a search under `Config.Features.SearchZones`
+completes; the resulting `alert` would only actually broadcast to nearby
+players if `Config.Features.ContrabandAlerts` is also `true` (see
+`Config.SearchZones.alertBroadcastRadius` above). **Order matters** — this
+list must stay sorted ascending by `minWeight`; the search logic is
+designed to walk it and keep the *last* tier whose `minWeight` the total
+contraband weight meets or exceeds, so a zero-contraband result should
+still resolve to a real, defined tier rather than falling through
+unhandled.
+
+The `{ minWeight = 0, alert = 'clean' }` baseline entry is a **new,
+mandatory** addition in Phase 2's config — it was not present in the
+original draft table, which only defined the two found-contraband tiers.
+It exists specifically so a genuinely clean search always has defined
+feedback for the requester instead of an unhandled fallback case.
+
+> **Placeholder — not production data.** Like `Config.SearchContrabandItems`
+> above, the `minWeight` thresholds (`1`, `250`) are placeholder numbers,
+> not the result of an economy/item-weight review. Re-tune them against
+> your own server's actual `ox_inventory` item weights before going live —
+> as shipped, these numbers have no verified relationship to what a real
+> stash on your server would actually weigh.
+
+### `Config.DoorInteraction`
+
+```lua
+Config.DoorInteraction = {
+    interactDistance      = 1.5,
+    nudgeRequiresUnlocked = true,
+    scratchCooldownMs     = 3000,
+}
+```
+
+Gated by `Config.Features.DoorInteraction`, which is meant to cover **both**
+sub-features:
+
+- **Nudge-open** — a cosmetic push-open interaction, scoped to grant no
+  real capability (mirrors the vehicle entry/exit exception described
+  above): designed to only ever be offered on a door that's already
+  unlocked. `nudgeRequiresUnlocked` is documented in `config.lua` as a
+  **hard requirement, not a toggle** — it's not intended to ever ship as
+  `false` on a live server, since flipping it would let the nudge act as a
+  lockpick bypass.
+- **Scratch-to-alert** — a sound-cue interaction available regardless of
+  lock state, structurally mirroring the existing bark relay (a server
+  round-trip plus a per-player cooldown, no inventory/lock-state reveal of
+  any kind).
+
+Fields:
+- `interactDistance` (meters, default `1.5`) — max distance to a door
+  entity at which either option would be offered.
+- `nudgeRequiresUnlocked` (boolean, default `true`) — see above.
+- `scratchCooldownMs` (ms, default `3000`) — per-player cooldown on the
+  scratch-to-alert sound cue, the same shape as `BasicBarkSounds`'
+  existing server-side cooldown.
+
+### `Config.Vision`
+
+```lua
+Config.Vision = {
+    Thermal = { toggleKey = 'K' },
+    Night   = { toggleKey = 'J' },
+}
+```
+
+Two independent native-toggle keybinds, no custom shader or asset —
+`Thermal` is designed to drive `SetSeethrough`, `Night` to drive
+`SetNightvision`. Gated by `Config.Features.ThermalVision` and
+`Config.Features.NightVision` respectively (each independently
+toggleable). Both are designed to gate on simply *playing a K9-modeled
+character* — the same "innate perception, not a granted departmental
+privilege" bar the existing camera toggle already uses — not on holding an
+active certification.
+
+- `Thermal.toggleKey` (default `'K'`) — the default `RegisterKeyMapping`
+  bind for toggling thermal vision on/off. As with the existing camera
+  toggle, this is a default only — the actual key is rebindable per-player
+  through FiveM's own keybind settings menu, not something a server owner
+  locks in solely via this config value.
+- `Night.toggleKey` (default `'J'`) — same mechanism, for night vision.
+
+Thermal and night vision are designed to be mutually exclusive at any given
+moment (toggling one off should toggle the other off too, if both were
+somehow active).
 
 ## Commands
 
@@ -494,6 +761,15 @@ job, rank, proximity, or ped model:
 - `client/radial.lua` — the ox_lib "K9 Unit" radial menu wiring (Sit, Bark,
   Attach/Detach Leash, Enter/Exit Vehicle).
 - `client/vehicle.lua` — K9 vehicle load/release and its ox_target options.
+- `client/tracking.lua`, `client/search.lua`, `client/vision.lua`,
+  `server/tracking.lua`, `server/search.lua` — **Phase 2 scaffolding, not
+  yet implemented behavior.** These files exist in the tree and are wired
+  into `fxmanifest.lua`'s script lists, but every function body is a
+  `-- TODO` stub per `SPEC.md` §11, pending implementation and (for
+  `server/search.lua` especially) a security review before anything in
+  them is mergeable/enabled. See
+  [Phase 2 configuration](#phase-2-configuration-not-yet-enabled-by-default)
+  above for the config they're designed to eventually read.
 
 There are no `exports` declared by this resource (no `server_exports` /
 `client_exports` in `fxmanifest.lua`) — integration by other resources is
