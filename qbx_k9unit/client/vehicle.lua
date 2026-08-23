@@ -34,8 +34,12 @@
 
 -- Local-only "am I currently tucked into a vehicle" state. Not exposed
 -- directly — always go through IsInK9Vehicle()/EnterNearestK9Vehicle()/
--- ExitK9Vehicle().
---- @type { vehicle: number, doorIndex: number } | nil
+-- ExitK9Vehicle(). Stores the vehicle's NETWORK id, not a raw entity
+-- handle — see ResolveVehicleFromState() below for why (a cached raw
+-- handle can go stale over a ride of unknown length; client/movement.lua's
+-- leash pull-back thread established this exact re-resolve-every-use
+-- pattern for the same reason on a ped handle).
+--- @type { vehicleNetId: number, doorIndex: number } | nil
 local vehicleState = nil
 
 --- @return boolean
@@ -71,6 +75,49 @@ local function FindNearestK9Vehicle(maxDistance)
     return nearestVehicle
 end
 
+--- Re-resolves the vehicle referenced by vehicleState back to a live
+--- entity handle via its network id, rather than trusting a raw handle
+--- cached at entry time to stay valid for the whole ride (the vehicle can
+--- be streamed out and back in, in which case the old handle silently
+--- refers to nothing/something else). Mirrors client/movement.lua's leash
+--- pull-back thread, which re-resolves its partner ped from a server id
+--- every tick for the identical reason ("a cached ped handle can go
+--- stale").
+--- @return number? vehicle
+local function ResolveVehicleFromState()
+    if not vehicleState then return nil end
+    if not NetworkDoesEntityExistWithNetworkId(vehicleState.vehicleNetId) then return nil end
+    return NetworkGetEntityFromNetworkId(vehicleState.vehicleNetId)
+end
+
+--- Reverses the four persisted native states EnterNearestK9Vehicle()
+--- applies to the player's own ped (attach, freeze, visibility, collision
+--- all persist on the entity itself and never revert on their own), and
+--- repositions the ped next to `vehicle` if it still exists. Shared by
+--- ExitK9Vehicle() (the normal player-driven release) and the
+--- onResourceStop handler below, so a resource restart mid-ride can't
+--- permanently strand a player frozen/invisible/collisionless/attached
+--- with no self-service recovery path (the ship-blocking bug this helper
+--- exists to close).
+--- @param ped number
+--- @param vehicle number|nil  -- resolved live vehicle entity, or nil if it no longer exists
+local function ReleasePedFromVehicleState(ped, vehicle)
+    DetachEntity(ped, true, false)
+    FreezeEntityPosition(ped, false)
+    SetEntityVisible(ped, true, false)
+    SetEntityCollision(ped, true, true)
+
+    if vehicle and DoesEntityExist(vehicle) then
+        local exitCoords = GetOffsetFromEntityInWorldCoords(vehicle, 0.0, -3.0, 0.0)
+        SetEntityCoords(ped, exitCoords.x, exitCoords.y, exitCoords.z, false, false, false, true)
+        SetEntityHeading(ped, GetEntityHeading(vehicle))
+    end
+    -- If the vehicle itself no longer exists (despawned while "loaded"),
+    -- just restore the ped in place rather than erroring — better than
+    -- leaving the player permanently frozen/invisible with no vehicle to
+    -- reference.
+end
+
 --- Finds the nearest vehicle within Config.VehicleInteractMeters whose
 --- model is in Config.K9Vehicles and enters it (hides/freezes the K9's
 --- own ped, per SPEC.md §6.1 vehicle bullet).
@@ -104,7 +151,10 @@ function EnterNearestK9Vehicle()
     SetEntityVisible(ped, false, false)
     AttachEntityToEntity(ped, vehicle, 0, 0.0, -1.5, 0.0, 0.0, 0.0, 0.0, false, false, false, false, 2, true)
 
-    vehicleState = { vehicle = vehicle, doorIndex = 5 } -- boot/trunk, a reasonable default "loaded" spot
+    -- Store the NETWORK id, not the raw `vehicle` handle above — see
+    -- ResolveVehicleFromState()'s doc comment for why the handle itself
+    -- isn't trusted to stay valid for the whole ride.
+    vehicleState = { vehicleNetId = NetworkGetNetworkIdFromEntity(vehicle), doorIndex = 5 } -- boot/trunk, a reasonable default "loaded" spot
     lib.notify({ title = 'K9 Unit', description = 'Loaded into the vehicle.', type = 'success' })
 end
 
@@ -121,26 +171,30 @@ function ExitK9Vehicle()
     if not IsInK9Vehicle() then return end
 
     local ped = PlayerPedId()
-    local vehicle = vehicleState.vehicle
-
-    DetachEntity(ped, true, false)
-    FreezeEntityPosition(ped, false)
-    SetEntityVisible(ped, true, false)
-    SetEntityCollision(ped, true, true)
-
-    if DoesEntityExist(vehicle) then
-        local exitCoords = GetOffsetFromEntityInWorldCoords(vehicle, 0.0, -3.0, 0.0)
-        SetEntityCoords(ped, exitCoords.x, exitCoords.y, exitCoords.z, false, false, false, true)
-        SetEntityHeading(ped, GetEntityHeading(vehicle))
-    end
-    -- If the vehicle itself no longer exists (despawned while "loaded"),
-    -- just restore the ped in place rather than erroring — better than
-    -- leaving the player permanently frozen/invisible with no vehicle to
-    -- reference.
+    ReleasePedFromVehicleState(ped, ResolveVehicleFromState())
 
     vehicleState = nil
     lib.notify({ title = 'K9 Unit', description = 'Released from the vehicle.', type = 'success' })
 end
+
+-- Resource-restart safety net (ship-blocking QA finding): vehicleState is
+-- a plain Lua local, so it resets to nil on `restart qbx_k9unit` — but the
+-- native states EnterNearestK9Vehicle() applied to the ped (frozen,
+-- invisible, collisionless, attached) are entity-persisted and do NOT
+-- revert on their own just because the script unloads. Without this
+-- handler, restarting this resource mid-ride permanently strands the
+-- player: the new script instance boots with vehicleState = nil, so
+-- IsInK9Vehicle() reports false and ExitK9Vehicle() immediately no-ops,
+-- leaving no self-service recovery path. Reuses ReleasePedFromVehicleState
+-- (the exact same cleanup ExitK9Vehicle() runs above) rather than
+-- duplicating the native calls.
+AddEventHandler('onResourceStop', function(resourceName)
+    if resourceName ~= GetCurrentResourceName() then return end
+    if not vehicleState then return end
+
+    ReleasePedFromVehicleState(PlayerPedId(), ResolveVehicleFromState())
+    vehicleState = nil
+end)
 
 -- Register the ox_target vehicle options for every model in
 -- Config.K9Vehicles, labeled contextually ("Load Into Vehicle" /
@@ -183,7 +237,7 @@ exports.ox_target:addGlobalVehicle({
         distance = Config.VehicleInteractMeters,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.VehicleEntryExit then return false end
-            return IsInK9Vehicle() and vehicleState.vehicle == entity
+            return IsInK9Vehicle() and ResolveVehicleFromState() == entity
         end,
         onSelect = function()
             ExitK9Vehicle()
