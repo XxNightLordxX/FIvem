@@ -1,22 +1,13 @@
 --[[
     qbx_k9unit/server/search.lua
 
-    Phase 2 SCAFFOLD ONLY (coder-backend lens) — NOT final implementation
-    and NOT wired into fxmanifest.lua yet. Written ahead of Phase 1's
-    confirmation wave closing, per explicit work-ahead direction (safe to
-    read/review, not safe to merge/enable blindly). Every function body
-    below is a `-- TODO` stub citing the authoritative source for exactly
-    what must go there — do not treat anything here as reviewed,
-    security-checked, or mergeable as-is.
-
-    THIS IS THE SECURITY-CRITICAL FILE OF PHASE 2, per SPEC.md §11.1
-    sub-phase 2b ("this is also the piece coder-security should review
-    first, per the task's explicit direction to confirm search results
-    can't be client-claimed") and per phase2_notes/contraband_search_contract.md's
-    own framing ("designing early because the trust boundary doesn't move
-    even if config field names do"). Treat every TODO below as a hard
-    requirement to satisfy before this file is considered done, not a
-    suggestion — and get an explicit coder-security sign-off on the real
+    Phase 2 implementation (coder-backend). THIS IS THE SECURITY-CRITICAL
+    FILE OF PHASE 2, per SPEC.md §11.1 sub-phase 2b ("this is also the
+    piece coder-security should review first, per the task's explicit
+    direction to confirm search results can't be client-claimed") and per
+    phase2_notes/contraband_search_contract.md's own framing ("designing
+    early because the trust boundary doesn't move even if config field
+    names do"). Get an explicit coder-security sign-off on this
     implementation before it ships, the same standard
     server/certifications.lua's header already sets for §4's grant/revoke
     flow.
@@ -35,93 +26,68 @@
     (this file's sibling) only ever reveals a client-cosmetic marker trail
     (SPEC.md §11.6, no real capability granted).
 
-    AUTHORITATIVE SOURCES FOR THIS FILE'S BODY, IN ORDER OF PRECEDENCE
-    (read all three in full before writing real code — none of them are
-    optional background):
+    AUTHORITATIVE SOURCES FOR THIS FILE'S BODY, IN ORDER OF PRECEDENCE:
     1. SPEC.md §11.4 item 2 (event/callback contract) and §11.5's
        "Search vehicle/person + contraband alert tiers" acceptance
-       criteria — the base contract this file must satisfy.
+       criteria — the base contract this file satisfies.
     2. phase2_notes/contraband_search_contract.md — supplements §11.4/
-       §11.5 with the exact server-authoritative validation order (its
-       §3, 15 numbered steps — reproduced/renumbered as 17 steps in
-       HandleSearchTarget's own doc comment below to fold in the security
-       review's blocking additions inline, rather than as a separate
-       pass), the REAL confirmed ox_inventory export surface (its §1 —
-       `GetInventoryItems`, `GetInventory`, `GetItemCount`,
-       `GetContainerFromSlot`, read against the actual
+       §11.5 with the exact server-authoritative validation order (§3), the
+       REAL confirmed ox_inventory export surface (§1 —
+       `GetInventoryItems`, `GetContainerFromSlot`, read against the actual
        overextended/ox_inventory source, not guessed), the mandatory
-       container-recursion requirement (its §2), and the race-safe
-       rate-limiting/mutex design (its §4).
-    3. phase2_notes/contraband_search_security_review.md — reviews §11.4
-       item 2 adversarially and lists BLOCKING findings (its §8 summary)
-       that §11.4's own text does not state explicitly. Every blocking
-       item there is treated as equal in authority to SPEC.md itself
-       below, not as optional hardening:
-         - Blocking: contraband alert broadcast must be DISTANCE-FILTERED,
-           never a global `-1` broadcast like relayBark's (§1).
-         - Blocking: broadcast payload carries `netId` + `alertTier`
-           ONLY — never `totalWeight`/`contrabandFound` (§1).
-         - Add a flat per-source cooldown on `searchTarget` (ANY target),
-           independent of the existing per-(source, targetNetId) cooldown
-           (§2).
-         - Write the per-pair cooldown timestamp BEFORE the awaited
+       container-recursion requirement (§2), and the race-safe
+       rate-limiting/mutex design (§4).
+    3. phase2_notes/contraband_search_security_review.md — every BLOCKING
+       finding in its §8 summary is implemented below as a hard
+       requirement, not optional hardening:
+         - Blocking: contraband alert broadcast is DISTANCE-FILTERED (see
+           BroadcastContrabandAlert below), never a global `-1` broadcast
+           like relayBark's (§1).
+         - Blocking: broadcast payload carries `netId` + `alertTier` ONLY —
+           never `totalWeight`/`contrabandFound` (§1).
+         - Flat per-source cooldown on `searchTarget` (ANY target),
+           independent of the existing per-(source, target) cooldown (§2).
+         - Per-pair cooldown timestamp written BEFORE the awaited
            ox_inventory read, not after (§3).
-         - Cross-validate the resolved entity's REAL type against the
-           claimed `targetType`; for 'person', confirm `IsPedAPlayer`-
-           equivalent and a currently-connected player before treating it
-           as searchable (§4).
+         - Resolved entity's REAL type cross-validated against the claimed
+           `targetType`; for 'person', confirmed to resolve to a
+           currently-connected player before being treated as searchable
+           (§4).
          - Explicit, stated decision (not a silent default) on whether a
-           per-target-ONLY backstop cooldown exists alongside the
-           per-(K9, target) one (§5) — NOT resolved by this scaffold.
-         - Nice-to-have: key the person-search cooldown by citizenid, not
-           raw ped netId (§7).
+           per-target-ONLY backstop cooldown exists — see HandleSearchTarget's
+           doc comment below for the decision made and its rationale (§5).
+         - citizenid, not raw ped netId, keys the person-search cooldown
+           (§7).
 
-    api-contract-agent's phase2_notes/EXPORT_TRACKING.md validation pass
-    flags that an EARLIER draft of the security review proposed a
-    competing two-event, tier-only-response shape that CONTRADICTS
-    §11.4's single lib.callback / requester-gets-totalWeight shape. That
-    contradiction is RESOLVED in this scaffold's EVENT/CALLBACK CONTRACT
-    below in favor of §11.4's shape: one `lib.callback`
-    (`searchTarget`), `totalWeight` returned to the REQUESTER only (never
-    broadcast), tier-only for the broadcast-to-bystanders alert. This is
-    the reconciliation EXPORT_TRACKING.md itself recommends — do not
-    re-introduce the two-event shape without an explicit, separate
-    decision to override this reconciliation.
+    Coordinator amendment (2026-08-23, this pass): Config.SearchZones.alertBroadcastRadius
+    is the max distance from the SEARCHED TARGET's own live coordinates
+    for a bystander to receive the alert broadcast — never a global
+    broadcast, per the security review above.
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT — Phase 2 scaffold, reconciled per the
-    precedence list above. Identical in format to
-    server/certifications.lua's contract block for the same
-    parallel-work-without-live-coordination reason that file states.
+    EVENT/CALLBACK CONTRACT — Phase 2. Identical in format to
+    server/certifications.lua's contract block.
 
     Callbacks (ox_lib lib.callback):
     1. 'qbx_k9unit:server:searchTarget' (targetType: 'vehicle'|'person', targetNetId: number)
        -> { ok: boolean, reason: string?, contrabandFound: boolean?, totalWeight: number?, alertTier: string? }
        [THIS FILE]
        See HandleSearchTarget's own doc comment below for the full
-       17-step validation order.
+       validation order.
 
     Server events (RegisterNetEvent, client->server): none. This feature
-    is entirely request/response shaped (SPEC.md §11.4 item 7's own
-    reasoning for why lib.callback is the right fit for tracking-result
-    delivery applies identically here) — there is deliberately no
+    is entirely request/response shaped — there is deliberately no
     fire-and-forget "I searched" event.
 
     Client events (RegisterNetEvent, server->client):
     2. 'qbx_k9unit:client:playContrabandAlert' (netId: number, alertTier: string)
-       [client/search.lua — NOT YET SCAFFOLDED as of this file] — the
-       distance-filtered broadcast described in step 15 below. NOTE the
-       DELIBERATE ABSENCE of `totalWeight`/`contrabandFound` in this
-       payload — see the security review's blocking finding §1.
-       NAMING NOTE: this exact event name is NOT locked anywhere in
-       SPEC.md §11.4 or phase2_notes/EXPORT_TRACKING.md as of this
-       scaffold — §11.4 item 2 only says the alert "triggers a broadcast
-       ... the same way relayBark does" without naming the client-side
-       event. Proposed here following this resource's own established
-       naming convention (`qbx_k9unit:client:<verbNoun>`, camelCase) —
-       confirm with whoever scaffolds client/search.lua before treating
-       this as final, and update EXPORT_TRACKING.md's naming table once
-       confirmed.
+       [client/search.lua] — the distance-filtered broadcast described in
+       BroadcastContrabandAlert below. NOTE the DELIBERATE ABSENCE of
+       `totalWeight`/`contrabandFound` in this payload — see the security
+       review's blocking finding §1. `netId` here is the SEARCHED TARGET's
+       own netId (the vehicle/ped that was flagged), not the requesting
+       K9's — the client needs to know which entity to play the reaction
+       on/near.
 
     Commands: none.
 
@@ -130,299 +96,541 @@
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `HasK9Access(source)`, resource-global from
-      server/certifications.lua — reused, never re-derived, per that
-      file's own "SINGLE source of truth" rule. Does NOT call
+      server/certifications.lua — reused, never re-derived. Does NOT call
       `IsConfiguredK9Model` — a search requester's eligibility is pure
       job+certification (HasK9Access), same posture as
       server/tracking.lua's own FILE-TO-FILE CONTRACT note for the same
       reason.
-    - THIS FILE exposes NO resource-global functions as of this scaffold.
-      OPEN QUESTION (SPEC.md §11.3's own search.lua row): "consider
-      exposing a small shared helper from server/main.lua if [relayBark's
-      broadcast and this file's alert broadcast] end up wanting
-      byte-identical broadcast logic" — NOT the case here, since the
-      security review's blocking finding §1 requires THIS broadcast to be
-      distance-filtered while relayBark's stays a raw `-1` broadcast (its
-      payload is harmless server-wide, this one is not) — so the two are
-      NOT byte-identical and should NOT naively share relayBark's helper
-      as-is. Whether a NEW shared "distance-filtered broadcast" helper is
-      worth factoring out (e.g. if server/main.lua's future
-      relayDoorScratch ever wants the same targeted-audience treatment,
-      per phase2_notes/EXPORT_TRACKING.md's own open item on door-scratch
-      broadcast scope) is a judgment call for whoever writes the real
-      body — not decided by this scaffold either way.
+    - THIS FILE exposes NO resource-global functions.
     - THIS FILE owns `SearchInFlight`, `lastSearchAt`, and
       `lastTargetSearchAt` below as file-local state — see each table's
       own doc comment for why each exists.
     ======================================================================
 ]]
 
--- In-flight mutex per source (contraband_search_contract.md §4A — "closes
--- the exact check-then-act race server/certifications.lua's DB
--- unique-index backstop exists to close for grant INSERTs, recurring here
--- in a different shape"). MUST be set synchronously, BEFORE any await,
--- checked as validation step 4 below, and cleared on EVERY exit path
--- (success, failure, AND error — the equivalent of a `finally`) so a
--- thrown error inside the ox_inventory call doesn't permanently wedge a
--- source out of ever searching again.
+-- In-flight mutex per source (contraband_search_contract.md §4A). Set
+-- synchronously, BEFORE any yielding work, checked immediately after the
+-- cheap validation steps (payload shape, feature flag, access) and before
+-- any cooldown/entity-resolution work, cleared on EVERY exit path
+-- (success, failure, AND error) so a thrown error inside the ox_inventory
+-- call doesn't permanently wedge that source out of ever searching again.
 -- SearchInFlight[source] = true | nil
 local SearchInFlight = {}
 
 -- Flat per-source cooldown — BLOCKING per
 -- contraband_search_security_review.md §2 ("nothing stops a single
 -- source from searching many different targets back-to-back with zero
--- delay" — NOT present in SPEC.md §11.4's original text, which only
--- specifies a per-(source, target) cooldown). Recommended sizing: around
--- Config.SearchZones.sniffAnimDurationMs (that finding's own suggestion).
--- Mirrors BARK_COOLDOWN_MS/lastBarkAt's exact shape in server/main.lua.
+-- delay"). Sized around Config.SearchZones.sniffAnimDurationMs (that
+-- finding's own suggestion). Mirrors BARK_COOLDOWN_MS/lastBarkAt's exact
+-- shape in server/main.lua. Cleared on playerDropped.
 -- lastSearchAt[source] = <GetGameTimer() ms>
 local lastSearchAt = {}
 
 -- Per-resolved-target cooldown backing Config.SearchZones.searchCooldownMs
--- (SPEC.md §11.4 item 2's originally-specified "per (source, targetNetId)
--- pair" cooldown) — REFINED per contraband_search_contract.md §4B to key
--- on the RESOLVED, STABLE identity (plate for vehicles; for persons,
--- prefer citizenid over raw server id per
--- contraband_search_security_review.md §7's "survives a ped-recreation
--- edge case" nice-to-have — TODO: confirm citizenid vs. targetServerId
--- before writing the real body), NOT the raw client-supplied
--- `targetNetId` (recyclable/spoofable-adjacent, per §4B's own reasoning).
--- Outlives any single player's connection (a plate persists after the
--- searching officer disconnects), so — unlike lastSearchAt/SearchInFlight
--- above, which clear on that source's own playerDropped — this table
--- needs its OWN independent TTL-based sweep so it doesn't grow unbounded
--- for the resource's lifetime (contraband_search_contract.md §4, mirrors
--- server/certifications.lua's own "regression-test fix" for its
--- citizenid-keyed cache's unbounded growth).
--- lastTargetSearchAt[<resolved identity string>] = <GetGameTimer() ms>
+-- — keyed on the RESOLVED, STABLE identity (plate for vehicles; citizenid
+-- for persons, per contraband_search_security_review.md §7's "survives a
+-- ped-recreation edge case" note), NOT the raw client-supplied
+-- `targetNetId` (recyclable/spoofable-adjacent, contraband_search_contract.md
+-- §4B). Outlives any single player's connection (a plate persists after
+-- the searching officer disconnects), so — unlike lastSearchAt/SearchInFlight
+-- above — this table needs its OWN independent TTL-based sweep instead of
+-- playerDropped-based cleanup, see PruneTargetSearchCooldowns below.
+-- lastTargetSearchAt['vehicle:<plate>' | 'person:<citizenid>'] = <GetGameTimer() ms>
 local lastTargetSearchAt = {}
 
---- TODO (contraband_search_contract.md §4 — "an independent TTL-based
---- sweep... so it doesn't grow unbounded for the lifetime of the
---- resource"): a CreateThread loop on a modest interval (e.g. every
---- 60-120s — exact interval not spec-mandated) that drops
---- `lastTargetSearchAt` entries older than some multiple of
---- Config.SearchZones.searchCooldownMs (an entry older than its own
---- cooldown window is by definition no longer doing any rate-limiting
---- work and is safe to drop). Not the same table as
---- server/tracking.lua's `TrackableLog` prune pass — do not merge the two
---- threads, they prune different, unrelated tables on different schedules
---- for different reasons.
+-- Precomputed set of configured contraband item names, built once at file
+-- load (config.lua is a shared_script loaded before this file). O(1)
+-- membership test instead of re-scanning Config.SearchContrabandItems per
+-- inventory slot.
+local ContrabandItemSet = {}
+for _, itemName in ipairs(Config.SearchContrabandItems) do
+    ContrabandItemSet[itemName] = true
+end
+
+-- Container recursion depth cap (contraband_search_contract.md §2 —
+-- "an explicitly chosen max depth (e.g. 3) — not unbounded, and not
+-- skipped"). Deliberately a LOCAL implementation constant, not a
+-- Config.* field — recursion depth is an internal defensive bound of this
+-- file's own scan logic, not a server-owner tuning knob.
+local MAX_CONTAINER_RECURSION_DEPTH = 3
+
+--- Recursively sums the weight of every slot (top-level + nested
+--- containers, up to MAX_CONTAINER_RECURSION_DEPTH) in `items` whose
+--- `.name` is a configured contraband item (contraband_search_contract.md
+--- §2 — "must-handle, not optional polish": a naive top-level-only scan
+--- will not match a bag's OWN item name against Config.SearchContrabandItems,
+--- so "put the drugs in a bag" would otherwise be a trivial, fully-defeating
+--- bypass). `.weight` on each ItemSlot is ALREADY the total weight for
+--- that slot (item.weight * slot.count, plus adjustments) per the
+--- contract doc's confirmed read of the real ox_inventory source — do NOT
+--- re-multiply by `.count` here, that would double-count.
+--- @param inventoryId string|number -- needed to resolve child containers via GetContainerFromSlot
+--- @param items table<number, table>? -- GetInventoryItems' return shape
+--- @param depth number -- 1 for the initial top-level call
+--- @return number totalWeight
+local function SumContrabandWeight(inventoryId, items, depth)
+    local total = 0
+    if not items then return total end
+
+    for _, slot in pairs(items) do
+        if ContrabandItemSet[slot.name] then
+            total = total + (slot.weight or 0)
+        end
+
+        if depth < MAX_CONTAINER_RECURSION_DEPTH then
+            -- A non-container slot simply resolves to nil/false here —
+            -- pcall-wrapped since a mid-scan entity/inventory change could
+            -- make this error rather than cleanly return nil.
+            local containerOk, containerInv = pcall(function()
+                return exports.ox_inventory:GetContainerFromSlot(inventoryId, slot.slot)
+            end)
+            if containerOk and containerInv and containerInv.items then
+                total = total + SumContrabandWeight(containerInv.id or inventoryId, containerInv.items, depth + 1)
+            end
+        end
+    end
+
+    return total
+end
+
+--- Resolves `totalWeight` to a tier from Config.ContrabandAlertTiers.
+--- Coordinator amendment (2026-08-23): the config's baseline
+--- `{ minWeight = 0, alert = 'clean' }` entry is mandatory and sorted
+--- first (ascending by minWeight) — walk the whole list and keep the LAST
+--- tier whose minWeight the total meets or exceeds, so a zero-contraband
+--- result always resolves to 'clean' rather than falling through
+--- unhandled. Does not assume the list is sorted defensively (falls back
+--- to the first entry if somehow none matched, which cannot happen given
+--- the mandatory `minWeight = 0` baseline, but avoids ever returning nil).
+--- @param totalWeight number
+--- @return table tier -- { minWeight, alert }
+local function ResolveAlertTier(totalWeight)
+    local resolvedTier = Config.ContrabandAlertTiers[1]
+    for _, tier in ipairs(Config.ContrabandAlertTiers) do
+        if totalWeight >= tier.minWeight then
+            resolvedTier = tier
+        end
+    end
+    return resolvedTier
+end
+
+--- BLOCKING per contraband_search_security_review.md §1: iterates
+--- connected players and only notifies those within
+--- Config.SearchZones.alertBroadcastRadius of the TARGET's own live
+--- coordinates — NEVER a global TriggerClientEvent(-1, ...) like
+--- relayBark's, since (unlike a bark) this payload identifies a specific
+--- vehicle/person just flagged for contraband; a global broadcast would
+--- leak that fact to an accomplice anywhere on the map. Payload carries
+--- ONLY `targetNetId` + `alertTier` — NEVER `totalWeight`/`contrabandFound`
+--- (security review §1's "secondary" finding).
+--- @param targetCoords vector3 -- the searched target's own live coords, resolved server-side
+--- @param targetNetId number -- the searched target's own netId (client-supplied but already verified to resolve to this exact entity by the time this is called)
+--- @param alertTierName string
+local function BroadcastContrabandAlert(targetCoords, targetNetId, alertTierName)
+    for _, playerIdStr in ipairs(GetPlayers()) do
+        local playerId = tonumber(playerIdStr)
+        if playerId then
+            local ped = GetPlayerPed(playerId)
+            if ped ~= 0 then
+                local dist = #(GetEntityCoords(ped) - targetCoords)
+                if dist <= Config.SearchZones.alertBroadcastRadius then
+                    TriggerClientEvent('qbx_k9unit:client:playContrabandAlert', playerId, targetNetId, alertTierName)
+                end
+            end
+        end
+    end
+end
+
+-- An entry older than its own cooldown window is by definition no longer
+-- doing any rate-limiting work and is safe to drop (contraband_search_contract.md
+-- §4). Not the same table/schedule as server/tracking.lua's TrackableLog
+-- prune pass — unrelated tables, unrelated reasons, do not merge the
+-- threads.
+local TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS = 60000
+
 local function PruneTargetSearchCooldowns()
-    -- TODO: implementation — see doc comment above.
+    local now = GetGameTimer()
+    local staleAfterMs = Config.SearchZones.searchCooldownMs * 2
+    for key, loggedAt in pairs(lastTargetSearchAt) do
+        if (now - loggedAt) > staleAfterMs then
+            lastTargetSearchAt[key] = nil
+        end
+    end
 end
 
 CreateThread(function()
-    -- TODO: while true do PruneTargetSearchCooldowns(); Wait(<interval>) end
+    while true do
+        Wait(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS)
+        PruneTargetSearchCooldowns()
+    end
 end)
+
+--- Resolves a ped entity to the currently-connected player's server id it
+--- belongs to, or nil if it doesn't belong to any currently-connected
+--- player (an NPC, or a stale/despawned handle).
+---
+--- DELIBERATE IMPLEMENTATION CHOICE, flagged for coder-security: the
+--- design notes this file is built from (phase2_notes/contraband_search_contract.md
+--- §3 step 9, and this file's own prior scaffold) suggested
+--- `GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))` for this
+--- resolution. That combination was never independently re-verified this
+--- session as reliably callable SERVER-side (both natives are
+--- historically associated with the client-side "local player pool"
+--- concept, which the FXServer process — running no game-world simulation
+--- at all — may not expose the same way). Rather than depend on an
+--- unverified native combo for a security-relevant check, this resolves
+--- the same fact (does this entity belong to a real, currently-connected
+--- player?) using only natives already proven reliable SERVER-side
+--- elsewhere in this exact codebase (`GetPlayers()`/`GetPlayerPed(source)`
+--- — both already used in server/certifications.lua and server/main.lua):
+--- scan every connected player's own ped and match by entity handle. This
+--- is strictly more conservative (it can only ever match an entity that
+--- IS some connected player's own ped) and avoids introducing a new,
+--- unverified native dependency on the single most security-sensitive
+--- check in this file.
+--- @param entity number
+--- @return number? targetServerId
+local function ResolveConnectedPlayerFromPed(entity)
+    for _, playerIdStr in ipairs(GetPlayers()) do
+        local playerId = tonumber(playerIdStr)
+        if playerId and GetPlayerPed(playerId) == entity then
+            return playerId
+        end
+    end
+    return nil
+end
+
+--- Fire-and-forget audit log write to `k9_search_log`
+--- (sql/install.sql — see that table's own header comment for the full
+--- db-schema rationale and integration note this function implements).
+--- Non-blocking (`MySQL.insert(...)` WITHOUT `.await`) so a slow/contended
+--- DB write never delays or risks the searchTarget callback's own
+--- response to the requesting officer — and pcall-wrapped for the same
+--- reason: a logging failure must never surface as (or cause) a search
+--- failure to the caller. Only called for outcomes that reached a real
+--- inventory-read attempt (`'found'|'clean'|'search_failed'`) — never for
+--- early rejections (feature_disabled/no_access/search_in_progress/
+--- on_cooldown/too_far/invalid_target), per the table's own documented
+--- scope (those never touched the target's real inventory and carry no
+--- forensic value for "did a search actually happen").
+--- @param source number
+--- @param targetType 'vehicle'|'person'
+--- @param plateOrNil string?
+--- @param targetCitizenidOrNil string?
+--- @param result 'found'|'clean'|'search_failed'
+--- @param totalWeightOrNil number?
+--- @param alertTierOrNil string?
+local function LogSearchAttempt(source, targetType, plateOrNil, targetCitizenidOrNil, result, totalWeightOrNil, alertTierOrNil)
+    -- CORRECTION to sql/install.sql's own integration-note wording
+    -- (regression-tester finding): that comment says to "prefer whatever
+    -- job value HasK9Access already resolved... over re-deriving it" —
+    -- but HasK9Access(source) only ever returns a boolean, it never
+    -- exposes the job name it checked internally. There is nothing to
+    -- reuse; this independently re-derives searcher_job from
+    -- exports.qbx_core:GetPlayer(source).PlayerData.job.name below, same
+    -- as every other citizenid/job lookup in this codebase. Don't go
+    -- looking for a HasK9Access return value that doesn't exist.
+    local searcherPlayer = exports.qbx_core:GetPlayer(source)
+    local searcherData = searcherPlayer and searcherPlayer.PlayerData
+    local searcherCitizenid = searcherData and searcherData.citizenid
+    local searcherJob = searcherData and searcherData.job and searcherData.job.name
+    if not searcherCitizenid or not searcherJob then return end -- defensive: nothing sane to log
+
+    pcall(MySQL.insert, [[
+        INSERT INTO k9_search_log
+            (searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ]], {
+        searcherCitizenid, searcherJob, targetType, plateOrNil, targetCitizenidOrNil, result, totalWeightOrNil, alertTierOrNil,
+    })
+end
+
+--- Internal implementation for the searchTarget callback below. Called
+--- only after the callback's own cheap checks (payload shape, feature
+--- flag, HasK9Access, in-flight mutex, flat per-source cooldown) already
+--- passed. Any error thrown from within here (most commonly an
+--- ox_inventory export call) is caught by the caller's outer pcall and
+--- reported as `{ ok = false, reason = 'search_failed' }`.
+---
+--- Validation order — cheapest/most-defensive checks first, expensive/
+--- leaky ones last (contraband_search_contract.md §3's own framing;
+--- reordering "for convenience," e.g. moving the inventory read before
+--- the proximity check, silently reopens the map-wide oracle this
+--- ordering exists to prevent):
+---   1. Resolve `targetNetId` to a live entity — reject if it doesn't
+---      exist (despawned, garbage netId, or never existed).
+---   2. Cross-check the resolved entity's REAL type against the CLAIMED
+---      `targetType` (BLOCKING, security review §4) — closes the
+---      spoofing angle where a client sends `targetType = 'vehicle'` but
+---      a ped's netId (or vice versa) to probe a mismatched code path.
+---      For 'person', additionally confirms the ped resolves to a REAL,
+---      currently-connected player (never an NPC) via
+---      ResolveConnectedPlayerFromPed above — Phase 2's "person" search is
+---      player-only per SPEC.md §11.3's own scoping note.
+---   3. MANDATORY, FIRST-CLASS live proximity check, run BEFORE any
+---      ox_inventory query, unconditionally (contract doc §3 step 8 / §6:
+---      without this, a modified client could supply the netId of ANY
+---      vehicle/player anywhere on the map and get back a real
+---      contrabandFound/totalWeight result, turning this into a
+---      server-wide "scan any vehicle for drugs" oracle).
+---   4. Derive the resolved, STABLE cooldown identity (plate/citizenid,
+---      never the raw client-supplied targetNetId) and check the
+---      per-(K9, target) cooldown.
+---   5. Stamp BOTH cooldowns (flat per-source AND per-target) NOW, BEFORE
+---      the awaited ox_inventory call below (BLOCKING, security review
+---      §3 / contract doc §3 step 13) — writing the cooldown after an
+---      awaited call leaves a window where a second call for the same
+---      source/target can interleave before the first stamps anything,
+---      causing a double-search/double-broadcast.
+---   6. Derive the real inventory id server-side ONLY now — never
+---      anything client-supplied.
+---   7. Query contents via ox_inventory, pcall-wrapped — a caught error or
+---      a `nil` result is `search_failed`, NEVER collapsed into
+---      `contrabandFound = false` (conflating "we couldn't check" with
+---      "we checked and it's clean" is a correctness bug with real
+---      in-fiction consequences).
+---   8. Recurse into containers (SumContrabandWeight), sum weight, resolve
+---      the alert tier.
+---   9. If Config.Features.ContrabandAlerts and the tier isn't 'clean',
+---      broadcast (distance-filtered, tier-only payload).
+---  10. Return the full result (including totalWeight) to the CALLER
+---      ONLY — this is the one place totalWeight is allowed to appear.
+---
+--- EXPLICIT DECISION, not a silent default (security review §5): this
+--- implementation does NOT add a per-target-ONLY backstop cooldown
+--- independent of searcher identity. Multiple distinct, legitimately
+--- certified K9 officers can each search the same target once their own
+--- per-pair cooldown allows — treated as intended behavior (multiple
+--- units working a scene should each be able to verify independently),
+--- not a gap, now that finding §1 (distance-filtered, tier-only broadcast)
+--- means a repeat search never leaks more information to bystanders than
+--- a single search already did. Flagged here explicitly for
+--- coder-security to confirm or override, per the security review's own
+--- framing that either answer is defensible.
+---
+--- Search-action audit logging (contract doc §6's last bullet: who
+--- searched what/whom, when, result) is NOT an open question — db-schema
+--- already decided YES and shipped `k9_search_log` in sql/install.sql with
+--- a full integration note. Wired here via LogSearchAttempt (see its own
+--- doc comment above and its two call sites below, for 'search_failed' and
+--- for 'found'/'clean').
+--- @param source number
+--- @param targetType 'vehicle'|'person'
+--- @param targetNetId number
+--- @param requestedAt number -- GetGameTimer() at the moment the flat cooldown check passed, reused as the single timestamp for both cooldown stamps
+--- @return table result
+local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
+    local entity = NetworkGetEntityFromNetworkId(targetNetId)
+    if entity == 0 then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    -- Cross-check the resolved entity's REAL type against the CLAIMED
+    -- targetType. GetEntityType: 1 = ped, 2 = vehicle, 3 = object
+    -- (well-established FiveM native behavior).
+    local entityType = GetEntityType(entity)
+    local citizenid, targetServerId
+
+    if targetType == 'vehicle' then
+        if entityType ~= 2 then
+            return { ok = false, reason = 'invalid_target' }
+        end
+    else -- 'person'
+        if entityType ~= 1 then
+            return { ok = false, reason = 'invalid_target' }
+        end
+
+        targetServerId = ResolveConnectedPlayerFromPed(entity)
+        if not targetServerId then
+            return { ok = false, reason = 'invalid_target' } -- NPC, or no longer a connected player's ped
+        end
+
+        local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
+        citizenid = targetPlayer and targetPlayer.PlayerData and targetPlayer.PlayerData.citizenid
+        if not citizenid then
+            return { ok = false, reason = 'invalid_target' }
+        end
+    end
+
+    -- MANDATORY, FIRST-CLASS live proximity check — BEFORE any
+    -- ox_inventory query, unconditionally.
+    local requesterPed = GetPlayerPed(source)
+    if requesterPed == 0 then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    local maxDistance = targetType == 'vehicle' and Config.SearchZones.vehicleSearchDistance or Config.SearchZones.personSearchDistance
+    local dist = #(GetEntityCoords(requesterPed) - GetEntityCoords(entity))
+    if dist > maxDistance then
+        return { ok = false, reason = 'too_far' }
+    end
+
+    -- Derive the resolved, STABLE cooldown identity and the real
+    -- ox_inventory inventory id — NEVER anything client-supplied. `plate`
+    -- is hoisted to this outer scope (rather than staying local to the
+    -- 'vehicle' branch below) because LogSearchAttempt, at the bottom of
+    -- this function, needs it for the k9_search_log audit row.
+    local inventoryId, cooldownKey, plate
+
+    if targetType == 'vehicle' then
+        plate = GetVehicleNumberPlateText(entity)
+        plate = plate and plate:match('^%s*(.-)%s*$') or nil -- trim GTA's space-padded plate string
+        if not plate or plate == '' then
+            return { ok = false, reason = 'invalid_target' }
+        end
+        -- Confirmed against the real overextended/ox_inventory source
+        -- (contraband_search_contract.md §1): a vehicle trunk's inventory
+        -- id is literally 'trunk' .. plate.
+        inventoryId = ('trunk%s'):format(plate)
+        cooldownKey = 'vehicle:' .. plate
+    else
+        -- A connected player's own inventory is keyed by their live
+        -- numeric server id, already loaded while they're online — no
+        -- lazy-load dance needed (unlike vehicles). Re-confirm the target
+        -- is STILL connected right before deriving the inventory id (no
+        -- yield has happened since the earlier resolution above, so this
+        -- is a cheap belt-and-suspenders re-check, not a required
+        -- TOCTOU close).
+        if not targetServerId or GetPlayerPed(targetServerId) ~= entity then
+            return { ok = false, reason = 'invalid_target' }
+        end
+        inventoryId = targetServerId
+        cooldownKey = 'person:' .. citizenid -- citizenid, not raw netId/server id (security review §7 — survives a ped-recreation edge case)
+    end
+
+    -- Per-resolved-target cooldown check.
+    local lastTargetAt = lastTargetSearchAt[cooldownKey]
+    if lastTargetAt and (requestedAt - lastTargetAt) < Config.SearchZones.searchCooldownMs then
+        return { ok = false, reason = 'on_cooldown' }
+    end
+
+    -- Stamp BOTH cooldowns NOW, BEFORE the awaited ox_inventory call below.
+    lastSearchAt[source] = requestedAt
+    lastTargetSearchAt[cooldownKey] = requestedAt
+
+    -- Query contents (recursively via SumContrabandWeight below), pcall-
+    -- wrapped — a lazily-loaded vehicle inventory can error on edge-case
+    -- vehicle classes/timing. LOAD-BEARING DETAIL, confirmed against the
+    -- real overextended/ox_inventory source (contraband_search_contract.md
+    -- §1, re-verified by tech-scout): for an uncached vehicle trunk,
+    -- ox_inventory's own loadInventoryData awaits
+    -- lib.callback.await('ox_inventory:getVehicleData', source, netid)
+    -- against the ambient `source` of whatever coroutine is executing —
+    -- and if that ambient `source` is nil (i.e. this call were deferred to
+    -- a different tick/thread/helper outside this callback's own execution
+    -- context), it falls back to `NetworkGetEntityOwner(entity)` instead of
+    -- hard-failing. That fallback resolves UNPREDICTABLY to whoever
+    -- currently holds network ownership of the vehicle (could be an
+    -- unrelated bystander, or resolve to nobody useful for a vehicle
+    -- nobody's near) — not the requesting K9 player. This call MUST
+    -- therefore stay inside this callback's own execution context (the one
+    -- FiveM already set `source` to = the requesting K9 player) so the
+    -- lazy-load asks the correct client, not an arbitrary/unpredictable one.
+    local queryOk, items = pcall(function()
+        return exports.ox_inventory:GetInventoryItems(inventoryId)
+    end)
+
+    if not queryOk or items == nil then
+        -- k9_search_log audit row — regression-tester correction: this
+        -- MUST be wired at THIS specific pcall boundary (the one strictly
+        -- around the ox_inventory read, which genuinely reached a real
+        -- inventory-read attempt), NOT on the outer catch-all
+        -- pcall(HandleSearchTarget, ...) in the callback registration
+        -- below, which also catches early-validation errors (proximity,
+        -- plate parsing, citizenid resolution) that never touched real
+        -- inventory. Logging from that outer wrapper instead would record
+        -- a phantom search that never actually happened whenever an
+        -- unrelated future bug hits early validation, contradicting this
+        -- table's own forensic-integrity purpose (sql/install.sql's scope
+        -- comment: only found/clean/search_failed, never early rejections).
+        -- 'search_failed' has no real totalWeight/alertTier to record
+        -- (NULL, not 0/'clean' — never misrepresent a failed check as a
+        -- clean one, same discipline as the callback's own reason value).
+        LogSearchAttempt(source, targetType, plate, citizenid, 'search_failed', nil, nil)
+        return { ok = false, reason = 'search_failed' } -- NEVER collapse into contrabandFound = false
+    end
+
+    local totalWeight = SumContrabandWeight(inventoryId, items, 1)
+    local contrabandFound = totalWeight > 0
+    local alertTier = ResolveAlertTier(totalWeight)
+
+    if Config.Features.ContrabandAlerts and alertTier.alert ~= 'clean' then
+        BroadcastContrabandAlert(GetEntityCoords(entity), targetNetId, alertTier.alert)
+    end
+
+    -- k9_search_log audit row (sql/install.sql — db-schema's Phase 2
+    -- addition, wired here per that table's own integration note): one row
+    -- per completed search attempt, fire-and-forget, never delays this
+    -- return.
+    LogSearchAttempt(source, targetType, plate, citizenid, contrabandFound and 'found' or 'clean', totalWeight, alertTier.alert)
+
+    -- The requester who performed a real, gated, proximity-checked search
+    -- learns the real number — this is the ONE place totalWeight is
+    -- allowed to appear (security review §6). Applies identically when
+    -- Config.Features.ContrabandAlerts == false (§11.5: that flag gates
+    -- the broadcast above, not the requester's own result here).
+    return {
+        ok = true,
+        contrabandFound = contrabandFound,
+        totalWeight = totalWeight,
+        alertTier = alertTier.alert,
+    }
+end
 
 --- SPEC.md §11.4 item 2 / contraband_search_contract.md §3. THE
 --- security-critical callback of Phase 2 (SPEC.md §11.1 sub-phase 2b).
----
---- TODO: full body, validation order MATTERS — cheapest/most-defensive
---- checks first, expensive/leaky ones last (contract doc §3's own
---- framing; reordering "for convenience," e.g. moving the inventory read
---- before the proximity check, silently reopens the map-wide oracle
---- finding in step 8 below — this is, per the contract doc's own §6,
---- "the single most important ordering constraint in this whole
---- contract"). Exact steps, in order:
----   1. `type(targetType) ~= 'string'` or `targetType` not one of
----      `'vehicle'|'person'`, or `type(targetNetId) ~= 'number'` ->
----      `{ ok = false, reason = 'invalid_target' }`. Defensive
----      payload-shape check, same posture as relayBark's
----      `type(barkType) ~= 'string'` guard and
----      GrantCertification's `type(targetServerId) ~= 'number'` guard.
----   2. `not Config.Features.SearchZones` -> `{ ok = false, reason =
----      'feature_disabled' }`. Real server-side no-op regardless of
----      client UI state, per §3's cross-cutting acceptance criteria.
----   3. `not HasK9Access(source)` -> `{ ok = false, reason = 'no_access' }`.
----      Reuse the global from server/certifications.lua — do NOT
----      re-derive job/cert logic here.
----   4. `SearchInFlight[source]` already true -> `{ ok = false, reason =
----      'search_in_progress' }` (contract doc §4A) — reject outright,
----      do not queue or silently overwrite the in-flight call.
----   5. Cooldown check, BOTH halves:
----        (a) `lastSearchAt[source]` vs.
----            `Config.SearchZones.sniffAnimDurationMs` — BLOCKING per
----            security review §2, NOT present in §11.4's original text —
----            a flat per-source floor independent of which target is
----            named, closing the "sweep every vehicle in a parking lot
----            with zero delay" flood vector.
----        (b) `lastTargetSearchAt[<resolved identity>]` vs.
----            `Config.SearchZones.searchCooldownMs` — the
----            originally-specified per-(K9, target) cooldown (§11.4 item
----            2). NOTE: the resolved identity this half keys on isn't
----            known until step 10 below (plate/citizenid), so
----            IMPLEMENTATION-WISE this half of the check physically runs
----            AFTER entity resolution (steps 6-9) even though it's
----            listed here for logical grouping with (a) — mirrors
----            contract doc §3's own step 5 vs. step 9 structuring, don't
----            "fix" this into one single early check by keying on raw
----            `targetNetId` instead (that would reopen the exact
----            recycled-netId gap contract doc §4B warns against).
----      Either half failing -> `{ ok = false, reason = 'on_cooldown' }`.
----   6. Resolve `targetNetId` to a live entity:
----      `local entity = NetworkGetEntityFromNetworkId(targetNetId)`.
----      `entity == 0` -> `{ ok = false, reason = 'invalid_target' }`
----      (doesn't exist — despawned, garbage netId, or never existed).
----   7. Cross-check the resolved entity's REAL type against the CLAIMED
----      `targetType` — BLOCKING per security review §4, NOT explicit in
----      §11.4's own text: `GetEntityType(entity)` must be `2` (vehicle)
----      for `targetType == 'vehicle'`; or `1` (ped) AND
----      `NetworkGetPlayerIndexFromPed(entity) ~= -1` (a REAL, currently
----      connected player, never an NPC — SPEC.md §11.3's own "person"
----      search scoping is player-only) for `targetType == 'person'`.
----      Mismatch on either axis -> `{ ok = false, reason =
----      'invalid_target' }` — closes the spoofing angle where a client
----      sends `targetType = 'vehicle'` but a ped's netId (or vice versa)
----      to probe how a mismatched code path behaves.
----   8. MANDATORY, FIRST-CLASS live proximity check — distance between
----      `GetEntityCoords(GetPlayerPed(source))` and
----      `GetEntityCoords(entity)` must be `<=
----      Config.SearchZones.vehicleSearchDistance` or `.personSearchDistance`
----      as appropriate. THIS MUST RUN BEFORE ANY ox_inventory QUERY,
----      UNCONDITIONALLY (contract doc §3 step 8 / §6: "without this
----      check enforced first, a modified client could supply the netId
----      of ANY vehicle/player anywhere on the map and get back a real
----      contrabandFound/totalWeight result for it, turning the feature
----      into a server-wide 'scan any vehicle for drugs' oracle"). Too
----      far -> `{ ok = false, reason = 'too_far' }`.
----   9. NOW stamp BOTH cooldowns (`lastSearchAt[source]` and
----      `lastTargetSearchAt[<resolved identity>]`) — BEFORE the awaited
----      ox_inventory call in step 11, NOT after. BLOCKING per security
----      review §3 / contract doc §3 step 13's explicit ordering
----      requirement: writing the cooldown AFTER an awaited call leaves a
----      window where a second call for the same source/target can
----      interleave before the first stamps anything, causing a
----      double-search/double-broadcast. If the search is later rejected
----      for an unrelated reason (target vanished mid-await, etc.), that's
----      an acceptable minor false-positive on the cooldown — far smaller
----      than a double-search bypassing rate-limiting entirely.
----   10. Derive the real inventory id server-side ONLY now — NEVER
----       anything client-supplied: plate via
----       `GetVehicleNumberPlateText(entity)` for vehicles (inventory id
----       is literally `'trunk' .. plate`, confirmed against the real
----       overextended/ox_inventory source per contract doc §1); the
----       target's own live server id (and/or citizenid, per the
----       `lastTargetSearchAt` doc comment above) via
----       `GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))` for
----       persons.
----   11. Query contents via `exports.ox_inventory:GetInventoryItems(id)`
----       (confirmed real export, contract doc §1 — returns
----       `table<slot, ItemSlot>?`, `nil` if the inventory can't be
----       resolved/loaded), wrapped in `pcall`. LOAD-BEARING DETAIL
----       (contract doc §1): for an uncached vehicle trunk, ox_inventory
----       internally awaits its OWN `lib.callback.await('ox_inventory:getVehicleData', source, netid)`
----       against the ambient `source` of whatever coroutine is executing
----       — meaning this lookup MUST happen from WITHIN this callback's
----       own execution context (the one FiveM already set `source` to =
----       the requesting K9 player), never deferred to a different tick,
----       thread, or a helper called outside that context, or
----       ox_inventory's own internal callback has no valid client to ask
----       about the vehicle and the lazy load silently fails. A person's
----       own inventory needs no such lazy-load dance (already loaded
----       while they're online). A caught error or a `nil` result ->
----       `{ ok = false, reason = 'search_failed' }` — NEVER collapse this
----       into `contrabandFound = false` (contract doc §3 step 10 /
----       security review §6: "conflating 'we couldn't check' with 'we
----       checked and it's clean' is a correctness bug with real
----       in-fiction consequences," independent of exploitability).
----   12. RECURSE into every container slot (contract doc §2 — via
----       `GetContainerFromSlot(inv, slotId)`, confirmed real export) to
----       an EXPLICIT, chosen max depth (e.g. 3 — not unbounded, and not
----       skipped) and include nested `GetInventoryItems` results in the
----       same scan. THIS IS A MUST-HANDLE, NOT OPTIONAL POLISH — a naive
----       top-level-only scan will not match a bag's OWN item name against
----       `Config.SearchContrabandItems`, so "put the drugs in a bag"
----       becomes a trivial, realistic, fully-defeating bypass of the
----       entire feature if this step is skipped.
----   13. Sum `.weight` across every matching slot (top-level + recursed
----       containers) whose `.name` is in `Config.SearchContrabandItems`.
----       Per contract doc §1, `.weight` on each `ItemSlot` is ALREADY the
----       total weight for that slot (`item.weight * slot.count`, plus
----       adjustments) — do NOT re-multiply by `.count`, that would
----       double-count. This sum is `totalWeight`.
----       `contrabandFound = totalWeight > 0`.
----   14. Look up `alertTier` from `Config.ContrabandAlertTiers` (highest
----       `minWeight` not exceeding `totalWeight`). REQUIRES an explicit
----       baseline "clean" tier (e.g. `{ minWeight = 0, alert = 'clean' }`
----       as config.lua's first `Config.ContrabandAlertTiers` entry) to
----       already exist — contract doc §5 option (a), recommended there —
----       so a genuinely clean search has defined feedback rather than an
----       unhandled fallback case. `config.lua`'s CURRENT placeholder table
----       (per SPEC.md §5 / config.lua as of this scaffold) only defines
----       the two found-contraband tiers (`'whine'`, `'aggressive_bark'`)
----       — flag to coder-architect if that baseline tier hasn't landed
----       yet by the time this file is implemented for real; do NOT
----       hardcode a `'clean'` fallback string inside this file instead
----       (contract doc §5 option (b), explicitly the non-recommended
----       alternative).
----   15. If `Config.Features.ContrabandAlerts` and `alertTier` isn't the
----       `'clean'` case, broadcast the alert. BLOCKING per security
----       review §1: this broadcast MUST be DISTANCE-FILTERED — iterate
----       connected players server-side and `TriggerClientEvent` only to
----       those within some `Config.SearchZones`-driven audible radius of
----       the TARGET's live coordinates (computed server-side, same
----       live-position discipline as every other check above) — NEVER
----       reuse relayBark's raw `TriggerClientEvent(..., -1, ...)` shape
----       for this event, even though §11.3's own wording ("mirrors how
----       relayBark already broadcasts") reads as an instruction to copy
----       it literally. The payload must carry ONLY `netId` + `alertTier`
----       (whatever a client needs to pick a sound/animation) — NEVER
----       `totalWeight`, `contrabandFound`, or item identities, to any
----       client other than the requester (security review §1's
----       "Secondary, same root cause" finding — a "just pass the whole
----       result table into the broadcast for convenience" shortcut would
----       silently leak `totalWeight` server-wide to anyone running a
----       listener).
----   16. Return `{ ok = true, contrabandFound, totalWeight, alertTier }`
----       to the CALLER ONLY. This is the ONE place `totalWeight` is
----       allowed to appear (security review §6: "the requester gets the
----       real number... and that boundary only holds if the broadcast
----       path is actually distance-filtered and tier-only" — step 15
----       above is what makes that boundary hold). Applies identically
----       when `Config.Features.ContrabandAlerts == false`: per §11.5's
----       explicit acceptance bullet, a successful search STILL reports
----       `contrabandFound`/`totalWeight` to the requester even with
----       alerts off — that flag gates the broadcast in step 15, not the
----       requester's own result in this step.
----   17. Clear `SearchInFlight[source]` on EVERY exit path above,
----       including every early return in steps 1-9 and any pcall-caught
----       error path in step 11 (contract doc §4A's "finally" requirement)
----       — a thrown error must never permanently wedge a source out of
----       searching again.
----
---- STILL-OPEN, NOT DECIDED BY THIS SCAFFOLD (flag before finalizing —
---- pick one explicitly, do not let either fall out by accident):
----   - Per-target-ONLY backstop cooldown, independent of searcher
----     identity — security review §5: nothing currently stops MULTIPLE
----     distinct, legitimately certified K9 officers from re-probing the
----     SAME target back-to-back, since each individual searcher's own
----     per-pair cooldown (step 5b) is satisfied every time. Either answer
----     ("intended, multiple units working a scene should each be able to
----     search" vs. "add a lighter target-side floor") is defensible —
----     this scaffold does not pick one.
----   - Search action audit logging, mirroring `k9_certifications`' audit
----     trail (contract doc §6's last bullet) — open question for
----     coder-architect/db-schema, not resolved here.
----   - `citizenid` vs. raw `targetServerId` as the person-search cooldown
----     key (security review §7, nice-to-have, not blocking).
 lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetType, targetNetId)
-    -- TODO: see doc comment above for the full 17-step body.
-    return { ok = false, reason = 'not_implemented' }
+    if type(targetType) ~= 'string' or (targetType ~= 'vehicle' and targetType ~= 'person') or type(targetNetId) ~= 'number' then
+        return { ok = false, reason = 'invalid_target' } -- defensive: never trust client payload shape
+    end
+
+    if not Config.Features.SearchZones then
+        return { ok = false, reason = 'feature_disabled' } -- real server-side no-op regardless of client UI state
+    end
+
+    if not HasK9Access(source) then
+        return { ok = false, reason = 'no_access' } -- reuse the global from server/certifications.lua, do not re-derive
+    end
+
+    if SearchInFlight[source] then
+        return { ok = false, reason = 'search_in_progress' } -- reject outright, never queue/race a concurrent call from the same source
+    end
+
+    -- Set the in-flight mutex synchronously, BEFORE any further work that
+    -- could yield (contraband_search_contract.md §4A) — cleared on EVERY
+    -- exit path below.
+    SearchInFlight[source] = true
+
+    local requestedAt = GetGameTimer()
+
+    -- Flat per-source cooldown (ANY target) — BLOCKING per
+    -- contraband_search_security_review.md §2, not present in SPEC.md
+    -- §11.4's original text (which only specified a per-(source, target)
+    -- cooldown). Closes the "sweep every vehicle in a parking lot with
+    -- zero delay" flood vector a per-pair-only cooldown leaves open.
+    if lastSearchAt[source] and (requestedAt - lastSearchAt[source]) < Config.SearchZones.sniffAnimDurationMs then
+        SearchInFlight[source] = nil
+        return { ok = false, reason = 'on_cooldown' }
+    end
+
+    local ok, result = pcall(HandleSearchTarget, source, targetType, targetNetId, requestedAt)
+
+    SearchInFlight[source] = nil -- ALWAYS clear, success or error (contraband_search_contract.md §4A "finally")
+
+    if not ok then
+        print(('[qbx_k9unit] searchTarget error for source %s: %s'):format(source, tostring(result)))
+        return { ok = false, reason = 'search_failed' }
+    end
+
+    return result
 end)
 
 --- Cleans up this file's per-SOURCE ephemeral state on disconnect (does
 --- NOT touch `lastTargetSearchAt`, which is intentionally NOT keyed by
 --- source — see that table's own doc comment on why it needs an
---- independent TTL sweep instead of playerDropped-based cleanup). Same
---- rationale as server/main.lua's playerDropped handler and
---- server/tracking.lua's own equivalent handler.
----
---- TODO: full body —
----   `SearchInFlight[src] = nil`
----   `lastSearchAt[src] = nil`
+--- independent TTL sweep instead).
 AddEventHandler('playerDropped', function(_reason)
     local src = source
-    -- TODO: see doc comment above for the exact cleanup body.
+    SearchInFlight[src] = nil
+    lastSearchAt[src] = nil
 end)

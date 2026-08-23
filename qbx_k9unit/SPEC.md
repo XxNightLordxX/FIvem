@@ -1,7 +1,17 @@
 # qbx_k9unit — Product Spec
 
-Status: CORRECTED — Phase 1 build in progress, coordinated directly by the
-top-level session (peer-agent-to-peer delegation is not available in this
+Status: Phase 1 (vertical slice) is **complete and reviewed** — certification
+grant/revoke/check, the consensual two-player leash system, the "K9 Unit"
+radial menu, K9 vehicle load/release, and the bark relay all shipped and
+passed review (matches README.md's own status line). Phase 2's config
+schema (§11.2) has **landed verbatim in `config.lua`**, and Phase 2's
+scaffolding files (`server/tracking.lua`, `server/search.lua`,
+`client/tracking.lua`, `client/search.lua`, `client/vision.lua`) already
+exist in the tree and are wired into `fxmanifest.lua` — but Phase 2's
+**actual logic is still mid-implementation by concurrent agents** as of
+this pass, not finished or reviewed, and every Phase 2 `Config.Features`
+flag still defaults to `false`. Coordinated directly by the top-level
+session (peer-agent-to-peer delegation is not available in this
 environment; see §10)
 Author: product-agent (spec pass) + top-level session (post-draft
 correction), jlwood17190665@gmail.com
@@ -169,7 +179,7 @@ this requirement is structural, not just "the flag exists":
 **Access rule:** `player.job.name ∈ Config.Departments` **AND** the player
 holds an **active** K9 certification for that job, checked **server-side**
 on every gated action that grants a real capability (radial menu access,
-leash grant/detach, certify/revoke) — not cached client-side as a one-time
+leash attach/detach, certify/revoke) — not cached client-side as a one-time
 pass.
 
 **Exception, confirmed after security review:** K9 vehicle entry/exit
@@ -542,10 +552,16 @@ Config.ContrabandAlertTiers = {
 > **Phase 2 config additions (`Config.Tracking`, `Config.WaterTrackingDecay`,
 > `Config.SearchContrabandItems`, `Config.SearchZones`,
 > `Config.DoorInteraction`, `Config.Vision`) are specified in full in
-> §11.2**, kept out of this section so §5 stays a faithful record of what
-> Phase 1 actually shipped (per this file's own top-of-file transcription
-> convention in `config.lua`) rather than mixing unreviewed Phase 2 additions
-> into the Phase 1 block.
+> §11.2**, and kept out of the code block above purely for this document's
+> own organization — §5 documents Phase 1's original schema, §11.2 documents
+> Phase 2's additions next to the section that scoped them. **This is a
+> documentation split only, not a claim about the real `config.lua`:** as of
+> this pass, the shipped `config.lua` already contains §11.2's Phase 2
+> tables verbatim, appended after the Phase 1 block (every Phase 2
+> `Config.Features` flag they belong to still defaults to `false`, and the
+> logic that reads most of them is still mid-implementation — see the
+> top-of-file Status line). Treat `config.lua` itself, not §5 alone, as the
+> source of truth for the complete current schema.
 
 ---
 
@@ -937,6 +953,41 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     search-zone cooldown on the same target? Not resolved here; flagged as a
     judgment call for coder-backend during implementation, not a spec
     mandate either way.
+15. ~~**(NEW, Phase 2, found and closed during §11.4's event-contract
+    hardening pass) Did `relayDamageEvent` need an explicit rate limit,
+    stated with the same parity as `relayWeaponFire`'s?**~~ **Resolved** —
+    yes, this was a real gap: the original §11.4 event contract explicitly
+    called for "its own tight per-player rate limit" on `relayWeaponFire`
+    (item 4) but never stated the equivalent requirement for
+    `relayDamageEvent` (item 3), leaving the blood-trail ingest side
+    unprotected on paper even though the gunpowder side was covered. Fixed
+    by giving both logged trail types their own logging-side cooldown field
+    — `Config.Tracking.Blood.relayCooldownMs` and
+    `Config.Tracking.Gunpowder.relayCooldownMs`, both present in the shipped
+    `config.lua` — enforced in `server/tracking.lua`'s `relayDamageEvent`/
+    `relayWeaponFire` handlers, with the timestamp stamped **before** any
+    log-append work in both, per the same TOCTOU discipline §11.4 item 2
+    already established for the search cooldown.
+16. **(NEW, Phase 2, found during §11.4's event-contract hardening pass, not
+    yet resolved) Does `relayDoorScratch`'s `doorNetId` need an
+    existence/proximity check before broadcasting?** Unlike `relayBark`
+    (which always resolves and broadcasts the *sender's own* already-verified
+    ped), `relayDoorScratch`'s `doorNetId` (§11.4 item 5) is an arbitrary
+    client-supplied network id identifying a *different* entity (a door).
+    Neither §11.4 item 5 nor `phase2_notes/door_interaction.md`'s server-
+    handler sketch (§4.2) call for resolving that id
+    (`NetworkGetEntityFromNetworkId`), confirming it still exists, or
+    checking it's actually near the reporting player before broadcasting
+    `qbx_k9unit:client:playDoorScratch` — as designed, the handler only
+    re-checks `Config.Features.DoorInteraction`, `HasK9Access(source)`, a
+    payload type check, and the cooldown. A modified client could supply any
+    entity's netId (not necessarily a door, not necessarily nearby) and have
+    it broadcast server-wide. Lower severity than the certification/search
+    checks — no inventory or lock-state data is leaked, per §11.5 — but still
+    a real gap relative to this resource's own "never trust a client-supplied
+    id" standard (§4.3). `server/main.lua`'s `relayDoorScratch` handler does
+    not exist yet in the codebase as of this pass, so this should be closed
+    out as part of writing it, not discovered afterward as a regression.
 
 ---
 
@@ -1518,5 +1569,11 @@ Applying §7's same rigor to every Phase 2 item:
 ### 11.7 Cross-reference
 
 New open questions raised by this section have been appended to §9 (items
-10–14) rather than duplicated here, so §9 remains the single running list
-correctness-overseer and team-leader can check against.
+10–16) rather than duplicated here, so §9 remains the single running list
+correctness-overseer and team-leader can check against. Items 10–14 came
+from the initial Phase 2 detailed-scoping pass; items 15–16 were added
+later, during §11.4's event-contract hardening pass (item 15's rate-limit
+parity gap, now resolved; item 16's `relayDoorScratch` existence/proximity
+gap, still open) — both had been discussed in §11.4's own text without
+actually being carried into §9 until this pass, which this cross-reference
+now reflects.

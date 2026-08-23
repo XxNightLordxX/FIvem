@@ -48,12 +48,27 @@
       Either party, at any time, zero consent needed (hard requirement per
       the requester's confirmation — no mechanic may trap someone leashed
       with no self-service exit).
+    - 'qbx_k9unit:server:relayDoorScratch' (doorNetId: number)
+      Phase 2 (SPEC.md §11.4 item 5, phase2_notes/door_interaction.md §4.2).
+      Structurally mirrors relayBark above, EXCEPT `doorNetId` names a
+      DIFFERENT entity than the sender's own ped, so (unlike relayBark) this
+      handler also resolves it (NetworkGetEntityFromNetworkId), confirms it
+      still exists (DoesEntityExist), and confirms it's actually near the
+      caller before broadcasting — closing the gap flagged in SPEC.md §9
+      item 16. Own independent cooldown table (lastDoorScratchAt), not
+      shared with relayBark's.
 
     Client events (RegisterNetEvent, server->client):
     - 'qbx_k9unit:client:playBark' (netId: number, barkType: string)
       [client/main.lua] — netId is still present here because the
       *receiving* clients need to know which entity to attach the sound
       to; it's server-resolved from the sender, not client-claimed.
+    - 'qbx_k9unit:client:playDoorScratch' (doorNetId: number)
+      [client/movement.lua] — mirrors playBark above; sent as a global
+      broadcast (-1), deliberately, since a door's location carries no
+      person/vehicle identity to leak (see the relayDoorScratch handler's
+      own comment below for why this is NOT the pattern to copy for
+      server/search.lua's contraband-alert broadcast).
     - 'qbx_k9unit:client:leashAttachRequest' (fromServerId: number)
       [client/movement.lua] — shown to the target as an accept/decline
       prompt.
@@ -320,6 +335,81 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     -- validation enum unless client/radial.lua's comment says otherwise
     -- for Phase 5's AdvancedBarkRadial.
     TriggerClientEvent('qbx_k9unit:client:playBark', -1, netId, barkType)
+end)
+
+-- SPEC.md §9 item 16 (Phase 2 event-contract hardening pass finding, closed
+-- here as part of writing this handler for the first time, per that item's
+-- own closing note that it "should be closed out as part of writing it, not
+-- discovered afterward as a regression"): unlike relayBark above (which only
+-- ever resolves and broadcasts the SENDER's own already-access-checked ped),
+-- relayDoorScratch's `doorNetId` names a DIFFERENT entity the caller merely
+-- claims to be near — neither the original §11.4 item 5 contract nor
+-- phase2_notes/door_interaction.md §4.2's handler sketch called for
+-- resolving/existence-checking/proximity-checking that id before
+-- broadcasting. Left unchecked, a modified client could pass any entity's
+-- netId (any vehicle, any other player's ped, even 0) and have the server
+-- broadcast a sound event referencing it to every client with that entity
+-- streamed in. Closed below via DoesEntityExist + a distance check against
+-- the caller's own live position, mirroring the "never trust a
+-- client-supplied id" standard already applied elsewhere in this resource
+-- (e.g. relayBark resolving the sender's own ped rather than trusting a
+-- claimed netId, CheckLeashEligibility's live proximity checks).
+local DOOR_SCRATCH_DISTANCE_TOLERANCE = 1.0 -- meters of slack over Config.DoorInteraction.interactDistance for latency/desync, same spirit as other proximity re-checks in this file
+
+-- Sibling, INDEPENDENT per-source cooldown table — deliberately not shared
+-- with lastBarkAt above. Bark and door-scratch are two independently
+-- cooldowned actions per §11.4/phase2_notes/door_interaction.md §4.2; a
+-- player who just barked should not have that consumed against their
+-- separate door-scratch allowance, or vice versa.
+local lastDoorScratchAt = {}
+
+--- Relays a door-scratch sound to every client so anyone with the door
+--- entity streamed in hears it. Gated by Config.Features.DoorInteraction AND
+--- HasK9Access(source) — both re-checked HERE, server-side, same standard as
+--- relayBark above (SPEC.md §3's "disabled feature must be a no-op
+--- server-side" requirement).
+--- @param doorNetId number
+RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
+    local src = source
+
+    if not Config.Features.DoorInteraction then return end -- silent no-op
+    if type(doorNetId) ~= 'number' then return end -- defensive: never trust client payload shape
+    if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
+
+    -- Gap closed per SPEC.md §9 item 16 (see comment above this handler):
+    -- resolve the claimed netId to a live entity and confirm it actually
+    -- exists before doing anything else with it.
+    local doorEntity = NetworkGetEntityFromNetworkId(doorNetId)
+    if doorEntity == 0 or not DoesEntityExist(doorEntity) then
+        return -- silent no-op: not a real, currently-existing entity
+    end
+
+    -- ...and confirm the caller is actually near the entity they're
+    -- claiming to be scratching at, not just naming an arbitrary networked
+    -- entity anywhere on the map (any vehicle, any player's ped, etc.).
+    local ped = GetPlayerPed(src)
+    local dist = #(GetEntityCoords(ped) - GetEntityCoords(doorEntity))
+    if dist > (Config.DoorInteraction.interactDistance + DOOR_SCRATCH_DISTANCE_TOLERANCE) then
+        return -- silent no-op: claimed door is not actually near the caller
+    end
+
+    local now = GetGameTimer()
+    if lastDoorScratchAt[src] and (now - lastDoorScratchAt[src]) < Config.DoorInteraction.scratchCooldownMs then
+        return -- silent no-op: rate-limited, not an error worth notifying about
+    end
+    lastDoorScratchAt[src] = now
+
+    -- DELIBERATE broadcast to EVERYONE (-1), not distance-filtered to nearby
+    -- clients server-side, and NOT the pattern to copy if you're touching
+    -- server/search.lua's contraband-alert broadcast instead: a door's
+    -- location carries no person/vehicle identity to leak (SPEC.md §11.4
+    -- item 5: "No inventory/lock-state reveal of any kind — purely a sound
+    -- cue"), unlike a search alert which does need scope-limiting to avoid
+    -- broadcasting a specific player/vehicle's search outcome resource-wide.
+    -- This mirrors relayBark's own -1 broadcast exactly, on purpose — do not
+    -- "fix" this later by pattern-matching off the search-alert's
+    -- distance-filtering requirement.
+    TriggerClientEvent('qbx_k9unit:client:playDoorScratch', -1, doorNetId)
 end)
 
 --- @param source number
@@ -617,6 +707,7 @@ AddEventHandler('playerDropped', function(reason)
     PendingLeashRequests[src] = nil -- target-side: a request aimed AT the disconnecting player
     lastBarkAt[src] = nil -- drop the bark-cooldown entry too, don't leak one per session
     lastLeashRequestAt[src] = nil -- drop the leash-request cooldown entry too, don't leak one per session
+    lastDoorScratchAt[src] = nil -- drop the door-scratch cooldown entry too, don't leak one per session
 
     -- Initiator-side cleanup (coder-security/QA finding): PendingLeashRequests
     -- is keyed by TARGET server id, so the line above only ever clears an
