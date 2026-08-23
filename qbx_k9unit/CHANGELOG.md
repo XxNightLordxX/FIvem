@@ -109,13 +109,19 @@ fixes:
 
 - **`Config.Features.ScentTracking` MUST remain `false` on a live server.**
   Scent tracking's server-side source resolution is not implemented —
-  the server always reports "not found" for a scent trail's origin,
-  pending an unconfirmed `ox_inventory` drop-location hook. This is an
-  explicit, disclosed gap (not a hidden shortcut), tracked as `SPEC.md`
-  §9 item 17, and it ships disabled by default. **Do not flip this flag
-  to `true` until that item is resolved** — doing so will not deliver a
-  working feature and the acceptance criteria for scent tracking are not
-  currently met end-to-end.
+  the server always reports "not found" for a scent trail's origin. The
+  research half of this gap is now closed: a tech-scout pass confirmed a
+  real, server-side `ox_inventory` hook
+  (`exports.ox_inventory:registerHook('swapItems', ...)`) that fires on
+  every item drop and resolves to a live, non-client-claimed position —
+  see `phase2_notes/scent_source_resolution.md` and `SPEC.md` §9 item 17
+  for the confirmed mechanism and the exact `server/tracking.lua` change
+  it implies. The `.lua` implementation itself has **not** been written
+  yet, so this remains an explicit, disclosed gap (not a hidden
+  shortcut), and it still ships disabled by default. **Do not flip this
+  flag to `true` until the `server/tracking.lua` implementation lands**
+  — doing so will not deliver a working feature and the acceptance
+  criteria for scent tracking are not currently met end-to-end.
 - Door interaction ships as scratch-to-alert only; nudge-open (opening a
   locked door) is not implemented in this drop, and the config safety
   guard described above exists specifically to keep it safe to add later.

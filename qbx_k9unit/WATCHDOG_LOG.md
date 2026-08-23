@@ -207,3 +207,138 @@ clean.
   `phase2_notes/phase4_hud_bridge_design.md` vs.
   `phase2_notes/phase4_hud_early_design.md` — they disagree) is still
   unresolved; will block `client/hud.lua` once someone starts writing it.
+
+---
+
+## 2026-08-23 — Pass #3 (issue-closer sweep; overdue relative to 13 commits since Pass #2)
+
+**Reviewed:** `git log` since Pass #2's `c52a402` — through `19c57f8`
+(door-scratch abuse-vector/entity-type-spoofing fixes, client-side door
+interaction landing, Phase 3 combat research + evidence-backed resolution
+of 3 of 4 design forks, CHANGELOG.md's initial add, README refresh,
+REFACTOR_ROADMAP.md's Phase-2 retrospective, and the tech-scout confirmation
+of a real `ox_inventory` scent-drop hook). All landed same-day (2026-08-23).
+This pass ran concurrently with what git status showed to be live,
+in-progress work on a shared cooldown/TTL helper (`server/cooldowns.lua`,
+uncommitted `server/main.lua`/`fxmanifest.lua` changes present at the time
+of this pass) — **that work was deliberately left untouched and
+unreviewed here**, including its files, per this pass's own scope
+boundary; a future pass should review it once it lands and commits.
+
+**`luac5.4 -p` baseline:** ran against all 13 `.lua` files currently in the
+resource (`config.lua`, `fxmanifest.lua`, 6 `client/*.lua`, 4 `server/*.lua`
+at the time of this pass, plus `server/cooldowns.lua` which was present but
+uncommitted and not reviewed for content, only confirmed present). All
+pass with no syntax errors.
+
+**Regression spot-checks — all 8 previously-confirmed items still present,
+no drift:**
+1. `AgilityBasicJump` still gates its thread — `client/movement.lua:605`.
+2. `LeashPairs[x] = { partner, isK9 }` intact — `server/main.lua:718-719`.
+3. `RevokeCertificationOffline` still calls `RefreshCertificationCache` —
+   `server/certifications.lua:585`/`665`.
+4. `client/vehicle.lua`'s `onResourceStop` cleanup still registered —
+   line 191.
+5. Leash pull-back thread still checks `IsInK9Vehicle` —
+   `client/movement.lua:420`.
+6. Radial `lib.registerRadial`/`lib.addRadialItem` split still correct,
+   still has the 3 tracking items.
+7. `client/search.lua`'s netId-capture-before-animation fix still in
+   place; water-crossing draw-order fix still in place.
+8. Door-scratch's dual cooldown (`lastDoorScratchAt` per-source +
+   `lastDoorScratchAtByDoor` per-door, `server/main.lua:420-512`), the
+   entity-type cross-check (`GetEntityType(doorEntity) ~= 3`, line 493),
+   and the vehicle-tuck exclusion (`IsInK9Vehicle` guard in the door
+   `canInteract` predicate, `client/movement.lua:833`) — all confirmed
+   present, matching CHANGELOG.md's claims about them.
+
+**New since Pass #2, confirmed landed correctly (not just claimed):**
+- Client-side door interaction (scratch-to-alert) — Pass #2's "for next
+  pass" item. Confirmed: `client/movement.lua`'s ox_target option, sit-
+  scenario-based scratch animation, and `playDoorScratch` receiver are
+  all present and wired.
+- `Config.DoorInteraction.nudgeRequiresUnlocked` resource-start assert
+  (`server/main.lua:274-283`) — confirmed present, fails loudly on a bad
+  config value as CHANGELOG.md describes.
+- `SumContrabandWeight`/`ResolveAlertTier` pcall-wrapping — not
+  independently re-verified line-by-line this pass (out of the 8-item
+  regression set), noted only as a commit that landed; no reason found to
+  doubt it.
+
+**Stale documentation found and fixed this pass (not a code regression):**
+- `CHANGELOG.md`'s "Known Limitations" entry for `Config.Features.ScentTracking`
+  still said the `ox_inventory` drop-location hook was "unconfirmed,"
+  contradicting `SPEC.md` §9 item 17's own update (tech-scout, same day)
+  confirming a real hook (`registerHook('swapItems', ...)`) exists.
+  `SPEC.md` itself was already current; only `CHANGELOG.md` had drifted.
+  Fixed by updating the bullet to reflect: research done, hook confirmed,
+  `server/tracking.lua` implementation still pending, flag still ships
+  `false`. No code changed, no behavior changed.
+
+**New open item found and NOT closed here (see the dedicated decision
+doc):** `PHASE3_SPEC.md`'s handler-partnership-link fork (§12.0 item 7) —
+the one design fork the same-day Phase 3 resolution pass could not close
+from available evidence — is written up as a standalone decision doc,
+`phase2_notes/phase3_handler_partnership_decision.md`, so a human/
+specialist doesn't have to extract it from a 1,600+ line spec file. Not a
+new finding (already flagged in `PHASE3_SPEC.md` itself), just made
+easier to act on.
+
+**Deliberately not touched this pass, and why:**
+- `Config.Features.ScentTracking`'s remaining `.lua` implementation
+  (`server/tracking.lua`'s `'scent'` branch) — research is done
+  (`phase2_notes/scent_source_resolution.md`) but the implementation
+  itself was explicitly out of scope for the tech-scout pass that produced
+  it, and `server/tracking.lua` was also one of the files with live,
+  uncommitted work in progress at the time of this pass (see above) —
+  touching it risks colliding with that work.
+- The cooldown/TTL helper extraction (`REFACTOR_ROADMAP.md`'s top
+  near-term item) — confirmed in progress (uncommitted
+  `server/cooldowns.lua`, `server/main.lua`, `fxmanifest.lua` changes
+  present at the start of this pass); left entirely alone, including not
+  reviewing its partial contents.
+- Bark-audio placeholder asset gap (`SPEC.md` §7) — still unresolved,
+  unchanged status across all 3 passes now; needs an actual sourced audio
+  asset, not a code fix.
+- `client/vision.lua`'s HUD-visibility-gate disagreement (Pass #2's own
+  "for next pass" note) — still unresolved; still not urgent since Phase 4
+  (`client/hud.lua`) hasn't started, re-flagging rather than re-solving.
+- `phase2_notes/EXPORT_TRACKING.md` — last updated at the Phase 2
+  *scaffold* commit (`4c287a5`), predating the full client/server
+  implementations that landed afterward (`6270a71` onward). Its own
+  content is still accurate for everything it covers (function names,
+  file placement), so this isn't a wrong-information gap, just a
+  currency gap against `REFACTOR_ROADMAP.md`'s "actively maintained"
+  characterization — flagging for whoever next touches Phase 3's public
+  surface to fold Phase 2's final shape in before extending it, rather
+  than fixing prose-only currency here.
+
+### Verdict
+
+**No regressions.** All 8 previously-confirmed fixes intact, all new
+Phase-2-completion claims verified against actual code (not just
+CHANGELOG's word), full syntax baseline clean. One stale-documentation
+drift found and fixed (CHANGELOG.md's scent-tracking limitation wording).
+One already-known open design fork made easier to act on via a dedicated
+decision doc, not newly discovered. Two areas of confirmed-live concurrent
+work (cooldown extraction, scent-tracking implementation) deliberately
+left untouched rather than risking a collision.
+
+### For next pass
+
+- Re-check the same 8 items above, plus confirm the cooldown/TTL helper
+  extraction (`server/cooldowns.lua` + its call-site migrations) landed
+  cleanly once it's committed — re-verify the door-scratch dual-cooldown
+  and search's `SearchInFlight`/`lastTargetSearchAt` TTL-vs-`playerDropped`
+  split specifically, since `REFACTOR_ROADMAP.md` flags those as the exact
+  behavior-preservation risk of that migration.
+- Check whether `server/tracking.lua`'s `'scent'` branch has been
+  implemented per `phase2_notes/scent_source_resolution.md` §4, and if so
+  whether `Config.Features.ScentTracking` was safely flipped to `true`
+  with acceptance criteria actually met, per `SPEC.md` §11.5.
+- Check whether `phase2_notes/phase3_handler_partnership_decision.md` has
+  received a decision; if so, confirm `PHASE3_SPEC.md` §12.0 item 7/§12.7
+  item 7 were updated to reflect it before Phase 3's 3b/3e sub-phases
+  start implementation.
+- Bark-audio asset gap and the HUD-visibility-gate disagreement remain
+  open with no change in status; carry forward again.
