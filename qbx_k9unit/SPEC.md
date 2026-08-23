@@ -1362,10 +1362,22 @@ Applying §7's same rigor to every Phase 2 item:
   the Cayo Perico heist's thermal goggles item), which actually highlights
   peds as heat sources — closer to the real gameplay intent of "K9 thermal
   vision" than a generic timecycle modifier reskin would be. Fully
-  native-only, zero new assets.
+  native-only, zero new assets. **Independently re-confirmed** by
+  native-api-assistant against the CitizenFX SDK source
+  (`Game.cs`'s `Seethrough`/`Nightvision` boolean properties) plus multiple
+  real-world FiveM implementations — both natives are genuinely
+  toggle-and-forget (no per-frame maintenance thread needed).
 - **Night vision — CONFIRMED achievable as stated.** `SetNightvision(true)`
   is the standard native NV-goggle effect. Fully native-only, zero new
-  assets, matches SPEC.md §7 exactly.
+  assets, matches SPEC.md §7 exactly. Same independent re-confirmation as
+  thermal above.
+- **New requirement surfaced during verification, not in the original
+  design:** because both natives are global local-render toggles with no
+  automatic reset, `client/vision.lua`'s toggle handlers must explicitly
+  force both `SetSeethrough(false)`/`SetNightvision(false)` on every exit
+  path — player death, disconnect, and §4.4's auto-revoke of certification
+  mid-session — since nothing else will turn them off and a player left in
+  a stuck thermal/NV view after losing K9 access would be a real bug.
 - **Gunpowder sniffing — PARTIALLY OVERSTATED in §6.3's original wording,
   still fully achievable.** "Native weapon-fire events already fired by the
   game" is not quite accurate as a zero-effort claim: there is no single
