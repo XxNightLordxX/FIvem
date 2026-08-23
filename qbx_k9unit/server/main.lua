@@ -393,6 +393,18 @@ RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
         return -- silent no-op: claimed door is not actually near the caller
     end
 
+    -- Cheap defense-in-depth on top of the distance check above (closes the
+    -- narrower residual case the pre-implementation review flagged: an
+    -- attacker who is genuinely standing within interactDistance of a real
+    -- bystander could otherwise still supply that bystander's own ped/
+    -- vehicle netId and have a "scratch" alert broadcast anchored to them
+    -- server-wide). GetEntityType returns 1 for a ped, 2 for a vehicle, 3
+    -- for an object — door props are objects, so reject anything else
+    -- outright, on top of (not instead of) the proximity check above.
+    if GetEntityType(doorEntity) ~= 3 then
+        return -- silent no-op: claimed entity isn't an object (e.g. a ped/vehicle), never trust the client's own IsLikelyDoorEntity() UX gate as the real check
+    end
+
     local now = GetGameTimer()
     if lastDoorScratchAt[src] and (now - lastDoorScratchAt[src]) < Config.DoorInteraction.scratchCooldownMs then
         return -- silent no-op: rate-limited, not an error worth notifying about
