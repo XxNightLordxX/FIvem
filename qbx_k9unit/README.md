@@ -16,20 +16,31 @@ top of a player who is already playing as a dog.
 certification grant/revoke/check, a consensual two-player leash system,
 the "K9 Unit" radial menu, K9 vehicle load/release, and a bark relay.
 **Phase 2 (tracking, search zones/contraband alerts, vision, door
-interaction) has its full config schema landed in `config.lua`** — see
-[Phase 2 configuration](#phase-2-configuration-not-yet-enabled-by-default)
-below for every new option — and its corresponding source files
-(`client/tracking.lua`, `client/search.lua`, `client/vision.lua`,
-`server/tracking.lua`, `server/search.lua`) already exist in the tree and
-are wired into `fxmanifest.lua`'s script lists. **None of it is active
-yet**: those files are work-ahead scaffolding (per `SPEC.md` §11) still
-under implementation and review, not finished/audited code, and every
-Phase 2 `Config.Features` flag ships `false` by default — nothing changes
-for an existing install until that work is finished and a server owner
-deliberately opts in, flag by flag. Later phases beyond that (bite-and-
-hold, inventory/XP, audio/prop polish; see `SPEC.md` §8) have no code at
-all yet, and several `Config.Features` flags and config blocks that belong
-to those phases exist in `config.lua` purely as placeholders (see
+interaction) is implemented and has been through security/QA/regression/
+correctness review passes** — see
+[Phase 2 configuration](#phase-2-configuration-not-enabled-by-default)
+below for every option it adds. Its source files (`client/tracking.lua`,
+`client/search.lua`, `client/vision.lua`, `server/tracking.lua`,
+`server/search.lua`, plus door interaction, which was folded into the
+existing `client/movement.lua`/`server/main.lua` rather than getting its
+own file) contain real, reviewed logic now, not scaffolding. **None of it
+is active on an existing install by default**, though: every Phase 2
+`Config.Features` flag (`BloodTracking`, `GunpowderSniffing`,
+`ScentTracking`, `WaterTrackingDecay`, `SearchZones`, `ContrabandAlerts`,
+`ThermalVision`, `NightVision`, `DoorInteraction`) still ships `false` —
+nothing changes until a server owner deliberately opts in, flag by flag.
+One flag is a hard exception rather than just an off-by-default: **do not
+enable `Config.Features.ScentTracking`** — its server-side trail-source
+resolution isn't implemented, so it can never functionally succeed even
+once enabled (see `SPEC.md` §9 item 17). Every other Phase 2 flag is
+implemented, reviewed, and safe to enable once you've read its config
+section below. Door interaction itself only ships **scratch-to-alert**;
+its "nudge-open" sub-feature was deliberately not built this pass — see
+[Config.DoorInteraction](#configdoorinteraction) below. Later phases
+beyond Phase 2 (bite-and-hold, inventory/XP, audio/prop polish; see
+`SPEC.md` §8) have no code at all yet, and several `Config.Features` flags
+and config blocks that belong to those phases exist in `config.lua` purely
+as placeholders (see
 [Config options not yet wired up](#config-options-not-yet-wired-up)).
 
 ## Dependencies
@@ -43,7 +54,7 @@ Install and **start these before** `qbx_k9unit` (declared in
 | [`ox_lib`](https://github.com/overextended/ox_lib) | overextended | `lib.callback`, `lib.notify`, `lib.alertDialog`, `lib.addRadialItem` |
 | [`ox_target`](https://github.com/overextended/ox_target) | overextended | In-world interaction options (leash, certify/revoke, vehicle load) |
 | [`oxmysql`](https://github.com/overextended/oxmysql) | overextended | Database access for the certification table |
-| [`ox_inventory`](https://github.com/overextended/ox_inventory) | overextended | **Phase 2 only** (`server/search.lua`) — reads a searched vehicle's/person's real inventory contents and live item weights for the contraband-search feature. Phase 1 never touched inventory at all; this dependency exists solely to support `Config.Features.SearchZones`/`ContrabandAlerts` once that work lands and is reviewed. Still required to be **started** (declared in `fxmanifest.lua`'s `dependencies`) even while those flags are `false`. |
+| [`ox_inventory`](https://github.com/overextended/ox_inventory) | overextended | **Phase 2** (`server/search.lua`) — reads a searched vehicle's/person's real inventory contents and live item weights for the contraband-search feature. Implemented and reviewed; exists to support `Config.Features.SearchZones`/`ContrabandAlerts`, which ship `false` by default. Still required to be **started** (declared in `fxmanifest.lua`'s `dependencies`) even while those flags are `false`. |
 
 Qbox/QBCore data model only — there is no ESX support.
 
@@ -57,10 +68,10 @@ Qbox/QBCore data model only — there is no ESX support.
    idempotent (`CREATE TABLE IF NOT EXISTS`) if you accidentally run it
    twice.
 3. Add to `server.cfg`, after the five dependencies above (`ox_inventory`
-   must be started too, even though nothing in this resource uses it until
-   Phase 2's `SearchZones`/`ContrabandAlerts` ship — it's still declared in
-   `fxmanifest.lua`'s `dependencies` block, so the resource won't start
-   without it running):
+   must be started too, even though nothing in this resource uses it unless
+   you enable Phase 2's `Config.Features.SearchZones`/`ContrabandAlerts` —
+   it's still declared in `fxmanifest.lua`'s `dependencies` block, so the
+   resource won't start without it running):
    ```
    ensure qbx_k9unit
    ```
@@ -214,10 +225,15 @@ All configuration lives in `config.lua`.
 
 ### `Config.Features`
 
-Boolean toggles. **Only the Phase 1 flags below are actually read by any
-code right now** — see
-[Config options not yet wired up](#config-options-not-yet-wired-up) for the
-rest.
+Boolean toggles. The Phase 1 flags below are documented in this table.
+Phase 2's flags (`BloodTracking`, `GunpowderSniffing`, `ScentTracking`,
+`WaterTrackingDecay`, `SearchZones`, `ContrabandAlerts`, `ThermalVision`,
+`NightVision`, `DoorInteraction`) are also read by real, implemented code,
+but are documented together with the config tables they gate in
+[Phase 2 configuration](#phase-2-configuration-not-enabled-by-default)
+below rather than repeated here — see
+[Config options not yet wired up](#config-options-not-yet-wired-up) for
+the flags that belong to later phases with no code behind them at all yet.
 
 | Flag | Default | What it actually gates |
 |---|---|---|
@@ -370,22 +386,12 @@ independently from the pull-back/detach distances.
 
 ### Config options not yet wired up
 
-These exist in `config.lua` but **no finished/reviewed code in this
-resource currently reads them** — the corresponding `Config.Features` flag
-gates nothing yet because the phase that would gate on it hasn't shipped:
+These exist in `config.lua` but **no code in this resource reads them at
+all** — unlike Phase 2's flags/tables (see
+[Phase 2 configuration](#phase-2-configuration-not-enabled-by-default)
+below), which are implemented and reviewed even though they default off,
+everything below belongs to a phase with no code behind it yet:
 
-- `Config.Features.ScentTracking`, `BloodTracking`, `WaterTrackingDecay`,
-  `GunpowderSniffing`, `SearchZones`, `ContrabandAlerts`, `ThermalVision`,
-  `NightVision`, `DoorInteraction` (Phase 2 — listed here only because
-  these **feature flags** aren't consumed by finished/reviewed code yet.
-  The *tuning tables* they'll eventually gate — `Config.Tracking`,
-  `Config.WaterTrackingDecay`, `Config.SearchContrabandItems`,
-  `Config.SearchZones`, `Config.DoorInteraction`, `Config.Vision`,
-  `Config.ContrabandAlertTiers` — already exist in `config.lua` in full and
-  are documented in detail, with their source files already wired into
-  `fxmanifest.lua`'s script lists as work-ahead scaffolding; see
-  [Phase 2 configuration](#phase-2-configuration-not-yet-enabled-by-default)
-  below)
 - `Config.Features.BiteAndHold`, `NonLethalTakedown`, `HandlerDownDefense`,
   `PropDragging`, `AgilityAdvanced` (Phase 3)
 - `Config.Features.K9Inventory`, `XPProgression`, `HealthStaminaHUD`,
@@ -396,25 +402,39 @@ gates nothing yet because the phase that would gate on it hasn't shipped:
   (Phase 5)
 - `Config.XPTiers` (Phase 4 — XP thresholds/speed/scent-range tiers)
 
-The Phase 3/4/5 blocks above are carried over verbatim from the original
-design spec with no code behind them at all yet. All of the above are left
+These blocks are carried over verbatim from the original design spec with
+no code behind them at all yet. All of the above are left
 `false`/present in the shipped config as a placeholder for future work;
 there is no harm in leaving any of them at their defaults.
 
-## Phase 2 configuration (not yet enabled by default)
+## Phase 2 configuration (not enabled by default)
 
-Every table in this section lives in `config.lua` today and is documented
-here so a server owner can plan ahead, but **nothing in this section is
-active in this build**. The client/server logic that would read these
-tables — `client/tracking.lua`, `client/search.lua`, `client/vision.lua`,
-`server/tracking.lua`, `server/search.lua` — exists in the resource only as
-work-ahead scaffolding written against `SPEC.md` §11 (every function body
-is a `-- TODO` stub citing its source-of-truth section); it is not yet
-implemented, not security-reviewed (`server/search.lua` in particular is
-flagged in-code as the security-critical file of this phase), and does not
-actually gate on `Config.Features` yet. Every gating flag below ships
-`false`. Do not flip any of them to `true` until a release note says Phase
-2 has shipped and been reviewed.
+Every table in this section lives in `config.lua` and is read by real,
+implemented code — `client/tracking.lua`, `client/search.lua`,
+`client/vision.lua`, `server/tracking.lua`, `server/search.lua`, plus door
+interaction, which was folded into the existing `client/movement.lua` and
+`server/main.lua` rather than a new file. This code has been through
+security/QA/regression/correctness review passes (`server/search.lua` in
+particular was reviewed as the security-critical file of this phase).
+**Every gating flag below still ships `false`**, so none of it is active
+on an existing install until a server owner deliberately flips a flag —
+but that's a default to opt into, not a sign the work itself is
+unfinished or unreviewed.
+
+The one real exception: **`Config.Features.ScentTracking` must NOT be
+enabled.** Unlike the other flags below, this one has an actual,
+documented functional blocker, not just a conservative default —
+`server/tracking.lua`'s `findTrackableSource` callback's `'scent'` branch
+always returns "nothing found" because its server-side trail-source
+resolution was never implemented (no confirmed `ox_inventory`
+drop-location hook exists to resolve where a scent trail should
+originate — see `SPEC.md` §9 item 17). Turning this flag on ships a
+feature that can never functionally succeed end-to-end, not merely an
+unreviewed one. `BloodTracking`, `GunpowderSniffing`,
+`WaterTrackingDecay`, `SearchZones`, `ContrabandAlerts`, `ThermalVision`,
+`NightVision`, and `DoorInteraction` do not have this problem — each is
+implemented and reviewed end-to-end and is safe to enable once you've read
+its config section below.
 
 ### `Config.Tracking`
 
@@ -592,28 +612,58 @@ Config.DoorInteraction = {
 }
 ```
 
-Gated by `Config.Features.DoorInteraction`, which is meant to cover **both**
-sub-features:
+Gated by `Config.Features.DoorInteraction`. **Only "Scratch to Alert" is
+implemented.** "Nudge-open" — a cosmetic push-open interaction — was
+deliberately **not** built this pass; treat `DoorInteraction` as shipping
+scratch-to-alert alone, not "door interaction" in general. See the
+"NUDGE-OPEN NOT IMPLEMENTED" comment block in `client/movement.lua` for
+the full reasoning (it's scoped in `SPEC.md` §11.1 as a stretch item, not
+a blocker for shipping scratch-to-alert).
 
-- **Nudge-open** — a cosmetic push-open interaction, scoped to grant no
-  real capability (mirrors the vehicle entry/exit exception described
-  above): designed to only ever be offered on a door that's already
-  unlocked. `nudgeRequiresUnlocked` is documented in `config.lua` as a
-  **hard requirement, not a toggle** — it's not intended to ever ship as
-  `false` on a live server, since flipping it would let the nudge act as a
-  lockpick bypass.
-- **Scratch-to-alert** — a sound-cue interaction available regardless of
-  lock state, structurally mirroring the existing bark relay (a server
-  round-trip plus a per-player cooldown, no inventory/lock-state reveal of
-  any kind).
+**Scratch-to-alert**, as actually implemented (`client/movement.lua` +
+`server/main.lua`'s `relayDoorScratch` handler):
+
+- Registers a "Scratch to Alert" ox_target option on nearby door-shaped
+  objects, within `interactDistance` of the K9. There's no generic "is
+  this a door" native, so the client-side option uses a best-effort
+  heuristic (the object's model/archetype name containing the substring
+  "door") purely to decide when to *offer* the option — a UX guess only,
+  never the security boundary.
+- Works on **any door, regardless of lock state**. This is intentional,
+  not a gap: the action reveals no inventory or lock-state information at
+  all (it's purely a sound cue), so there's nothing lock-state-related to
+  check or restrict in the first place.
+- Plays a local scratch animation and sound on the acting K9 immediately,
+  then round-trips through the server, which independently resolves the
+  claimed door entity, confirms it still exists, confirms it's actually an
+  object (not a ped/vehicle) near the caller's own live position, and only
+  then broadcasts a shared sound cue to every client that currently has
+  that door streamed in (`qbx_k9unit:client:playDoorScratch`) — the
+  server never trusts the client's own door guess or claimed distance.
+- Rate-limited by **two independent, server-side cooldowns that must both
+  pass** before a broadcast fires: a per-player cooldown (stops one player
+  spamming scratch across many different doors) and a separate per-door
+  cooldown (stops multiple — potentially colluding — players from
+  hammering the *same* door between them). Both use `scratchCooldownMs` as
+  their window; there's no separate config value for the per-door one.
 
 Fields:
 - `interactDistance` (meters, default `1.5`) — max distance to a door
-  entity at which either option would be offered.
-- `nudgeRequiresUnlocked` (boolean, default `true`) — see above.
-- `scratchCooldownMs` (ms, default `3000`) — per-player cooldown on the
-  scratch-to-alert sound cue, the same shape as `BasicBarkSounds`'
-  existing server-side cooldown.
+  entity at which the "Scratch to Alert" option is offered client-side,
+  and the distance (plus a small server-side latency tolerance) the
+  server independently re-checks before ever broadcasting.
+- `nudgeRequiresUnlocked` (boolean, default `true`) — **currently inert**:
+  nothing reads this value day-to-day, because nudge-open (the only
+  feature it would ever gate) isn't implemented yet. It's documented, in
+  `config.lua`'s own inline comment and this README, as a hard safety
+  requirement that must stay `true` — a resource-start `assert` in
+  `server/main.lua` actively enforces this today (the resource refuses to
+  start at all if this is ever set to `false`), specifically so it can't
+  be silently mis-set before nudge-open exists to read it. It must never
+  become a lockpick-bypass toggle once nudge-open is eventually built.
+- `scratchCooldownMs` (ms, default `3000`) — the shared cooldown window
+  both the per-player and per-door checks above are keyed from, the same
+  shape as `BasicBarkSounds`' existing server-side cooldown.
 
 ### `Config.Vision`
 
@@ -746,8 +796,13 @@ job, rank, proximity, or ped model:
   revocation on job change, and the `/k9certify`, `/k9decertify`,
   `/k9decertifyoffline` commands.
 - `server/main.lua` — the bark relay, the full leash consent/state
-  handshake and in-memory leash-pair registry, and a resource-start cache
-  backfill for already-connected players.
+  handshake and in-memory leash-pair registry, a resource-start cache
+  backfill for already-connected players, and (Phase 2) the
+  `relayDoorScratch` handler backing "Scratch to Alert" (resolves and
+  existence/type/proximity-checks the claimed door entity, enforces the
+  per-player and per-door cooldowns, then broadcasts the sound cue) plus a
+  resource-start `assert` that refuses to start the resource if
+  `Config.DoorInteraction.nudgeRequiresUnlocked` is ever set to `false`.
 - `client/main.lua` — the local K9-model self-check (display only), the
   `hasK9Access` callback wrapper (`HasK9Access()`, short-TTL cached), the
   `CanShowK9UI()` combinator every other client file gates on, and the bark
@@ -756,20 +811,26 @@ job, rank, proximity, or ped model:
   rebindable), the "Sit" self-emote, the full client side of the leash
   subsystem (consent prompt, elastic pull-back thread, detach), the
   "Attach Leash"/"Certify K9 Handler"/"Revoke K9 Certification" ox_target
-  options, and the jump/crouch suppression thread used when
-  `Config.Features.AgilityBasicJump` is `false`.
+  options, the jump/crouch suppression thread used when
+  `Config.Features.AgilityBasicJump` is `false`, and (Phase 2) the
+  "Scratch to Alert" door-interaction ox_target option plus its
+  `playDoorScratch` broadcast receiver — see
+  [Config.DoorInteraction](#configdoorinteraction) above; nudge-open is
+  not implemented here.
 - `client/radial.lua` — the ox_lib "K9 Unit" radial menu wiring (Sit, Bark,
   Attach/Detach Leash, Enter/Exit Vehicle).
 - `client/vehicle.lua` — K9 vehicle load/release and its ox_target options.
 - `client/tracking.lua`, `client/search.lua`, `client/vision.lua`,
-  `server/tracking.lua`, `server/search.lua` — **Phase 2 scaffolding, not
-  yet implemented behavior.** These files exist in the tree and are wired
-  into `fxmanifest.lua`'s script lists, but every function body is a
-  `-- TODO` stub per `SPEC.md` §11, pending implementation and (for
-  `server/search.lua` especially) a security review before anything in
-  them is mergeable/enabled. See
-  [Phase 2 configuration](#phase-2-configuration-not-yet-enabled-by-default)
-  above for the config they're designed to eventually read.
+  `server/tracking.lua`, `server/search.lua` — **Phase 2, implemented and
+  reviewed, disabled by default.** Scent/blood/gunpowder tracking, search
+  zones/contraband alerts, and thermal/night vision respectively — real,
+  reviewed logic, not stubs (`server/search.lua` was reviewed as this
+  phase's security-critical file). Every `Config.Features` flag these
+  files read still ships `false`, and `Config.Features.ScentTracking`
+  specifically must not be enabled at all (unresolved trail-source
+  blocker). See
+  [Phase 2 configuration](#phase-2-configuration-not-enabled-by-default)
+  above for the full config and the `ScentTracking` blocker's details.
 
 There are no `exports` declared by this resource (no `server_exports` /
 `client_exports` in `fxmanifest.lua`) — integration by other resources is
