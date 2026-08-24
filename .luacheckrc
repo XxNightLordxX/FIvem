@@ -42,12 +42,16 @@ read_globals = {
     -- Threading / events
     "CreateThread", "Wait", "AddEventHandler", "RegisterNetEvent",
     "TriggerClientEvent", "TriggerServerEvent", "TriggerEvent", "RegisterCommand",
-    -- GET_RESOURCE_STATE. Server-side; used by server/tracking.lua's
-    -- ox_inventory capability probe as the first gate, because accessing an
-    -- export on a resource that is not started can throw rather than return
-    -- nil. Basis: CFX base resource-management API, not a game native --
-    -- pending confirmation from the in-flight native audit; remove if refuted.
+    -- GET_RESOURCE_STATE. Used by server/tracking.lua's ox_inventory
+    -- capability probe as the first gate, because accessing an export on a
+    -- resource that is not started can throw rather than return nil.
+    -- VERIFIED: ext/native-decls/GetResourceState.md declares apiset `shared`.
     "GetResourceState",
+    -- Timecycle modifiers, client/screenfx.lua. VERIFIED client-only against
+    -- primary source: both are declared in citizenfx/natives GRAPHICS with no
+    -- ext/native-decls server override, and FXServer has no renderer at all.
+    -- Hashes 0x2C933ABF17A1DF41 / 0x0F07E7745A236711.
+    "SetTimecycleModifier", "ClearTimecycleModifier",
     "RegisterKeyMapping",
     -- Player / entity queries
     "GetPlayers", "GetActivePlayers", "GetPlayerFromServerId",

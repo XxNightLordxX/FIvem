@@ -762,6 +762,24 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
         BroadcastContrabandAlert(GetEntityCoords(entity), targetNetId, alertTier.alert)
     end
 
+    -- ContrabandScreenFX (client/screenfx.lua). Sent to the SEARCHER ONLY
+    -- (`source`), never broadcast: this is self-only cosmetic feedback, and
+    -- broadcasting it would hand every nearby player a free contraband
+    -- detector. Gated independently of ContrabandAlerts above -- an operator
+    -- may reasonably want one and not the other. Wrapped defensively because
+    -- Config.ContrabandScreenFX is a separate table from the feature flag and
+    -- a config that has the flag but not the table must go inert, not error
+    -- inside a search that has already done its real work.
+    if Config.Features.ContrabandScreenFX and type(Config.ContrabandScreenFX) == 'table'
+        and type(Config.ContrabandScreenFX.triggerTiers) == 'table' then
+        for i = 1, #Config.ContrabandScreenFX.triggerTiers do
+            if Config.ContrabandScreenFX.triggerTiers[i] == alertTier.alert then
+                TriggerClientEvent('qbx_k9unit:client:applyContrabandScreenFx', source, Config.ContrabandScreenFX.durationMs)
+                break
+            end
+        end
+    end
+
     -- k9_search_log audit row (sql/install.sql — db-schema's Phase 2
     -- addition, wired here per that table's own integration note): one row
     -- per completed search attempt, fire-and-forget, never delays this

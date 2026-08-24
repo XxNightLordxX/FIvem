@@ -687,11 +687,14 @@ Config.ContrabandScreenFX = {
     -- constant rather than notable.
     triggerTiers = { 'aggressive_bark' },
 
-    -- UNVERIFIED CANDIDATE. Nobody has confirmed this timecycle modifier
-    -- name exists; an unrecognised name is a harmless no-op (no visual, no
-    -- crash), which is this resource's established convention for an
-    -- unverified asset name. See client/screenfx.lua's CONFIDENCE NOTE.
-    modifierName = 'drug_wobbly_shroom',
+    -- VERIFIED. The candidate that shipped here first, 'drug_wobbly_shroom',
+    -- DOES NOT EXIST -- a native audit checked every `drug_`-prefixed entry in
+    -- a real game-data extraction of 2806+ timecycle modifiers and found only
+    -- 'drug_wobbly' (56 modifications, "Drug" category, base game). The wrong
+    -- name would have been a silent no-op forever: the feature would have
+    -- shipped, been enabled, and simply never shown anything, with nothing in
+    -- the logs to say why.
+    modifierName = 'drug_wobbly',
 
     -- Deliberately well below PHASE4_SPEC.md 13.2's 8000ms sketch: this is
     -- meant to be feedback, not a screen-blocking penalty, and the
