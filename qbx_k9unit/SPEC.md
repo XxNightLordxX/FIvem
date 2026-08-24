@@ -3,16 +3,39 @@
 Status: Phase 1 (vertical slice) is **complete and reviewed** — certification
 grant/revoke/check, the consensual two-player leash system, the "K9 Unit"
 radial menu, K9 vehicle load/release, and the bark relay all shipped and
-passed review (matches README.md's own status line). Phase 2's config
-schema (§11.2) has **landed verbatim in `config.lua`**, and Phase 2's
-scaffolding files (`server/tracking.lua`, `server/search.lua`,
-`client/tracking.lua`, `client/search.lua`, `client/vision.lua`) already
-exist in the tree and are wired into `fxmanifest.lua` — but Phase 2's
-**actual logic is still mid-implementation by concurrent agents** as of
-this pass, not finished or reviewed, and every Phase 2 `Config.Features`
-flag still defaults to `false`. Coordinated directly by the top-level
-session (peer-agent-to-peer delegation is not available in this
-environment; see §10)
+passed review (matches README.md's own status line). Phase 2 (tracking,
+search zones/contraband alerts, vision, door interaction) is now
+**implementation-complete**: every Phase 2 subsystem has real, reviewed
+client and server code, and scent tracking's server-side source resolution
+(`server/tracking.lua`'s `ox_inventory` `swapItems` hook) has landed,
+closing the one gap this phase still had disclosed as of Pass #4. Every
+Phase 2 `Config.Features` flag still defaults to `false`; `ScentTracking`
+specifically stays `false` pending a one-time verification of that hook
+against a live `ox_inventory` install (see `CHANGELOG.md`'s Known
+Limitations). Phase 3 (combat/action) is **partially coded, mostly still
+design work**: `AgilityAdvanced` is fully implemented behind its flag. Both
+cross-cutting design forks that were blocking the rest of this phase have
+been resolved as design decisions — §12.0 item 8's client-relay/
+non-cooperating-client architecture, and item 7's handler-partnership link
+(a new, dedicated `k9_partnerships` registry, not a reuse of `LeashPairs`)
+— but the partnership registry itself has **not** been implemented, so
+`HandlerDownDefense` remains uncoded. A substantial `server/combat.lua`
+implementing `BiteAndHold`/`NonLethalTakedown` exists in the tree but is
+deliberately **not** registered in `fxmanifest.lua` and has no client half
+yet, so it is inert, not a shipped feature; `PropDragging` has no code at
+all. Phase 4 (inventory, progression, vitality) now has real
+implementations behind still-`false` flags for `HealthStaminaHUD`,
+`K9Inventory`, `K9Medkit`, the unified wellbeing subsystem (Fatigue/Mood/
+FearStress/Distraction/Injury), and `XPProgression`; only
+`ContrabandScreenFX` remains uncoded. Phase 5 (audio/props/camera R&D) now
+also has real implementations behind still-`false` flags for
+`DeployableKennel` and `AdvancedBarkRadial` (the latter widens, rather than
+closes, §7's bark-audio placeholder-asset gap by adding three more
+placeholder sound names); `ProximityAudioFX`, `PropAttachments`,
+`FetchMechanic`, and `CameraFeedPiP` remain uncoded. Coordinated directly by
+the top-level session (peer-agent-to-peer delegation is not available in
+this environment; see §10). *(Status paragraph refreshed 2026-08-24 — see
+`WATCHDOG_LOG.md` Pass #4/#5, which this rewrite is based on.)*
 Author: product-agent (spec pass) + top-level session (post-draft
 correction), jlwood17190665@gmail.com
 Date: 2026-08-23

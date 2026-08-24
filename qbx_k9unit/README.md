@@ -44,19 +44,51 @@ Every other Phase 2 flag is implemented, reviewed, and safe to enable once
 you've read its config section below. Door interaction now ships **both**
 scratch-to-alert and nudge-open — see
 [Config.DoorInteraction](#configdoorinteraction) below for nudge-open's
-deliberately cosmetic-only safety design. A first, still-disabled-by-default
-slice of **Phase 4** has also landed: a passive vitality HUD
-(`client/hud.lua`, `Config.Features.HealthStaminaHUD`) — see
+deliberately cosmetic-only safety design.
+
+**Phase 4 (inventory, progression, vitality)** now has real code behind
+several still-`false` flags, not just the vitality HUD: a passive vitality
+HUD (`client/hud.lua`, `Config.Features.HealthStaminaHUD`), a per-K9
+`ox_inventory` gear stash (`Config.Features.K9Inventory`), a
+server-authoritative K9 medkit (`Config.Features.K9Medkit`), a unified
+Fatigue/Mood/FearStress/Distraction/Injury wellbeing subsystem
+(`Config.Features.FatigueSystem`/`MoodSystem`/`FearStressSystem`/
+`DistractionSystem`/`InjuryLimping`), and XP/progression
+(`Config.Features.XPProgression`) — see
 [Phase 4 configuration](#phase-4-configuration-not-enabled-by-default)
-below. Phase 3 (combat/action features) still has no code at all —
-`PHASE3_SPEC.md` is a design document only; see that file for the current
-scope decisions, including a recent reversal that puts player-vs-player K9
-combat in scope for whenever implementation eventually starts. Later phases
-beyond Phase 2/this first Phase 4 slice (bite-and-hold, inventory/XP,
-remaining audio/prop polish; see `SPEC.md` §8) have no code at all yet, and
-several `Config.Features` flags and config blocks that belong to those
-phases exist in `config.lua` purely as placeholders (see
-[Config options not yet wired up](#config-options-not-yet-wired-up)).
+below for all of it. Only `Config.Features.ContrabandScreenFX` remains a
+Phase 4 flag with no code behind it.
+
+**Phase 5 (audio/props/camera R&D)** also has its first two real
+implementations: a deployable kennel R&D scaffold
+(`Config.Features.DeployableKennel`) and an advanced bark radial
+(`Config.Features.AdvancedBarkRadial`, which adds three more placeholder
+sound names with no real audio behind them — see
+[Bark sounds are placeholders](#bark-sounds-are-placeholders) below). See
+[Phase 5 configuration](#phase-5-configuration-not-enabled-by-default) for
+both. `Config.Features.ProximityAudioFX`, `PropAttachments`,
+`FetchMechanic`, and `CameraFeedPiP` remain uncoded.
+
+**Phase 3 (combat/action features)** is mostly still design work, with one
+real exception: `AgilityAdvanced` is fully implemented behind its
+still-`false` flag (`client/movement.lua`). `PHASE3_SPEC.md`'s design
+scoping has also moved forward — a recent reversal puts player-vs-player K9
+combat in scope, and the two cross-cutting design forks that were blocking
+implementation (the client-relay/non-cooperating-target-client
+architecture, and which officer counts as a given K9's "handler"
+independent of leash state) have both been resolved as design decisions.
+The handler-partnership resolution is a **design decision only** — a new,
+dedicated partnership registry, not a reuse of the existing leash pairing —
+and that registry has **not** been implemented, so `HandlerDownDefense`
+remains fully uncoded. A substantial `server/combat.lua` implementing
+`BiteAndHold`/`NonLethalTakedown` exists in this branch's working tree
+under the resolved architecture's guardrails, but it is **deliberately not
+registered in `fxmanifest.lua`** and has **no client half** — it does not
+run, is not part of this install, and should not be treated as a working
+feature. `PropDragging` is out of scope for that file and remains fully
+uncoded. Do not enable `Config.Features.BiteAndHold`, `NonLethalTakedown`,
+or `HandlerDownDefense` — see `CHANGELOG.md`'s Known Limitations for the
+full detail.
 
 ## Dependencies
 
@@ -69,7 +101,7 @@ Install and **start these before** `qbx_k9unit` (declared in
 | [`ox_lib`](https://github.com/overextended/ox_lib) | overextended | `lib.callback`, `lib.notify`, `lib.alertDialog`, `lib.addRadialItem` |
 | [`ox_target`](https://github.com/overextended/ox_target) | overextended | In-world interaction options (leash, certify/revoke, vehicle load) |
 | [`oxmysql`](https://github.com/overextended/oxmysql) | overextended | Database access for the certification table |
-| [`ox_inventory`](https://github.com/overextended/ox_inventory) | overextended | **Phase 2** (`server/search.lua`) — reads a searched vehicle's/person's real inventory contents and live item weights for the contraband-search feature. Implemented and reviewed; exists to support `Config.Features.SearchZones`/`ContrabandAlerts`, which ship `false` by default. Still required to be **started** (declared in `fxmanifest.lua`'s `dependencies`) even while those flags are `false`. |
+| [`ox_inventory`](https://github.com/overextended/ox_inventory) | overextended | **Phase 2** (`server/search.lua`) — reads a searched vehicle's/person's real inventory contents and live item weights for the contraband-search feature, supporting `Config.Features.SearchZones`/`ContrabandAlerts`. Also used by three **Phase 4** features, all still `false` by default: `Config.Features.K9Inventory` (`RegisterStash`/`openInventory` for the K9 gear stash), `Config.Features.K9Medkit` (`GetItemCount`/`RemoveItem` to consume the medkit item), and the wellbeing subsystem's Mood/Distraction stats (`Config.Features.MoodSystem`/`DistractionSystem`, same two exports, for feed/meat-bait/whistle item consumption). Still required to be **started** (declared in `fxmanifest.lua`'s `dependencies`) even while every one of those flags is `false`. |
 
 Qbox/QBCore data model only — there is no ESX support.
 
@@ -79,14 +111,21 @@ Qbox/QBCore data model only — there is no ESX support.
 2. **Run the SQL migration before first start.** Import
    `qbx_k9unit/sql/install.sql` against your database with your usual DB
    client (phpMyAdmin, HeidiSQL, the `mysql` CLI, etc.) — this resource does
-   not auto-execute it. It creates one table, `k9_certifications`, and is
-   idempotent (`CREATE TABLE IF NOT EXISTS`) if you accidentally run it
-   twice.
+   not auto-execute it. It creates `k9_certifications` (see
+   [Database](#database) below), plus `k9_search_log` (Phase 2 search
+   audit trail) and `k9_partnerships` (schema landed ahead of its own
+   implementation — no code reads or writes it yet, see
+   [Database](#database)). All three are idempotent
+   (`CREATE TABLE IF NOT EXISTS`) if you accidentally run it twice. **Note:
+   `Config.Features.XPProgression`'s `k9_progression` table is not yet in
+   this migration file** — see [Database](#database) below before enabling
+   that flag.
 3. Add to `server.cfg`, after the five dependencies above (`ox_inventory`
-   must be started too, even though nothing in this resource uses it unless
-   you enable Phase 2's `Config.Features.SearchZones`/`ContrabandAlerts` —
-   it's still declared in `fxmanifest.lua`'s `dependencies` block, so the
-   resource won't start without it running):
+   must be started too, even if you leave every flag that actually uses it —
+   Phase 2's `Config.Features.SearchZones`/`ContrabandAlerts`, and Phase 4's
+   `K9Inventory`/`K9Medkit`/`MoodSystem`/`DistractionSystem` — at their
+   shipped `false` default; it's still declared in `fxmanifest.lua`'s
+   `dependencies` block, so the resource won't start without it running):
    ```
    ensure qbx_k9unit
    ```
@@ -147,6 +186,34 @@ player's `qbx_core` metadata on every grant/revoke **purely for client-side
 HUD/badge display**. It is never read by any server-side authorization
 check — the database table above is the only thing that actually grants
 access.
+
+`qbx_k9unit/sql/install.sql` also creates two more tables:
+
+- **`k9_search_log`** — an append-only audit trail for every completed
+  Phase 2 contraband search (`server/search.lua`), one row per attempt that
+  actually reached a real inventory read (`found`/`clean`/`search_failed`
+  — early rejections like `on_cooldown`/`too_far` are never logged, since
+  they never touched the target). Exists purely for dispute accountability
+  ("did this K9 unit actually search my vehicle"); nothing in this resource
+  ever reads it back to make an access decision.
+- **`k9_partnerships`** — schema for a future "K9/handler partnership"
+  registry (`PHASE3_SPEC.md` §12.0 item 7), landed ahead of its own
+  implementation. **No `.lua` file in this resource reads or writes this
+  table yet** — `server/partnership.lua` does not exist. It exists so the
+  eventual implementation (needed for `Config.Features.HandlerDownDefense`)
+  has an already-reviewed table to build against. Safe to ignore until
+  that file ships.
+
+**Known gap: `Config.Features.XPProgression`'s `k9_progression` table is
+referenced by `server/progression.lua` but does not yet exist in
+`sql/install.sql`.** Every `k9_progression` query in that file is
+pcall-wrapped, so a missing table fails safely rather than crashing the
+resource — XP still accumulates correctly in the in-memory cache for the
+remainder of a server session (every gameplay effect keeps working), but
+every read/write against the missing table silently errors, so nothing is
+ever actually saved: a restart, or even a reconnect, loses all XP earned
+so far. Do not enable `Config.Features.XPProgression` on a live server
+until `k9_progression` has landed in `sql/install.sql`.
 
 ## How certification works, day one
 
@@ -401,28 +468,40 @@ independently from the pull-back/detach distances.
 
 ### Config options not yet wired up
 
-These exist in `config.lua` but **no code in this resource reads them at
-all** — unlike Phase 2's flags/tables (see
-[Phase 2 configuration](#phase-2-configuration-not-enabled-by-default)
-below), which are implemented and reviewed even though they default off,
-everything below belongs to a phase with no code behind it yet:
+These exist in `config.lua` but **no functioning code in this resource
+uses them** — unlike Phase 2/4/5's implemented flags/tables (see
+[Phase 2 configuration](#phase-2-configuration-not-enabled-by-default),
+[Phase 4 configuration](#phase-4-configuration-not-enabled-by-default), and
+[Phase 5 configuration](#phase-5-configuration-not-enabled-by-default)
+below), which are implemented and reviewed even though they default off:
 
-- `Config.Features.BiteAndHold`, `NonLethalTakedown`, `HandlerDownDefense`,
-  `PropDragging`, `AgilityAdvanced` (Phase 3)
-- `Config.Features.K9Inventory`, `XPProgression`,
-  `FatigueSystem`, `MoodSystem`, `FearStressSystem`, `DistractionSystem`,
-  `InjuryLimping`, `K9Medkit`, `ContrabandScreenFX` (Phase 4 — see
-  [Phase 4 configuration](#phase-4-configuration-not-enabled-by-default)
-  below for `HealthStaminaHUD`, which **is** wired up now)
-- `Config.Features.AdvancedBarkRadial`, `ProximityAudioFX`,
-  `PropAttachments`, `FetchMechanic`, `DeployableKennel`, `CameraFeedPiP`
-  (Phase 5)
-- `Config.XPTiers` (Phase 4 — XP thresholds/speed/scent-range tiers)
+- `Config.Features.HandlerDownDefense`, `PropDragging` (Phase 3) — no code
+  at all. `HandlerDownDefense` is blocked on a design decision
+  (a dedicated "K9 partnership" registry, `phase2_notes/phase3_handler_partnership_decision.md`)
+  that has been made but not yet implemented; `PropDragging` is explicitly
+  out of scope for the Phase 3 work that has landed so far.
+- `Config.Features.BiteAndHold`, `NonLethalTakedown` (Phase 3) — **real
+  server-side code exists** (`server/combat.lua`) but is deliberately **not
+  registered in `fxmanifest.lua`** and has **no client half**
+  (`client/combat.lua` does not exist yet) — it does not run on this
+  install. Treat these exactly like a phase with no code at all until that
+  changes; do not enable either flag. See `CHANGELOG.md`'s Known
+  Limitations for the full detail.
+- `Config.Features.ContrabandScreenFX` (Phase 4) — no code at all.
+- `Config.Features.ProximityAudioFX`, `PropAttachments`, `FetchMechanic`,
+  `CameraFeedPiP` (Phase 5) — no code at all.
 
-These blocks are carried over verbatim from the original design spec with
-no code behind them at all yet. All of the above are left
-`false`/present in the shipped config as a placeholder for future work;
-there is no harm in leaving any of them at their defaults.
+`Config.Features.AgilityAdvanced` (Phase 3), `K9Inventory`, `XPProgression`,
+`FatigueSystem`, `MoodSystem`, `FearStressSystem`, `DistractionSystem`,
+`InjuryLimping`, `K9Medkit`, `HealthStaminaHUD` (Phase 4), and
+`AdvancedBarkRadial`, `DeployableKennel` (Phase 5) all **are** wired up to
+real, working (if unreviewed-for-numeric-tuning) code now — see their
+respective sections below. `Config.XPTiers`/`Config.XP` (Phase 4 — XP
+thresholds/awards) are also now read by `server/progression.lua`.
+
+Everything in the bulleted list above is left `false`/present in the
+shipped config as a placeholder for future work; there is no harm in
+leaving any of it at its defaults.
 
 ## Phase 2 configuration (not enabled by default)
 
@@ -763,9 +842,15 @@ somehow active).
 
 ## Phase 4 configuration (not enabled by default)
 
-Only one Phase 4 flag has real code behind it so far — everything else
-Phase 4 in `config.lua` is a placeholder (see
-[Config options not yet wired up](#config-options-not-yet-wired-up)).
+Five Phase 4 flags now have real code behind them: `HealthStaminaHUD`
+(below), `K9Inventory`, `K9Medkit`, the five wellbeing flags
+(`FatigueSystem`/`MoodSystem`/`FearStressSystem`/`DistractionSystem`/
+`InjuryLimping`), and `XPProgression`. Only `ContrabandScreenFX` remains a
+placeholder with no code behind it (see
+[Config options not yet wired up](#config-options-not-yet-wired-up)). Every
+numeric value in this section's config tables is an unreviewed placeholder
+pending a config-validator/economy-balance pass — do not flip any of these
+flags to `true` on a live server before that review happens.
 
 ### `Config.Features.HealthStaminaHUD`
 
@@ -803,6 +888,214 @@ See `phase2_notes/phase4_hud_bridge_design.md` for the full NUI
 callback/payload contract if you need to modify `client/hud.lua` or the
 `html/` frontend — the two sides must match byte-for-byte on action/
 callback names and payload keys.
+
+### `Config.Features.K9Inventory`
+
+`boolean`, default `false`. Gates a per-K9 `ox_inventory` gear stash
+(`server/inventory.lua`, `client/inventory.lua`), opened via an "Open K9
+Gear" ox_target option on the K9's own ped. The K9 player can always open
+their own stash; who else can is set by `Config.K9Inventory.accessScope`:
+
+- `'department'` (default) — any player whose job is a key in
+  `Config.Departments` (any grade) may also open it — "shared field
+  equipment," the same framing this resource already gives
+  `Config.K9Vehicles`.
+- `'ownerOnly'` — only the K9's own citizenid may open it.
+- An unrecognized/misconfigured value **fails closed** to `'ownerOnly'`,
+  never to the more permissive `'department'`.
+
+The real access boundary is `ox_inventory`'s own `RegisterStash`
+owner/groups check, set at registration time from the value above — this
+resource's own callback re-check is defense-in-depth on top of that, not a
+substitute for it. Other fields:
+
+- `Config.K9Inventory.slots` (default `5`) / `.maxWeight` (default `8000`,
+  the same gram-equivalent unit `ox_inventory` items use) — the stash's
+  size.
+- `Config.K9Inventory.interactRange` (meters, default `2.0`) — max distance
+  for both the ox_target option and the server's own proximity re-check.
+- `Config.K9Inventory.allowedItems` — **currently has no effect even if
+  set to a list.** Item-whitelist enforcement was not implemented this
+  pass; left `nil` (no whitelist) rather than a config value that silently
+  does nothing different from `nil`.
+
+### `Config.Features.K9Medkit`
+
+`boolean`, default `false`. Gates a "Treat K9" ox_target world interaction
+(`server/medkit.lua`, `client/medkit.lua`) letting an authorized player
+consume a real `ox_inventory` item on a nearby K9-model player to restore
+health. Authorization is **job-only**, deliberately not gated on the using
+player's own K9 certification (treating a K9 is not a K9-handling action):
+a job in `Config.Departments`, a job in `Config.K9Medkit.emsJobs` (default
+`{ 'ambulance' }`), or a truthy result from the optional
+`Config.K9Medkit.IsMedkitUserAuthorizedOverride(usingPlayerServerId)`
+function hook (commented out by default).
+
+- `Config.K9Medkit.itemName` (default `'k9_medkit'`) — placeholder item
+  name; must exist in your server's real `ox_inventory` items table before
+  enabling this flag.
+- `Config.K9Medkit.healthRestore` (default `50`) — native health units
+  restored, clamped to the K9's real max health, never allowed to overheal.
+- `Config.K9Medkit.injuryRestore` (default `40`) — restores the wellbeing
+  subsystem's Injury stat (below) once `Config.Features.InjuryLimping` is
+  also enabled; a no-op otherwise.
+- `Config.K9Medkit.range` (meters, default `2.0`) — server-enforced max
+  distance between the using player and the target K9, checked before any
+  item consumption or health change.
+- `Config.K9Medkit.cooldownMs` (default `60000`) — per-target (K9
+  citizenid) cooldown between treatments.
+
+Health restoration is applied by the **target K9's own client**
+self-writing an already-clamped, server-computed absolute health value
+(never a delta it could reapply) — a cross-owner `SetEntityHealth` write
+was not confirmed reliable server-side, so this avoids relying on it.
+
+### K9 wellbeing subsystem
+
+Five independent `boolean` flags, all default `false`:
+`Config.Features.FatigueSystem`, `MoodSystem`, `FearStressSystem`,
+`DistractionSystem`, `InjuryLimping`. One shared per-citizenid stat store
+and one shared server tick (`Config.Wellbeing.tickIntervalMs`, default
+`5000`ms) drive all five stats (`server/wellbeing.lua`,
+`client/wellbeing.lua`); each stat is only ticked, read, or gated when its
+own flag is `true` — a fully-disabled subsystem starts no thread at all.
+
+- **Fatigue** (`Config.Wellbeing.Fatigue`) — decays while the K9 is
+  server-detected as sprinting (a rolling position-sample against
+  `sprintSpeedThreshold`, default `4.0` m/s), regenerates while idle, and
+  drops move speed by `speedPenaltyMultiplier` (default `0.85`) once below
+  `speedPenaltyThreshold` (default `30`). `restRegenPerTick`/`restRadius`/
+  `restSources` exist in config but are **not wired to any real detection
+  this pass** — resting near a configured source has no effect yet.
+- **Mood** (`Config.Wellbeing.Mood`) — decays on taking damage
+  (`damageDecayAmount`, default `15`), restored by "Pet K9"
+  (`petRegenAmount`, default `10`) and "Feed K9" ox_target interactions
+  (`feedRegenAmount`, default `20`, consuming `feedItemName` — a
+  placeholder item name, `'k9_treat'`), regenerates passively, and drops
+  move speed by `performancePenaltyMultiplier` (default `0.9`) below
+  `performancePenaltyThreshold` (default `25`). Pet/feed share a
+  per-(interactor, target) cooldown, `petCooldownMs` (default `30000`).
+- **Fear/Stress** (`Config.Wellbeing.FearStress`) — rises from nearby
+  gunfire (reusing Phase 2's gunfire relay, within `gunfireRadius`/
+  `gunfireLookbackSeconds`), decays passively, and above
+  `hesitationThreshold` (default `70`) imposes a temporary command-refusal
+  state (`hesitationDurationMs`, default `8000`ms) that a self-only "Calm
+  Down" action (`/k9calmdown`) can reduce early (`calmDownReduceAmount`,
+  `calmDownCooldownMs`).
+- **Distraction** (`Config.Wellbeing.Distraction`) — a thrown meat-bait
+  item (`/k9meatbait`) or an ultrasonic whistle (`/k9whistle`) briefly
+  distracts every K9 within the configured radius. **Deliberately usable
+  by any player**, not gated on `CanShowK9UI()` — a fleeing suspect using
+  one against a pursuing K9 is an intended use case, not an oversight.
+  `flashbangImmune` is **aspirational config only, not implemented** — it
+  depends on an unconfirmed third-party flashbang/stun resource's event
+  shape.
+- **Injury** (`Config.Wellbeing.Injury`) — decays on taking damage,
+  restored by `K9Medkit` above, and blocks sprint/jump input
+  (client-local, not a server-enforced boundary) plus reduces move speed
+  below `sprintBlockThreshold`/`jumpBlockThreshold`/`speedPenaltyMultiplier`.
+
+### `Config.Features.XPProgression`
+
+`boolean`, default `false`. Gates server-authoritative XP accumulation per
+K9 citizenid (`server/progression.lua`), intended to persist in a
+`k9_progression` table (one row per citizenid, survives a department
+change — unlike certification, which is job-scoped). **That table is not
+yet in `sql/install.sql`** — see [Database](#database) above before
+enabling this flag; XP works in-memory for a session but nothing currently
+survives a restart. `Config.XP.awards`
+defines flat XP amounts per action key:
+
+- `searchContrabandFound` (default `25`) — a successful Phase 2 contraband
+  search.
+- `trackSourceResolved` (default `10`) — awarded only once the K9's own
+  client actually **arrives** within `Config.XP.trackArrivalRadius`
+  (default `3.0`m) of a resolved scent/blood/gunpowder source within
+  `Config.XP.trackArrivalTTLMs` (default `60000`ms) — not just on the
+  trail resolving, which would otherwise let a K9 farm XP by repeatedly
+  triggering a search without ever finishing it.
+- `biteHoldSuccess` (default `20`) / `takedownSuccess` (default `30`) —
+  defined for the Phase 3 combat feature to call, but **not currently
+  wired to anything**, since that feature isn't registered (see
+  [Config options not yet wired up](#config-options-not-yet-wired-up)).
+
+Crossing a threshold in `Config.XPTiers` immediately applies that tier's
+`speedMultiplier`/`scentRange` and pushes a one-time "tier reached"
+notification — never on the initial post-login snapshot, only on a real
+crossing. `Config.XP.scopePerCitizenidOrJob` currently only supports
+`'citizenid'`; a `'job'` alternative is an open, unresolved product
+question, not implemented.
+
+## Phase 5 configuration (not enabled by default)
+
+Two Phase 5 flags now have real code behind them, both explicitly R&D-grade
+rather than release-hardened: `DeployableKennel` and `AdvancedBarkRadial`.
+`ProximityAudioFX`, `PropAttachments`, `FetchMechanic`, and `CameraFeedPiP`
+remain uncoded (see
+[Config options not yet wired up](#config-options-not-yet-wired-up)). Every
+numeric value in `Config.DeployableKennel`/`Config.AdvancedBarkRadial` is an
+unreviewed placeholder pending a config-validator pass.
+
+### `Config.Features.DeployableKennel`
+
+`boolean`, default `false`. Lets a certified handler place a world kennel
+object near themselves (`/k9deploykennel`, `server/kennel.lua`,
+`client/kennel.lua`) and pick it up again via an ox_target option on the
+placed object. The **server**, never the client, computes the spawn point
+from the handler's own live position and forward vector, and independently
+re-validates the placed object's model, entity type, and position (within
+a small tolerance) before accepting it as a real kennel — a modified
+client cannot report an arbitrary pre-existing networked entity as "the
+kennel it just placed."
+
+- `Config.DeployableKennel.propModel` (default `'prop_doghouse_01'`) — a
+  **single-source, unconfirmed** prop name, found in an unrelated
+  third-party resource's own config default, not independently
+  cross-verified. Confirm it actually streams in-engine before relying on
+  it.
+- `Config.DeployableKennel.fallbackPropModel` (default
+  `'prop_tennis_ball'`) — a confirmed-real prop used automatically if the
+  primary model fails to load client-side within a timeout. Not
+  thematically a kennel; exists purely so a bad `propModel` degrades to
+  "an oddly-shaped but real object appears" instead of a silent failure.
+- `Config.DeployableKennel.placementForwardOffsetMeters` (default `2.0`),
+  `.interactDistanceMeters` (default `2.5`), `.deployCooldownMs` (default
+  `5000`), `.pendingPlacementTtlMs` (default `15000`) — placement/cooldown
+  tuning.
+- **One active kennel per handler is a hardcoded invariant, not a config
+  value** — there is deliberately no `maxActivePerHandler` field. Raising
+  this limit would need a real code change (the server tracks kennels in a
+  single-slot `citizenid -> entry` table, not an array), not a config flip.
+
+Kennels are cleaned up on manual pickup, handler disconnect, and resource
+stop — none of these paths can leave a kennel permanently orphaned in the
+world.
+
+### `Config.Features.AdvancedBarkRadial`
+
+`boolean`, default `false`. Layered on top of
+`Config.Features.BasicBarkSounds` (still required underneath it, same
+Phase-5-on-Phase-1 pattern as the tracking flags over `RadialMenu`). When
+enabled, the radial menu's single "Bark" action becomes a submenu of three
+variants defined in `Config.AdvancedBarkRadial` (Alert/Aggressive/Calm by
+default), each sending the existing `qbx_k9unit:server:relayBark` event
+with a different `barkType` string — `server/main.lua`'s handler is
+unchanged, since it already accepts any opaque, length-capped bark type.
+When this flag is off, behavior is byte-for-byte the same as Phase 1's
+single generic bark.
+
+#### Bark sounds are placeholders
+
+Neither the Phase 1 bark nor any `AdvancedBarkRadial` variant has real
+authored audio behind it. `'bark'`/`'qbx_k9unit_sounds'` (Phase 1) and
+`'Bark_Alert'`/`'Bark_Aggressive'`/`'Bark_Calm'` (`AdvancedBarkRadial`) are
+all placeholder names with no `.ogg`/`.wav`/`.awc`/`.rel` asset shipped
+anywhere in this resource. `PlaySoundFromEntity` with an unrecognized
+name/set silently no-ops, so enabling either flag is safe (you'll just
+hear nothing) rather than erroring — but you will need to source and wire
+in real audio assets yourself before either bark feature is actually
+audible. See `SPEC.md` §7 for the full native-only-vs-custom-asset
+breakdown.
 
 ## Commands
 
@@ -868,9 +1161,11 @@ player's own ped to a nearby vehicle and restores it on exit — it grants no
 real capability, and no server-authoritative state currently depends on
 whether a player is "in" a K9 vehicle. A modified client gains nothing here
 it couldn't already get by calling the same client-side natives on itself
-directly. If a future feature (e.g. a K9 stash) ever needs to condition
-something server-authoritative on vehicle-load state, this will need a real
-server-side leg added — it does not currently exist.
+directly. The K9 gear stash (`Config.Features.K9Inventory`, above) has
+since landed without needing this — it gates on live proximity/model/
+access instead, not vehicle-load state. If a future feature ever does need
+to condition something server-authoritative on vehicle-load state, this
+will need a real server-side leg added — it does not currently exist.
 
 Both a resource restart mid-ride and the normal "Release From Vehicle"
 option restore the player's ped to a visible, unfrozen, collidable state
@@ -900,6 +1195,21 @@ job, rank, proximity, or ped model:
   that read is in flight.
 - The automatic revoke-on-job-change path has no client-reachable entry
   point at all.
+- K9 Inventory (`server/inventory.lua`) resolves the target's live model,
+  connected-player status, and access independently of the client's
+  ox_target selection, and re-checks live proximity before ever mutating
+  state — but the real access boundary for the stash itself is
+  `ox_inventory`'s own owner/groups check, not this resource's own
+  re-check, which is defense-in-depth on top of it.
+- K9 Medkit (`server/medkit.lua`) and the wellbeing subsystem's Pet/Feed/
+  Distraction interactions (`server/wellbeing.lua`) all independently
+  re-derive the target's live model and live proximity, and consume a real,
+  server-checked `ox_inventory` item before mutating any state — a
+  client-reported "I used it" is never sufficient.
+- Deployable kennel placement (`server/kennel.lua`) computes the spawn
+  point from the requester's own live server-side position — the client
+  never supplies a coordinate — and independently re-validates the placed
+  object's model, entity type, and position before accepting it as real.
 - The one deliberate exception is vehicle entry/exit — see above.
 
 ## Where things live
@@ -911,10 +1221,15 @@ job, rank, proximity, or ped model:
   revocation on job change, and the `/k9certify`, `/k9decertify`,
   `/k9decertifyoffline` commands.
 - `server/cooldowns.lua` — shared `NewCooldown`/`NewNestedCooldown`/
-  `NewMutex` constructors backing every cooldown/mutex table across the
-  four server files below (a pure structural extraction, no behavior
-  change). Loaded first in `fxmanifest.lua`'s `server_scripts`, since the
-  other four files call these constructors at their own file-load time.
+  `NewMutex` constructors backing every cooldown/mutex table across this
+  resource's other server files (a pure structural extraction, no behavior
+  change). Loaded first in `fxmanifest.lua`'s `server_scripts`, since every
+  other server file calls these constructors at its own file-load time.
+- `server/entities.lua` — the shared `ResolveNetworkEntity(netId,
+  expectedEntityType?)` defensive netId-to-entity resolver, extracted out
+  of two independent hand-written copies in `server/main.lua` and
+  `server/search.lua`. Loaded alongside `server/cooldowns.lua`, before its
+  consumers.
 - `server/main.lua` — the bark relay, the full leash consent/state
   handshake and in-memory leash-pair registry, a resource-start cache
   backfill for already-connected players, and (Phase 2) the
@@ -957,6 +1272,35 @@ job, rank, proximity, or ped model:
   see [Phase 2 configuration](#phase-2-configuration-not-enabled-by-default)
   above and `CHANGELOG.md`'s Known Limitations section for the exact
   remaining detail before enabling it in production.
+- `server/inventory.lua`, `client/inventory.lua` — **Phase 4, disabled by
+  default.** The K9 gear stash — see
+  [Config.Features.K9Inventory](#configfeaturesk9inventory) above.
+- `server/medkit.lua`, `client/medkit.lua` — **Phase 4, disabled by
+  default.** The K9 medkit — see
+  [Config.Features.K9Medkit](#configfeaturesk9medkit) above.
+- `server/wellbeing.lua`, `client/wellbeing.lua` — **Phase 4, disabled by
+  default.** The unified Fatigue/Mood/FearStress/Distraction/Injury
+  wellbeing subsystem — see
+  [K9 wellbeing subsystem](#k9-wellbeing-subsystem) above.
+- `server/progression.lua`, `client/progression.lua` — **Phase 4, disabled
+  by default.** XP accumulation, persistence (`k9_progression` table), and
+  tier application — see
+  [Config.Features.XPProgression](#configfeaturesxpprogression) above.
+- `server/kennel.lua`, `client/kennel.lua` — **Phase 5 R&D scaffold,
+  disabled by default.** The deployable kennel — see
+  [Config.Features.DeployableKennel](#configfeaturesdeployablekennel) above.
+  `client/radial.lua`'s Bark item also gained an `AdvancedBarkRadial`
+  submenu branch (same file, no new file) — see
+  [Config.Features.AdvancedBarkRadial](#configfeaturesadvancedbarkradial)
+  above.
+- `server/combat.lua` — **Phase 3, NOT registered in `fxmanifest.lua`, NOT
+  functional.** A substantial `BiteAndHold`/`NonLethalTakedown`
+  implementation exists in this branch's working tree, built under a
+  resolved client-relay-architecture design decision, but it has no
+  client-side counterpart (`client/combat.lua` does not exist) and is not
+  wired into the manifest — it is inert. See `CHANGELOG.md`'s Known
+  Limitations for the full detail; do not treat this as installed or
+  working.
 
 There are no `exports` declared by this resource (no `server_exports` /
 `client_exports` in `fxmanifest.lua`) — integration by other resources is

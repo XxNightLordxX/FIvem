@@ -16,12 +16,26 @@ server-side source resolution, a resource-wide cooldown/mutex refactor, a
 `luacheck` CI job, the certification-revocation TOCTOU fix below, three
 native-correctness corrections, door interaction's previously-deferred
 nudge-open half, and the first (still feature-flagged-off) slice of Phase
-4's vitality HUD. Phase 3
-(combat/action features) still has **no implementation** — `PHASE3_SPEC.md`
-has been revised (Revision 3: player-vs-player K9 combat is now a settled,
-in-scope design decision, reversing an earlier NPC-only default), but that
-is a design-document change only, not code. Everything below is pending
-final packaging.
+4's vitality HUD. Phase 3 (combat/action features) still has **no shipped
+implementation** — `PHASE3_SPEC.md` has been revised (Revision 3:
+player-vs-player K9 combat is now a settled, in-scope design decision,
+reversing an earlier NPC-only default), and the handler-partnership design
+fork (originally named as blocking both `BiteAndHold`'s Recall actor and
+`HandlerDownDefense`'s trigger) has since been resolved as a design
+decision — a new, dedicated partnership registry, not a reuse of the
+existing leash pairing — but that resolution is a decision document, not
+code, and the registry itself has not been built. Since that Phase 3
+design work landed, this branch has also picked up: a shared, defensive
+netId-to-entity resolver extracted out of two independent hand-written
+copies; the first three real Phase 4 capability grants beyond the vitality
+HUD (a certified/departmental K9 gear stash, a server-authoritative K9
+medkit, and a unified Fatigue/Mood/FearStress/Distraction/Injury wellbeing
+subsystem feeding a new XP/progression system); and the first two real
+Phase 5 features (a deployable kennel R&D scaffold, and an expanded bark
+radial). **Every one of these new features ships behind its own
+`Config.Features.*` flag, and every one of those flags still defaults to
+`false`** — none of it is active on an existing install. Everything below
+is pending final packaging.
 
 ### Added
 
@@ -142,6 +156,99 @@ final packaging.
   interactive element to focus, by design. Wired into `fxmanifest.lua`
   (`ui_page`, `html/index.html`/`style.css`/`app.js`) but genuinely inert
   end-to-end while the flag stays `false`.
+- **Shared defensive netId-to-entity resolver (`server/entities.lua`,
+  `ResolveNetworkEntity`)** — a pure structural extraction, not a redesign.
+  The two independent hand-written copies of "resolve a client-claimed
+  network id to a live entity, then existence-guard it" (`server/main.lua`'s
+  `relayDoorScratch` and `server/search.lua`'s `HandleSearchTarget`) now
+  share one function, with each call site's own additional checks (the
+  door-scratch handler's object-only restriction; the search handler's
+  target-type cross-check) left exactly where they were. One small,
+  disclosed strengthening came along for the ride: `HandleSearchTarget`
+  previously accepted a nonzero `NetworkGetEntityFromNetworkId` result
+  without also confirming `DoesEntityExist`; the shared resolver now applies
+  that same existence check to every caller, including this one — not
+  expected to change observed behavior, but a real, deliberate tightening
+  rather than a silent one.
+- **K9 Inventory (`Config.Features.K9Inventory`, still `false`)** — a
+  certified K9's own `ox_inventory` gear stash, opened via an ox_target
+  "Open K9 Gear" option on the K9's own ped. The K9 can always open their
+  own stash; who else can is controlled by `Config.K9Inventory.accessScope`
+  (`'department'`, the default — any player whose job is in
+  `Config.Departments` — or `'ownerOnly'`, restricted to the K9's own
+  citizenid; an unrecognized value fails closed to `'ownerOnly'`). The
+  real access boundary is `ox_inventory`'s own owner/groups check on the
+  registered stash, not this resource's own re-check, which is
+  defense-in-depth on top of it. Item-whitelist enforcement
+  (`Config.K9Inventory.allowedItems`) is **not** implemented this pass and
+  currently has no effect even if set — left honestly inert rather than
+  a half-built enforcement path.
+- **K9 Medkit (`Config.Features.K9Medkit`, still `false`)** — a "Treat K9"
+  ox_target world interaction letting a department member or a configured
+  EMS-job player (`Config.K9Medkit.emsJobs`) use a real, consumed
+  `ox_inventory` item on a nearby K9-model player to restore health, on a
+  per-K9 cooldown. Deliberately **not** gated on the using player's own K9
+  certification — treating a K9 is not itself a K9-handling action.
+  Restoring health is applied by the target's own client self-writing an
+  already-clamped, server-computed absolute value (never a delta it could
+  reapply), since a cross-owner `SetEntityHealth` write was not confirmed
+  reliable server-side this pass. Also restores the new wellbeing
+  subsystem's Injury stat once that subsystem exists — a forward-compatible
+  no-op until it does.
+- **Unified K9 wellbeing subsystem (`Config.Features.FatigueSystem` /
+  `MoodSystem` / `FearStressSystem` / `DistractionSystem` / `InjuryLimping`,
+  all still `false`)** — one shared per-citizenid stat store and one shared
+  server tick drive five independently-toggleable stats for a K9 character:
+  Fatigue (decays while sprinting, recovers while idle, reduces move speed
+  when low), Mood (decays on taking damage, restored by "Pet K9"/"Feed K9"
+  ox_target interactions, reduces move speed when low), Fear/Stress (rises
+  near recent gunfire, imposes a temporary command-hesitation state above a
+  threshold, reducible via a "Calm Down" self-action), Distraction (a
+  thrown meat-bait item or an ultrasonic whistle — deliberately usable by
+  *any* player, not just K9 handlers, since a fleeing suspect using one
+  against a pursuing K9 is an intended use case — briefly breaks command),
+  and Injury (decays on taking damage, restored by the K9 medkit above,
+  blocks sprint/jump input and reduces move speed below configured
+  thresholds). Every stat is only ever ticked, read, or gated behind its own
+  feature flag — a disabled stat idles at its healthy default and costs
+  nothing. Flashbang immunity for Distraction
+  (`Config.Wellbeing.Distraction.flashbangImmune`) is aspirational config
+  only, **not implemented** — it depends on an unconfirmed third-party
+  flashbang/stun resource's own event shape.
+- **XP / progression (`Config.Features.XPProgression`, still `false`)** —
+  server-authoritative XP accumulates per K9 citizenid (persisted in a new
+  `k9_progression` table, survives a department change) from configured
+  actions, currently a successful contraband find (Phase 2 search) and
+  actually arriving at a resolved scent/blood/gunpowder trail source (Phase
+  2 tracking) — arrival, not just a trail resolving, is required, closing an
+  otherwise-farmable "trigger a search and never finish it" loop. Crossing a
+  threshold in `Config.XPTiers` immediately applies that tier's speed
+  multiplier and scent range and pushes a one-time "tier reached"
+  notification to the K9's own client. The two Phase 3 award hooks
+  (`biteHoldSuccess`, `takedownSuccess`) are defined in config but not yet
+  wired to anything, since the combat feature that would call them isn't
+  registered (see Known Limitations).
+- **Deployable kennel (`Config.Features.DeployableKennel`, still `false`,
+  Phase 5 R&D scaffold)** — a certified handler can place a world kennel
+  object near themselves (`/k9deploykennel`) and pick it up again via an
+  ox_target option on the placed object. The server, never the client,
+  computes the spawn point from the handler's own live position, and
+  independently re-validates the placed object's model/type/position before
+  accepting it as real — a modified client cannot report an arbitrary
+  pre-existing networked entity as "the kennel it just placed." Limited to
+  one active kennel per handler (a hardcoded invariant, not a config value),
+  with cleanup on pickup, disconnect, and resource stop. The kennel prop
+  model itself (`prop_doghouse_01`) is a single-source, unconfirmed lead;
+  a confirmed-real fallback prop is used automatically if it fails to load.
+- **Advanced bark radial (`Config.Features.AdvancedBarkRadial`, still
+  `false`, layered on top of `Config.Features.BasicBarkSounds`)** — the
+  radial menu's single "Bark" action becomes a submenu of three variants
+  (Alert/Aggressive/Calm, `Config.AdvancedBarkRadial`), each sending the
+  same existing `relayBark` event with a different `barkType` string;
+  `server/main.lua`'s handler is unchanged, since it already accepts any
+  opaque, length-capped bark type. **This adds three more placeholder sound
+  names with no real authored audio behind them** — it widens, rather than
+  closes, the bark-audio asset gap already disclosed below.
 
 ### Security
 
@@ -255,13 +362,13 @@ fixes:
   remains hard-pinned to `true` via the resource-start assertion described
   above, since there is still no real lock-state check anywhere in this
   feature for that field to meaningfully gate.
-- The husky ped-model fix above was scoped to `Config.Peds` itself.
-  `client/movement.lua`'s Sit and Scratch-to-alert scenario lookup tables
-  (`K9_SIT_SCENARIO_BY_MODEL_HASH` / `K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH`)
-  still key on the old `a_c_huskie` spelling as of this writing, so a real
-  husky K9 currently falls back to the default Shepherd sit/bark animation
-  rather than the intended Retriever substitution until those two lookup
-  tables are updated to the corrected model name.
+- ~~The husky ped-model fix above was scoped to `Config.Peds` itself...~~
+  **Resolved.** `client/movement.lua`'s Sit and Scratch-to-alert scenario
+  lookup tables (`K9_SIT_SCENARIO_BY_MODEL_HASH` /
+  `K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH`) both now key on the corrected
+  `a_c_husky` spelling — a real husky K9 gets the intended
+  Retriever-substitute sit/bark animation, not the default Shepherd
+  fallback this bullet previously warned about.
 - Phase 4's new vitality HUD (`Config.Features.HealthStaminaHUD`, still
   `false` by default) reads hunger/thirst from
   `QBX.PlayerData.metadata.hunger`/`.thirst` on the assumption those field
@@ -271,18 +378,84 @@ fixes:
   against your own server's actual metadata schema before enabling this
   flag. Health and stamina are sourced from real client natives instead
   and are not affected by this caveat.
-- Phase 3 (combat/action features) still has **no implementation** — only
-  design scoping (`PHASE3_SPEC.md`). That document's Revision 3 reverses
-  its own earlier NPC-only default: player-vs-player K9 combat is now a
-  settled, in-scope design decision for whenever Phase 3 implementation
-  eventually starts. This is a design-document change only — no `.lua`
-  file was touched to produce it, and no combat code of any kind exists
-  yet. The same revision leaves one item explicitly unresolved and
-  flagged blocking: whether a non-cooperating player's client can be
-  *prevented* (not merely detected) from ignoring a relayed combat
-  restriction — no `Config.Combat` flag should be enabled and no
-  player-target combat implementation should start until that question is
-  answered.
+- Phase 3 (combat/action features) still has **no shipped, functional
+  implementation**, though this is no longer purely a design-scoping
+  situation. `PHASE3_SPEC.md`'s Revision 3 settled player-vs-player K9
+  combat as in-scope (reversing an earlier NPC-only default), and two
+  cross-cutting design forks that were blocking implementation have both
+  since been resolved as design decisions:
+  - §12.0 item 8 (whether a non-cooperating player's client can be
+    *prevented*, not merely detected, from ignoring a relayed combat
+    effect) was resolved with five binding guardrails — in short, no
+    server-authoritative consequence may ever depend on a relayed effect
+    having actually landed on a target's client, and every player-facing
+    string describing one is worded as best-effort, never as a guarantee.
+  - §12.0 item 7 (which human officer is "this K9's handler" for Recall/
+    `HandlerDownDefense` purposes, independent of momentary leash state)
+    was resolved as a **design decision only** — a new, dedicated,
+    DB-backed `k9_partnerships` registry, explicitly rejecting a reuse of
+    the existing `LeashPairs` table. **The registry itself has not been
+    implemented.** `HandlerDownDefense` remains fully uncoded because of
+    this, and `Config.Features.HandlerPartnership` does not yet exist in
+    `config.lua`.
+  - `AgilityAdvanced` is fully implemented behind its still-`false` flag
+    (`client/movement.lua`) and does not depend on either fork above.
+  - A substantial `server/combat.lua` implementing `BiteAndHold` and
+    `NonLethalTakedown` under item 8's guardrails exists in this branch's
+    working tree, but is **deliberately not registered in
+    `fxmanifest.lua`** and has **no client half** (`client/combat.lua`
+    does not exist) — it is inert, unreachable code, not a functioning
+    feature, and is not part of this release. `PropDragging` is out of
+    scope for that file and remains fully uncoded.
+  - `Config.Features.BiteAndHold`, `NonLethalTakedown`, and
+    `HandlerDownDefense` must stay `false`, and no player-target combat
+    implementation should be enabled, until `server/combat.lua` has a
+    working client half, is registered, and has been through this
+    resource's normal review pass.
+- **`Config.Features.XPProgression`'s `k9_progression` table is missing
+  from `sql/install.sql`.** `server/progression.lua` reads/writes a
+  `k9_progression` table that this resource's own migration file does not
+  yet create. Every query against it is pcall-wrapped, so this fails safely
+  rather than crashing — XP still accumulates correctly in the in-memory
+  cache for the rest of a server session, and every tier-based gameplay
+  effect (speed/scent range) still applies correctly — but every DB
+  read/write silently errors, so nothing is ever actually saved: a
+  disconnect, reconnect, or restart loses all XP earned so far. Do not
+  enable this flag on a live server until `k9_progression` has landed in
+  `sql/install.sql`. (`k9_search_log` and `k9_partnerships`, this batch's
+  other new/landed tables, are both present in the migration file already.)
+- **Bark-audio placeholder asset gap (widened, not closed, this batch).**
+  This resource has never shipped a real bark audio asset — `'bark'`/
+  `'qbx_k9unit_sounds'` have always been placeholder names with no `.ogg`/
+  `.wav`/`.awc`/`.rel` file backing them anywhere in the tree. Advanced Bark
+  Radial (`Config.Features.AdvancedBarkRadial`, above) adds three more
+  placeholder sound names (`Bark_Alert`, `Bark_Aggressive`, `Bark_Calm`) on
+  the same unbacked footing — more plumbing over the same gap, not a step
+  toward closing it. `PlaySoundFromEntity` with an unrecognized name/set
+  silently no-ops, so every bark action (basic or advanced) ships safely
+  with no audio rather than erroring, but a server owner who enables either
+  flag should not expect to hear anything until real audio assets are
+  sourced and wired in. See `SPEC.md` §7 for the full asset-vs-native-only
+  breakdown.
+- **Every numeric value in this batch's new `Config.K9Inventory`,
+  `Config.K9Medkit`, `Config.Wellbeing`, `Config.XP`, and
+  `Config.DeployableKennel` tables is an unreviewed placeholder** — cooldowns,
+  ranges, thresholds, XP award amounts, and the kennel's forward-offset/
+  interact-distance values have not been through a config-validator or
+  economy-balance pass, the same status this resource's existing Phase 2/4
+  placeholder tables (`Config.ContrabandAlertTiers`,
+  `Config.SearchContrabandItems`) already carry. Do not flip any of this
+  batch's feature flags to `true` on a live server before that review
+  happens.
+- **`Config.DeployableKennel.propModel` (`'prop_doghouse_01'`) is a
+  single-source, unconfirmed prop name** — found in an unrelated
+  third-party resource's own config default, not independently
+  cross-verified against a second source this pass. A confirmed-real
+  fallback prop (`'prop_tennis_ball'`, thematically wrong but definitely
+  real) is used automatically if the primary model fails to load client-side,
+  so the feature degrades to "an oddly-shaped but real object appears"
+  rather than failing silently — but confirm the primary model actually
+  streams in-engine before treating it as settled.
 - This batch has not yet had the same end-to-end release-readiness
   sign-off Phase 1 received; treat everything above as pending final
   packaging, not a shipped release.
