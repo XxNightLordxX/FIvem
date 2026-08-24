@@ -23,40 +23,84 @@
 
     ======================================================================
     RESOLVED DESIGN DECISION — Config.K9Inventory.accessScope
-    (PHASE4_SPEC.md §13.4.2 open question 1 / §13.6 item 3, previously
-    genuinely open, resolved HERE for implementation rather than left as a
-    placeholder):
+    (PHASE4_SPEC.md §13.4.2 open question 1 / §13.6 item 3)
 
-    Shipped default is `'department'` (matches §13.2's own sketch default),
-    concretely implemented as: the K9's own citizenid, plus every job name in
-    `Config.Departments` at any grade, may open that K9's stash — "shared
-    field equipment," the same framing this resource already gives
-    `Config.K9Vehicles`' patrol-vehicle trunk access. Chosen over
-    `'ownerOnly'` specifically because the K9 in this resource is a full,
+    coder-security FINDING (this pass), CONFIRMED and independently
+    RE-VERIFIED against the live, current `overextended/ox_inventory` `main`
+    branch source (fetched fresh this session — modules/inventory/
+    server.lua's `loadInventoryData`, root `server.lua`'s `openInventory`/
+    `forceOpenInventory`, modules/bridge/server.lua's `hasGroup`,
+    `registerStash`'s own doc comment): the previous version of this header
+    described `accessScope = 'ownerOnly'` as "a fully supported, symmetric
+    code path... flippable per-deployment with zero code change." That claim
+    was FALSE, and was itself part of the defect — 'ownerOnly' provided NO
+    actual access control:
+
+    - ox_inventory's stash-open path (`loadInventoryData`'s stash branch,
+      and `openInventory`'s own post-resolve check) gates access
+      EXCLUSIVELY via `stash.groups`/`right.groups`, through
+      `server.hasGroup(player, groups)`. Both checks are written as
+      `stash.groups and ... and not hasGroup(...)` / `right.groups and not
+      hasGroup(...)` — a nil `groups` short-circuits straight to ALLOW, for
+      every caller, unconditionally. `ResolveStashOwnerAndGroups`'s
+      'ownerOnly' branch returned `groups = nil`.
+    - `RegisterStash`'s `owner` argument (string OR the boolean `true`
+      "personal locker" form) is used EXCLUSIVELY for `Inventories` table
+      keying/partitioning (`Inventories[owner and
+      ('%s:%s'):format(stash.name, owner) or stash.name]`) and DB
+      persistence (`db.saveStash(inv.owner, ...)`) — it is NEVER compared
+      against the calling player's own identity anywhere in either
+      function. `registerStash`'s own upstream doc comment confirms this is
+      intentional, not an oversight: it documents the boolean `true` form as
+      "each player has a unique stash, but can request other player's
+      stashes" — cross-owner access is upstream-documented, expected
+      behavior for that form, not a bug this resource could rely on
+      closing.
+    - Net effect: once any K9's stash had been registered even once in a
+      server session (trivially triggered by that K9 opening their own
+      gear), ANY connected player who knew or guessed that citizenid could
+      call `exports.ox_inventory:openInventory('stash', 'k9inv-<citizenid>')`
+      directly from a modified client and get full read/write access —
+      bypassing every check this resource makes (proximity, HasK9Access,
+      IsAuthorizedForK9Inventory, the cooldown/mutex) and
+      `Config.Features.K9Inventory` itself, since ox_inventory knows nothing
+      about that flag.
+
+    CONCLUSION: there is no ox_inventory mechanism this resource can hook to
+    make a real, per-K9-owner ACL exist — `groups` (job/rank membership via
+    `hasGroup`) is the only actual capability ox_inventory's stash system
+    provides. `'department'` already uses exactly that mechanism correctly
+    (`groupRank >= (requiredRank or 0)` grants any grade in a listed job,
+    matching this resource's documented intent) and remains the shipped
+    default below, UNCHANGED — "shared field equipment," the same framing
+    this resource already gives `Config.K9Vehicles`' patrol-vehicle trunk
+    access, chosen because the K9 in this resource is a full,
     independently-logged-in player character (SPEC.md §1/§4.5's
-    post-correction model), not something that is "with" its handler at all
-    times — an `'ownerOnly'` default would make it impossible for a handler
-    to restock their partner K9's gear while the K9 player is offline, which
-    is the ordinary case this resource is built around, not an edge case.
-    The real theft-risk tradeoff this creates (any officer in the department
-    could pilfer a K9's stash) is the same social/administrative-abuse
-    category `phase2_notes/contraband_search_contract.md` §6's last bullet
-    already accepts for search-capability misuse — not a code-level exploit
-    this config value can close, and explicitly NOT decided as the only
-    correct answer: `Config.K9Inventory.accessScope = 'ownerOnly'` is a fully
-    supported, symmetric code path below (see ResolveStashOwnerAndGroups and
-    IsAuthorizedForK9Inventory), flippable per-deployment with zero code
-    change. Still flagged for an explicit human product sign-off before
-    `Config.Features.K9Inventory` ever defaults to `true` on a live server —
-    this is a resolved IMPLEMENTATION default, not a claim that the product
-    question itself no longer needs a human answer.
+    post-correction model): a handler restocking their partner K9's gear
+    while the K9 player is offline is the ordinary case this resource is
+    built around, not an edge case. The real theft-risk tradeoff
+    'department' creates (any officer in the department could pilfer a K9's
+    stash) is the same social/administrative-abuse category
+    `phase2_notes/contraband_search_contract.md` §6's last bullet already
+    accepts for search-capability misuse — not a code-level exploit any
+    config value here can close.
 
-    An unrecognized/misconfigured `accessScope` value (a typo, neither
-    'department' nor 'ownerOnly') FAILS CLOSED to the 'ownerOnly' shape (see
-    ResolveStashOwnerAndGroups) — mirrors server/cooldowns.lua's own
-    "a bad/missing config value must never silently become MORE permissive
-    than intended" fail-closed convention, applied here to a real ox_inventory
-    capability grant instead of a rate-limit threshold.
+    `accessScope` is therefore HARD-ENFORCED to `'department'` — the only
+    value this file actually implements a real access control for — via an
+    `assert` at resource start (below), not left selectable with a caveat
+    comment: a config value that can silently grant world-readable
+    read/write access to every K9's inventory is exactly the class this
+    resource already treats as a hard startup failure, per
+    server/main.lua's `nudgeRequiresUnlocked` assert and
+    server/search.lua's own `onResourceStart` config-invariant asserts —
+    same precedent, applied here. `ResolveStashOwnerAndGroups` and
+    `IsAuthorizedForK9Inventory` below still fail closed for any
+    non-'department' value as defense-in-depth (in case a future edit ever
+    removes the assert without touching them), but that code path is
+    UNREACHABLE in a running resource today — 'ownerOnly' is not an
+    implemented, selectable option, it is a rejected one. Still flagged for
+    an explicit human product sign-off before `Config.Features.K9Inventory`
+    ever defaults to `true` on a live server.
 
     ======================================================================
     CONFIDENCE NOTES — every ox_inventory export/shape this file's body
@@ -72,36 +116,34 @@
       via `openInventory` below) is what actually presents/moves items once
       access is granted.
     - `exports.ox_inventory:RegisterStash(id, label, slots, weight, owner,
-      groups)` — the SIGNATURE (5 positional args after `id`) matches
-      `phase2_notes/contraband_search_contract.md`'s own confirmed reading of
-      the STATIC vehicle-trunk case (real `overextended/ox_inventory` source,
-      that note §1). The DYNAMIC, per-player-registered-at-runtime call shape
+      groups)` — VERIFIED this session, directly against the current
+      `overextended/ox_inventory` `main` branch `registerStash` function
+      (root server.lua): signature is exactly `registerStash(name, label,
+      slots, maxWeight, owner, groups, coords, instance)` — HIGH confidence,
+      including for the DYNAMIC, per-player-registered-at-runtime call shape
       used here (one stash per K9 citizenid, registered lazily on first
-      request rather than declared once at file-load like a fixed vehicle
-      trunk) is, per PHASE4_SPEC.md §13.4.2's own reality check and §13.5's
-      cross-cutting note, **NOT independently re-verified against the real
-      ox_inventory source or a live install this session** — MEDIUM
-      confidence, based on this being ox_inventory's well-documented public
-      registration API (used identically, per that note, for the trunk
-      case), not a guess, but genuinely unconfirmed for the dynamic path.
-      If stashes silently fail to register or fail to enforce owner/groups
-      on a live server, verify this export's exact behavior against the real
-      `overextended/ox_inventory` source before assuming this file's logic
-      is at fault.
-    - `owner`/`groups` semantics (`owner`: string ties the stash to that
-      single owner identifier; `groups`: `table<jobName, minGrade>` restricts
-      access to job members at or above that grade) follow the widely
-      documented, established ox_inventory `RegisterStash` convention —
-      MEDIUM confidence, NOT independently re-verified against source this
-      session (same caveat class as the point above). `minGrade = 0` for
-      every configured department (see K9InventoryDepartmentGroups below) is
-      this file's own choice to mean "any grade in that job," not a verified
-      ox_inventory default.
+      request); `registerStash` is fully generic over call timing, nothing
+      in it special-cases "declared once at file-load" vs. "called
+      lazily at runtime."
+    - `owner`/`groups` semantics — VERIFIED this session against the same
+      source, including `registerStash`'s own doc comment and the actual
+      access-check code in `loadInventoryData`/`openInventory`
+      (modules/inventory/server.lua, root server.lua): `groups` —
+      `table<jobName, minGrade>` — IS the real, and ONLY, access gate,
+      checked via `server.hasGroup(player, groups)` wherever `groups` is
+      non-nil; `minGrade = 0` for every configured department (see
+      K9InventoryDepartmentGroups below) is this file's own choice to mean
+      "any grade in that job," confirmed correct against `hasGroup`'s
+      `groupRank >= (requiredRank or 0)` logic. `owner` (string or boolean
+      `true`) is NOT an access gate at all — confirmed used exclusively for
+      `Inventories` table keying and DB persistence, never compared against
+      the requesting player's identity anywhere in either function (see the
+      RESOLVED DESIGN DECISION section above for the full trace — this is
+      the coder-security finding this pass fixes).
     - `exports.ox_inventory:openInventory('stash', stashId)` (the CLIENT-side
-      call, client/inventory.lua) — cited directly by PHASE4_SPEC.md
-      §13.4.2's own concrete-behavior section as "the standard ox_target +
-      ox_inventory pattern"; same MEDIUM confidence/unverified-this-session
-      status as the two points above.
+      call, client/inventory.lua) — VERIFIED this session: this exact call
+      shape (`'stash', stash.name`) appears in ox_inventory's own
+      modules/inventory/client.lua. HIGH confidence.
     - `Config.K9Inventory.allowedItems` item-whitelist enforcement is
       DELIBERATELY NOT IMPLEMENTED in this pass — PHASE4_SPEC.md §13.4.2
       itself flags this as "a real, currently unresolved implementation
@@ -227,6 +269,42 @@ for jobName in pairs(Config.Departments) do
     K9InventoryDepartmentGroups[jobName] = 0
 end
 
+-- CONFIG-SAFETY GUARD (coder-security finding, this pass — see this file's
+-- header RESOLVED DESIGN DECISION section for the full trace). `'department'`
+-- is the ONLY `Config.K9Inventory.accessScope` value this file implements a
+-- real ox_inventory access control for — `'ownerOnly'` (or any other value)
+-- relies on ox_inventory's `owner` RegisterStash argument, which is never
+-- checked against the calling player's identity anywhere in ox_inventory's
+-- own open-inventory path (independently verified against the live,
+-- current `overextended/ox_inventory` source this session): `groups` via
+-- `server.hasGroup` is the only real gate, and a nil `groups` (what
+-- 'ownerOnly' produces) short-circuits to ALLOW for every caller. Failing
+-- loudly here, at resource start, rather than letting a misconfigured value
+-- silently grant world-readable read/write access to every K9's stash —
+-- same precedent as server/main.lua's `nudgeRequiresUnlocked` assert and
+-- server/search.lua's own `onResourceStart` config-invariant asserts,
+-- placed in THIS file (not centralized) because this is the file whose
+-- security model actually depends on it, same reasoning server/search.lua's
+-- own header already gives for that placement choice.
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    assert(
+        Config.K9Inventory.accessScope == 'department',
+        "[qbx_k9unit] Config.K9Inventory.accessScope must be 'department' -- " ..
+        "'ownerOnly' (or any other value) is NOT a real access control. ox_inventory's " ..
+        'RegisterStash only gates stash access via its `groups` argument (server.hasGroup); ' ..
+        'the `owner` argument is used exclusively for internal stash keying and DB persistence ' ..
+        "and is never checked against the calling player's identity anywhere in ox_inventory's " ..
+        'open-inventory path (verified against the current overextended/ox_inventory source). ' ..
+        "Setting accessScope to anything but 'department' would silently let ANY connected " ..
+        "player who knows or guesses a K9's citizenid open that K9's stash directly via " ..
+        "exports.ox_inventory:openInventory('stash', 'k9inv-<citizenid>'), bypassing every " ..
+        'check this resource makes (proximity, HasK9Access, IsAuthorizedForK9Inventory, the ' ..
+        'cooldown/mutex) and Config.Features.K9Inventory itself.'
+    )
+end)
+
 --- Resolves a ped entity to the currently-connected player's server id it
 --- belongs to, or nil if it doesn't belong to any currently-connected
 --- player. Small local copy of server/search.lua's function of the same
@@ -250,8 +328,13 @@ end
 
 --- Resolves the `owner`/`groups` RegisterStash arguments for a given K9
 --- citizenid, per Config.K9Inventory.accessScope. See this file's header
---- RESOLVED DESIGN DECISION section for the full reasoning, including the
---- fail-closed behavior for an unrecognized accessScope value.
+--- RESOLVED DESIGN DECISION section for the full reasoning. The
+--- onResourceStart assert above guarantees accessScope is always
+--- 'department' in a running resource — the branch below is UNREACHABLE
+--- dead code today, kept only as defense-in-depth (fails to the most
+--- restrictive shape, single-owner/no-groups, rather than the more
+--- permissive 'department' reading) in case a future edit ever removes
+--- that assert without touching this function.
 --- @param citizenid string
 --- @return string|boolean owner
 --- @return table? groups
@@ -260,11 +343,13 @@ local function ResolveStashOwnerAndGroups(citizenid)
         return false, K9InventoryDepartmentGroups
     end
 
-    -- 'ownerOnly', OR any unrecognized/misconfigured value — FAIL CLOSED to
-    -- the most restrictive shape (single-owner, no groups) rather than
-    -- silently treating a typo as the more permissive 'department' reading.
-    -- See this file's header for why this direction (not the reverse) is
-    -- the safe default.
+    -- UNREACHABLE in a running resource (see doc comment above) — defense
+    -- in depth only. Fails CLOSED to the most restrictive shape
+    -- (single-owner, no groups) rather than silently treating a typo as the
+    -- more permissive 'department' reading. NOTE: unlike the real
+    -- 'department' path above, this shape provides NO actual ox_inventory
+    -- access control at all (see header) — it is not a safe fallback to
+    -- rely on, only a non-worse one.
     return citizenid, nil
 end
 
@@ -286,8 +371,10 @@ local function IsAuthorizedForK9Inventory(interactorJobName, isSelf)
         return interactorJobName ~= nil and Config.Departments[interactorJobName] ~= nil
     end
 
-    -- 'ownerOnly', or an unrecognized/misconfigured value — fail closed,
-    -- same direction as ResolveStashOwnerAndGroups above.
+    -- UNREACHABLE in a running resource (the onResourceStart assert above
+    -- guarantees accessScope == 'department') — fails closed, same
+    -- direction/reasoning as ResolveStashOwnerAndGroups above, kept only as
+    -- defense-in-depth.
     return false
 end
 

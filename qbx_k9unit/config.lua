@@ -579,18 +579,20 @@ Config.K9Inventory = {
     maxWeight     = 8000,  -- grams-equivalent, same units ox_inventory's own item .weight fields use (unit convention confirmed: phase2_notes/contraband_search_contract.md §1)
     interactRange = 2.0,
 
-    -- RESOLVED (coder-backend, this pass — see server/inventory.lua's header
-    -- "RESOLVED DESIGN DECISION" section for the full reasoning, including
-    -- why an 'ownerOnly' server is fully supported too, and why an
-    -- unrecognized value here fails CLOSED to 'ownerOnly', not
-    -- 'department'): 'department' (default) — any player whose job is a
+    -- 'department' is the ONLY supported value (coder-security finding,
+    -- this pass — see server/inventory.lua's header "RESOLVED DESIGN
+    -- DECISION" section for the full reasoning): any player whose job is a
     -- key in Config.Departments (any grade) may open a given K9's gear
     -- stash, shared-field-equipment framing, the same posture
-    -- Config.K9Vehicles already gives patrol-vehicle trunk access. Set to
-    -- 'ownerOnly' to instead restrict access to only the K9 player's own
-    -- citizenid (a personal-locker framing) — both values are fully
-    -- implemented, this is a real per-deployment product choice, not a
-    -- placeholder pending code.
+    -- Config.K9Vehicles already gives patrol-vehicle trunk access.
+    -- 'ownerOnly' was previously documented here as an equally-supported
+    -- alternative -- it was NOT: ox_inventory's RegisterStash `owner`
+    -- argument is never checked against the calling player's identity
+    -- anywhere in ox_inventory's own open-inventory path (only `groups`
+    -- is), so 'ownerOnly' provided no real access control at all and is
+    -- HARD-ENFORCED OUT at resource start (assert, server/inventory.lua) --
+    -- changing this value away from 'department' will crash the resource
+    -- on startup by design.
     accessScope   = 'department',
 
     -- nil = no item whitelist enforced (ox_inventory's own slot/weight

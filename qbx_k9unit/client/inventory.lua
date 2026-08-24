@@ -110,16 +110,18 @@ exports.ox_target:addGlobalPlayer({
                 return true
             end
 
-            -- Otherwise, DISPLAY-ONLY approximation of accessScope: for
-            -- 'ownerOnly' a non-self interactor is never authorized
-            -- server-side, so don't even show the option; for 'department'
-            -- (or an unrecognized/misconfigured value, which
-            -- server/inventory.lua's ResolveStashOwnerAndGroups/
-            -- IsAuthorizedForK9Inventory both fail CLOSED on) only show the
-            -- option to a player whose own job is a configured department —
-            -- QBX.PlayerData is the live-updated client-side job cache this
-            -- resource's fxmanifest.lua already documents as the standard
-            -- source for this, per '@qbx_core/modules/playerdata.lua'.
+            -- Otherwise, DISPLAY-ONLY approximation of accessScope: only
+            -- show the option to a player whose own job is a configured
+            -- department. `accessScope ~= 'department'` is UNREACHABLE
+            -- today — server/inventory.lua's onResourceStart assert
+            -- hard-enforces accessScope == 'department' (coder-security
+            -- finding: any other value, including 'ownerOnly', provided no
+            -- real ox_inventory access control at all) — kept as
+            -- defense-in-depth so this UI never shows a stale/misleading
+            -- option if that invariant is ever loosened. QBX.PlayerData is
+            -- the live-updated client-side job cache this resource's
+            -- fxmanifest.lua already documents as the standard source for
+            -- this, per '@qbx_core/modules/playerdata.lua'.
             if Config.K9Inventory.accessScope ~= 'department' then
                 return false
             end
