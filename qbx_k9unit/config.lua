@@ -113,6 +113,16 @@ Config.Features = {
     -- well as security-sensitive -- set AcePermission before flipping it on.
     AdminAuditCommands   = false,
 
+    -- server/bonetool.lua + client/bonetool.lua. A DEV-SERVER-ONLY sweep that
+    -- attaches a marker prop to bone indices in sequence so a human can
+    -- visually identify the right one for a quadruped skeleton -- the
+    -- question that blocked PropAttachments and FetchMechanic through three
+    -- research passes. NEVER enable this on a production server: it spawns
+    -- and attaches props on command. It is additionally ACE-gated
+    -- (Config.BoneSweepTool.AcePermission), so this flag alone does not make
+    -- it reachable -- but treat the flag as the real switch and leave it off.
+    BoneSweepDevTool     = false,
+
     -- Phase 5 (audio/props/advanced vision R&D)
     AdvancedBarkRadial   = false,
     ProximityAudioFX     = false,
@@ -126,14 +136,14 @@ Config.Features = {
 -- PED ROSTER — extensible, no code changes needed to add a streamed model.
 -- ======================================================================
 Config.Peds = {
-    { model = 'a_c_shepherd',   label = 'German Shepherd' },
-    { model = 'a_c_rottweiler', label = 'Rottweiler' },
-    { model = 'a_c_husky',      label = 'Husky' },
-    { model = 'a_c_chop',       label = 'Chop (K9 Unit)' },
+    { model = 'a_c_shepherd' },
+    { model = 'a_c_rottweiler' },
+    { model = 'a_c_husky' },
+    { model = 'a_c_chop' },
     -- Example custom streamed model (requires the model to exist in a
     -- streamed resource elsewhere on the server; adding this line is the
     -- *only* change needed to make it selectable):
-    -- { model = 'a_c_k9_malinois', label = 'Belgian Malinois' },
+    -- { model = 'a_c_k9_malinois' },
 }
 
 -- ======================================================================
@@ -472,9 +482,8 @@ Config.Combat = {
     NonComplianceDetection = {
         enabled                = true,
         positionSampleWindowMs = 500,   -- how often the shared sampling thread re-reads every active hold/ragdoll's target position
-        speedTolerance         = 1.0,   -- m/s of slack — GENERIC fallback only, not used by BiteAndHold (see biteHoldSpeedTolerance below, which item 8 explicitly recommends tightening for that specific check) — UNTUNED
         biteHoldIdleCeiling    = 0.3,   -- m/s -- a compliant BiteAndHold target is near-stationary (may turn in place); observed speed above (idleCeiling + biteHoldSpeedTolerance) is a candidate violation. UNTUNED placeholder, per item 8's own numbers.
-        biteHoldSpeedTolerance = 0.5,   -- m/s -- item 8's own tightened recommendation for BiteAndHold specifically (the shipped generic speedTolerance=1.0 above was flagged as too loose stacked on a 0.3 m/s idle ceiling). UNTUNED.
+        biteHoldSpeedTolerance = 0.5,   -- m/s -- item 8's own tightened recommendation for BiteAndHold specifically. Item 8's generic speedTolerance=1.0 baseline was flagged as too loose stacked on a 0.3 m/s idle ceiling, and has been deleted from this table entirely -- an audit confirmed it had no reader anywhere in the resource, under any feature flag; every effect type carries its own dedicated threshold instead. UNTUNED.
         biteHoldViolationSamples = 2,   -- consecutive over-threshold samples required before flagging — never a single noisy sample, per item 8's "never auto-punish/flag on one sample" instinct (mirrors server/tracking.lua's own FORGED TRAIL DECISION reasoning).
         takedownNetDisplacementMeters = 3.0, -- meters -- NonLethalTakedown uses NET DISPLACEMENT from the ragdoll-start position over the whole window as its primary signal instead of a continuous speed check (a genuine ragdoll produces noisy per-tick velocity from falling/sliding that a speed check would false-positive on) — see server/combat.lua's own comment for the disclosed simplification versus item 8's fuller "sustained consistent heading, not random tumbling drift" framing. UNTUNED.
         action                 = 'log', -- 'log' | 'notify_staff' -- deliberately NEVER 'auto_kick'/'auto_ban': a false positive from lag/desync must not itself become a punitive action without human review.
@@ -1015,4 +1024,86 @@ Config.Wellbeing = {
         damageDecayAmount       = 10, -- flat decrement per logged damage event -- independent value from Mood's own damageDecayAmount, same detection source
         passiveRegenPerTick     = 0.1, -- deliberately very slow -- K9Medkit (Config.K9Medkit, via RestoreInjury) is the intended primary recovery path, not natural regen
     },
+}
+
+-- ======================================================================
+-- PROP ATTACHMENTS (Config.Features.PropAttachments) --
+-- client/propattachment.lua, server/propattachment.lua. A visible prop
+-- (vest/harness) attached to the K9 ped.
+--
+-- ABOUT boneIndex, because this is the part everyone gets wrong:
+-- AttachEntityToEntity takes a bone INDEX, not a bone NAME, and the docs note
+-- the index is "different to boneID". Three earlier research passes stalled
+-- searching for a quadruped bone NAME, which does not exist to be found.
+-- GetWorldPositionOfEntityBone is declared over a generic Entity (ENTITY
+-- namespace, not PED), so it works against a dog ped -- but a dog skeleton's
+-- layout differs from a human's, so the specific index has to be found by
+-- looking. That is what Config.Features.BoneSweepDevTool exists for.
+-- Default 0 is the root bone: always valid, never crashes, looks wrong.
+-- ======================================================================
+Config.PropAttachments = {
+    propModel         = 'prop_bodyarmour_02', -- UNVERIFIED, degrades to a no-op if absent
+    fallbackPropModel = 'prop_box_ammo01a',   -- UNVERIFIED, same
+    boneIndex         = 0,                    -- root; replace after a dev-server sweep
+    offsetX = 0.0, offsetY = 0.0, offsetZ = 0.0,
+    rotX    = 0.0, rotY    = 0.0, rotZ    = 0.0,
+    toggleCooldownMs         = 2000,
+    pendingConfirmTtlMs      = 15000,
+    confirmDistanceTolerance = 5.0,
+}
+
+-- ======================================================================
+-- BONE SWEEP DEV TOOL (Config.Features.BoneSweepDevTool) -- see that flag's
+-- own comment. Dev servers only.
+-- ======================================================================
+Config.BoneSweepTool = {
+    AcePermission     = 'k9unit.admin',
+    TestPropModel     = 'prop_box_ammo01a',
+    MaxBoneIndex      = 200,
+    TestOffsetX = 0.0, TestOffsetY = 0.0, TestOffsetZ = 0.0,
+    CommandCooldownMs = 500,
+}
+
+-- ======================================================================
+-- FETCH (Config.Features.FetchMechanic) -- client/fetch.lua, server/fetch.lua.
+--
+-- Note what this feature is NOT: the K9 does not walk the ball back on its
+-- own. It cannot -- the K9 is a connected player's own character, and nothing
+-- in this resource's architecture scripts a player's ped movement. The return
+-- leg is a real player action ("Deliver to Handler", server-validated for
+-- identity and live proximity) instead of a scripted walk.
+-- ======================================================================
+Config.FetchMechanic = {
+    ballPropModel                = 'prop_tennis_ball',
+    throwForwardOffsetMeters     = 1.0,
+    throwUpOffsetMeters          = 1.2,
+    throwForceForward            = 12.0,
+    throwForceUp                 = 6.0,
+    throwCooldownMs              = 5000,
+    pendingThrowTtlMs            = 15000,
+    maxBallLifetimeMs            = 300000, -- absolute ceiling; no ball outlives this
+    pickupInteractDistanceMeters = 2.0,
+    deliverProximityMeters       = 3.0,
+    maintenanceIntervalMs        = 2000,
+
+    -- 'fake' (delete + animate) or 'attach' (real mouth-carried prop).
+    -- Ships 'fake' deliberately: 'attach' is only honest once a dev-server
+    -- sweep has found a real mouth/jaw index AND confirmed it does not clip
+    -- during the bark/pant carry pose. The feature is fully playable in
+    -- 'fake' mode without that step.
+    mouthCarryMode = 'fake',
+    mouthBoneIndex = 0, -- root; replace from a sweep, then set mouthCarryMode
+    mouthOffsetX = 0.0, mouthOffsetY = 0.4, mouthOffsetZ = 0.15,
+}
+
+-- ======================================================================
+-- PROXIMITY AUDIO (Config.Features.ProximityAudioFX) -- client/proximityaudio.lua.
+-- Distance-scaled K9 audio over the NUI bridge's Web Audio gain node.
+-- REMEMBER: no audio files ship with this resource. Until an operator supplies
+-- html/sounds/<key>.ogg this is silent by design, not broken.
+-- ======================================================================
+Config.ProximityAudioFX = {
+    scanIntervalMs  = 2500,  -- discovery cadence; never a per-frame loop
+    triggerDistance = 25.0,  -- meters; must stay <= client/audio.lua's own 30.0 ceiling
+    soundName       = 'Growl_Ambient', -- resolves to html/sounds/growl_ambient.ogg
 }

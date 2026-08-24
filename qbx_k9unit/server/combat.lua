@@ -295,17 +295,21 @@
     ======================================================================
 
     NON-COMPLIANCE DETECTION (PHASE3_SPEC.md §12.0 item 8, point 2) — real,
-    implemented sampling, not a sketch. One shared maintenance thread (never
+    implemented sampling, not a sketch. TWO shared maintenance threads (never
     one thread per active effect, mirroring server/tracking.lua's
-    PruneTrackableLogs single-pass-over-a-shared-table discipline) does TWO
-    jobs on every tick of MAINTENANCE_INTERVAL_MS below:
-      (a) enforces every active hold/ragdoll's hard expiresAt cap —
-          ALWAYS, regardless of Config.Combat.NonComplianceDetection.enabled
-          — this is item 4's "no unbounded trap" guarantee and must never
-          be gated behind the detection feature flag;
-      (b) IF NonComplianceDetection.enabled, samples the target's live,
-          server-authoritative position (GetEntityCoords — NEVER a
-          client-reported value) and applies the PER-EFFECT heuristic
+    PruneTrackableLogs single-pass-over-a-shared-table discipline), each
+    doing exactly one job, on two DELIBERATELY DECOUPLED intervals:
+      (a) the expiry thread (MAINTENANCE_INTERVAL_MS below, hardcoded,
+          NEVER Config.Combat.NonComplianceDetection.positionSampleWindowMs)
+          enforces every active hold/ragdoll's hard expiresAt cap — ALWAYS,
+          regardless of Config.Combat.NonComplianceDetection.enabled — this
+          is item 4's "no unbounded trap" guarantee and must never be gated
+          behind, or have its timing at the mercy of, the detection
+          feature's own (separately configurable) sampling interval;
+      (b) IF NonComplianceDetection.enabled, a second, independent thread
+          runs on its own positionSampleWindowMs interval and samples the
+          target's live, server-authoritative position (GetEntityCoords —
+          NEVER a client-reported value), applying the PER-EFFECT heuristic
           PHASE3_SPEC.md §12.0 item 8 specifies:
             - BiteAndHold: near-stationary check, flagged only after
               `biteHoldViolationSamples` CONSECUTIVE over-threshold
@@ -940,7 +944,7 @@ end
 --- @param now number
 local function SampleCompliance(targetNetId, hold, now)
     local targetPed = ResolveNetworkEntity(targetNetId, 1)
-    if not targetPed then return end -- DEFENSE IN DEPTH ONLY, should not normally trigger: the maintenance thread's own resolvability check (RED-TEAM FINDING, see its own comment) now ends the hold BEFORE this function is ever called with an unresolvable target — kept here in case a future call site ever calls this function directly without going through that check first
+    if not targetPed then return end -- DEFENSE IN DEPTH: the expiry thread's own resolvability check (RED-TEAM FINDING, see its own comment) ends an unresolvable hold on ITS OWN next tick, but this function now runs on a SEPARATE, independently-configurable sampling thread (positionSampleWindowMs) rather than sharing the expiry thread's tick — so a target can legitimately go unresolvable in the gap between the two threads' ticks. Silently returning here (never erroring) is the correct handling for that ordinary race, not just a "should not normally trigger" backstop.
 
     local cfg = Config.Combat.NonComplianceDetection
     local compliance = hold.compliance
@@ -1028,12 +1032,13 @@ local function DragExceedsMaxDistance(hold, targetNetId)
     return dist > Config.Combat.PropDragging.maxDragDistance
 end
 
--- Single shared maintenance thread — see this file's header for why this
+-- Shared EXPIRY maintenance thread — see this file's header for why this
 -- is ALWAYS running (expiry enforcement, job (a)) regardless of whether
--- detection sampling (job (b)) is enabled. A fixed interval, deliberately
--- NOT derived from Config.Combat.NonComplianceDetection.positionSampleWindowMs
--- — expiry (the "no unbounded trap" guarantee) must never be delayed by a
--- large/misconfigured detection-sampling interval.
+-- detection sampling (job (b), its own separate thread below) is enabled.
+-- A fixed interval, deliberately NOT derived from
+-- Config.Combat.NonComplianceDetection.positionSampleWindowMs — expiry
+-- (the "no unbounded trap" guarantee) must never be delayed by a large/
+-- misconfigured detection-sampling interval.
 local MAINTENANCE_INTERVAL_MS = 500
 
 CreateThread(function()
@@ -1046,10 +1051,11 @@ CreateThread(function()
                 -- MEDIUM, QA-flagged this session: EndHold reaches AwardXP
                 -- (guarded only by a `type(...) == 'function'` existence
                 -- check, no pcall of its own) and TriggerClientEvent calls
-                -- that could theoretically error on bad state — SampleCompliance
-                -- three lines below is already pcall-wrapped for exactly
-                -- this reason; this call was not, despite being the SAME
-                -- shared, resource-wide maintenance coroutine. An uncaught
+                -- that could theoretically error on bad state — the
+                -- compliance-sampling thread's own SampleCompliance call
+                -- is already pcall-wrapped for exactly this reason; this
+                -- call was not, despite both being shared, resource-wide
+                -- maintenance coroutines. An uncaught
                 -- error here would kill this thread PERMANENTLY (Lua
                 -- coroutines/threads do not resume after an unhandled
                 -- error), silently disabling expiry enforcement — the "no
@@ -1065,10 +1071,11 @@ CreateThread(function()
                 end
             elseif not ResolveNetworkEntity(targetNetId, 1) then
                 -- RED-TEAM FINDING (PropDragging), generalized to every
-                -- effectType: DragExceedsMaxDistance/SampleCompliance below
-                -- both used to bail out silently the moment their own
-                -- internal ResolveNetworkEntity(targetNetId, 1) call
-                -- returned nil, on the stated assumption that "the
+                -- effectType: DragExceedsMaxDistance below (this thread)
+                -- and SampleCompliance (its own, separate compliance-
+                -- sampling thread) both used to bail out silently the
+                -- moment their own internal ResolveNetworkEntity(targetNetId, 1)
+                -- call returned nil, on the stated assumption that "the
                 -- maintenance loop's own expiry/disconnect cleanup handles
                 -- teardown" — but the ONLY disconnect cleanup that exists
                 -- (the playerDropped handler below) fires on a full
@@ -1077,7 +1084,7 @@ CreateThread(function()
                 -- replaced with a new network id without disconnecting
                 -- (e.g. some ambulance/revive flows), the OLD targetNetId
                 -- becomes permanently unresolvable, silently skipped by
-                -- both checks below forever — leaving nothing but the hard
+                -- both checks forever — leaving nothing but the hard
                 -- `hold.expiresAt` timeout above to ever clear it, up to
                 -- Config.Combat.BiteAndHold.maxDurationMs/
                 -- Config.Combat.PropDragging.maxDragDurationMs later. This
@@ -1102,15 +1109,47 @@ CreateThread(function()
                 if not ok then
                     print(('[qbx_k9unit] combat EndHold(max_distance_exceeded) errored for netId %s: %s'):format(targetNetId, tostring(err)))
                 end
-            elseif Config.Combat.NonComplianceDetection.enabled then
+            end
+        end
+    end
+end)
+
+-- Shared COMPLIANCE-SAMPLING thread — job (b) from this file's header,
+-- deliberately a SEPARATE thread from the expiry thread above rather than
+-- a branch sharing its tick, on its own Config.Combat.NonComplianceDetection.
+-- positionSampleWindowMs interval (this field's own doc comment in
+-- config.lua already called it "the shared sampling thread", i.e. its own
+-- thread, distinct from expiry — this wires that up for real). Sampling is
+-- non-punitive and log-only (see FlagNonCompliance/this file's header), so
+-- decoupling its cadence from the hard expiry/max-distance safety valves
+-- above is safe: nothing here ever ends a hold or mutates authoritative
+-- state, it only ever writes to a hold's own `compliance` sub-record.
+-- Started only when NonComplianceDetection.enabled — Config is read once
+-- at resource start and never mutated at runtime, so gating thread
+-- creation itself (rather than looping forever just to no-op every tick)
+-- costs nothing.
+if Config.Combat.NonComplianceDetection.enabled then
+    CreateThread(function()
+        while true do
+            Wait(Config.Combat.NonComplianceDetection.positionSampleWindowMs)
+            local now = GetGameTimer()
+
+            for targetNetId, hold in pairs(ActiveHolds) do
+                -- pcall-wrapped for the same reason as every other call
+                -- site in this shared coroutine's siblings: an error
+                -- sampling ONE hold must never stop sampling for every
+                -- OTHER active hold on this same tick, nor kill this
+                -- thread permanently for the rest of the resource's
+                -- uptime (Lua coroutines do not resume after an
+                -- unhandled error).
                 local ok, err = pcall(SampleCompliance, targetNetId, hold, now)
                 if not ok then
                     print(('[qbx_k9unit] combat compliance sampling errored for netId %s: %s'):format(targetNetId, tostring(err)))
                 end
             end
         end
-    end
-end)
+    end)
+end
 
 --[[ ================= BITE-AND-HOLD ================= ]]
 

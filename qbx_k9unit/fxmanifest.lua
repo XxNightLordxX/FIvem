@@ -179,4 +179,22 @@ server_scripts {
 }
 
 lua54 'yes'
+-- OAL = "One Argument List", an experimental change to the Lua native-calling
+-- convention -- NOT an object/asset loader, which is what a release review
+-- initially assumed and flagged as risky to ship. Under it, natives no longer
+-- auto-unpack a vector3 into x, y, z.
+--
+-- KEPT DELIBERATELY, after checking rather than assuming. qbx_core, ox_lib,
+-- ox_target and ox_inventory all set this flag in their own live main-branch
+-- manifests (verified Aug 2026), so a server running this resource already
+-- needs a build supporting fxv2 OAL regardless of what we set here. Dropping
+-- it would reduce this resource's real exposure by nothing.
+--
+-- This resource's own calls are already OAL-safe: every coordinate-taking
+-- native is passed manually unpacked x/y/z, never a bare vector3. The one
+-- GetShapeTestResult call (client/movement.lua's vault sweep) reads only
+-- resultCode and hit -- never endCoords or surfaceNormal, the exact vector
+-- returns reported broken by lua54 + fxv2_oal together on some builds.
+-- If a future call here needs to read a shape-test or raycast vector result,
+-- re-verify that known issue against the build in use FIRST.
 use_experimental_fxv2_oal 'yes'
