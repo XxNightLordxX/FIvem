@@ -128,6 +128,30 @@
       below, and the QBCore:Server:OnJobUpdate auto-revoke handler) — see
       ForceDetachLeashIfOnline's own doc comment and server/main.lua's
       header for the full rationale (SPEC.md §1/§4.4 "immediately").
+    - THIS FILE also calls `ForceBreakPartnershipForCitizenId(citizenid,
+      reason)`, exposed by server/partnership.lua (Phase 3, PHASE3_SPEC.md
+      §12.0 item 7), alongside all FOUR existing leash-teardown call sites
+      in this file: RevokeCertification's online branch
+      (ForceDetachLeashForSource), RevokeCertificationOffline
+      (ForceDetachLeashIfOnline), and the QBCore:Server:OnJobUpdate
+      handler's TWO branches — department-loss
+      (ForceDetachOfficerLeashForSource) and cert-revoke-due-to-job-change
+      (ForceDetachLeashForSource) — a K9 partnership must not outlive
+      either party's cert revocation or department loss any more than a
+      leash pairing may. Guarded at each call site by a
+      `type(...) == 'function'` runtime existence check (this resource's
+      established "runtime existence guard, not a load-order assumption"
+      convention — see fxmanifest.lua's own comment on server/medkit.lua's
+      RestoreInjury reuse for the precedent), since server/partnership.lua
+      is loaded AFTER this file in fxmanifest.lua's server_scripts and its
+      Config.Features.HandlerPartnership feature flag may be off entirely
+      on a given server. Called UNCONDITIONALLY of that flag's current
+      value at each site (not gated on `Config.Features.HandlerPartnership`
+      here) — a partnership row established while the feature was on must
+      still be torn down by a cert revoke/department change even if the
+      flag was later flipped off, since ForceBreakPartnershipForCitizenId
+      is itself already a cheap, safe no-op when `citizenid` has no active
+      partnership row to tear down.
     - THIS FILE owns `Certifications` (citizenid -> { active: boolean,
       job: string }) as a local table. STRUCTURAL NOTE: SPEC.md §4.3's
       prose describes this cache as a bare `Certifications[citizenid] =
@@ -599,6 +623,26 @@ local function RevokeCertification(granterSrc, targetServerId)
         -- inside the `targetIsOnline` branch), so force-detach directly
         -- rather than re-resolving by citizenid.
         ForceDetachLeashForSource(targetServerId, 'certification_revoked')
+
+        -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): a K9 partnership must not
+        -- outlive its K9-role party's certification either — same
+        -- "immediately" requirement as leash directly above, now extended
+        -- to the persistent partnership registry (server/partnership.lua).
+        -- CITIZENID-keyed (not source-keyed), unlike the leash call above,
+        -- because ForceBreakPartnershipForCitizenId operates on the DB row
+        -- directly and works identically online or offline — see that
+        -- function's own "OFFLINE-CAPABLE BY DESIGN" doc comment; using
+        -- `targetCitizenid` here rather than `targetServerId` is not an
+        -- inconsistency with the leash call above, it's this callee's own
+        -- documented, intentional shape. Guarded by a `type(...) ==
+        -- 'function'` runtime existence check, not a load-order assumption,
+        -- since server/partnership.lua loads AFTER this file (see this
+        -- file's own header and fxmanifest.lua's matching comment) — called
+        -- unconditionally of Config.Features.HandlerPartnership's current
+        -- value, see this file's header for why.
+        if type(ForceBreakPartnershipForCitizenId) == 'function' then
+            ForceBreakPartnershipForCitizenId(targetCitizenid, 'certification_revoked')
+        end
     end
 
     NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')
@@ -726,6 +770,24 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
     -- doc comment.
     ForceDetachLeashIfOnline(citizenid, 'certification_revoked')
 
+    -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): unlike leash immediately
+    -- above (a genuine, in-memory-only no-op for a truly offline citizenid
+    -- — see ForceDetachLeashIfOnline's own doc comment), a K9 partnership
+    -- is DB-backed and DOES persist across a disconnect
+    -- (server/partnership.lua's own "OFFLINE-CAPABLE BY DESIGN" header
+    -- section). This is in fact THE call site that design decision exists
+    -- for: a genuinely offline K9-role citizenid revoked while off-shift
+    -- must still have any real, active partnership row torn down, or it
+    -- would otherwise stand indefinitely — exactly the gap the partnership
+    -- registry was built to not have. ForceBreakPartnershipForCitizenId is
+    -- citizenid-keyed for exactly this reason and works identically online
+    -- or offline. Same runtime existence guard / unconditional-of-
+    -- feature-flag reasoning as RevokeCertification's online branch's
+    -- identical call above in this file.
+    if type(ForceBreakPartnershipForCitizenId) == 'function' then
+        ForceBreakPartnershipForCitizenId(citizenid, 'certification_revoked')
+    end
+
     NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')
 end
 
@@ -757,6 +819,23 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     -- officer/handler-role, not K9-role, party of its pairing).
     if not job or not Config.Departments[job.name] then
         ForceDetachOfficerLeashForSource(source, 'department_changed')
+
+        -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): department loss ends an
+        -- active partnership the same way it ends an active leash pairing
+        -- directly above — a partnership's handler-role party who no
+        -- longer passes department membership is exactly as invalid a
+        -- handler-role party as one who no longer has a leash-eligible
+        -- department. ForceBreakPartnershipForCitizenId covers `citizenid`
+        -- regardless of which role (K9 or handler) they currently hold in
+        -- their active row (see that function's own doc comment), so
+        -- unlike ForceDetachOfficerLeashForSource above, no separate
+        -- role-specific counterpart is needed here. Same runtime existence
+        -- guard / unconditional-of-feature-flag reasoning as
+        -- RevokeCertification's online branch's identical call, above in
+        -- this file.
+        if type(ForceBreakPartnershipForCitizenId) == 'function' then
+            ForceBreakPartnershipForCitizenId(citizenid, 'department_changed')
+        end
     end
 
     local cached = Certifications[citizenid]
@@ -798,6 +877,19 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     -- force-detach directly rather than re-resolving by citizenid — same
     -- reasoning as the online branch of RevokeCertification above.
     ForceDetachLeashForSource(source, 'certification_revoked')
+
+    -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): same "must not outlive
+    -- certification loss" requirement as leash immediately above, applied
+    -- to the partnership registry. This branch is only reached for a
+    -- K9-role citizenid — the department-membership-only handler/officer
+    -- role never holds a certification of its own (see this handler's own
+    -- comment near its top on that exact asymmetry) — so `citizenid` here
+    -- is always the K9-role party of any active partnership it might hold.
+    -- Same runtime existence guard / unconditional-of-feature-flag
+    -- reasoning as RevokeCertification's online branch's identical call.
+    if type(ForceBreakPartnershipForCitizenId) == 'function' then
+        ForceBreakPartnershipForCitizenId(citizenid, 'certification_revoked')
+    end
 end)
 
 lib.callback.register('qbx_k9unit:server:hasK9Access', function(source)

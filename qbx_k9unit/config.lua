@@ -427,6 +427,49 @@ Config.Combat = {
         -- by this callback is caught and logged; it never interrupts the
         -- sampling thread for other active holds.
         OnViolationOverride    = nil,
+        -- PropDragging's own compliance slack, in METERS. Distinct from the
+        -- speed-based thresholds above BY DESIGN: a drag's compliance
+        -- signal compares the target's live position against the DRAGGING
+        -- K9's own live position, not against an absolute speed ceiling,
+        -- because PHASE3_SPEC.md §12.0 item 8's corollary is that a hostile
+        -- target can simply self-detach (DetachEntity is very likely not
+        -- ownership-gated). A target that has broken free reads as a
+        -- growing gap, which an absolute speed ceiling would miss entirely.
+        -- Log-only like every other field here — the ACTUAL enforcement for
+        -- a runaway drag is Config.Combat.PropDragging.maxDragDistance
+        -- below, which is checked unconditionally and is never gated behind
+        -- `enabled`.
+        dragComplianceSlackMeters = 4.0,
+    },
+
+    -- PHASE3_SPEC.md §12.5.4. MIXED Category A/B per §12.0 item 8, and the
+    -- only Phase 3 mechanic that is: the ATTACH is Category A (server-side
+    -- authoritative, robust against a hostile target client) while the
+    -- SPEED LIMIT is Category B (SetPedMoveRateOverride is local-only, so a
+    -- modified target client can ignore it). client/combat.lua re-asserts
+    -- the attach EVERY TICK rather than once, specifically because a target
+    -- can self-detach — see that file's own guardrail comments.
+    -- ALL NUMERIC VALUES BELOW ARE UNREVIEWED PLACEHOLDERS pending a
+    -- balance pass, same status as every other Phase 3 tuning number here.
+    PropDragging = {
+        range              = 2.5,    -- meters, self-initiated trigger range (matches BiteAndHold's)
+        maxDragDistance    = 30.0,   -- meters from the drag's start point before the server force-ends it. THIS is the real "no unbounded trap" enforcement — checked unconditionally in the maintenance loop, never gated behind NonComplianceDetection.enabled.
+        maxDragDurationMs  = 20000,  -- hard timeout if never manually released, same role as BiteAndHold's maxDurationMs
+        dragSpeedMultiplier = 0.4,   -- Category B: applied to the TARGET's move rate while dragged. A modified client may ignore this; that is disclosed, not solved.
+        -- function(targetServerId: number) -> boolean|nil, OPTIONAL.
+        -- PHASE3_SPEC.md §12.0 item 6 made this a REQUIRED active config
+        -- surface rather than a commented-out placeholder, because the
+        -- native-only fallback is genuinely unreliable for players:
+        -- IsPedDeadOrDying/IsPedRagdoll measure raw physics state, not a
+        -- server's scripted laststand, so they both false-positive (a
+        -- ragdolling but conscious player) and false-negative (a player in
+        -- a scripted laststand that keeps the ped "alive"). Point this at
+        -- your own ambulance/laststand resource. server/combat.lua FAILS
+        -- CLOSED if this errors — treats the target as NOT downed — and
+        -- only falls back to a best-effort metadata.isdead/.inlaststand
+        -- guess when this is nil, exactly like WantedStatusCheckOverride
+        -- above.
+        IsPlayerDownedOverride = nil,
     },
 
     BiteAndHold = {

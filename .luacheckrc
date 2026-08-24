@@ -121,6 +121,20 @@ read_globals = {
     -- the four natives this pass's native-api-assistant verification
     -- flagged as genuinely in question -- see that same header section.
     "IsPlayerAceAllowed",
+    -- Phase 3 PropDragging (client/combat.lua, server/combat.lua,
+    -- PHASE3_SPEC.md §12.5.4). NetworkRequestControlOfEntity is called
+    -- before every native this client applies to a ped it may not own --
+    -- added after a QA pass found the pre-existing applyNpcBiteHold/
+    -- applyNpcTakedown handlers omitted it, which this resource's own
+    -- phase2_notes/phase3_combat_natives.md names as required for exactly
+    -- those natives. It is best-effort: no success-check native is
+    -- confirmed available here, so the call improves the odds of the
+    -- effect landing rather than guaranteeing it -- see client/combat.lua's
+    -- own disclosure. IsPedDeadOrDying/IsPedRagdoll back the NPC branch of
+    -- server/combat.lua's IsTargetDowned (the player branch deliberately
+    -- avoids them, per PHASE3_SPEC.md §12.0 item 6's finding that they
+    -- measure raw physics state rather than a server's scripted laststand).
+    "NetworkRequestControlOfEntity", "IsPedDeadOrDying", "IsPedRagdoll",
     -- Server-side implicit global inside event handlers
     "source",
     -- ox_lib / oxmysql / export surface
@@ -251,6 +265,11 @@ globals = {
     -- fxmanifest.lua's own comment on that file names as its exposed
     -- surface for a future client/radial.lua entry, not yet wired up.
     "RequestPartnerUp", "BreakPartnership", "IsPartnered", "GetPartnerServerId",
+    -- client/combat.lua's PropDragging trigger surface (Phase 3,
+    -- PHASE3_SPEC.md §12.5.4) -- same self-initiated-trigger plus
+    -- zero-consent-release shape as RequestBiteHold/ReleaseBiteHold above.
+    -- Not yet wired into client/radial.lua; exposed for that future entry.
+    "RequestDrag", "ReleaseDrag", "IsDragEngaged",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the

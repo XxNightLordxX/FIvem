@@ -6,9 +6,19 @@
     item 8's ("the client-relay/non-cooperating-target-client architecture
     problem") own resolution and its five binding guardrails — this file
     IS that resolution's implementation, not a separate design pass.
-    `PropDragging` and `HandlerDownDefense` are OUT OF SCOPE for this file
-    — see config.lua's own Config.Combat header comment for exactly why
-    each is still blocked/deferred.
+
+    PHASE 3 ADDITION (this pass, coder-architect): also owns
+    `PropDragging` (PHASE3_SPEC.md §12.5.4, §12.0 item 6's downed-check
+    contract, §12.0 item 8's "mixed Category A/B" split for this
+    specific mechanic). `HandlerDownDefense` remains OUT OF SCOPE for this
+    file — still blocked on `server/partnership.lua` (§12.0 item 7) not
+    existing yet, see config.lua's own Config.Combat header comment.
+    PropDragging reuses this file's existing `ActiveHolds`/`K9ActiveEffect`/
+    `EndHold`/`FlagNonCompliance`/shared-maintenance-thread machinery
+    (`effectType = 'drag'`, a third variant alongside `'bite'`/`'takedown'`)
+    rather than standing up a parallel table — see PROP DRAGGING section
+    near the bottom of this file for the full writeup, and EndHold's own
+    now-three-way branch for the teardown/relay differences per effectType.
 
     ======================================================================
     HOW THIS FILE SATISFIES ITEM 8'S FIVE BINDING GUARDRAILS (read together
@@ -19,7 +29,19 @@
        NON-COMPLIANCE DETECTION below — a real, single, shared sampling
        thread, not a sketch.
     2. "PropDragging's AttachEntityToEntity call is re-asserted every
-       tick..." — N/A, PropDragging is not implemented in this file.
+       tick..." — TRUE of THIS PASS's implementation: the re-assertion
+       itself is entirely client-side (client/combat.lua's ActiveDragAsHolder
+       maintenance loop, which is what actually calls AttachEntityToEntity
+       every frame) — this file's own contribution to guardrail 2 is that
+       requestDrag/EndHold never assume the attach "worked" for anything
+       server-authoritative (see guardrail 3 below), and that the
+       maxDragDistance safety valve (job (a) in NON-COMPLIANCE DETECTION
+       below) and the drag-specific compliance gap check (job (b)) are both
+       BLIND to whether the client-side re-assertion is actually happening —
+       they only ever look at live GetEntityCoords positions, never at
+       "is AttachEntityToEntity still being called," which is exactly the
+       right posture per item 8's own "regardless of cause" framing for this
+       specific check.
     3. "No server-authoritative consequence of any kind may ever be
        conditioned on a Category B effect having been applied successfully
        to a player target." Confirmed true of every code path below: the
@@ -86,6 +108,46 @@
     - 'qbx_k9unit:client:endNpcTakedown' (npcNetId: number, reason: string)
       Sent ONLY to the requesting K9's own client — same relay, teardown
       side.
+
+    PROP DRAGGING (coder-architect, this pass, PHASE3_SPEC.md §12.5.4) —
+    NEW server events (client->server), THIS FILE:
+    - 'qbx_k9unit:server:requestDrag' (targetNetId: number)
+    - 'qbx_k9unit:server:releaseDrag' () — either the HOLDING K9 or, when
+      the target is a player, the TARGET can send this; server resolves
+      which side `source` is and ends the drag either way. Zero consent
+      needed from the other side either direction — mirrors leash's own
+      "no consent needed to get free" rule, PHASE3_SPEC.md §12.0 item 4/
+      §12.5.4, and is stronger than BiteAndHold/NonLethalTakedown's own
+      target (who has NO self-release action at all — apprehension, not a
+      cooperative mechanic).
+
+    NEW client events (server->client), registered by client/combat.lua:
+    - 'qbx_k9unit:client:dragStarted' (targetNetId: number, isPlayerTarget:
+      boolean, expiresAt: number)
+      Sent ONLY to the HOLDING K9's own client. Starts that client's own
+      per-tick AttachEntityToEntity re-assertion loop (Category A, see this
+      file's header "PROP DRAGGING — CATEGORY A/B SPLIT" section below) and,
+      when `isPlayerTarget` is false, ALSO the direct
+      SetPedMoveRateOverride(npcPed, ...) re-assertion on the NPC target
+      every tick (no relay problem for an NPC — same posture as
+      applyNpcBiteHold/applyNpcTakedown above, just for move-rate instead of
+      flee-suppression/ragdoll).
+    - 'qbx_k9unit:client:dragEnded' (targetNetId: number, reason: string)
+      Sent ONLY to the holding K9's own client — stops the re-assertion
+      loop, calls DetachEntity once, and (NPC target only) resets that
+      NPC's move rate back to 1.0.
+    - 'qbx_k9unit:client:applyDragSpeedLimit' (expiresAt: number)
+      Sent ONLY to a PLAYER target's own client (never to an NPC — NPCs have
+      no "own client," see dragStarted above) — the Category B half of
+      dragging, PHASE3_SPEC.md §12.0 item 8. Re-asserted by that client
+      every tick via SetPedMoveRateOverride, either directly or through
+      client/movement.lua's shared move-rate composer depending on whether
+      THAT client's own ped is currently a K9 model — see client/combat.lua's
+      own header for why a blanket "always go through the composer" reading
+      would silently no-op for the common (non-K9 target) case.
+    - 'qbx_k9unit:client:endDragSpeedLimit' (reason: string)
+      Sent ONLY to a player target's own client — restores move rate to 1.0
+      and self-detaches as a defense-in-depth backstop (see client/combat.lua).
 
     ======================================================================
     NPC-TARGET NATIVE EXECUTION CONTEXT — RESTRUCTURED this session
@@ -277,9 +339,8 @@
 -- target (enforced by the 'already_held' check below).
 --
 -- ActiveHolds[targetNetId] = {
---     effectType   = 'bite' | 'takedown',
+--     effectType   = 'bite' | 'takedown' | 'drag',
 --     holderSrc    = number,           -- the K9 player's own source
---     holderNetId  = number,           -- the K9 ped's own netId, for the Category B relay payload
 --     isPlayerTarget = boolean,        -- resolved server-side via ResolveConnectedPlayerFromPed, NEVER client-claimed
 --     targetSrc    = number?,          -- present only when isPlayerTarget
 --     startedAt    = number,           -- GetGameTimer() at open
@@ -397,9 +458,64 @@ local function IsPlayerWantedEligible(targetSrc)
     return metadata.wanted == true or metadata.iswanted == true
 end
 
+--- PHASE3_SPEC.md §12.0 item 6 / §12.5.4 — PropDragging's "is this target
+--- actually downed" gate. NEVER reuses ValidateCombatRequest's own
+--- IsEntityDead check (that check exists specifically to REJECT a dead
+--- target for BiteAndHold/NonLethalTakedown, the exact opposite of what
+--- dragging wants) — called as a SEPARATE step, after
+--- ValidateCombatRequest({requireAlive = false}) has already succeeded.
+---
+--- NPC branch: fully native, exactly as §12.5.4 specifies
+--- (`IsPedDeadOrDying(ped, true)` OR `IsPedRagdoll(ped)`) — no external
+--- dependency, HIGH confidence per phase2_notes/phase3_combat_natives.md's
+--- own confirmation of IsPedRagdoll and its explicit naming of this exact
+--- pairing as PropDragging's "downed" approximation. IsPedDeadOrDying's own
+--- server-side callability (a read-only ped-state getter, same class as
+--- GetEntityHealth/IsEntityDead already called server-side elsewhere in
+--- this file) was reasoned about by analogy rather than independently
+--- re-verified against the primary native declarations this pass — flagged
+--- honestly per this file's own established confidence-grading convention,
+--- not silently asserted as confirmed.
+---
+--- Player branch: NEVER the native checks above (§12.0 item 6 — raw
+--- physics/AI state is a category mismatch for a server's own scripted
+--- laststand state, with concrete false-positive/false-negative modes) —
+--- override function first, FAILS CLOSED on error (same discipline as
+--- IsPlayerWantedEligible above — a broken override must never silently
+--- widen who can be dragged), else the default best-effort
+--- metadata.isdead/.inlaststand guess.
+--- @param targetPed number
+--- @param isPlayerTarget boolean
+--- @param targetSrc number?
+--- @return boolean downed
+local function IsTargetDowned(targetPed, isPlayerTarget, targetSrc)
+    if not isPlayerTarget then
+        return IsPedDeadOrDying(targetPed, true) or IsPedRagdoll(targetPed)
+    end
+
+    local override = Config.Combat.PropDragging.IsPlayerDownedOverride
+    if type(override) == 'function' then
+        local ok, result = pcall(override, targetSrc)
+        if not ok then
+            print(('[qbx_k9unit] Config.Combat.PropDragging.IsPlayerDownedOverride errored for source %s: %s -- failing closed (target treated as NOT downed)'):format(targetSrc, tostring(result)))
+            return false
+        end
+        return result == true
+    end
+
+    -- Default best-effort check -- see config.lua's own comment on this
+    -- field for the confidence note (HIGHER confidence than
+    -- WantedStatusCheckOverride's equivalent default, per PHASE3_SPEC.md
+    -- §12.0 item 6 vs. item 5).
+    local player = exports.qbx_core:GetPlayer(targetSrc)
+    local metadata = player and player.PlayerData and player.PlayerData.metadata
+    if type(metadata) ~= 'table' then return false end
+    return metadata.isdead == true or metadata.inlaststand == true
+end
+
 --- Best-effort, non-restraint-implying rejection copy (guardrail 4) —
---- shared between BiteAndHold and NonLethalTakedown since their reason
---- vocabularies overlap almost entirely.
+--- shared between BiteAndHold, NonLethalTakedown, and PropDragging since
+--- their reason vocabularies overlap almost entirely.
 local COMBAT_REJECT_MESSAGES = {
     feature_disabled   = 'This feature is disabled on this server.',
     invalid_target     = 'Invalid target.',
@@ -407,6 +523,7 @@ local COMBAT_REJECT_MESSAGES = {
     already_engaged    = 'You are already engaged with another target.',
     offline            = 'Unable to resolve your own K9.',
     self_target        = 'You cannot target yourself.',
+    target_not_downed  = 'That target does not appear to be downed.',
     target_dead        = 'That target is down.',
     too_far            = 'You are too far from the target.',
     already_held       = 'That target is already held by another K9.',
@@ -426,14 +543,28 @@ local function CombatRejectMessage(reason)
     return COMBAT_REJECT_MESSAGES[reason] or 'Unable to complete that action.'
 end
 
---- Shared request-time validation for BOTH BiteAndHold and
---- NonLethalTakedown — PHASE3_SPEC.md §12.5.1/§12.5.2's own contract
---- blocks specify an identical validation prefix for both
---- (`requestBiteHold`/`requestTakedown`'s own doc text: "re-validates ...
---- HasK9Access(source), live proximity ..., resolves player-vs-NPC ...,
---- and — if the target is a player — RequireWantedStatus"). Feature-flag
---- and range are passed in since those two differ per effect; everything
---- else here is identical.
+--- Shared request-time validation for BiteAndHold, NonLethalTakedown, AND
+--- (this pass) PropDragging — PHASE3_SPEC.md §12.5.1/§12.5.2/§12.5.4's own
+--- contract blocks specify an identical validation prefix for all three
+--- (`requestBiteHold`/`requestTakedown`/`requestDrag`'s own doc text:
+--- "re-validates ... HasK9Access(source), live proximity ..., resolves
+--- player-vs-NPC ..., and — if the target is a player — RequireWantedStatus").
+--- Feature-flag and range are passed in since those differ per effect;
+--- everything else here is identical.
+---
+--- @param opts table? -- OPTIONAL, PropDragging-only knob (added this pass,
+---   never passed by requestBiteHold/requestTakedown, so their behavior is
+---   byte-for-byte unchanged): `opts.requireAlive` (default true via
+---   `opts.requireAlive ~= false`). PropDragging passes
+---   `{ requireAlive = false }` because its ENTIRE premise is a DOWNED
+---   target — the IsEntityDead rejection below exists specifically to
+---   REJECT BiteAndHold/NonLethalTakedown's target when dead, the opposite
+---   of what dragging wants. PropDragging's own IsTargetDowned (above) is
+---   the real "is this specific target eligible" check for that mechanic,
+---   run by the caller AFTER this function returns ok == true — it is
+---   deliberately NOT folded into this shared function, to keep this
+---   function's own contract (identical prefix, effect-agnostic) honest
+---   rather than growing a per-effect branch inside a "shared" validator.
 ---
 --- PROXIMITY-BEFORE-MUTATION: this function performs ZERO mutation
 --- (no cooldown Touch/Consume, no ActiveHolds write) — every check here is
@@ -452,7 +583,8 @@ end
 --- @return boolean? isPlayerTarget
 --- @return number? targetSrc
 --- @return string? reason
-local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMeters)
+local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMeters, opts)
+    opts = opts or {}
     if not featureEnabled then
         return false, nil, nil, nil, nil, 'feature_disabled'
     end
@@ -516,7 +648,7 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         return false, nil, nil, nil, nil, 'self_target'
     end
 
-    if IsEntityDead(targetPed) then
+    if opts.requireAlive ~= false and IsEntityDead(targetPed) then
         return false, nil, nil, nil, nil, 'target_dead'
     end
 
@@ -542,11 +674,21 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     return true, k9Ped, targetPed, isPlayerTarget, targetSrc
 end
 
---- Shared teardown for BOTH effect types — release, timeout, or
+--- Shared teardown for ALL THREE effect types — release, timeout, or
 --- disconnect all funnel through here so there is exactly one place that
 --- mutates ActiveHolds/K9ActiveEffect on the way out (mirrors
 --- server/main.lua's own doDetachLeash "there is exactly one place that
 --- mutates LeashPairs on detach" discipline).
+---
+--- RESTRUCTURED this pass (PropDragging addition): the relay-selection
+--- logic below used to be an implicit two-way "'bite' vs. else(=takedown)"
+--- branch — adding a third effectType on top of that binary would have
+--- silently sent 'drag' down the 'takedown' relay paths (endForceRagdoll/
+--- endNpcTakedown), which is wrong (dragging has its own, differently-shaped
+--- event contract — see this file's header EVENT/CALLBACK CONTRACT). Made
+--- explicit as a real three-way `if/elseif/else` instead, with each of the
+--- three branches' behavior for 'bite'/'takedown' kept byte-for-byte
+--- identical to before this restructure.
 --- @param targetNetId number
 --- @param reason string
 local function EndHold(targetNetId, reason)
@@ -558,45 +700,37 @@ local function EndHold(targetNetId, reason)
         K9ActiveEffect[hold.holderSrc] = nil
     end
 
-    if hold.isPlayerTarget then
-        -- Category B teardown relay -- best-effort, same posture as the
-        -- apply side (PHASE3_SPEC.md §12.0 item 8). If the target's client
-        -- ignored the apply event in the first place, it will almost
-        -- certainly ignore this one too — that is an accepted, disclosed
-        -- limitation (item 8's own guardrail 3 is exactly why nothing
-        -- server-authoritative depends on this succeeding).
-        if hold.effectType == 'bite' then
+    if hold.effectType == 'bite' then
+        if hold.isPlayerTarget then
+            -- Category B teardown relay -- best-effort, same posture as the
+            -- apply side (PHASE3_SPEC.md §12.0 item 8). If the target's
+            -- client ignored the apply event in the first place, it will
+            -- almost certainly ignore this one too — that is an accepted,
+            -- disclosed limitation (item 8's own guardrail 3 is exactly why
+            -- nothing server-authoritative depends on this succeeding).
             TriggerClientEvent('qbx_k9unit:client:endBiteHold', hold.targetSrc, reason)
         else
-            TriggerClientEvent('qbx_k9unit:client:endForceRagdoll', hold.targetSrc, reason)
-        end
-    else
-        -- NPC target — RESTRUCTURED, native-api-assistant verification
-        -- pass (this session): see this file's header "NPC-TARGET NATIVE
-        -- EXECUTION CONTEXT" note for the full finding. Relayed to the
-        -- REQUESTING K9's OWN client (client/combat.lua), same as the
-        -- apply side below — never called directly server-side anymore.
-        if hold.effectType == 'bite' then
+            -- NPC target — RESTRUCTURED, native-api-assistant verification
+            -- pass (an earlier session): see this file's header "NPC-TARGET
+            -- NATIVE EXECUTION CONTEXT" note for the full finding. Relayed
+            -- to the REQUESTING K9's OWN client (client/combat.lua), same
+            -- as the apply side — never called directly server-side.
             TriggerClientEvent('qbx_k9unit:client:endNpcBiteHold', hold.holderSrc, targetNetId, reason)
-        else
-            TriggerClientEvent('qbx_k9unit:client:endNpcTakedown', hold.holderSrc, targetNetId, reason)
         end
-    end
 
-    if hold.effectType == 'bite' then
         TriggerClientEvent('qbx_k9unit:client:biteHoldEnded', hold.holderSrc, targetNetId, reason)
 
         -- Config.XP.awards.biteHoldSuccess (config.lua) — QA-flagged as dead
-        -- code (configured, never granted) until this pass. "Genuinely
-        -- successful" is deliberately narrower than "a hold merely
-        -- existed": excludes 'holder_disconnected'/'target_disconnected'
-        -- (incomplete, not an intentional outcome) outright, and further
-        -- requires MIN_BITE_HOLD_XP_DURATION_MS to have elapsed for a
-        -- 'released' end (never for 'timeout', which cannot fire early —
-        -- see that constant's own declaration comment for the full
-        -- anti-farm reasoning). Runtime existence guard, same convention as
-        -- server/tracking.lua's own trackSourceResolved call site — no
-        -- load-order assumption on server/progression.lua.
+        -- code (configured, never granted) until an earlier pass.
+        -- "Genuinely successful" is deliberately narrower than "a hold
+        -- merely existed": excludes 'holder_disconnected'/
+        -- 'target_disconnected' (incomplete, not an intentional outcome)
+        -- outright, and further requires MIN_BITE_HOLD_XP_DURATION_MS to
+        -- have elapsed for a 'released' end (never for 'timeout', which
+        -- cannot fire early — see that constant's own declaration comment
+        -- for the full anti-farm reasoning). Runtime existence guard, same
+        -- convention as server/tracking.lua's own trackSourceResolved call
+        -- site — no load-order assumption on server/progression.lua.
         if reason == 'released' or reason == 'timeout' then
             local heldDurationMs = GetGameTimer() - hold.startedAt
             if reason == 'timeout' or heldDurationMs >= MIN_BITE_HOLD_XP_DURATION_MS then
@@ -609,12 +743,47 @@ local function EndHold(targetNetId, reason)
                 end
             end
         end
-    elseif reason ~= 'timeout' then
-        -- Takedown has no manual "release" action (PHASE3_SPEC.md §12.5.2
-        -- lists no release event) — only notify the K9 for a non-timeout
-        -- reason (e.g. the target disconnecting mid-ragdoll); a plain
-        -- timeout is the expected, silent end of a successful takedown.
-        NotifyPlayer(hold.holderSrc, 'The takedown ended early.', 'inform')
+    elseif hold.effectType == 'takedown' then
+        if hold.isPlayerTarget then
+            TriggerClientEvent('qbx_k9unit:client:endForceRagdoll', hold.targetSrc, reason)
+        else
+            TriggerClientEvent('qbx_k9unit:client:endNpcTakedown', hold.holderSrc, targetNetId, reason)
+        end
+
+        if reason ~= 'timeout' then
+            -- Takedown has no manual "release" action (PHASE3_SPEC.md
+            -- §12.5.2 lists no release event) — only notify the K9 for a
+            -- non-timeout reason (e.g. the target disconnecting mid-ragdoll);
+            -- a plain timeout is the expected, silent end of a successful
+            -- takedown.
+            NotifyPlayer(hold.holderSrc, 'The takedown ended early.', 'inform')
+        end
+    else -- 'drag' (PHASE3_SPEC.md §12.5.4, this pass)
+        -- Category A (attach) teardown ALWAYS goes to the HOLDING K9's own
+        -- client regardless of target kind — that client is the one
+        -- actually calling AttachEntityToEntity/DetachEntity, §12.0 item 8's
+        -- new finding on DetachEntity's own lack of an ownership gate. The
+        -- Category B speed-limit half ADDITIONALLY goes to the target's own
+        -- client, but ONLY when that target is a player — an NPC's move
+        -- rate is reset by this SAME dragEnded handler on the K9's own
+        -- client instead (see client/combat.lua's own header) — there is no
+        -- separate "NPC drag speed" relay event, unlike bite/takedown's own
+        -- applyNpc*/endNpc* pair, because the K9's client already receives
+        -- everything it needs via dragStarted's own isPlayerTarget field.
+        TriggerClientEvent('qbx_k9unit:client:dragEnded', hold.holderSrc, targetNetId, reason)
+        if hold.isPlayerTarget then
+            TriggerClientEvent('qbx_k9unit:client:endDragSpeedLimit', hold.targetSrc, reason)
+        end
+
+        if reason ~= 'released_by_holder' and reason ~= 'released_by_target' then
+            -- Only notify for a NON-manual end (timeout/disconnect/the
+            -- maxDragDistance safety valve) -- a manual release from either
+            -- side is self-evident to that side already (the
+            -- button/keybind press itself is the feedback), mirroring
+            -- takedown's own "only notify for a non-expected end" posture
+            -- above.
+            NotifyPlayer(hold.holderSrc, 'The drag ended.', 'inform')
+        end
     end
 end
 
@@ -699,7 +868,7 @@ local function SampleCompliance(targetNetId, hold, now)
                     ('observedSpeed=%.2fm/s ceiling=%.2fm/s consecutiveSamples=%d'):format(observedSpeed, ceiling, compliance.consecutiveViolations))
             end
         end
-    else -- 'takedown'
+    elseif hold.effectType == 'takedown' then
         -- Net displacement from the ragdoll-open baseline, NOT a
         -- continuous speed check — see this file's header for why, and for
         -- the disclosed "heading consistency not implemented" narrowing.
@@ -709,10 +878,59 @@ local function SampleCompliance(targetNetId, hold, now)
             FlagNonCompliance(hold, targetNetId, 'takedown_displacement',
                 ('netDisplacement=%.2fm threshold=%.2fm'):format(netDisplacement, cfg.takedownNetDisplacementMeters))
         end
+    else -- 'drag' (PHASE3_SPEC.md §12.5.4/§12.0 item 8, this pass)
+        -- Only meaningful for a PLAYER target -- an NPC target has no "own
+        -- client" to ignore the speed-limit relay in the first place (the
+        -- K9's own already-trusted client directly commands the NPC's move
+        -- rate every tick, same posture as bite/takedown's NPC branches) --
+        -- so there is no hostile party to detect here, unlike bite/takedown
+        -- above which sample BOTH target kinds uniformly (a pre-existing
+        -- choice this pass does not relitigate). Compares the target's live
+        -- position against the K9's OWN live position (never an absolute
+        -- speed ceiling) -- PHASE3_SPEC.md §12.0 item 8's own framing:
+        -- "regardless of cause (self-detach, a bypassed move-rate override,
+        -- or the K9's own client failing to re-assert the attach)" — this
+        -- single geometric check catches all three failure modes at once
+        -- without needing to distinguish which one occurred.
+        if hold.isPlayerTarget then
+            local k9Ped = GetPlayerPed(hold.holderSrc)
+            if k9Ped ~= 0 then
+                local gap = #(currentPos - GetEntityCoords(k9Ped))
+                if not compliance.flagged and gap > cfg.dragComplianceSlackMeters then
+                    compliance.flagged = true
+                    FlagNonCompliance(hold, targetNetId, 'drag_gap',
+                        ('gap=%.2fm slack=%.2fm'):format(gap, cfg.dragComplianceSlackMeters))
+                end
+            end
+        end
     end
 
     compliance.lastPos = currentPos
     compliance.lastTime = now
+end
+
+--- PHASE3_SPEC.md §12.0 item 4's "no unbounded trap" guarantee for
+--- PropDragging specifically — item 4's own text names `maxDragDistance`
+--- (not a duration) as this mechanic's analog of BiteAndHold/
+--- NonLethalTakedown's hard `maxDurationMs`/ragdoll-window caps. ALWAYS
+--- enforced (see the maintenance thread's own call site below — checked
+--- unconditionally, never gated behind `NonComplianceDetection.enabled`,
+--- exactly like the `hold.expiresAt` check it sits alongside) — distinct
+--- from the drag_gap NON-PUNITIVE detection signal above, which is a
+--- smaller, log-only slack meant to catch a likely-hostile target sooner;
+--- this is the hard, always-on safety valve that actually ends the drag.
+--- @param hold table
+--- @param targetNetId number
+--- @return boolean exceeded
+local function DragExceedsMaxDistance(hold, targetNetId)
+    local targetPed = ResolveNetworkEntity(targetNetId, 1)
+    if not targetPed then return false end -- despawned; expiry/disconnect cleanup handles it, not this check
+
+    local k9Ped = GetPlayerPed(hold.holderSrc)
+    if k9Ped == 0 then return false end -- holder already disconnected; the playerDropped handler tears this down independently
+
+    local dist = #(GetEntityCoords(k9Ped) - GetEntityCoords(targetPed))
+    return dist > Config.Combat.PropDragging.maxDragDistance
 end
 
 -- Single shared maintenance thread — see this file's header for why this
@@ -730,7 +948,31 @@ CreateThread(function()
 
         for targetNetId, hold in pairs(ActiveHolds) do
             if now >= hold.expiresAt then
-                EndHold(targetNetId, 'timeout')
+                -- MEDIUM, QA-flagged this session: EndHold reaches AwardXP
+                -- (guarded only by a `type(...) == 'function'` existence
+                -- check, no pcall of its own) and TriggerClientEvent calls
+                -- that could theoretically error on bad state — SampleCompliance
+                -- three lines below is already pcall-wrapped for exactly
+                -- this reason; this call was not, despite being the SAME
+                -- shared, resource-wide maintenance coroutine. An uncaught
+                -- error here would kill this thread PERMANENTLY (Lua
+                -- coroutines/threads do not resume after an unhandled
+                -- error), silently disabling expiry enforcement — the "no
+                -- unbounded trap" guarantee itself — for every future hold/
+                -- takedown/drag for the rest of the resource's uptime, and
+                -- would wedge whatever ActiveHolds/K9ActiveEffect entries
+                -- existed at that moment into a permanent already_held/
+                -- already_engaged lockout with nothing left running to ever
+                -- clear them. Mirrored here, not left asymmetric.
+                local ok, err = pcall(EndHold, targetNetId, 'timeout')
+                if not ok then
+                    print(('[qbx_k9unit] combat EndHold(timeout) errored for netId %s: %s'):format(targetNetId, tostring(err)))
+                end
+            elseif hold.effectType == 'drag' and DragExceedsMaxDistance(hold, targetNetId) then
+                local ok, err = pcall(EndHold, targetNetId, 'max_distance_exceeded')
+                if not ok then
+                    print(('[qbx_k9unit] combat EndHold(max_distance_exceeded) errored for netId %s: %s'):format(targetNetId, tostring(err)))
+                end
             elseif Config.Combat.NonComplianceDetection.enabled then
                 local ok, err = pcall(SampleCompliance, targetNetId, hold, now)
                 if not ok then
@@ -766,7 +1008,6 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
     ActiveHolds[targetNetId] = {
         effectType     = 'bite',
         holderSrc      = src,
-        holderNetId    = k9NetId,
         isPlayerTarget = isPlayerTarget,
         targetSrc      = targetSrc,
         startedAt      = now,
@@ -876,7 +1117,17 @@ local function HandleTakedownRequest(src, targetNetId)
     -- ox_inventory call" precedent). Anything could have changed during
     -- the wait: the K9's own access, proximity, the target already being
     -- held by someone else, or the target's own eligibility.
-    local ok2, k9Ped2, targetPed2, isPlayerTarget2, targetSrc2, reason2 =
+    -- k9Ped2 (the second, post-yield k9Ped) is deliberately discarded (`_`)
+    -- this pass: it was previously only used to compute a k9NetId for the
+    -- now-removed dead `ActiveHolds.holderNetId` field (QA-flagged this
+    -- session, see this file's own header/report — server/combat.lua never
+    -- read that field back; every relay payload that needs a K9 reference
+    -- uses a LOCAL k9NetId computed at its own call site instead, and
+    -- forceRagdoll/applyNpcTakedown need no K9 reference at all). Same
+    -- "unused-by-design, not unfinished" pattern already established at
+    -- this file's own pre-yield call above (`local ok, _, targetPed, _, _,
+    -- reason = ValidateCombatRequest(...)`).
+    local ok2, _, targetPed2, isPlayerTarget2, targetSrc2, reason2 =
         ValidateCombatRequest(src, targetNetId, Config.Features.NonLethalTakedown, Config.Combat.NonLethalTakedown.range)
     if not ok2 then
         NotifyPlayer(src, CombatRejectMessage(reason2), 'error')
@@ -903,12 +1154,10 @@ local function HandleTakedownRequest(src, targetNetId)
 
     local now = GetGameTimer()
     local expiresAt = now + Config.Combat.NonLethalTakedown.ragdollDurationMs
-    local k9NetId = NetworkGetNetworkIdFromEntity(k9Ped2)
 
     ActiveHolds[targetNetId] = {
         effectType     = 'takedown',
         holderSrc      = src,
-        holderNetId    = k9NetId,
         isPlayerTarget = isPlayerTarget2,
         targetSrc      = targetSrc2,
         startedAt      = now,
@@ -1000,6 +1249,160 @@ RegisterNetEvent('qbx_k9unit:server:requestTakedown', function(targetNetId)
 
     if not ok then
         print(('[qbx_k9unit] requestTakedown error for source %s: %s'):format(src, tostring(err)))
+    end
+end)
+
+--[[ ================= PROP DRAGGING ================= ]]
+--[[
+    PHASE3_SPEC.md §12.5.4 / §12.0 items 1, 4, 5, 6, 8 (coder-architect,
+    this pass). Reuses ActiveHolds/K9ActiveEffect/EndHold/FlagNonCompliance/
+    the shared maintenance thread above wholesale (effectType = 'drag') —
+    see this file's own header for why (avoids exactly the kind of
+    unforced duplicate-table/duplicate-lifecycle problem PHASE3_SPEC.md
+    §12.0 item 8 itself warns against for this class of state).
+
+    CATEGORY A/B SPLIT FOR THIS MECHANIC, restated concretely against the
+    code below (PHASE3_SPEC.md §12.0 item 8's own framing): the attach
+    (AttachEntityToEntity, entirely client/combat.lua's responsibility —
+    THIS file only ever grants/denies the request and tracks state, it
+    never calls that native itself) is Category A and comparatively robust
+    -- but ONLY under the "re-asserted every tick, never one-shot"
+    discipline binding guardrail 2 requires, because DetachEntity is very
+    likely NOT ownership-gated either (§12.0 item 8's own citation of
+    citizenfx/fivem issue #3726) -- a hostile target's own client can call
+    DetachEntity on itself at any moment, and the ONLY thing that puts the
+    attach back is the K9's client calling AttachEntityToEntity again on
+    its very next frame. THIS FILE'S OWN CONTRIBUTION to that guarantee is
+    narrow and honest: it never assumes the attach "is holding" for any
+    server-authoritative purpose (guardrail 3), and DragExceedsMaxDistance
+    above / the drag_gap compliance signal above are BOTH blind to *why* the
+    gap grew (self-detach, a bypassed move-rate override, or the K9 client
+    simply failing to keep re-asserting) — by design, per item 8's own
+    "regardless of cause" framing, since this file has no way to observe
+    client-side attach state directly anyway. The speed-limit half is
+    Category B in full, same posture as bite/takedown's own restrictive
+    effects.
+
+    "IS THIS TARGET DOWNED" — see IsTargetDowned (above, near
+    IsPlayerWantedEligible) for the full two-branch contract (native-only
+    for an NPC, override-or-metadata-guess for a player, PHASE3_SPEC.md
+    §12.0 item 6). Called as an explicit SEPARATE step after
+    ValidateCombatRequest({requireAlive = false}) succeeds — see that
+    function's own updated header for why this could not simply reuse its
+    built-in IsEntityDead check.
+
+    NO XP AWARD for PropDragging in this pass — PHASE3_SPEC.md §12.2's own
+    config sketch names no `Config.XP.awards.*` key for dragging (unlike
+    biteHoldSuccess/takedownSuccess), so none is invented here; this is a
+    disclosed omission, not an oversight, and a config-validator/product
+    pass can add one later the same way biteHoldSuccess/takedownSuccess
+    were wired up if a reward is wanted.
+]]
+
+--- @param targetNetId any
+RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
+    local src = source
+
+    -- requireAlive = false: PropDragging's ENTIRE premise is a DOWNED
+    -- target -- ValidateCombatRequest's own IsEntityDead rejection exists
+    -- to protect BiteAndHold/NonLethalTakedown from a target that is
+    -- ALREADY dead/dying, the opposite of what this mechanic wants. The
+    -- REAL "is this specific target downed" check is IsTargetDowned below,
+    -- run only after every other shared precondition (access, proximity,
+    -- already_held, wellbeing, RequireWantedStatus) has independently
+    -- passed.
+    -- k9Ped is deliberately discarded (`_`): dragStarted's payload carries
+    -- no K9 netId (the K9's own client already knows its own PlayerPedId()
+    -- locally for the attach), same "unused-by-design" pattern as
+    -- HandleTakedownRequest's own discarded k9Ped2 above.
+    local ok, _, targetPed, isPlayerTarget, targetSrc, reason =
+        ValidateCombatRequest(src, targetNetId, Config.Features.PropDragging, Config.Combat.PropDragging.range, { requireAlive = false })
+    if not ok then
+        NotifyPlayer(src, CombatRejectMessage(reason), 'error')
+        return
+    end
+
+    if not IsTargetDowned(targetPed, isPlayerTarget, targetSrc) then
+        NotifyPlayer(src, CombatRejectMessage('target_not_downed'), 'error')
+        return
+    end
+
+    local now = GetGameTimer()
+    -- maxDragDurationMs: a defensive hard-duration backstop ADDED beyond
+    -- PHASE3_SPEC.md §12.2's literal sketch (which names only
+    -- maxDragDistance as this mechanic's "no unbounded trap" cap, §12.0
+    -- item 4) — see config.lua's own comment on this field (once added —
+    -- this value is REQUESTED, not yet landed, see this pass's own report)
+    -- for the full disclosed reasoning. Reuses the SAME `hold.expiresAt` /
+    -- maintenance-thread-timeout mechanism bite/takedown already use, no
+    -- new enforcement path.
+    local expiresAt = now + Config.Combat.PropDragging.maxDragDurationMs
+
+    ActiveHolds[targetNetId] = {
+        effectType     = 'drag',
+        holderSrc      = src,
+        isPlayerTarget = isPlayerTarget,
+        targetSrc      = targetSrc,
+        startedAt      = now,
+        expiresAt      = expiresAt,
+        compliance = {
+            -- lastPos/lastTime are stamped for parity with bite/takedown's
+            -- own compliance records (SampleCompliance's shared tail always
+            -- writes them) but are NOT read by the 'drag' branch itself —
+            -- that branch compares LIVE positions each sample, it has no
+            -- use for a historical baseline/rate the way bite/takedown do.
+            lastPos  = GetEntityCoords(targetPed),
+            lastTime = now,
+            flagged  = false,
+        },
+    }
+    K9ActiveEffect[src] = targetNetId
+
+    -- Category A: tells the HOLDING K9's own client to start its per-tick
+    -- AttachEntityToEntity re-assertion loop (client/combat.lua). isPlayerTarget
+    -- is included so that SAME client also knows whether to ALSO drive the
+    -- NPC's own move-rate directly (no relay needed for an NPC) or leave
+    -- the speed-limit half to the target's own client (Category B, below).
+    TriggerClientEvent('qbx_k9unit:client:dragStarted', src, targetNetId, isPlayerTarget, expiresAt)
+
+    if isPlayerTarget then
+        -- Category B relay -- PHASE3_SPEC.md §12.0 item 8.
+        TriggerClientEvent('qbx_k9unit:client:applyDragSpeedLimit', targetSrc, expiresAt)
+    end
+    -- NPC target: no separate relay event needed -- dragStarted above
+    -- already told the K9's own client isPlayerTarget = false, which is
+    -- all that client needs to also drive SetPedMoveRateOverride on the
+    -- NPC directly, every tick, alongside the attach re-assertion.
+
+    -- BEST-EFFORT WORDING (guardrail 4) -- never claims the target cannot
+    -- escape, mirrors requestBiteHold/HandleTakedownRequest's own copy.
+    NotifyPlayer(src, 'Attempting to drag the target — this is not guaranteed against an uncooperative target.', 'inform')
+end)
+
+RegisterNetEvent('qbx_k9unit:server:releaseDrag', function()
+    local src = source
+
+    -- Either the HOLDING K9 or, when the target is a player, the TARGET
+    -- itself may release at will -- PHASE3_SPEC.md §12.5.4 / §12.0 item 4:
+    -- mirrors leash's own "no consent needed to get free" rule, and is
+    -- STRONGER than bite/takedown's own target (who has no self-release
+    -- action at all -- apprehension by design, not a cooperative
+    -- mechanic). Checks the holder side first (cheap O(1) lookup via
+    -- K9ActiveEffect) before falling back to the O(n) target-side scan.
+    local targetNetId = K9ActiveEffect[src]
+    if targetNetId then
+        local hold = ActiveHolds[targetNetId]
+        if hold and hold.effectType == 'drag' and hold.holderSrc == src then
+            EndHold(targetNetId, 'released_by_holder')
+            return
+        end
+    end
+
+    for netId, hold in pairs(ActiveHolds) do
+        if hold.effectType == 'drag' and hold.isPlayerTarget and hold.targetSrc == src then
+            EndHold(netId, 'released_by_target')
+            return
+        end
     end
 end)
 
