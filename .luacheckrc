@@ -27,31 +27,6 @@ std = "lua54" -- matches the actual runtime: .github/workflows/lua-check.yml
 -- rather than allowlisted.
 exclude_files = {
     "**/fxmanifest.lua",
-    -- TEMPORARY, WITH A DEFINED EXPIRY -- remove this line as part of the
-    -- commit that lands client/combat.lua. server/combat.lua is committed
-    -- but DELIBERATELY UNFINISHED: it is the server half of Phase 3's
-    -- BiteAndHold/NonLethalTakedown, its client half was never written (an
-    -- implementing agent was interrupted mid-task), and it is deliberately
-    -- NOT registered in fxmanifest.lua, so nothing loads it. It is
-    -- committed only so 811 lines of real work survive this ephemeral
-    -- container, not because it is ready.
-    --
-    -- It currently has 10 luacheck warnings, excluded here rather than
-    -- silenced individually ON PURPOSE: 7 are FiveM natives missing from
-    -- read_globals below (SetBlockingOfNonTemporaryEvents,
-    -- SetEntityCanBeDamaged, SetPedFleeAttributes, SetPedToRagdollWithFall,
-    -- IsPlayerAceAllowed), and adding them to read_globals would assert
-    -- they are legitimately callable SERVER-side, which has NOT been
-    -- verified this session -- the first four are conventionally
-    -- client-side natives, used here only in the NPC-target branch where
-    -- the server owns the entity (the player-target branch correctly
-    -- relays via TriggerClientEvent per PHASE3_SPEC.md §12.0 item 8). That
-    -- is a real open native-correctness question for whoever finishes this
-    -- file, and quietly allowlisting the names would bury it. The other 3
-    -- are unused locals that may indicate unfinished logic, not dead names.
-    -- Excluding the whole file keeps CI honest-green while leaving every
-    -- warning intact and re-surfacing the moment this line is removed.
-    "qbx_k9unit/server/combat.lua",
 }
 
 -- Read-only: FiveM/CFX natives and the implicit server-event `source` global
@@ -117,6 +92,35 @@ read_globals = {
     -- in this resource
     "CreateObject", "PlaceObjectOnGroundProperly", "DeleteEntity",
     "RequestModel", "HasModelLoaded", "SetModelAsNoLongerNeeded", "IsModelValid",
+    -- Phase 3 BiteAndHold/NonLethalTakedown (client/combat.lua) --
+    -- CLIENT-side ped-behavior/physics natives, each with a genuine,
+    -- confirmed CLIENT call site in that file (applyBiteHold/forceRagdoll/
+    -- applyNpcBiteHold/applyNpcTakedown and their own teardown handlers).
+    -- Deliberately NOT added on the strength of server/combat.lua's own
+    -- usage -- this session's native-api-assistant verification pass
+    -- confirmed SetEntityCanBeDamaged is CLIENT-ONLY (no apiset entry on
+    -- the canonical citizenfx/fivem native declaration) and could NOT
+    -- confirm SetPedFleeAttributes/SetBlockingOfNonTemporaryEvents/
+    -- SetPedToRagdollWithFall's SERVER-side validity either way (their
+    -- CLIENT-side validity was never in question -- these are standard,
+    -- well-established client ped-AI/physics natives). server/combat.lua
+    -- no longer calls any of these four directly as of this same pass --
+    -- every NPC-target effect is relayed to the requesting K9's own client
+    -- instead (see that file's own header "NPC-TARGET NATIVE EXECUTION
+    -- CONTEXT" section for the full finding and the reasoning for why this
+    -- sidesteps the three unresolved natives' server-side status rather
+    -- than assert it). Adding these here asserts ONLY their confirmed
+    -- CLIENT validity, never their server-side status.
+    "SetEntityCanBeDamaged", "SetPedFleeAttributes",
+    "SetBlockingOfNonTemporaryEvents", "SetPedToRagdollWithFall",
+    -- Phase 3 combat NON-COMPLIANCE DETECTION staff alert
+    -- (server/combat.lua's FlagNonCompliance) -- standard, ubiquitous
+    -- FXServer permission-check native (ACE permissions are inherently a
+    -- server-side concept); HIGH confidence, not independently
+    -- cross-checked against two live sources this session but not one of
+    -- the four natives this pass's native-api-assistant verification
+    -- flagged as genuinely in question -- see that same header section.
+    "IsPlayerAceAllowed",
     -- Server-side implicit global inside event handlers
     "source",
     -- ox_lib / oxmysql / export surface
@@ -217,6 +221,12 @@ globals = {
     -- authorization surface" framing), not currently consumed elsewhere in
     -- this resource.
     "GetCurrentXPTier",
+    -- client/combat.lua (Phase 3 completion pass, BiteAndHold/
+    -- NonLethalTakedown self-initiated triggers) -- for a future
+    -- client/radial.lua "Bite & Hold"/"Takedown" entry to call, same
+    -- "global helper, private per-file state" convention as
+    -- RequestLeashAttach/DetachLeash above.
+    "RequestBiteHold", "ReleaseBiteHold", "IsBiteHoldEngaged", "RequestTakedown",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the

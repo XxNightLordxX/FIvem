@@ -72,6 +72,7 @@ client_scripts {
     'client/medkit.lua',   -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4)
     'client/wellbeing.lua', -- Phase 4 (unified Fatigue/Mood/FearStress/Distraction/Injury subsystem, PHASE4_SPEC.md §13.0 Decision 1)
     'client/progression.lua', -- Phase 4 (XPProgression, PHASE4_SPEC.md §13.4.1)
+    'client/combat.lua', -- Phase 3 (BiteAndHold/NonLethalTakedown, PHASE3_SPEC.md §12.5.1/§12.5.2) -- the client half of server/combat.lua; no ordering dependency on anything else in this list (reads Config.Combat/Config.Features from config.lua, already loaded via shared_scripts, and calls CanShowK9UI/DenyK9UIAccess from client/main.lua, which is loaded earlier in this same list, but Lua global-function resolution here is at CALL time, not load time, so this would still work even loaded first)
 }
 
 server_scripts {
@@ -106,6 +107,22 @@ server_scripts {
     -- tracking.lua/search.lua, which call AwardXP/GetXPTier through runtime
     -- existence guards rather than a load-order assumption.
     'server/progression.lua',
+    -- Phase 3 (BiteAndHold/NonLethalTakedown, PHASE3_SPEC.md §12.5.1/
+    -- §12.5.2/§12.0 item 8) -- loaded after cooldowns.lua (NewCooldown/
+    -- NewMutex at file-load time, per this file's own header) and
+    -- entities.lua/certifications.lua (ResolveNetworkEntity/HasK9Access,
+    -- called at runtime, but kept load-ordered before this file for the
+    -- same reason every other consumer of those two already is).
+    -- Deliberately loaded AFTER server/wellbeing.lua/server/progression.lua
+    -- even though it CONSUMES IsHesitating/IsDistracted (wellbeing.lua) and
+    -- AwardXP (progression.lua) -- same "runtime existence guard, not a
+    -- load-order assumption" convention every other soft cross-file
+    -- dependency in this manifest already follows (see this file's own
+    -- comment on server/medkit.lua's RestoreInjury above); loading after
+    -- both simply means those guards are non-nil from this file's very
+    -- first tick rather than only after a resource restart, not a
+    -- correctness requirement.
+    'server/combat.lua',
 }
 
 lua54 'yes'

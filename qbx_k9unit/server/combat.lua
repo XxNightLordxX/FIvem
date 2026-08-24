@@ -72,6 +72,69 @@
       Sent ONLY to the target's own client — restores
       SetEntityCanBeDamaged(true) on that client's own ped before/at
       expiresAt.
+    - 'qbx_k9unit:client:applyNpcBiteHold' (npcNetId: number, expiresAt: number)
+      Sent ONLY to the REQUESTING K9's own client — NEW, native-api-assistant
+      verification pass (this session). See "NPC-TARGET NATIVE EXECUTION
+      CONTEXT" below for why an NPC target's bite-suppression is relayed
+      here rather than applied directly server-side as originally written.
+    - 'qbx_k9unit:client:endNpcBiteHold' (npcNetId: number, reason: string)
+      Sent ONLY to the requesting K9's own client — same relay, teardown
+      side.
+    - 'qbx_k9unit:client:applyNpcTakedown' (npcNetId: number, expiresAt: number)
+      Sent ONLY to the requesting K9's own client — NEW, same session/reason
+      as applyNpcBiteHold above, for NonLethalTakedown's NPC-target path.
+    - 'qbx_k9unit:client:endNpcTakedown' (npcNetId: number, reason: string)
+      Sent ONLY to the requesting K9's own client — same relay, teardown
+      side.
+
+    ======================================================================
+    NPC-TARGET NATIVE EXECUTION CONTEXT — RESTRUCTURED this session
+    (native-api-assistant verification pass), superseding this file's own
+    ORIGINAL "NPC target: this server already fully commands this entity,
+    no relay problem" reasoning for BiteAndHold/NonLethalTakedown's
+    NPC-target branches. That reasoning assumed
+    SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes/SetEntityCanBeDamaged/
+    SetPedToRagdollWithFall are all plainly callable server-side against a
+    server-spawned NPC ped. Verified against the canonical
+    citizenfx/fivem native declarations this session:
+    - SetEntityCanBeDamaged (0x1760FFA8AB074D66, `ENTITY` namespace) is
+      CONFIRMED CLIENT-ONLY — no `apiset` entry in the primary source,
+      which per that same repo's own codegen convention means the native
+      never lands in FXServer's compiled table at all. The original
+      server-side call in HandleTakedownRequest's NPC branch was
+      therefore a SILENT NO-OP, a real correctness/safety bug: the
+      damage-bracket that is supposed to make a takedown non-lethal never
+      actually applied to a server-spawned NPC target, and the health-floor
+      backstop alone is a reactive one-time top-up, not a continuous damage
+      block, so it cannot honestly cover sustained damage from another
+      source during the ragdoll window on its own.
+    - SetPedFleeAttributes, SetBlockingOfNonTemporaryEvents, and
+      SetPedToRagdollWithFall (all `PED` namespace) could NOT be confirmed
+      either way this session — the primary source's PED section and every
+      mirror/doc host tried were unreachable. Indirect community
+      corroboration is consistent with "client-only, same as
+      SetEntityCanBeDamaged" but is NOT independent primary-source
+      confirmation — graded MEDIUM confidence / single indirect source,
+      honestly, not upgraded to match the one native that WAS confirmed.
+    Rather than assert an unresolved server-side legitimacy for three
+    natives just to keep one code shape, or leave one bug fixed and three
+    others standing on an unverified assumption, ALL FOUR are relayed to
+    the REQUESTING K9's OWN client instead — unambiguously a valid
+    execution context for all four regardless of their server-side status
+    (their CLIENT-side validity was never in question; SetPedToRagdollWithFall
+    is already independently confirmed client-callable by this same file's
+    own player-target relay, applied via client/combat.lua's forceRagdoll
+    handler). This is not a weakening of server authority: the server has
+    already independently completed every real check (feature flag,
+    HasK9Access, live proximity, cooldowns, the speed gate for takedown)
+    BEFORE ever sending one of these four relay events — only the
+    MECHANICAL "make the NPC do X" step moves client-side, to the one actor
+    already fully trusted for this action, mirroring the exact posture this
+    file already uses for a PLAYER target (relay to the target's own
+    client) just relayed to the K9 instead, since an NPC has no "own
+    client" to relay to. See client/combat.lua's own header for the
+    receiving-side implementation.
+    ======================================================================
 
     No anim-dictionary/TASK_PLAY_ANIM asset is used for BiteAndHold in this
     pass — phase2_notes/phase3_combat_natives.md's own §1 write-up flags
@@ -98,9 +161,33 @@
       cooldown/in-flight-guard below is one of these constructors, never a
       hand-rolled table, per REFACTOR_ROADMAP.md item 1's own standing
       convention for this resource.
+    - Calls IsHesitating(citizenid)/IsDistracted(citizenid), resource-globals
+      from server/wellbeing.lua, ONLY IF THOSE FUNCTIONS EXIST (`type(...) ==
+      'function'` guard — same soft-dependency convention as
+      server/medkit.lua's RestoreInjury/server/tracking.lua's AwardXP call
+      sites, never a load-order assumption). server/wellbeing.lua's own
+      header names THIS file's request-validation path as "THE genuine new
+      cross-file dependency" it added these two accessors for — see
+      ValidateCombatRequest below for the actual call site. A K9 whose own
+      character is currently hesitating (FearStress) or distracted cannot
+      have a bite-hold/takedown request granted; this is a check on the
+      REQUESTING K9's own wellbeing state, never the target's.
+    - Calls AwardXP(citizenid, awardKey), resource-global from
+      server/progression.lua, ONLY IF IT EXISTS (same runtime-existence-guard
+      convention, mirroring server/tracking.lua's own trackSourceResolved
+      call site exactly) — see EndHold (BiteAndHold) and
+      HandleTakedownRequest (NonLethalTakedown) for the two award call
+      sites and their own anti-farm reasoning. Config.XP.awards.biteHoldSuccess/
+      .takedownSuccess (config.lua) are the two award keys this file owns;
+      searchContrabandFound/trackSourceResolved belong to
+      server/search.lua/server/tracking.lua respectively, not here.
     - Loaded in fxmanifest.lua's server_scripts after cooldowns.lua,
       entities.lua, and certifications.lua (all three are load-time
-      dependencies of this file).
+      dependencies of this file). No ordering dependency on
+      server/wellbeing.lua or server/progression.lua either way (both are
+      consumed through runtime existence guards, not a load-order
+      assumption) — same posture server/medkit.lua's own fxmanifest.lua
+      comment already documents for RestoreInjury.
     ======================================================================
 
     PLAYER-VS-NPC RESOLUTION — DELIBERATE DEVIATION FROM PHASE3_SPEC.md'S
@@ -231,6 +318,18 @@ local TakedownTargetCooldown = NewCooldown(Config.Combat.NonLethalTakedown.targe
 local TakedownMutex = NewMutex()
 TakedownMutex.RegisterPlayerDropped()
 
+-- Anti-farm floor for BiteAndHold's XP award (Config.XP.awards.biteHoldSuccess,
+-- config.lua) — see EndHold's own award call site below for the full
+-- reasoning. UNTUNED placeholder, same "flag the number, don't pretend it's
+-- reviewed" convention as every other numeric constant in this file/this
+-- codebase pending a config-validator pass. A hold that ends via 'timeout'
+-- always clears this floor trivially (timeout cannot fire before
+-- Config.Combat.BiteAndHold.maxDurationMs elapses); this constant only ever
+-- actually gates the 'released' path, specifically to block an
+-- accept-then-immediately-release macro from minting XP with no real
+-- restraint ever having happened.
+local MIN_BITE_HOLD_XP_DURATION_MS = 3000
+
 local TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS = 60000
 TakedownTargetCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
     return (now - loggedAt) > (Config.Combat.NonLethalTakedown.targetCooldownMs * 2)
@@ -314,6 +413,11 @@ local COMBAT_REJECT_MESSAGES = {
     not_eligible_target = 'That target is not currently eligible.',
     not_fleeing        = 'The target does not appear to be fleeing.',
     on_cooldown        = 'You must wait before attempting that again.',
+    -- server/wellbeing.lua-driven — these describe the REQUESTING K9's own
+    -- state, never the target's (see this file's header FILE-TO-FILE
+    -- CONTRACT entry for IsHesitating/IsDistracted).
+    hesitating         = 'Your K9 is too stressed to comply right now.',
+    distracted         = 'Your K9 is distracted and not responding to commands.',
 }
 
 --- @param reason string?
@@ -363,6 +467,37 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
 
     if K9ActiveEffect[src] then
         return false, nil, nil, nil, nil, 'already_engaged'
+    end
+
+    -- server/wellbeing.lua §13.5 cross-file dependency, wired here for real
+    -- (this file's own header names the exact call site) — a K9 whose OWN
+    -- character is currently hesitating (FearStress) or distracted cannot
+    -- have a request granted at all, checked BEFORE any other state is
+    -- resolved/mutated, same "read-only precondition first" discipline this
+    -- function already documents above. Runtime existence guard: neither
+    -- accessor is assumed to exist by load order (server/wellbeing.lua may
+    -- be absent, or its features disabled) — see server/medkit.lua's
+    -- RestoreInjury for the identical guard shape. pcall-wrapped: an error
+    -- inside either accessor must fail this specific request closed (never
+    -- granted), not bubble up and abort the whole event handler for an
+    -- unrelated reason.
+    if type(IsHesitating) == 'function' or type(IsDistracted) == 'function' then
+        local k9Player = exports.qbx_core:GetPlayer(src)
+        local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
+        if k9Citizenid then
+            if type(IsHesitating) == 'function' then
+                local ok, hesitating = pcall(IsHesitating, k9Citizenid)
+                if ok and hesitating then
+                    return false, nil, nil, nil, nil, 'hesitating'
+                end
+            end
+            if type(IsDistracted) == 'function' then
+                local ok, distracted = pcall(IsDistracted, k9Citizenid)
+                if ok and distracted then
+                    return false, nil, nil, nil, nil, 'distracted'
+                end
+            end
+        end
     end
 
     local k9Ped = GetPlayerPed(src)
@@ -436,21 +571,44 @@ local function EndHold(targetNetId, reason)
             TriggerClientEvent('qbx_k9unit:client:endForceRagdoll', hold.targetSrc, reason)
         end
     else
-        -- NPC target: this server (or the K9's own client, per the file
-        -- plan) already fully commands this entity — restore directly,
-        -- no relay problem.
-        local targetPed = ResolveNetworkEntity(targetNetId, 1)
-        if targetPed then
-            if hold.effectType == 'bite' then
-                SetBlockingOfNonTemporaryEvents(targetPed, false)
-            else
-                SetEntityCanBeDamaged(targetPed, true)
-            end
+        -- NPC target — RESTRUCTURED, native-api-assistant verification
+        -- pass (this session): see this file's header "NPC-TARGET NATIVE
+        -- EXECUTION CONTEXT" note for the full finding. Relayed to the
+        -- REQUESTING K9's OWN client (client/combat.lua), same as the
+        -- apply side below — never called directly server-side anymore.
+        if hold.effectType == 'bite' then
+            TriggerClientEvent('qbx_k9unit:client:endNpcBiteHold', hold.holderSrc, targetNetId, reason)
+        else
+            TriggerClientEvent('qbx_k9unit:client:endNpcTakedown', hold.holderSrc, targetNetId, reason)
         end
     end
 
     if hold.effectType == 'bite' then
         TriggerClientEvent('qbx_k9unit:client:biteHoldEnded', hold.holderSrc, targetNetId, reason)
+
+        -- Config.XP.awards.biteHoldSuccess (config.lua) — QA-flagged as dead
+        -- code (configured, never granted) until this pass. "Genuinely
+        -- successful" is deliberately narrower than "a hold merely
+        -- existed": excludes 'holder_disconnected'/'target_disconnected'
+        -- (incomplete, not an intentional outcome) outright, and further
+        -- requires MIN_BITE_HOLD_XP_DURATION_MS to have elapsed for a
+        -- 'released' end (never for 'timeout', which cannot fire early —
+        -- see that constant's own declaration comment for the full
+        -- anti-farm reasoning). Runtime existence guard, same convention as
+        -- server/tracking.lua's own trackSourceResolved call site — no
+        -- load-order assumption on server/progression.lua.
+        if reason == 'released' or reason == 'timeout' then
+            local heldDurationMs = GetGameTimer() - hold.startedAt
+            if reason == 'timeout' or heldDurationMs >= MIN_BITE_HOLD_XP_DURATION_MS then
+                if type(AwardXP) == 'function' then
+                    local holderPlayer = exports.qbx_core:GetPlayer(hold.holderSrc)
+                    local holderCitizenid = holderPlayer and holderPlayer.PlayerData and holderPlayer.PlayerData.citizenid
+                    if holderCitizenid then
+                        AwardXP(holderCitizenid, 'biteHoldSuccess')
+                    end
+                end
+            end
+        end
     elseif reason ~= 'timeout' then
         -- Takedown has no manual "release" action (PHASE3_SPEC.md §12.5.2
         -- lists no release event) — only notify the K9 for a non-timeout
@@ -627,10 +785,23 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
         -- the target's own client, never a broadcast.
         TriggerClientEvent('qbx_k9unit:client:applyBiteHold', targetSrc, k9NetId, expiresAt)
     else
-        -- NPC target: this server already fully commands this entity, no
-        -- relay problem — PHASE3_SPEC.md §12.5.1.
-        SetBlockingOfNonTemporaryEvents(targetPed, true)
-        SetPedFleeAttributes(targetPed, 0, false)
+        -- NPC target — RESTRUCTURED, native-api-assistant verification
+        -- pass (this session): see this file's header "NPC-TARGET NATIVE
+        -- EXECUTION CONTEXT" note. PHASE3_SPEC.md §12.5.1's own prose calls
+        -- this "no relay problem" on the theory the server can just call
+        -- these natives directly — that theory did not survive
+        -- verification (SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes'
+        -- SERVER-side validity could not be confirmed either way this
+        -- session; the sibling SetEntityCanBeDamaged call in
+        -- HandleTakedownRequest below WAS independently confirmed
+        -- CLIENT-ONLY). Relayed to the REQUESTING K9's OWN client instead
+        -- — that client is already this resource's trusted actor for this
+        -- action (server has already independently verified
+        -- access/proximity/cooldowns above; only the mechanical
+        -- "make the NPC stop fleeing/reacting" step moves client-side),
+        -- and is unambiguously a valid execution context for both natives
+        -- regardless of their unresolved server-side status.
+        TriggerClientEvent('qbx_k9unit:client:applyNpcBiteHold', src, targetNetId, expiresAt)
     end
 
     TriggerClientEvent('qbx_k9unit:client:biteHoldStarted', src, targetNetId, expiresAt)
@@ -660,7 +831,18 @@ end)
 --- @param src number
 --- @param targetNetId any
 local function HandleTakedownRequest(src, targetNetId)
-    local ok, k9Ped, targetPed, isPlayerTarget, targetSrc, reason =
+    -- k9Ped/isPlayerTarget/targetSrc from THIS pre-yield call are
+    -- deliberately discarded (`_`), same "unused-by-design, not
+    -- unfinished" pattern already established at server/main.lua:701
+    -- (`local ok, _, _, reason = CheckLeashEligibility(...)`) — everything
+    -- except targetPed (needed for basePos below) and reason (needed for
+    -- the early-return message) is RE-DERIVED from scratch by the second
+    -- ValidateCombatRequest call after the yield below ("RE-VALIDATE
+    -- EVERYTHING after the yield" — see that call site's own comment), so
+    -- carrying the pre-yield k9Ped/isPlayerTarget/targetSrc forward would
+    -- only invite an accidental use of a value that may already be stale by
+    -- the time this function's second half runs.
+    local ok, _, targetPed, _, _, reason =
         ValidateCombatRequest(src, targetNetId, Config.Features.NonLethalTakedown, Config.Combat.NonLethalTakedown.range)
     if not ok then
         NotifyPlayer(src, CombatRejectMessage(reason), 'error')
@@ -744,23 +926,56 @@ local function HandleTakedownRequest(src, targetNetId)
         -- Category B relay -- PHASE3_SPEC.md §12.0 item 8.
         TriggerClientEvent('qbx_k9unit:client:forceRagdoll', targetSrc2, expiresAt)
     else
-        -- NPC target: applied directly, ordering per
-        -- phase2_notes/phase3_combat_natives.md §2 (damage-bracket +
-        -- health floor BEFORE the ragdoll task, never after).
-        SetEntityCanBeDamaged(targetPed2, false)
+        -- NPC target — RESTRUCTURED, native-api-assistant verification
+        -- pass (this session), REAL BUG FIX not just a lint workaround: see
+        -- this file's header "NPC-TARGET NATIVE EXECUTION CONTEXT" note for
+        -- the full finding. SetEntityCanBeDamaged was CONFIRMED CLIENT-ONLY
+        -- (0x1760FFA8AB074D66, ENTITY namespace, no apiset entry — FXServer
+        -- never receives this native at all), which means the previous
+        -- server-side call here was a silent no-op: the damage-bracket that
+        -- is supposed to make this takedown non-lethal never actually
+        -- applied to a server-spawned NPC target. The health floor below is
+        -- NOT a sufficient substitute on its own — it is a REACTIVE
+        -- top-up (fires only once, only if health has already dropped
+        -- below the floor at the instant this line runs), not a continuous
+        -- damage block, so it cannot honestly cover sustained damage from
+        -- another source during the multi-second ragdoll window (e.g. a
+        -- different player still shooting the downed NPC). Fixed by
+        -- relaying BOTH the damage-bracket and the ragdoll to the
+        -- REQUESTING K9's own client — SetPedToRagdollWithFall's
+        -- server-side validity also could not be confirmed either way this
+        -- session, so this sidesteps that open question entirely rather
+        -- than resolve it by assertion, the same way the bite-hold NPC
+        -- branch above does.
         if GetEntityHealth(targetPed2) < Config.Combat.NonLethalTakedown.healthFloor then
-            -- Backstop only, NOT the primary non-lethal mechanism (that's
-            -- the damage-bracket above) — see config.lua's own comment.
+            -- Kept as a real, independently server-callable backstop
+            -- (GetEntityHealth/SetEntityHealth's server-side validity is
+            -- not in question — see .luacheckrc's own SetEntityHealth
+            -- comment) even though the K9's client now also applies the
+            -- damage bracket below — defense in depth costs nothing here.
             SetEntityHealth(targetPed2, Config.Combat.NonLethalTakedown.healthFloor)
         end
 
-        local forward = GetEntityForwardVector(k9Ped2)
-        -- SET_PED_TO_RAGDOLL_WITH_FALL(ped, minTime, maxTime, nFallType,
-        -- dirX, dirY, dirZ, fGroundHeight, grab1[xyz], grab2[xyz]) — grab
-        -- params documented unused, per phase2_notes/phase3_combat_natives.md §2.
-        -- minTime/maxTime below are UNTUNED placeholders (not previously
-        -- specified anywhere in this codebase's own config/spec).
-        SetPedToRagdollWithFall(targetPed2, 1000, 1500, 0, forward.x, forward.y, forward.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        TriggerClientEvent('qbx_k9unit:client:applyNpcTakedown', src, targetNetId, expiresAt)
+    end
+
+    -- Config.XP.awards.takedownSuccess (config.lua) — QA-flagged as dead
+    -- code (configured, never granted) until this pass. Unlike BiteAndHold,
+    -- no anti-farm floor is needed here: reaching this line already means
+    -- the server-computed speed gate (genuinely fleeing, never a
+    -- client-claimed flag), both cooldowns (per-K9 AND per-target), and the
+    -- full ValidateCombatRequest re-check all passed — there is no
+    -- "immediate release" farm vector to guard against since takedown has
+    -- no manual release action at all (single atomic action, not a
+    -- hold-then-release lifecycle). Runtime existence guard, same
+    -- convention as server/tracking.lua's own trackSourceResolved call
+    -- site — no load-order assumption on server/progression.lua.
+    if type(AwardXP) == 'function' then
+        local holderPlayer = exports.qbx_core:GetPlayer(src)
+        local holderCitizenid = holderPlayer and holderPlayer.PlayerData and holderPlayer.PlayerData.citizenid
+        if holderCitizenid then
+            AwardXP(holderCitizenid, 'takedownSuccess')
+        end
     end
 
     -- BEST-EFFORT WORDING (guardrail 4).
