@@ -167,6 +167,22 @@ local BARK_SOUND_NAME = 'Bark'
 --- handler). Not a real shipped soundset yet — see the comment above.
 local K9_SOUND_SET = 'qbx_k9unit_sounds'
 
+--- Phase 5 (Config.Features.AdvancedBarkRadial, client/radial.lua): maps a
+--- specific `barkType` string (config.lua's Config.AdvancedBarkRadial —
+--- SPEC.md §6.7's "aggressive/alert/calm") to its own placeholder sound
+--- name, built once at file load. Still all placeholder audio, same
+--- K9_SOUND_SET convention as BARK_SOUND_NAME above — phase2_notes/
+--- phase5_features_research.md §1 confirms a real per-variant soundset
+--- needs authored `.awc`/REL audio-bank assets, not just a different string
+--- here; this table only carries the plumbing. Built defensively against
+--- Config.AdvancedBarkRadial not existing (older configs, or the feature
+--- flag simply left off) since this table is populated unconditionally
+--- regardless of Config.Features.AdvancedBarkRadial's value.
+local BarkTypeSoundNames = {}
+for _, variant in ipairs(Config.AdvancedBarkRadial or {}) do
+    BarkTypeSoundNames[variant.barkType] = variant.sound
+end
+
 --- REFACTOR_ROADMAP.md near-term item 2 ("resolve network entity
 --- defensively" helper — 6 independent hand-written copies, 4 client-side
 --- + 2 server-side). Resolves netId to a live, currently-streamed-in
@@ -221,10 +237,16 @@ end
 --- @param netId number
 --- @param barkType string
 RegisterNetEvent('qbx_k9unit:client:playBark', function(netId, barkType)
-    -- `barkType` is treated as an opaque passthrough string for Phase 1 —
-    -- only one generic bark exists ('bark', see client/radial.lua's Bark
-    -- item), so it isn't yet used to select between distinct assets.
-    -- Phase 5's AdvancedBarkRadial is where per-type sound selection would
-    -- get added.
-    PlaySoundOnNetworkEntity(netId, BARK_SOUND_NAME)
+    -- `barkType` is an opaque passthrough string from server/main.lua's
+    -- relayBark handler (untouched by this feature — it never validates or
+    -- interprets barkType itself, only length-caps it). Phase 1's single
+    -- literal ('bark', client/radial.lua's non-AdvancedBarkRadial Bark item)
+    -- won't be in BarkTypeSoundNames, so it falls back to the one generic
+    -- BARK_SOUND_NAME below, same behavior as before this feature existed.
+    -- Phase 5's AdvancedBarkRadial variants (client/radial.lua's bark
+    -- submenu) DO resolve to their own distinct entry via
+    -- Config.AdvancedBarkRadial (config.lua) — still placeholder audio
+    -- either way, see BarkTypeSoundNames' own comment above.
+    local soundName = BarkTypeSoundNames[barkType] or BARK_SOUND_NAME
+    PlaySoundOnNetworkEntity(netId, soundName)
 end)

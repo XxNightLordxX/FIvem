@@ -89,9 +89,20 @@
     bark sound plays on a radial-triggered 'Bark' action" — the
     aggressive/alert/calm variety is Phase 5's AdvancedBarkRadial, not
     Phase 1). Use a single literal string, e.g. 'bark', consistently with
-    server/main.lua's relayBark TODO and client/main.lua's playBark TODO —
-    all three call sites must agree on the same literal until this gets
-    promoted to a real config-driven enum (flagged in those files too).
+    server/main.lua's relayBark handler and client/main.lua's playBark
+    handler — all three call sites must agree on the same literal.
+
+    UPDATE (Phase 5, AdvancedBarkRadial implemented): when
+    Config.Features.AdvancedBarkRadial is also true (still requires
+    BasicBarkSounds underneath it), the Bark item below becomes a submenu of
+    config-driven variants (Config.AdvancedBarkRadial, config.lua) instead of
+    that single literal — see the Bark block below for the full contract.
+    Every variant still triggers the exact same
+    'qbx_k9unit:server:relayBark' event, just with a different `barkType`
+    string; server/main.lua's handler was NOT changed for this, it already
+    accepts any opaque, length-capped barkType. When AdvancedBarkRadial is
+    off (the default), behavior is unchanged from the single-literal
+    description above.
 ]]
 
 -- OPEN STRUCTURAL QUESTION resolution: option (b) was chosen — the "K9
@@ -172,21 +183,78 @@ local k9SubmenuItems = {
 }
 
 --- Bark — SPEC.md §6.1, §8 step 9. Config.Features.BasicBarkSounds gate.
+---
+--- Phase 5's AdvancedBarkRadial (Config.Features.AdvancedBarkRadial, layered
+--- ON TOP of BasicBarkSounds — still requires it, matching how this resource
+--- layers every Phase 5 feature over its Phase 1 prerequisite elsewhere,
+--- e.g. ScentTracking/BloodTracking/GunpowderSniffing each standing alone
+--- under RadialMenu) swaps the single generic "Bark" action for a nested
+--- submenu of variants (Config.AdvancedBarkRadial, config.lua — SPEC.md
+--- §6.7: "aggressive/alert/calm"). Every variant still funnels through the
+--- SAME 'qbx_k9unit:server:relayBark' event with its own `barkType` string —
+--- server/main.lua's handler is UNCHANGED for this feature; it already
+--- accepts any opaque, length-capped barkType (BARK_TYPE_MAX_LENGTH = 16)
+--- with no enum validation, exactly the shape this needs. When
+--- AdvancedBarkRadial is off, behavior is byte-for-byte the same as before
+--- this feature existed: a single 'k9_bark' action sending the literal
+--- 'bark' string.
 if Config.Features.BasicBarkSounds then
-    k9SubmenuItems[#k9SubmenuItems + 1] = {
-        id = 'k9_bark',
-        label = 'Bark',
-        icon = 'volume-high',
-        onSelect = function()
-            if not CanShowK9UI() then
-                DenyK9UIAccess()
-                return
-            end
-            -- server re-validates Config.Features.BasicBarkSounds and
-            -- HasK9Access independently regardless — see server/main.lua.
-            TriggerServerEvent('qbx_k9unit:server:relayBark', 'bark')
-        end,
-    }
+    if Config.Features.AdvancedBarkRadial then
+        -- Build the nested submenu's terminal action items from
+        -- config.lua's Config.AdvancedBarkRadial list. Each `variant` here
+        -- is a FRESH local per loop iteration (Lua's generic `for` rebinds
+        -- its control variables every pass), so each onSelect closure
+        -- safely captures its own variant, not a shared/last-iteration one.
+        local barkSubmenuItems = {}
+        for _, variant in ipairs(Config.AdvancedBarkRadial) do
+            barkSubmenuItems[#barkSubmenuItems + 1] = {
+                id = 'k9_bark_' .. variant.barkType,
+                label = variant.label,
+                icon = variant.icon,
+                onSelect = function()
+                    if not CanShowK9UI() then
+                        DenyK9UIAccess()
+                        return
+                    end
+                    -- server re-validates Config.Features.BasicBarkSounds and
+                    -- HasK9Access independently regardless — see server/main.lua.
+                    TriggerServerEvent('qbx_k9unit:server:relayBark', variant.barkType)
+                end,
+            }
+        end
+
+        lib.registerRadial({
+            id = 'k9unit_bark',
+            items = barkSubmenuItems,
+        })
+
+        -- Opener item inside the "K9 Unit" submenu: selecting THIS navigates
+        -- into 'k9unit_bark' (registered just above), same `menu`-field
+        -- navigation mechanic this file's header already documents for the
+        -- top-level 'k9unit_open' opener — this item carries no onSelect of
+        -- its own on purpose.
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_bark',
+            label = 'Bark',
+            icon = 'volume-high',
+            menu = 'k9unit_bark',
+        }
+    else
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_bark',
+            label = 'Bark',
+            icon = 'volume-high',
+            onSelect = function()
+                if not CanShowK9UI() then
+                    DenyK9UIAccess()
+                    return
+                end
+                -- server re-validates Config.Features.BasicBarkSounds and
+                -- HasK9Access independently regardless — see server/main.lua.
+                TriggerServerEvent('qbx_k9unit:server:relayBark', 'bark')
+            end,
+        }
+    end
 end
 
 --- Attach/Detach Leash — SPEC.md §6.1, §8 step 6-7. A single

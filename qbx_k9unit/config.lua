@@ -392,6 +392,42 @@ Config.DeployableKennel = {
 -- header for why.
 
 -- ======================================================================
+-- PHASE 5 (R&D) — ADVANCED BARK RADIAL (Config.Features.AdvancedBarkRadial,
+-- still `false` by default — layered on top of Config.Features.BasicBarkSounds
+-- per this resource's existing Phase-5-on-Phase-1 convention, see
+-- client/radial.lua's Bark item for the enforcement of that layering).
+-- SPEC.md §6.7 names the variant set explicitly: "Radial bark options
+-- (aggressive/alert/calm) each play a distinct sound asset attached to the
+-- K9 entity" — that's the exact set shipped here, not an arbitrary pick
+-- (phase2_notes/phase5_features_research.md §1 confirms no other count is
+-- named anywhere in the spec).
+--
+-- `sound` is still the SAME placeholder posture as client/main.lua's
+-- BARK_SOUND_NAME/K9_SOUND_SET (see that file's header comment in full) —
+-- none of these resolve to real, distinct authored audio yet.
+-- phase5_features_research.md §1 confirms a real per-variant soundset needs
+-- authored `.awc`/`dat151`/`dat54` RAGE-audio-bank assets, not just a
+-- different string here — this table only carries the plumbing (which
+-- placeholder name maps to which radial item/barkType), not the asset
+-- itself. PlaySoundFromEntity with an unrecognized name/set combination is
+-- a harmless no-op, so this ships safely with zero real audio, same as
+-- Phase 1's single bark.
+--
+-- `barkType` is the exact string sent over the EXISTING
+-- 'qbx_k9unit:server:relayBark' event (client/radial.lua) and echoed back
+-- opaquely by server/main.lua's handler, which enforces
+-- `BARK_TYPE_MAX_LENGTH = 16` — keep every `barkType` value below at or
+-- under that length. server/main.lua itself is NOT modified for this
+-- feature; it already accepts any opaque, length-capped string with no
+-- enum validation.
+-- ======================================================================
+Config.AdvancedBarkRadial = {
+    { barkType = 'bark_alert',      label = 'Alert Bark',      icon = 'triangle-exclamation', sound = 'Bark_Alert' },
+    { barkType = 'bark_aggressive', label = 'Aggressive Bark', icon = 'skull',                sound = 'Bark_Aggressive' },
+    { barkType = 'bark_calm',       label = 'Calm Bark',       icon = 'moon',                 sound = 'Bark_Calm' },
+}
+
+-- ======================================================================
 -- PHASE 4 — K9 INVENTORY (ox_inventory stash). Backs
 -- Config.Features.K9Inventory (still `false` above, per this resource's
 -- "ship disabled until acceptance criteria are fully met" convention).
