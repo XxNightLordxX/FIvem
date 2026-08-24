@@ -46,7 +46,9 @@
 
     FILE-TO-FILE CONTRACT (client side):
     - THIS FILE exposes three resource-global (no `local`) functions,
-      used by client/movement.lua, client/radial.lua, and client/vehicle.lua:
+      used by client/movement.lua, client/radial.lua, and client/vehicle.lua,
+      PLUS ResolveNetworkEntity() (see its own doc comment near
+      PlaySoundOnNetworkEntity below — REFACTOR_ROADMAP.md near-term item 2):
         IsOwnModelK9() -> boolean
             Pure local check (GetEntityModel(PlayerPedId()) against
             Config.Peds) — display-only, per §4.5, never treat this as a
@@ -165,21 +167,50 @@ local BARK_SOUND_NAME = 'Bark'
 --- handler). Not a real shipped soundset yet — see the comment above.
 local K9_SOUND_SET = 'qbx_k9unit_sounds'
 
+--- REFACTOR_ROADMAP.md near-term item 2 ("resolve network entity
+--- defensively" helper — 6 independent hand-written copies, 4 client-side
+--- + 2 server-side). Resolves netId to a live, currently-streamed-in
+--- entity handle on THIS client, or nil if it doesn't currently resolve to
+--- anything real (not streamed in, deleted/recycled, or a bogus id).
+---
+--- Extracted from what were, before this pass, 3 independent client-side
+--- copies of the exact same "NetworkDoesEntityExistWithNetworkId guard ->
+--- NetworkGetEntityFromNetworkId -> DoesEntityExist guard" sequence:
+--- PlaySoundOnNetworkEntity below (itself already the product of an
+--- earlier dedup pass covering this file's playBark handler and
+--- client/search.lua's playContrabandAlert handler — see that pass's own
+--- comment, kept below for history), client/vehicle.lua's
+--- ResolveVehicleFromState, and client/movement.lua's playDoorScratch
+--- receiver. All three now call this single function instead. A 4th
+--- named copy, client/search.lua's playContrabandAlert handler, already
+--- goes through PlaySoundOnNetworkEntity (and therefore, transitively,
+--- through this function) rather than resolving netId itself — it never
+--- needed its own separate migration.
+--- @param netId number
+--- @return number? entity
+function ResolveNetworkEntity(netId)
+    if not NetworkDoesEntityExistWithNetworkId(netId) then
+        return nil -- this client doesn't have the entity streamed in at all
+    end
+
+    local entity = NetworkGetEntityFromNetworkId(netId)
+    if not DoesEntityExist(entity) then return nil end
+
+    return entity
+end
+
 --- Resolves netId to a live, currently-streamed-in entity and plays
 --- soundName from it via this resource's shared placeholder sound set.
 --- Refactor pass (dedup): this exact "resolve netId -> guard
 --- DoesEntityExist -> PlaySoundFromEntity" sequence was previously
 --- duplicated between this file's playBark handler and
---- client/search.lua's contraband-alert handler.
+--- client/search.lua's contraband-alert handler; the resolve half is now
+--- ResolveNetworkEntity() above (REFACTOR_ROADMAP.md near-term item 2).
 --- @param netId number
 --- @param soundName string
 function PlaySoundOnNetworkEntity(netId, soundName)
-    if not NetworkDoesEntityExistWithNetworkId(netId) then
-        return -- this client doesn't have the entity streamed in at all
-    end
-
-    local entity = NetworkGetEntityFromNetworkId(netId)
-    if not DoesEntityExist(entity) then return end
+    local entity = ResolveNetworkEntity(netId)
+    if not entity then return end
 
     PlaySoundFromEntity(-1, soundName, entity, K9_SOUND_SET, false, 0)
 end

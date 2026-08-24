@@ -29,7 +29,10 @@
         ExitK9Vehicle()
         IsInK9Vehicle() -> boolean
     - THIS FILE calls client/main.lua's global CanShowK9UI() before acting
-      on any of the above.
+      on any of the above, and client/main.lua's global
+      ResolveNetworkEntity(netId) inside ResolveVehicleFromState() below
+      (REFACTOR_ROADMAP.md near-term item 2 — was this file's own
+      independent copy of the same defensive-resolve sequence).
 ]]
 
 -- Local-only "am I currently tucked into a vehicle" state. Not exposed
@@ -82,12 +85,15 @@ end
 --- refers to nothing/something else). Mirrors client/movement.lua's leash
 --- pull-back thread, which re-resolves its partner ped from a server id
 --- every tick for the identical reason ("a cached ped handle can go
---- stale").
+--- stale"). The actual resolve-and-guard sequence is now
+--- client/main.lua's shared ResolveNetworkEntity() (REFACTOR_ROADMAP.md
+--- near-term item 2) — this function's only remaining job is the
+--- vehicleState-nil short-circuit, which is specific to this file's own
+--- local state and doesn't belong in the generic resolver.
 --- @return number? vehicle
 local function ResolveVehicleFromState()
     if not vehicleState then return nil end
-    if not NetworkDoesEntityExistWithNetworkId(vehicleState.vehicleNetId) then return nil end
-    return NetworkGetEntityFromNetworkId(vehicleState.vehicleNetId)
+    return ResolveNetworkEntity(vehicleState.vehicleNetId)
 end
 
 --- Reverses the four persisted native states EnterNearestK9Vehicle()

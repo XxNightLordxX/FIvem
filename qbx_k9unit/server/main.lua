@@ -100,6 +100,10 @@
     - THIS FILE calls `HasK9Access(source)` and `IsConfiguredK9Model(modelHash)`,
       resource-global functions exposed by server/certifications.lua — do
       not re-implement either check here.
+    - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)`,
+      exposed by server/entities.lua (REFACTOR_ROADMAP.md near-term item 2),
+      inside relayDoorScratch below — do not re-implement the
+      resolve/existence-guard sequence here.
     - THIS FILE calls `RefreshCertificationCache(citizenid, jobName)`,
       also exposed by server/certifications.lua, from the resource-start
       backfill loop below.
@@ -517,31 +521,35 @@ RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
 
     -- Gap closed per SPEC.md §9 item 16 (see comment above this handler):
     -- resolve the claimed netId to a live entity and confirm it actually
-    -- exists before doing anything else with it.
-    local doorEntity = NetworkGetEntityFromNetworkId(doorNetId)
-    if doorEntity == 0 or not DoesEntityExist(doorEntity) then
-        return -- silent no-op: not a real, currently-existing entity
+    -- exists AND is an object (GetEntityType == 3 — door props are
+    -- objects; 1 = ped, 2 = vehicle) before doing anything else with it.
+    -- REFACTOR_ROADMAP.md near-term item 2: was this handler's own inline
+    -- "NetworkGetEntityFromNetworkId -> 0/DoesEntityExist guard" followed,
+    -- a few lines further down, by a SEPARATE `GetEntityType ~= 3` check —
+    -- both are now server/entities.lua's shared ResolveNetworkEntity(),
+    -- called with expectedEntityType = 3 to fold the type restriction in
+    -- as one call. Behavior unchanged: still object-only, still fails
+    -- closed on any mismatch, never trust the client's own
+    -- IsLikelyDoorEntity() UX gate as the real check.
+    local doorEntity = ResolveNetworkEntity(doorNetId, 3)
+    if not doorEntity then
+        return -- silent no-op: not a real, currently-existing object entity
     end
 
     -- ...and confirm the caller is actually near the entity they're
     -- claiming to be scratching at, not just naming an arbitrary networked
     -- entity anywhere on the map (any vehicle, any player's ped, etc.).
+    -- Cheap defense-in-depth on top of the object-type check above (closes
+    -- the narrower residual case the pre-implementation review flagged: an
+    -- attacker who is genuinely standing within interactDistance of a real
+    -- bystander could otherwise still supply that bystander's own ped/
+    -- vehicle netId — the object-type check above already rejects that
+    -- regardless, but this proximity check is independent, not redundant,
+    -- since a real door object could still be far away).
     local ped = GetPlayerPed(src)
     local dist = #(GetEntityCoords(ped) - GetEntityCoords(doorEntity))
     if dist > (Config.DoorInteraction.interactDistance + DOOR_SCRATCH_DISTANCE_TOLERANCE) then
         return -- silent no-op: claimed door is not actually near the caller
-    end
-
-    -- Cheap defense-in-depth on top of the distance check above (closes the
-    -- narrower residual case the pre-implementation review flagged: an
-    -- attacker who is genuinely standing within interactDistance of a real
-    -- bystander could otherwise still supply that bystander's own ped/
-    -- vehicle netId and have a "scratch" alert broadcast anchored to them
-    -- server-wide). GetEntityType returns 1 for a ped, 2 for a vehicle, 3
-    -- for an object — door props are objects, so reject anything else
-    -- outright, on top of (not instead of) the proximity check above.
-    if GetEntityType(doorEntity) ~= 3 then
-        return -- silent no-op: claimed entity isn't an object (e.g. a ped/vehicle), never trust the client's own IsLikelyDoorEntity() UX gate as the real check
     end
 
     -- Both checks must run BEFORE either stamps (preserved from the

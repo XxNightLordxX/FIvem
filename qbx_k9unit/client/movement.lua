@@ -164,7 +164,10 @@
     - 'qbx_k9unit:client:playDoorScratch' (doorNetId: number) [THIS FILE]
       Mirrors client/main.lua's existing playBark handler exactly (resolve
       the network entity, no-op if not streamed in/nonexistent, play a
-      sound) — per SPEC.md §11.4 item 6.
+      sound) — per SPEC.md §11.4 item 6. The resolve step calls
+      client/main.lua's global ResolveNetworkEntity(netId)
+      (REFACTOR_ROADMAP.md near-term item 2) rather than re-implementing
+      it locally.
     ======================================================================
 ]]
 
@@ -1073,15 +1076,14 @@ end
 --- here, since a client should never assume a netId it receives over the
 --- network still resolves to something real by the time this fires
 --- (streamed out between broadcast and receipt is a normal, expected race,
---- not an error worth logging/notifying about).
+--- not an error worth logging/notifying about). The resolve-and-guard
+--- sequence itself is now client/main.lua's shared ResolveNetworkEntity()
+--- (REFACTOR_ROADMAP.md near-term item 2) — this was previously this
+--- file's own independent copy of the identical sequence.
 --- @param doorNetId number
 RegisterNetEvent('qbx_k9unit:client:playDoorScratch', function(doorNetId)
-    if not NetworkDoesEntityExistWithNetworkId(doorNetId) then
-        return -- this client doesn't have the door entity streamed in at all
-    end
-
-    local entity = NetworkGetEntityFromNetworkId(doorNetId)
-    if entity == 0 or not DoesEntityExist(entity) then return end
+    local entity = ResolveNetworkEntity(doorNetId)
+    if not entity then return end
 
     PlaySoundFromEntity(-1, DOOR_SCRATCH_SOUND_NAME, entity, DOOR_SCRATCH_SOUND_SET, false, 0)
 end)

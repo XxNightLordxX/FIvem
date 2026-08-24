@@ -113,6 +113,13 @@
       server/cooldowns.lua tracker instance, per REFACTOR_ROADMAP.md item 1
       — see each one's own doc comment for why it exists and which original
       hand-rolled table it replaced).
+    - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)`,
+      exposed by server/entities.lua (REFACTOR_ROADMAP.md near-term item 2),
+      inside HandleSearchTarget below — do not re-implement the
+      resolve/existence-guard sequence here. HandleSearchTarget's own
+      targetType-vs-GetEntityType cross-check is NOT delegated to that
+      helper and stays local to this file — see HandleSearchTarget's own
+      comment for why.
     ======================================================================
 ]]
 
@@ -449,8 +456,20 @@ end
 --- @param requestedAt number -- GetGameTimer() at the moment the flat cooldown check passed, reused as the single timestamp for both cooldown stamps
 --- @return table result
 local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
-    local entity = NetworkGetEntityFromNetworkId(targetNetId)
-    if entity == 0 then
+    -- REFACTOR_ROADMAP.md near-term item 2: was
+    -- `NetworkGetEntityFromNetworkId(targetNetId)` + a bare `entity == 0`
+    -- check, no DoesEntityExist call. Now server/entities.lua's shared
+    -- ResolveNetworkEntity(), called WITHOUT expectedEntityType — the
+    -- targetType-vs-GetEntityType cross-check immediately below branches
+    -- into further person-only resolution logic beyond a simple
+    -- reject-or-continue gate, so it stays entirely at this call site,
+    -- exactly as before, and is NOT folded into the shared resolver. NOTE:
+    -- ResolveNetworkEntity also adds a DoesEntityExist guard this call
+    -- site never had — a deliberate, disclosed STRENGTHENING of this
+    -- existence check, not a weakening (see ResolveNetworkEntity's own doc
+    -- comment for why this isn't expected to change observed behavior).
+    local entity = ResolveNetworkEntity(targetNetId)
+    if not entity then
         return { ok = false, reason = 'invalid_target' }
     end
 

@@ -1,5 +1,39 @@
 # qbx_k9unit — Technical Debt / Refactor Roadmap
 
+**Revision 4 — near-term item 2 landed, coder-architect pass, 2026-08-24.**
+Near-term item 2 below (the shared `ResolveNetworkEntity` defensive-netId-
+resolution helper) **shipped** this pass as a client-side global in
+`client/main.lua` plus a new `server/entities.lua` (see that file's own
+header for why a new file rather than joining `server/cooldowns.lua` — the
+roadmap left the choice open, and this pass reads item 1's own "one
+new file per responsibility" precedent as favoring a dedicated file, not
+one shared catch-all utils module). Client-side, reading the actual
+current code at the start of this pass found the 4-copy count already
+partially self-corrected: an earlier, undocumented-in-this-roadmap dedup
+pass had already consolidated `client/main.lua`'s `playBark` handler and
+`client/search.lua`'s `playContrabandAlert` handler onto one shared
+`PlaySoundOnNetworkEntity()` — so only 3 independent client-side resolve
+implementations remained (`PlaySoundOnNetworkEntity` itself,
+`client/vehicle.lua`'s `ResolveVehicleFromState`, and
+`client/movement.lua`'s `playDoorScratch` receiver), not 4. All 3 now call
+the new `ResolveNetworkEntity()`; `playContrabandAlert` picks it up
+transitively through `PlaySoundOnNetworkEntity` and needed no direct edit.
+Server-side, both `relayDoorScratch` (now passing `expectedEntityType = 3`
+to fold its object-only restriction into the same call) and
+`HandleSearchTarget` (called without `expectedEntityType` — its
+`targetType`-vs-`GetEntityType` cross-check stays at the call site exactly
+as this item specified) were migrated with their existing entity-type/
+proximity checks preserved. One disclosed, deliberate exception:
+`HandleSearchTarget` previously had no `DoesEntityExist` guard at all (only
+an `entity == 0` check) — the shared resolver adds one for every caller,
+a strengthening, not a weakening, flagged explicitly rather than folded in
+silently; see `server/entities.lua`'s own doc comment and
+`server/search.lua`'s `HandleSearchTarget` comment for the full reasoning
+on why this isn't expected to change observed behavior. `luac5.4 -p` and
+`luacheck` (with `ResolveNetworkEntity` added to the root `.luacheckrc`'s
+cross-file-globals list) both report 0 warnings/0 errors across the whole
+resource. See the **"STATUS: DONE"** marker on the item 2 heading below.
+
 **Revision 3 — near-term item 1 landed, watchdog Pass #4, 2026-08-23.**
 Near-term item 1 below (the shared `NewCooldown`/`NewNestedCooldown`/
 `NewMutex` extraction) **shipped** in commit `ac29069` as
@@ -327,7 +361,17 @@ overdue — do it before Phase 3 (`PHASE3_SPEC.md`) adds its own cooldowns
 using the same hand-rolled convention, which would make this a 12+-table
 migration instead of an 11-table one.
 
-#### 2. Extract the "resolve network entity defensively" helper — same call, now backed by 6 real instances instead of 2 — **STATUS: still open**
+#### 2. Extract the "resolve network entity defensively" helper — same call, now backed by 6 real instances instead of 2 — **STATUS: DONE (2026-08-24, coder-architect)**
+
+**Landed this pass** as `client/main.lua`'s `ResolveNetworkEntity(netId)`
+(client-side) and `server/entities.lua`'s `ResolveNetworkEntity(netId,
+expectedEntityType?)` (server-side, new file — see that file's own header
+for the "new file vs. join cooldowns.lua" decision and reasoning). See the
+Revision 4 note at the top of this document for the full verification
+detail, including the one disclosed exception (a strengthened, not
+weakened, existence check picked up by `HandleSearchTarget`). The
+write-up immediately below is retained as the original problem statement
+for the record, not because the item is still open.
 
 **Confirmed still open this pass** — `ac29069` (item 1 above) did not touch
 this pattern; still 6 independent copies, no `ResolveNetworkEntity` helper
