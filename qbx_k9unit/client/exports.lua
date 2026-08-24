@@ -75,14 +75,30 @@
 ]]
 
 --- Copies a tier-shaped table (xp/label/speedMultiplier/scentRange) into a
---- fresh table — same rationale as server/exports.lua's ShallowCopyTier:
+--- fresh table — same rationale as server/exports.lua's CopyTier:
 --- never hand out a live reference to this file's own cached state.
 --- @param tier table
 --- @return table copy
-local function ShallowCopyTier(tier)
+local function CopyTier(tier)
+    -- WHY THIS RECURSES, given Config.XPTiers is flat today: the whole point
+    -- of copying is that GetXPTier() internally returns the SHARED
+    -- Config.XPTiers[n] reference, so handing it out raw would let any
+    -- consumer mutate movement speed for every K9 in that tier, server-wide
+    -- and for the rest of this resource's uptime. A shallow copy closes that
+    -- for the current flat shape (xp/label/speedMultiplier/scentRange, all
+    -- scalars) -- but it would SILENTLY STOP protecting the moment anyone
+    -- adds a nested field, e.g. a per-tier perks list. Nothing would error,
+    -- no test would fail, and the hole would just be open again. That
+    -- "a control quietly stops working and says nothing" failure mode has
+    -- bitten this resource repeatedly, so this recurses instead of relying
+    -- on a shape assumption a future editor has no reason to know about.
     local copy = {}
     for key, value in pairs(tier) do
-        copy[key] = value
+        if type(value) == 'table' then
+            copy[key] = CopyTier(value)
+        else
+            copy[key] = value
+        end
     end
     return copy
 end
@@ -195,7 +211,7 @@ end)
 
 --- The last server-pushed tier snapshot for the local player, or nil
 --- before the first 'qbx_k9unit:client:xpTierChanged' event has arrived
---- this session — ALWAYS a fresh copy (see ShallowCopyTier above), never
+--- this session — ALWAYS a fresh copy (see CopyTier above), never
 --- client/progression.lua's own cached table reference.
 --- @return table? { xp: number, label: string, speedMultiplier: number, scentRange: number }
 exports('GetCurrentXPTier', function()
@@ -203,7 +219,7 @@ exports('GetCurrentXPTier', function()
 
     local ok, tier = pcall(GetCurrentXPTier)
     if not ok or type(tier) ~= 'table' then return nil end
-    return ShallowCopyTier(tier)
+    return CopyTier(tier)
 end)
 
 -- ======================================================================

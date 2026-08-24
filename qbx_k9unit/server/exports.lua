@@ -45,7 +45,7 @@
        citizenid in that bracket. Handing that reference to an external
        resource would let a caller's `tier.speedMultiplier = 999` corrupt
        movement speed for every K9 in that tier, server-wide, for the rest
-       of this resource's uptime. Copy first, always — see ShallowCopyTier
+       of this resource's uptime. Copy first, always — see CopyTier
        below.
     4. THIS FILE WRAPS, IT DOES NOT REIMPLEMENT. Every export below is a
        thin wrapper around an existing resource-global function or a
@@ -280,10 +280,26 @@
 --- file must never let an external caller obtain a live reference to it.
 --- @param tier table
 --- @return table copy
-local function ShallowCopyTier(tier)
+local function CopyTier(tier)
+    -- WHY THIS RECURSES, given Config.XPTiers is flat today: the whole point
+    -- of copying is that GetXPTier() internally returns the SHARED
+    -- Config.XPTiers[n] reference, so handing it out raw would let any
+    -- consumer mutate movement speed for every K9 in that tier, server-wide
+    -- and for the rest of this resource's uptime. A shallow copy closes that
+    -- for the current flat shape (xp/label/speedMultiplier/scentRange, all
+    -- scalars) -- but it would SILENTLY STOP protecting the moment anyone
+    -- adds a nested field, e.g. a per-tier perks list. Nothing would error,
+    -- no test would fail, and the hole would just be open again. That
+    -- "a control quietly stops working and says nothing" failure mode has
+    -- bitten this resource repeatedly, so this recurses instead of relying
+    -- on a shape assumption a future editor has no reason to know about.
     local copy = {}
     for key, value in pairs(tier) do
-        copy[key] = value
+        if type(value) == 'table' then
+            copy[key] = CopyTier(value)
+        else
+            copy[key] = value
+        end
     end
     return copy
 end
@@ -294,7 +310,7 @@ end
 -- baseline (see server/progression.lua's ResolveTier doc comment), reused
 -- here rather than inventing a second one.
 local function BaseTierCopy()
-    return ShallowCopyTier(Config.XPTiers[1])
+    return CopyTier(Config.XPTiers[1])
 end
 
 -- ======================================================================
@@ -409,7 +425,7 @@ exports('GetXP', function(citizenid)
 end)
 
 --- The resolved Config.XPTiers entry for `citizenid`'s current XP total —
---- ALWAYS a fresh copy (see DESIGN PRINCIPLES item 3; ShallowCopyTier
+--- ALWAYS a fresh copy (see DESIGN PRINCIPLES item 3; CopyTier
 --- above), never the shared Config.XPTiers[n] reference the internal
 --- GetXPTier() returns. Defaults to a copy of the base tier for an
 --- unknown/invalid citizenid or if the wrapped global is unavailable —
@@ -424,7 +440,7 @@ exports('GetXPTier', function(citizenid)
 
     local ok, tier = pcall(GetXPTier, citizenid)
     if not ok or type(tier) ~= 'table' then return BaseTierCopy() end
-    return ShallowCopyTier(tier)
+    return CopyTier(tier)
 end)
 
 -- ======================================================================
