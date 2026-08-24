@@ -122,6 +122,18 @@ Config.Features = {
     -- (Config.BoneSweepTool.AcePermission), so this flag alone does not make
     -- it reachable -- but treat the flag as the real switch and leave it off.
     BoneSweepDevTool     = false,
+    -- OPERATIONAL CAVEAT, and it matters most for THIS flag specifically.
+    -- Nothing in this resource flips a Config.Features.* flag while running:
+    -- every feature gates its RegisterCommand/RegisterNetEvent calls ONCE, at
+    -- file-load or onResourceStart time. That is deliberate ("gate at
+    -- registration, not inside the handler") and it is what makes a disabled
+    -- feature genuinely inert rather than merely hidden.
+    -- The consequence: turning this flag ON, restarting, then turning it back
+    -- OFF does NOT unregister /k9bonetool. It stays reachable until the NEXT
+    -- restart. For most features that is harmless. For this one it is not --
+    -- it spawns and attaches props on command. RESTART AFTER DISABLING IT.
+    -- (The ACE check still applies in that window; this is about not leaving
+    -- a dev tool registered on a production server at all.)
 
     -- Phase 5 (audio/props/advanced vision R&D)
     AdvancedBarkRadial   = false,

@@ -1,49 +1,88 @@
 # qbx_k9unit — Status & Decisions Needed
 
-Written 2026-08-24. Covers the whole resource as it stands, and lists the
-calls that are genuinely yours to make rather than ours.
+Written 2026-08-24, rewritten the same day after roughly 15 more commits
+landed on top of the first draft. Covers the whole resource as it stands
+right now, and lists the calls that are genuinely yours to make rather than
+ours. If you only read one document in this repo before deciding anything,
+read this one — everything else is detail underneath it.
 
-Nothing in this document is urgent in the "production is broken" sense —
-**every feature built this session ships `false` by default**, and the five
-Phase 1 features that are `true` have been re-verified conformant. The
-decisions below gate whether any of the rest gets switched on.
+Nothing here is urgent in the "production is broken" sense. **Every feature
+built this session still ships `false` by default**, and the five Phase 1
+features that ship `true` have been re-verified conformant repeatedly. The
+decisions below gate whether any of the rest ever gets switched on.
+
+Two other groups are looking at this resource in parallel right now (config
+tuning and release/security readiness). Their findings aren't in yet, so a
+couple of items below (D4, D5, D6) may pick up more detail shortly — treat
+this document as current as of today, not as the last word on numeric
+tuning.
 
 ---
 
 ## 1. Where the resource actually stands
 
-29 Lua files, 91 commits. Lint and syntax are at a genuine zero across the
-resource, and CI runs both on every push.
+**48 Lua files on disk, every one of them loaded.** `config.lua` is the one
+shared script; the other 46 resource files are split across
+`fxmanifest.lua`'s `client_scripts`/`server_scripts` lists exactly as
+written, with nothing orphaned and nothing missing. That's new since the
+first draft of this document — at that point several finished files
+(exports, the admin/audit surface, the tenure bonus, the NUI audio bridge,
+the contraband screen effect) existed on disk but weren't wired in. That gap
+is closed. Lint and syntax are at a genuine zero across the resource, and CI
+runs both on every push.
 
-**Live today** (`true` in `config.lua`): leash mechanics, radial menu,
-vehicle entry/exit, basic bark, basic jump/crouch.
+**Forty `Config.Features` flags exist; five are on.** (An earlier draft of
+this document said "thirty-one" — that was already stale when written and
+is more so now; forty is a fresh count against today's `config.lua`.)
 
-**Built and reviewed, shipping off**: scent/blood/gunpowder tracking,
-contraband search + audit log, thermal/night vision, door scratch and
-nudge, bite-and-hold, non-lethal takedown, prop dragging, advanced agility
-vault, K9 inventory stash, medkit, XP progression, the five-stat wellbeing
-system, health/stamina HUD, deployable kennel, advanced bark radial,
-handler partnership registry.
+**Live today** (`true` by default): leash mechanics, radial menu, vehicle
+entry/exit, basic bark, basic jump/crouch.
 
-**Landed since this document was written (correction, not a rewrite of the
-original list):** HandlerDownDefense, Recall, contraband screen FX end to
-end, and the client-event origin check are all now implemented and wired
-into `fxmanifest.lua` — none of them are "in flight" anymore. The NUI audio
-bridge (`client/audio.lua`) is also wired into `fxmanifest.lua`, but still
-has no caller in the manifest today (`client/main.lua`'s bark relay hasn't
-been switched over, and its other intended consumer,
-`client/proximityaudio.lua`, is itself not yet in the manifest). **New
-in-flight work as of this correction**: `ProximityAudioFX`, `PropAttachments`,
-and `FetchMechanic` now have real client/server code on disk, none of it
-registered in `fxmanifest.lua` yet. See `README.md`'s Known Issues section
-for the current, fast-moving state of exactly what is and isn't wired in —
-this resource is being edited by multiple agents in parallel and this list
-should be expected to keep changing.
+**Built, reviewed, and reachable in-game, shipping `false`**: scent/blood/
+gunpowder tracking, contraband search + audit log, thermal/night vision,
+door scratch and nudge, bite-and-hold, non-lethal takedown, prop dragging,
+advanced agility vault, handler-down defense, handler partnership registry,
+Recall, K9 inventory stash, medkit, XP progression, the five-stat wellbeing
+system, health/stamina HUD, deployable kennel, advanced bark radial, prop
+attachments, the fetch mechanic, proximity audio, the contraband screen
+effect, the admin/audit surface, and partnership-tenure bonuses.
+
+**New since the first draft of this document, one line each:**
+
+- **Recall** (`/k9recall`, `server/recall.lua` + `client/recall.lua`) — the
+  handler's "call the dog off" button, ending whatever bite/takedown/drag
+  their partnered K9 currently holds. Deliberately never blocked by
+  certification state, by design — see D2's "no unbounded trap" rule.
+- **Prop attachments** — a cosmetic vest/harness the K9 can toggle on
+  itself. Code-complete; the attach point is a placeholder until D8 below is
+  done.
+- **Fetch** — throw a ball, the K9 fetches it, the handler collects it back
+  manually (nothing here scripts a player's movement). Ships in a safe
+  "delete and re-appear" mode rather than a real mouth-carry, pending D8.
+- **Proximity audio** — ambient K9 sound that fades with listener distance,
+  built on the same silent-until-supplied audio bridge as bark sounds. See
+  D7.
+- **The contraband screen effect** — a brief screen effect for the
+  *searching* K9's own handler (never the person being searched) when a
+  search turns up a large stash. One historical documentation bug about this
+  feature is worth knowing about — see §6.
+- **The admin/audit surface** (`/k9auditcert`, `/k9auditpartner`,
+  `/k9auditsearch`) — read-only, ACE-gated commands over the certification,
+  partnership, and search-log tables, so an admin no longer has to run raw
+  SQL by hand. Zero mutation paths.
+- **Partnership-tenure bonuses** — a one-time flat XP reward (15/40/100 XP)
+  when a handler-K9 partnership stays continuously active for 1, 7, and 30
+  days. Needs both `HandlerPartnership` and `XPProgression` on to do
+  anything.
+- **SQL migrations** (`sql/migrations/0001`–`0003`) — for a database that
+  already ran an older `install.sql`. A brand-new install only ever needs
+  the current `sql/install.sql`, which already includes everything the
+  migrations add.
 
 **Researched and deliberately not built**: `CameraFeedPiP` — no native
-exists to render a secondary camera into a NUI texture. There is an open
-upstream citizenfx issue requesting exactly that native. This one is
-closed as impossible, not deferred.
+exists to render a secondary camera into a NUI texture. There's an open
+upstream CitizenFX issue requesting exactly that native. This one is closed
+as impossible, not deferred.
 
 ---
 
@@ -51,100 +90,113 @@ closed as impossible, not deferred.
 
 ### D1. Which features do you actually want on?
 
-This is the big one and everything else is downstream of it. Thirty-one
-feature flags exist; five are on. We built to spec, but we don't know your
-server's appetite — a K9 unit that can drag downed players and bite
-suspects is a very different fit from one that tracks scent and searches
-trunks.
+This is the big one and everything else is downstream of it. Forty feature
+flags exist; five are on. We built to spec, but we don't know your server's
+appetite — a K9 unit that can drag downed players and bite suspects is a
+very different fit from one that tracks scent and searches trunks.
 
-Suggest picking a first tranche to enable and playtest, rather than
-flipping everything. The tracking/search set (`ScentTracking`,
-`BloodTracking`, `GunpowderSniffing`, `SearchZones`, `ContrabandAlerts`)
-is the lowest-risk group — read-only, no player-vs-player state, and the
-most thoroughly reviewed. Combat is the highest-risk group, for reasons in
-D2.
+Suggest picking a first tranche to enable and playtest, rather than flipping
+everything. The tracking/search set (`ScentTracking`, `BloodTracking`,
+`GunpowderSniffing`, `SearchZones`, `ContrabandAlerts`) is the lowest-risk
+group — read-only, no player-vs-player state, and the most thoroughly
+reviewed and re-reviewed of anything in this resource. Combat is the
+highest-risk group, for reasons in D2.
 
 **Caveat on `ScentTracking` specifically**: it needs a one-time live check
 first, see D6.
 
 ### D2. Do Category B combat effects ship, knowing a modified client can ignore them?
 
-Bite-and-hold, non-lethal takedown and prop dragging split into two kinds
+Bite-and-hold, non-lethal takedown, and prop dragging split into two kinds
 of effect. **Category A** (the attach in prop dragging) is server-applied
 and holds against a hostile client. **Category B** (movement restriction,
 forced ragdoll, damage bracket) is inherently local — it only means
-anything if the *target's own client* executes it, and a modified client
-can simply decline.
+anything if the *target's own client* executes it, and a modified client can
+simply decline.
 
 We shipped Category B under five guardrails, the important one being that
 no server-authoritative consequence is ever gated on a Category B signal
 succeeding. Non-compliance is detected and logged, never punished
-automatically.
+automatically — the config option for what happens on a detected violation
+is hard-limited to `'log'` or `'notify_staff'`, never an automatic kick or
+ban.
 
 **Your call**: accept that a cheater can shrug off a bite hold, or keep
 these three features off. There is no third option — this is a property of
-how FiveM distributes entity authority, not something more code fixes.
-Most servers accept it; we're flagging it rather than letting you discover
-it from a player complaint.
+how FiveM distributes entity authority, not something more code fixes. Most
+servers accept it; we're flagging it rather than letting you discover it
+from a player complaint.
 
-### D3. Ship the client-event origin check on medium-high confidence, or verify in-engine first?
+### D3. The client-event origin check shipped resource-wide — still worth an in-engine confirmation before you lean on it for combat
 
-A real exploit was found and fixed this session: client-side net event
-handlers could not distinguish a genuine server message from a local
-`TriggerEvent` the player fired themselves. Any player could loop one call
-for indefinite invincibility — **with the features switched off**, because
-only the server checked the flags and that path never reached the server.
+A real exploit was found and fixed this session: a client-side event
+handler couldn't originally tell a genuine server message from a local call
+the player fired at themselves. Any player could loop one call for
+indefinite invincibility — **with every feature switched off**, because
+only the server checked the feature flags and that path never reached the
+server.
 
-Per-mechanic gating closed the flags-off case. The deeper fix is
-`if source ~= 65535 then return end` at the top of each handler, which is
-CitizenFX's own documented pattern from their security guide.
+The fix (`if source ~= 65535 then return end` at the top of each handler,
+CitizenFX's own documented pattern) is now applied resource-wide — every
+client-side event handler in every file carries it, not just the mechanic
+where it was first found.
 
-**But we graded it medium-high, not certain.** We confirmed from primary
-source that the native behind `TriggerEvent` takes no origin parameter, and
-found the official pattern in CFX's docs — but we could not reach the
-forums or trace the C++ path that populates `source` on network receive.
-The recommendation is an empirical in-engine check before trusting it.
+**But it's still graded medium-high confidence, not certain, and that
+hasn't changed since the first draft of this document.** We confirmed from
+primary source that the native behind a local `TriggerEvent` call takes no
+origin parameter, and found the official pattern in CitizenFX's own docs —
+but we could not reach the forums or trace the C++ path that populates
+`source` on a real network receive, to independently confirm the
+server-genuine case is reliably the number `65535` rather than, say, a
+string. Nobody has run the five-minute empirical check yet (print `source`
+and its type once from a real server trigger and once from a locally forged
+one, and compare).
 
-**Your call**: ship it as-is (it's strictly better than nothing and costs
-one line per handler), or have someone confirm on a dev server first. If
-you enable any combat feature, this matters more.
+**Your call**: trust it as shipped (it's strictly better than nothing and
+already applied everywhere), or have someone run that empirical check on a
+dev server before enabling any combat feature. The more of Category B combat
+(D2) you turn on, the more this one matters.
 
 ---
 
-## 3. Decisions about the XP economy
+## 3. Resolved since the first draft — tune the numbers if you like
 
-Two real defects were found in audit. Both need a product call, not just a
-code fix.
+Two real defects were found in this session's economy audit. Both are now
+fixed in code; what's left is a numbers question, not a decision that
+blocks anything.
 
-### D4. What should the XP tier scent bonus actually be?
+### D4. The XP tier scent bonus was dead — it's now a working multiplier. Tune the numbers if you want a bigger effect.
 
-`Config.XPTiers` grants `scentRange` per tier — 5.0 / 6.5 / 8.0 / 10.0
-from Recruit to Elite. It is applied as a floor against the tracking
-config's own `maxRange`, which is **40.0 for every track type**. Since even
-the Elite value never exceeds 40, this bonus has never done anything. The
-"scent range grows with XP" reward is numerically dead as shipped.
+`Config.XPTiers` used to grant a flat `scentRange` per tier (5.0 / 6.5 / 8.0
+/ 10.0 meters) applied as a floor against the tracking config's own
+`maxRange` — which defaults to 40.0 for every track type. Since even the
+Elite tier's value never exceeded 40, the bonus never did anything from the
+day it shipped.
 
-**Your call**: pick real numbers above 40 (something like 42/48/55/65), or
-change the mechanic to a multiplier over each type's own range. The second
-is cleaner but changes the balance shape.
+It's now `scentRangeMultiplier` — a multiplier over each track type's own
+`maxRange` instead of a flat floor. Shipped values: 1.00 / 1.05 / 1.10 /
+1.20 across the four tiers (Recruit through Elite), so an Elite K9 tracks
+20% farther than a Recruit one. These are still placeholder balance numbers
+— tune them freely in `Config.XPTiers` if you want a bigger or smaller
+spread.
 
-### D5. How should contraband-search XP be limited?
+### D5. Contraband-search XP could be farmed — it's now capped to real police work. No action needed unless you want to retune it.
 
-`searchContrabandFound` awards 25 XP whenever a search finds contraband.
-The only limiter is a 10-second per-target cooldown, and the result is
-computed deterministically from real inventory contents. A handler can
-plant contraband in their own trunk and re-search it every 10 seconds:
-roughly 9,000 XP/hour, reaching the top tier in under half an hour with no
-travel and no risk.
+`searchContrabandFound` awards 25 XP whenever a search finds contraband,
+originally limited only by a 10-second per-target cooldown. Since the
+result is deterministic from real inventory contents, a handler could plant
+contraband in their own trunk and re-search it every 10 seconds for roughly
+9,000 XP/hour.
 
-Two sibling awards got anti-farm floors this session — a minimum travel
-distance for track sources, a minimum hold duration for bite-and-hold.
-This one never did.
-
-**Your call, roughly in order of effort**: require the contraband to change
-or be seized between awards; add a long XP-eligible cooldown per
-(searcher, target) separate from the anti-harassment cooldown; or cap
-daily XP from searches.
+The fix: XP for a given search target is now only paid the first time
+contraband is found there, and again only if that target's contraband
+composition has genuinely changed since the last payout (a top-up, a
+partial seizure, a full seizure-and-replant all count as "changed";
+re-searching an untouched stash any number of times pays nothing further).
+A real officer working a scene where contraband keeps changing keeps
+earning normally; a farmer who never touches their own planted stash can't
+re-earn from it. No action needed from you here — just noting it's closed,
+in case you want to retune the 25 XP figure itself.
 
 ---
 
@@ -152,69 +204,94 @@ daily XP from searches.
 
 ### D6. Run the one-time `ox_inventory` check for scent tracking?
 
-Scent tracking depends on `exports.ox_inventory:registerHook('swapItems', ...)`.
-The hook name and payload shape were confirmed by reading ox_inventory's
-source directly — the docs site is unreachable from our environment — but
-never verified against a live install. The recommended check is logging the
-payload once on a dev server to confirm field names before trusting it.
+Scent tracking depends on `exports.ox_inventory:registerHook('swapItems',
+...)`. The hook name and payload shape were confirmed by reading
+`ox_inventory`'s own source directly (and, since the first draft of this
+document, cross-checked a second time against its current live upstream
+source, which matches exactly) — but never verified against a live install
+you actually run. This has also been hardened since the first draft: the
+hook now only registers if a runtime check confirms it actually exists on
+your build of `ox_inventory`, and prints one clear warning and disables
+scent tracking cleanly if it doesn't, rather than failing silently or
+crashing the resource.
 
+The recommended check is still logging the payload once on a dev server to
+confirm field names before trusting it in production — a five-minute job,
+now lower-stakes than when this was first written, but not yet done.
 `Config.Features.ScentTracking` stays `false` until someone does this.
-It's a five-minute job for anyone with a dev server.
 
 ### D7. Supply bark audio, or accept silence?
 
-Every bark in this resource is a placeholder soundset name that resolves to
-a harmless no-op. There is no real audio anywhere, and the advanced bark
-radial widened that gap rather than closing it — it now has three silent
-variants instead of one.
+Every bark in this resource — the Phase 1 generic bark and all three
+`AdvancedBarkRadial` variants — is a placeholder soundset name that
+resolves to a harmless no-op. The new proximity-audio feature uses the same
+audio bridge and is silent for the same reason. **No audio files ship
+anywhere in this resource.** We deliberately did not fabricate or download
+any.
 
-The cheaper path we identified is extending the NUI bridge (in progress),
-which drops the requirement from "author RAGE `.awc`/`dat151`/`dat54` audio
-banks" to "supply three licensed `.ogg` files."
+The cheaper path we identified is a small NUI audio bridge (built, wired
+in, currently silent), which drops the requirement from "author RAGE
+`.awc`/`dat151`/`dat54` audio banks" to "supply four short, genuinely Ogg
+Vorbis `.ogg` files."
 
-**Your call**: source three `.ogg` files, commission them, or accept that
-barks stay silent and drop `AdvancedBarkRadial` from your enable list.
-We deliberately did not fabricate or download any audio.
+**Your call**: source or commission four `.ogg` files (see
+`html/sounds/CREDITS.md` for the exact filenames and a few unverified
+leads), or accept that barks and proximity audio stay silent and drop
+`AdvancedBarkRadial`/`ProximityAudioFX` from your enable list.
 
-### D8. Run the bone-index sweep for prop attachments and fetch?
+### D8. Run the bone-index sweep — it now finishes two features that are otherwise shipped, rather than unblocking work that doesn't exist yet.
 
-Three separate research passes failed to find a documented bone name for a
-quadruped skeleton, and reading two open-source dog scripts found nobody
-attaching props to an animal ped at all. The reframe that unblocks it:
-`AttachEntityToEntity` needs a bone **index**, not a name, and
-`GetWorldPositionOfEntityBone` is entity-type-agnostic — so the real method
-is a short in-engine sweep to identify the right index visually.
+This was previously "run it, or leave both features unbuilt." That's no
+longer accurate: `PropAttachments` and `FetchMechanic` are both fully built
+and playable today, and a dev-only sweep tool now exists
+(`client/bonetool.lua` + `server/bonetool.lua`, gated behind its own feature
+flag *and* an ACE permission, never enable on a live server) to answer the
+one remaining question — which numeric bone index on a dog skeleton is the
+right attach point for a vest or a mouth-carried item.
 
-This is a bounded ~20-line dev-server test, and it unblocks both
-`PropAttachments` (a visible vest) and `FetchMechanic`'s mouth carry.
+Until someone runs it: the vest attaches at the root bone (index 0), which
+is always valid and never crashes, but looks wrong. Fetch ships in a "delete
+and re-appear" mode instead of a real mouth-carry, which is fully playable
+but not as polished.
 
-**Your call**: run it, or leave both features unbuilt.
+**Your call**: run the sweep (a bounded, ~20-line, one-session dev-server
+test — the tool does the hard part) to get a correctly-placed vest and a
+real mouth-carry, or leave both features as-is; neither is blocked or unsafe
+without it, just less polished.
 
 ### D9. Confirm the kennel prop model?
 
 `client/kennel.lua` ships `prop_doghouse_01` on a single unverified source,
 with a documented fallback and a graceful failure path if the model never
 loads. Worth eyeballing on a dev server before enabling
-`DeployableKennel`. Low stakes — it degrades safely.
+`DeployableKennel`. Low stakes — it degrades safely to an obviously-wrong
+placeholder object rather than breaking anything.
 
 ---
 
 ## 5. Decisions about direction
 
-### D10. Which complementary work, if any?
+### D10. Which complementary work, if any? — the top three are now built.
 
-From `COMPLEMENTARY_FEATURES.md`, ranked by value-per-effort:
+The first draft of this document, quoting `COMPLEMENTARY_FEATURES.md`,
+recommended three things ranked by value-per-effort. All three are now
+built:
 
-1. **Ship an export/event surface.** This resource currently declares
-   **zero exports**. That makes it a prerequisite for almost any
-   integration with dispatch, MDT or evidence systems — not a nice-to-have.
-   Cheap.
-2. **In-game admin/audit surface** for the certification, partnership and
-   search-log tables. Today those are documented as raw SQL an admin runs
-   by hand. The data is already written; this is just a command wrapper.
-3. **Partnership-tenure bonuses.** The registry landed with no gameplay
-   consequence attached to it yet. The most direct payoff on infrastructure
-   already built.
+1. **An export/event API surface** — done (`server/exports.lua` /
+   `client/exports.lua`, 9 server exports, matching client-side display
+   exports, and six outbound events for other resources to listen for).
+   This was a real gap: the resource previously declared zero exports,
+   which made it a hard blocker for any dispatch/MDT/evidence integration.
+2. **An in-game admin/audit surface** — done (`/k9auditcert`,
+   `/k9auditpartner`, `/k9auditsearch`), replacing "an admin runs raw SQL by
+   hand" with three read-only, ACE-gated commands. No mutation path exists.
+3. **Partnership-tenure bonuses** — done (see the "new since" list in §1).
+
+`COMPLEMENTARY_FEATURES.md` has further ideas ranked below these three
+(dispatch integration, MDT/evidence integration, deeper XP-tier unlocks, a
+cooperative-search bonus, certification specializations) — none built, none
+urgent, worth a read if you want to plan further ahead once D1's first
+tranche is live.
 
 Verified maintained: `ps-dispatch`, `ps-mdt` (real evidence exports),
 `qbx_ambulancejob`/`qbx_medical`. Verified **dead**: `qbx_prison` is
@@ -226,11 +303,11 @@ them by convention.
 
 **Do not attempt this.** Verified against the FiveM engine's own C++ source
 (`ResourceDependencyLoader.cpp`, `ResourceManagerConstraintsComponent.cpp`,
-`ServerResources.cpp`, read directly from a clone of `citizenfx/fivem`):
-the `dependencies` block has **no version-constraint syntax at all**. A
-string is only treated as a constraint if it begins with `/`, and the only
+`ServerResources.cpp`, read directly from a clone of `citizenfx/fivem`): the
+`dependencies` block has **no version-constraint syntax at all**. A string
+is only treated as a constraint if it begins with `/`, and the only
 constraints the engine defines are `/server:BUILD`, `/onesync`,
-`/gameBuild:BUILD` and `/native:0xHASH`. Everything else is a literal
+`/gameBuild:BUILD`, and `/native:0xHASH`. Everything else is a literal
 resource-name lookup.
 
 So writing `'ox_inventory@2.47.9'` or `'ox_inventory >=2.47.9'` would not
@@ -241,49 +318,82 @@ encodes a version in a dependency entry.
 
 **What to do instead**, and this is the actual decision:
 
-- A documentation-only "last verified compatible" note in the manifest.
-  Verified this session by reading each dependency's source: `qbx_core`
-  1.24.0, `ox_lib` 3.39.0, `ox_target` 1.18.1, `oxmysql` 2.14.1,
-  `ox_inventory` 2.47.9. Honest caveat: these are "newest version the
-  assumptions were checked against," not proven minimums — nobody
-  git-blamed how far back each API goes.
-- A **runtime capability check** for `ox_inventory` specifically, which is
-  the only dependency with version-sensitive behaviour this resource relies
-  on. Checking that `registerHook` actually exists before letting
-  `ScentTracking` run is more trustworthy than a version string, because a
-  fork can self-declare any version it likes.
-
-**Your call on that last point**: hard `assert` (resource refuses to start)
-or soft-disable the feature with a warning. The recommendation is
-soft-disable — a missing hook makes the feature silently inert, not
-silently exploitable, and this resource reserves hard asserts for
-actively-dangerous states like the two access-control invariants.
+- A documentation-only "last verified compatible" note in the manifest,
+  already in `README.md` and re-checked twice since the first draft with no
+  drift found: `qbx_core` 1.24.0, `ox_lib` 3.39.0, `ox_target` 1.18.1,
+  `oxmysql` 2.14.1, `ox_inventory` 2.47.9. Honest caveat: these are "newest
+  version the assumptions were checked against," not proven minimums —
+  nobody git-blamed how far back each API goes.
+- A **runtime capability check** for `ox_inventory` specifically, the only
+  dependency with version-sensitive behavior this resource relies on. This
+  is now built (see D6) — the scent-tracking hook checks that
+  `registerHook` actually exists before running, and soft-disables with a
+  clear warning if it doesn't, rather than assuming a version string can be
+  trusted (a fork can self-declare any version it likes).
 
 ### D12. Cut a version?
 
-The resource is still `0.1.0`. A minor bump to `0.2.0` was recommended
-earlier on the grounds that everything added is additive and defaults off,
-so upgrading is a no-op for anyone who doesn't opt in. Worth doing once you
-settle D1.
+The resource is still `0.1.0` in `fxmanifest.lua`. A minor bump to `0.2.0`
+has been recommended since the first draft of this document, on the
+grounds that everything added is additive and defaults off, so upgrading is
+a no-op for anyone who doesn't opt in — and a changelog entry for `0.2.0` is
+already drafted and waiting in `CHANGELOG.md`. Worth doing once you settle
+D1.
 
 ---
 
-## 6. Things you should know but don't need to decide
+## 6. What this process got wrong
 
-- **Two headers described controls that did not exist.** One claimed an
-  inventory access mode that provided no access control whatsoever; one
-  claimed teardown call sites that were never written. Both are fixed, and
-  both were found by someone verifying a claim rather than trusting it.
-  Worth knowing the docs have been wrong in this specific way twice.
-- **A "real bug fix" was itself possibly broken.** The fix for a
-  non-lethal takedown that could kill omitted a native this resource's own
-  research notes list as required. Fixed, and disclosed as best-effort
-  because no success-check native is confirmed available.
-- **The partnership feature briefly had a join path and no leave path** —
-  the exact unbounded trap the design forbids. Being fixed now.
-- **`REFACTOR_ROADMAP.md` item 2 was marked done and wasn't** — four files
-  written afterwards re-created the pattern 11 times. Corrected, and the
-  migration is in progress.
+You're inheriting work from several rounds of AI-driven development on this
+resource. It caught its own mistakes every time listed below, and none of
+them reached a live server — but you should know the specific ways this
+process has been wrong, not just that it was eventually right.
 
-None of these need action from you. They're listed because a status
-document that only reports successes isn't worth reading.
+- **Documentation described security controls that did not exist, twice.**
+  Once, a config comment claimed a K9-inventory access mode
+  (`accessScope = 'ownerOnly'`) restricted a gear stash to its own K9 —
+  it never did, because the underlying `ox_inventory` check that mode
+  relied on doesn't compare against the caller's identity at all. It's now
+  hard-removed: setting that value crashes the resource on startup rather
+  than silently granting broader access than documented. Separately, a file
+  header claimed for some time that revoking a certification automatically
+  tore down that handler's active partnership — the function to do that
+  existed, but nothing ever called it, so the teardown silently never
+  happened until someone checked the claim against the code and wired the
+  missing calls in.
+- **A commit's own message described a fix that wasn't in that commit's
+  diff.** A commit claimed to fix inverted stamina math in the vitality
+  HUD; the code was in fact already correct, because a different,
+  concurrent piece of work had fixed the same thing moments earlier. No bug
+  reached you, but it's a reminder that a commit message asserting a fix is
+  not proof the fix is actually in that commit.
+- **A config comment described an effect landing on the wrong player.** The
+  comment above the contraband screen effect said it applied to the
+  *searched* person's screen; the code has always applied it to the
+  *searching* K9's own handler, as sensory feedback for the search, not a
+  penalty on a suspect. The comment was wrong, not the code — but a future
+  editor trusting only the comment could have "fixed" working code into
+  applying a disorienting effect to the wrong player.
+- **A shipped effect referenced an asset that doesn't exist.** The
+  contraband screen effect's timecycle modifier name,
+  `'drug_wobbly_shroom'`, isn't a real modifier — checked against a full
+  extraction of the game's own timecycle data, which has `'drug_wobbly'`
+  and nothing resembling the shipped name. The feature would have been
+  enabled, run without error, and simply shown nothing, forever, with no
+  clue in any log about why. Fixed to the real name.
+- **A security bug already fixed once reappeared in a new file.** An
+  unguarded "delete this networked object" handler in the deployable-kennel
+  feature let a forged client event delete *any* streamed entity on the
+  server, not just a kennel, and only worked at all because the handler
+  never checked its own feature flag first. That exact combination — no
+  flag check, no check that the target is actually the right kind of
+  object — was found and fixed in the kennel code, and then had to be found
+  and closed again in the newer prop-attachment/bone-sweep file pair before
+  those files were allowed into `fxmanifest.lua`. The underlying lesson
+  (a new file copying an old pattern can copy its bug too) is now a standing
+  item for whoever does security review on the next new feature.
+
+None of these needed action from you, and none are still open. They're
+listed because a status document that only reports successes isn't worth
+trusting, and because the next feature built on this codebase is more
+likely to repeat one of these five failure modes than to invent a new one.
