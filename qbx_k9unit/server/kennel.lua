@@ -201,22 +201,12 @@ local KennelModelHashes = {
     [GetHashKey(Config.DeployableKennel.fallbackPropModel)] = true,
 }
 
---- Sends an ox_lib notification to a specific player. Duplicated (not
---- shared) across this resource's server files by established convention —
---- see server/certifications.lua's NotifyPlayer comment for why
---- `ox_lib:notify` was chosen over exports.qbx_core:Notify, and
---- server/main.lua's own copy for why this tiny UI-plumbing helper isn't
---- worth a shared module.
---- @param target number
---- @param description string
---- @param notifyType string?
-local function NotifyPlayer(target, description, notifyType)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit',
-        description = description,
-        type = notifyType or 'inform',
-    })
-end
+-- NotifyPlayer used to be defined here as its own local copy (one of 12
+-- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- audit). It is now server/notify.lua's single shared resource-global
+-- implementation -- see that file's own header for the extraction writeup.
+-- Every call site below is unchanged: this file never passed a custom
+-- title, which is server/notify.lua's own default.
 
 --- Deletes the citizenid's active kennel (server-side attempt + broadcast
 --- backstop — see this file's header CLEANUP CONFIDENCE NOTE) and clears

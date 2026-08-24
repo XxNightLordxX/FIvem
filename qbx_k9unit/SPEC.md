@@ -59,12 +59,18 @@ a reuse of `LeashPairs`) — and the partnership registry itself has now
 mutually-consented "Partner Up"/"Break Partnership" handshake, DB-backed so
 it survives a disconnect/restart, exposing read accessors
 (`GetActivePartnerCitizenId`/`IsActivePartnerOf`) for a future consumer.
-**This is a foundation only, wiring no combat consequence of its own** —
-`HandlerDownDefense` and this document's own Recall mechanic, the two
-features this registry exists to unblock, are **still not built**; the
-registry unblocks them, it does not deliver them. A disclosed gap in the
-registry as shipped: nothing in its contract re-syncs a client's own view
-of an already-established partnership after that client reconnects or this
+**This registry is no longer wiring zero combat consequence.**
+`HandlerDownDefense` (`server/defense.lua` + `client/defense.lua`) and this
+document's own Recall mechanic (`server/recall.lua` + `client/recall.lua`,
+the `/k9recall` command) are both now real, implemented, and listed in
+`fxmanifest.lua` — an earlier revision of this paragraph said both were
+"still not built," which was accurate when written and is corrected here.
+Both still ship `Config.Features.HandlerDownDefense` / `.Recall` behind
+their own flags, and `HandlerDownDefense` additionally requires a
+"Partner Up" to have been completed at least once for the pair before it
+can ever fire. A disclosed gap in the partnership registry as shipped:
+nothing in its contract re-syncs a client's own view of an
+already-established partnership after that client reconnects or this
 resource restarts, so `client/partnership.lua`'s
 `IsPartnered()`/`GetPartnerServerId()` accessors can under-report ("not
 partnered") for a player who is genuinely still partnered server-side,
@@ -72,29 +78,52 @@ until a fresh consent-handshake event reaches that client — see
 `CHANGELOG.md`'s Known Limitations for the full detail. Phase 4 (inventory, progression, vitality) now has real
 implementations behind still-`false` flags for `HealthStaminaHUD`,
 `K9Inventory`, `K9Medkit`, the unified wellbeing subsystem (Fatigue/Mood/
-FearStress/Distraction/Injury), and `XPProgression`; only
-`ContrabandScreenFX` remains uncoded. Phase 5 (audio/props/camera R&D) now
+FearStress/Distraction/Injury), and `XPProgression`; `ContrabandScreenFX` is
+also code-complete and, as of this pass, wired end-to-end
+(`client/screenfx.lua` is listed in `fxmanifest.lua`, and `server/search.lua`
+fires the event it listens for on a qualifying contraband find) — an
+earlier revision of this paragraph said it "remains uncoded," which is now
+doubly stale (it was already code-complete client-side then, and is now
+also reachable in-game). It still ships `false`, and its timecycle-modifier
+name remains an unverified candidate. Phase 5 (audio/props/camera R&D) now
 also has real implementations behind still-`false` flags for
 `DeployableKennel` and `AdvancedBarkRadial` (the latter widens, rather than
 closes, §7's bark-audio placeholder-asset gap by adding three more
-placeholder sound names); `ProximityAudioFX`, `PropAttachments`,
-`FetchMechanic`, and `CameraFeedPiP` remain uncoded. A further research
-pass (`phase2_notes/phase5_remaining_features_research.md`) reframed, but
-did not close, the first three of those: `ProximityAudioFX`'s real blocker
-turns out not to be the audio mechanism at all (buildable on this
-resource's existing NUI bridge) but the complete absence of any "hidden
-suspect" detection primitive — Phase 2's tracking system resolves a
-static, logged coordinate, not a live, continuously-moving entity, and no
-such live-detection code exists anywhere in this resource; `PropAttachments`
-(and `FetchMechanic`'s identical mouth/jaw attach point) turn out not to
-need a documented bone *name* at all, only a bone *index*, obtainable by an
-in-engine `GetWorldPositionOfEntityBone` sweep against a live K9 model —
-reframing a previously indefinitely-blocked research question into one
-bounded, short engineering test. `CameraFeedPiP` was already concluded
-infeasible in a prior pass and was not re-researched. Coordinated directly by
+placeholder sound names). `ProximityAudioFX`, `PropAttachments`, and
+`FetchMechanic` also now have real client/server code
+(`client/proximityaudio.lua`; `client/propattachment.lua` +
+`server/propattachment.lua`; `client/fetch.lua` + `server/fetch.lua`) —
+an earlier revision of this paragraph said all three "remain uncoded,"
+which is stale at the source-file level. **None of the three are usable**,
+though: as of this pass none of those files are listed in
+`fxmanifest.lua`, so all three remain completely inert regardless of their
+flags — see `README.md`'s Known Issues section for the current,
+fast-moving state of exactly which files are and aren't wired in.
+`CameraFeedPiP` remains uncoded and confirmed infeasible — unchanged. A
+further research pass (`phase2_notes/phase5_remaining_features_research.md`)
+reframed, but did not by itself close, `ProximityAudioFX`'s and
+`PropAttachments`'/`FetchMechanic`'s real blockers before the
+implementations above landed: `ProximityAudioFX`'s real blocker turned out
+not to be the audio mechanism at all (buildable on this resource's
+existing NUI bridge, and now built) but the complete absence of any
+"hidden suspect" detection primitive — Phase 2's tracking system resolves
+a static, logged coordinate, not a live, continuously-moving entity, and
+the shipped `client/proximityaudio.lua` deliberately does not attempt that
+detection, scoping itself to distance-based ambient audio only, not a
+"hidden suspect" growl relay; `PropAttachments` (and `FetchMechanic`'s
+identical mouth/jaw attach point) turned out not to need a documented bone
+*name* at all, only a bone *index*, obtainable by an in-engine
+`GetWorldPositionOfEntityBone` sweep against a live K9 model — a
+dev-only sweep tool for exactly this now exists as
+`client/bonetool.lua`/`server/bonetool.lua`, also not yet wired into
+`fxmanifest.lua`. `CameraFeedPiP` was already concluded infeasible in a
+prior pass and was not re-researched. Coordinated directly by
 the top-level session (peer-agent-to-peer delegation is not available in
 this environment; see §10). *(Status paragraph refreshed 2026-08-24 — see
-`WATCHDOG_LOG.md` Pass #4/#5, which this rewrite is based on.)*
+`WATCHDOG_LOG.md` Pass #4/#5, which this rewrite is based on, and note that
+this resource's Phase 5 file set has kept changing after that pass; verify
+`fxmanifest.lua` directly before trusting any "wired"/"not wired" claim
+above if time has passed.)*
 Author: product-agent (spec pass) + top-level session (post-draft
 correction), jlwood17190665@gmail.com
 Date: 2026-08-23

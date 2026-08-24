@@ -1042,8 +1042,17 @@ Config.Wellbeing = {
 -- Default 0 is the root bone: always valid, never crashes, looks wrong.
 -- ======================================================================
 Config.PropAttachments = {
-    propModel         = 'prop_bodyarmour_02', -- UNVERIFIED, degrades to a no-op if absent
-    fallbackPropModel = 'prop_box_ammo01a',   -- UNVERIFIED, same
+    -- UNVERIFIED. No confirmed lead for a K9 vest/harness prop was found, so
+    -- this is a placeholder that will very likely not load. That is survivable
+    -- by design: the fallback below is the one this actually degrades to.
+    propModel         = 'prop_bodyarmour_02',
+    -- The SAME model Config.DeployableKennel already falls back to, chosen for
+    -- exactly that reason -- it is the one prop in this resource with a
+    -- confirmed-safe track record rather than a second unverified guess. It
+    -- will look wrong (a K9 wearing a tennis ball), which is the point: an
+    -- obviously-wrong visible prop tells an operator to go find a real vest
+    -- model, where a silent no-op would just look like the feature is broken.
+    fallbackPropModel = 'prop_tennis_ball',
     boneIndex         = 0,                    -- root; replace after a dev-server sweep
     offsetX = 0.0, offsetY = 0.0, offsetZ = 0.0,
     rotX    = 0.0, rotY    = 0.0, rotZ    = 0.0,
@@ -1057,8 +1066,11 @@ Config.PropAttachments = {
 -- own comment. Dev servers only.
 -- ======================================================================
 Config.BoneSweepTool = {
-    AcePermission     = 'k9unit.admin',
-    TestPropModel     = 'prop_box_ammo01a',
+    -- A SEPARATE principal from Config.AdminAudit.AcePermission on purpose.
+    -- Granting someone read-only audit access should not also hand them a tool
+    -- that spawns and attaches props to peds.
+    AcePermission     = 'k9unit.bonesweep',
+    TestPropModel     = 'prop_tennis_ball',
     MaxBoneIndex      = 200,
     TestOffsetX = 0.0, TestOffsetY = 0.0, TestOffsetZ = 0.0,
     CommandCooldownMs = 500,

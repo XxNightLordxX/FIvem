@@ -189,23 +189,19 @@ function IsConfiguredK9Model(modelHash)
     return K9ModelHashes[modelHash] == true
 end
 
---- Sends an ox_lib notification to a specific player. Chosen over
---- exports.qbx_core:Notify because ox_lib's `ox_lib:notify` client event
---- is a stable, publicly documented API of an already-declared dependency
---- (ox_lib) — qbx_core's own Notify export name/signature could not be
---- independently confirmed in this sandbox (no qbx_core install was
---- reachable here to inspect; see the CONFIDENCE NOTE near the bottom of
---- this file for the same caveat applied to the player-loaded event name).
---- @param target number
---- @param description string
---- @param notifyType string?
-local function NotifyPlayer(target, description, notifyType)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit',
-        description = description,
-        type = notifyType or 'inform',
-    })
-end
+-- NotifyPlayer used to be defined here as its own local copy (one of 12
+-- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- audit). It is now server/notify.lua's single shared resource-global
+-- implementation -- ox_lib's `ox_lib:notify` client event was chosen there
+-- over exports.qbx_core:Notify for the same reason this file's own original
+-- comment gave (a stable, publicly documented API of an already-declared
+-- dependency; qbx_core's own Notify export name/signature could not be
+-- independently confirmed in this sandbox -- see the CONFIDENCE NOTE near
+-- the bottom of this file for the same caveat applied to the player-loaded
+-- event name). Every call site below is unchanged: this file's own calls
+-- always passed a `notifyType` and never a custom title, which is exactly
+-- server/notify.lua's default title, so nothing here needed editing beyond
+-- deleting this local copy.
 
 --- Server-authoritative check: is `source` currently allowed to use K9
 --- features? SPEC.md §4.1 "Access rule": job.name in Config.Departments

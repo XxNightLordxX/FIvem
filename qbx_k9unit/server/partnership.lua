@@ -384,23 +384,12 @@ local PARTNERSHIP_ESTABLISH_MUTEX_KEY = 'establish'
 local PartnerRequestCooldown = NewCooldown(Config.Partnership.RequestCooldownMs)
 PartnerRequestCooldown.RegisterPlayerDropped()
 
---- Sends an ox_lib notification to a specific player. Duplicated here
---- rather than shared across files -- same tiny, generic UI-plumbing
---- helper this resource already duplicates in both server/main.lua and
---- server/certifications.lua (see either file's own identical comment on
---- this exact function) for the same reason: it is not
---- certification/permission logic that must stay a single source of
---- truth.
---- @param target number
---- @param description string
---- @param notifyType string?
-local function NotifyPlayer(target, description, notifyType)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit',
-        description = description,
-        type = notifyType or 'inform',
-    })
-end
+-- NotifyPlayer used to be defined here as its own local copy (one of 12
+-- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- audit). It is now server/notify.lua's single shared resource-global
+-- implementation -- see that file's own header for the extraction writeup.
+-- Every call site below is unchanged: this file never passed a custom
+-- title, which is server/notify.lua's own default.
 
 --- Sends the `partnershipEnded` client event to `citizenid` ONLY if they
 --- currently resolve to a connected server id -- silent no-op otherwise
@@ -521,8 +510,10 @@ end
 --- INSERT) represents a MySQL/MariaDB duplicate-key error (1062) on either
 --- of this table's two UNIQUE KEYs. Duplicated from
 --- server/certifications.lua's `IsDuplicateKeyError` rather than shared --
---- same tiny, self-contained, no-shared-state helper, same reasoning as
---- this file's own duplicated `NotifyPlayer` above. See that function's own
+--- same tiny, self-contained, no-shared-state helper (unlike NotifyPlayer
+--- above, which WAS one of 12 duplicated copies of the same UI-plumbing
+--- helper across this resource, now consolidated into server/notify.lua --
+--- see that file's own header). See that function's own
 --- doc comment for why every shape checked here (table with
 --- .errno/.code/.message/.sqlMessage, or a plain string) is checked rather
 --- than assuming one specific oxmysql error shape.

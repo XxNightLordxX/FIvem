@@ -12,16 +12,16 @@
     deliberately still missing and why — that section is as load-bearing as
     the exports themselves for anyone reviewing this contract.
 
-    SCOPE BOUNDARY THIS FILE OPERATES UNDER: this pass adds ONLY this new
-    file (plus its fxmanifest.lua/.luacheckrc script-list entries, reported
-    separately to whoever owns those files, not edited here) — it does not
-    modify any other existing .lua file in this resource. That constraint
-    directly shapes two decisions below: the "NO NEW MUTATIONS" stance, and
-    the "EVENT CONTRACT — DOCUMENTED, NOT YET WIRED" section (the outbound
-    events COMPLEMENTARY_FEATURES.md §1 asks for require adding a
-    TriggerEvent call at an existing success point inside server/
-    certifications.lua / server/partnership.lua / server/progression.lua /
-    server/search.lua — all four off limits to this pass).
+    SCOPE BOUNDARY THIS FILE OPERATED UNDER AT THE TIME IT WAS WRITTEN: this
+    pass added ONLY this new file (plus its fxmanifest.lua/.luacheckrc
+    script-list entries, reported separately to whoever owned those files,
+    not edited here) — it did not modify any other existing .lua file in
+    this resource at the time. That constraint directly shaped two decisions
+    below: the "NO NEW MUTATIONS" stance (still current), and the original
+    "EVENT CONTRACT — DOCUMENTED, NOT YET WIRED" section immediately below,
+    which is **no longer accurate as a status claim** — see the correction
+    at the top of that section before assuming the six events it lists still
+    need wiring.
 
     ======================================================================
     DESIGN PRINCIPLES — read before adding a new export here:
@@ -124,20 +124,23 @@
       feature flag, so there is nothing else for it to be gated by.
     ======================================================================
 
-    EVENT CONTRACT — DOCUMENTED, NOT YET WIRED. COMPLEMENTARY_FEATURES.md
-    §1 asks for outbound events other resources can react to (a
-    certification granted/revoked, a partnership formed/broken, a
-    contraband search completing, an XP tier crossing), with its own
-    "Needs" line stating exactly what implementing them requires:
-    "wrapping existing internal TriggerEvent/DB-write call sites to also
-    fire the new public ones," hand-off split as "coder-architect (manifest
-    + contract), coder-backend for the call-site wiring." This file is the
-    contract half of that split. Actually firing these requires editing
-    server/certifications.lua, server/partnership.lua, server/progression.lua
-    and server/search.lua at their existing success points — all four are
-    OFF LIMITS to this pass (scope: this file only, nothing else). Nothing
-    below is registered or fired by this file today; this is the full,
-    ready-to-implement contract for whoever picks up the wiring next.
+    EVENT CONTRACT — WIRED, NOT JUST DOCUMENTED (correction: this section
+    originally read "DOCUMENTED, NOT YET WIRED" — that was accurate when
+    this file was first written and is stale now; do not re-implement any
+    of the six wiring described below, it already exists). Verified by
+    direct grep of the current tree: server/certifications.lua,
+    server/partnership.lua, server/progression.lua, and server/search.lua
+    each now call a shared `FireOutboundEvent(...)` helper at the exact
+    success points described below, firing all six events by their exact
+    names/payload shapes. This file itself still only documents the
+    contract and does not fire anything directly (it never did — firing
+    happens at the owning files' own success points, which was always the
+    intended design, not a placeholder); what changed is that those four
+    files' owners have since done the wiring this section originally
+    described as still needed. COMPLEMENTARY_FEATURES.md §1's ask (outbound
+    events other resources can react to — certification granted/revoked, a
+    partnership formed/broken, a contraband search completing, an XP tier
+    crossing) is therefore now fully delivered, not merely specified.
 
     Naming: a new `qbx_k9unit:events:<name>` namespace, distinct from the
     existing `qbx_k9unit:server:`/`qbx_k9unit:client:` namespaces (which
@@ -228,19 +231,31 @@
       these are exposed in v1; a genuine cross-resource need for one should
       be reviewed on its own merits, not added by default alongside the
       read-only surface.
-    - k9_search_log READ-BACK (audit/dispute-history access). No internal
-      resource-global accessor for this exists today — server/search.lua's
-      own LogSearchAttempt is `local`, and sql/install.sql's own schema
-      comment for this table states "nothing in this resource ever reads it
-      back." Building a new SELECT against it here would mean this file
-      inventing new query/authorization logic for a table it doesn't own
-      (principle 4 above), AND deciding, unreviewed, a real product question
-      (should a caller see every row, only their own department's, only one
-      citizenid's?) that deserves its own pass, not a default baked
-      silently into an export shim. Recommend: a real
+    - k9_search_log READ-BACK (audit/dispute-history access) as a PUBLIC
+      EXPORT. Still deliberately not added here. No resource-global accessor
+      this file could wrap exists — server/search.lua's own LogSearchAttempt
+      remains `local`. NOTE, since this section was first written:
+      server/admin.lua has since added its own direct, ACE-gated
+      `/k9auditsearch` SELECT against this table — so an absolute "nothing
+      in this resource ever reads it back" framing is no longer true (this
+      file's own text used that framing originally; `sql/install.sql`'s own
+      current schema comment was not found to make that same absolute claim
+      as of this correction, so check that file directly rather than
+      assuming it needs the identical fix). That does not change the
+      reasoning for this file: server/admin.lua's read
+      is a console/ACE-authorized admin command with its own access-scope
+      decision already made for that context, not a general-purpose,
+      any-caller-resource export — building the latter would still mean
+      inventing new authorization logic for a table this file doesn't own
+      (principle 4 above), and would still be a distinct, unreviewed product
+      question (should an arbitrary caller resource see every row, only
+      their own department's, only one citizenid's?) from the admin
+      command's own already-settled ACE model. Recommend, unchanged: a real
       `GetSearchHistoryForCitizenid`/`GetSearchHistoryForPlate`-style
       accessor belongs in server/search.lua itself first (coder-backend),
-      exported from here once it exists and its access scope is decided.
+      exported from here once it exists and its access scope is decided —
+      server/admin.lua's existence is useful precedent for that future pass,
+      not a substitute for it.
     - RefreshCertificationCache / RefreshPartnershipCache. Both are already
       resource-global functions, but both perform a live, awaited SQL query
       as a side effect of being called, and today are only ever invoked

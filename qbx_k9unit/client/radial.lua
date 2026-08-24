@@ -627,21 +627,18 @@ end
 --- unneeded is strictly better than one that is sometimes invisible to
 --- exactly the player who needs it.
 ---
---- TODO(coordination, whoever wires a live partnership-status callback):
---- a coder-backend is adding a lib.callback to server/partnership.lua,
---- modeled on the existing 'qbx_k9unit:server:hasK9Access' callback
---- (client/main.lua's HasK9Access() wrapper is the pattern to mirror), that
---- returns current SERVER-truth partnership state -- this had not landed
---- (no lib.callback.register exists in server/partnership.lua as of this
---- pass) and its exact event name/return shape were not yet available. Once
---- it exists, it does NOT need to be awaited here to gate visibility (see
---- above -- this item must stay unconditionally offered regardless of what
---- it returns, or the reconnect trap comes back); its one legitimate use
---- would be to make client/partnership.lua's IsPartnered()/
---- GetPartnerServerId() accurate immediately after PlayerLoaded/resource
---- start (an await in that file, not this one) so the "Partner Up" ox_target
---- option's own display-only staleness gap (see that file's header) closes
---- too. Nothing in THIS file needs to change when it lands.
+--- RESOLVED (was a TODO here; corrected, not left stale): the live
+--- partnership-status callback this note was waiting on has landed --
+--- server/partnership.lua registers
+--- `lib.callback.register('qbx_k9unit:server:getPartnershipState', ...)`,
+--- returning current SERVER-truth partnership state, and
+--- client/partnership.lua's RefreshPartnershipStateFromServer() already
+--- awaits it (per this resource's own fxmanifest.lua comment on that file).
+--- As anticipated below, THIS file needed no change when it landed -- the
+--- "Break Partnership" item stays unconditionally offered regardless of
+--- local partnership-state cache accuracy, for the exact reconnect-trap
+--- reason described above. Kept here only as a historical note so a future
+--- reader doesn't go looking for a callback that already exists.
 if Config.Features.HandlerPartnership then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_break_partnership',

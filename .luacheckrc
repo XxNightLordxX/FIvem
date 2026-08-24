@@ -187,6 +187,10 @@ globals = {
     "IsFetchCarryEngaged", "ReleaseFetchBall", "RequestRecallFetchBall", "RequestThrowFetchBall",
     -- server/cooldowns.lua constructors
     "NewCooldown", "NewNestedCooldown", "NewMutex",
+    -- server/notify.lua -- shared ox_lib notify wrapper, replacing 12
+    -- hand-rolled copies. Two files deliberately keep a thin local wrapper
+    -- over it to preserve their own distinct notification title.
+    "NotifyPlayer",
     -- server/certifications.lua
     "HasK9Access", "IsConfiguredK9Model", "RefreshCertificationCache",
     -- server/main.lua

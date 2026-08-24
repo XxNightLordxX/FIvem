@@ -243,21 +243,13 @@ local LEASH_REQUEST_COOLDOWN_MS = 1000
 local LeashRequestCooldown = NewCooldown(LEASH_REQUEST_COOLDOWN_MS)
 LeashRequestCooldown.RegisterPlayerDropped()
 
---- Sends an ox_lib notification to a specific player — see
---- server/certifications.lua's NotifyPlayer for why `ox_lib:notify` was
---- chosen over exports.qbx_core:Notify. Duplicated here rather than
---- shared across files since it's a tiny, generic UI-plumbing helper, not
---- certification/permission logic that must stay a single source of truth.
---- @param target number
---- @param description string
---- @param notifyType string?
-local function NotifyPlayer(target, description, notifyType)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit',
-        description = description,
-        type = notifyType or 'inform',
-    })
-end
+-- NotifyPlayer used to be defined here as its own local copy (one of 12
+-- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- audit). It is now server/notify.lua's single shared resource-global
+-- implementation, called at RUN time from this file's handlers exactly as
+-- before -- see server/notify.lua's own header for the extraction writeup.
+-- Every call site below is unchanged: this file never passed a custom
+-- title, which is server/notify.lua's own default.
 
 -- STRUCTURAL GAP backfill (flagged by coder-architect, not explicit in
 -- SPEC.md itself): server/certifications.lua's cache populates per-player

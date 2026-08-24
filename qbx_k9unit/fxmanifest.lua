@@ -92,6 +92,13 @@ server_scripts {
     -- resolver (ResolveNetworkEntity), loaded alongside cooldowns.lua and
     -- before main.lua/search.lua, its two consumers.
     'server/entities.lua',
+    -- Shared ox_lib notify wrapper (NotifyPlayer). Extracted after an audit
+    -- found this pattern hand-rolled 12 separate times across server files --
+    -- with real drift already visible between copies -- while the roadmap
+    -- recorded it as "2 copies, closed". Loaded early alongside cooldowns.lua
+    -- and entities.lua, the resource's other shared-helper files, since its
+    -- consumers span nearly every server file below.
+    'server/notify.lua',
     'server/main.lua',
     'server/certifications.lua',
     -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7
