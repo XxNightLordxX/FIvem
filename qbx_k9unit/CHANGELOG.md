@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-08-24
+
+**Release-manager summary (read this before the detailed entry below):**
+Phases 2 through 5 land on top of the Phase 1 (`0.1.0`) vertical slice.
+Every feature added since `0.1.0` ships behind its own independent
+`Config.Features.*` flag, and **every one of those flags still defaults to
+`false`** — upgrading from `0.1.0` changes nothing for a server that
+doesn't touch `config.lua`. The one exception to "purely additive" is this
+release's new public export/event API surface (`server/exports.lua`,
+`client/exports.lua`), which is a real contract other resources can now
+build against — see "Added — Public API surface" below — and is the actual
+reason this is a minor bump and not a patch.
+
+**Be honest about what this release is not:**
+- **No audio assets ship.** `client/audio.lua`'s NUI sound bridge and
+  `AdvancedBarkRadial`'s extra bark variants are real, working plumbing
+  with zero `.ogg`/`.wav` files behind any of it — every play call
+  degrades to a silent no-op end to end. See `html/sounds/CREDITS.md` for
+  the sourcing attempt that didn't land a licensable asset.
+- **`CameraFeedPiP` is impossible with this codebase's confirmed native
+  set, not merely deferred.** It ships `false` with no code behind it and
+  should not be read as "coming soon."
+- **`ContrabandScreenFX` and `PropAttachments` are code-complete client-side
+  (and, for `PropAttachments`, server-side) but not functional even if
+  their flags were flipped on**, for two different reasons: `ContrabandScreenFX`
+  has no server-side trigger anywhere in `server/search.lua` yet (its own
+  client file's header documents the exact hook still needed), and
+  `PropAttachments`' `boneIndex` default (`0`, the root bone) is an
+  admitted placeholder pending a one-time in-engine bone sweep with a
+  dev-only tool (`client/bonetool.lua`/`server/bonetool.lua`) that **does
+  not exist in this tree as of this cut**. As a further practical note for
+  whoever cuts this release: as of this writing, `client/screenfx.lua`,
+  `client/propattachment.lua`, and `server/propattachment.lua` are also
+  not yet referenced anywhere in `fxmanifest.lua`'s script lists — confirm
+  the manifest's actual contents immediately before tagging, since other
+  agents are actively wiring files into it in parallel with this review.
+- **Several features need a one-time dev-server verification before they
+  should be enabled**, independent of their flag defaulting `false`:
+  `ScentTracking`'s `ox_inventory` `swapItems` hook shape, `HealthStaminaHUD`'s
+  `hunger`/`thirst` metadata field names, and `DeployableKennel`'s
+  `prop_doghouse_01` model — each documented in its own Known Limitations
+  entry below with the exact check to run first.
+- **This release has not been through a correctness-overseer or qa-tester
+  sign-off equivalent to what `0.1.0` received before it shipped.** Treat
+  the version bump and changelog below as packaging preparation, not as a
+  release-readiness attestation on their own.
+
 Phase 2 (tracking, contraband search, vision, door interaction) has landed
 on this branch as a complete feature set with real client and server
 implementations, but it has **not** been through the same release-readiness
@@ -413,6 +462,143 @@ integration that did not actually exist in code until this pass). Everything bel
   `false` default or the balance/anim-preview review still recommended
   before enabling any of them — see Known Limitations below.
 
+### Added — landed after the entries above (Phase 3 completion, Phase 5, public API)
+
+- **HandlerDownDefense (`Config.Features.HandlerDownDefense`, still
+  `false`, `server/defense.lua` + `client/defense.lua`)** — the last
+  un-coded Phase 3 mechanic now has real code. It is a **UI/auto-targeting
+  convenience only, never an AI takeover**: when a certified handler's own
+  health drops below a configured threshold near a recent hostile contact,
+  their partnered K9 (per the `HandlerPartnership` registry, never a
+  client-claimed relationship) receives a time-limited notification with
+  an optional pre-selected target, which only ever pre-fills a
+  manually-confirmed `requestBiteHold`/`requestTakedown` call — nothing in
+  this file ever moves the K9's ped, fires a weapon, or applies any task to
+  it directly. One design deviation from `PHASE3_SPEC.md`'s original text,
+  disclosed in the file's own header: that spec assumed
+  `relayDamageEvent` carries an attacker field it does not actually carry
+  (it's deliberately payload-less), so this ships its own explicitly
+  low-trust hint channel instead of inventing trust that isn't there.
+- **Recall (`Config.Features.Recall`, still `false`, `server/recall.lua` +
+  `client/recall.lua`)** — the handler's escape hatch for any of the three
+  non-consensual combat mechanics (bite, takedown, drag alike, generalized
+  beyond `PHASE3_SPEC.md`'s bite-only text so a handler isn't left unable
+  to call off a mid-drag K9). A handler's own established partner K9 can
+  unconditionally end whatever engagement it currently holds via the new
+  `k9recall` command. This is a **termination path and is deliberately
+  never gated behind `HasK9Access`/`CanShowK9UI` on either party** — a
+  decertified handler, or one whose K9 partner is decertified, must still
+  be able to call their dog off mid-engagement; this resource has shipped
+  the opposite bug once before (a leash-decline notification gap in
+  `0.1.0`) and this file's header calls out not reintroducing that pattern
+  by name. Resolution is entirely server-side (source → citizenid → active
+  partner → that partner's active engagement) — there is nothing for a
+  client to spoof beyond which `source` is calling.
+- **Partnership tenure bonus (`Config.Features.PartnershipTenureBonus`,
+  still `false`, `server/tenure.lua`)** — the first real gameplay
+  consequence wired to the `HandlerPartnership` registry, which previously
+  shipped as a foundation with zero effect. A K9/handler pair whose
+  partnership stays continuously active past a configured tenure threshold
+  earns a one-time, flat XP bonus. Has no effect unless
+  `HandlerPartnership` **and** `XPProgression` are also `true`.  Requires a
+  new `k9_partnerships.tenure_bonus_tier_granted` column
+  (`sql/migrations/0003_add_k9_partnerships_tenure_bonus_tier_granted.sql`
+  for an existing database, already in `sql/install.sql` for a fresh one)
+  — without it, every query this feature makes is pcall-wrapped and
+  degrades to a silent no-op rather than re-granting the bonus every
+  restart or erroring.
+- **Public API surface (`server/exports.lua`, `client/exports.lua`) — this
+  resource's first stable, documented export contract.** Until this
+  release, `README.md` said integration by other resources was "limited to
+  reading the `metadata.k9certified` display flag" and explicitly not a
+  stable API. Both new files are **read-only** (no grant/revoke/award/
+  force-detach mutation is exported — see each file's own "NOT IN THIS
+  FILE" section for what was considered and deliberately rejected),
+  re-derive every answer from the same server-authoritative state the
+  internal code already trusts (never trust a caller-supplied
+  citizenid/source as a claim), copy every table before returning it (a
+  raw internal reference would let an external caller corrupt shared
+  tier/config state), and fail closed with a pcall wrapper rather than
+  ever throwing across the resource boundary. Server exports:
+  `GetAPIVersion`, `HasK9Access`, `IsConfiguredK9Model`, `IsK9Department`,
+  `GetActivePartnerCitizenId`, `IsActivePartnerOf`, `GetXP`, `GetXPTier`,
+  `IsFeatureEnabled`. Client exports: `GetAPIVersion`, `HasK9Access`,
+  `IsOwnModelK9`, `CanShowK9UI`, `IsLeashed`, `IsInK9Vehicle`,
+  `IsPartnered`, `GetPartnerServerId`, `GetCurrentXPTier`, `IsTracking`,
+  `GetActiveTrackType`, `IsThermalVisionActive`, `IsNightVisionActive`,
+  `IsBiteHoldEngaged`, `IsDragEngaged`. This surface carries its own
+  independent semantic version (`GetAPIVersion()` → `1.0.0`), separate from
+  `fxmanifest.lua`'s resource `version` field — see this release's version
+  notes for why the two are tracked separately. Also lands the first
+  **outbound integration events** for other resources to listen for:
+  `qbx_k9unit:events:certificationGranted` and
+  `qbx_k9unit:events:certificationRevoked` (fired from
+  `server/certifications.lua`'s grant/revoke/offline-revoke/auto-revoke-on-
+  job-change paths, always after the underlying DB write has already
+  committed, and pcall-wrapped so a broken listener in another resource can
+  never unwind back into and abort this resource's own certification flow).
+  Not gated on any `Config.Features` flag — certification is this
+  resource's core access gate, not a phase-numbered toggle.
+- **Admin/audit command surface (`Config.Features.AdminAuditCommands`,
+  still `false`, `server/admin.lua`) — the first ACE-gated surface in this
+  resource**, disclosed explicitly as a precedent-setting choice: every
+  other gated action here is job/grade-scoped (a K9-handler feature); this
+  is server-operator tooling, so ACE (`Config.AdminAudit.AcePermission`,
+  configurable rather than hardcoded to FXServer's generic `'command'`
+  ace) is the correct primitive instead. Adds three read-only commands —
+  `/k9auditcert`, `/k9auditpartner`, `/k9auditsearch` — over the three
+  tables this resource already wrote but previously only exposed as a raw
+  SQL query run by hand (`k9_certifications`, `k9_partnerships`,
+  `k9_search_log`). Computes nothing new: every query shape is one
+  `sql/install.sql` already indexes for. Every invocation (including
+  denied and rate-limited ones) is logged via `print()` — this is the
+  intended audit trail for this file, not debug residue; see the debug/
+  test-code sweep in this release's own preparation notes for why this is
+  called out explicitly rather than flagged as leftover logging. Console
+  (`source == 0`) is trusted unconditionally without an ACE check, an
+  explicit, disclosed judgment call (the console already has irreplaceable
+  control over this entire process) rather than a silent default.
+- **NUI audio bridge (`client/audio.lua`) — plumbing only, no audio
+  assets.** Exposes `PlayK9Sound`/`StopK9Sound` globals over a real
+  Web Audio API bridge in `html/app.js` (`audio:play`/`audio:setGain`/
+  `audio:stop` messages), gated file-scope on
+  `Config.Features.BasicBarkSounds`. **Nothing in this resource calls
+  either function yet** — `client/main.lua`'s existing bark relay is
+  deliberately left on the native `PlaySoundFromEntity` path, so this file
+  loads inert regardless of its flag. `html/sounds/CREDITS.md` documents
+  an attempted asset-sourcing pass that did not land a licensable bark
+  sound; every play call against a not-yet-supplied `html/sounds/<key>.ogg`
+  degrades to a silent no-op end to end, matching this resource's existing
+  bark-audio placeholder gap rather than closing it.
+- **Contraband screen FX (`Config.Features.ContrabandScreenFX`, still
+  `false`, `client/screenfx.lua`) — client half only.** Applies a
+  `SetTimecycleModifier` post-effect for a configured duration on a
+  contraband find, mirroring `client/vision.lua`'s "gate at registration,
+  force off on every exit path" discipline, and rejects a locally-forged
+  `TriggerEvent` self-invocation via the documented `source ~= 65535`
+  check. **This feature cannot fire even if enabled**: the required
+  server-side trigger inside `server/search.lua`'s search-success path
+  does not exist yet — this pass's own header documents the exact block
+  needed and reports it to `server/search.lua`'s owner rather than adding
+  it (that file was off-limits to this pass).
+- **K9 prop attachments (`Config.Features.PropAttachments`, still `false`,
+  `client/propattachment.lua` + `server/propattachment.lua`) — code-complete,
+  not verified functional.** Lets a certified handler toggle a cosmetic
+  prop (vest/harness) on their own K9-model ped. Server-side, every action
+  operates only on the calling player's own ped (never a client-claimed
+  target), and the one client-supplied value it does accept (the netId of
+  a prop the client was just told to create) is checked against a model
+  allowlist and a live-position tolerance before being trusted — mirroring
+  `server/kennel.lua`'s own placed-object confirmation pattern.
+  `Config.PropAttachments.boneIndex` defaults to `0` (the root bone) as an
+  explicit placeholder: no documented bone name exists for a quadruped
+  skeleton, and the correct index needs a one-time in-engine visual sweep
+  with a dev-only, ACE-gated tool (`client/bonetool.lua`/
+  `server/bonetool.lua`) referenced by this file's own header as "built
+  alongside this feature" — **that tool does not exist in this tree as of
+  this release**. A wrong `boneIndex` degrades to "visibly attached at the
+  wrong point," never a crash or an entity-leak, by design.
+
 ### Security
 
 These were found and fixed during Phase 2's own review passes before this
@@ -613,6 +799,39 @@ combat mechanic and its radial reachability went in:
   established while the flag was on must still be torn down by a later
   revoke/department change even if the flag is subsequently flipped off).
 
+A fourth round of fixes closed out the resource-wide client-event-origin
+sweep the third round's own entry flagged as still open:
+
+- **Closed the last of a 29-handler `RegisterNetEvent` sweep for missing
+  per-mechanic feature gating and missing origin guards.** Following the
+  same defect class the third round of fixes above found and fixed in
+  `client/combat.lua`, a broader pass found three more, independent
+  instances of a client-side handler being registered **without** checking
+  its own `Config.Features` flag first (`client/kennel.lua`'s deploy/
+  remove pair, `client/medkit.lua`'s heal-apply handler,
+  `client/progression.lua`'s tier-change handler) — each closed the same
+  way, gated at file scope on the flag it implements. `client/kennel.lua`'s
+  `removeKennel` handler had a second, independent gap: it validated only
+  that the incoming netId was a number before calling `DeleteEntity`,
+  meaning any streamed entity's netId (not just a kennel's) would be
+  deleted — a model-check restriction to configured kennel props now
+  limits the blast radius to "someone else's kennel" even if the
+  namespacing assumption it also relies on is ever wrong. `client/wellbeing.lua`,
+  `client/main.lua`, and `client/partnership.lua` each received the
+  documented `source ~= 65535` origin guard on their own
+  `RegisterNetEvent` handlers — partnership's three had previously been
+  *reported* as already carrying this check by an earlier pass; that
+  report was not accurate, and this pass actually applies it. Every one of
+  these origin-guard comments is worded MEDIUM-HIGH confidence,
+  documented-pattern, not independently verified in-engine — matching
+  `client/combat.lua`'s own header framing for the same check, and see
+  `DECISIONS_NEEDED.md` D3 for the open question this defers. **This
+  closes "flag off means genuinely inert" for these five files; it does
+  not close the deeper client-relay trust boundary** flagged unresolved in
+  the third round above — once a mechanic's flag is `true`, none of these
+  handlers independently verify a given invocation actually originated
+  from the server rather than a local self-trigger.
+
 ### Known Limitations
 
 - **`Config.Features.ScentTracking` still ships `false` by default**, but
@@ -741,16 +960,27 @@ combat mechanic and its radial reachability went in:
     coder-security pass under §12.0 item 8's own trust-boundary note — do
     not read the per-mechanic gating fix as having closed it.
   - `Config.Features.BiteAndHold`, `NonLethalTakedown`, `PropDragging`, and
-    `HandlerDownDefense` must all stay `false`. `HandlerDownDefense` still
-    has no code to enable at all. The other three now have real, registered
-    code **and** an in-game entry point, but no balance/anim-preview review
-    pass has happened and the client-relay trust-boundary gap immediately
-    above remains open — do not enable any of the three on a live server
-    before both of those are addressed. `Config.Features.HandlerPartnership`
-    is real and can be safely enabled on its own (it wires no combat
-    consequence yet), but see its own disclosed reconnect-cache-staleness
-    gap above before relying on `IsPartnered()`/`GetPartnerServerId()` for
-    anything beyond the "Partner Up" ox_target option's own display check.
+    `HandlerDownDefense` must all stay `false`. **`HandlerDownDefense` is
+    no longer uncoded — this claim, unchanged in this file since it was
+    first written, was stale as of the commit that added
+    `server/defense.lua` + `client/defense.lua` and is corrected here.**
+    See "Added — Combat & Handler Partnership (Phase 3)" under `[0.2.0]`
+    below for its real description. All four mechanics now have real,
+    registered code **and** an in-game entry point (`HandlerDownDefense`'s
+    is a pre-selected-target prompt + keybind, not a radial item), but no
+    balance/anim-preview review pass has happened and the client-relay
+    trust-boundary gap immediately above remains open — do not enable any
+    of the four on a live server before both of those are addressed.
+    `Config.Features.HandlerPartnership` is real and can be safely enabled
+    on its own (it wires no combat consequence yet beyond the optional,
+    also-`false` `PartnershipTenureBonus` XP milestone), but see its own
+    disclosed reconnect-cache-staleness gap above before relying on
+    `IsPartnered()`/`GetPartnerServerId()` for anything beyond the "Partner
+    Up" ox_target option's own display check. `Config.Features.Recall` is
+    real, deliberately ungated by `HasK9Access`/`CanShowK9UI` on either
+    party (it is a termination path — see its own Added entry under
+    `[0.2.0]`), and safe to enable independently of the other three, since
+    it can only ever end an engagement, never start one.
 - ~~**`Config.Features.XPProgression`'s `k9_progression` table is missing
   from `sql/install.sql`.**~~ **Resolved.** `sql/install.sql` now creates
   `k9_progression` (see Database above) — every previously-pcall-wrapped

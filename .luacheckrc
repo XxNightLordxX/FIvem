@@ -52,6 +52,14 @@ read_globals = {
     -- ext/native-decls server override, and FXServer has no renderer at all.
     -- Hashes 0x2C933ABF17A1DF41 / 0x0F07E7745A236711.
     "SetTimecycleModifier", "ClearTimecycleModifier",
+    -- GET_WORLD_POSITION_OF_ENTITY_BONE, client/propattachment.lua and
+    -- client/bonetool.lua. VERIFIED: declared in citizenfx/natives ENTITY
+    -- (the ENTITY namespace, not PED -- it takes a generic Entity, which is
+    -- what makes it usable against a quadruped K9 ped), no ext/native-decls
+    -- server override, so client-only. Takes a bone INDEX, not a name; a
+    -- human-derived index is not meaningful on a dog skeleton, which is
+    -- exactly what the bonetool sweep exists to resolve.
+    "GetWorldPositionOfEntityBone",
     "RegisterKeyMapping",
     -- Player / entity queries
     "GetPlayers", "GetActivePlayers", "GetPlayerFromServerId",
@@ -171,6 +179,12 @@ globals = {
     "EndActiveEffectForHolder",
     -- client/recall.lua -- the handler's escape hatch.
     "RequestRecall",
+    -- client/propattachment.lua + client/fetch.lua (PropAttachments,
+    -- FetchMechanic). Both features are UNREGISTERED in fxmanifest.lua and
+    -- under active security review -- these are declared so lint stays
+    -- meaningful over files that are in the tree but do not yet ship.
+    "AttachPropToOwnPed", "DetachAndDeleteProp", "RequestToggleK9PropAttachment",
+    "IsFetchCarryEngaged", "ReleaseFetchBall", "RequestRecallFetchBall", "RequestThrowFetchBall",
     -- server/cooldowns.lua constructors
     "NewCooldown", "NewNestedCooldown", "NewMutex",
     -- server/certifications.lua

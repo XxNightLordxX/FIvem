@@ -1,0 +1,764 @@
+--[[
+    qbx_k9unit/server/fetch.lua
+
+    Config.Features.FetchMechanic (SPEC.md §6.7: "dog can pick up, carry
+    (attached to mouth bone), and drop a physics prop ... on a handler
+    command"). Ships `false`.
+
+    ======================================================================
+    SHARED BONE-INDEX SURFACE — COORDINATION NOTE (read before touching
+    mouth-carry): the mouth/jaw bone-attach question this feature needs was
+    the SAME unsolved problem `PropAttachments` (client/propattachment.lua,
+    server/propattachment.lua) hit for its own vest/harness anchor —
+    `AttachEntityToEntity` needs a raw bone INDEX, not a documented NAME, and
+    no name was ever found for an `a_c_*` quadruped skeleton across three
+    research passes. `server/bonetool.lua`'s dev-only `/k9bonetool` sweep
+    tool (built concurrently, this same task round) is the one, shared
+    answer to that question for BOTH features — see that file's own
+    "EXPOSED SURFACE FOR FetchMechanic" header note. This pass does NOT
+    build a second sweep tool. Per that coordination and per
+    client/propattachment.lua's own shipped, simpler convention (a single
+    flat `boneIndex` + offsets, not a per-`Config.Peds`-model table — a
+    deliberate departure from an earlier PHASE5_SPEC.md draft's more
+    elaborate `Config.K9BoneIndices[model]` sketch, superseded by what
+    actually shipped), this feature's own mouth-carry config mirrors that
+    same flat shape: `Config.FetchMechanic.mouthBoneIndex` (defaults to `0`,
+    the root bone — a harmless, always-valid attach point, not a crash) plus
+    `mouthOffsetX/Y/Z`, and `Config.FetchMechanic.mouthCarryMode` ('fake' by
+    default, 'attach' only once a developer's own `/k9bonetool` session
+    confirms a real mouth/jaw index and records it here). See
+    client/fetch.lua's own header for the client-side half of this
+    coordination (it reuses client/propattachment.lua's shared
+    `AttachPropToOwnPed`/`DetachAndDeleteProp` mechanic directly, per that
+    file's own documented cross-feature contract, rather than a third
+    hand-rolled `AttachEntityToEntity` call).
+
+    ======================================================================
+    WHY THE THROWER, NOT AN AUTONOMOUS DOG, DOES THE "RETURN TO HANDLER" LEG:
+    this resource's entire architecture (SPEC.md §1/§2, config.lua's own
+    history note on the removed spawn/despawn/registry concept) is that the
+    K9 IS a player's own persistent, player-CONTROLLED character — there is
+    no NPC dog for a script to path-find around, and no precedent anywhere
+    in this codebase for a script driving a connected player's own ped
+    movement without their input (PHASE5_SPEC.md's own "Pursue: zero
+    scripting" finding, already reached independently for the throw→pickup
+    leg, applies identically here). A literal, scripted "K9 walks itself
+    back to the handler" would mean hijacking a live player's controls —
+    out of bounds for this codebase. This file instead gives the CARRYING
+    K9 player a real, bounded, server-validated "Deliver to Handler" action
+    (`requestDeliverFetchBall` below): the player walks back under their own
+    control (exactly like the pickup leg), then explicitly hands the item
+    off once genuinely in proximity to the player who threw it. This
+    satisfies the full command→move→pick up→return→release cycle as a real,
+    terminating, player-driven loop rather than a scripted one.
+
+    ======================================================================
+    STATE MACHINE — FetchBalls[throwerCitizenId] = {
+        netId: number?,       -- nil only during the brief 'attach'-mode
+                               -- pickup transition (see PendingFetchCarries)
+        state: 'thrown' | 'carried' | 'dropped',
+        throwerSrc: number,
+        carrierSrc: number?, carrierCitizenId: string?, mode: 'attach'|'fake'|nil,
+        createdAt: number,    -- GetGameTimer() at throw-confirm time
+        expiresAt: number,    -- createdAt + maxBallLifetimeMs -- ABSOLUTE,
+                               -- never extended by a pickup/drop/carry
+                               -- transition -- see the maintenance thread
+                               -- below, this feature's "no unbounded trap"
+                               -- guarantee (task requirement, mirrors
+                               -- PHASE3_SPEC.md §12.0 item 4's maxDurationMs/
+                               -- maxDragDistance precedent).
+    }
+    CarrierIndex[carrierSrc] = throwerCitizenId -- reverse lookup; release/
+        deliver/death-report/disconnect all arrive keyed by the CARRIER's own
+        source, but FetchBalls is keyed by the THROWER's citizenid.
+    PendingFetchThrows[throwerCitizenId] = { src, expiresAt } -- mirrors
+        server/kennel.lua's PendingKennelPlacements exactly.
+    PendingFetchCarries[carrierSrc] = { throwerCitizenId, expiresAt } --
+        'attach'-mode pickup only: the carrier's client must delete the old
+        (thrown/dropped) entity and report a freshly `AttachPropToOwnPed`-
+        created replacement's netId before the carry is fully confirmed.
+    PendingFetchDrops[carrierSrc] = { throwerCitizenId, expiresAt } --
+        'fake'-mode drop only: the carrier's client recreates a plain,
+        unattached ball object at drop time and must report ITS netId.
+    Every one of the four tables above is bounded by its own TTL, swept by
+    the maintenance thread below — no table entry can outlive its own
+    expiry unanswered, closing the "must always terminate" requirement for
+    every transitional (not just terminal) state.
+
+    ======================================================================
+    ENTITY-THEFT / TRUST-BOUNDARY DISCIPLINE (task-mandated): no handler in
+    this file ever attaches, deletes, or otherwise trusts a client-supplied
+    netId on its own say-so. Every netId this file acts on is independently
+    (a) resolved via server/entities.lua's `ResolveNetworkEntity` (existence
+    guard, expectedEntityType = 3 = object), (b) checked against
+    `FetchBallModelHashes` (the configured ball prop, never an arbitrary
+    streamed-in entity — same shape client/kennel.lua's `removeKennel`
+    handler already established and this file mirrors), AND (c), for the
+    pickup/deliver paths specifically, cross-checked for EQUALITY against
+    this file's OWN authoritative `FetchBalls` registry entry — mirroring
+    server/kennel.lua's `requestPickupKennel`'s `kennel.netId ~= netId`
+    ownership check, one step stronger than (a)+(b) alone.
+
+    ======================================================================
+    EVENT CONTRACT:
+    Server events (client->server):
+      requestThrowFetchBall ()
+      confirmFetchBallThrown (netId)
+      cancelFetchThrow ()
+      requestPickupFetchBall (netId)
+      confirmFetchBallCarried (netId)      -- 'attach'-mode pickup only
+      cancelFetchCarryAttach ()             -- 'attach'-mode pickup only
+      releaseFetchBall ()                   -- voluntary drop, no access gate
+      confirmFetchBallDropped (netId)       -- 'fake'-mode drop only
+      requestDeliverFetchBall (targetServerId)
+      requestRecallFetchBall ()             -- thrower ends their own cycle early
+      reportFetchCarrierDown ()             -- carrier's own client reports its ped died mid-carry
+    Client events (server->client), each gated at REGISTRATION in
+    client/fetch.lua, not inside the handler (client/hud.lua's own
+    established convention — see that file's header):
+      throwFetchBallAt (spawnX, spawnY, spawnZ, forceX, forceY, forceZ) [thrower only]
+      carryFetchBall (netId, mode) [carrier only]
+      endFetchCarry (mode, terminal) [carrier only]
+      removeFetchBall (netId) [broadcast backstop, mirrors client/kennel.lua's removeKennel]
+
+    FILE-TO-FILE CONTRACT:
+    - Loads after server/cooldowns.lua (NewCooldown), server/entities.lua
+      (ResolveNetworkEntity), and server/certifications.lua (HasK9Access,
+      IsConfiguredK9Model) — all called at file-load and/or runtime.
+    - Exposes no resource-global functions of its own; nothing else in this
+      codebase needs to reach into FetchMechanic's own state.
+
+    CONFIG THIS FILE ASSUMES EXISTS — NOT owned by this file (config.lua/
+    fxmanifest.lua/.luacheckrc are owned by the task's orchestrator this
+    pass; see this pass's own report for the exact blocks needed):
+      Config.FetchMechanic = {
+        ballPropModel, throwForwardOffsetMeters, throwUpOffsetMeters,
+        throwForceForward, throwForceUp, throwCooldownMs, pendingThrowTtlMs,
+        maxBallLifetimeMs, pickupInteractDistanceMeters,
+        deliverProximityMeters, maintenanceIntervalMs,
+        mouthCarryMode, mouthBoneIndex, mouthOffsetX, mouthOffsetY, mouthOffsetZ,
+      }
+]]
+
+-- GATE AT REGISTRATION, NOT INSIDE THE HANDLER — this file's whole purpose
+-- is FetchMechanic, so the entire file is inert (zero handlers registered,
+-- zero threads started) while the flag is off, mirroring client/hud.lua's
+-- own "checked ONCE at file-load time" convention exactly (see that file's
+-- header). Placed before ANY other top-level code, including the model-hash
+-- table below, so this file never errors even if Config.FetchMechanic
+-- itself doesn't exist yet on a server that hasn't applied this feature's
+-- config additions.
+if not Config.Features.FetchMechanic then return end
+
+-- Precomputed allowlist of the one configured fetch-ball prop model —
+-- task-mandated defense-in-depth, same shape server/kennel.lua's
+-- KennelModelHashes already established.
+local FetchBallModelHashes = {
+    [GetHashKey(Config.FetchMechanic.ballPropModel)] = true,
+}
+
+local FetchBalls = {}
+local CarrierIndex = {}
+local PendingFetchThrows = {}
+local PendingFetchCarries = {}
+local PendingFetchDrops = {}
+
+-- REFACTOR_ROADMAP.md item 1 convention: dedicated cooldown, never a
+-- hand-rolled table. Per-THROWER rate limit on requesting a NEW throw only
+-- — distinct from the one-active-ball-per-citizenid limit enforced
+-- separately below.
+local ThrowCooldown = NewCooldown(Config.FetchMechanic.throwCooldownMs)
+ThrowCooldown.RegisterPlayerDropped()
+
+--- Sends an ox_lib notification to a specific player. Duplicated (not
+--- shared) per this resource's established convention — see
+--- server/kennel.lua's own NotifyPlayer comment.
+--- @param target number
+--- @param description string
+--- @param notifyType string?
+local function NotifyPlayer(target, description, notifyType)
+    TriggerClientEvent('ox_lib:notify', target, {
+        title = 'K9 Unit',
+        description = description,
+        type = notifyType or 'inform',
+    })
+end
+
+--- @param src number
+--- @return string? citizenid
+local function ResolveCitizenId(src)
+    local player = exports.qbx_core:GetPlayer(src)
+    return player and player.PlayerData and player.PlayerData.citizenid
+end
+
+--- @param netId number
+--- @return string? citizenid
+--- @return table? ball
+local function FindBallByNetId(netId)
+    for citizenid, entry in pairs(FetchBalls) do
+        if entry.netId == netId then
+            return citizenid, entry
+        end
+    end
+    return nil, nil
+end
+
+--- Shared terminal-cleanup path — every way a fetch cycle can permanently
+--- end (recall, lifetime expiry, despawn detection, handler disconnect,
+--- fake-mode carrier loss) funnels through here so there is exactly one
+--- place that clears the registry, deletes the entity, and notifies the
+--- carrier. Mirrors server/kennel.lua's RemoveKennelForCitizenid role.
+--- @param citizenid string
+--- @param ball table
+local function EndFetchCycle(citizenid, ball)
+    FetchBalls[citizenid] = nil
+
+    if ball.carrierSrc then
+        CarrierIndex[ball.carrierSrc] = nil
+        PendingFetchCarries[ball.carrierSrc] = nil
+        PendingFetchDrops[ball.carrierSrc] = nil
+    end
+
+    if ball.netId then
+        local entity = ResolveNetworkEntity(ball.netId)
+        if entity then
+            DeleteEntity(entity)
+        end
+        -- Backstop broadcast — see server/kennel.lua's own CLEANUP
+        -- CONFIDENCE NOTE for the full "whichever connected client
+        -- currently holds real network ownership" reasoning, not
+        -- re-derived here.
+        TriggerClientEvent('qbx_k9unit:client:removeFetchBall', -1, ball.netId)
+    end
+
+    if ball.state == 'carried' and ball.carrierSrc then
+        TriggerClientEvent('qbx_k9unit:client:endFetchCarry', ball.carrierSrc, ball.mode, true)
+    end
+end
+
+--- Step 1: handler asks to throw a fetch ball. A HUMAN HANDLER action per
+--- SPEC.md's own "on a handler command" wording — deliberately gated on
+--- `HasK9Access(src)` ALONE, not also `IsConfiguredK9Model`, since the
+--- thrower need not currently be riding a K9 model (PHASE5_SPEC.md
+--- §14.4.3's own resolved design; this file calls HasK9Access directly
+--- rather than adding a same-shape `CanActAsK9Handler()` combinator to
+--- client/main.lua, since `HasK9Access` alone is exactly what that would
+--- have returned).
+RegisterNetEvent('qbx_k9unit:server:requestThrowFetchBall', function()
+    local src = source
+
+    if not HasK9Access(src) then
+        NotifyPlayer(src, 'You are not authorized to use K9 fetch equipment.', 'error')
+        return
+    end
+
+    if not ThrowCooldown.Consume(src) then
+        return -- silent no-op: rate-limited, matches this resource's bark/leash-request/certify-action convention
+    end
+
+    local citizenid = ResolveCitizenId(src)
+    if not citizenid then
+        NotifyPlayer(src, 'Unable to resolve your own citizen ID.', 'error')
+        return
+    end
+
+    if FetchBalls[citizenid] then
+        NotifyPlayer(src, 'You already have an active fetch item out — recall it, or wait for it to expire, before throwing another.', 'error')
+        return
+    end
+    if PendingFetchThrows[citizenid] then
+        NotifyPlayer(src, 'A throw is already in progress.', 'error')
+        return
+    end
+
+    local ped = GetPlayerPed(src)
+    if ped == 0 then return end -- defensive: src disconnected between the event firing and this line
+
+    local coords = GetEntityCoords(ped)
+    local forward = GetEntityForwardVector(ped)
+    local cfg = Config.FetchMechanic
+
+    local spawnX = coords.x + forward.x * cfg.throwForwardOffsetMeters
+    local spawnY = coords.y + forward.y * cfg.throwForwardOffsetMeters
+    local spawnZ = coords.z + cfg.throwUpOffsetMeters
+
+    local forceX = forward.x * cfg.throwForceForward
+    local forceY = forward.y * cfg.throwForceForward
+    local forceZ = cfg.throwForceUp
+
+    PendingFetchThrows[citizenid] = {
+        src = src,
+        expiresAt = GetGameTimer() + cfg.pendingThrowTtlMs,
+    }
+
+    TriggerClientEvent('qbx_k9unit:client:throwFetchBallAt', src, spawnX, spawnY, spawnZ, forceX, forceY, forceZ)
+end)
+
+--- Step 2: client reports the network id of the ball it actually created.
+--- Deliberately does NOT tightly re-validate the reported position against
+--- the server-chosen spawn point (unlike server/kennel.lua's
+--- KENNEL_CONFIRM_DISTANCE_TOLERANCE) — a thrown, physics-simulated ball's
+--- resting position legitimately moves before this confirm fires, and
+--- nothing server-authoritative depends on exactly where it lands
+--- (PHASE5_SPEC.md §14.4.3's own disclosed divergence, adopted verbatim).
+--- @param netId number
+RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
+    local src = source
+    if type(netId) ~= 'number' then return end
+
+    local citizenid = ResolveCitizenId(src)
+    if not citizenid then return end
+
+    local pending = PendingFetchThrows[citizenid]
+    if not pending or pending.src ~= src then return end
+    PendingFetchThrows[citizenid] = nil
+
+    if GetGameTimer() > pending.expiresAt then
+        NotifyPlayer(src, 'Fetch throw timed out — try again.', 'error')
+        return
+    end
+
+    if not HasK9Access(src) then return end
+    if FetchBalls[citizenid] then return end -- shouldn't be reachable, but never trust an invariant alone
+
+    local entity = ResolveNetworkEntity(netId, 3)
+    if not entity then
+        NotifyPlayer(src, 'Fetch ball could not be confirmed.', 'error')
+        return
+    end
+    if not FetchBallModelHashes[GetEntityModel(entity)] then
+        NotifyPlayer(src, 'Fetch ball placement failed — unexpected object model.', 'error')
+        return
+    end
+
+    local now = GetGameTimer()
+    FetchBalls[citizenid] = {
+        netId = netId,
+        state = 'thrown',
+        throwerSrc = src,
+        carrierSrc = nil,
+        carrierCitizenId = nil,
+        mode = nil,
+        createdAt = now,
+        expiresAt = now + Config.FetchMechanic.maxBallLifetimeMs,
+    }
+
+    NotifyPlayer(src, 'Fetch ball thrown.', 'success')
+end)
+
+--- Client reports its own throw attempt failed (model never loaded,
+--- CreateObject failed) — frees the pending slot immediately.
+RegisterNetEvent('qbx_k9unit:server:cancelFetchThrow', function()
+    local src = source
+    local citizenid = ResolveCitizenId(src)
+    if not citizenid then return end
+
+    local pending = PendingFetchThrows[citizenid]
+    if pending and pending.src == src then
+        PendingFetchThrows[citizenid] = nil
+    end
+end)
+
+--- Step 3: a K9 (own ped model required — this leg IS K9-specific, unlike
+--- the throw) requests to pick up a specific fetch ball by netId. NEVER
+--- trusts the reported netId alone — see this file's header ENTITY-THEFT
+--- DISCIPLINE block.
+--- @param netId number
+RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
+    local src = source
+    if type(netId) ~= 'number' then return end
+
+    if not HasK9Access(src) then
+        NotifyPlayer(src, 'You are not authorized to use K9 fetch equipment.', 'error')
+        return
+    end
+
+    local ped = GetPlayerPed(src)
+    if ped == 0 then return end
+    if not IsConfiguredK9Model(GetEntityModel(ped)) then
+        NotifyPlayer(src, 'Only a K9 may carry a fetch item.', 'error')
+        return
+    end
+
+    if CarrierIndex[src] or PendingFetchCarries[src] then
+        NotifyPlayer(src, 'You are already carrying (or about to carry) a fetch item.', 'error')
+        return
+    end
+
+    local ownerCitizenId, ball = FindBallByNetId(netId)
+    if not ball or (ball.state ~= 'thrown' and ball.state ~= 'dropped') then
+        NotifyPlayer(src, 'That fetch item is not available to pick up.', 'error')
+        return
+    end
+
+    -- Defense in depth, mirroring server/kennel.lua's confirmKennelPlaced
+    -- discipline: independently re-confirm the model, not just the netId
+    -- equality check FindBallByNetId already gives.
+    local entity = ResolveNetworkEntity(netId, 3)
+    if not entity or not FetchBallModelHashes[GetEntityModel(entity)] then
+        NotifyPlayer(src, 'That fetch item could not be confirmed.', 'error')
+        return
+    end
+
+    local citizenid = ResolveCitizenId(src)
+    if not citizenid then return end
+
+    local mode = Config.FetchMechanic.mouthCarryMode == 'attach' and 'attach' or 'fake'
+
+    ball.state = 'carried'
+    ball.carrierSrc = src
+    ball.carrierCitizenId = citizenid
+    ball.mode = mode
+    CarrierIndex[src] = ownerCitizenId
+
+    if mode == 'attach' then
+        -- Two-phase: client/propattachment.lua's shared AttachPropToOwnPed
+        -- always CREATES a new object (it has no "attach this existing
+        -- handle" mode) — reused here per this file's header coordination
+        -- note rather than hand-rolling a third AttachEntityToEntity call.
+        -- The carrier's client deletes the old (thrown/dropped) entity and
+        -- must report the freshly attached replacement's netId before this
+        -- is fully confirmed. `ball.netId` is left pointing at the OLD,
+        -- about-to-be-deleted entity in the meantime — harmless: nothing
+        -- else acts on a 'carried'-state ball's netId until this resolves
+        -- (see the maintenance thread's own `ball.state ~= 'carried'`
+        -- despawn-check guard), and a stale resolve degrades to a no-op via
+        -- ResolveNetworkEntity's own existence guard if something ever does.
+        PendingFetchCarries[src] = {
+            throwerCitizenId = ownerCitizenId,
+            expiresAt = GetGameTimer() + Config.FetchMechanic.pendingThrowTtlMs,
+        }
+    end
+
+    TriggerClientEvent('qbx_k9unit:client:carryFetchBall', src, netId, mode)
+    NotifyPlayer(src, 'Picked up the fetch item.', 'success')
+end)
+
+--- 'attach'-mode pickup confirm — see requestPickupFetchBall's own comment.
+--- @param netId number
+RegisterNetEvent('qbx_k9unit:server:confirmFetchBallCarried', function(netId)
+    local src = source
+    if type(netId) ~= 'number' then return end
+
+    local pending = PendingFetchCarries[src]
+    if not pending then return end
+    PendingFetchCarries[src] = nil
+
+    if GetGameTimer() > pending.expiresAt then return end -- the maintenance sweep may already have force-ended this cycle
+
+    local ball = FetchBalls[pending.throwerCitizenId]
+    if not ball or ball.carrierSrc ~= src or ball.state ~= 'carried' then return end
+
+    local entity = ResolveNetworkEntity(netId, 3)
+    if not entity or not FetchBallModelHashes[GetEntityModel(entity)] then
+        EndFetchCycle(pending.throwerCitizenId, ball)
+        return
+    end
+
+    ball.netId = netId
+end)
+
+--- 'attach'-mode pickup failed client-side (model never loaded, or
+--- AttachPropToOwnPed otherwise returned nil) — nothing tangible survives
+--- this failure (the old entity is already deleted client-side), so the
+--- whole cycle must end rather than leaving a 'carried' ball with no real
+--- entity behind it.
+RegisterNetEvent('qbx_k9unit:server:cancelFetchCarryAttach', function()
+    local src = source
+    local pending = PendingFetchCarries[src]
+    if not pending then return end
+    PendingFetchCarries[src] = nil
+
+    local ball = FetchBalls[pending.throwerCitizenId]
+    if ball and ball.carrierSrc == src then
+        EndFetchCycle(pending.throwerCitizenId, ball)
+    end
+end)
+
+--- Voluntary drop. Deliberately NOT gated on HasK9Access/CanShowK9UI —
+--- mirrors DetachLeash/ReleaseBiteHold/ReleaseDrag's established "always
+--- let go" posture: a K9 that loses access mid-carry must still be able to
+--- end it. Guards against the brief 'attach'-mode pickup transition window
+--- (PendingFetchCarries) to avoid racing a not-yet-confirmed attach.
+RegisterNetEvent('qbx_k9unit:server:releaseFetchBall', function()
+    local src = source
+
+    if PendingFetchCarries[src] then
+        return -- still transitioning into the carry itself; nothing to release yet
+    end
+
+    local ownerCitizenId = CarrierIndex[src]
+    if not ownerCitizenId then return end
+    local ball = FetchBalls[ownerCitizenId]
+    if not ball or ball.carrierSrc ~= src then
+        CarrierIndex[src] = nil -- stale index entry, clean it up defensively
+        return
+    end
+
+    local mode = ball.mode
+    ball.state = 'dropped'
+    ball.carrierSrc = nil
+    ball.carrierCitizenId = nil
+    ball.mode = nil
+    CarrierIndex[src] = nil
+
+    if mode == 'fake' then
+        -- Nothing tangible exists right now (the world object was deleted
+        -- at pickup) — the client must recreate one and report its netId
+        -- before this ball is pickup-able again.
+        PendingFetchDrops[src] = {
+            throwerCitizenId = ownerCitizenId,
+            expiresAt = GetGameTimer() + Config.FetchMechanic.pendingThrowTtlMs,
+        }
+    end
+
+    TriggerClientEvent('qbx_k9unit:client:endFetchCarry', src, mode, false)
+end)
+
+--- 'fake'-mode drop confirm — the carrier's client recreated a plain,
+--- unattached ball object at its own current position and reports its
+--- netId so this file's registry stays in sync.
+--- @param netId number
+RegisterNetEvent('qbx_k9unit:server:confirmFetchBallDropped', function(netId)
+    local src = source
+    if type(netId) ~= 'number' then return end
+
+    local pending = PendingFetchDrops[src]
+    if not pending then return end
+    PendingFetchDrops[src] = nil
+
+    if GetGameTimer() > pending.expiresAt then return end -- ball table entry may already be gone via recall/timeout
+
+    local ball = FetchBalls[pending.throwerCitizenId]
+    if not ball or ball.state ~= 'dropped' then return end -- recalled/changed state in the meantime
+
+    local entity = ResolveNetworkEntity(netId, 3)
+    if not entity or not FetchBallModelHashes[GetEntityModel(entity)] then return end
+
+    ball.netId = netId
+end)
+
+--- The "returns to handler and releases" leg — see this file's header for
+--- why this is a real, player-driven, proximity-checked action rather than
+--- scripted movement. Only deliverable to the ACTUAL thrower of THIS ball,
+--- never an arbitrary nearby player, and only within
+--- Config.FetchMechanic.deliverProximityMeters of that handler's own live,
+--- server-side position (never a client-claimed distance).
+--- @param targetServerId number
+RegisterNetEvent('qbx_k9unit:server:requestDeliverFetchBall', function(targetServerId)
+    local src = source
+    if type(targetServerId) ~= 'number' then return end
+
+    if PendingFetchCarries[src] then
+        return -- still transitioning into the carry itself
+    end
+
+    local ownerCitizenId = CarrierIndex[src]
+    if not ownerCitizenId then
+        NotifyPlayer(src, 'You are not carrying a fetch item.', 'error')
+        return
+    end
+    local ball = FetchBalls[ownerCitizenId]
+    if not ball or ball.carrierSrc ~= src then return end
+
+    if ball.throwerSrc ~= targetServerId then
+        NotifyPlayer(src, 'Only the handler who threw this item can receive it.', 'error')
+        return
+    end
+
+    local carrierPed = GetPlayerPed(src)
+    local handlerPed = GetPlayerPed(targetServerId)
+    if carrierPed == 0 or handlerPed == 0 then return end
+
+    local dist = #(GetEntityCoords(carrierPed) - GetEntityCoords(handlerPed))
+    if dist > Config.FetchMechanic.deliverProximityMeters then
+        NotifyPlayer(src, 'Get closer to your handler to deliver the item.', 'error')
+        return
+    end
+
+    EndFetchCycle(ownerCitizenId, ball)
+    NotifyPlayer(src, 'Delivered the fetch item to your handler.', 'success')
+    NotifyPlayer(targetServerId, 'Your K9 delivered the fetch item.', 'success')
+end)
+
+--- Thrower-initiated early termination of their OWN cycle, from any state —
+--- an explicit interrupt path independent of the carrier's own release,
+--- satisfying the task's "must be interruptible" requirement from the
+--- handler's side too.
+RegisterNetEvent('qbx_k9unit:server:requestRecallFetchBall', function()
+    local src = source
+    local citizenid = ResolveCitizenId(src)
+    if not citizenid then return end
+
+    local ball = FetchBalls[citizenid]
+    if not ball or ball.throwerSrc ~= src then
+        NotifyPlayer(src, 'You have no active fetch item to recall.', 'error')
+        return
+    end
+
+    EndFetchCycle(citizenid, ball)
+    NotifyPlayer(src, 'Fetch item recalled.', 'success')
+end)
+
+--- Carrier's own client reports its ped died mid-carry (client/fetch.lua's
+--- own IsEntityDead poll, only running while actually carrying). 'attach'
+--- mode degrades to a natural 'dropped' state (the ball entity still
+--- physically exists); 'fake' mode must fully end the cycle (nothing
+--- tangible exists to leave behind — the dead ped's own client cannot
+--- reliably recreate/report a fresh object the way a normal voluntary drop
+--- does).
+RegisterNetEvent('qbx_k9unit:server:reportFetchCarrierDown', function()
+    local src = source
+
+    if PendingFetchCarries[src] then return end -- see releaseFetchBall's own comment
+
+    local ownerCitizenId = CarrierIndex[src]
+    if not ownerCitizenId then return end
+    local ball = FetchBalls[ownerCitizenId]
+    if not ball or ball.carrierSrc ~= src then return end
+
+    local mode = ball.mode
+    CarrierIndex[src] = nil
+
+    if mode == 'fake' then
+        EndFetchCycle(ownerCitizenId, ball)
+        return
+    end
+
+    ball.state = 'dropped'
+    ball.carrierSrc = nil
+    ball.carrierCitizenId = nil
+    ball.mode = nil
+
+    TriggerClientEvent('qbx_k9unit:client:endFetchCarry', src, mode, false)
+end)
+
+-- Single shared maintenance thread — ALWAYS running (mirrors
+-- server/combat.lua's own identical "expiry enforcement must never be
+-- delayed or conditioned on anything" precedent), but a guaranteed genuine
+-- no-op for the lifetime of this file's early-return gate above: every
+-- table this loop scans is only ever populated by handlers that already
+-- required Config.Features.FetchMechanic to be true (the whole file
+-- wouldn't have loaded otherwise). Interval is deliberately independent of
+-- any per-tick sampling need — this feature has none — so a coarse
+-- interval is both correct and cheap.
+local FETCH_MAINTENANCE_INTERVAL_MS = Config.FetchMechanic.maintenanceIntervalMs or 2000
+
+CreateThread(function()
+    while true do
+        Wait(FETCH_MAINTENANCE_INTERVAL_MS)
+        local now = GetGameTimer()
+
+        -- (a) Absolute lifetime ceiling — THIS is the "no unbounded trap"
+        -- guarantee for a ball nobody ever picks up, drops, delivers, or
+        -- recalls, mirroring PHASE3_SPEC.md §12.0 item 4's maxDurationMs/
+        -- maxDragDistance precedent. Checked unconditionally.
+        for citizenid, ball in pairs(FetchBalls) do
+            if now > ball.expiresAt then
+                EndFetchCycle(citizenid, ball)
+            elseif ball.netId and ball.state ~= 'carried' then
+                -- (b) Despawn/unreachable-target detection: a 'thrown' or
+                -- 'dropped' ball should always resolve to a real entity
+                -- between confirms. If it doesn't (an external deletion, a
+                -- desync, or any other despawn this resource doesn't
+                -- control), don't leave a permanently stuck registry entry
+                -- around for the rest of maxBallLifetimeMs.
+                if not ResolveNetworkEntity(ball.netId) then
+                    EndFetchCycle(citizenid, ball)
+                end
+            end
+        end
+
+        -- (c) Bounded transitional-state windows — 'attach'-mode pickup and
+        -- 'fake'-mode drop can each get stuck in limbo if the carrier
+        -- disconnects or their client errors between the request and its
+        -- confirm; these TTLs guarantee that limbo always resolves.
+        for carrierSrc, pending in pairs(PendingFetchCarries) do
+            if now > pending.expiresAt then
+                PendingFetchCarries[carrierSrc] = nil
+                local ball = FetchBalls[pending.throwerCitizenId]
+                if ball and ball.carrierSrc == carrierSrc then
+                    EndFetchCycle(pending.throwerCitizenId, ball)
+                end
+            end
+        end
+        for carrierSrc, pending in pairs(PendingFetchDrops) do
+            if now > pending.expiresAt then
+                PendingFetchDrops[carrierSrc] = nil -- the ball itself, if it still exists, simply stays 'dropped' with its last-known netId — nothing further to force here
+            end
+        end
+        for citizenid, pending in pairs(PendingFetchThrows) do
+            if now > pending.expiresAt then
+                PendingFetchThrows[citizenid] = nil
+            end
+        end
+    end
+end)
+
+-- Handler-disconnect / carrier-disconnect cleanup (task requirement: a
+-- fetch cycle must not leak permanently into the world).
+AddEventHandler('playerDropped', function(_reason)
+    local src = source
+    local citizenid = ResolveCitizenId(src)
+
+    -- Thrower (handler) disconnect: end the ENTIRE cycle regardless of
+    -- state.
+    if citizenid and FetchBalls[citizenid] and FetchBalls[citizenid].throwerSrc == src then
+        EndFetchCycle(citizenid, FetchBalls[citizenid])
+    end
+
+    if citizenid and PendingFetchThrows[citizenid] and PendingFetchThrows[citizenid].src == src then
+        PendingFetchThrows[citizenid] = nil
+    end
+
+    -- Carrier disconnect (possibly a DIFFERENT citizenid than the thrower).
+    -- 'attach' mode degrades to a natural 'dropped' state (the ball is left
+    -- wherever it was — a real, still-existing networked entity); 'fake'
+    -- mode must fully end the cycle (nothing tangible exists to leave
+    -- behind, and only the now-disconnecting client could ever recreate it)
+    -- — see EndFetchCycle's own carrier-loss framing for the identical
+    -- reasoning applied to a death report instead of a disconnect.
+    local ownerCitizenId = CarrierIndex[src]
+    if ownerCitizenId then
+        CarrierIndex[src] = nil
+        PendingFetchCarries[src] = nil
+        PendingFetchDrops[src] = nil
+        local ball = FetchBalls[ownerCitizenId]
+        if ball and ball.carrierSrc == src then
+            if ball.mode == 'fake' or not ball.netId then
+                EndFetchCycle(ownerCitizenId, ball)
+            else
+                ball.state = 'dropped'
+                ball.carrierSrc = nil
+                ball.carrierCitizenId = nil
+                ball.mode = nil
+            end
+        end
+    end
+
+    -- ThrowCooldown already registered its own playerDropped handler via
+    -- :RegisterPlayerDropped() — REFACTOR_ROADMAP.md item 1 convention,
+    -- nothing to do for it here.
+end)
+
+-- Resource-stop cleanup (task requirement, same class of gap
+-- server/kennel.lua's own onResourceStop comment addresses for a different
+-- piece of entity state): a resource restart must not leave any active
+-- fetch ball behind as a permanent, orphaned world object.
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    for _, ball in pairs(FetchBalls) do
+        if ball.netId then
+            local entity = ResolveNetworkEntity(ball.netId)
+            if entity then
+                DeleteEntity(entity)
+            end
+        end
+    end
+    -- Deliberately no client broadcast here — every connected client's own
+    -- copy of this resource is stopping at essentially the same moment,
+    -- mirroring server/kennel.lua's own onResourceStop reasoning verbatim
+    -- (see that file's header for the full "unreliable busywork, not a real
+    -- backstop" writeup), not re-derived here.
+end)
