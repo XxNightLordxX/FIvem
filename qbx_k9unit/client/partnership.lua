@@ -440,22 +440,17 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
     lib.notify({ title = 'K9 Unit', description = description, type = 'inform' })
 end)
 
--- Client-side hash set for the "Partner Up" ox_target option's
--- display-only plausibility check below. client/main.lua only exposes
--- IsOwnModelK9() (not its private model-hash table), so this is a small
--- local copy of the same generic Config.Peds-driven check for THIS file's
--- own convenience use -- not a security check, mirroring
--- client/movement.lua's own identical, separately-justified local copy
--- (k9ModelHashesForTargeting) rather than expanding client/main.lua's
--- documented three-function contract for a second file's convenience.
-local k9ModelHashesForTargeting = {}
-for _, pedEntry in ipairs(Config.Peds) do
-    k9ModelHashesForTargeting[GetHashKey(pedEntry.model)] = true
-end
-
-local function IsEntityModelK9(entity)
-    return k9ModelHashesForTargeting[GetEntityModel(entity)] == true
-end
+-- The "Partner Up" ox_target option's canInteract below calls
+-- client/main.lua's resource-global IsEntityModelK9(entity)
+-- (REFACTOR_ROADMAP.md item 3) directly for its display-only plausibility
+-- check, rather than keeping this file's own small local copy of the same
+-- Config.Peds-driven hash table -- client/main.lua loads first
+-- (fxmanifest.lua's client_scripts order) and this call only ever happens
+-- at canInteract-invocation time, never at this file's own load time, so
+-- no runtime existence guard is needed here, same as this file's existing
+-- IsOwnModelK9()/CanShowK9UI() call-time-only calls elsewhere. NOT a
+-- security check -- server/partnership.lua's CheckPartnershipEligibility
+-- independently re-derives the real, live model.
 
 -- Derived from Config.Partnership.ProximityMeters (the REAL server-side
 -- range check for establishing a partnership, both at request time and

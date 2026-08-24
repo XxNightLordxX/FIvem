@@ -354,6 +354,35 @@ local function IsDuplicateKeyError(err)
     return false
 end
 
+--- Fires a stable `qbx_k9unit:events:*` outbound event for other resources
+--- (dispatch/MDT/evidence integrations — see server/exports.lua's header
+--- "EVENT CONTRACT" section for the full documented contract this
+--- implements). Every call site below fires this ONLY after its own DB
+--- write has already committed and every eligibility check has already
+--- passed — never optimistically, never inside a branch that can still
+--- fail/roll back — so by the time this runs, this resource's own state
+--- already reflects the change being announced.
+---
+--- `TriggerEvent` runs every `AddEventHandler` registered by every OTHER
+--- resource on this server, SYNCHRONOUSLY, on this same call stack. A
+--- misbehaving/buggy consumer resource's handler throwing must never be
+--- able to unwind back into (and abort the remainder of) the certification/
+--- partnership/search flow that triggered it — pcall-wrapped so a
+--- consumer's exception is swallowed and logged here, never propagated.
+--- Because this is only ever called AFTER the real state change already
+--- committed, a pcall failure here can only ever mean "a consumer's own
+--- handler broke," never "this resource's own DB/cache state disagrees
+--- with what it just announced" — nothing above this call is undone or
+--- retried based on whether the fire succeeds.
+--- @param eventName string
+--- @param ... any
+local function FireOutboundEvent(eventName, ...)
+    local ok, err = pcall(TriggerEvent, eventName, ...)
+    if not ok then
+        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
+    end
+end
+
 -- SECURITY FIX (coder-security, final pass): grant/revoke are the single
 -- most sensitive server-authoritative actions this resource exposes (they
 -- ARE the permission system, per this file's header) — yet, unlike
@@ -512,6 +541,17 @@ local function GrantCertification(granterSrc, targetServerId)
 
     RefreshCertificationCache(targetCitizenid, jobName)
 
+    -- Outbound integration event (server/exports.lua's EVENT CONTRACT §1) —
+    -- fired here, after the cache refresh that itself follows the committed
+    -- INSERT, so any consumer reacting to this has already-committed,
+    -- server-authoritative state to query back against (HasK9Access/
+    -- GetActivePartnerCitizenId/etc.) if it wants to. Not gated on any
+    -- Config.Features flag: certification is this resource's core access
+    -- gate (SPEC.md §4.1), not a phase-numbered toggle, matching this same
+    -- reasoning already applied to HasK9Access itself in server/exports.lua's
+    -- header.
+    FireOutboundEvent('qbx_k9unit:events:certificationGranted', targetCitizenid, jobName, granterCitizenid)
+
     -- Read-only mirror for client HUD display ONLY (SPEC.md §4.3) — NEVER
     -- read by any server-side authorization check. Do not add a read of
     -- this field to HasK9Access or any other gate.
@@ -609,6 +649,12 @@ local function RevokeCertification(granterSrc, targetServerId)
         NotifyPlayer(granterSrc, 'Target does not hold an active certification for this department.', 'inform')
         return
     end
+
+    -- Outbound integration event (server/exports.lua's EVENT CONTRACT §2) —
+    -- fired immediately once `affectedRows` confirms a real row actually
+    -- flipped (never optimistically before this check), same "not gated on
+    -- a feature flag" reasoning as the grant event above.
+    FireOutboundEvent('qbx_k9unit:events:certificationRevoked', targetCitizenid, targetJobName, 'manual')
 
     if targetIsOnline then
         RefreshCertificationCache(targetCitizenid, targetJobName)
@@ -730,6 +776,12 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
         NotifyPlayer(granterSrc, 'That citizen does not hold an active certification for that department.', 'inform')
         return
     end
+
+    -- Outbound integration event (server/exports.lua's EVENT CONTRACT §2) —
+    -- same "fire only once affectedRows confirms a real row flipped"
+    -- discipline as RevokeCertification's online branch above; reason is
+    -- 'manual_offline' to distinguish this path from that one.
+    FireOutboundEvent('qbx_k9unit:events:certificationRevoked', citizenid, job, 'manual_offline')
 
     -- Regression-test fix: unlike RevokeCertification's online branch and
     -- the QBCore:Server:OnJobUpdate auto-revoke handler (both of which call
@@ -856,6 +908,14 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
         'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
         { 'system:job_change', citizenid, oldJob }
     )
+
+    -- Outbound integration event (server/exports.lua's EVENT CONTRACT §2) —
+    -- fired right after the UPDATE above. This branch is only reached once
+    -- `cached.active` and a real job-name change have already been
+    -- confirmed (see the guards above), so — unlike the two manual revoke
+    -- paths — there is no separate `affectedRows` result to gate on here;
+    -- the awaited UPDATE having returned at all IS this path's commit point.
+    FireOutboundEvent('qbx_k9unit:events:certificationRevoked', citizenid, oldJob, 'job_changed')
 
     -- Repopulate the cache scoped to the NEW job (almost certainly
     -- active = false unless they already hold a separate active cert for

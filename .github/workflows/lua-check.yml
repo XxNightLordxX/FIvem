@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'qbx_k9unit/**'
+      - '.luacheckrc'
       - '.github/workflows/lua-check.yml'
   pull_request:
     paths:
       - 'qbx_k9unit/**'
+      - '.luacheckrc'
       - '.github/workflows/lua-check.yml'
 
 jobs:
@@ -61,3 +63,495 @@ jobs:
         # off there too, with reasoning in that file -- see .luacheckrc
         # before assuming a new warning class is a bug rather than a config
         # gap.
+
+  # --- Everything below this line catches defect classes that pass BOTH
+  # luac5.4 -p and a clean luacheck run: syntactically valid, no unused/
+  # undefined-global warnings, and still broken at runtime. Each of these
+  # four jobs automates a specific real defect this codebase has actually
+  # shipped (see each job's own comment for which one, and how). They are
+  # deliberately kept as separate jobs, same as luac-syntax/luacheck above,
+  # so a failure's job name alone tells you which defect class it is
+  # without reading the log first.
+
+  manifest-paths:
+    name: fxmanifest.lua path existence
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.4 (provides luac5.4)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: Every own-resource path in fxmanifest.lua must exist on disk
+        # Real defect this catches: fxmanifest.lua's client_scripts once
+        # listed 'client/partnership.lua' for a period while that file did
+        # not exist on disk -- both luac5.4 -p and luacheck pass
+        # fxmanifest.lua cleanly either way (it's syntactically valid Lua,
+        # and it's excluded from luacheck entirely -- see .luacheckrc's own
+        # comment on why). The resource would fail to start with a manifest
+        # like that. Caught here by manually diffing every manifest path
+        # against disk once; this automates exactly that diff.
+        #
+        # Reads `luac5.4 -p -l -l` bytecode disassembly rather than
+        # grepping raw source text, specifically so a path merely mentioned
+        # in a COMMENT (fxmanifest.lua has many, e.g. "-- see
+        # client/partnership.lua's own header...") can never cause a false
+        # positive -- comments are never compiled into string constants,
+        # only real string literals in the manifest's actual
+        # shared_scripts{}/client_scripts{}/server_scripts{}/files{}/
+        # ui_page(...) calls are.
+        run: |
+          set -uo pipefail
+          MANIFEST="qbx_k9unit/fxmanifest.lua"
+          status=0
+          # Keep only strings that look like an own-resource relative file
+          # path: doesn't start with '@' (an '@resource/file' string is a
+          # reference into ANOTHER resource's own files, e.g.
+          # '@ox_lib/init.lua', not a path in this resource) and ends in a
+          # real file extension (2-5 alpha chars after the last '.') -- this
+          # excludes plain dependency names ('qbx_core', 'ox_lib' -- no
+          # dot) and non-path metadata strings ('0.1.0', 'cerulean',
+          # 'gta5', 'yes' -- no dot, or a non-alpha suffix after the last
+          # dot).
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            full="qbx_k9unit/$path"
+            if [ ! -f "$full" ]; then
+              echo "::error file=$MANIFEST::fxmanifest.lua references '$path', but $full does not exist on disk. Either the file was renamed/deleted without updating fxmanifest.lua, or this is a typo -- the resource will fail to start with this manifest."
+              status=1
+            fi
+          done < <(
+            luac5.4 -p -l -l -o /dev/null "$MANIFEST" \
+              | grep -oP '"\K[^"]+(?=")' \
+              | grep -vP '^@' \
+              | grep -P '\.[A-Za-z]{2,5}$' \
+              | sort -u
+          )
+          if [ "$status" -eq 0 ]; then
+            echo "Manifest path check passed: every own-resource path referenced in fxmanifest.lua exists on disk."
+          fi
+          exit "$status"
+
+  sql-table-existence:
+    name: MySQL query tables exist in sql/install.sql
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.4 (provides luac5.4)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: Every table in a MySQL.* query must exist in sql/install.sql
+        # Real defect this catches: server/progression.lua selected from
+        # and inserted into a `k9_progression` table that did not exist in
+        # sql/install.sql. Both call sites were pcall-wrapped (the
+        # documented "a persistence failure must never surface as a
+        # gameplay failure" convention), so it failed completely silently
+        # at runtime -- no startup error, no log line, XP just never
+        # persisted. Neither luac5.4 -p nor luacheck can see this: it's a
+        # cross-file (Lua query text <-> separate .sql schema file)
+        # consistency requirement, not a Lua-language defect.
+        #
+        # Reads only LOADK string CONSTANTS from `luac5.4 -p -l -l`
+        # bytecode, never raw source text -- specifically so this can never
+        # false-positive on a comment containing the plain English words
+        # "from"/"update"/"into" (this codebase's comments are full of
+        # prose like "differs from..." or "the update above..."). Comments
+        # are never compiled into bytecode constants, so only real SQL
+        # string literals actually passed to MySQL.* are ever inspected.
+        run: |
+          python3 <<'PYEOF'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          RESOURCE = Path("qbx_k9unit")
+          SQL_FILE = RESOURCE / "sql" / "install.sql"
+
+          # NOTE: (?<!KEY ) excludes the `... ON DUPLICATE KEY UPDATE col = val`
+          # upsert clause -- that UPDATE introduces a column assignment, not a
+          # table name, unlike a real `UPDATE tablename SET ...` statement
+          # (server/progression.lua's own AwardXP upsert uses exactly this
+          # clause).
+          TABLE_REF_RE = re.compile(r'(?<!KEY )\b(?:FROM|INTO|UPDATE|JOIN)\s+`?([A-Za-z_][A-Za-z0-9_]*)`?', re.IGNORECASE)
+          SQL_START_RE = re.compile(r'^\s*(SELECT|INSERT|UPDATE|DELETE|REPLACE)\b', re.IGNORECASE)
+
+
+          def declared_tables():
+              if not SQL_FILE.is_file():
+                  print(f"::error::{SQL_FILE} not found")
+                  sys.exit(2)
+              text = SQL_FILE.read_text()
+              return set(re.findall(r'CREATE TABLE(?:\s+IF NOT EXISTS)?\s+`?([A-Za-z_][A-Za-z0-9_]*)`?', text, re.IGNORECASE))
+
+
+          def sql_constants(fpath):
+              p = subprocess.run(
+                  ["luac5.4", "-p", "-l", "-l", "-o", "/dev/null", str(fpath)],
+                  capture_output=True, text=True,
+              )
+              if p.returncode != 0:
+                  print(f"::error file={fpath}::luac5.4 failed to disassemble this file: {p.stderr.strip()}")
+                  sys.exit(2)
+              out = []
+              for line in p.stdout.splitlines():
+                  m = re.match(r'^\t(\d+)\t\[(\d+)\]\tLOADK\s*\t\d+\s+\d+\t; "(.*)"$', line)
+                  if m:
+                      _idx, srcline, s = m.groups()
+                      out.append((int(srcline), s))
+              return out
+
+
+          def main():
+              declared = declared_tables()
+              if not declared:
+                  print(f"::error::no `CREATE TABLE` statements found in {SQL_FILE} -- ground truth is empty, refusing to run this check (would flag everything)")
+                  sys.exit(2)
+
+              findings = []
+              for sub in ("client", "server"):
+                  for fpath in sorted((RESOURCE / sub).glob("*.lua")):
+                      for srcline, s in sql_constants(fpath):
+                          unescaped = s.replace("\\n", " ").replace("\\t", " ")
+                          if not SQL_START_RE.match(unescaped):
+                              continue
+                          for m in TABLE_REF_RE.finditer(unescaped):
+                              table = m.group(1)
+                              if table.upper() in ("DUAL",):
+                                  continue
+                              if table not in declared:
+                                  findings.append((str(fpath), srcline, table, unescaped.strip()))
+
+              if findings:
+                  print("SQL table check FAILED -- a query references a table sql/install.sql never creates:")
+                  seen = set()
+                  for fpath, srcline, table, query in findings:
+                      key = (fpath, srcline, table)
+                      if key in seen:
+                          continue
+                      seen.add(key)
+                      print(f"::error file={fpath},line={srcline}::query references table `{table}`, which has no CREATE TABLE in {SQL_FILE}. Query: {query}")
+                  print()
+                  print(f"Fix: add a `CREATE TABLE IF NOT EXISTS` for each missing table above to {SQL_FILE}, or fix the table-name typo in the query.")
+                  print("A pcall-wrapped query on a missing table fails completely silently at runtime (no log line) -- exactly the k9_progression/XP defect this check exists to catch.")
+                  sys.exit(1)
+              print(f"SQL table check passed: every table referenced in a MySQL.* query has a matching CREATE TABLE in {SQL_FILE}.")
+
+
+          if __name__ == "__main__":
+              main()
+          PYEOF
+
+  config-path-existence:
+    name: Config.X.Y.Z chains resolve to real tables in config.lua
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.4 (provides lua5.4 and luac5.4)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: Every intermediate step of an indexed Config chain must be a real table
+        # Real defect this targets: a Config.Features flag was read while
+        # the matching Config.Combat.PropDragging TABLE did not yet exist
+        # in config.lua -- every further `Config.Combat.PropDragging.<x>`
+        # read would hard-error the first time that code path ran
+        # ("attempt to index a nil value"). Neither luac5.4 -p nor luacheck
+        # catch this: syntactically it's a completely ordinary nested field
+        # access, and Config is an allowlisted global either way.
+        #
+        # APPROACH (disclosed scope/limits -- see also the script's own
+        # header comment): reads `luac5.4 -p -l -l` bytecode, never raw
+        # source text, so a Config.* path merely mentioned in a comment can
+        # never cause a false positive. It tracks, per function, which
+        # registers hold a value traceable back to a `Config...` dotted
+        # chain (via GETTABUP/GETFIELD/MOVE), and whenever code indexes ONE
+        # LEVEL DEEPER into such a register, asserts that chain must
+        # resolve to a real table in the actual, loaded config.lua (the
+        # TERMINAL leaf field is never required to exist -- reading a nil
+        # leaf is valid Lua and does not crash, only indexing further into
+        # it does). On any instruction whose effect on a register isn't one
+        # of those three well-understood cases, that register's tracked
+        # state is dropped rather than guessed at -- so this is designed to
+        # under-report (e.g. a chain threaded through a closure upvalue, or
+        # produced on only one side of a branch) rather than ever assert a
+        # table requirement that doesn't actually hold. Verified against a
+        # constructed regression (a config table temporarily renamed out
+        # from under its real call sites) before being added here.
+        run: |
+          python3 <<'PYEOF'
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          RESOURCE = Path("qbx_k9unit")
+
+          INSTR_RE = re.compile(r"^\t(\d+)\t\[(\d+)\]\t(\S+)\s*\t?(.*)$")
+          FUNC_HEADER_RE = re.compile(r"^(main|function) <.*?:(\d+),(\d+)>")
+          STR_CONST_RE = re.compile(r'"([^"]*)"$')
+
+
+          def load_config_table():
+              lua_helper = r"""
+                  local function walk(t, prefix, seen)
+                      seen = seen or {}
+                      if seen[t] then return end
+                      seen[t] = true
+                      for k, v in pairs(t) do
+                          if type(k) == "string" then
+                              local path = prefix .. "." .. k
+                              print(path)
+                              if type(v) == "table" then
+                                  walk(v, path, seen)
+                              end
+                          end
+                      end
+                  end
+                  Config = {}
+                  dofile(arg[0])
+                  print("Config")
+                  walk(Config, "Config")
+              """
+              p = subprocess.run(
+                  ["lua5.4", "-e", lua_helper, "--", str(RESOURCE / "config.lua")],
+                  capture_output=True, text=True,
+              )
+              if p.returncode != 0:
+                  print("::error::could not load config.lua with lua5.4 to build ground truth:")
+                  print(p.stderr)
+                  sys.exit(2)
+              return set(line.strip() for line in p.stdout.splitlines() if line.strip())
+
+
+          def disassemble(fpath):
+              p = subprocess.run(
+                  ["luac5.4", "-p", "-l", "-l", "-o", "/dev/null", str(fpath)],
+                  capture_output=True, text=True,
+              )
+              if p.returncode != 0:
+                  print(f"::error file={fpath}::luac5.4 failed to disassemble this file: {p.stderr.strip()}")
+                  sys.exit(2)
+              return p.stdout.splitlines()
+
+
+          def parse_operands(rest):
+              if "\t; " in rest:
+                  ops_part, comment = rest.split("\t; ", 1)
+              elif "; " in rest:
+                  ops_part, comment = rest.split("; ", 1)
+              else:
+                  ops_part, comment = rest, ""
+              ops = [int(x.rstrip('k')) if x.rstrip('k').lstrip('-').isdigit() else None
+                     for x in ops_part.split()]
+              return ops, comment.strip()
+
+
+          def check_file(fpath, config_paths, findings):
+              lines = disassemble(fpath)
+              tags = {}
+
+              def untag_range(a, b=None):
+                  if b is None:
+                      tags.pop(a, None)
+                  else:
+                      for r in range(a, b + 1):
+                          tags.pop(r, None)
+
+              def require_table(path, lineno):
+                  if path not in config_paths:
+                      findings.append((str(fpath), lineno, path))
+
+              for raw in lines:
+                  if FUNC_HEADER_RE.match(raw):
+                      tags.clear()
+                      continue
+                  m = INSTR_RE.match(raw)
+                  if not m:
+                      continue
+                  _idx, srcline, op, rest = m.groups()
+                  srcline = int(srcline)
+                  ops, comment = parse_operands(rest)
+
+                  if op == "GETTABUP":
+                      A = ops[0]
+                      if comment.startswith('_ENV "Config"'):
+                          tags[A] = "Config"
+                      else:
+                          untag_range(A)
+                  elif op == "GETFIELD":
+                      A, B = ops[0], ops[1]
+                      fm = STR_CONST_RE.search(comment)
+                      field = fm.group(1) if fm else None
+                      base = tags.get(B)
+                      if base is not None and field is not None:
+                          require_table(base, srcline)
+                          tags[A] = base + "." + field
+                      else:
+                          untag_range(A)
+                  elif op == "MOVE":
+                      A, B = ops[0], ops[1]
+                      if B in tags:
+                          tags[A] = tags[B]
+                      else:
+                          untag_range(A)
+                  elif op in ("GETTABLE", "GETI", "SELF"):
+                      A, B = ops[0], ops[1]
+                      base = tags.get(B)
+                      if base is not None:
+                          require_table(base, srcline)
+                      untag_range(A, A + 1 if op == "SELF" else A)
+                  elif op in ("SETFIELD", "SETTABLE"):
+                      A = ops[0]
+                      base = tags.get(A)
+                      if base is not None:
+                          require_table(base, srcline)
+                  elif op in ("LOADF", "LOADI", "LOADK", "LOADFALSE", "LOADTRUE",
+                              "LFALSESKIP", "NEWTABLE", "GETUPVAL", "CLOSURE",
+                              "ADD", "ADDI", "ADDK", "SUB", "SUBK", "MUL", "MULK",
+                              "DIV", "DIVK", "CONCAT", "UNM", "NOT", "LEN", "TESTSET"):
+                      untag_range(ops[0])
+                  elif op == "LOADNIL":
+                      untag_range(ops[0], ops[0] + ops[1])
+                  elif op == "CALL":
+                      A, _B, C = ops[0], ops[1], ops[2]
+                      if C == 0:
+                          tags.clear()
+                      elif C >= 2:
+                          untag_range(A, A + C - 2)
+                  elif op == "TAILCALL":
+                      tags.clear()
+                  elif op in ("FORPREP", "FORLOOP"):
+                      untag_range(ops[0], ops[0] + 3)
+                  elif op in ("TFORPREP", "TFORCALL", "TFORLOOP"):
+                      untag_range(ops[0], ops[0] + 7)
+                  elif op in ("SETTABUP", "SETUPVAL", "SETLIST", "RETURN", "RETURN0",
+                              "RETURN1", "TEST", "EQ", "EQI", "EQK", "LT", "LTI", "LE",
+                              "LEI", "GTI", "JMP", "CLOSE", "VARARGPREP", "EXTRAARG",
+                              "MMBIN", "MMBINI", "MMBINK"):
+                      pass
+                  else:
+                      tags.clear()
+
+
+          def main():
+              config_paths = load_config_table()
+              findings = []
+              for sub in ("client", "server"):
+                  for fpath in sorted((RESOURCE / sub).glob("*.lua")):
+                      check_file(fpath, config_paths, findings)
+
+              if findings:
+                  print("Config path check FAILED -- code indexes into a Config.* table that does not exist in config.lua:")
+                  seen = set()
+                  for fpath, lineno, path in findings:
+                      key = (fpath, lineno, path)
+                      if key in seen:
+                          continue
+                      seen.add(key)
+                      print(f"::error file={fpath},line={lineno}::`{path}` is indexed as a table here, but config.lua has no such table.")
+                  print()
+                  print("Fix: either add that table to config.lua, or fix the typo'd path at the line(s) above.")
+                  print("This mirrors a real hard Lua error ('attempt to index a nil value') the first time that code path runs.")
+                  sys.exit(1)
+              print("Config path check passed: every Config.* chain that is indexed further resolves to a real table in config.lua.")
+
+
+          if __name__ == "__main__":
+              main()
+          PYEOF
+
+  luacheckrc-globals-defined:
+    name: .luacheckrc globals allowlist has real definitions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Every name in .luacheckrc's globals list must be really defined
+        # Rationale: luacheck's `globals` allowlist only ever suppresses
+        # "accessing/setting undefined variable" warnings for those exact
+        # names -- it never verifies the name is actually assigned
+        # anywhere. If a resource-global is allowlisted PREMATURELY (before
+        # the function that defines it is actually written) or with a
+        # typo'd spelling, luacheck stays clean on both sides. That gap
+        # matters most for exactly this codebase's own documented
+        # "runtime existence guard, not a load-order assumption" pattern
+        # (many of these globals are only ever READ behind a
+        # `type(X) == 'function'` check), which is precisely the shape
+        # that would let a prematurely-allowlisted, never-defined global
+        # slip through with zero luacheck warnings from either side. Only
+        # checks `globals` (this resource's OWN symbols) -- never
+        # `read_globals` (external FiveM/CFX/oxmysql/ox_lib/qbx_core
+        # natives), which are correctly never defined in this codebase.
+        # Reads .luacheckrc as input only -- does not modify it; a finding
+        # here is reported to whoever owns that file, not fixed here.
+        run: |
+          python3 <<'PYEOF'
+          import re
+          import sys
+          from pathlib import Path
+
+          RESOURCE = Path("qbx_k9unit")
+          LUACHECKRC = Path(".luacheckrc")
+
+
+          def extract_globals_list(text):
+              m = re.search(r'\bglobals\s*=\s*\{(.*?)\n\}', text, re.DOTALL)
+              if not m:
+                  print("::error::could not find a `globals = { ... }` table in .luacheckrc -- check its format hasn't changed")
+                  sys.exit(2)
+              body = m.group(1)
+              # Strip `-- ...` line comments BEFORE extracting quoted strings --
+              # this table's own entries are documented with extensive prose
+              # comments that themselves contain quoted words (e.g. a comment
+              # mentioning a future `client/radial.lua "Bite & Hold"/"Takedown"
+              # entry`), which would otherwise be mistaken for real allowlist
+              # entries.
+              code_only_lines = [line.split("--", 1)[0] for line in body.splitlines()]
+              code_only = "\n".join(code_only_lines)
+              return sorted(set(re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', code_only)))
+
+
+          def has_definition_site(name, all_lua_text):
+              func_pat = re.compile(r'^[ \t]*function\s+' + re.escape(name) + r'\s*\(', re.MULTILINE)
+              assign_pat = re.compile(r'^[ \t]*' + re.escape(name) + r'\s*=(?!=)', re.MULTILINE)
+              return bool(func_pat.search(all_lua_text) or assign_pat.search(all_lua_text))
+
+
+          def main():
+              if not LUACHECKRC.is_file():
+                  print(f"::error::{LUACHECKRC} not found")
+                  sys.exit(2)
+              names = extract_globals_list(LUACHECKRC.read_text())
+
+              lua_files = [RESOURCE / "config.lua"] + sorted((RESOURCE / "client").glob("*.lua")) + sorted((RESOURCE / "server").glob("*.lua"))
+              combined = ""
+              for f in lua_files:
+                  if f.is_file():
+                      combined += f"\n-- FILE:{f}\n" + f.read_text()
+
+              missing = [n for n in names if not has_definition_site(n, combined)]
+
+              if missing:
+                  print("::error::.luacheckrc globals check FAILED -- these names are allowlisted in .luacheckrc's `globals` table but have no real `function NAME(...)` or `NAME = ...` definition anywhere in qbx_k9unit: " + ", ".join(missing))
+                  print()
+                  print("This means either: (a) the allowlist entry is stale/premature (the planned function was never actually written), or (b) it's a typo and the REAL definition uses a different spelling -- in which case the real spelling is a genuinely undefined global from luacheck's point of view too, just not yet exercised by any code path luacheck's own analysis walks.")
+                  print("Fix: either implement the missing definition, remove the stale allowlist entry, or correct the typo so it matches the real definition site. (Report this to whoever owns .luacheckrc rather than editing it in an unrelated PR.)")
+                  sys.exit(1)
+              print(f"luacheckrc globals check passed: all {len(names)} names in .luacheckrc's `globals` list have a real definition site.")
+
+
+          if __name__ == "__main__":
+              main()
+          PYEOF

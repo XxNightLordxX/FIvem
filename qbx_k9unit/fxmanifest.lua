@@ -75,6 +75,9 @@ client_scripts {
     'client/combat.lua', -- Phase 3 (BiteAndHold/NonLethalTakedown, PHASE3_SPEC.md §12.5.1/§12.5.2) -- the client half of server/combat.lua; no ordering dependency on anything else in this list (reads Config.Combat/Config.Features from config.lua, already loaded via shared_scripts, and calls CanShowK9UI/DenyK9UIAccess from client/main.lua, which is loaded earlier in this same list, but Lua global-function resolution here is at CALL time, not load time, so this would still work even loaded first)
     'client/partnership.lua', -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7/§12.3) -- the client half of server/partnership.lua (Partner Up consent prompt, ox_target option, IsPartnered()/GetPartnerServerId(), and RefreshPartnershipStateFromServer() which yields on a server callback to re-sync the local cache before a caller decides Partner Up vs Break Partnership -- the local cache alone can under-report after a reconnect. The radial entry is now wired, in client/radial.lua). Same "no ordering dependency" note as client/combat.lua above -- calls CanShowK9UI()/IsOwnModelK9() from client/main.lua only at CALL time (inside RequestPartnerUp/the ox_target predicate), never at file-load time.
     'client/defense.lua', -- Phase 3 HandlerDownDefense client half -- soft dependency on client/combat.lua's IsBiteHoldEngaged via a runtime existence guard, so no hard load-order requirement
+    'client/audio.lua', -- Phase 5 NUI audio bridge. PLUMBING ONLY -- no audio files ship with this resource (html/sounds/CREDITS.md records an egress-blocked sourcing attempt and four unverified CC0 leads). Every play against a not-yet-supplied html/sounds/<key>.ogg degrades to a silent no-op end to end. Has no caller yet: client/main.lua's PlaySoundOnNetworkEntity is deliberately still on the RAGE path, so this loads inert.
+    'client/recall.lua', -- Phase 3 Recall (client half). Exposes RequestRecall() and the k9recall command. Deliberately does NOT call CanShowK9UI()/DenyK9UIAccess() -- Recall is a TERMINATION path and gating one is how the unbounded trap this resource forbids gets built.
+    'client/exports.lua', -- Public client-side export surface. No load-order dependency: every wrapped function is reached through a `type(fn) == 'function'` guard plus pcall, so an export over a file that early-returns under its own feature flag returns a documented nil/false rather than erroring.
 }
 
 server_scripts {
@@ -145,6 +148,33 @@ server_scripts {
     -- first tick rather than only after a resource restart, not a
     -- correctness requirement.
     'server/combat.lua',
+    -- Phase 3 Recall (server half) -- the handler's escape hatch, ending
+    -- whatever active effect their partnered K9 holds. Loaded after
+    -- cooldowns.lua (NewCooldown at file-load time -- a hard requirement);
+    -- no ordering requirement against partnership.lua or combat.lua, both
+    -- consumed through runtime existence guards.
+    'server/recall.lua',
+    -- Partnership-tenure milestone XP bonus (Config.Features.PartnershipTenureBonus,
+    -- COMPLEMENTARY_FEATURES.md item 7) -- the first gameplay consequence
+    -- wired to the HandlerPartnership registry, which landed as a
+    -- foundation with none. Extends partnership.lua/progression.lua through
+    -- their already-exposed accessors; no load-order dependency on either.
+    -- REQUIRES k9_partnerships.tenure_bonus_tier_granted (sql/install.sql
+    -- for fresh installs, sql/migrations/0003_*.sql for existing ones);
+    -- without it the milestone would re-grant on every restart, so its
+    -- queries are pcall-wrapped and go inert rather than misbehaving.
+    'server/tenure.lua',
+    -- Read-only, ACE-gated admin/audit surface over the three tables this
+    -- resource writes. Loaded after cooldowns.lua (NewCooldown at file-load
+    -- time); deliberately does NOT call into certifications.lua or
+    -- partnership.lua -- see its own ACCESS MODEL header.
+    'server/admin.lua',
+    -- Public server-side export surface -- this resource's first exports.
+    -- Self-registers via the runtime `exports('name', fn)` call, so no
+    -- `server_exports` manifest key is needed. Loaded last so every wrapped
+    -- internal function is already defined, though each call is guarded
+    -- anyway.
+    'server/exports.lua',
 }
 
 lua54 'yes'

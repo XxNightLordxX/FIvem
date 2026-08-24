@@ -250,6 +250,48 @@ local function PushTierSnapshot(targetSrc, tier)
     TriggerClientEvent('qbx_k9unit:client:xpTierChanged', targetSrc, tier)
 end
 
+--- Copies a Config.XPTiers-shaped entry (xp/label/speedMultiplier/
+--- scentRange) into a fresh table — identical shape/purpose to
+--- server/exports.lua's own `ShallowCopyTier`, duplicated here rather than
+--- shared, since this file has no import mechanism to reach that one.
+--- ResolveTier above deliberately returns the SAME Config.XPTiers[n] table
+--- object (by reference) for every citizenid whose xp falls in one tier's
+--- bracket (see that function's own doc comment) — handing that reference
+--- out in an outbound event payload would let an external resource's
+--- handler mutate `tier.speedMultiplier` and corrupt movement speed for
+--- every K9 in that tier, server-wide, for the rest of this resource's
+--- uptime. Always copy before it leaves this file via FireOutboundEvent.
+--- @param tier table
+--- @return table copy
+local function CopyTier(tier)
+    local copy = {}
+    for key, value in pairs(tier) do
+        copy[key] = value
+    end
+    return copy
+end
+
+--- Fires a stable `qbx_k9unit:events:*` outbound event for other resources
+--- (dispatch/MDT/evidence integrations — see server/exports.lua's header
+--- "EVENT CONTRACT" section for the full documented contract this
+--- implements). Same shape/reasoning as server/certifications.lua's and
+--- server/partnership.lua's own file-local copies of this helper: fired
+--- ONLY after the change it reports on has already committed (per this
+--- file's own design, that commit point is the synchronous K9XP cache
+--- write in AwardXP below, NOT the fire-and-forget DB UPSERT that follows
+--- it — see that function's own comment on why correctness never depends
+--- on DB round-trip latency here), and pcall-wrapped so a misbehaving
+--- consumer's `AddEventHandler` throwing can never unwind back into (and
+--- abort) the AwardXP call that fired it.
+--- @param eventName string
+--- @param ... any
+local function FireOutboundEvent(eventName, ...)
+    local ok, err = pcall(TriggerEvent, eventName, ...)
+    if not ok then
+        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
+    end
+end
+
 --- Resource-global — see FILE-TO-FILE CONTRACT above for the full contract.
 --- THE single server-authoritative XP-award entry point. Never trusts a
 --- client-claimed XP delta or tier — `actionKey` selects a flat, config-owned
@@ -298,13 +340,29 @@ function AwardXP(citizenid, actionKey)
 
     local newTier = ResolveTier(newXp)
     if newTier ~= oldTier then
-        -- Only push if the citizenid resolves to a CURRENTLY connected
-        -- player — every real call site today only ever awards XP to the
-        -- player who just performed the action (always online at call
-        -- time), but this stays generic (GetPlayerByCitizenId, not an
-        -- assumed `source`) rather than asserting that invariant, mirroring
-        -- server/certifications.lua's ForceDetachLeashIfOnline's own
-        -- "resolve by citizenid, no-op if not currently online" shape.
+        -- Outbound integration event (server/exports.lua's EVENT CONTRACT
+        -- §6) — fired here, at the exact crossing this branch already
+        -- exists to detect, with FRESH COPIES of both tiers (never the
+        -- shared Config.XPTiers[n] reference newTier/oldTier actually hold
+        -- — see CopyTier's own doc comment above for exactly why that
+        -- matters). Deliberately fired regardless of whether `citizenid`
+        -- currently resolves to an online player, unlike the client-facing
+        -- PushTierSnapshot call below it: this is a citizenid-keyed
+        -- integration signal for OTHER resources, not a client HUD push, so
+        -- there is no reason to suppress it just because this K9's own
+        -- client happens not to be connected right now (mirrors
+        -- server/certifications.lua's certificationRevoked event, which
+        -- likewise fires for both online and offline targets).
+        FireOutboundEvent('qbx_k9unit:events:xpTierReached', citizenid, CopyTier(newTier), CopyTier(oldTier))
+
+        -- Only push the CLIENT-facing snapshot if the citizenid resolves to
+        -- a CURRENTLY connected player — every real call site today only
+        -- ever awards XP to the player who just performed the action
+        -- (always online at call time), but this stays generic
+        -- (GetPlayerByCitizenId, not an assumed `source`) rather than
+        -- asserting that invariant, mirroring server/certifications.lua's
+        -- ForceDetachLeashIfOnline's own "resolve by citizenid, no-op if
+        -- not currently online" shape.
         local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
         local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
         if type(onlineSrc) == 'number' then

@@ -388,6 +388,24 @@ end)
 -- now calls that shared global below (HandleSearchTarget's 'person'
 -- branch) instead of defining its own.
 
+--- Fires a stable `qbx_k9unit:events:*` outbound event for other resources
+--- (dispatch/MDT/evidence integrations — see server/exports.lua's header
+--- "EVENT CONTRACT" section for the full documented contract this
+--- implements). Same shape/reasoning as server/certifications.lua's,
+--- server/partnership.lua's, and server/progression.lua's own file-local
+--- copies of this helper: fired ONLY after the write it reports on has
+--- already been issued, and pcall-wrapped so a misbehaving consumer's
+--- `AddEventHandler` throwing can never unwind back into (and abort) the
+--- searchTarget flow that fired it.
+--- @param eventName string
+--- @param ... any
+local function FireOutboundEvent(eventName, ...)
+    local ok, err = pcall(TriggerEvent, eventName, ...)
+    if not ok then
+        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
+    end
+end
+
 --- Fire-and-forget audit log write to `k9_search_log`
 --- (sql/install.sql — see that table's own header comment for the full
 --- db-schema rationale and integration note this function implements).
@@ -431,6 +449,18 @@ local function LogSearchAttempt(source, targetType, plateOrNil, targetCitizenidO
     ]], {
         searcherCitizenid, searcherJob, targetType, plateOrNil, targetCitizenidOrNil, result, totalWeightOrNil, alertTierOrNil,
     })
+
+    -- Outbound integration event (server/exports.lua's EVENT CONTRACT §5) --
+    -- wired HERE, not at each of this file's own call sites, so the event
+    -- payload can never drift from what actually lands in the k9_search_log
+    -- audit row above (every field below is the exact same value just bound
+    -- into that INSERT). Not gated on any Config.Features flag here: every
+    -- call site that reaches this function already required
+    -- Config.Features.SearchZones to be on (the callback registration below
+    -- rejects with 'feature_disabled' before ever reaching a code path that
+    -- calls this), so there is no reachable call with the feature off to
+    -- additionally guard against.
+    FireOutboundEvent('qbx_k9unit:events:searchCompleted', searcherCitizenid, searcherJob, targetType, result, totalWeightOrNil, alertTierOrNil)
 end
 
 --- Internal implementation for the searchTarget callback below. Called

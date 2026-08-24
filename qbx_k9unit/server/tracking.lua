@@ -207,9 +207,19 @@
     THIS FILE, server-to-server — added this pass, SPEC.md §9 items 11/17,
     phase2_notes/scent_source_resolution.md):
     5. 'swapItems' [THIS FILE]
-       Registered once at file load. Fires synchronously, server-side,
-       whenever ox_inventory processes ANY slot-to-slot item move —
-       filtered here to `payload.toType == 'drop'` (a ground-drop) only.
+       ADDENDUM (coordinator decision, 2026-08-24): registration is now
+       GATED on a runtime capability check (`IsOxInventoryHookCapable()`,
+       this file, checked from an `onResourceStart` handler further down) in
+       addition to Config.Features.ScentTracking — fxmanifest.lua's
+       `dependencies` block has no version-constraint syntax at all, so it
+       cannot guarantee `registerHook` actually exists on whatever
+       `ox_inventory` ends up running. If the check fails, this hook is
+       never registered at all (not registered-then-early-returning) and
+       one warning is printed; see `IsOxInventoryHookCapable()`'s own
+       call-site comment for the full reasoning. Otherwise unchanged: fires
+       synchronously, server-side, whenever ox_inventory processes ANY
+       slot-to-slot item move — filtered here to `payload.toType == 'drop'`
+       (a ground-drop) only.
        Logs the DROPPING PLAYER'S OWN live position, resolved via
        GetEntityCoords(GetPlayerPed(payload.source)) — same "never trust a
        claimed coordinate" rule as events 2/3 above, except there is no
@@ -260,6 +270,15 @@
       — added this pass. This is a one-way consumption (this file registers
       a callback ox_inventory invokes); THIS FILE still exposes nothing of
       its own for ox_inventory or any other resource to call.
+      ADDENDUM (coordinator decision, 2026-08-24): fxmanifest.lua's
+      `dependencies` block only guarantees ORDERING (ox_inventory starts
+      before this resource) — it has no version-constraint syntax at all, so
+      it cannot guarantee `registerHook` actually exists on whatever
+      `ox_inventory` build ends up running. `IsOxInventoryHookCapable()`
+      (declared just above the `registerHook` call site below) is a runtime
+      substitute for the version pin fxmanifest.lua cannot express, checked
+      once from an `onResourceStart` handler before this hook is ever
+      registered.
     - THIS FILE owns `TrackableLog` (scent/blood/gunpowder event log) and
       the cooldown tables below as file-local state. STRUCTURAL NOTE,
       UPDATED THIS PASS (mirrors server/certifications.lua's own
@@ -559,11 +578,112 @@ RegisterNetEvent('qbx_k9unit:server:relayWeaponFire', function()
     }
 end)
 
---- SPEC.md §9 items 11/17. Registered once at file load (ox_inventory is a
---- hard `dependencies` entry in fxmanifest.lua, so it is already running by
---- the time this file's top-level code executes — same ordering guarantee
---- server/search.lua's own ox_inventory export calls already rely on).
---- Confirmed real mechanism, phase2_notes/scent_source_resolution.md §2/§4
+--- RUNTIME CAPABILITY CHECK (coordinator decision, 2026-08-24) for the
+--- ox_inventory `registerHook` export the 'swapItems' hook below depends on.
+--- fxmanifest.lua's `dependencies` block has NO version-constraint syntax at
+--- all (confirmed against FiveM's own manifest-parsing source): a
+--- dependency string is only ever a constraint when it begins with '/', and
+--- the sole defined forms are '/server:BUILD', '/onesync', '/gameBuild:BUILD',
+--- '/native:0xHASH' — none of which can pin a DEPENDENT resource's own
+--- exports surface. So `dependencies { 'ox_inventory' }` alone cannot
+--- guarantee `registerHook` exists on whatever `ox_inventory` actually ends
+--- up running — a stale pinned build predating hook support, or a fork that
+--- renamed/dropped it, both look identical to fxmanifest.lua. A RUNTIME
+--- check is the only thing that can actually confirm it, and is strictly
+--- better anyway: a fork can self-declare any version string regardless of
+--- its real capabilities, so a version pin (even if the syntax existed)
+--- would have been no more trustworthy than this.
+---
+--- `GetResourceState(...) ~= 'started'` is checked FIRST and treated as an
+--- unconditional "unavailable": accessing `exports.ox_inventory` at all on a
+--- resource that is not started can itself throw a Lua error (not merely
+--- return nil), so this must gate BEFORE any export access is attempted —
+--- never be inferred from one.
+---
+--- The second check deliberately only INDEXES `exports.ox_inventory.registerHook`
+--- — it never CALLS it. Calling it is what performs ox_inventory's real
+--- hook-registration side effect, so a disposable "probe" call (e.g.
+--- registering a throwaway hook just to see if it succeeds) would leave a
+--- live, orphaned hook registered forever just to answer this yes/no
+--- question — deliberately not done here. The surrounding `pcall` is
+--- defense-in-depth against `exports.ox_inventory` itself throwing (see the
+--- `GetResourceState` note above — kept as a second layer even with that
+--- pre-check in place, the same "never trust a single layer" posture this
+--- file already applies everywhere else, e.g. DamageRelayCooldown/
+--- WeaponFireRelayCooldown/ScentDropRelayCooldown all being independent
+--- per-surface rate limits rather than one shared one).
+---
+--- HONEST CONFIDENCE NOTE: indexing (not calling) an export is understood,
+--- from FiveM's documented exports behavior, to always return a callable
+--- wrapper function regardless of whether the target resource actually
+--- registered that export name — the real "does it exist" answer is only
+--- resolved when the wrapper is CALLED. This was not independently
+--- re-verified against FiveM's Lua scripting-runtime source this session
+--- (only the fxmanifest.lua dependency-constraint parsing was verified
+--- against engine source — a different subsystem). Given that, this
+--- indexing check's practical value is mostly as a defensive belt against
+--- `exports.ox_inventory` itself erroring (the GetResourceState race noted
+--- above); it is NOT guaranteed to catch every case of `registerHook`
+--- being absent from an otherwise-started `ox_inventory` (e.g. a fork that
+--- removed the hooks module entirely but is still `GetResourceState`
+--- `'started'`) — disclosed here rather than silently assumed airtight.
+--- @return boolean
+local function IsOxInventoryHookCapable()
+    if GetResourceState('ox_inventory') ~= 'started' then
+        return false
+    end
+
+    local ok, hookExport = pcall(function() return exports.ox_inventory.registerHook end)
+    return ok and type(hookExport) == 'function'
+end
+
+--- SPEC.md §9 items 11/17. GATED AT REGISTRATION (this pass) on BOTH
+--- Config.Features.ScentTracking AND IsOxInventoryHookCapable() above —
+--- matches this resource's established "config-gated registration, not
+--- just config-gated behavior" convention (client/vision.lua's `if
+--- Config.Features.ThermalVision then RegisterCommand(...) end`,
+--- server/admin.lua's/server/combat.lua's own `onResourceStart`-gated
+--- blocks below this comment mirrors): if either check is false,
+--- `exports.ox_inventory:registerHook` is never called at all — not
+--- registered-then-early-returning inside its own callback body the way
+--- relayDamageEvent/relayWeaponFire above stay registered and check
+--- Config.Features internally (those are payload-less RegisterNetEvent
+--- handlers with no equivalent "leave something live in another resource"
+--- cost to avoiding; registering this hook when it should not exist at all
+--- is exactly that cost, hence the different shape here).
+---
+--- Wrapped in `onResourceStart` (THIS resource's own start, per the
+--- `GetCurrentResourceName() ~= resourceName` guard — same idiom as
+--- server/combat.lua's PropDragging warning and server/admin.lua's command
+--- registration) rather than run at bare top-level file-load time, so this
+--- is an explicit, one-time "at resource start" checkpoint distinct from
+--- mere script-load ordering. Fires exactly once per resource start
+--- (`onResourceStart` only ever fires once for a given start), does not
+--- poll, and is safe to run this late: ox_inventory is a hard
+--- `dependencies` entry in fxmanifest.lua, so it is already running (or
+--- knowably not) well before this resource's own `onResourceStart` fires —
+--- no player-facing drop can occur before this resource itself has finished
+--- starting anyway, so nothing is missed by not registering at bare
+--- file-load time instead.
+---
+--- ON FAILURE (ScentTracking enabled but IsOxInventoryHookCapable() false):
+--- prints ONE warning naming ox_inventory, the missing `registerHook`
+--- capability, and the exact consequence ("scent tracking disabled"), then
+--- leaves the feature genuinely inert — TrackableLog.scent simply never
+--- receives an entry (nothing ever calls the hook body below), so
+--- findTrackableSource's 'scent' branch always falls through to
+--- `{ found = false }` further down, exactly as if no scent source had ever
+--- existed. Deliberately NOT an `assert`: this resource reserves hard
+--- asserts for actively-dangerous states (server/certifications.lua's two,
+--- both access-control invariants) — a missing hook here makes the feature
+--- silently INERT, never silently EXPLOITABLE, so blocking this entire
+--- resource's startup over one disabled-by-default cosmetic feature would
+--- be a disproportionate response, mirroring server/combat.lua's own
+--- PropDragging warning's identical "enabled but underlying
+--- capability/config is missing -> loud warning, not a hard stop" reasoning.
+---
+--- Confirmed real mechanism otherwise unchanged from the original
+--- implementation, phase2_notes/scent_source_resolution.md §2/§4
 --- (tech-scout pass, 2026-08-23): `swapItems` fires SERVER-SIDE,
 --- synchronously, on every slot-to-slot item move ox_inventory processes
 --- (trunk/stash transfers, giving an item to another player, AND dropping
@@ -602,25 +722,39 @@ end)
 --- production) has NOT been performed as part of this implementation pass —
 --- flagging explicitly rather than silently skipping it, so whoever
 --- deploys this does it once before going live.
-exports.ox_inventory:registerHook('swapItems', function(payload)
-    if not Config.Features.ScentTracking then return end -- real server-side no-op regardless of client UI state, per §3
-    if payload.toType ~= 'drop' then return end -- only a ground-drop counts as a scent source; trunk/stash/give moves are not
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
 
-    -- Defense-in-depth rate limit, stamped BEFORE any log-append work, same
-    -- ordering discipline as every other ingest surface in this file — see
-    -- ScentDropRelayCooldown's own declaration comment for why this is NOT
-    -- an anti-forgery measure the way relayCooldownMs is for blood/gunpowder.
-    if not ScentDropRelayCooldown.Consume(payload.source, Config.Tracking.Scent.relayCooldownMs, GetGameTimer()) then
-        return -- silent no-op: rate-limited, not an error worth notifying about
+    if not Config.Features.ScentTracking then return end -- nothing to gate for; do not probe/warn about a disabled-by-default feature
+
+    if not IsOxInventoryHookCapable() then
+        print('[qbx_k9unit] WARNING: Config.Features.ScentTracking is enabled but ' ..
+            'ox_inventory\'s registerHook export is unavailable (ox_inventory is missing, not ' ..
+            'started, or this build does not support hook registration) -- scent tracking ' ..
+            'disabled. No scent sources will ever be logged; findTrackableSource(\'scent\') will ' ..
+            'always report found = false.')
+        return
     end
 
-    local ped = GetPlayerPed(payload.source)
-    if ped == 0 then return end -- defensive: no live ped (e.g. a system/script-originated drop with no real connected player behind payload.source)
+    exports.ox_inventory:registerHook('swapItems', function(payload)
+        if payload.toType ~= 'drop' then return end -- only a ground-drop counts as a scent source; trunk/stash/give moves are not
 
-    TrackableLog.scent[#TrackableLog.scent + 1] = {
-        coords = GetEntityCoords(ped), -- the DROPPING PLAYER'S OWN live position — NEVER ox_inventory's internal/eventual drop-inventory .coords (not yet created at this point in ox_inventory's own dropItem flow anyway, per scent_source_resolution.md §2) and NEVER anything client-supplied
-        loggedAt = GetGameTimer(),
-    }
+        -- Defense-in-depth rate limit, stamped BEFORE any log-append work, same
+        -- ordering discipline as every other ingest surface in this file — see
+        -- ScentDropRelayCooldown's own declaration comment for why this is NOT
+        -- an anti-forgery measure the way relayCooldownMs is for blood/gunpowder.
+        if not ScentDropRelayCooldown.Consume(payload.source, Config.Tracking.Scent.relayCooldownMs, GetGameTimer()) then
+            return -- silent no-op: rate-limited, not an error worth notifying about
+        end
+
+        local ped = GetPlayerPed(payload.source)
+        if ped == 0 then return end -- defensive: no live ped (e.g. a system/script-originated drop with no real connected player behind payload.source)
+
+        TrackableLog.scent[#TrackableLog.scent + 1] = {
+            coords = GetEntityCoords(ped), -- the DROPPING PLAYER'S OWN live position — NEVER ox_inventory's internal/eventual drop-inventory .coords (not yet created at this point in ox_inventory's own dropItem flow anyway, per scent_source_resolution.md §2) and NEVER anything client-supplied
+            loggedAt = GetGameTimer(),
+        }
+    end)
 end)
 
 --- SPEC.md §11.4 item 1. Resolves the nearest trackable source of

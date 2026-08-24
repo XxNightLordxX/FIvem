@@ -28,6 +28,22 @@
 --
 -- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
 -- this idempotent if executed more than once.
+--
+-- UPGRADING AN EXISTING DATABASE (db-schema pass, 2026-08-24): this file
+-- remains the correct thing to run for a brand-new install (it creates
+-- every table below in one pass, in final shape, via CREATE TABLE IF NOT
+-- EXISTS). It is NOT re-run to pick up a column/index added to an ALREADY
+-- EXISTING table on a live database — `CREATE TABLE IF NOT EXISTS` is a
+-- complete no-op once the table exists, even if that table's stored
+-- definition is missing a column this file's CREATE TABLE now includes
+-- (e.g. `k9_partnerships.tenure_bonus_tier_granted`, added below). For
+-- that case, apply the ordered, individually-idempotent files under
+-- `qbx_k9unit/sql/migrations/` (0001, 0002, 0003, ... in filename order)
+-- instead — each one is safe to run any number of times and safe to run
+-- against a database that already has the change it applies. A fresh
+-- install never needs the migrations folder; an existing install upgrading
+-- across resource versions runs install.sql once (harmless no-op for
+-- anything already present) then every migration file in order.
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS `k9_certifications` (
   `id`               INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -318,6 +334,35 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
 --     FK/format constraint is placed on this column for the same reason
 --     `k9_certifications` places none on `revoked_by`.
 --
+-- `tenure_bonus_tier_granted` (db-schema pass, 2026-08-24): ONE new column,
+-- added per `server/tenure.lua`'s own header ("WHY ONE NEW COLUMN IS
+-- UNAVOIDABLE") -- that file's real SELECT/UPDATE text was read directly
+-- (not inferred from its header prose) and this column matches it exactly:
+-- name, type, NOT NULL, and DEFAULT 0. It is the highest 1-based index into
+-- `Config.Partnership.TenureBonus.milestones` already paid out as a
+-- one-time XP bonus for THIS partnership row (0 = none yet). Without a
+-- durable marker here, `server/tenure.lua`'s periodic milestone check would
+-- re-grant every already-earned milestone for every still-active,
+-- past-threshold partnership on every resource/server restart -- an
+-- ordinary, frequent event, not a rare edge case (same class of bug this
+-- file's own `k9_progression` table below was added to close for XP
+-- persistence generally). Written ONLY by `server/tenure.lua`, via an
+-- optimistic `UPDATE ... WHERE tenure_bonus_tier_granted = <old value>`
+-- race guard -- never decremented, never reset in place; a NEW partnership
+-- row (a break + re-form always INSERTs a fresh row, per this table's own
+-- append-mostly design above) always starts at this column's DEFAULT 0,
+-- which is how tenure resets across a break/re-form with zero extra code.
+-- TINYINT UNSIGNED is sized for the real domain (a handful of milestones,
+-- proposed as 3 in `server/tenure.lua`'s closing comment block) while still
+-- leaving headroom (0-255) for future milestones without a second widening
+-- migration. `server/tenure.lua`'s own queries are pcall-wrapped and
+-- degrade to a silent no-op if this column is missing, so adding it here is
+-- backward-compatible with a database that has not applied it yet -- but
+-- see `qbx_k9unit/sql/migrations/0003_add_k9_partnerships_tenure_bonus_tier_granted.sql`
+-- for the companion ALTER TABLE this exact addition requires on any
+-- database where `k9_partnerships` already exists (CREATE TABLE IF NOT
+-- EXISTS below does not retroactively add a column to an existing table).
+--
 -- No FK to a `players` table is declared here, for the exact same
 -- reason `k9_certifications` and `k9_search_log` above declare none:
 -- this resource's migration must not depend on qbx_core's own schema
@@ -345,6 +390,13 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
                                                                      -- the identical sentinel convention this column mirrors.
   `ended_at`            DATETIME     DEFAULT NULL,
   `active`              TINYINT(1)   NOT NULL DEFAULT 1,           -- 1 = currently a live partnership, 0 = historical/ended row
+
+  `tenure_bonus_tier_granted` TINYINT UNSIGNED NOT NULL DEFAULT 0, -- highest 1-based index into
+                                                                     -- Config.Partnership.TenureBonus.milestones already paid
+                                                                     -- out for THIS row; 0 = none yet. See this table's own
+                                                                     -- header comment above for the full rationale
+                                                                     -- (server/tenure.lua) and the companion migration file
+                                                                     -- for databases where this table already existed.
 
   -- Generated helper columns (derived only, never written directly by
   -- app code): NULL for every inactive/ended row, and the respective

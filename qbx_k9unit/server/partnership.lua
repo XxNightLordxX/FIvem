@@ -421,6 +421,29 @@ local function TellCitizenIdPartnershipEnded(citizenid, reason)
     TriggerClientEvent('qbx_k9unit:client:partnershipEnded', src, reason)
 end
 
+--- Fires a stable `qbx_k9unit:events:*` outbound event for other resources
+--- (dispatch/MDT/evidence integrations — see server/exports.lua's header
+--- "EVENT CONTRACT" section for the full documented contract this
+--- implements). Identical shape/reasoning to server/certifications.lua's
+--- own `FireOutboundEvent` local helper of the same name (kept as its own
+--- file-local copy rather than a shared cross-file global — this is a tiny,
+--- self-contained utility, not domain state, so duplicating it costs less
+--- than adding a new cross-file dependency for it): fired ONLY after the
+--- DB write it reports on has already committed, and pcall-wrapped so a
+--- misbehaving consumer's `AddEventHandler` throwing can never unwind back
+--- into (and abort) the partnership flow that fired it. A pcall failure
+--- here can only mean a consumer's own handler broke — never that this
+--- file's own DB/cache state disagrees with what it just announced, since
+--- nothing above this call is undone based on whether the fire succeeds.
+--- @param eventName string
+--- @param ... any
+local function FireOutboundEvent(eventName, ...)
+    local ok, err = pcall(TriggerEvent, eventName, ...)
+    if not ok then
+        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
+    end
+end
+
 --- Re-queries the active-partnership row for `citizenid` (in EITHER role)
 --- and updates the in-memory cache. Exposed globally (no `local`) -- see
 --- this file's header for the full pcall/fail-closed rationale, mirroring
@@ -908,6 +931,16 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
     -- which must tolerate either side being offline.
     TriggerClientEvent('qbx_k9unit:client:partnershipEstablished', k9Src, officerSrc, true)  -- isK9 = true
     TriggerClientEvent('qbx_k9unit:client:partnershipEstablished', officerSrc, k9Src, false) -- isK9 = false
+
+    -- Outbound integration event (server/exports.lua's EVENT CONTRACT §3) --
+    -- fired only once `outcomeOrErr == 'ok'`, i.e. strictly after the INSERT
+    -- above committed AND RefreshPartnershipCache already ran, mirroring the
+    -- two TriggerClientEvent calls directly above. Not gated on
+    -- Config.Features.HandlerPartnership: this branch is only reachable at
+    -- all if CheckPartnershipEligibility (and the re-check inside the mutex
+    -- above) already confirmed the flag was on, so there is no path here
+    -- with the feature disabled to additionally gate against.
+    FireOutboundEvent('qbx_k9unit:events:partnershipEstablished', k9Citizenid, officerCitizenid)
 end)
 
 --- Internal teardown core, keyed by CITIZENID (not source) so it works
@@ -952,6 +985,21 @@ local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
     local partnerCitizenid = (row.k9_citizenid == citizenid) and row.handler_citizenid or row.k9_citizenid
     TellCitizenIdPartnershipEnded(citizenid, broadcastReason)
     TellCitizenIdPartnershipEnded(partnerCitizenid, broadcastReason)
+
+    -- Outbound integration event (server/exports.lua's EVENT CONTRACT §4) --
+    -- fired only once `affectedRows` confirmed above that THIS call actually
+    -- won the race and flipped the row (the early `return false` paths above
+    -- never reach here). This one function backs both the player-initiated
+    -- breakPartnership event and ForceBreakPartnershipForCitizenId (the
+    -- automatic teardown on cert revoke/department change), so wiring it
+    -- here covers both paths in one place, exactly as documented. Not gated
+    -- on Config.Features.HandlerPartnership: an existing, already-persisted
+    -- partnership row must be reported as torn down regardless of the
+    -- flag's CURRENT value (mirrors server/exports.lua's own reasoning for
+    -- GetActivePartnerCitizenId/IsActivePartnerOf -- a real DB row does not
+    -- stop being real just because an operator toggled the flag off after
+    -- it was created).
+    FireOutboundEvent('qbx_k9unit:events:partnershipEnded', row.k9_citizenid, row.handler_citizenid, broadcastReason)
 
     return true
 end

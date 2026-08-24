@@ -839,6 +839,49 @@ local function EndHold(targetNetId, reason)
     end
 end
 
+--- Resource-global (no `local`) accessor exposed for OTHER files that need
+--- to unconditionally end whatever engagement (bite/takedown/drag) a K9 is
+--- CURRENTLY the HOLDER of, regardless of who is asking or that K9's own
+--- current certification/access state. server/recall.lua's Recall actor
+--- (PHASE3_SPEC.md §12.5.1, §12.0 item 7's "Recall actor" consumer) is this
+--- function's one intended caller today -- resolved through the SAME
+--- `type(...) == 'function'` runtime-existence-guard convention this file
+--- already uses for IsHesitating/IsDistracted/AwardXP (see FILE-TO-FILE
+--- CONTRACT above), never a load-order assumption, since server/recall.lua's
+--- own position in fxmanifest.lua's server_scripts relative to THIS file is
+--- not, and should not need to be, load-bearing.
+---
+--- DELIBERATELY NEVER CHECKS HasK9Access/Config.Features.* ITSELF -- this is
+--- a TERMINATION path, and PHASE3_SPEC.md's own "no unbounded trap"
+--- guarantee (§12.0 item 4, restated for Recall specifically at §12.5.1)
+--- requires that a K9 whose certification is revoked, or whose feature flag
+--- is toggled off, mid-engagement can still be called off; gating this
+--- function on either would reintroduce exactly the trap that guarantee
+--- forbids. The caller (server/recall.lua) is responsible for its OWN
+--- authorization (verifying the requester is genuinely `holderSrc`'s
+--- established partner, per server/partnership.lua) -- this function's own
+--- contract is narrower and unconditional: "does this holder have an active
+--- engagement, and if so, end it," nothing more.
+---
+--- pcall-wrapped internally (mirrors this file's own shared-maintenance-
+--- thread precedent for EndHold above) so an unexpected error inside
+--- EndHold/AwardXP/a TriggerClientEvent argument can never propagate into an
+--- unrelated caller's own event handler and abort IT for a reason that has
+--- nothing to do with that caller's own logic.
+--- @param holderSrc number
+--- @return boolean ended -- false if `holderSrc` has no active engagement (a genuine no-op, not an error)
+function EndActiveEffectForHolder(holderSrc)
+    local targetNetId = K9ActiveEffect[holderSrc]
+    if not targetNetId then return false end
+
+    local ok, err = pcall(EndHold, targetNetId, 'recalled')
+    if not ok then
+        print(('[qbx_k9unit] EndActiveEffectForHolder(recalled) errored for holderSrc %s, targetNetId %s: %s'):format(holderSrc, targetNetId, tostring(err)))
+        return false
+    end
+    return true
+end
+
 --[[ ================= NON-COMPLIANCE DETECTION ================= ]]
 
 --- @param hold table -- an ActiveHolds entry

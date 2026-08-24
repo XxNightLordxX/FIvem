@@ -1,0 +1,273 @@
+--[[
+    qbx_k9unit/client/exports.lua
+
+    PUBLIC API SURFACE (client half) — coder-architect pass, 2026-08-24.
+    Companion to server/exports.lua — read that file's header first, it
+    covers the shared design principles (read-only, re-derive/never trust,
+    no raw internal tables, wrap-don't-reimplement, fail closed) which apply
+    here identically. This file exists because a client-side justification
+    is genuinely different from the server one, not by default symmetry:
+
+    JUSTIFICATION FOR A CLIENT COUNTERPART (task explicitly asks this be
+    argued, not assumed): the server surface answers "is this player
+    allowed/what is their state," which is what dispatch/MDT/evidence-style
+    integrations need. A client-side integration need is narrower but real
+    — another CLIENT resource running in the SAME player's game session may
+    need to read this resource's LOCAL, already-computed UI/interaction
+    state to avoid stepping on it, without standing up its own server
+    round-trip:
+      - A vision/goggle-item resource activating its OWN screen effect has
+        a concrete reason to check IsThermalVisionActive()/
+        IsNightVisionActive() first — client/vision.lua's own
+        EnsureOnlyOneVisionEffectActive already enforces "only one vision
+        effect active" WITHIN this resource; a second resource's effect
+        stacking on top of this resource's is exactly the kind of visual
+        conflict that check cannot see across resource boundaries.
+      - A phone/tablet/HUD resource may want to hide/disable itself while
+        the local player is CanShowK9UI() (actively controlling a K9 with
+        this resource's own UI live) or IsLeashed()/IsInK9Vehicle(), the
+        same way it already reasonably would for e.g. being restrained.
+      - An animation/ragdoll-management resource may want IsBiteHoldEngaged()/
+        IsDragEngaged() before doing something that would visibly conflict
+        with a K9 action already in progress on the same ped.
+    Every export below is a zero-argument (or citizenid-echoing) read of
+    state this file's own client scripts already compute for their own use
+    — no new logic, same "thin wrapper" posture as the server file.
+
+    ======================================================================
+    TRUST MODEL NOTE, DISTINCT FROM THE SERVER FILE: client-side state is
+    never a security boundary in this resource (nor in FiveM generally — a
+    modified client can always lie to itself), so "re-derive, never trust"
+    does not carry the same authorization weight here it does server-side.
+    These exports are DISPLAY/COORDINATION state, not permission checks —
+    HasK9Access() below still round-trips to the server-authoritative
+    check (it's the same function client/main.lua's own UI gating already
+    calls), but a caller relying on it for anything security-relevant
+    should use the SERVER export (server/exports.lua's HasK9Access(source))
+    instead, which cannot be affected by a compromised client. This file's
+    HasK9Access() is exposed for the coordination use case above (a local
+    UI decision), not as a substitute authorization check.
+    ======================================================================
+
+    Config.Features GATING: same reasoning as server/exports.lua — none of
+    the exports below gate on a Config.Features flag beyond what the
+    wrapped client function itself already does internally (e.g.
+    IsThermalVisionActive()/IsNightVisionActive() already return false
+    outright if their owning feature was never enabled, since the
+    underlying vision-effect natives are simply never toggled on in that
+    case — this file adds no separate gate on top of that).
+
+    VERSIONING: GetAPIVersion() mirrors server/exports.lua's literal value
+    (1.0.0) — kept in sync manually since client and server are separate
+    Lua VMs with no shared module system in this resource's own convention
+    (see server/exports.lua's header for the full semver posture).
+
+    NOT IN THIS FILE: RequestPartnerUp/BreakPartnership/RequestLeashAttach/
+    DetachLeash/RequestBiteHold/ReleaseBiteHold/RequestTakedown/RequestDrag/
+    ReleaseDrag/ToggleThermalVision/ToggleNightVision and every other
+    self-initiated ACTION this resource's client files expose. Same
+    "mutations are a trust boundary, read-only first" posture as the server
+    file's own exclusion list — none of these are queries, and every one of
+    them already has its own consent/proximity/cooldown context tied to
+    THIS resource's own UI flow (radial menu selection, ox_target option,
+    etc.) that an external resource driving them directly would bypass.
+    ======================================================================
+]]
+
+--- Copies a tier-shaped table (xp/label/speedMultiplier/scentRange) into a
+--- fresh table — same rationale as server/exports.lua's ShallowCopyTier:
+--- never hand out a live reference to this file's own cached state.
+--- @param tier table
+--- @return table copy
+local function ShallowCopyTier(tier)
+    local copy = {}
+    for key, value in pairs(tier) do
+        copy[key] = value
+    end
+    return copy
+end
+
+-- ======================================================================
+-- VERSIONING
+-- ======================================================================
+
+local API_VERSION = { major = 1, minor = 0, patch = 0, string = '1.0.0' }
+
+--- @return table { major: number, minor: number, patch: number, string: string }
+exports('GetAPIVersion', function()
+    return { major = API_VERSION.major, minor = API_VERSION.minor, patch = API_VERSION.patch, string = API_VERSION.string }
+end)
+
+-- ======================================================================
+-- LOCAL PLAYER / UI STATE (wraps client/main.lua)
+-- ======================================================================
+
+--- YIELDS on a server round-trip the first call in any ~1000ms window (see
+--- client/main.lua's own HAS_K9_ACCESS_CACHE_TTL_MS) — the wrapped
+--- HasK9Access() is a debounced read of the server-authoritative check for
+--- THIS client's own local player, not a permission decision this resource
+--- makes locally. See this file's header TRUST MODEL NOTE — prefer
+--- server/exports.lua's HasK9Access(source) for anything security-relevant.
+--- @return boolean
+exports('HasK9Access', function()
+    if type(HasK9Access) ~= 'function' then return false end
+
+    local ok, result = pcall(HasK9Access)
+    if not ok then return false end
+    return result == true
+end)
+
+--- Pure client-side, display-only check: is the local player's own
+--- character currently a recognized K9 model? Wraps IsOwnModelK9() 1:1.
+--- @return boolean
+exports('IsOwnModelK9', function()
+    if type(IsOwnModelK9) ~= 'function' then return false end
+
+    local ok, result = pcall(IsOwnModelK9)
+    if not ok then return false end
+    return result == true
+end)
+
+--- The combinator client/main.lua's own header calls "every other client
+--- file should call for K9 UI/feature gating decisions" (IsOwnModelK9() AND
+--- HasK9Access()) — extended across the resource boundary here for the
+--- same reason. YIELDS, for the same reason HasK9Access() above does.
+--- @return boolean
+exports('CanShowK9UI', function()
+    if type(CanShowK9UI) ~= 'function' then return false end
+
+    local ok, result = pcall(CanShowK9UI)
+    if not ok then return false end
+    return result == true
+end)
+
+--- @return boolean
+exports('IsLeashed', function()
+    if type(IsLeashed) ~= 'function' then return false end
+
+    local ok, result = pcall(IsLeashed)
+    if not ok then return false end
+    return result == true
+end)
+
+--- @return boolean
+exports('IsInK9Vehicle', function()
+    if type(IsInK9Vehicle) ~= 'function' then return false end
+
+    local ok, result = pcall(IsInK9Vehicle)
+    if not ok then return false end
+    return result == true
+end)
+
+-- ======================================================================
+-- PARTNERSHIP STATE (wraps client/partnership.lua)
+-- ======================================================================
+
+--- Local, non-yielding cache read — see client/partnership.lua's own
+--- "KNOWN CACHE-STALENESS GAP" note (that file's header) for the one case
+--- this can under-report (a reconnect before the client's own
+--- RefreshPartnershipStateFromServer has run). Not wrapping that refresh
+--- function here deliberately — this file stays non-yielding-by-default
+--- for its partnership reads, consistent with IsPartnered()/
+--- GetPartnerServerId() being this resource's own designed-for-reuse
+--- surface (see client/partnership.lua's own FILE-TO-FILE CONTRACT).
+--- @return boolean
+exports('IsPartnered', function()
+    if type(IsPartnered) ~= 'function' then return false end
+
+    local ok, result = pcall(IsPartnered)
+    if not ok then return false end
+    return result == true
+end)
+
+--- @return number? partnerServerId
+exports('GetPartnerServerId', function()
+    if type(GetPartnerServerId) ~= 'function' then return nil end
+
+    local ok, result = pcall(GetPartnerServerId)
+    if not ok then return nil end
+    return result
+end)
+
+-- ======================================================================
+-- XP / PROGRESSION STATE (wraps client/progression.lua)
+-- ======================================================================
+
+--- The last server-pushed tier snapshot for the local player, or nil
+--- before the first 'qbx_k9unit:client:xpTierChanged' event has arrived
+--- this session — ALWAYS a fresh copy (see ShallowCopyTier above), never
+--- client/progression.lua's own cached table reference.
+--- @return table? { xp: number, label: string, speedMultiplier: number, scentRange: number }
+exports('GetCurrentXPTier', function()
+    if type(GetCurrentXPTier) ~= 'function' then return nil end
+
+    local ok, tier = pcall(GetCurrentXPTier)
+    if not ok or type(tier) ~= 'table' then return nil end
+    return ShallowCopyTier(tier)
+end)
+
+-- ======================================================================
+-- TRACKING STATE (wraps client/tracking.lua)
+-- ======================================================================
+
+--- @return boolean
+exports('IsTracking', function()
+    if type(IsTracking) ~= 'function' then return false end
+
+    local ok, result = pcall(IsTracking)
+    if not ok then return false end
+    return result == true
+end)
+
+--- @return 'scent'|'blood'|'gunpowder'|nil
+exports('GetActiveTrackType', function()
+    if type(GetActiveTrackType) ~= 'function' then return nil end
+
+    local ok, result = pcall(GetActiveTrackType)
+    if not ok then return nil end
+    return result
+end)
+
+-- ======================================================================
+-- VISION STATE (wraps client/vision.lua)
+-- ======================================================================
+
+--- @return boolean
+exports('IsThermalVisionActive', function()
+    if type(IsThermalVisionActive) ~= 'function' then return false end
+
+    local ok, result = pcall(IsThermalVisionActive)
+    if not ok then return false end
+    return result == true
+end)
+
+--- @return boolean
+exports('IsNightVisionActive', function()
+    if type(IsNightVisionActive) ~= 'function' then return false end
+
+    local ok, result = pcall(IsNightVisionActive)
+    if not ok then return false end
+    return result == true
+end)
+
+-- ======================================================================
+-- COMBAT ENGAGEMENT STATE (wraps client/combat.lua)
+-- ======================================================================
+
+--- @return boolean
+exports('IsBiteHoldEngaged', function()
+    if type(IsBiteHoldEngaged) ~= 'function' then return false end
+
+    local ok, result = pcall(IsBiteHoldEngaged)
+    if not ok then return false end
+    return result == true
+end)
+
+--- @return boolean
+exports('IsDragEngaged', function()
+    if type(IsDragEngaged) ~= 'function' then return false end
+
+    local ok, result = pcall(IsDragEngaged)
+    if not ok then return false end
+    return result == true
+end)

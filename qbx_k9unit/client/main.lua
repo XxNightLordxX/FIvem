@@ -110,14 +110,21 @@ end
 --- this exact signature) to a resource-global here, reusing THIS file's
 --- own `K9ModelHashes` table above rather than building a second,
 --- identical one — the Revision 5 audit found this same boolean
---- model-recognition table independently hand-copied 5 times across this
+--- model-recognition table independently hand-copied 6 times across this
 --- resource (client/main.lua, client/movement.lua, client/wellbeing.lua,
---- client/medkit.lua, client/inventory.lua); this promotion deletes the
---- client/movement.lua/client/wellbeing.lua/client/medkit.lua copies (all
---- three in scope for this pass). client/inventory.lua's copy and
---- client/partnership.lua's own copy (a 6th, previously untracked
---- instance found while making this change — see this pass's own
---- reporting) are OUT OF SCOPE for this pass and left untouched.
+--- client/medkit.lua, client/inventory.lua, and client/partnership.lua —
+--- this last one a previously untracked 6th instance found only while
+--- consolidating the other five). This is now fully done, landed across
+--- two passes: the first deleted the client/movement.lua/client/wellbeing.lua/
+--- client/medkit.lua copies; a later pass deleted the remaining
+--- client/inventory.lua and client/partnership.lua copies too, once each
+--- was re-read and confirmed byte-identical in behavior (same
+--- Config.Peds-driven model set, no extra guard/nil-check divergence) —
+--- see those two files' own call sites for the direct
+--- `IsEntityModelK9(entity)` calls that replaced them. Zero duplicate
+--- copies of this check remain anywhere in `client/` as of this comment;
+--- if a new one appears, update this count rather than letting it go
+--- unrecorded again.
 --- server/certifications.lua's server-side `K9ModelHashes` is correctly
 --- left alone per the roadmap's own note — a resource-global here can't
 --- cross the client/server realm boundary.

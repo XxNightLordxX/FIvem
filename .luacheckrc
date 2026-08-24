@@ -41,7 +41,13 @@ exclude_files = {
 read_globals = {
     -- Threading / events
     "CreateThread", "Wait", "AddEventHandler", "RegisterNetEvent",
-    "TriggerClientEvent", "TriggerServerEvent", "RegisterCommand",
+    "TriggerClientEvent", "TriggerServerEvent", "TriggerEvent", "RegisterCommand",
+    -- GET_RESOURCE_STATE. Server-side; used by server/tracking.lua's
+    -- ox_inventory capability probe as the first gate, because accessing an
+    -- export on a resource that is not started can throw rather than return
+    -- nil. Basis: CFX base resource-management API, not a game native --
+    -- pending confirmation from the in-flight native audit; remove if refuted.
+    "GetResourceState",
     "RegisterKeyMapping",
     -- Player / entity queries
     "GetPlayers", "GetActivePlayers", "GetPlayerFromServerId",
@@ -152,6 +158,15 @@ read_globals = {
 -- they belong in `globals` (readable AND assignable), not `read_globals`.
 globals = {
     "Config",
+    -- client/audio.lua -- NUI audio bridge (Phase 5). Plumbing only; no
+    -- audio files ship with this resource, see html/sounds/CREDITS.md.
+    "PlayK9Sound", "StopK9Sound", "IsK9SoundActive",
+    -- server/combat.lua -- termination primitive with no gate of its own,
+    -- exposed for server/recall.lua. Authorization is the CALLER's job;
+    -- gating a termination path is how an unbounded trap gets built.
+    "EndActiveEffectForHolder",
+    -- client/recall.lua -- the handler's escape hatch.
+    "RequestRecall",
     -- server/cooldowns.lua constructors
     "NewCooldown", "NewNestedCooldown", "NewMutex",
     -- server/certifications.lua

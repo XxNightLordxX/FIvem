@@ -47,6 +47,16 @@ Config.Features = {
     PropDragging         = false,
     AgilityAdvanced      = false, -- fence/window vault approximation
 
+    -- server/recall.lua + client/recall.lua (PHASE3_SPEC.md §12.5.1's
+    -- "Recall actor"). The handler's escape hatch: ends whatever active
+    -- effect their partnered K9 currently holds (bite/takedown/drag alike --
+    -- deliberately generalised beyond §12.5.1's bite-only text, since
+    -- narrowing it would leave a handler unable to call off a mid-drag K9,
+    -- a strictly worse unbounded-trap posture). The TERMINATION path is
+    -- never gated on HasK9Access/CanShowK9UI on either party, by design --
+    -- a decertified handler must still be able to call their dog off.
+    Recall               = false,
+
     -- PHASE3_SPEC.md §12.0 item 7 (Revision 5, coder-architect) /
     -- server/partnership.lua (coder-backend, this pass). Gates the
     -- mutually-consented "Partner Up" registry ONLY -- HandlerDownDefense
@@ -67,6 +77,20 @@ Config.Features = {
     -- isn't independently verified.
     HandlerPartnership   = false,
 
+    -- server/tenure.lua (COMPLEMENTARY_FEATURES.md §7). Grants a one-time,
+    -- flat XP bonus to the K9-role party when a partnership's CONTINUOUS
+    -- tenure crosses a configured threshold -- the first gameplay
+    -- consequence wired to the HandlerPartnership registry, which landed as
+    -- a foundation with none. Has NO effect unless HandlerPartnership AND
+    -- XPProgression are ALSO true (server/tenure.lua re-checks both at point
+    -- of use). REQUIRES the k9_partnerships.tenure_bonus_tier_granted
+    -- column -- present in sql/install.sql for fresh installs, and in
+    -- sql/migrations/0003_*.sql for existing databases. Without that column
+    -- the milestone bonus would re-grant on every restart; tenure.lua's
+    -- queries are pcall-wrapped and degrade to a silent no-op until it
+    -- exists, so an un-migrated database is inert rather than exploitable.
+    PartnershipTenureBonus = false,
+
     -- Phase 4 (inventory, progression, vitality)
     K9Inventory          = false,
     XPProgression        = false,
@@ -78,6 +102,16 @@ Config.Features = {
     InjuryLimping        = false,
     K9Medkit             = false,
     ContrabandScreenFX   = false,
+
+    -- server/admin.lua. A read-only, ACE-gated in-game audit surface over
+    -- the three tables this resource already writes (k9_certifications,
+    -- k9_partnerships, k9_search_log) -- three commands, six hardcoded
+    -- SELECTs, zero mutation paths of any kind. Replaces "documented raw
+    -- SQL an admin runs by hand" (COMPLEMENTARY_FEATURES.md item 2). Ships
+    -- false per this resource's convention for a newly-landed surface; note
+    -- this one exposes WHO SEARCHED WHOM, so it is privacy-sensitive as
+    -- well as security-sensitive -- set AcePermission before flipping it on.
+    AdminAuditCommands   = false,
 
     -- Phase 5 (audio/props/advanced vision R&D)
     AdvancedBarkRadial   = false,
@@ -207,16 +241,29 @@ Config.XP = {
         -- SERVER's resolved coordinate before this amount is granted.
         trackSourceResolved   = 10,
         -- server/combat.lua's requestBiteHold success (PHASE3_SPEC.md
-        -- §12.5.1). NOT YET WIRED: server/combat.lua does not exist in this
-        -- codebase as of this pass (Phase 3 combat is being built
-        -- separately/concurrently). Whoever lands it should call
-        -- `AwardXP(citizenid, 'biteHoldSuccess')` (server/progression.lua,
-        -- resource-global) from that success path — see
-        -- server/progression.lua's own header for the exact call contract.
+        -- §12.5.1). WIRED. The note that stood here -- "NOT YET WIRED:
+        -- server/combat.lua does not exist in this codebase" -- predated
+        -- Phase 3 combat landing and had gone stale; that file exists and
+        -- calls AwardXP(citizenid, 'biteHoldSuccess') from its success
+        -- path. See server/progression.lua's header for the call contract.
         biteHoldSuccess       = 20,
         -- server/combat.lua's requestTakedown success (PHASE3_SPEC.md
-        -- §12.5.2) — same NOT YET WIRED note as biteHoldSuccess above.
+        -- §12.5.2) -- same stale-note correction as biteHoldSuccess above;
+        -- this one is wired too.
         takedownSuccess       = 30,
+
+        -- server/tenure.lua's partnership-tenure milestones. Each is a
+        -- ONE-TIME award per partnership row -- never repeating, never
+        -- per-tick. That distinction is the whole safety argument: this is
+        -- the only award in this table driven by a WALL CLOCK rather than a
+        -- player action, so a recurring trickle would be a pure idle-XP
+        -- farm. The hard cap (15+40+100 = 155 XP ever, per partnership) is
+        -- what makes awarding from a non-activity-gated clock safe at all.
+        -- UNTUNED PLACEHOLDERS, same review status as every other value
+        -- here. For scale: the top XP tier is reached at 3500.
+        partnershipTenure1Day  = 15,  -- 24 real-world hours of continuous active partnership
+        partnershipTenure7Day  = 40,  -- 7 days
+        partnershipTenure30Day = 100, -- 30 days
     },
 
     -- 'citizenid' (default, per PHASE4_SPEC.md §13.2's own default and
@@ -367,14 +414,25 @@ Config.Vision = {
 --     player target, so it is not simply "the same pattern, one more
 --     feature" — left for whoever picks it up next to design/implement
 --     against item 8's already-resolved guardrails directly.
---   - `HandlerDownDefense` is blocked on a DIFFERENT, separately open item
---     — PHASE3_SPEC.md §12.0 item 7 / phase2_notes/
---     phase3_handler_partnership_decision.md ("who is this K9's handler,
---     independent of momentary leash state" — genuinely unresolved, needs
---     a human product decision or a dedicated design pass, not a guess).
---     Now that `requestBiteHold`/`requestTakedown` exist for it to
---     pre-select a target into (§12.3's "pure consumer" framing), item 7 is
---     the ONLY remaining blocker for this feature specifically.
+--   - `HandlerDownDefense` NO LONGER BLOCKED, AND NEITHER IS PropDragging.
+--     Both of the "blocked" write-ups above and here are superseded and are
+--     kept only so the reasoning that unblocked them is legible:
+--       * PropDragging shipped -- see Config.Combat.PropDragging below,
+--         plus client/combat.lua and server/combat.lua.
+--       * HandlerDownDefense shipped -- see Config.Combat.HandlerDownDefense
+--         below, plus server/defense.lua and client/defense.lua. Its stated
+--         blocker (PHASE3_SPEC.md §12.0 item 7, "who is this K9's handler")
+--         was resolved by the HandlerPartnership registry landing.
+--         NOTE, because the spec was WRONG about this and a future editor
+--         will otherwise re-derive it: §12.3 assumed HandlerDownDefense
+--         could reuse an attacker identity from `relayDamageEvent`. That
+--         event is deliberately PAYLOAD-LESS -- there is no attacker field
+--         to reuse. server/defense.lua therefore carries its own, explicitly
+--         low-trust hint channel, and no server-authoritative consequence
+--         depends on that hint; the K9's confirmation is re-validated from
+--         scratch by ValidateCombatRequest.
+--     Both features still ship `false`, per this resource's convention that
+--     a newly-landed mechanic stays off until its own go-live review.
 -- Re-diff this block against PHASE3_SPEC.md §12.2 in full if either of the
 -- above is picked up later, rather than assuming this copy stays in sync.
 -- ======================================================================
@@ -541,15 +599,16 @@ Config.Combat = {
 -- (Config.Tracking, Config.SearchZones, Config.DoorInteraction, Config.Vision,
 -- Config.Combat above) rather than a single everything-table.
 --
--- This registry is a FOUNDATION only, in this pass — it establishes/
--- persists/tears down a "who is my partner" relationship, with no combat
--- consequence wired to it yet. BiteAndHold's Recall actor and
--- HandlerDownDefense's trigger (the two features PHASE3_SPEC.md §12.0 item
--- 7 names as blocked on this registry existing) are OUT OF SCOPE for this
--- pass and remain unimplemented — see server/partnership.lua's own header
--- for the exact accessor functions (`GetActivePartnerCitizenId`,
--- `IsActivePartnerOf`) a future implementation of either should call rather
--- than re-deriving its own partner lookup.
+-- This registry started as a FOUNDATION ONLY, with no combat consequence
+-- wired to it. That is no longer true, and this note is kept only so the
+-- progression is legible: both mechanics PHASE3_SPEC.md 12.0 item 7 named as
+-- blocked on this registry existing are now built and consuming it --
+-- HandlerDownDefense's trigger (server/defense.lua) and the Recall actor
+-- (server/recall.lua, Config.Recall below). Both call
+-- `GetActivePartnerCitizenId`/`IsActivePartnerOf` directly rather than
+-- re-deriving their own partner lookup, per this registry's accessor
+-- contract (see server/partnership.lua's header). A third consumer,
+-- server/tenure.lua, reads the same registry for the tenure bonus.
 -- ======================================================================
 Config.Partnership = {
     -- PHASE3_SPEC.md §12.0 item 7 point 1 explicitly leaves "reuse
@@ -572,6 +631,108 @@ Config.Partnership = {
     -- deliberately mirrors — PHASE3_SPEC.md §12.0 item 7 point 1).
     RequestTTLMs      = 30000,
     RequestCooldownMs = 1000,
+
+    -- server/tenure.lua (Config.Features.PartnershipTenureBonus). Nested
+    -- here rather than given its own top-level block because it tunes THIS
+    -- mechanic's payoff, not a subsystem of its own.
+    TenureBonus = {
+        -- server/tenure.lua's poll cadence, independent of
+        -- Config.Wellbeing.tickIntervalMs (an unrelated subsystem).
+        -- Milestones are hours-to-days away, so a coarse interval costs
+        -- nothing in perceived responsiveness and keeps the one indexed
+        -- SELECT this adds per online, actively-partnered K9 effectively
+        -- free.
+        checkIntervalMs = 300000, -- 5 minutes
+
+        -- MUST stay sorted ascending by afterSeconds -- server/tenure.lua's
+        -- tier walk breaks on the first unmet threshold, mirroring
+        -- Config.ContrabandAlertTiers' identical documented ordering
+        -- requirement. Each actionKey must have a matching entry in
+        -- Config.XP.awards above, or the award silently resolves to nothing.
+        milestones = {
+            { afterSeconds = 86400,   actionKey = 'partnershipTenure1Day'  },
+            { afterSeconds = 604800,  actionKey = 'partnershipTenure7Day'  },
+            { afterSeconds = 2592000, actionKey = 'partnershipTenure30Day' },
+        },
+    },
+}
+
+-- ======================================================================
+-- RECALL (Config.Features.Recall) -- server/recall.lua, client/recall.lua.
+-- PHASE3_SPEC.md 12.5.1's "Recall actor": the handler's escape hatch for
+-- ending whatever active effect their partnered K9 is holding.
+--
+-- READ THIS BEFORE TUNING: Recall is this resource's PRIMARY TERMINATION
+-- PATH, and the cooldown below is the only throttle on it. It exists to
+-- stop request spam, never to delay a legitimate first recall -- keep it
+-- small. Do NOT add an access check, a proximity requirement, or a
+-- feature-flag dependency on the combat mechanics to this path: a handler
+-- whose certification is revoked mid-bite must still be able to call their
+-- dog off, and every gate added here is a step toward the unbounded trap
+-- this resource forbids outright.
+-- ======================================================================
+Config.Recall = {
+    -- Per-CALLER (the handler issuing the recall) rate limit.
+    RequestCooldownMs = 2000,
+}
+
+-- ======================================================================
+-- CONTRABAND SCREEN FX (Config.Features.ContrabandScreenFX) --
+-- client/screenfx.lua. A brief timecycle effect on the SEARCHED player's
+-- own screen when a search turns up contraband. Cosmetic, self-only.
+-- ======================================================================
+Config.ContrabandScreenFX = {
+    -- Which Config.ContrabandAlertTiers tier(s) trigger the effect. Only
+    -- the most severe by default -- firing on every tier would make this
+    -- constant rather than notable.
+    triggerTiers = { 'aggressive_bark' },
+
+    -- UNVERIFIED CANDIDATE. Nobody has confirmed this timecycle modifier
+    -- name exists; an unrecognised name is a harmless no-op (no visual, no
+    -- crash), which is this resource's established convention for an
+    -- unverified asset name. See client/screenfx.lua's CONFIDENCE NOTE.
+    modifierName = 'drug_wobbly_shroom',
+
+    -- Deliberately well below PHASE4_SPEC.md 13.2's 8000ms sketch: this is
+    -- meant to be feedback, not a screen-blocking penalty, and the
+    -- modifier family is a disorienting one. client/screenfx.lua clamps its
+    -- own effective ceiling to 4000ms regardless of what is set here.
+    durationMs = 3000,
+}
+
+-- ======================================================================
+-- ADMIN AUDIT SURFACE (Config.Features.AdminAuditCommands) --
+-- server/admin.lua. Read-only SELECTs over the three tables this resource
+-- writes. No mutation path exists in that file at all.
+-- ======================================================================
+Config.AdminAudit = {
+    -- Checked via IsPlayerAceAllowed. SET THIS DELIBERATELY: these commands
+    -- expose who searched whom and when, so this is a privacy boundary as
+    -- well as an admin one.
+    AcePermission = 'k9unit.admin',
+
+    -- Whether a `source == 0` caller bypasses the ACE check. DEFAULTS OFF,
+    -- and think before turning it on: in FiveM `source == 0` is not only the
+    -- server console. It is also an RCON client (authenticated by
+    -- rcon_password alone) and ANY other resource on this server calling
+    -- ExecuteCommand -- these commands are registered unrestricted, so a
+    -- compromised or buggy co-located resource could otherwise read the whole
+    -- audit trail with no ACE grant. Turning this on accepts all three.
+    -- A genuine console operator can instead be granted AcePermission above,
+    -- or simply query the database directly.
+    TrustConsole = false,
+
+    -- Shared across all three commands, keyed by caller.
+    CommandCooldownMs = 3000,
+
+    -- Per-command result caps. server/admin.lua additionally clamps every
+    -- one of these into [1, 100] in code regardless of what is set here, so
+    -- a careless edit cannot turn an audit command into a table dump.
+    MaxResults = {
+        Certifications = 25,
+        Partnerships   = 25,
+        SearchLog      = 25,
+    },
 }
 
 -- ======================================================================

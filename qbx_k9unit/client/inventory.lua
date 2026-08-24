@@ -33,15 +33,16 @@
     - THIS FILE calls the server's 'qbx_k9unit:server:openK9Inventory'
       lib.callback and exports.ox_inventory:openInventory — see this file's
       header CONFIDENCE NOTE below for the latter's verification status.
-    - `IsEntityModelK9` below is a SMALL LOCAL COPY of client/movement.lua's
-      function of the same name/purpose — that file only exposes
-      IsOwnModelK9() (via client/main.lua) as a resource-global per its own
-      documented three-function contract, not its private model-hash table,
-      so this mirrors client/movement.lua's OWN documented tradeoff
-      ("a second small local copy... is an acceptable, deliberate tradeoff
-      here") rather than expanding another file's contract for one
-      display-only plausibility check. NOT a security check — the server
-      independently re-verifies the real model via IsConfiguredK9Model.
+    - This file's ox_target canInteract predicate below calls
+      client/main.lua's resource-global `IsEntityModelK9(entity)`
+      (REFACTOR_ROADMAP.md item 3) rather than keeping its own small local
+      copy — client/main.lua is loaded first (fxmanifest.lua's
+      client_scripts order) and this call only ever happens at
+      canInteract-invocation time (never at this file's own load time), so
+      no runtime existence guard is needed, matching client/movement.lua's/
+      client/partnership.lua's own established pattern for the same call.
+      NOT a security check either way — the server independently
+      re-verifies the real model via IsConfiguredK9Model.
     ======================================================================
 
     CONFIDENCE NOTE: `exports.ox_inventory:openInventory('stash', stashId)`
@@ -68,22 +69,6 @@ local K9_INVENTORY_REASON_MESSAGES = {
     not_authorized    = 'You are not authorized to access that K9\'s gear.',
     stash_failed      = 'Unable to open K9 gear right now.',
 }
-
--- Client-side hash set for the ox_target option's display-only plausibility
--- check below — see this file's header FILE-TO-FILE CONTRACT for why this
--- is a small local copy rather than a shared global. NOT a security check;
--- server/inventory.lua's HandleOpenK9Inventory independently re-derives the
--- real, live model via IsConfiguredK9Model.
-local k9ModelHashesForTargeting = {}
-for _, pedEntry in ipairs(Config.Peds) do
-    k9ModelHashesForTargeting[GetHashKey(pedEntry.model)] = true
-end
-
---- @param entity number
---- @return boolean
-local function IsEntityModelK9(entity)
-    return k9ModelHashesForTargeting[GetEntityModel(entity)] == true
-end
 
 --- Register the "Open K9 Gear" ox_target option on nearby player peds whose
 --- live model is (plausibly, client-side) a configured K9 model. Display
