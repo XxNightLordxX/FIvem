@@ -664,3 +664,96 @@ No new mismatch found in this window. Pass #4's flagged staleness in
 mid-implementation) was partly addressed by `5afef62`'s §9/§11.5 edits, but
 the header paragraph itself should be re-checked next pass now that Phase 2
 is genuinely complete.
+
+---
+
+## 2026-08-24 — Pass #6 (scheduled trigger, 06:45 UTC; run by the top-level session)
+
+**Window:** the 9 commits since Pass #5's marker (`b172141`) —
+`111075f`, `bbf7c1b`, `5a9fc18`, `17e4429`, `885c6ea`, `cb8f240`,
+`0020c2b`, `f9c91c5`, `afde4f5`. Every one was reviewed and committed by
+the top-level session as it landed, so nothing entered the branch
+unreviewed in this window. Working tree clean at pass time.
+
+### Health baseline
+
+- `luac5.4 -p`: all 28 `.lua` files parse, no errors.
+- `luacheck` (repo-root `.luacheckrc`): **0 warnings / 0 errors across 27
+  files** — and this is now an honest zero. Pass #5 recorded a temporary
+  `exclude_files` entry hiding 10 warnings in the then-unfinished
+  `server/combat.lua`; `afde4f5` removed that entry and fixed the
+  warnings for real rather than carrying the exclusion forward.
+
+### Regression spot-checks — all five INTACT
+
+`AgilityBasicJump` still read (`client/movement.lua`); role-aware
+`LeashPairs` (`isK9`) still in place; `RevokeCertificationOffline` still
+calls `RefreshCertificationCache`; `client/vehicle.lua`'s
+`onResourceStop` cleanup still present; `client/radial.lua`'s
+`lib.registerRadial` (line 411) still precedes `lib.addRadialItem`
+(line 421), so the 2026-08-23 hard-error fix holds. No regression
+despite this window touching `movement.lua`, `radial.lua` and
+`vehicle.lua`.
+
+### Externally-uncertain facts
+
+- **Dependency maintenance status: RESOLVED** (`5a9fc18`), closing a
+  question Passes #4 and #5 both carried forward. Overextended is again
+  the canonical maintained home for ox_lib/ox_target/oxmysql/ox_inventory
+  (discontinued 2025, resumed 2026); CommunityOx, the stopgap fork, is
+  itself archived as of 2026-04-28. The `api.github.com` 403 that blocked
+  both earlier passes reproduced again — but `github.com` HTML and
+  `raw.githubusercontent.com` were reachable and gave equivalent data,
+  an avenue neither earlier pass had tried. Note the research flagged
+  rather than hid a source conflict (a releases page dating v3.39.0 to
+  2024 against commit lists giving 2026) and reasoned to 2026. **Stop
+  carrying this item forward.**
+- **Bark-audio gap: STILL OPEN**, unchanged — 0 real audio assets ship,
+  `'qbx_k9unit_sounds'` remains the placeholder soundset. But `5a9fc18`
+  identified a concrete lower-cost path (extend the already-running NUI
+  bridge rather than author a RAGE `.awc`/`dat151`/`dat54` bank), plus an
+  explicitly-unconfirmed hypothesis that the vanilla `WORLD_DOG_BARKING_*`
+  scenarios already in use may carry usable audio for free — worth a
+  short in-engine test before anyone builds either path. Carry forward as
+  an open gap, but no longer an unscoped one.
+
+### SPEC/CHANGELOG "Done"/"Resolved" claims vs. code — ONE REAL FINDING
+
+`SPEC.md`'s top-of-file Status paragraph, flagged stale by Passes #4 and
+#5, was rewritten at `885c6ea` and is now accurate; it correctly records
+that the partnership registry is unbuilt and `HandlerDownDefense`
+uncoded, both of which match the code (`server/partnership.lua` does not
+exist — only its schema does).
+
+**But `CHANGELOG.md` documented a security control that does not
+exist.** Docs were last synced at `885c6ea`; four commits landed after it
+touching none of them. The resulting passage (~lines 176-182) presented
+`Config.K9Inventory.accessScope = 'ownerOnly'` as a working
+personal-locker mode "restricted to the K9's own citizenid", claimed an
+unrecognized value "fails closed to `'ownerOnly'`", and asserted the real
+boundary was "ox_inventory's own owner/groups check". All three are false
+as of `f9c91c5`: `'ownerOnly'` never provided any access control (ox_
+inventory never compares `owner` against the caller; only `groups` gates
+anything, and `'ownerOnly'` passed nil groups, short-circuiting to
+allow), it is not implementable at all, and it is now hard-asserted out
+at resource start rather than failing closed to anything.
+
+This is the failure mode watchdog item 4 exists to catch: not a doc
+lagging behind code, but a doc confidently describing protection a server
+owner does not have. Dispatched to docs-agent to correct, along with the
+other three unsynced commits (`cb8f240`, `0020c2b`, `afde4f5`).
+
+### Carried forward to Pass #7
+
+- Bark-audio asset gap (now with two scoped candidate paths, above).
+- `fxmanifest.lua` pins no dependency versions at all — a real
+  reproducibility gap for a dependency set that just went through a
+  discontinuation/fork/re-fork cycle (raised by `5a9fc18`, unactioned).
+- Phase 3 combat has **no in-game entry point** — its client triggers are
+  not registered in `client/radial.lua`. The feature is complete and
+  registered but unreachable in-game.
+- Recall (`PHASE3_SPEC.md` §12.5.1) unimplemented, blocked on
+  `server/partnership.lua`.
+- FearStress residual: one sustained forged reporter is still
+  indistinguishable server-side from one real continuous shooter
+  (disclosed in-code at `0020c2b`, deliberately not claimed closed).
