@@ -228,3 +228,171 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
   --   WHERE target_citizenid = ? ORDER BY searched_at DESC;
   KEY `idx_target_citizenid_searched_at` (`target_citizenid`, `searched_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_partnerships
+--
+-- SCHEMA LANDING AHEAD OF IMPLEMENTATION -- deliberately. No `.lua` file
+-- in this resource reads or writes this table yet. It is added now so
+-- the eventual implementation of `server/partnership.lua` (not yet
+-- written) has a reviewed, agreed-upon table to build against, per
+-- PHASE3_SPEC.md's own working style of landing design artifacts ahead
+-- of code (see that document's repeated "no .lua file was touched to
+-- produce this revision" notes). Do not wire any query against this
+-- table without also updating this comment block once it has a real
+-- owner file.
+--
+-- Governing spec: PHASE3_SPEC.md section 12.0, item 7 ("Handler-
+-- partnership link: reuse active leash pairing, or a new persistent
+-- registry?"), resolved in Revision 5 (coder-architect) as Option B: a
+-- new, DB-backed, mutually-consented K9/handler partnership registry,
+-- independent of momentary leash state. See that section for the full
+-- rationale on why `server/main.lua`'s in-memory `LeashPairs` was
+-- rejected for this purpose (it is transient, session-scoped state for
+-- a movement-restriction mechanic, and would leave `HandlerDownDefense`
+-- non-functional for its own primary use case -- an off-leash foot
+-- chase, where the pair is deliberately unleashed).
+--
+-- Owner file (not yet written): `server/partnership.lua`. Per
+-- PHASE3_SPEC.md section 12.0 item 7 and section 12.3, that file is
+-- expected to:
+--   * handle the "Partner Up" consent handshake (mirroring
+--     `server/main.lua`'s `PendingLeashRequests` pattern -- a TTL'd
+--     pending-request slot, one live request per target, consumed on
+--     any response -- NOT `k9_certifications`' grant-hierarchy model,
+--     since partnership is a peer relationship between two already-
+--     eligible parties, not a permission grant),
+--   * maintain an in-memory `Partnerships[citizenid]` cache
+--     (`{ partner = partnerCitizenid, isK9 = boolean, active = true }`)
+--     refreshed via a `RefreshPartnershipCache` modeled on
+--     `certifications.lua`'s `RefreshCertificationCache` (same
+--     pcall/fail-closed discipline), populated on `PlayerLoaded` and via
+--     an `onResourceStart` backfill loop mirroring
+--     `certifications.lua`'s own restart-recovery pattern,
+--   * expose a `ForceBreakPartnershipForSource`-equivalent teardown,
+--     called alongside every existing `ForceDetachLeashForSource` /
+--     `ForceDetachOfficerLeashForSource` call site in
+--     `server/certifications.lua` (K9-role cert revocation, either
+--     party's department change) -- automatic, no-consent-needed
+--     termination, mirroring the leash's own "no unbounded trap" rule.
+--
+-- Modeled directly on `k9_certifications` above (same file, read in
+-- full before this table was written), per PHASE3_SPEC.md's explicit
+-- instruction to reuse that table's conventions rather than invent new
+-- ones: append-mostly audit rows (establishing INSERTs a new row,
+-- ending UPDATEs the existing active row to active = 0, never deletes),
+-- an `active` flag, `established_by`/`ended_by` citizenid-shaped
+-- attribution columns (mirroring `granted_by`/`revoked_by`), a
+-- CREATE TABLE IF NOT EXISTS for idempotent re-runs, and
+-- VARCHAR(50)/DATETIME typing matching the qbx_core/QBCore citizenid
+-- convention used throughout this file.
+--
+-- Where this table's shape necessarily DIFFERS from k9_certifications,
+-- because a partnership is a relationship between TWO citizenids rather
+-- than one citizenid's grant against one job:
+--   * two citizenid columns (`k9_citizenid`, `handler_citizenid`)
+--     instead of one citizenid + one job, and
+--   * TWO generated-column unique constraints instead of one --
+--     `k9_certifications`' single `active_cert_key` only had to prevent
+--     two simultaneous active rows for the same (citizenid, job) pair.
+--     Here, per PHASE3_SPEC.md section 12.0 item 7's explicit call-out,
+--     BOTH "at most one active partnership per K9 citizenid" AND "at
+--     most one active partnership per handler citizenid" must hold
+--     independently -- a single combined key (e.g. on the concatenated
+--     pair) would not stop a K9 who is already partnered with handler A
+--     from also picking up an active row with handler B, nor the
+--     symmetric case on the handler side. Each side therefore gets its
+--     own VIRTUAL generated column (NULL whenever the row is inactive,
+--     the real citizenid whenever it is active) and its own UNIQUE KEY,
+--     exactly doubling `k9_certifications`' single-constraint pattern
+--     rather than trying to force one constraint to cover both
+--     invariants at once.
+--   * `ended_by` may, like `k9_certifications.revoked_by`, hold a
+--     non-citizenid sentinel (e.g. `'system:leash_force_detach'`,
+--     `'system:cert_revoked'`, `'system:job_change'`) when
+--     `server/partnership.lua`'s automatic-teardown path ends a
+--     partnership rather than either party doing so directly -- no
+--     FK/format constraint is placed on this column for the same reason
+--     `k9_certifications` places none on `revoked_by`.
+--
+-- No FK to a `players` table is declared here, for the exact same
+-- reason `k9_certifications` and `k9_search_log` above declare none:
+-- this resource's migration must not depend on qbx_core's own schema
+-- existing first, and a player-data reset/delete workflow on another
+-- resource's table must never be able to fail this table's constraints.
+-- Relational integrity to qbx_core players is enforced at the
+-- application layer, same convention used throughout this file.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_partnerships` (
+  `id`                  INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `k9_citizenid`        VARCHAR(50)  NOT NULL,                     -- citizenid of the party currently playing the K9-role ped at establishment time
+  `handler_citizenid`   VARCHAR(50)  NOT NULL,                     -- citizenid of the party currently playing the certified-handler role
+  `established_by`      VARCHAR(50)  NOT NULL,                     -- citizenid of whichever party's client INITIATED the "Partner Up" request
+                                                                     -- (mutual consent is still required from the other party before this row
+                                                                     -- is written -- see server/partnership.lua's pending-request handshake --
+                                                                     -- this column records who asked first, not who "granted" anything).
+  `established_at`      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `ended_by`            VARCHAR(50)  DEFAULT NULL,                 -- citizenid of whichever party ended the partnership, OR a non-citizenid
+                                                                     -- 'system:...' sentinel when server/partnership.lua's automatic-teardown
+                                                                     -- path ends it (leash-force-detach call sites, cert revocation, department
+                                                                     -- change) -- NULL until ended. See k9_certifications.revoked_by above for
+                                                                     -- the identical sentinel convention this column mirrors.
+  `ended_at`            DATETIME     DEFAULT NULL,
+  `active`              TINYINT(1)   NOT NULL DEFAULT 1,           -- 1 = currently a live partnership, 0 = historical/ended row
+
+  -- Generated helper columns (derived only, never written directly by
+  -- app code): NULL for every inactive/ended row, and the respective
+  -- citizenid for an active row. Two separate columns/constraints are
+  -- required here, unlike k9_certifications' single active_cert_key --
+  -- see the header comment above for why one combined key cannot cover
+  -- both "one active partnership per K9" and "one active partnership
+  -- per handler" invariants at once.
+  `active_partner_k9_key`      VARCHAR(50)
+                                  GENERATED ALWAYS AS (
+                                    CASE WHEN `active` = 1
+                                         THEN `k9_citizenid`
+                                         ELSE NULL
+                                    END
+                                  ) VIRTUAL,
+  `active_partner_handler_key` VARCHAR(50)
+                                  GENERATED ALWAYS AS (
+                                    CASE WHEN `active` = 1
+                                         THEN `handler_citizenid`
+                                         ELSE NULL
+                                    END
+                                  ) VIRTUAL,
+
+  PRIMARY KEY (`id`),
+
+  -- Hot-path index, K9 side: "does citizenid X (as a K9) currently have
+  -- an active partner". Also serves "full partnership history for K9
+  -- citizenid X" as a prefix scan (WHERE k9_citizenid = ?).
+  --   SELECT * FROM k9_partnerships
+  --   WHERE k9_citizenid = ? AND active = 1 LIMIT 1;
+  KEY `idx_k9_citizenid_active` (`k9_citizenid`, `active`),
+
+  -- Hot-path index, handler side: the symmetric lookup for the other
+  -- role in the pair.
+  --   SELECT * FROM k9_partnerships
+  --   WHERE handler_citizenid = ? AND active = 1 LIMIT 1;
+  KEY `idx_handler_citizenid_active` (`handler_citizenid`, `active`),
+
+  -- DB-level backstop, K9 side: closes the check-then-insert race window
+  -- (two near-simultaneous "Partner Up" acceptances naming the same K9
+  -- citizenid) the same way k9_certifications' uq_one_active_cert_per_job
+  -- closes it for grants. coder-backend/server/partnership.lua: on the
+  -- establishing INSERT, treat a duplicate-key error on either of these
+  -- two constraints (MySQL/MariaDB error 1062) as "target already has an
+  -- active partnership, reject the request" -- NOT as an unexpected
+  -- failure to surface as a generic error.
+  UNIQUE KEY `uq_one_active_partnership_per_k9` (`active_partner_k9_key`),
+
+  -- DB-level backstop, handler side -- the second, independent
+  -- invariant this table has that k9_certifications does not need
+  -- (see header comment: a certification's invariant is scoped to a
+  -- single citizenid; a partnership's is scoped to TWO).
+  UNIQUE KEY `uq_one_active_partnership_per_handler` (`active_partner_handler_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

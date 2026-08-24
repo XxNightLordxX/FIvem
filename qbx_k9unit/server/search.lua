@@ -123,6 +123,81 @@
     ======================================================================
 ]]
 
+-- CONFIG-SAFETY GUARDS (config-validator findings, both actioned in this
+-- pass). Same "fail loudly at resource start instead of silently accepting
+-- an unsafe value" posture as server/main.lua's existing
+-- Config.DoorInteraction.nudgeRequiresUnlocked guard (see that file's
+-- onResourceStart block for the precedent this follows). Deliberately
+-- placed HERE rather than alongside that precedent: both config values
+-- below are read exclusively by this file (ResolveAlertTier and
+-- BroadcastContrabandAlert above), so the invariant lives next to the
+-- code whose security model actually depends on it, the same reasoning
+-- this file's own header already gives for splitting server/search.lua
+-- out of server/main.lua by trust boundary rather than feature name.
+-- main.lua's onResourceStart guard remains the right home for
+-- nudgeRequiresUnlocked specifically because that flag has no owning
+-- file yet (nudge-open isn't implemented anywhere in this resource).
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    -- Finding 1: Config.ContrabandAlertTiers' zero-baseline entry and sort
+    -- order are documented (config.lua's own comment above that table,
+    -- and README.md) as mandatory, but ResolveAlertTier above only
+    -- defaults to index 1 and its own doc comment admits it "does not
+    -- assume the list is sorted defensively." If a server owner reorders
+    -- this list or drops the { minWeight = 0, alert = 'clean' } entry, a
+    -- genuinely clean search (totalWeight = 0) can resolve to whatever
+    -- tier sits at index 1 -- including a non-'clean' tier -- which
+    -- BroadcastContrabandAlert would then broadcast as a FALSE contraband
+    -- alert about an innocent player to every bystander in range.
+    local tiers = Config.ContrabandAlertTiers
+    assert(
+        type(tiers) == 'table' and tiers[1] ~= nil and tiers[1].minWeight == 0 and tiers[1].alert == 'clean',
+        "[qbx_k9unit] Config.ContrabandAlertTiers[1] must be { minWeight = 0, alert = 'clean' } -- " ..
+        'it is documented as the mandatory clean-search baseline, but ResolveAlertTier ' ..
+        '(server/search.lua) only defaults to index 1 without verifying it. A missing or ' ..
+        're-ordered baseline entry would let a genuinely clean search (totalWeight = 0) resolve ' ..
+        "to a non-'clean' tier, broadcasting a FALSE contraband alert about an innocent player."
+    )
+    for i = 2, #tiers do
+        assert(
+            tiers[i].minWeight >= tiers[i - 1].minWeight,
+            '[qbx_k9unit] Config.ContrabandAlertTiers must stay sorted ascending by minWeight ' ..
+            '(index ' .. i .. " ('" .. tostring(tiers[i].alert) .. "', minWeight=" .. tostring(tiers[i].minWeight) ..
+            ') is lower than index ' .. (i - 1) .. "'s minWeight=" .. tostring(tiers[i - 1].minWeight) .. ') -- ' ..
+            'ResolveAlertTier walks the whole list keeping the LAST tier whose minWeight is met, so an ' ..
+            "out-of-order list resolves to the wrong tier (e.g. reporting 'clean' for a real stash, or a " ..
+            'false alert about an innocent player).'
+        )
+    end
+
+    -- Finding 2: this file's own header above quotes the security review's
+    -- BLOCKING requirement that BroadcastContrabandAlert's radius-filtered
+    -- broadcast must never become a de facto global one, because (unlike
+    -- relayBark) its payload identifies a specific vehicle/person just
+    -- flagged for contraband -- a map-wide broadcast leaks that fact to an
+    -- accomplice anywhere on the server. Nothing enforced an upper bound on
+    -- the config value driving that filter, so a server owner setting
+    -- alertBroadcastRadius to e.g. 5000.0 ("so everyone hears it") would
+    -- silently defeat that entire design while leaving the code path
+    -- looking correct. 200.0m is chosen as the ceiling: it is 5x the
+    -- largest other legitimate detection distance in this resource
+    -- (Config.Tracking's Scent/Blood/Gunpowder maxRange, all 40.0m) --
+    -- generous enough to cover a busy search scene (a full parking lot, a
+    -- multi-vehicle pursuit stop) -- while staying unambiguously local:
+    -- two orders of magnitude below a map traversal, so this radius can
+    -- never functionally become "everyone on the server hears it."
+    assert(
+        type(Config.SearchZones.alertBroadcastRadius) == 'number' and Config.SearchZones.alertBroadcastRadius <= 200.0,
+        '[qbx_k9unit] Config.SearchZones.alertBroadcastRadius must be <= 200.0 -- ' ..
+        "it is a hard safety ceiling, not a server-tunable-to-anything toggle. This resource's contraband " ..
+        'alert broadcast is deliberately distance-filtered (never a global TriggerClientEvent(-1, ...) like ' ..
+        "relayBark's) because its payload identifies a specific vehicle/person just flagged for contraband -- " ..
+        'setting this radius high enough to cover the whole map would leak that fact to an accomplice anywhere ' ..
+        'on the server, silently defeating the distance-filtered design BroadcastContrabandAlert implements.'
+    )
+end)
+
 -- In-flight mutex per source (contraband_search_contract.md §4A). Set
 -- synchronously, BEFORE any yielding work, checked immediately after the
 -- cheap validation steps (payload shape, feature flag, access) and before

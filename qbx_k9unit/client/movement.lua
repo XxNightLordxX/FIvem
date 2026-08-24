@@ -497,6 +497,36 @@ local function IsEntityModelK9(entity)
     return k9ModelHashesForTargeting[GetEntityModel(entity)] == true
 end
 
+-- config-validator finding: this option's `distance` used to be a bare
+-- 2.5 with no relationship to any Config value at all, even though the
+-- REAL server-side range check for initiating a leash attach is
+-- Config.LeashMaxDistance (server/main.lua's CheckLeashEligibility, which
+-- reuses that same raw value directly per config.lua's own comment on it
+-- — see the "too far to request" check there). Deriving from it here means
+-- an installer who edits Config.LeashMaxDistance now sees this option's
+-- visible range move with it, instead of it silently staying frozen at an
+-- unrelated magic number.
+--
+-- Kept at HALF Config.LeashMaxDistance rather than the full value: this is
+-- a DISPLAY-ONLY UI gate (the server re-validates authoritatively
+-- regardless — see below), so it's deliberately tighter than the server
+-- bound on purpose, not because it needs to match exactly. An ox_target
+-- option that only appears right at the exact edge of what the server
+-- would accept is a bad experience — a half-step of player movement
+-- between opening the ox_target menu and the server actually processing
+-- the resulting 'qbx_k9unit:server:requestLeashAttach' event can flip a
+-- borderline case from accepted to rejected. Halving the server bound
+-- gives comfortable margin against that without being so tight the option
+-- feels unreasonably hard to find.
+--
+-- NOTE for reviewers: with the current default (Config.LeashMaxDistance =
+-- 8.0), this evaluates to 4.0m, WIDER than the previous hardcoded 2.5m —
+-- this is an intentional, documented widening (not an incidental
+-- side-effect of this change), and remains well inside
+-- Config.LeashMaxDistance, so the server's own authoritative check is
+-- still what actually gates the action either way.
+local LEASH_TARGET_DISTANCE_FACTOR = 0.5
+
 -- Register the "Attach Leash" ox_target option on nearby player peds
 -- (SPEC.md §6.1 leash bullet's "either the K9 or a nearby officer
 -- initiates 'Attach Leash' (ox_target) on the other"). This is a DISPLAY
@@ -508,7 +538,7 @@ exports.ox_target:addGlobalPlayer({
         name = 'qbx_k9unit:attachLeash',
         icon = 'fas fa-link',
         label = 'Attach Leash',
-        distance = 2.5,
+        distance = LEASH_TARGET_DISTANCE_FACTOR * Config.LeashMaxDistance,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.LeashMechanics then return false end
             if IsLeashed() then return false end
@@ -559,12 +589,41 @@ exports.ox_target:addGlobalPlayer({
 -- /k9decertifyoffline commands are likewise registered unconditionally —
 -- this follows that same, already-established convention rather than
 -- inventing a new toggle for it.
+--
+-- config-validator finding: both options below used to have a bare 2.5
+-- `distance` with no relationship to any Config value, even though the
+-- REAL server-side proximity check for both grant and revoke is
+-- Config.CertifyProximityMeters (server/certifications.lua's
+-- GrantCertification and RevokeCertification, both of which reject past
+-- that value — see the header comment above and server/certifications.lua
+-- itself for the exact call sites). Deriving from it here means an
+-- installer who edits Config.CertifyProximityMeters now sees these
+-- options' visible range move with it, instead of it silently staying
+-- frozen at an unrelated magic number — exactly the drift the finding
+-- flagged.
+--
+-- Kept at HALF Config.CertifyProximityMeters, same "don't vanish right at
+-- the server's exact edge" reasoning as LEASH_TARGET_DISTANCE_FACTOR
+-- above: this is a DISPLAY-ONLY UI gate (the server re-validates
+-- authoritatively regardless), so being deliberately tighter than the
+-- server bound is intentional, giving margin against a player drifting a
+-- few centimetres between opening ox_target and the server processing the
+-- resulting certifyHandler/revokeHandler event.
+--
+-- NOTE for reviewers: with the current default (Config.CertifyProximityMeters
+-- = 5.0), this evaluates to 2.5m — the SAME value as the previous
+-- hardcoded constant. That match is coincidental (this file's original
+-- 2.5 was never actually derived from Config.CertifyProximityMeters), not
+-- load-bearing: this now tracks any future change to that config value
+-- instead of staying frozen.
+local CERTIFY_TARGET_DISTANCE_FACTOR = 0.5
+
 exports.ox_target:addGlobalPlayer({
     {
         name = 'qbx_k9unit:certifyHandler',
         icon = 'fas fa-id-badge',
         label = 'Certify K9 Handler',
-        distance = 2.5,
+        distance = CERTIFY_TARGET_DISTANCE_FACTOR * Config.CertifyProximityMeters,
         canInteract = function(entity, distance, coords, name)
             if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-cert stays command-only (/k9certify [own id]), matches the leash option's self-exclusion above
 
@@ -586,7 +645,7 @@ exports.ox_target:addGlobalPlayer({
         name = 'qbx_k9unit:revokeHandler',
         icon = 'fas fa-id-badge',
         label = 'Revoke K9 Certification',
-        distance = 2.5,
+        distance = CERTIFY_TARGET_DISTANCE_FACTOR * Config.CertifyProximityMeters,
         canInteract = function(entity, distance, coords, name)
             if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-decert stays command-only, matches certify above
 
