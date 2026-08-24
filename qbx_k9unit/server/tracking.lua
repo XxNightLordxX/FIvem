@@ -128,7 +128,7 @@
     later phase..." TRIGGER ABOVE HAS NOW FIRED): Config.Features.XPProgression
     landed this same pass and is precisely that later phase — it conditions
     something server-authoritative (real XP, and therefore a real
-    speedMultiplier/scentRange bonus via Config.XPTiers) on a resolved trail
+    speedMultiplier/scentRangeMultiplier bonus via Config.XPTiers) on a resolved trail
     source, via trackSourceResolved (PendingTrackArrival /
     reportTrackSourceArrival below). Revisiting confirmed this decision's
     own reasoning still holds for the REVEAL itself (a forged/phantom

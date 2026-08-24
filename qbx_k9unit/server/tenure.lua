@@ -56,7 +56,7 @@
 
     2. FEED THE EXISTING PROGRESSION, OR GRANT SOMETHING CATEGORICALLY
        DIFFERENT? -- Feeds the existing progression, deliberately, and NOT
-       by choice alone: `Config.XPTiers`' speedMultiplier/scentRange are the
+       by choice alone: `Config.XPTiers`' speedMultiplier/scentRangeMultiplier are the
        "categorically different" alternative COMPLEMENTARY_FEATURES.md §7
        itself names (a Mood-regen bonus, a raised Fatigue cap) -- both of
        which require write access to server/wellbeing.lua's `local`

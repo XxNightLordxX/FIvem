@@ -74,7 +74,7 @@
     ======================================================================
 ]]
 
---- Copies a tier-shaped table (xp/label/speedMultiplier/scentRange) into a
+--- Copies a tier-shaped table (xp/label/speedMultiplier/scentRangeMultiplier) into a
 --- fresh table — same rationale as server/exports.lua's CopyTier:
 --- never hand out a live reference to this file's own cached state.
 --- @param tier table
@@ -85,7 +85,7 @@ local function CopyTier(tier)
     -- Config.XPTiers[n] reference, so handing it out raw would let any
     -- consumer mutate movement speed for every K9 in that tier, server-wide
     -- and for the rest of this resource's uptime. A shallow copy closes that
-    -- for the current flat shape (xp/label/speedMultiplier/scentRange, all
+    -- for the current flat shape (xp/label/speedMultiplier/scentRangeMultiplier, all
     -- scalars) -- but it would SILENTLY STOP protecting the moment anyone
     -- adds a nested field, e.g. a per-tier perks list. Nothing would error,
     -- no test would fail, and the hole would just be open again. That
@@ -213,7 +213,7 @@ end)
 --- before the first 'qbx_k9unit:client:xpTierChanged' event has arrived
 --- this session — ALWAYS a fresh copy (see CopyTier above), never
 --- client/progression.lua's own cached table reference.
---- @return table? { xp: number, label: string, speedMultiplier: number, scentRange: number }
+--- @return table? { xp: number, label: string, speedMultiplier: number, scentRangeMultiplier: number }
 exports('GetCurrentXPTier', function()
     if type(GetCurrentXPTier) ~= 'function' then return nil end
 

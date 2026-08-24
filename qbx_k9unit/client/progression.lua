@@ -21,7 +21,7 @@
 
     Client events (RegisterNetEvent, server->client):
     1. 'qbx_k9unit:client:xpTierChanged' (newTier: table — a full entry from
-       Config.XPTiers: { xp, label, speedMultiplier, scentRange })
+       Config.XPTiers: { xp, label, speedMultiplier, scentRangeMultiplier })
        [THIS FILE] — sent on PlayerLoaded/resource-start backfill (an
        authoritative snapshot, not a "level up") and on any real tier
        crossing (server/progression.lua's AwardXP). This file cannot tell
@@ -154,7 +154,7 @@ local function ApplyXPTierMoveRateEffect()
     end
 end
 
---- @param newTier table -- { xp, label, speedMultiplier, scentRange }, a full Config.XPTiers entry
+--- @param newTier table -- { xp, label, speedMultiplier, scentRangeMultiplier }, a full Config.XPTiers entry
 RegisterNetEvent('qbx_k9unit:client:xpTierChanged', function(newTier)
     -- SOURCE-ORIGIN GUARD (coder-security, same pass/reasoning as
     -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block — read that

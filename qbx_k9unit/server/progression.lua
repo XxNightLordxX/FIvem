@@ -48,7 +48,7 @@
 
     Client events (RegisterNetEvent, server->client):
     1. 'qbx_k9unit:client:xpTierChanged' (newTier: table — a full entry
-       from Config.XPTiers: { xp, label, speedMultiplier, scentRange })
+       from Config.XPTiers: { xp, label, speedMultiplier, scentRangeMultiplier })
        [client/progression.lua] — sent to the K9's own client ONLY
        (never broadcast), on: (a) PlayerLoaded / resource-start backfill
        (an authoritative snapshot so a returning K9 doesn't need to earn
@@ -97,7 +97,7 @@
             (Config.XPTiers[1], 0 XP), the same "unknown state defaults to
             least privilege" posture this resource already applies
             elsewhere. Read by server/tracking.lua's findTrackableSource to
-            apply the tier's `scentRange` server-side — callers are
+            apply the tier's `scentRangeMultiplier` server-side — callers are
             responsible for gating this read behind
             Config.Features.XPProgression themselves (this accessor does
             not gate internally, so it stays a plain, always-correct cache
@@ -177,7 +177,7 @@ end)
 --- tier crossing via plain `~=` comparison rather than a deep-equality
 --- check.
 --- @param xp number
---- @return table tier -- { xp, label, speedMultiplier, scentRange }
+--- @return table tier -- { xp, label, speedMultiplier, scentRangeMultiplier }
 local function ResolveTier(xp)
     local resolvedTier = Config.XPTiers[1]
     for _, tier in ipairs(Config.XPTiers) do
@@ -191,7 +191,7 @@ end
 --- Resource-global — see FILE-TO-FILE CONTRACT above. Always returns a real
 --- Config.XPTiers entry, defaulting to the base tier for an uncached
 --- citizenid (never nil, never a security-relevant fail-open — the base
---- tier grants the SMALLEST scentRange/speedMultiplier in the table, so an
+--- tier grants the SMALLEST scentRangeMultiplier/speedMultiplier in the table, so an
 --- unresolved cache entry can only ever under-grant, never over-grant).
 --- @param citizenid string
 --- @return table tier
@@ -251,7 +251,7 @@ local function PushTierSnapshot(targetSrc, tier)
 end
 
 --- Copies a Config.XPTiers-shaped entry (xp/label/speedMultiplier/
---- scentRange) into a fresh table — identical shape/purpose to
+--- scentRangeMultiplier) into a fresh table — identical shape/purpose to
 --- server/exports.lua's own `ShallowCopyTier`, duplicated here rather than
 --- shared, since this file has no import mechanism to reach that one.
 --- ResolveTier above deliberately returns the SAME Config.XPTiers[n] table
@@ -319,7 +319,7 @@ function AwardXP(citizenid, actionKey)
     local newXp = oldXp + amount
     -- Update the in-memory cache SYNCHRONOUSLY, before the DB write below —
     -- phase2_notes/phase4_xp_schema_notes.md §5: correctness of the applied
-    -- gameplay effect (tier-derived scentRange/speedMultiplier) depends only
+    -- gameplay effect (tier-derived scentRangeMultiplier/speedMultiplier) depends only
     -- on this line, never on DB round-trip latency.
     K9XP[citizenid] = newXp
 

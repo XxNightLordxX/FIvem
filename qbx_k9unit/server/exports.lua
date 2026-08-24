@@ -289,7 +289,7 @@
 ]]
 
 --- Copies a Config.XPTiers-shaped entry (xp/label/speedMultiplier/
---- scentRange) into a fresh table. See DESIGN PRINCIPLES item 3 above for
+--- scentRangeMultiplier) into a fresh table. See DESIGN PRINCIPLES item 3 above for
 --- exactly why this matters: the wrapped GetXPTier() can return the SAME
 --- Config.XPTiers[n] table object for many different citizenids, and this
 --- file must never let an external caller obtain a live reference to it.
@@ -301,7 +301,7 @@ local function CopyTier(tier)
     -- Config.XPTiers[n] reference, so handing it out raw would let any
     -- consumer mutate movement speed for every K9 in that tier, server-wide
     -- and for the rest of this resource's uptime. A shallow copy closes that
-    -- for the current flat shape (xp/label/speedMultiplier/scentRange, all
+    -- for the current flat shape (xp/label/speedMultiplier/scentRangeMultiplier, all
     -- scalars) -- but it would SILENTLY STOP protecting the moment anyone
     -- adds a nested field, e.g. a per-tier perks list. Nothing would error,
     -- no test would fail, and the hole would just be open again. That
@@ -448,7 +448,7 @@ end)
 --- convention, so an unresolved lookup can only ever under-report, never
 --- over-report, a K9's real tier.
 --- @param citizenid string
---- @return table { xp: number, label: string, speedMultiplier: number, scentRange: number }
+--- @return table { xp: number, label: string, speedMultiplier: number, scentRangeMultiplier: number }
 exports('GetXPTier', function(citizenid)
     if type(citizenid) ~= 'string' or citizenid == '' then return BaseTierCopy() end
     if type(GetXPTier) ~= 'function' then return BaseTierCopy() end

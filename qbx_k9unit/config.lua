@@ -218,10 +218,22 @@ Config.LeashMaxDistance = 8.0
 -- XP TIERS — Phase 4, placeholder numbers pending economy-balance-agent review
 -- ======================================================================
 Config.XPTiers = {
-    { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRange = 5.0  },
-    { xp = 500,  label = 'Trained K9', speedMultiplier = 1.05, scentRange = 6.5  },
-    { xp = 1500, label = 'Veteran K9', speedMultiplier = 1.10, scentRange = 8.0  },
-    { xp = 3500, label = 'Elite K9',   speedMultiplier = 1.15, scentRange = 10.0 },
+    -- scentRangeMultiplier REPLACED the old absolute `scentRange` field, and
+    -- the unit changed, which is why the name had to change with it. The old
+    -- values (5.0/6.5/8.0/10.0) were applied as a math.max FLOOR against each
+    -- track type's own maxRange -- and every maxRange defaults to 40.0. Even
+    -- the Elite tier's 10.0 could never exceed 40.0, so the floor could never
+    -- raise anything, for any tier. "Scent range grows with XP" was numerically
+    -- dead from the day it shipped.
+    -- Now a multiplier over each track type's own maxRange, so it scales with
+    -- whatever that type is tuned to instead of fighting an absolute ceiling.
+    -- Base tier is 1.00 = no bonus, so a base-tier K9's range is byte-identical
+    -- to today's behaviour. Only a value > 1.0 does anything.
+    -- Pure balance placeholders -- tune freely.
+    { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+    { xp = 500,  label = 'Trained K9', speedMultiplier = 1.05, scentRangeMultiplier = 1.05 },
+    { xp = 1500, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10 },
+    { xp = 3500, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20 },
 }
 
 -- ======================================================================
