@@ -180,9 +180,10 @@ globals = {
     -- client/recall.lua -- the handler's escape hatch.
     "RequestRecall",
     -- client/propattachment.lua + client/fetch.lua (PropAttachments,
-    -- FetchMechanic). Both features are UNREGISTERED in fxmanifest.lua and
-    -- under active security review -- these are declared so lint stays
-    -- meaningful over files that are in the tree but do not yet ship.
+    -- FetchMechanic). Both features are REGISTERED in fxmanifest.lua and load
+    -- on every server; their flags ship `false`. The note that stood here --
+    -- "UNREGISTERED ... files that are in the tree but do not yet ship" -- was
+    -- true when written and was overtaken by the registration pass.
     "AttachPropToOwnPed", "DetachAndDeleteProp", "RequestToggleK9PropAttachment",
     "IsFetchCarryEngaged", "ReleaseFetchBall", "RequestRecallFetchBall", "RequestThrowFetchBall",
     -- server/cooldowns.lua constructors

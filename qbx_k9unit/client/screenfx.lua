@@ -89,9 +89,13 @@
     being a silent, unexplained exception to it.
 
     ======================================================================
-    REQUIRED SERVER-SIDE HOOK (not implemented by this pass -- server files
-    are off-limits to this session; reported to the integration owner
-    verbatim so whoever owns server/search.lua can apply it):
+    SERVER-SIDE HOOK -- IMPLEMENTED. Live at server/search.lua, firing
+    qbx_k9unit:client:applyContrabandScreenFx at the resolved alert tier, sent
+    to `source` only and never broadcast (broadcasting would hand every nearby
+    player a free contraband detector). The request below is kept as the record
+    of what was asked for and what shipped; do NOT apply it a second time.
+    The original text read "not implemented by this pass -- server files are
+    off-limits to this session":
 
     Inside server/search.lua's searchTarget callback success path, after
     `alertTier` is resolved (that file's own `ResolveAlertTier` call,

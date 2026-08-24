@@ -116,7 +116,9 @@ server_scripts {
     -- existence guard, not a load-order assumption" convention as every
     -- other soft cross-file dependency in this manifest (see this file's
     -- own comment on server/medkit.lua's RestoreInjury reuse below); those
-    -- three call sites guard the call with a `type(...) == 'function'`
+    -- four call sites (a verification pass counted four, not the three an
+    -- earlier revision of this comment claimed) guard the call with a
+    -- `type(...) == 'function'`
     -- check rather than assuming load order, since by the time any of them
     -- can actually FIRE (a real player action), every server_scripts file
     -- below has already finished loading regardless of manifest order.
