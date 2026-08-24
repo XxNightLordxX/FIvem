@@ -314,20 +314,16 @@
 -- and server/progression.lua's own `K9XP` cache.
 local TenureFullyCollected = {}
 
---- Sends an ox_lib notification to a specific player. Deliberate per-file
---- duplication -- see server/partnership.lua's/server/medkit.lua's own
---- identical comment on this exact tiny helper for why this resource
---- duplicates it rather than sharing it (not certification/permission
---- logic that must stay a single source of truth).
---- @param target number
---- @param description string
-local function NotifyPlayer(target, description)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit',
-        description = description,
-        type = 'inform',
-    })
-end
+-- NotifyPlayer used to be defined here as its own local copy (one of 12
+-- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- audit) -- the narrowest of the 12, with no `notifyType` parameter at all
+-- (always `'inform'`). It is now server/notify.lua's single shared
+-- resource-global implementation -- see that file's own header for the
+-- extraction writeup. Both of this file's call sites below are unchanged:
+-- each already only ever passed 2 arguments, which produces the identical
+-- `type = 'inform', title = 'K9 Unit'` payload through the shared
+-- function's own defaults -- confirmed against both call sites directly
+-- before deleting this local copy, not assumed.
 
 --- Re-derives, from the DB row itself (never from the cheap cache
 --- pre-filter that got the caller here), whether `k9Citizenid` currently

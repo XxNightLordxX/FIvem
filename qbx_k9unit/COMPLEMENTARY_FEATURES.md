@@ -1,5 +1,15 @@
 # qbx_k9unit — Complementary Features & Ecosystem Integration
 
+**Status correction (documentation pass, later the same day):** this
+document's "Top 3" recommendations below have since all been built.
+`server/exports.lua`/`client/exports.lua` (item 1), `server/admin.lua`
+(item 2), and `server/tenure.lua` (item 3) all now exist, are listed in
+`fxmanifest.lua`, and are documented as live in `README.md`. Read the
+sections below as the reasoning that led to those features, not as a list
+of still-open recommendations — in particular, the "Baseline worth stating
+up front" paragraph immediately below ("`fxmanifest.lua` declares zero
+exports") describes the state that motivated item 1 and is no longer true.
+
 Author: technology-scout pass, 2026-08-24, jlwood17190665@gmail.com.
 
 Purpose: a decision aid for the project owner, not a menu. Two questions:

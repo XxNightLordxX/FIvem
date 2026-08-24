@@ -170,19 +170,13 @@ local PendingFetchDrops = {}
 local ThrowCooldown = NewCooldown(Config.FetchMechanic.throwCooldownMs)
 ThrowCooldown.RegisterPlayerDropped()
 
---- Sends an ox_lib notification to a specific player. Duplicated (not
---- shared) per this resource's established convention — see
---- server/kennel.lua's own NotifyPlayer comment.
---- @param target number
---- @param description string
---- @param notifyType string?
-local function NotifyPlayer(target, description, notifyType)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit',
-        description = description,
-        type = notifyType or 'inform',
-    })
-end
+-- NotifyPlayer used to be defined here as its own local copy (a 13th
+-- hand-rolled copy of this exact pattern, landed in this file after
+-- REFACTOR_ROADMAP.md's 12-copy dedup audit was already written -- see
+-- server/notify.lua's own header for that audit and the extraction it
+-- describes). It is now server/notify.lua's single shared resource-global
+-- implementation. Every call site below is unchanged: this file never
+-- passed a custom title, which is server/notify.lua's own default.
 
 --- @param src number
 --- @return string? citizenid

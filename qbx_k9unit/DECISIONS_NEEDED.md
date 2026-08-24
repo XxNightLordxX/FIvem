@@ -25,8 +25,20 @@ vault, K9 inventory stash, medkit, XP progression, the five-stat wellbeing
 system, health/stamina HUD, deployable kennel, advanced bark radial,
 handler partnership registry.
 
-**In flight as of writing**: HandlerDownDefense, Recall, contraband screen
-FX, the NUI audio bridge, and a client-event origin check.
+**Landed since this document was written (correction, not a rewrite of the
+original list):** HandlerDownDefense, Recall, contraband screen FX end to
+end, and the client-event origin check are all now implemented and wired
+into `fxmanifest.lua` — none of them are "in flight" anymore. The NUI audio
+bridge (`client/audio.lua`) is also wired into `fxmanifest.lua`, but still
+has no caller in the manifest today (`client/main.lua`'s bark relay hasn't
+been switched over, and its other intended consumer,
+`client/proximityaudio.lua`, is itself not yet in the manifest). **New
+in-flight work as of this correction**: `ProximityAudioFX`, `PropAttachments`,
+and `FetchMechanic` now have real client/server code on disk, none of it
+registered in `fxmanifest.lua` yet. See `README.md`'s Known Issues section
+for the current, fast-moving state of exactly what is and isn't wired in —
+this resource is being edited by multiple agents in parallel and this list
+should be expected to keep changing.
 
 **Researched and deliberately not built**: `CameraFeedPiP` — no native
 exists to render a secondary camera into a NUI texture. There is an open

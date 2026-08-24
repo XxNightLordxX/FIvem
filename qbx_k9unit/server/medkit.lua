@@ -210,22 +210,12 @@ local function IsMedkitUserAuthorized(source)
     return false
 end
 
---- Sends an ox_lib notification to a specific player. Mirrors
---- server/certifications.lua's own NotifyPlayer helper exactly (same
---- reasoning: ox_lib's `ox_lib:notify` client event is a stable, publicly
---- documented API of an already-declared dependency) — a small,
---- deliberate per-file duplication rather than reaching into another
---- file's local function.
---- @param target number
---- @param description string
---- @param notifyType string?
-local function NotifyPlayer(target, description, notifyType)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit',
-        description = description,
-        type = notifyType or 'inform',
-    })
-end
+-- NotifyPlayer used to be defined here as its own local copy (one of 12
+-- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- audit). It is now server/notify.lua's single shared resource-global
+-- implementation -- see that file's own header for the extraction writeup.
+-- Every call site below is unchanged: this file never passed a custom
+-- title, which is server/notify.lua's own default.
 
 --- Internal implementation for the useK9Medkit callback below. Called only
 --- after the callback's own cheap checks (payload shape, feature flag,

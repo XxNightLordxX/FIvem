@@ -139,18 +139,23 @@
 -- other key here uses.
 local VALID_SUBCOMMAND_SET = { ['goto'] = true, next = true, prev = true, test = true, stop = true }
 
---- Sends an ox_lib notification to a specific player. Duplicated (not
---- shared) per this resource's established convention — see
---- server/kennel.lua's own NotifyPlayer comment.
+--- Sends an ox_lib notification to a specific player, using this file's own
+--- 'K9 Unit — Bone Tool' title. Deliberately kept as a thin LOCAL wrapper
+--- (same name, shadowing the resource-global on purpose) rather than
+--- flattened onto server/notify.lua's shared implementation directly at
+--- every call site below — see that file's header "TWO CALL SITES
+--- DELIBERATELY KEPT AS LOCAL WRAPPERS" section for the full reasoning
+--- (this title is a deliberate, player-visible per-subsystem difference,
+--- not an accident). The explicit `_G.` prefix below is required, not
+--- decorative: a bare `NotifyPlayer(...)` call inside this same-named local
+--- function's own body would resolve to this local (already in scope
+--- inside its own body) and recurse forever instead of reaching the shared
+--- global.
 --- @param target number
 --- @param description string
 --- @param notifyType string?
 local function NotifyPlayer(target, description, notifyType)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit — Bone Tool',
-        description = description,
-        type = notifyType or 'inform',
-    })
+    _G.NotifyPlayer(target, description, notifyType, 'K9 Unit — Bone Tool')
 end
 
 -- REFACTOR_ROADMAP.md item 1 convention: per-source rate limit on running

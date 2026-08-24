@@ -75,8 +75,11 @@ client_scripts {
     'client/combat.lua', -- Phase 3 (BiteAndHold/NonLethalTakedown, PHASE3_SPEC.md §12.5.1/§12.5.2) -- the client half of server/combat.lua; no ordering dependency on anything else in this list (reads Config.Combat/Config.Features from config.lua, already loaded via shared_scripts, and calls CanShowK9UI/DenyK9UIAccess from client/main.lua, which is loaded earlier in this same list, but Lua global-function resolution here is at CALL time, not load time, so this would still work even loaded first)
     'client/partnership.lua', -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7/§12.3) -- the client half of server/partnership.lua (Partner Up consent prompt, ox_target option, IsPartnered()/GetPartnerServerId(), and RefreshPartnershipStateFromServer() which yields on a server callback to re-sync the local cache before a caller decides Partner Up vs Break Partnership -- the local cache alone can under-report after a reconnect. The radial entry is now wired, in client/radial.lua). Same "no ordering dependency" note as client/combat.lua above -- calls CanShowK9UI()/IsOwnModelK9() from client/main.lua only at CALL time (inside RequestPartnerUp/the ox_target predicate), never at file-load time.
     'client/defense.lua', -- Phase 3 HandlerDownDefense client half -- soft dependency on client/combat.lua's IsBiteHoldEngaged via a runtime existence guard, so no hard load-order requirement
+    'client/propattachment.lua', -- Phase 5 R&D (PropAttachments). Also owns the generic AttachPropToOwnPed/DetachAndDeleteProp mechanic that client/bonetool.lua and client/fetch.lua both reuse rather than hand-rolling a third copy.
+    'client/bonetool.lua',       -- Dev-only bone-index sweep (BoneSweepDevTool). Placed here for topical grouping only; calls propattachment's globals at runtime, so no load-order requirement.
     'client/screenfx.lua', -- Phase 4 (ContrabandScreenFX). Held out of this manifest until its two timecycle natives were verified against primary source (no native is allowlisted here on an unverified assertion); both are now confirmed client-only. Registers its OWN handler for qbx_k9unit:client:applyContrabandScreenFx rather than extending client/search.lua -- an additional consumer, the same pattern server/wellbeing.lua and server/tracking.lua use for relayDamageEvent. No load-order dependency.
     'client/audio.lua', -- Phase 5 NUI audio bridge. PLUMBING ONLY -- no audio files ship with this resource (html/sounds/CREDITS.md records an egress-blocked sourcing attempt and four unverified CC0 leads). Every play against a not-yet-supplied html/sounds/<key>.ogg degrades to a silent no-op end to end. Has no caller yet: client/main.lua's PlaySoundOnNetworkEntity is deliberately still on the RAGE path, so this loads inert.
+    'client/proximityaudio.lua', -- Phase 5 (ProximityAudioFX). Distance-scaled gain over client/audio.lua's NUI bridge, so it loads after it. Registers no net-event handlers at all -- a security sweep confirmed the forged-event class does not apply. Silent until an operator supplies html/sounds/<key>.ogg, by design.
     'client/recall.lua', -- Phase 3 Recall (client half). Exposes RequestRecall() and the k9recall command. Deliberately does NOT call CanShowK9UI()/DenyK9UIAccess() -- Recall is a TERMINATION path and gating one is how the unbounded trap this resource forbids gets built.
     'client/exports.lua', -- Public client-side export surface. No load-order dependency: every wrapped function is reached through a `type(fn) == 'function'` guard plus pcall, so an export over a file that early-returns under its own feature flag returns a documented nil/false rather than erroring.
 }
@@ -161,6 +164,15 @@ server_scripts {
     -- cooldowns.lua (NewCooldown at file-load time -- a hard requirement);
     -- no ordering requirement against partnership.lua or combat.lua, both
     -- consumed through runtime existence guards.
+    -- Phase 5 R&D (PropAttachments) and the dev-only bone-index sweep tool.
+    -- Both call NewCooldown() at file-load time, so both MUST load after
+    -- server/cooldowns.lua. Registered after a security review cleared all
+    -- four files: the arbitrary-entity delete is closed, registration is
+    -- gated on the feature flag rather than the handler self-rejecting, and
+    -- the sweep tool is dual-gated (flag at command registration, ACE
+    -- re-checked per invocation, console explicitly rejected).
+    'server/propattachment.lua',
+    'server/bonetool.lua',
     'server/recall.lua',
     -- Partnership-tenure milestone XP bonus (Config.Features.PartnershipTenureBonus,
     -- COMPLEMENTARY_FEATURES.md item 7) -- the first gameplay consequence

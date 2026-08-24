@@ -33,7 +33,7 @@ layer on top of a player who is already playing as a dog.
 | 1 | Certification, leash, radial menu, vehicle load, bark | Feature-complete, enabled by default |
 | 2 | Tracking, search zones/contraband, vision, door interaction | Implemented, reviewed, ships **disabled** |
 | 3 | Bite & Hold, Non-Lethal Takedown, Prop Dragging, Advanced Agility, Handler Partnership, Handler-Down Defense | Implemented, ships **disabled**; combat mechanics have an open client-trust caveat — do not enable on a live server without reading it |
-| 4 | K9 Inventory, K9 Medkit, wellbeing (Fatigue/Mood/FearStress/Distraction/Injury), XP progression, vitality HUD | Implemented, ships **disabled**. `ContrabandScreenFX` has a client file but is not wired up end-to-end (see Known issues) |
+| 4 | K9 Inventory, K9 Medkit, wellbeing (Fatigue/Mood/FearStress/Distraction/Injury), XP progression, vitality HUD | Implemented, ships **disabled**. `ContrabandScreenFX` is now wired end-to-end (client file loaded, server-side trigger fires) — see its row in the [config reference](#phase-4--inventory-progression-vitality-all-ship-false) below |
 | 5 | Deployable kennel, advanced bark radial | Implemented (R&D-grade), ships **disabled**. `ProximityAudioFX`, `PropAttachments`, and `FetchMechanic` now have real client/server code on disk (`client/proximityaudio.lua`, `client/propattachment.lua`+`server/propattachment.lua`, `client/fetch.lua`+`server/fetch.lua`), but **none of it is registered in `fxmanifest.lua`** as of this pass, so all three remain completely inert regardless of their flags — see Known issues. `CameraFeedPiP` is confirmed impossible with current natives (see below) |
 
 Only **five** `Config.Features` flags ship `true`: `LeashMechanics`,

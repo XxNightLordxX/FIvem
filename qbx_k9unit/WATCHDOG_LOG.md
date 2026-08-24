@@ -985,6 +985,19 @@ not go near it.
 | Recall | **No** — same, flag/comments only | No | No (false) | N/A |
 | AgilityAdvanced | Yes (prior window) | Yes | No (false) | Yes (prior passes) |
 
+**Correction, added by a later documentation pass (not by Pass #7 itself —
+kept as an appended note per this document's own "layer corrections, don't
+rewrite history" convention, matching REFACTOR_ROADMAP.md's practice):**
+the two "No" rows above (`HandlerDownDefense`, `Recall`) are stale as of
+this correction. Both are now real, implemented code — `server/defense.lua`
++ `client/defense.lua` and `server/recall.lua` + `client/recall.lua`
+respectively — both listed in `fxmanifest.lua` and gated on their own
+still-`false` flags. This table was accurate at the moment Pass #7 wrote
+it; it stopped being accurate before this correction landed.
+`REFACTOR_ROADMAP.md` Revision 6 flagged this exact table as due for a
+refresh (its Part 6 "near-term item 1") — this note is that refresh,
+scoped to a minimal correction rather than rewriting Pass #7's own text.
+
 **In-flight, not yet landed as of this pass's last check:** the working
 tree's uncommitted `client/radial.lua` diff adds a "Drag / Release" item
 mirroring Bite & Hold's context-sensitive pattern — **this closes the
@@ -1051,3 +1064,21 @@ commits in this window touched any doc file.
 5. Carried forward unchanged, no new information this window: bark-audio
    placeholder asset gap (two scoped candidate paths from Pass #6, still
    neither attempted); `fxmanifest.lua` still pins no dependency versions.
+
+## 2026-08-24 — Watchdog pass (scheduled trigger, project-lead recurring mode)
+
+Clean, with one stale doc claim corrected and four files cleared for registration.
+
+- **Syntax baseline**: `luac5.4 -p` on all 48 `.lua` files — all parse. `luacheck` 0 warnings / 0 errors, no suppressions.
+- **Regression spot-checks — all five intact, each verified against code, not comments**:
+  - `AgilityBasicJump` is genuinely read at `client/movement.lua:964` (a real file-scope gate). Note: its only other appearances are in comments in `combat.lua`/`tracking.lua`, so a naive grep looks reassuring for the wrong reason.
+  - Role-aware `LeashPairs` intact — `server/main.lua:798-799` still writes `{ partner, isK9 }` for both directions.
+  - `RevokeCertificationOffline` still calls `RefreshCertificationCache` (`server/certifications.lua:794`).
+  - `client/vehicle.lua`'s `onResourceStop` cleanup present (line 197) and still detaches/restores visibility and collision.
+  - `lib.registerRadial` / `lib.addRadialItem` split (the 2026-08-23 hard-error fix) still correct — real calls at `client/radial.lua:226`, `:671`, `:681`. Checked for actual call sites specifically because the surrounding comment block quotes both API names heavily; comment matches alone would have been misleading.
+- **Externally-uncertain facts re-verified this session** (by a dependency scout, against live `main` branches via `raw.githubusercontent.com`): `qbx_core` 1.24.0, `ox_lib` 3.39.0, `ox_target` 1.18.1, `oxmysql` 2.14.1, `ox_inventory` 2.47.9 — all exact matches to the recorded "last verified", no drift. Overextended confirmed as the canonical maintained home; CommunityOx is an archived fork. The two `ox_inventory` commits since verification were read and are orthogonal to this resource's usage.
+- **Bark audio gap (SPEC.md §7): STILL OPEN.** No real asset. A sourcing attempt found this environment's egress blocked to every audio host; `html/sounds/CREDITS.md` records that, four unverified CC0 leads, and exactly what an operator must supply. Nothing was fabricated.
+- **SPEC.md audit — one stale claim found and fixed**: it still described `ContrabandScreenFX`'s timecycle-modifier name as "an unverified candidate". It is no longer unverified — the shipped value `drug_wobbly_shroom` **does not exist** (a game-data extraction of 2806+ modifiers contains only `drug_wobbly`), so the feature would have rendered nothing, silently, forever. Corrected in code and config earlier this session; SPEC.md now says so.
+- **Registered after their security review cleared**: `client/propattachment.lua`, `server/propattachment.lua`, `client/bonetool.lua`, `server/bonetool.lua`, `client/proximityaudio.lua`. All ship `false`.
+- **Still deliberately unregistered**: `client/fetch.lua`, `server/fetch.lua` — held only because both were being actively edited during this pass, not for any unresolved finding; the sweep covered them and found them clean.
+- **Known open, not regressions**: the two XP farms (track-source and contraband-search) are still live and assigned. They remain the reason `0.2.0` is not cuttable.

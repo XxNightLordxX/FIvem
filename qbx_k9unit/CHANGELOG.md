@@ -1059,8 +1059,20 @@ sweep the third round's own entry flagged as still open:
   direct in-engine observation" (a bounded, one-session engineering test
   using `GetWorldPositionOfEntityBone`, since `AttachEntityToEntity`'s bone
   parameter accepts a raw index either way). None of `Config.Features.ProximityAudioFX`/
-  `PropAttachments`/`FetchMechanic`/`CameraFeedPiP` have any code behind
-  them yet as a result — see [Config options not yet wired up](README.md#config-options-not-yet-wired-up).
+  `PropAttachments`/`FetchMechanic`/`CameraFeedPiP` had any code behind
+  them yet as of this research pass. **Correction, added later the same
+  day:** real client/server implementations for `ProximityAudioFX`,
+  `PropAttachments`, and `FetchMechanic` have since landed
+  (`client/proximityaudio.lua`; `client/propattachment.lua` +
+  `server/propattachment.lua`; `client/fetch.lua` + `server/fetch.lua`) —
+  none of them are registered in `fxmanifest.lua` yet, so all three remain
+  unusable regardless, but "no code" is no longer the accurate description.
+  `CameraFeedPiP` is unaffected and remains genuinely uncoded and
+  infeasible. The broken link this line previously pointed to
+  (`README.md#config-options-not-yet-wired-up`, a section that doesn't
+  exist) is removed rather than left dangling — see `README.md`'s
+  [Known issues](README.md#known-issues--code-that-exists-but-does-not-run)
+  section for the current, actual state of what is and isn't wired in.
 - **A whole-codebase technical-debt audit (`REFACTOR_ROADMAP.md` Revision
   5) found the previously-closed shared `ResolveNetworkEntity`
   defensive-entity-resolution extraction reopened by 11 new,

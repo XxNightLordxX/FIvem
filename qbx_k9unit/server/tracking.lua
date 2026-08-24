@@ -150,6 +150,25 @@
     DECISION above still stands, unmodified, for the REVEAL; only the new
     XP-ticket eligibility gate is new.
 
+    ADDENDUM 2 (economy-audit finding, this pass — MIN_TRACK_XP_DISTANCE
+    alone was NOT sufficient): a live economy audit independently confirmed
+    trackSourceResolved was still a real, ~3,600-4,200 XP/hr farm even with
+    finding A's fix in place, via two holes finding A's own distance-only
+    check never touched: (1) a single TrackableLog entry stayed matchable
+    for its ENTIRE maxAgeSeconds window, so walking MIN_TRACK_XP_DISTANCE
+    away from the SAME still-fresh entry and back re-earned XP off the one
+    real logged event indefinitely — no NEW source was ever required; (2)
+    MIN_TRACK_XP_DISTANCE and Config.XP.trackArrivalRadius are both
+    POSITION-only checks, so a client capable of `SetEntityCoords` could
+    satisfy both with a single teleport and ~0ms of real elapsed time. Both
+    are now closed: TrackableLog entries carry a `ticketIssued` flag rationing
+    each real logged event to at most one ticket ever (see that field's own
+    declaration comment), and every PendingTrackArrival ticket now also
+    requires genuine elapsed server time, scaled to distance, before it can
+    be redeemed (see MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS's own declaration
+    comment). Neither change touches the forged-trail DECISION above or the
+    REVEAL — only trackSourceResolved's XP-ticket eligibility.
+
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 2, per SPEC.md §11.4 items 1, 3, 4.
     Identical in shape to server/certifications.lua's contract block so
@@ -199,8 +218,11 @@
        already resolved and stored in `PendingTrackArrival` (below) —
        NEVER a client-claimed distance/arrival boolean. Rate-limited by
        `TrackArrivalReportCooldown` (defense-in-depth only, see that
-       tracker's own declaration comment — the primary anti-farm mechanism
-       is `PendingTrackArrival`'s single-use-then-cleared shape, not this
+       tracker's own declaration comment — the primary anti-farm mechanisms
+       are `PendingTrackArrival`'s single-use-then-cleared shape, the
+       underlying TrackableLog entry's own one-ticket-ever `ticketIssued`
+       rationing, and the real-elapsed-time-vs-distance `minElapsedMs`
+       check (ADDENDUM 2, economy-audit fix, this file's header), not this
        rate limit).
 
     ox_inventory hooks (exports.ox_inventory:registerHook, ox_inventory ->
@@ -317,8 +339,16 @@
 -- NOT persisted, mirrors server/main.lua's `LeashPairs` precedent (SPEC.md
 -- §10 flags this precedent as still needing db-schema's confirmation, not
 -- assumed settled here).
--- TrackableLog[trackType][i] = { coords = vector3, loggedAt = <GetGameTimer() ms> }
--- trackType in {'scent', 'blood', 'gunpowder'}.
+-- TrackableLog[trackType][i] = { coords = vector3, loggedAt = <GetGameTimer() ms>,
+-- ticketIssued = boolean }. trackType in {'scent', 'blood', 'gunpowder'}.
+-- `ticketIssued` ADDED this pass (ANTI-FARM FIX, see findTrackableSource's
+-- own doc comment below for the full writeup) — false at log-append time,
+-- flipped true the one time (ever) this exact entry is selected as the
+-- nearest match AND clears MIN_TRACK_XP_DISTANCE, i.e. the one time it is
+-- ever used to mint a PendingTrackArrival ticket. Rations a single real
+-- logged event to at most one XP-eligible ticket for its entire lifetime,
+-- independent of how many times it is later re-resolved (cosmetically) or
+-- how long it remains within maxAgeSeconds.
 local TrackableLog = {
     scent = {},
     blood = {},
@@ -363,23 +393,26 @@ local WeaponFireRelayCooldown = NewCooldown()
 WeaponFireRelayCooldown.RegisterPlayerDropped()
 
 -- PHASE 4 ADDITION (coder-backend, XPProgression pass) -- PendingTrackArrival[src]
--- = { trackType, coords, expiresAt }. Backs Config.XP.awards.trackSourceResolved
--- (config.lua, PHASE4_SPEC.md §13.4.1 open question 3): findTrackableSource's
--- own `found = true` reveal below is deliberately NOT the XP award trigger --
--- awarding there would let a K9 farm XP by repeatedly triggering a search
--- without ever completing it (the exact gap that open question flags,
--- explicitly left unresolved by PHASE4_SPEC.md and closed here). Instead, a
--- successful resolve stores where the K9 would need to walk to, and XP is
--- only granted once 'qbx_k9unit:server:reportTrackSourceArrival' below
--- confirms the K9's OWN LIVE server-side position is within
--- Config.XP.trackArrivalRadius of that stored coordinate -- never a
--- client-claimed distance/arrival boolean. Single-slot per source (a fresh
--- resolve overwrites any earlier pending arrival for that source, mirroring
--- server/main.lua's PendingLeashRequests single-slot-per-target shape) --
--- plain table + manual playerDropped cleanup, NOT a NewCooldown/NewMutex
--- shape (this isn't a rate limiter, it's a short-lived one-shot claim
--- ticket), same reasoning server/main.lua's own PendingLeashRequests
--- declaration gives for its own shape.
+-- = { trackType, coords, expiresAt, createdAt, minElapsedMs }. Backs
+-- Config.XP.awards.trackSourceResolved (config.lua, PHASE4_SPEC.md §13.4.1
+-- open question 3): findTrackableSource's own `found = true` reveal below
+-- is deliberately NOT the XP award trigger -- awarding there would let a K9
+-- farm XP by repeatedly triggering a search without ever completing it (the
+-- exact gap that open question flags, explicitly left unresolved by
+-- PHASE4_SPEC.md and closed here). Instead, a successful resolve stores
+-- where the K9 would need to walk to, and XP is only granted once
+-- 'qbx_k9unit:server:reportTrackSourceArrival' below confirms the K9's OWN
+-- LIVE server-side position is within Config.XP.trackArrivalRadius of that
+-- stored coordinate -- never a client-claimed distance/arrival boolean.
+-- Single-slot per source (a fresh resolve overwrites any earlier pending
+-- arrival for that source, mirroring server/main.lua's
+-- PendingLeashRequests single-slot-per-target shape) -- plain table +
+-- manual playerDropped cleanup, NOT a NewCooldown/NewMutex shape (this
+-- isn't a rate limiter, it's a short-lived one-shot claim ticket), same
+-- reasoning server/main.lua's own PendingLeashRequests declaration gives
+-- for its own shape. `createdAt`/`minElapsedMs` ADDED this pass -- see
+-- MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS's own declaration comment below for the
+-- economy-audit finding they close.
 local PendingTrackArrival = {}
 
 -- SECURITY FIX (coder-security finding A, this pass) -- see this file's
@@ -399,6 +432,53 @@ local PendingTrackArrival = {}
 -- Config.Tracking.<Type>.maxRange default (40.0), so this does not make
 -- otherwise-legitimate, genuinely-distant resolves ineligible.
 local MIN_TRACK_XP_DISTANCE = 15.0
+
+-- ECONOMY-AUDIT FIX (this pass, closing two independently-confirmed
+-- trackSourceResolved XP-farm holes on top of finding A's stationary-farm
+-- fix above):
+--
+-- HOLE 1 -- REUSABLE SOURCE: MIN_TRACK_XP_DISTANCE above only ever gated
+-- whether a TICKET gets created; it never touched the underlying
+-- TrackableLog ENTRY itself. A single logged event (one real gunfight, one
+-- real item drop) stayed matchable by findTrackableSource's nearest-fresh-
+-- entry loop for its ENTIRE maxAgeSeconds window (120-900s) -- so a K9
+-- could walk MIN_TRACK_XP_DISTANCE away from that SAME still-fresh entry
+-- and back, re-resolve it (once every searchCooldownMs), and re-earn
+-- trackSourceResolved XP off the one real event indefinitely, turning any
+-- real gunfight or item drop anywhere on the map into a recyclable piñata.
+-- FIX: TrackableLog entries now carry their own `ticketIssued` flag (see
+-- each log-append call site above and the TrackableLog declaration comment
+-- for the full field writeup) -- findTrackableSource below marks the
+-- resolved entry `ticketIssued = true` the one time it is ever used to mint
+-- a ticket, and refuses to mint a second one for an already-ticketed entry.
+-- The cosmetic reveal (`found = true` / `coords`) is completely unaffected
+-- either way -- only ticket-minting is gated on this, same "reveal is
+-- cosmetic, XP-eligibility is the real gate" split finding A already
+-- established.
+--
+-- HOLE 2 -- NO ELAPSED-TIME REQUIREMENT: reportTrackSourceArrival below
+-- only ever compared LIVE POSITION at the moment of the report against
+-- `pending.coords` -- it never compared TIME. A client capable of
+-- `SetEntityCoords` (teleport) could resolve a source MIN_TRACK_XP_DISTANCE
+-- away (satisfying finding A's own check) and then teleport straight onto
+-- it, satisfying both the distance-at-resolution AND distance-at-arrival
+-- checks with zero real travel and near-zero elapsed time. FIX: every
+-- ticket now also stores `createdAt` (GetGameTimer() at ticket-creation)
+-- and `minElapsedMs`, computed below from the SAME server-measured
+-- `nearestDist` finding A's own check already gates on -- never a
+-- client-supplied value -- as `nearestDist / MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS`.
+-- reportTrackSourceArrival now additionally requires real elapsed server
+-- time (`GetGameTimer() - pending.createdAt`) to be at least that long
+-- before paying XP. MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS below is deliberately
+-- generous (well above an on-foot sprint, comparable to a patrol vehicle at
+-- a brisk city-street pace) precisely so a legitimate K9 handler who
+-- reaches the source quickly BY VEHICLE is never falsely blocked -- this
+-- closes the "zero elapsed time" teleport case without penalizing
+-- genuinely fast, genuinely real travel. Combined with HOLE 1's per-entry
+-- rationing above, a farmer can no longer manufacture free tickets by
+-- reusing one entry, and even a freshly-earned single ticket can no longer
+-- be redeemed with a 0ms teleport-and-report round trip.
+local MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS = 25.0 -- ~90 km/h -- a local implementation constant, not a Config.* field, for the same "internal defensive bound" reasoning MIN_TRACK_XP_DISTANCE's own declaration comment gives
 
 -- Defense-in-depth rate limit on the reportTrackSourceArrival event below --
 -- same "never leave a per-source ingest path fully unbounded" posture this
@@ -534,6 +614,7 @@ RegisterNetEvent('qbx_k9unit:server:relayDamageEvent', function()
     TrackableLog.blood[#TrackableLog.blood + 1] = {
         coords = GetEntityCoords(ped), -- NEVER a client-supplied coordinate
         loggedAt = now,
+        ticketIssued = false, -- ANTI-FARM FIX (this pass) -- see findTrackableSource's own comment on this field for the full writeup
     }
 end)
 
@@ -575,6 +656,7 @@ RegisterNetEvent('qbx_k9unit:server:relayWeaponFire', function()
     TrackableLog.gunpowder[#TrackableLog.gunpowder + 1] = {
         coords = GetEntityCoords(ped), -- NEVER a client-supplied coordinate
         loggedAt = now,
+        ticketIssued = false, -- ANTI-FARM FIX (this pass) -- see findTrackableSource's own comment on this field for the full writeup
     }
 end)
 
@@ -753,6 +835,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         TrackableLog.scent[#TrackableLog.scent + 1] = {
             coords = GetEntityCoords(ped), -- the DROPPING PLAYER'S OWN live position — NEVER ox_inventory's internal/eventual drop-inventory .coords (not yet created at this point in ox_inventory's own dropItem flow anyway, per scent_source_resolution.md §2) and NEVER anything client-supplied
             loggedAt = GetGameTimer(),
+            ticketIssued = false, -- ANTI-FARM FIX (this pass) — see findTrackableSource's own comment on this field for the full writeup
         }
     end)
 end)
@@ -822,7 +905,7 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
 
     -- PHASE 4 ADDITION (coder-backend, XPProgression pass, PHASE4_SPEC.md
     -- §13.4.1 item (a)): "crossing a threshold... changes... the server's
-    -- own authoritative scentRange value for that K9, read by
+    -- own authoritative scent-range bonus for that K9, read by
     -- server/tracking.lua's findTrackableSource in place of
     -- Config.Tracking.<Type>.maxRange." Read via a `type(GetXPTier) ==
     -- 'function'` runtime existence guard (server/progression.lua, same
@@ -831,25 +914,35 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     -- server/progression.lua happens to be loaded, and is unaffected by
     -- fxmanifest.lua's server_scripts ordering either way (no load-order
     -- assumption is made). Only ever RAISES maxRange (never lowers it below
-    -- this type's own configured baseline) — an uncached/base-tier
-    -- citizenid's tier.scentRange (Config.XPTiers[1] = 5.0) is smaller than
-    -- every Config.Tracking.<Type>.maxRange default (40.0) as shipped, so
-    -- this is purely an XP-earned BONUS on top of the type's own tuning,
-    -- never a silent regression of it, regardless of how the two tables get
-    -- tuned relative to each other later. Applied uniformly to all three
-    -- trackTypes (scent/blood/gunpowder) — Config.XPTiers has one
-    -- `scentRange` value per tier, not one per trackType, so this reads it
-    -- as "the K9's general resolved-source detection range," not literally
-    -- scoped to the 'scent' trackType by name; flagged here as a judgment
-    -- call on ambiguous spec wording, not a silently-picked interpretation.
+    -- this type's own configured baseline) — the multiplier check below
+    -- (`> 1.0`) means an uncached/base-tier citizenid's
+    -- tier.scentRangeMultiplier (Config.XPTiers[1] = 1.00) never changes
+    -- maxRange at all, so this is purely an XP-earned BONUS on top of the
+    -- type's own tuning, never a silent regression of it. Applied uniformly
+    -- to all three trackTypes (scent/blood/gunpowder) — Config.XPTiers has
+    -- one `scentRangeMultiplier` value per tier, not one per trackType, so
+    -- this reads it as "the K9's general resolved-source detection range
+    -- multiplier," not literally scoped to the 'scent' trackType by name;
+    -- flagged here as a judgment call on ambiguous spec wording, not a
+    -- silently-picked interpretation.
+    --
+    -- RENAMED + REDESIGNED this pass (economy/config-correctness fix):
+    -- this field used to be `scentRange`, a flat replacement value applied
+    -- via `math.max(maxRange, tier.scentRange)` — but every tier's
+    -- scentRange (5.0-10.0) was smaller than every
+    -- Config.Tracking.<Type>.maxRange default (40.0), so that `math.max`
+    -- could structurally never take effect: the bonus was dead code from
+    -- the moment it shipped. It is now `scentRangeMultiplier`, a factor
+    -- applied to THIS type's own `trackingConfig.maxRange` (not a flat
+    -- floor), so tiers above base genuinely extend detection range.
     local maxRange = trackingConfig.maxRange
     if Config.Features.XPProgression and type(GetXPTier) == 'function' then
         local trackerPlayer = exports.qbx_core:GetPlayer(source)
         local trackerCitizenid = trackerPlayer and trackerPlayer.PlayerData and trackerPlayer.PlayerData.citizenid
         if trackerCitizenid then
             local tier = GetXPTier(trackerCitizenid)
-            if tier and type(tier.scentRange) == 'number' and tier.scentRange > maxRange then
-                maxRange = tier.scentRange
+            if tier and type(tier.scentRangeMultiplier) == 'number' and tier.scentRangeMultiplier > 1.0 then
+                maxRange = trackingConfig.maxRange * tier.scentRangeMultiplier
             end
         end
     end
@@ -867,6 +960,13 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     -- substitute for pruning).
     local maxAgeMs = trackingConfig.maxAgeSeconds * 1000
     local nearestDist
+    -- ANTI-FARM FIX (this pass) -- the actual TrackableLog entry object the
+    -- current best match came from, so the ticket-minting step below can
+    -- read/flip its `ticketIssued` flag. NOT reset per-loop-iteration on a
+    -- rejected candidate -- only ever (re)assigned in lockstep with
+    -- `nearestDist`/`sourceCoords` above, so it always refers to the SAME
+    -- entry those two describe.
+    local nearestEntry
 
     for _, entry in ipairs(TrackableLog[trackType]) do
         if (now - entry.loggedAt) < maxAgeMs then
@@ -874,6 +974,7 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
             if dist <= maxRange and (not nearestDist or dist < nearestDist) then
                 nearestDist = dist
                 sourceCoords = entry.coords
+                nearestEntry = entry
             end
         end
     end
@@ -909,11 +1010,21 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     -- client-cosmetic marker-trail REVEAL below is entirely unaffected (it
     -- still returns `found = true`/`coords` either way); only XP-ticket
     -- eligibility is gated on this.
-    if Config.Features.XPProgression and nearestDist >= MIN_TRACK_XP_DISTANCE then
+    -- ECONOMY-AUDIT FIX, HOLE 1 (this pass) -- see MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS's
+    -- own declaration comment above for the full writeup: `nearestEntry` (the
+    -- exact TrackableLog entry `sourceCoords` came from) must not already
+    -- have had a ticket minted from it, ever. Without this, walking
+    -- MIN_TRACK_XP_DISTANCE away from the SAME still-fresh entry and back
+    -- re-earned XP off the one real logged event indefinitely.
+    if Config.Features.XPProgression and nearestDist >= MIN_TRACK_XP_DISTANCE
+        and nearestEntry and not nearestEntry.ticketIssued then
+        nearestEntry.ticketIssued = true -- ration this entry to one ticket, ever -- the cosmetic reveal below is unaffected either way
         PendingTrackArrival[source] = {
             trackType = trackType,
             coords = sourceCoords, -- the SAME server-resolved coordinate returned to the client below -- never re-derived from a later client claim
             expiresAt = now + Config.XP.trackArrivalTTLMs,
+            createdAt = now, -- ECONOMY-AUDIT FIX, HOLE 2 -- real elapsed time is measured from this, never a client-reported duration
+            minElapsedMs = (nearestDist / MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS) * 1000, -- derived from the SAME server-measured nearestDist gated on just above
         }
     end
 
@@ -945,16 +1056,30 @@ RegisterNetEvent('qbx_k9unit:server:reportTrackSourceArrival', function()
     if not Config.Features.XPProgression then return end -- real server-side no-op regardless of client UI state, per §3
     if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive
 
-    if not TrackArrivalReportCooldown.Consume(src, TRACK_ARRIVAL_REPORT_COOLDOWN_MS) then
+    local now = GetGameTimer()
+
+    if not TrackArrivalReportCooldown.Consume(src, TRACK_ARRIVAL_REPORT_COOLDOWN_MS, now) then
         return -- silent no-op: rate-limited, not an error worth notifying about
     end
 
     local pending = PendingTrackArrival[src]
     if not pending then return end -- no resolved-but-unreached source is currently pending for this source
 
-    if GetGameTimer() > pending.expiresAt then
+    if now > pending.expiresAt then
         PendingTrackArrival[src] = nil -- stale — drop it rather than leave it around for a later, unrelated report to consume
         return
+    end
+
+    -- ECONOMY-AUDIT FIX, HOLE 2 (this pass) -- see MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS's
+    -- own declaration comment above for the full writeup. `pending.createdAt`/
+    -- `now` are both server GetGameTimer() values -- never a client-reported
+    -- duration. Deliberately does NOT clear the pending ticket on this
+    -- branch (unlike the expiry/single-use paths below) -- a genuine K9 who
+    -- simply arrived faster than expected just needs to wait out the
+    -- remainder of `minElapsedMs` and report again (bounded by
+    -- TrackArrivalReportCooldown above), not lose their in-flight ticket.
+    if (now - pending.createdAt) < pending.minElapsedMs then
+        return -- too little real time has passed to be genuine travel
     end
 
     local ped = GetPlayerPed(src)

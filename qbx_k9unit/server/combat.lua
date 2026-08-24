@@ -416,20 +416,12 @@ TakedownTargetCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, func
     return (now - loggedAt) > (Config.Combat.NonLethalTakedown.targetCooldownMs * 2)
 end)
 
---- Sends an ox_lib notification to a specific player. Duplicated (not
---- shared) per server/main.lua's own NotifyPlayer precedent — a tiny,
---- generic UI-plumbing helper, not logic that must stay a single source of
---- truth.
---- @param target number
---- @param description string
---- @param notifyType string?
-local function NotifyPlayer(target, description, notifyType)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit',
-        description = description,
-        type = notifyType or 'inform',
-    })
-end
+-- NotifyPlayer used to be defined here as its own local copy (one of 12
+-- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- audit). It is now server/notify.lua's single shared resource-global
+-- implementation -- see that file's own header for the extraction writeup.
+-- Every call site below is unchanged: this file never passed a custom
+-- title, which is server/notify.lua's own default.
 
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a local
 -- function (duplicated from server/search.lua's own copy). Extracted to

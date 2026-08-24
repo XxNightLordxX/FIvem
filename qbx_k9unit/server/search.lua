@@ -378,6 +378,69 @@ TargetSearchCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, functi
     return (now - loggedAt) > staleAfterMs
 end)
 
+-- ECONOMY-AUDIT FIX (this pass): Config.SearchZones.searchCooldownMs (the
+-- per-(K9,target) cooldown above) and Config.SearchZones.sniffAnimDurationMs
+-- (the flat per-source cooldown at HandleSearchTarget's own callback
+-- registration below) exist ONLY to keep repeat searches from harassing the
+-- same target or flooding this callback — neither was ever a
+-- searcher-dimension XP throttle, and TargetSearchCooldown's key
+-- (resolved target identity only) means it does not, and structurally
+-- cannot, throttle ONE K9 rotating across MANY targets. A K9 planting
+-- contraband in a small handful of their own stashes and rotating across
+-- them lands a real (not on-cooldown) search roughly every
+-- sniffAnimDurationMs regardless of how many stashes they own — with 3
+-- stashes that is ~15 searches/min * Config.XP.awards.searchContrabandFound
+-- (25) = ~22,500 XP/hr, reaching the top XP tier in well under ten minutes.
+--
+-- FIX, per this pass's explicit instruction to fix the XP side, not the
+-- search side (search itself must stay fully responsive — HandleSearchTarget's
+-- own doc comment above already documents multiple distinct legitimate K9
+-- officers each searching the same target as intended behavior, and that
+-- must keep working unchanged): XP for a given resolved target identity
+-- (`cooldownKey` below — the exact same stable 'vehicle:<plate>' |
+-- 'person:<citizenid>' string TargetSearchCooldown already keys on, never
+-- anything client-supplied) is only ever paid the FIRST time contraband is
+-- found there, and again only once that target's contraband composition has
+-- genuinely CHANGED since the last time XP was paid for it (weight differs
+-- — covers a top-up, a partial seizure, or a full seizure-then-replant).
+-- Re-searching the SAME untouched stash — however many times, however fast
+-- — pays zero additional XP: doing so reflects no new police work, just
+-- repeat confirmation of a fact already rewarded once. A genuine officer
+-- working a scene where contraband keeps changing (evidence intake, a
+-- suspect topping up) keeps earning normally; a farmer who never actually
+-- touches their own planted stash cannot re-earn from it no matter how many
+-- stashes they rotate across or how tight the request cadence is.
+--
+-- Deliberately a plain per-target `{ weight, awardedAt }` cache, NOT a
+-- NewCooldown/NewNestedCooldown instance from server/cooldowns.lua — this
+-- is not a "has enough time elapsed" check, it's a "did the underlying fact
+-- change" check, exactly the same "different shape entirely, do not force
+-- it onto the cooldown constructors" reasoning server/cooldowns.lua's own
+-- header already gives, almost verbatim, for server/tracking.lua's
+-- TrackableLog (an aged/scanned log, not a `key -> lastTouchedAtMs` map).
+-- Pruned below on its own long-lived sweep — deliberately far longer than
+-- TargetSearchCooldown's own ~20s (searchCooldownMs * 2) staleness window,
+-- so a target revisited at the exploited ~10-15s cadence above NEVER sees
+-- its cache entry evicted mid-farm (which would otherwise silently
+-- re-open a fresh XP award every eviction cycle); only a target genuinely
+-- untouched for the FULL 30 minutes is forgotten, purely for long-running-
+-- server memory hygiene, far too slow a cycle to farm meaningfully at.
+local ContrabandXpState = {} -- [cooldownKey] = { weight = number, awardedAt = <GetGameTimer() ms> }
+local CONTRABAND_XP_STATE_TTL_MS = 30 * 60 * 1000 -- 30 minutes — see comment above for why this must comfortably outlive TargetSearchCooldown's own staleness window
+local CONTRABAND_XP_STATE_SWEEP_INTERVAL_MS = 5 * 60 * 1000 -- 5 minutes — a memory-hygiene pass only; unrelated to any anti-farm timing above
+
+CreateThread(function()
+    while true do
+        Wait(CONTRABAND_XP_STATE_SWEEP_INTERVAL_MS)
+        local now = GetGameTimer()
+        for cooldownKey, state in pairs(ContrabandXpState) do
+            if (now - state.awardedAt) > CONTRABAND_XP_STATE_TTL_MS then
+                ContrabandXpState[cooldownKey] = nil
+            end
+        end
+    end
+end)
+
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a local
 -- function (see its own extensive "DELIBERATE IMPLEMENTATION CHOICE" doc
 -- comment, now preserved verbatim on server/entities.lua's copy). It was
@@ -804,10 +867,23 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- GetXPTier/AwardXP call sites and server/medkit.lua's RestoreInjury —
     -- no load-order assumption on server/progression.lua either way.
     if contrabandFound and Config.Features.XPProgression and type(AwardXP) == 'function' then
-        local searcherPlayer = exports.qbx_core:GetPlayer(source)
-        local searcherCitizenid = searcherPlayer and searcherPlayer.PlayerData and searcherPlayer.PlayerData.citizenid
-        if searcherCitizenid then
-            AwardXP(searcherCitizenid, 'searchContrabandFound')
+        -- ECONOMY-AUDIT FIX (this pass) — see ContrabandXpState's own
+        -- declaration comment above for the full writeup. Only pays XP if
+        -- this exact resolved target's contraband weight differs from
+        -- whatever it was the last time XP was paid for it (no prior state
+        -- counts as "differs" — the first-ever find for a target always
+        -- pays). `cooldownKey` is the same stable, server-resolved target
+        -- identity TargetSearchCooldown already uses above — never
+        -- anything client-supplied.
+        local priorAwardState = ContrabandXpState[cooldownKey]
+        local contrabandChangedSinceLastAward = not priorAwardState or priorAwardState.weight ~= totalWeight
+        if contrabandChangedSinceLastAward then
+            ContrabandXpState[cooldownKey] = { weight = totalWeight, awardedAt = GetGameTimer() }
+            local searcherPlayer = exports.qbx_core:GetPlayer(source)
+            local searcherCitizenid = searcherPlayer and searcherPlayer.PlayerData and searcherPlayer.PlayerData.citizenid
+            if searcherCitizenid then
+                AwardXP(searcherCitizenid, 'searchContrabandFound')
+            end
         end
     end
 

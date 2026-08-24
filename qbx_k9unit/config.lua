@@ -687,8 +687,16 @@ Config.Recall = {
 
 -- ======================================================================
 -- CONTRABAND SCREEN FX (Config.Features.ContrabandScreenFX) --
--- client/screenfx.lua. A brief timecycle effect on the SEARCHED player's
--- own screen when a search turns up contraband. Cosmetic, self-only.
+-- client/screenfx.lua. A brief timecycle effect on the SEARCHING K9 player's
+-- own screen when their search turns up contraband -- sensory feedback for the
+-- dog, not a penalty applied to the suspect.
+--
+-- An earlier version of THIS COMMENT said "the SEARCHED player's own screen",
+-- which never matched the code: server/search.lua fires this at `source`, the
+-- searcher. The code is the intended behaviour and the comment was wrong.
+-- Worth stating rather than silently editing, because a future maintainer
+-- reading only the old comment would have "fixed" the code to match it and
+-- turned a cosmetic self-effect into something applied to another player.
 -- ======================================================================
 Config.ContrabandScreenFX = {
     -- Which Config.ContrabandAlertTiers tier(s) trigger the effect. Only

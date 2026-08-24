@@ -252,25 +252,27 @@ local SEARCH_LOG_COLUMNS = 'searcher_citizenid, searcher_job, target_type, targe
 local AuditCooldown = NewCooldown()
 AuditCooldown.RegisterPlayerDropped()
 
---- Sends an ox_lib notification to a specific player. Duplicated here
---- rather than shared — same tiny, generic UI-plumbing helper this
---- resource already duplicates in server/main.lua, server/certifications.lua,
---- and server/partnership.lua (see any of those files' own identical
---- comment on this exact function) for the same reason: it is not
---- certification/permission/audit logic that must stay a single source of
---- truth. NEVER called with `target == 0` (server console) by any call
---- site in this file — console has no client to notify; see each command
---- handler's own console branch for how it surfaces results instead (a
---- plain print()).
+--- Sends an ox_lib notification to a specific player, using this file's own
+--- 'K9 Unit — Admin Audit' title. Deliberately kept as a thin LOCAL wrapper
+--- (same name, shadowing the resource-global on purpose) rather than
+--- flattened onto server/notify.lua's shared implementation directly at
+--- every call site below — see that file's header "TWO CALL SITES
+--- DELIBERATELY KEPT AS LOCAL WRAPPERS" section for the full reasoning
+--- (this title is a deliberate, player-visible per-subsystem difference,
+--- not an accident, and keeping it here in one place avoids duplicating the
+--- title string at all 11 of this file's own call sites instead). The
+--- explicit `_G.` prefix below is required, not decorative: a bare
+--- `NotifyPlayer(...)` call inside this same-named local function's own
+--- body would resolve to this local (already in scope inside its own body)
+--- and recurse forever instead of reaching the shared global. NEVER called
+--- with `target == 0` (server console) by any call site in this file —
+--- console has no client to notify; see each command handler's own console
+--- branch for how it surfaces results instead (a plain print()).
 --- @param target number
 --- @param description string
 --- @param notifyType string?
 local function NotifyPlayer(target, description, notifyType)
-    TriggerClientEvent('ox_lib:notify', target, {
-        title = 'K9 Unit — Admin Audit',
-        description = description,
-        type = notifyType or 'inform',
-    })
+    _G.NotifyPlayer(target, description, notifyType, 'K9 Unit — Admin Audit')
 end
 
 --- Server-authoritative authorization check for every command in this

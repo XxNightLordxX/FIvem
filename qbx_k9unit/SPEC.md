@@ -84,8 +84,11 @@ also code-complete and, as of this pass, wired end-to-end
 fires the event it listens for on a qualifying contraband find) — an
 earlier revision of this paragraph said it "remains uncoded," which is now
 doubly stale (it was already code-complete client-side then, and is now
-also reachable in-game). It still ships `false`, and its timecycle-modifier
-name remains an unverified candidate. Phase 5 (audio/props/camera R&D) now
+also reachable in-game). It still ships `false`. Its timecycle-modifier name is no
+longer an unverified candidate: an audit against a real game-data extraction
+found the shipped value `drug_wobbly_shroom` **does not exist** (only
+`drug_wobbly` does), so the feature would have rendered nothing, silently,
+forever. Corrected in `config.lua` and in `client/screenfx.lua`'s fallback. Phase 5 (audio/props/camera R&D) now
 also has real implementations behind still-`false` flags for
 `DeployableKennel` and `AdvancedBarkRadial` (the latter widens, rather than
 closes, §7's bark-audio placeholder-asset gap by adding three more
