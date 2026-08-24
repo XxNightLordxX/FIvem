@@ -59,18 +59,18 @@
     - Reads/writes `K9MoveRateModifiers` and calls `RecomputeK9MoveRate()`,
       both resource-globals from client/movement.lua (PHASE4_SPEC.md §13.0
       Decision 2) — never calls `SetPedMoveRateOverride` directly.
-    - Calls `IsOwnModelK9()`/`CanShowK9UI()`/`DenyK9UIAccess()`, resource-
-      globals from client/main.lua — reused, never re-derived.
-    - Builds its own local `K9ModelHashes` set from `Config.Peds`, mirroring
-      client/medkit.lua's own precomputation exactly (a client-side display
-      filter only — server/wellbeing.lua re-derives every target's real
-      model server-side regardless).
+    - Calls `IsOwnModelK9()`/`CanShowK9UI()`/`DenyK9UIAccess()`/
+      `IsEntityModelK9(entity)`/`ResolvePlayerServerIdFromPed(entity)`,
+      resource-globals from client/main.lua — reused, never re-derived.
+      `IsEntityModelK9` (REFACTOR_ROADMAP.md item 3) replaces this file's
+      own former local `K9ModelHashes` set (used to mirror
+      client/medkit.lua's own precomputation exactly — a client-side
+      display filter only, server/wellbeing.lua re-derives every target's
+      real model server-side regardless). `ResolvePlayerServerIdFromPed`
+      (REFACTOR_ROADMAP.md item 2b) replaces this file's own former local
+      copy of the same function (used to mirror client/medkit.lua's own
+      copy exactly).
 ]]
-
-local K9ModelHashes = {}
-for _, pedEntry in ipairs(Config.Peds) do
-    K9ModelHashes[GetHashKey(pedEntry.model)] = true
-end
 
 -- Local mirror of the server's last-pushed snapshot. Safe defaults (fully
 -- healthy/calm) so that, before the first real push ever arrives, nothing
@@ -165,6 +165,18 @@ end
 --- header EVENT/CALLBACK CONTRACT item 8.
 --- @param stats table
 RegisterNetEvent('qbx_k9unit:client:wellbeingUpdate', function(stats)
+    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
+    -- "SOURCE-ORIGIN GUARD" header block and
+    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- not re-derived here). Without this, a forged local
+    -- `TriggerEvent('qbx_k9unit:client:wellbeingUpdate', { fatigue = 999,
+    -- ... })` would feed straight into ApplyWellbeingSnapshot() ->
+    -- ApplyMoveRateModifiers()'s move-rate composer with zero server
+    -- contact. Confidence: MEDIUM-HIGH, the official documented pattern
+    -- for distinguishing a genuine server-sent event from a local
+    -- self-trigger, not independently verified in-engine this pass.
+    if source ~= 65535 then return end
+
     ApplyWellbeingSnapshot(stats)
 end)
 
@@ -230,22 +242,13 @@ end
 -- MOOD — "Pet K9" / "Feed K9" ox_target world interactions.
 -- ======================================================================
 if Config.Features.MoodSystem then
-    --- Resolves a targeted ped entity to the server id of the player it
-    --- belongs to. Same helper as client/medkit.lua's own
-    --- ResolvePlayerServerIdFromPed — deliberate per-file duplication, same
-    --- "client-side only, standard combo" reasoning that file's header
-    --- already gives.
-    --- @param entity number
-    --- @return number? targetServerId
-    local function ResolvePlayerServerIdFromPed(entity)
-        local playerIndex = NetworkGetPlayerIndexFromPed(entity)
-        if playerIndex == -1 then return nil end
-
-        local targetServerId = GetPlayerServerId(playerIndex)
-        if not targetServerId or targetServerId == 0 then return nil end
-
-        return targetServerId
-    end
+    -- ResolvePlayerServerIdFromPed(entity) used to be defined here as a
+    -- local copy of client/medkit.lua's own function (deliberate per-file
+    -- duplication at the time). Extracted to client/main.lua as a
+    -- resource-global per REFACTOR_ROADMAP.md item 2b once both copies
+    -- were confirmed byte-identical — see that file's own doc comment.
+    -- The "Pet K9"/"Feed K9" onSelect handlers below now call the shared
+    -- global instead.
 
     local function NotifyResult(result, okDescription)
         if not result then return end
@@ -273,7 +276,7 @@ if Config.Features.MoodSystem then
             distance = 3.0,
             canInteract = function(entity)
                 if not Config.Features.MoodSystem then return false end
-                return K9ModelHashes[GetEntityModel(entity)] == true
+                return IsEntityModelK9(entity)
             end,
             onSelect = function(data)
                 local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
@@ -290,7 +293,7 @@ if Config.Features.MoodSystem then
             distance = 3.0,
             canInteract = function(entity)
                 if not Config.Features.MoodSystem then return false end
-                return K9ModelHashes[GetEntityModel(entity)] == true
+                return IsEntityModelK9(entity)
             end,
             onSelect = function(data)
                 local targetServerId = ResolvePlayerServerIdFromPed(data.entity)

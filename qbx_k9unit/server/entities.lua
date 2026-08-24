@@ -40,7 +40,7 @@
 
     ======================================================================
     FILE-TO-FILE CONTRACT:
-    - THIS FILE exposes ONE resource-global (no `local`) function:
+    - THIS FILE exposes TWO resource-global (no `local`) functions:
         ResolveNetworkEntity(netId: number, expectedEntityType: number?) -> number?
       Reused by server/main.lua's relayDoorScratch (called WITH
       expectedEntityType = 3, restricting the resolve to objects only —
@@ -53,7 +53,28 @@
       comment). Both call sites' existing entity-type/proximity checks are
       preserved exactly — this file only consolidates the common
       "resolve + existence-guard" prefix both of them already did
-      independently.
+      independently. As of REFACTOR_ROADMAP.md item 2's Revision 5
+      reopening, also reused by server/kennel.lua (3 call sites) and
+      server/inventory.lua (1 call site) — see each call site's own
+      "migrated from X" comment.
+        ResolveConnectedPlayerFromPed(entity: number) -> number?
+      REFACTOR_ROADMAP.md item 2b ("scan connected players, match by ped,
+      return the server id" — same responsibility as ResolveNetworkEntity
+      above, not a new shared-utility concern). Extracted from
+      server/search.lua's original `ResolveConnectedPlayerFromPed` (the
+      first, most-documented copy — its own "DELIBERATE IMPLEMENTATION
+      CHOICE" doc comment, reasoning about why this scans
+      GetPlayers()/GetPlayerPed() rather than the unverified
+      GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity)) combo, is
+      preserved verbatim below since it applies equally to every caller),
+      which had been hand-copied verbatim into server/inventory.lua and
+      server/combat.lua (three independent copies total, none sharing an
+      implementation, before this extraction). Reused by
+      server/search.lua's HandleSearchTarget ('person' branch),
+      server/inventory.lua's HandleOpenK9Inventory, and
+      server/combat.lua's ValidateCombatRequest (player-vs-NPC
+      resolution) — every call site's existing use is unchanged, this
+      file only consolidates the one shared implementation.
     ======================================================================
 ]]
 
@@ -108,4 +129,53 @@ function ResolveNetworkEntity(netId, expectedEntityType)
     end
 
     return entity
+end
+
+--- Resolves a ped entity to the currently-connected player's server id it
+--- belongs to, or nil if it doesn't belong to any currently-connected
+--- player (an NPC, or a stale/despawned handle).
+---
+--- REFACTOR_ROADMAP.md item 2b. Extracted from three independent,
+--- byte-identical hand-written copies of this exact function:
+--- server/search.lua's original (the first-written, most-documented copy,
+--- whose own doc comment is preserved below verbatim), server/inventory.lua's
+--- `HandleOpenK9Inventory` (a "small local copy vs. expanding another
+--- file's contract" duplicate, per that file's own now-obsolete
+--- FILE-TO-FILE CONTRACT note), and server/combat.lua's
+--- `ValidateCombatRequest` player-vs-NPC resolution (whose own header
+--- already flagged this as an extraction candidate "now that there are
+--- two" — stale on arrival, since server/inventory.lua had already made it
+--- three). All three now call this single function instead.
+---
+--- DELIBERATE IMPLEMENTATION CHOICE, flagged for coder-security (preserved
+--- from server/search.lua's original doc comment — this reasoning applies
+--- equally to every caller, not just the one that first wrote it): the
+--- design notes server/search.lua was built from
+--- (phase2_notes/contraband_search_contract.md §3 step 9, and that file's
+--- own prior scaffold) suggested
+--- `GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))` for this
+--- resolution. That combination was never independently re-verified as
+--- reliably callable SERVER-side (both natives are historically associated
+--- with the client-side "local player pool" concept, which the FXServer
+--- process — running no game-world simulation at all — may not expose the
+--- same way). Rather than depend on an unverified native combo for a
+--- security-relevant check, this resolves the same fact (does this entity
+--- belong to a real, currently-connected player?) using only natives
+--- already proven reliable SERVER-side elsewhere in this exact codebase
+--- (`GetPlayers()`/`GetPlayerPed(source)` — already used in
+--- server/certifications.lua and server/main.lua): scan every connected
+--- player's own ped and match by entity handle. This is strictly more
+--- conservative (it can only ever match an entity that IS some connected
+--- player's own ped) and avoids introducing a new, unverified native
+--- dependency on this security-sensitive check.
+--- @param entity number
+--- @return number? targetServerId
+function ResolveConnectedPlayerFromPed(entity)
+    for _, playerIdStr in ipairs(GetPlayers()) do
+        local playerId = tonumber(playerIdStr)
+        if playerId and GetPlayerPed(playerId) == entity then
+            return playerId
+        end
+    end
+    return nil
 end

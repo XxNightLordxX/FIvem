@@ -87,7 +87,27 @@
           §13.5's own "whichever phase lands second should confirm the
           dependency against the other phase's actual shipped code" rule).
     ======================================================================
+
+    TOP-OF-FILE FEATURE GATE (coder-security, this pass -- coordinator-flagged
+    finding, verified against this file's own code before fixing): no line in
+    this file previously checked Config.Features.XPProgression at all (grepped
+    the whole file -- the only hits were this header's own prose). That meant
+    'qbx_k9unit:client:xpTierChanged' was reachable, and ApplyXPTierMoveRateEffect()
+    would feed a forged payload's speedMultiplier straight into the shared
+    move-rate composer, with XPProgression = false -- breaking this resource's
+    "flag off means genuinely inert" invariant (client/hud.lua / client/vision.lua
+    / client/partnership.lua / client/combat.lua precedent). Gated at the top
+    of the file, not per-handler, because -- like client/partnership.lua --
+    this file's ONLY responsibility is Config.Features.XPProgression's client
+    half; there is no other concern here that would be wrongly silenced by a
+    file-wide gate. GetCurrentXPTier() simply does not exist while the flag is
+    off (no current caller anywhere in this resource, confirmed by grep), the
+    same posture client/partnership.lua's IsPartnered()/GetPartnerServerId()
+    already establish for a single-concern file.
+    ======================================================================
 ]]
+
+if not Config.Features.XPProgression then return end
 
 --- Last tier snapshot received from the server this session, or nil before
 --- the first 'qbx_k9unit:client:xpTierChanged' event arrives. Not exposed
@@ -136,6 +156,21 @@ end
 
 --- @param newTier table -- { xp, label, speedMultiplier, scentRange }, a full Config.XPTiers entry
 RegisterNetEvent('qbx_k9unit:client:xpTierChanged', function(newTier)
+    -- SOURCE-ORIGIN GUARD (coder-security, same pass/reasoning as
+    -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block — read that
+    -- for the full confidence writeup; not re-derived here). Without this,
+    -- a modified client could locally fire
+    -- `TriggerEvent('qbx_k9unit:client:xpTierChanged', { speedMultiplier =
+    -- 999 })` — the shape check below only validates TYPE, never RANGE, so
+    -- an arbitrary numeric speedMultiplier would pass it and feed straight
+    -- into ApplyXPTierMoveRateEffect()'s move-rate composer — a real,
+    -- uncapped self-benefit vector via zero server contact. Graded
+    -- MEDIUM-HIGH, not certain: see client/combat.lua's own header for why
+    -- (the `source ~= 65535` client-side sentinel is the official
+    -- documented pattern for this, but was not empirically verified
+    -- in-engine as part of this change).
+    if source ~= 65535 then return end
+
     -- Defensive shape validation even though this is server-authoritative
     -- (never a client-supplied claim) — cheap, and this codebase's own
     -- convention (e.g. client/tracking.lua's `not result or not

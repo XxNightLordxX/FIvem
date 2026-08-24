@@ -48,7 +48,10 @@
     - THIS FILE exposes three resource-global (no `local`) functions,
       used by client/movement.lua, client/radial.lua, and client/vehicle.lua,
       PLUS ResolveNetworkEntity() (see its own doc comment near
-      PlaySoundOnNetworkEntity below — REFACTOR_ROADMAP.md near-term item 2):
+      PlaySoundOnNetworkEntity below — REFACTOR_ROADMAP.md near-term item 2),
+      PLUS ResolvePlayerServerIdFromPed() and IsEntityModelK9() (see their
+      own doc comments below — REFACTOR_ROADMAP.md item 2b and item 3
+      respectively):
         IsOwnModelK9() -> boolean
             Pure local check (GetEntityModel(PlayerPedId()) against
             Config.Peds) — display-only, per §4.5, never treat this as a
@@ -97,12 +100,39 @@ for _, pedEntry in ipairs(Config.Peds) do
     K9ModelHashes[GetHashKey(pedEntry.model)] = true
 end
 
+--- Is `entity`'s current model one of Config.Peds' recognized K9 models?
+--- Client-side, display/targeting-plausibility only — NEVER a security
+--- boundary; every server-side handler that cares about a target's real
+--- model re-derives it itself (IsConfiguredK9Model, server/certifications.lua).
+---
+--- REFACTOR_ROADMAP.md item 3. Promoted from client/movement.lua's local
+--- `IsEntityModelK9`/`k9ModelHashesForTargeting` pair (which already had
+--- this exact signature) to a resource-global here, reusing THIS file's
+--- own `K9ModelHashes` table above rather than building a second,
+--- identical one — the Revision 5 audit found this same boolean
+--- model-recognition table independently hand-copied 5 times across this
+--- resource (client/main.lua, client/movement.lua, client/wellbeing.lua,
+--- client/medkit.lua, client/inventory.lua); this promotion deletes the
+--- client/movement.lua/client/wellbeing.lua/client/medkit.lua copies (all
+--- three in scope for this pass). client/inventory.lua's copy and
+--- client/partnership.lua's own copy (a 6th, previously untracked
+--- instance found while making this change — see this pass's own
+--- reporting) are OUT OF SCOPE for this pass and left untouched.
+--- server/certifications.lua's server-side `K9ModelHashes` is correctly
+--- left alone per the roadmap's own note — a resource-global here can't
+--- cross the client/server realm boundary.
+--- @param entity number
+--- @return boolean
+function IsEntityModelK9(entity)
+    return K9ModelHashes[GetEntityModel(entity)] == true
+end
+
 --- Pure client-side, display-only check: is the local player's OWN
 --- character currently a recognized K9 model? Never used for security —
 --- see SPEC.md §4.5 ("Convenience (client)" bullet).
 --- @return boolean
 function IsOwnModelK9()
-    return K9ModelHashes[GetEntityModel(PlayerPedId())] == true
+    return IsEntityModelK9(PlayerPedId())
 end
 
 -- Lightweight TTL cache for HasK9Access() below. Hot call sites (ox_target
@@ -215,6 +245,31 @@ function ResolveNetworkEntity(netId)
     return entity
 end
 
+--- Resolves a targeted ped entity to the server id of the player it
+--- belongs to, or nil if it isn't (currently) a real player's own ped.
+--- CLIENT-SIDE ONLY — NetworkGetPlayerIndexFromPed + GetPlayerServerId is
+--- the standard, well-established client-side combo for this.
+--- server/entities.lua's own ResolveConnectedPlayerFromPed doc comment
+--- flags this SAME native combo as unverified SERVER-side only; that
+--- caveat does not apply to this client-side use.
+---
+--- REFACTOR_ROADMAP.md item 2b. Extracted from two independent,
+--- byte-identical hand-written copies of this exact function:
+--- client/medkit.lua's "Treat K9" onSelect handler and
+--- client/wellbeing.lua's "Pet K9"/"Feed K9" onSelect handlers. Both now
+--- call this single function instead.
+--- @param entity number
+--- @return number? targetServerId
+function ResolvePlayerServerIdFromPed(entity)
+    local playerIndex = NetworkGetPlayerIndexFromPed(entity)
+    if playerIndex == -1 then return nil end
+
+    local targetServerId = GetPlayerServerId(playerIndex)
+    if not targetServerId or targetServerId == 0 then return nil end
+
+    return targetServerId
+end
+
 --- Resolves netId to a live, currently-streamed-in entity and plays
 --- soundName from it via this resource's shared placeholder sound set.
 --- Refactor pass (dedup): this exact "resolve netId -> guard
@@ -237,6 +292,21 @@ end
 --- @param netId number
 --- @param barkType string
 RegisterNetEvent('qbx_k9unit:client:playBark', function(netId, barkType)
+    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
+    -- "SOURCE-ORIGIN GUARD" header block and
+    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- not re-derived here). Confidence: MEDIUM-HIGH, the official
+    -- documented pattern for distinguishing a genuine server-sent event
+    -- from a local self-trigger, not independently verified in-engine
+    -- this pass. Note this is NOT a feature-flag gate (this file's own
+    -- header already establishes BasicBarkSounds/AdvancedBarkRadial are
+    -- not the "ships false, must be inert" class this resource's other
+    -- gates protect -- forging this just plays a placeholder sound on
+    -- whatever entity the supplied netId resolves to, via the same
+    -- ResolveNetworkEntity() guard every caller of PlaySoundOnNetworkEntity
+    -- already goes through).
+    if source ~= 65535 then return end
+
     -- `barkType` is an opaque passthrough string from server/main.lua's
     -- relayBark handler (untouched by this feature — it never validates or
     -- interprets barkType itself, only length-caps it). Phase 1's single

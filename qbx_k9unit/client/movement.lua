@@ -290,8 +290,9 @@ end)
 --- since a real scripted scenario exists for every configured breed.
 --- Precomputed model-hash -> scenario lookup, built once at file load.
 --- Mirrors the precomputed-hash-table convention already used elsewhere
---- in this codebase (client/main.lua's K9ModelHashes, this file's own
---- k9ModelHashesForTargeting) rather than calling GetHashKey per lookup.
+--- in this codebase (client/main.lua's K9ModelHashes, which also backs
+--- IsEntityModelK9 per REFACTOR_ROADMAP.md item 3) rather than calling
+--- GetHashKey per lookup.
 local K9_SIT_SCENARIO_BY_MODEL_HASH = {}
 for model, scenario in pairs({
     a_c_shepherd = 'WORLD_DOG_SITTING_SHEPHERD',
@@ -379,6 +380,19 @@ end
 --- Step 1 of the consent handshake, received on the TARGET's client.
 --- @param fromServerId number
 RegisterNetEvent('qbx_k9unit:client:leashAttachRequest', function(fromServerId)
+    -- SOURCE-ORIGIN GUARD (coder-security pass, applied uniformly across
+    -- this file's `qbx_k9unit:client:*` handlers here — see
+    -- client/combat.lua's own "SOURCE-ORIGIN GUARD" header block for the
+    -- full sourced writeup/confidence grading, not re-derived per file).
+    -- Without this, a locally-forged `fromServerId` would pop a fake
+    -- accept/decline prompt for a leash request that was never actually
+    -- sent — a real-server response is still required to do anything, but
+    -- this closes the "arbitrary event with zero server contact" gap this
+    -- resource's own convention now expects for every client:* handler.
+    -- Confidence: MEDIUM-HIGH, not certain — see client/combat.lua's
+    -- header for the honest caveat (official documented pattern, not
+    -- empirically verified in-engine as part of this change).
+    if source ~= 65535 then return end
     local fromPlayer = GetPlayerFromServerId(fromServerId)
     local fromName = (fromPlayer ~= -1 and GetPlayerName(fromPlayer)) or ('Officer #' .. fromServerId)
 
@@ -406,6 +420,15 @@ end)
 --- @param partnerServerId number
 --- @param isConstrained boolean  -- true only on the K9-role party's client
 RegisterNetEvent('qbx_k9unit:client:leashAttached', function(partnerServerId, isConstrained)
+    -- SOURCE-ORIGIN GUARD — see leashAttachRequest above / client/combat.lua's
+    -- header for the full reasoning/confidence grading. Forging this
+    -- locally would set this client's OWN leashState directly (no
+    -- server-side pairing exists to back it) — low real-world payoff either
+    -- way (the elastic-restriction thread only constrains THIS client, and
+    -- a hostile client could already ignore that thread's DisableControlAction-
+    -- equivalent restrictions by other means), but applied for the same
+    -- resource-wide consistency reasoning as every other handler here.
+    if source ~= 65535 then return end
     leashState = { partnerServerId = partnerServerId, isConstrained = isConstrained }
     detachRequestedForSafety = false
     lib.notify({
@@ -424,6 +447,16 @@ end)
 --- playerDropped cleanup). Sent to whichever client(s) are still around.
 --- @param reason string  -- e.g. 'detached' | 'partner_disconnected'
 RegisterNetEvent('qbx_k9unit:client:leashDetached', function(reason)
+    -- SOURCE-ORIGIN GUARD — see leashAttachRequest above / client/combat.lua's
+    -- header for the full reasoning/confidence grading. This one has a real
+    -- self-benefit shape, not merely cosmetic: a CONSTRAINED party forging
+    -- this locally clears `leashState` on THIS client only, which silences
+    -- the elastic-restriction thread's pull-back enforcement below —
+    -- functionally the same as escaping the leash — while server/main.lua's
+    -- own leash bookkeeping (and the other party's client) still believes
+    -- the pairing is active, since no real `qbx_k9unit:server:detachLeash`
+    -- was ever sent.
+    if source ~= 65535 then return end
     leashState = nil
     detachRequestedForSafety = false
 
@@ -513,21 +546,16 @@ CreateThread(function()
     end
 end)
 
--- Client-side hash set for the leash ox_target option's display-only
--- plausibility check below. client/main.lua only exposes IsOwnModelK9()
--- (not its private model-hash table) per its documented three-function
--- contract, so this is a small local copy of the same generic
--- Config.Peds-driven check for THIS file's own convenience use — not a
--- security check, so a second small local copy (vs. expanding
--- client/main.lua's contract) is an acceptable, deliberate tradeoff here.
-local k9ModelHashesForTargeting = {}
-for _, pedEntry in ipairs(Config.Peds) do
-    k9ModelHashesForTargeting[GetHashKey(pedEntry.model)] = true
-end
-
-local function IsEntityModelK9(entity)
-    return k9ModelHashesForTargeting[GetEntityModel(entity)] == true
-end
+-- IsEntityModelK9(entity) used to be defined here as a small local copy
+-- (with its own private k9ModelHashesForTargeting hash set) of the same
+-- generic Config.Peds-driven display-only check, since client/main.lua only
+-- exposed IsOwnModelK9() (not its private model-hash table) at the time
+-- this file was written. Promoted to a client/main.lua resource-global per
+-- REFACTOR_ROADMAP.md item 3 — this file's own signature was the one
+-- promoted verbatim (see client/main.lua's own doc comment on
+-- IsEntityModelK9 for the full "5 independent copies" finding this
+-- consolidation closes). Every call site below now calls that shared
+-- global instead.
 
 -- config-validator finding: this option's `distance` used to be a bare
 -- 2.5 with no relationship to any Config value at all, even though the
@@ -1379,6 +1407,13 @@ end
 --- file's own independent copy of the identical sequence.
 --- @param doorNetId number
 RegisterNetEvent('qbx_k9unit:client:playDoorScratch', function(doorNetId)
+    -- SOURCE-ORIGIN GUARD — see leashAttachRequest above / client/combat.lua's
+    -- header for the full reasoning/confidence grading. Cosmetic-only
+    -- payoff here (a forged call just plays a sound at an arbitrary
+    -- resolvable netId), applied for the same resource-wide consistency as
+    -- every other handler in this file, not because this one carries real
+    -- exploit severity on its own.
+    if source ~= 65535 then return end
     local entity = ResolveNetworkEntity(doorNetId)
     if not entity then return end
 

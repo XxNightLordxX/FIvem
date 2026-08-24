@@ -286,6 +286,12 @@ globals = {
     -- client/partnership.lua rather than called raw from client/radial.lua,
     -- so every partnership round trip stays owned by one file.
     "RefreshPartnershipStateFromServer",
+    -- client/defense.lua (Phase 3 HandlerDownDefense, PHASE3_SPEC.md
+    -- §12.5.3). Per §12.0 item 2 this is UI/auto-targeting convenience,
+    -- not an AI takeover -- ConfirmHandlerDownDefense is the PLAYER's
+    -- confirmation of a surfaced prompt, never an autonomous action.
+    "ConfirmHandlerDownDefense", "HasFreshDefensePrompt",
+    "GetDefenseSuggestedTargetNetId",
     -- client/combat.lua's PropDragging trigger surface (Phase 3,
     -- PHASE3_SPEC.md §12.5.4) -- same self-initiated-trigger plus
     -- zero-consent-release shape as RequestBiteHold/ReleaseBiteHold above.

@@ -107,7 +107,12 @@
       see HandleSearchTarget's own doc comment, step 8) — deliberate,
       not a duplicate-by-accident, since certification.lua's revoke path
       can run to completion during that same await window.
-    - THIS FILE exposes NO resource-global functions.
+    - THIS FILE exposes NO resource-global functions. (Its own
+      `ResolveConnectedPlayerFromPed` WAS the original, most-documented
+      implementation of that helper — see server/entities.lua for why it
+      moved there under REFACTOR_ROADMAP.md item 2b, and this file's
+      HandleSearchTarget for the one remaining call site, unchanged
+      besides now calling the shared global.)
     - THIS FILE owns `SearchMutex`, `SearchCooldown`, and
       `TargetSearchCooldown` below as file-local state (each a
       server/cooldowns.lua tracker instance, per REFACTOR_ROADMAP.md item 1
@@ -373,40 +378,15 @@ TargetSearchCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, functi
     return (now - loggedAt) > staleAfterMs
 end)
 
---- Resolves a ped entity to the currently-connected player's server id it
---- belongs to, or nil if it doesn't belong to any currently-connected
---- player (an NPC, or a stale/despawned handle).
----
---- DELIBERATE IMPLEMENTATION CHOICE, flagged for coder-security: the
---- design notes this file is built from (phase2_notes/contraband_search_contract.md
---- §3 step 9, and this file's own prior scaffold) suggested
---- `GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))` for this
---- resolution. That combination was never independently re-verified this
---- session as reliably callable SERVER-side (both natives are
---- historically associated with the client-side "local player pool"
---- concept, which the FXServer process — running no game-world simulation
---- at all — may not expose the same way). Rather than depend on an
---- unverified native combo for a security-relevant check, this resolves
---- the same fact (does this entity belong to a real, currently-connected
---- player?) using only natives already proven reliable SERVER-side
---- elsewhere in this exact codebase (`GetPlayers()`/`GetPlayerPed(source)`
---- — both already used in server/certifications.lua and server/main.lua):
---- scan every connected player's own ped and match by entity handle. This
---- is strictly more conservative (it can only ever match an entity that
---- IS some connected player's own ped) and avoids introducing a new,
---- unverified native dependency on the single most security-sensitive
---- check in this file.
---- @param entity number
---- @return number? targetServerId
-local function ResolveConnectedPlayerFromPed(entity)
-    for _, playerIdStr in ipairs(GetPlayers()) do
-        local playerId = tonumber(playerIdStr)
-        if playerId and GetPlayerPed(playerId) == entity then
-            return playerId
-        end
-    end
-    return nil
-end
+-- ResolveConnectedPlayerFromPed(entity) used to be defined here as a local
+-- function (see its own extensive "DELIBERATE IMPLEMENTATION CHOICE" doc
+-- comment, now preserved verbatim on server/entities.lua's copy). It was
+-- extracted to server/entities.lua as a resource-global per
+-- REFACTOR_ROADMAP.md item 2b once server/inventory.lua and
+-- server/combat.lua independently hand-copied the exact same function —
+-- three byte-identical copies, none sharing an implementation. This file
+-- now calls that shared global below (HandleSearchTarget's 'person'
+-- branch) instead of defining its own.
 
 --- Fire-and-forget audit log write to `k9_search_log`
 --- (sql/install.sql — see that table's own header comment for the full

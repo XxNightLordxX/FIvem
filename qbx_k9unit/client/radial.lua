@@ -514,6 +514,159 @@ if Config.Features.NonLethalTakedown then
     }
 end
 
+--- Drag / Release — PHASE3_SPEC.md §12.5.4. A single context-sensitive item,
+--- the SAME toggle shape as Bite & Hold / Attach-Detach Leash above:
+--- client/combat.lua's RequestDrag()/ReleaseDrag()/IsDragEngaged() are a
+--- start/stop pair with an "am I engaged" query, exactly mirroring
+--- IsBiteHoldEngaged()-driven Bite & Hold — so this is one item, not two,
+--- for the same reason given there (two always-visible entries would mean
+--- one is always a no-op click depending on current state). Kept flat (not
+--- nested), same "Track precedent over Bark precedent" reasoning as Bite &
+--- Hold/Non-Lethal Takedown above. Config.Features.PropDragging gate (stays
+--- `false` by default — see config.lua).
+---
+--- RELEASE ORDERING — do not gate this on CanShowK9UI(): same "no
+--- unbounded trap" requirement as Detach Leash and Bite & Hold's own
+--- Release branch above (SPEC.md §9 item 3b — see Bite & Hold's comment
+--- block above for the full reasoning, which applies here verbatim).
+--- client/combat.lua's ReleaseDrag() itself never re-checks
+--- HasK9Access/feature-flag on the way out either (only that this src is a
+--- legitimate party to the drag, holder or target) — gating this client-side
+--- check would strand a K9 that loses access mid-drag (decertified,
+--- feature-flag flip, model swap) with no way to let go, stranding the drag
+--- until the server's maxDragDurationMs timeout. This was the exact mistake
+--- corrected for Bite & Hold in an earlier pass; not repeating it here.
+if Config.Features.PropDragging then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_drag',
+        label = 'Drag / Release',
+        icon = 'hand',
+        onSelect = function()
+            -- Release is NOT gated on CanShowK9UI() — see this item's
+            -- header comment above ("RELEASE ORDERING") for why.
+            if IsDragEngaged() then
+                ReleaseDrag()
+                return
+            end
+
+            if not CanShowK9UI() then
+                DenyK9UIAccess()
+                return
+            end
+
+            -- RequestDrag() itself finds the nearest eligible target and
+            -- notifies "no eligible target in range" on failure — nothing
+            -- further to do here, same "call straight through, no
+            -- re-derived logic in this file" posture as Sit/Vehicle/Bite &
+            -- Hold above.
+            RequestDrag()
+        end,
+    }
+end
+
+--- Break Partnership -- PHASE3_SPEC.md §12.0 item 7. Closes a real gap a QA
+--- pass found: client/partnership.lua exposes BreakPartnership() as a fully
+--- implemented resource-global specifically FOR a future radial entry (see
+--- that file's own header, "FILE-TO-FILE CONTRACT" -> BreakPartnership()),
+--- but nothing in this resource called it -- "Partner Up" has a live
+--- ox_target entry point, "Break Partnership" had none at all. Two
+--- consenting players therefore had no way to end a partnership short of
+--- one of them losing certification or changing department (and even THAT
+--- teardown path is separately disclosed as not actually wired yet -- see
+--- client/partnership.lua's header, "SEPARATE, ALSO DISCLOSED FINDING").
+--- This item is that entry point.
+---
+--- NOT GATED ON CanShowK9UI() -- same "no unbounded trap" requirement as
+--- Detach Leash / Release Bite & Hold / Release Drag above (SPEC.md §9 item
+--- 3b), now applied to a persistent, DB-backed relationship instead of a
+--- session-scoped one. client/partnership.lua's own BreakPartnership() is
+--- documented as deliberately ungated for exactly this reason (its header:
+--- "TERMINATION MUST NEVER BE GATED") -- gating the call HERE with a
+--- CanShowK9UI() check this file adds on top would silently reintroduce the
+--- exact trap that function was written to avoid (e.g. a K9 decertified or
+--- moved off-department while still partnered would hit DenyK9UIAccess()
+--- and have no way to leave). This onSelect therefore does nothing but the
+--- type-guarded call below -- no access check, no local state check, before
+--- or after.
+---
+--- NOT A CONTEXT-SENSITIVE TOGGLE with "Partner Up" (unlike Attach/Detach
+--- Leash, Bite & Hold, and Drag above), even though client/partnership.lua's
+--- own header floats exactly that dual-mode shape as a possibility for
+--- "a future radial entry." Deliberately NOT done here: every one of this
+--- file's existing toggles keys its branch off a LOCAL client-side state
+--- query (IsLeashed(), IsBiteHoldEngaged(), IsDragEngaged()) that mirrors
+--- SERVER-side data the client can never fall meaningfully behind on --
+--- movement.lua's own header frames leash pairs as ephemeral, session-scoped
+--- state that cannot survive this client's own reconnect/restart, so a
+--- locally-nil leash state is always accurate. client/partnership.lua's
+--- PartnershipState cache has NO such guarantee: partnership.lua's own
+--- header ("KNOWN CACHE-STALENESS GAP") discloses that IsPartnered() CAN
+--- under-report for a client that reconnects, or whose OWN resource
+--- restarts, while genuinely still partnered per the DB -- nothing in
+--- server/partnership.lua's current contract re-syncs
+--- 'qbx_k9unit:client:partnershipEstablished' (or anything else) to a
+--- reconnecting client. If this item toggled visibility/label off
+--- IsPartnered() the way Leash/Bite & Hold/Drag toggle off their own local
+--- state, a genuinely-partnered player who just reconnected would read a
+--- stale `false`, see only "Partner Up" here (never "Break Partnership"),
+--- and get nothing but the server's `already_partnered` rejection if they
+--- tried it -- silently reintroducing the exact trap this item exists to
+--- close, and doing it specifically to the players most likely to hit it
+--- (anyone who reconnected mid-shift). So instead: a single, ALWAYS-OFFERED,
+--- flat action -- gated ONLY on Config.Features.HandlerPartnership at
+--- registration (same as every other item's own feature flag here), never
+--- on any client-side partnership-state read. This is safe to click even
+--- for a player who was never partnered at all: BreakPartnership() sends
+--- unconditionally, and server/partnership.lua's own breakPartnership
+--- handler is an already-safe no-op for that case (NotifyPlayer: "You are
+--- not currently partnered with anyone."). Offering this to a never-
+--- partnered player is a DELIBERATE tradeoff, not an oversight left to be
+--- "fixed" later -- a future reviewer who hides this behind an
+--- IsPartnered() check to avoid that redundant click would silently bring
+--- the reconnect trap back. An exit that is occasionally offered when
+--- unneeded is strictly better than one that is sometimes invisible to
+--- exactly the player who needs it.
+---
+--- TODO(coordination, whoever wires a live partnership-status callback):
+--- a coder-backend is adding a lib.callback to server/partnership.lua,
+--- modeled on the existing 'qbx_k9unit:server:hasK9Access' callback
+--- (client/main.lua's HasK9Access() wrapper is the pattern to mirror), that
+--- returns current SERVER-truth partnership state -- this had not landed
+--- (no lib.callback.register exists in server/partnership.lua as of this
+--- pass) and its exact event name/return shape were not yet available. Once
+--- it exists, it does NOT need to be awaited here to gate visibility (see
+--- above -- this item must stay unconditionally offered regardless of what
+--- it returns, or the reconnect trap comes back); its one legitimate use
+--- would be to make client/partnership.lua's IsPartnered()/
+--- GetPartnerServerId() accurate immediately after PlayerLoaded/resource
+--- start (an await in that file, not this one) so the "Partner Up" ox_target
+--- option's own display-only staleness gap (see that file's header) closes
+--- too. Nothing in THIS file needs to change when it lands.
+if Config.Features.HandlerPartnership then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_break_partnership',
+        label = 'Break Partnership',
+        icon = 'handshake-slash',
+        onSelect = function()
+            -- type(...) == 'function' guard per this codebase's established
+            -- soft-dependency convention (e.g. RestoreInjury, AwardXP/
+            -- GetXPTier) -- effectively always true here in practice, since
+            -- this item is only ever registered under the SAME
+            -- Config.Features.HandlerPartnership flag that gates
+            -- client/partnership.lua's entire file (its own top-of-file
+            -- `if not Config.Features.HandlerPartnership then return end`),
+            -- so by the time a player can click this, that file has already
+            -- run and defined BreakPartnership(). Kept anyway: client/
+            -- partnership.lua's own header explicitly names this exact
+            -- guard as what a future radial caller should use, and it costs
+            -- nothing to honor that against, say, a future load-order change.
+            if type(BreakPartnership) == 'function' then
+                BreakPartnership()
+            end
+        end,
+    }
+end
+
 if Config.Features.RadialMenu then
     -- Register the actual submenu contents FIRST (lib.registerRadial),
     -- keyed by id 'k9unit' — this is the id the opener item below points

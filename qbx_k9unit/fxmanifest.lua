@@ -74,6 +74,7 @@ client_scripts {
     'client/progression.lua', -- Phase 4 (XPProgression, PHASE4_SPEC.md §13.4.1)
     'client/combat.lua', -- Phase 3 (BiteAndHold/NonLethalTakedown, PHASE3_SPEC.md §12.5.1/§12.5.2) -- the client half of server/combat.lua; no ordering dependency on anything else in this list (reads Config.Combat/Config.Features from config.lua, already loaded via shared_scripts, and calls CanShowK9UI/DenyK9UIAccess from client/main.lua, which is loaded earlier in this same list, but Lua global-function resolution here is at CALL time, not load time, so this would still work even loaded first)
     'client/partnership.lua', -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7/§12.3) -- the client half of server/partnership.lua (Partner Up consent prompt, ox_target option, IsPartnered()/GetPartnerServerId(), and RefreshPartnershipStateFromServer() which yields on a server callback to re-sync the local cache before a caller decides Partner Up vs Break Partnership -- the local cache alone can under-report after a reconnect. The radial entry is now wired, in client/radial.lua). Same "no ordering dependency" note as client/combat.lua above -- calls CanShowK9UI()/IsOwnModelK9() from client/main.lua only at CALL time (inside RequestPartnerUp/the ox_target predicate), never at file-load time.
+    'client/defense.lua', -- Phase 3 HandlerDownDefense client half -- soft dependency on client/combat.lua's IsBiteHoldEngaged via a runtime existence guard, so no hard load-order requirement
 }
 
 server_scripts {
@@ -105,6 +106,10 @@ server_scripts {
     -- can actually FIRE (a real player action), every server_scripts file
     -- below has already finished loading regardless of manifest order.
     'server/partnership.lua',
+    -- Phase 3 HandlerDownDefense (PHASE3_SPEC.md §12.5.3) -- hard dependency on
+    -- cooldowns.lua (NewCooldown at file-load time); reads partnership state via
+    -- GetActivePartnerCitizenId, server-side only, never a client claim.
+    'server/defense.lua',
     'server/tracking.lua', -- Phase 2
     'server/search.lua',   -- Phase 2
     'server/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)

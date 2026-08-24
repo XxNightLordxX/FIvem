@@ -67,37 +67,76 @@ sound names with no real audio behind them — see
 [Bark sounds are placeholders](#bark-sounds-are-placeholders) below). See
 [Phase 5 configuration](#phase-5-configuration-not-enabled-by-default) for
 both. `Config.Features.ProximityAudioFX`, `PropAttachments`,
-`FetchMechanic`, and `CameraFeedPiP` remain uncoded.
+`FetchMechanic`, and `CameraFeedPiP` remain uncoded — a research pass
+(`phase2_notes/phase5_remaining_features_research.md`) reframed, but did
+not close, the first two: `ProximityAudioFX`'s real blocker turns out not
+to be its audio (buildable on this resource's existing NUI bridge) but the
+complete absence of any "hidden suspect" detection primitive anywhere in
+this codebase — Phase 2's tracking system resolves a static, logged
+coordinate, never a live entity's current position; `PropAttachments` (and
+`FetchMechanic`'s identical mouth/jaw attach point) no longer need a
+documented bone *name*, only a bone *index*, obtainable via a short
+in-engine sweep — a bounded engineering task now, not indefinitely-blocked
+research.
 
-**Phase 3 (combat/action features)** now has `BiteAndHold`/
-`NonLethalTakedown` fully implemented and registered — `server/combat.lua`
-and a real `client/combat.lua` counterpart both exist and are wired into
-`fxmanifest.lua` — alongside `AgilityAdvanced`, fully implemented behind
-its still-`false` flag (`client/movement.lua`). `PHASE3_SPEC.md`'s design
-scoping has also moved forward — a recent reversal puts player-vs-player K9
-combat in scope, and the two cross-cutting design forks that were blocking
-implementation (the client-relay/non-cooperating-target-client
-architecture, and which officer counts as a given K9's "handler"
-independent of leash state) have both been resolved as design decisions.
-The handler-partnership resolution is a **design decision only** — a new,
-dedicated partnership registry, not a reuse of the existing leash pairing —
-and that registry has **not** been implemented (`server/partnership.lua`
-does not exist, only its `k9_partnerships` schema does), so
-`HandlerDownDefense` remains fully uncoded, and `PHASE3_SPEC.md`'s Recall
-mechanic — which depends on that same registry — is likewise
-unimplemented. Completing `client/combat.lua` also found and fixed a real
-safety bug: `SetEntityCanBeDamaged` is confirmed client-only, so
-`NonLethalTakedown`'s NPC-target branch calling it server-side was a
-silent no-op — a "non-lethal" takedown against an NPC could actually kill
-it before this fix. Despite now being code-complete and registered,
-`BiteAndHold`/`NonLethalTakedown` have **no in-game entry point**:
-`client/combat.lua` exposes `RequestBiteHold()`/`ReleaseBiteHold()`/
-`RequestTakedown()` as globals, but nothing — not the radial menu, not an
-ox_target option, not a command — calls them yet. `PropDragging` is out of
-scope for `server/combat.lua` and remains fully uncoded. Do not enable
-`Config.Features.BiteAndHold`, `NonLethalTakedown`, or
-`HandlerDownDefense` — see `CHANGELOG.md`'s Known Limitations for the full
-detail.
+**Phase 3 (combat/action features)** now has all four of its combat/
+agility mechanics fully implemented, and all three combat mechanics are
+reachable through this resource's own UI: `BiteAndHold`, `NonLethalTakedown`,
+and (newly) `PropDragging` are registered in `server/combat.lua` +
+`client/combat.lua` and wired into `fxmanifest.lua`, alongside
+`AgilityAdvanced`, fully implemented behind its still-`false` flag
+(`client/movement.lua`). The "K9 Unit" radial menu now exposes "Bite & Hold
+/ Release", "Non-Lethal Takedown", and "Drag / Release" items — the
+previously-disclosed "code exists but nothing can trigger it" gap is
+closed. `PHASE3_SPEC.md`'s design scoping has also moved forward — a
+reversal puts player-vs-player K9 combat in scope, and the two
+cross-cutting design forks that were blocking implementation (the
+client-relay/non-cooperating-target-client architecture, and which officer
+counts as a given K9's "handler" independent of leash state) have both
+been resolved as design decisions. The handler-partnership resolution — a
+new, dedicated **partnership registry**, not a reuse of the existing leash
+pairing — has now been **implemented** too:
+`Config.Features.HandlerPartnership` (still `false` by default) gates a
+mutually-consented "Partner Up"/"Break Partnership" handshake
+(`server/partnership.lua` + `client/partnership.lua`), DB-backed so it
+survives a disconnect or resource restart, unlike leash. **This is a
+foundation only** — `HandlerDownDefense` and `PHASE3_SPEC.md`'s Recall
+mechanic, the two features this registry exists to unblock, both still
+have **zero code**; the registry unblocks building them, it does not
+deliver either. A disclosed gap in the registry as shipped: nothing
+re-syncs a reconnecting client's own view of an already-established
+partnership, so `IsPartnered()`/`GetPartnerServerId()` can under-report
+until a fresh consent-handshake event reaches that client — see
+[Config.Features.HandlerPartnership](#configfeatureshandlerpartnership)
+below.
+
+Completing `client/combat.lua` earlier found and fixed a real safety bug:
+`SetEntityCanBeDamaged` is confirmed client-only, so `NonLethalTakedown`'s
+NPC-target branch calling it server-side was a silent no-op — a
+"non-lethal" takedown against an NPC could actually kill it before that
+fix. Landing `PropDragging` and the combat radial items found two more real
+gaps: `NetworkRequestControlOfEntity` had never been requested before
+driving natives against an NPC target this K9's own client doesn't already
+control, which could have made the earlier `NonLethalTakedown` safety fix
+silently no-op again on a populated server (now requested every tick,
+best-effort); and `client/combat.lua` had no `onResourceStop` handler
+despite setting several persistent native flags, risking a permanently
+undamageable player or permanently flee-suppressed NPC across a resource
+restart mid-effect (now fixed). Separately, a security review found every
+one of `client/combat.lua`'s event handlers had been registered
+**unconditionally**, so any connected player could trigger effects like
+indefinite self-invincibility via a locally-forged event with **zero
+server contact, even with every one of `BiteAndHold`/`NonLethalTakedown`/
+`PropDragging`'s flags `false`** — this resource's false-by-default
+posture gave no actual protection there. Handlers are now gated
+per-mechanic, restoring genuine inertness when a given mechanic is off.
+**This does not close the deeper client-relay trust boundary**: once a
+mechanic *is* enabled, none of its handlers verify a given event actually
+came from the server rather than a local self-trigger — that remains a
+separate, still-open item for a dedicated security pass, not something the
+per-mechanic gating fix resolves. Do not enable `Config.Features.BiteAndHold`,
+`NonLethalTakedown`, `PropDragging`, or `HandlerDownDefense` — see
+`CHANGELOG.md`'s Known Limitations for the full detail.
 
 ## Dependencies
 
@@ -207,14 +246,22 @@ access.
   they never touched the target). Exists purely for dispute accountability
   ("did this K9 unit actually search my vehicle"); nothing in this resource
   ever reads it back to make an access decision.
-- **`k9_partnerships`** — schema for a future "K9/handler partnership"
-  registry (`PHASE3_SPEC.md` §12.0 item 7), landed ahead of its own
-  implementation. **No `.lua` file in this resource reads or writes this
-  table yet** — `server/partnership.lua` does not exist. It exists so the
-  eventual implementation (needed for `Config.Features.HandlerDownDefense`,
-  and for `PHASE3_SPEC.md`'s Recall mechanic, which depends on the same
-  registry) has an already-reviewed table to build against. Safe to ignore
-  until that file ships.
+- **`k9_partnerships`** — the K9/handler partnership registry
+  (`PHASE3_SPEC.md` §12.0 item 7), now backed by real code:
+  `server/partnership.lua` reads and writes this table to establish, look
+  up, and tear down a mutually-consented "K9 partner" relationship, gated
+  by `Config.Features.HandlerPartnership` (still `false` by default) — see
+  [Config.Features.HandlerPartnership](#configfeatureshandlerpartnership)
+  below. At most one **active** row exists per citizenid, in either the
+  `k9_citizenid` or `handler_citizenid` column, enforced by two independent
+  unique indexes plus an application-level mutex around every establish
+  attempt (see that file's own header for exactly what gap the mutex closes
+  that the two independent unique indexes alone cannot). **This registry is
+  a foundation only** — nothing in this resource yet reads it to actually
+  do anything in combat: `Config.Features.HandlerDownDefense` and
+  `PHASE3_SPEC.md`'s Recall mechanic, the two features this registry exists
+  to unblock, both still have zero code. Landing this table's consumer
+  unblocks building them; it does not deliver either.
 - **`k9_progression`** — one row per citizenid (`xp` column, atomically
   upserted via `INSERT ... ON DUPLICATE KEY UPDATE`), backing
   `Config.Features.XPProgression` (`server/progression.lua`). Survives a
@@ -484,45 +531,46 @@ independently from the pull-back/detach distances.
 ### Config options not yet wired up
 
 These exist in `config.lua`. Most have **no functioning code in this
-resource using them at all** — unlike Phase 2/4/5's implemented
+resource using them at all** — unlike Phase 2/3/4/5's implemented
 flags/tables (see
 [Phase 2 configuration](#phase-2-configuration-not-enabled-by-default),
+[Phase 3 configuration](#phase-3-configuration-not-enabled-by-default),
 [Phase 4 configuration](#phase-4-configuration-not-enabled-by-default), and
 [Phase 5 configuration](#phase-5-configuration-not-enabled-by-default)
 below), which are implemented and reviewed even though they default off.
-`BiteAndHold`/`NonLethalTakedown` below are a partial exception to that
-framing — their code is real, registered, and does run; the gap for those
-two is a missing in-game trigger, not missing/unregistered code:
+`HandlerDownDefense` below is the one Phase 3 flag left with no code at
+all now that its own registry dependency has landed:
 
-- `Config.Features.HandlerDownDefense`, `PropDragging` (Phase 3) — no code
-  at all. `HandlerDownDefense` is blocked on a design decision
-  (a dedicated "K9 partnership" registry, `phase2_notes/phase3_handler_partnership_decision.md`)
-  that has been made but not yet implemented — the registry itself,
-  `server/partnership.lua`, does not exist; only its `k9_partnerships`
-  schema does (see [Database](#database) above). `PropDragging` is
-  explicitly out of scope for the Phase 3 work that has landed so far.
-- `Config.Features.BiteAndHold`, `NonLethalTakedown` (Phase 3) — **real,
-  registered client and server code now exists** (`server/combat.lua` +
-  `client/combat.lua`, both wired into `fxmanifest.lua`), but it has **no
-  in-game entry point** — nothing calls `client/combat.lua`'s exposed
-  `RequestBiteHold()`/`ReleaseBiteHold()`/`RequestTakedown()` globals (not
-  the radial menu, not an ox_target option, not a command). Do not enable
-  either flag — even setting them to `true` would not make the feature
-  reachable through this resource's own UI, only through a modified client
-  or a debug command. See `CHANGELOG.md`'s Known Limitations for the full
-  detail, including a real safety bug fixed while building the client
-  half.
+- `Config.Features.HandlerDownDefense` (Phase 3) — still **no code at
+  all**. The design decision that used to block it (a dedicated "K9
+  partnership" registry, `phase2_notes/phase3_handler_partnership_decision.md`)
+  has now also been **implemented** — `server/partnership.lua` +
+  `client/partnership.lua` are real, registered files (see
+  [Config.Features.HandlerPartnership](#configfeatureshandlerpartnership)
+  below and [Database](#database) above) — but the registry is a
+  foundation only, wiring no combat consequence of its own.
+  `HandlerDownDefense`'s own trigger logic, and `PHASE3_SPEC.md`'s Recall
+  mechanic (which depends on the same registry), both still have zero
+  code. Landing the registry unblocks building either; it does not deliver
+  them.
 - `Config.Features.ContrabandScreenFX` (Phase 4) — no code at all.
 - `Config.Features.ProximityAudioFX`, `PropAttachments`, `FetchMechanic`,
-  `CameraFeedPiP` (Phase 5) — no code at all.
+  `CameraFeedPiP` (Phase 5) — no code at all. See the Phase 5 status
+  paragraph above for a research pass that reframed, but did not close,
+  the blockers for the first two.
 
-`Config.Features.AgilityAdvanced` (Phase 3), `K9Inventory`, `XPProgression`,
-`FatigueSystem`, `MoodSystem`, `FearStressSystem`, `DistractionSystem`,
-`InjuryLimping`, `K9Medkit`, `HealthStaminaHUD` (Phase 4), and
-`AdvancedBarkRadial`, `DeployableKennel` (Phase 5) all **are** wired up to
-real, working (if unreviewed-for-numeric-tuning) code now — see their
-respective sections below. `Config.XPTiers`/`Config.XP` (Phase 4 — XP
-thresholds/awards) are also now read by `server/progression.lua`.
+`Config.Features.AgilityAdvanced`, `BiteAndHold`, `NonLethalTakedown`,
+`PropDragging`, `HandlerPartnership` (Phase 3), `K9Inventory`,
+`XPProgression`, `FatigueSystem`, `MoodSystem`, `FearStressSystem`,
+`DistractionSystem`, `InjuryLimping`, `K9Medkit`, `HealthStaminaHUD`
+(Phase 4), and `AdvancedBarkRadial`, `DeployableKennel` (Phase 5) all
+**are** wired up to real, working (if unreviewed-for-numeric-tuning) code
+now — see their respective sections below. `BiteAndHold`, `NonLethalTakedown`,
+and `PropDragging` are also now reachable from the "K9 Unit" radial menu —
+see [Phase 3 configuration](#phase-3-configuration-not-enabled-by-default)
+for why they should still not be enabled on a live server despite that.
+`Config.XPTiers`/`Config.XP` (Phase 4 — XP thresholds/awards) are also now
+read by `server/progression.lua`.
 
 Everything in the bulleted list above is left `false`/present in the
 shipped config as a placeholder for future work; there is no harm in
@@ -864,6 +912,186 @@ active certification.
 Thermal and night vision are designed to be mutually exclusive at any given
 moment (toggling one off should toggle the other off too, if both were
 somehow active).
+
+## Phase 3 configuration (not enabled by default)
+
+All four Phase 3 combat/agility mechanics — `AgilityAdvanced`,
+`BiteAndHold`, `NonLethalTakedown`, `PropDragging` — and the separate
+`HandlerPartnership` registry now have real, registered code behind their
+still-`false` flags. `BiteAndHold`, `NonLethalTakedown`, and `PropDragging`
+are also reachable from the "K9 Unit" radial menu ("Bite & Hold / Release",
+"Non-Lethal Takedown", "Drag / Release"). **Every numeric value in
+`Config.Combat` and `Config.Partnership` is an unreviewed placeholder
+pending a balance/config-validator pass — do not enable `BiteAndHold`,
+`NonLethalTakedown`, or `PropDragging` on a live server before that
+review, and before reading the trust-boundary caveat below.** Only
+`Config.Features.HandlerPartnership` is currently considered safe to
+enable on its own, since it wires no combat consequence of any kind yet.
+
+### `Config.Features.AgilityAdvanced`
+
+`boolean`, default `false`. Gates `client/movement.lua`'s fence/window
+vault approximation for a K9-modeled player: a multi-height capsule-sweep
+raycast (`Config.Combat.AgilityAdvanced.detectionMethod`, hard-locked to
+`'raycast'` — the resource asserts loudly at startup if this is ever set to
+anything else, since the alternate `'taggedProp'` shape is documented but
+has no implementation) detects a low obstacle ahead of the K9 and vaults it
+if it's no taller than `.maxVaultHeight` (meters, default `1.2`), on a
+per-K9 cooldown (`.vaultCooldownMs`, default `2000`ms). Does not depend on
+`BiteAndHold`/`NonLethalTakedown`/`PropDragging`/`HandlerPartnership` and
+has no PvP/trust-boundary caveat — it only ever affects the acting K9's own
+ped.
+
+### `Config.Features.BiteAndHold`, `NonLethalTakedown`, `PropDragging`
+
+All three gate real, registered code in `server/combat.lua` +
+`client/combat.lua`, all three default `false`, and all three are reachable
+from the radial menu once enabled. `Config.Combat.RequireWantedStatus`
+(`boolean`, default `true`) applies to all three mechanics' **player**
+targets: a K9 may only target a player flagged wanted/suspect (read via
+`Config.Combat.WantedStatusCheckOverride(playerId) -> boolean`, a function
+hook you should point at your own dispatch resource — `nil` by default,
+falling back to a lower-confidence `metadata.wanted`/`metadata.iswanted`
+guess). NPC targets are never subject to this check. A separate hook,
+`Config.Combat.PropDragging.IsPlayerDownedOverride(targetServerId) ->
+boolean|nil`, gates whether a **player** can be targeted for dragging at
+all (point it at your own ambulance/laststand resource); both hooks **fail
+closed** (treat the target as ineligible) if they error, rather than
+falling back to a permissive default.
+
+- **`BiteAndHold`** (`Config.Combat.BiteAndHold`) — `range` (meters,
+  default `2.5`), `maxDurationMs` (default `15000` — the hard, non-optional
+  "no unbounded trap" timeout for a non-consensual hold), `cooldownMs`
+  (default `20000`, per-K9). Suppresses the target's sprint/weapon-fire
+  input for the duration (or until the K9 releases early) via
+  `DisableControlAction`, applied on the target's own client for a player
+  target (a "Category B" relay this resource cannot make the target's
+  client actually honor — see the trust-boundary note below) or on the
+  requesting K9's own client for an NPC target.
+- **`NonLethalTakedown`** (`Config.Combat.NonLethalTakedown`) — `range`
+  (default `3.0`), `minTargetSpeed` (m/s, default `4.0`, server-computed
+  from a short live position-sample window — never a client-claimed
+  "I am sprinting" flag), `speedSampleWindowMs` (default `250`),
+  `ragdollDurationMs` (default `4000` — the hard timeout on both the forced
+  ragdoll and the damage-suppression bracket), `cooldownMs` (default
+  `25000`, per-K9), `targetCooldownMs` (default `30000`, per-target, stops
+  several K9s repeat-takedown-ing the same downed target back-to-back),
+  `healthFloor` (default `100`, a backstop only — the primary
+  non-lethality mechanism is the damage-suppression bracket, not this
+  floor). `SetEntityCanBeDamaged` is confirmed client-only, so both the
+  player- and NPC-target damage-suppression brackets are applied by
+  relaying to the target's/K9's own client rather than server-side.
+- **`PropDragging`** (`Config.Combat.PropDragging`) — `range` (default
+  `2.5`), `maxDragDistance` (meters, default `30.0` — the real,
+  server-enforced "no unbounded trap" backstop, checked unconditionally
+  regardless of whether the client-side attach is actually still being
+  honored), `maxDragDurationMs` (default `20000`), `dragSpeedMultiplier`
+  (default `0.4`, applied to a **player** target's move rate — client-side
+  only, see below). The K9's own client re-asserts `AttachEntityToEntity`
+  on the target every tick (not once), because a hostile target's own
+  client can call `DetachEntity` on itself at any moment to instantly break
+  free — **this resource cannot prevent that, only detect it**
+  (`Config.Combat.NonComplianceDetection.dragComplianceSlackMeters`,
+  default `4.0`m, compares the target's live position against the
+  dragging K9's own — a growing gap is logged/notified per
+  `Config.Combat.NonComplianceDetection.action` below, never auto-punished).
+  Either the holding K9 or, if the target is a player, the target
+  themselves can release the drag at any time with zero consent needed
+  from the other side.
+
+**Non-compliance detection is logging/staff-notification only, never
+enforcement** (`Config.Combat.NonComplianceDetection`, `enabled` default
+`true`): it samples an active hold/ragdoll/drag's target position every
+`positionSampleWindowMs` (default `500`ms) and flags a likely violation
+(fleeing during Bite & Hold, faking a ragdoll, breaking free of a drag)
+via `action` (`'log'` or `'notify_staff'` — deliberately never
+`'auto_kick'`/`'auto_ban'`, since a false positive from lag/desync must
+never itself become punitive without human review) or your own
+`OnViolationOverride(playerId, effectType, evidence)` hook. **No
+server-authoritative consequence of any kind is ever conditioned on one of
+these signals** — a flagged violation never ends the hold early, denies a
+cooldown refund, or blocks a future request.
+
+**The trust boundary this resource cannot close, stated plainly:** for a
+**player** target, the actual restraining effect (input-disable, forced
+ragdoll, move-rate reduction) runs on *that player's own client*, relayed
+there by the server. A modified client can choose to ignore the relayed
+event outright. This resource's own player-facing text is worded as
+best-effort for exactly this reason, and no server-side check ever assumes
+the effect actually landed. A dedicated security review found and fixed a
+related, more concrete gap: `client/combat.lua`'s event handlers used to be
+registered **unconditionally on every client, regardless of any of these
+three flags** — meaning a modified client could fire one of these events on
+itself directly (e.g. for indefinite self-invincibility) with **zero
+server contact, even with `BiteAndHold`/`NonLethalTakedown`/`PropDragging`
+all `false`**. Handlers are now gated per-flag, so "flag off" is
+genuinely inert again — **this does not mean a locally-forged event is
+prevented once the flag is `true`**; that deeper problem remains open and
+unsolved. Do not enable any of these three flags on a live server without
+understanding this.
+
+### `Config.Features.HandlerPartnership`
+
+`boolean`, default `false`. Gates a mutually-consented "Partner Up" / "Break
+Partnership" registry between a K9 and a departmental officer
+(`server/partnership.lua`, `client/partnership.lua`, `k9_partnerships`
+table — see [Database](#database) above). Unlike the leash pairing, a
+partnership is **DB-backed and survives a disconnect or a resource
+restart** — it exists specifically to answer "who is this K9's handler
+right now" at moments a transient leash pairing cannot.
+
+- **Establishing one**: either party uses the "Partner Up" ox_target option
+  on the other (or `RequestPartnerUp(targetServerId)`); the target gets an
+  accept/decline prompt. On accept, the server re-validates eligibility a
+  second time (closing the same TOCTOU window leash's own consent handshake
+  closes) before writing the row. Eligibility mirrors leash's own
+  asymmetric shape: the K9-role party needs `HasK9Access`, the officer/
+  handler-role party needs only `job.name` in `Config.Departments` — no
+  certifier-grade hierarchy, no requirement that the handler hold their own
+  K9 certification.
+- **A citizenid can hold at most one active partnership at a time**, in
+  either role, enforced by two independent DB unique indexes plus an
+  in-process mutex around every establish attempt (see
+  `server/partnership.lua`'s own header for the exact race the mutex closes
+  that the two unique indexes alone cannot).
+- **Either party can end it at any time, with zero consent required** —
+  same "no unbounded trap" guarantee this resource applies to leash.
+  `BreakPartnership()` deliberately never pre-checks a local "am I
+  partnered" cache before sending, specifically so a client whose local
+  cache is stale (see the gap below) can never be unable to end a real,
+  active partnership.
+- Losing certification, changing departments, or otherwise leaving the
+  department automatically tears down an active partnership server-side
+  (`server/certifications.lua` calls `ForceBreakPartnershipForCitizenId`
+  from all four of its own certification-change call sites), regardless of
+  `Config.Features.HandlerPartnership`'s current value — a partnership
+  established while the flag was on must still be torn down by a later
+  revoke/department change even if the flag is subsequently flipped off.
+- `Config.Partnership.ProximityMeters` (meters, default `5.0`) — max
+  distance between the two parties to establish a partnership, both at
+  request time and again at accept time.
+- `Config.Partnership.RequestTTLMs` (default `30000`ms) / `.RequestCooldownMs`
+  (default `1000`ms) — same "a request nobody answers shouldn't linger
+  forever" / "stop UI-harassment via repeat prompts" shape as leash's own
+  request handshake.
+- **This is a foundation only.** Nothing in this resource yet reads a
+  partnership to do anything in combat — `Config.Features.HandlerDownDefense`
+  and `PHASE3_SPEC.md`'s Recall mechanic, the two features this registry
+  exists to unblock, both still have **zero code**.
+- **Disclosed, unresolved reconnect gap**: nothing in this registry's
+  current contract re-syncs a client's own view of an already-established
+  partnership after that client reconnects or this resource restarts —
+  `RefreshPartnershipCache` silently repopulates the *server's* own cache on
+  `PlayerLoaded`/resource start, but never tells the client anything. That
+  means `IsPartnered()`/`GetPartnerServerId()` (`client/partnership.lua`)
+  can genuinely return "not partnered"/`nil` for a player who **is** still
+  actively partnered per the database, until a fresh consent-handshake
+  event reaches that client. In practice this only affects the "Partner Up"
+  option's own display check (the server's own eligibility check still
+  authoritatively rejects a redundant request either way) and never
+  `BreakPartnership()` (which is unconditional by design, see above) — but
+  do not build a future feature against these two accessors assuming they
+  are always accurate immediately after a reconnect.
 
 ## Phase 4 configuration (not enabled by default)
 
@@ -1298,7 +1526,35 @@ job, rank, proximity, or ped model:
   point from the requester's own live server-side position — the client
   never supplies a coordinate — and independently re-validates the placed
   object's model, entity type, and position before accepting it as real.
-- The one deliberate exception is vehicle entry/exit — see above.
+- The K9/handler partnership registry (`server/partnership.lua`)
+  re-validates eligibility twice, same TOCTOU discipline as leash and
+  contraband search, and enforces "at most one active partnership per
+  citizenid" with a DB-level unique-index backstop plus an in-process
+  mutex around every establish attempt — see
+  [Config.Features.HandlerPartnership](#configfeatureshandlerpartnership)
+  above for exactly what gap the mutex closes that the unique indexes alone
+  cannot.
+- `BiteAndHold`/`NonLethalTakedown`/`PropDragging` (`server/combat.lua`)
+  independently re-validate `HasK9Access`, live proximity,
+  `Config.Combat.RequireWantedStatus` (for a player target), and their own
+  cooldowns before granting an effect — but **this is the one area of this
+  resource where the server cannot fully enforce its own decision**: for a
+  player target, the actual restraining effect runs on that player's own
+  client, relayed there by the server, and a modified client can simply
+  ignore it. This resource's own player-facing text is worded as
+  best-effort for exactly this reason. `client/combat.lua`'s event handlers
+  are now gated per-flag (closing a real gap where a modified client used
+  to be able to trigger an effect like indefinite self-invincibility with
+  zero server contact even with every flag `false`), but that gating does
+  **not** make an individual handler verify a specific invocation actually
+  came from the server once its flag is `true` — that remains a separate,
+  open item. Do not enable any of these three flags on a live server before
+  reading [Config.Features.BiteAndHold, NonLethalTakedown, PropDragging](#configfeaturesbiteandhold-nonlethaltakedown-propdragging)
+  above in full.
+- The one deliberate exception to "the server always re-verifies" in the
+  sense of never round-tripping to the server at all (as opposed to the
+  combat trust-boundary caveat above, which does round-trip but can't force
+  compliance) is vehicle entry/exit — see above.
 
 ## Where things live
 
@@ -1382,22 +1638,38 @@ job, rank, proximity, or ped model:
   [Config.Features.AdvancedBarkRadial](#configfeaturesadvancedbarkradial)
   above.
 - `server/combat.lua`, `client/combat.lua` — **Phase 3, both registered in
-  `fxmanifest.lua`, both flags still `false`, no in-game entry point.**
-  `BiteAndHold`/`NonLethalTakedown` are fully implemented under the
-  resolved client-relay-architecture design decision (§12.0 item 8) and
-  both halves now run — a real change from an earlier state where
-  `server/combat.lua` existed with no client counterpart and was
-  deliberately excluded from the manifest. Completing the client half
-  found and fixed a real safety bug: `SetEntityCanBeDamaged` is
-  client-only, so `NonLethalTakedown`'s NPC-target branch calling it
-  server-side was a silent no-op that could let a "non-lethal" takedown
-  actually kill an NPC — see `CHANGELOG.md`. Despite running, the feature
-  has **no way to be triggered in a live game**: `client/combat.lua`
-  exposes `RequestBiteHold()`/`ReleaseBiteHold()`/`RequestTakedown()` as
-  globals, but `client/radial.lua` was not extended to call them, and no
-  other command/ox_target option does either. Do not treat this as a
-  usable feature; see `CHANGELOG.md`'s Known Limitations for the full
-  detail.
+  `fxmanifest.lua`, all three flags still `false`, reachable via the "K9
+  Unit" radial menu.** `BiteAndHold`, `NonLethalTakedown`, and (newly)
+  `PropDragging` are all fully implemented under the resolved
+  client-relay-architecture design decision (§12.0 item 8) — a real change
+  from an earlier state where `server/combat.lua` existed with no client
+  counterpart and was deliberately excluded from the manifest, and a later
+  state where both were implemented but had no in-game trigger at all.
+  Completing the client half found and fixed a real safety bug:
+  `SetEntityCanBeDamaged` is client-only, so `NonLethalTakedown`'s
+  NPC-target branch calling it server-side was a silent no-op that could
+  let a "non-lethal" takedown actually kill an NPC. Landing `PropDragging`
+  found two more real gaps, both now fixed: `NetworkRequestControlOfEntity`
+  was never requested before driving natives against an NPC target this
+  K9's own client doesn't already control (which could have made the
+  takedown safety fix above silently no-op again on a populated server),
+  and `client/combat.lua` had no `onResourceStop` handler despite setting
+  several persistent native flags. A security review separately found
+  every event handler in `client/combat.lua` had been registered
+  **unconditionally**, so a modified client could trigger effects like
+  indefinite self-invincibility with zero server contact even with all
+  three flags `false` — now gated per-mechanic, but **this does not close
+  the deeper client-relay trust boundary** once a mechanic is enabled (see
+  [Config.Features.BiteAndHold, NonLethalTakedown, PropDragging](#configfeaturesbiteandhold-nonlethaltakedown-propdragging)
+  above). Do not treat any of the three as a usable-on-a-live-server
+  feature yet; see `CHANGELOG.md`'s Known Limitations for the full detail.
+- `server/partnership.lua`, `client/partnership.lua` — **Phase 3, both
+  registered in `fxmanifest.lua`, flag still `false`.** The K9/handler
+  partnership registry — a foundation only, wiring no combat consequence
+  of its own; `HandlerDownDefense` and `PHASE3_SPEC.md`'s Recall mechanic
+  still have zero code — see
+  [Config.Features.HandlerPartnership](#configfeatureshandlerpartnership)
+  above.
 
 There are no `exports` declared by this resource (no `server_exports` /
 `client_exports` in `fxmanifest.lua`) — integration by other resources is

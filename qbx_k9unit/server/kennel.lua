@@ -97,6 +97,21 @@
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `HasK9Access(source)`, exposed by
       server/certifications.lua — do not re-derive the job/cert check here.
+    - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)`,
+      exposed by server/entities.lua (REFACTOR_ROADMAP.md item 2) — do not
+      re-implement the resolve/existence-guard sequence here.
+      RemoveKennelForCitizenid, confirmKennelPlaced, and the onResourceStop
+      sweep all previously hand-rolled their own
+      `NetworkDoesEntityExistWithNetworkId`/`NetworkGetEntityFromNetworkId`/
+      `DoesEntityExist` sequence — three of the 11 copies the Revision 5
+      whole-codebase audit found still bypassing this helper. confirmKennelPlaced
+      additionally used to re-derive a separate `GetEntityType(entity) ~= 3`
+      check alongside its own genuinely kennel-specific `KennelModelHashes`
+      model-hash check; the type check is now folded into
+      `ResolveNetworkEntity`'s `expectedEntityType = 3` argument (mirroring
+      server/main.lua's relayDoorScratch), while the model-hash check stays
+      at that call site, unchanged, since it isn't part of the generic
+      resolve.
     - THIS FILE owns `Kennels` (citizenid -> { netId, ownerSrc, createdAt })
       and `PendingKennelPlacements` (citizenid -> { src, coords, expiresAt }),
       both local to this file. Nothing outside this file reads them
@@ -214,11 +229,15 @@ local function RemoveKennelForCitizenid(citizenid)
     if not kennel then return end
     Kennels[citizenid] = nil
 
-    if NetworkDoesEntityExistWithNetworkId(kennel.netId) then
-        local entity = NetworkGetEntityFromNetworkId(kennel.netId)
-        if DoesEntityExist(entity) then
-            DeleteEntity(entity)
-        end
+    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this file's
+    -- own inline `NetworkDoesEntityExistWithNetworkId` / `NetworkGetEntityFromNetworkId`
+    -- / `DoesEntityExist` sequence. No entity-type restriction is needed
+    -- here (a kennel is being deleted by its own recorded netId, not
+    -- validated against an unrelated claim), so this is called without
+    -- expectedEntityType, same as server/search.lua's HandleSearchTarget.
+    local entity = ResolveNetworkEntity(kennel.netId)
+    if entity then
+        DeleteEntity(entity)
     end
 
     -- Backstop broadcast — see CLEANUP CONFIDENCE NOTE above. A safe no-op
@@ -315,28 +334,39 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     if not HasK9Access(src) then return end
     if Kennels[citizenid] then return end
 
-    if not NetworkDoesEntityExistWithNetworkId(netId) then
-        NotifyPlayer(src, 'Kennel placement failed — the object could not be confirmed.', 'error')
-        return
-    end
-
-    local entity = NetworkGetEntityFromNetworkId(netId)
-    if not DoesEntityExist(entity) then
+    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this file's
+    -- own `NetworkDoesEntityExistWithNetworkId` existence guard followed by
+    -- a SEPARATE `GetEntityType(entity) ~= 3` check further down — both
+    -- are now server/entities.lua's shared ResolveNetworkEntity(), called
+    -- with expectedEntityType = 3 to fold the object-only restriction in
+    -- as one call, mirroring server/main.lua's relayDoorScratch exactly.
+    -- The genuinely kennel-specific KennelModelHashes check stays here,
+    -- unchanged, since it isn't part of the generic resolve.
+    --
+    -- DISCLOSED, NOT SILENT, MESSAGE-WORDING CHANGE: before this
+    -- migration, an entity that existed but had the wrong GetEntityType
+    -- got its own distinct "unexpected entity type" notification, separate
+    -- from the "could not be confirmed" wording used for a nonexistent
+    -- entity. Folding both into one ResolveNetworkEntity(netId, 3) call
+    -- means both cases now return nil and share the "could not be
+    -- confirmed" message below — the REJECTION itself is unchanged (both
+    -- cases still fail closed), only the player-facing wording for the
+    -- wrong-type case is now less specific. Flagged explicitly per this
+    -- resource's own "strengthen/change silently never, disclose always"
+    -- convention (see server/entities.lua's own doc comment for the
+    -- precedent on HandleSearchTarget's existence-check strengthening).
+    local entity = ResolveNetworkEntity(netId, 3)
+    if not entity then
         NotifyPlayer(src, 'Kennel placement failed — the object could not be confirmed.', 'error')
         return
     end
 
     -- Defense-in-depth (relayDoorScratch precedent, server/main.lua):
     -- confirm the reported entity is actually one of the two configured
-    -- kennel prop models and actually an OBJECT (type 3), not an
-    -- arbitrary pre-existing networked entity (any vehicle/ped/other prop)
-    -- a modified client could report instead of a genuine new kennel.
+    -- kennel prop models, not an arbitrary pre-existing networked object a
+    -- modified client could report instead of a genuine new kennel.
     if not KennelModelHashes[GetEntityModel(entity)] then
         NotifyPlayer(src, 'Kennel placement failed — unexpected object model.', 'error')
-        return
-    end
-    if GetEntityType(entity) ~= 3 then
-        NotifyPlayer(src, 'Kennel placement failed — unexpected entity type.', 'error')
         return
     end
 
@@ -439,12 +469,13 @@ end)
 AddEventHandler('onResourceStop', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
+    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this file's
+    -- own inline existence-check sequence, same as RemoveKennelForCitizenid
+    -- above (no expectedEntityType needed here either).
     for _, kennel in pairs(Kennels) do
-        if NetworkDoesEntityExistWithNetworkId(kennel.netId) then
-            local entity = NetworkGetEntityFromNetworkId(kennel.netId)
-            if DoesEntityExist(entity) then
-                DeleteEntity(entity)
-            end
+        local entity = ResolveNetworkEntity(kennel.netId)
+        if entity then
+            DeleteEntity(entity)
         end
     end
     -- Deliberately NOT also broadcasting 'qbx_k9unit:client:removeKennel'

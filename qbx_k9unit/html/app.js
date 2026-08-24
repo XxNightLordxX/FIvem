@@ -84,6 +84,103 @@
     client-side throttling/debouncing of incoming messages is needed or
     should be added here.
     ======================================================================
+
+    ======================================================================
+    AUDIO BRIDGE CONTRACT (added this pass — must match client/audio.lua
+    exactly, byte-for-byte, same "a name that doesn't match on both sides
+    just hangs or drops silently" risk as the HUD contract above). See
+    client/audio.lua's own header for the full authoritative background
+    (phase2_notes/dependency_and_audio_status.md,
+    phase2_notes/phase5_remaining_features_research.md §1) — short version:
+    this resource's bark audio has always been a placeholder RAGE soundset
+    name that resolves to a harmless no-op; this bridge is the plumbing
+    that plays a REAL sound once a server operator drops one in, using
+    Web Audio (a GainNode) for distance-based volume instead of a RAGE
+    audio bank.
+
+    Lua -> JS (SendNUIMessage), one-directional only — THERE IS NO
+    JS -> Lua callback anywhere in this audio bridge (contrast 'hud:ready'
+    above): every message below is fire-and-forget from client/audio.lua,
+    and this file never calls back into Lua about whether a sound existed,
+    played, or failed. That is a deliberate design choice (see
+    client/audio.lua's header "WHAT THIS FILE DELIBERATELY DOES NOT DO"),
+    not an oversight — this file's own job is to make every one of the
+    three cases below (missing file, decode failure, Web Audio
+    unavailable) degrade completely silently, with zero console output
+    and zero thrown error, since a server that has not supplied any
+    .ogg assets is the expected, normal state for every install of this
+    resource today.
+
+        { action: 'audio:play', data: { id: <number>, sound: <string>, gain: <number 0-1>, loop: <boolean> } }
+            Starts (or attempts to start) playback of html/sounds/<sound>.ogg
+            at the given initial gain. `sound` is a bare key with no
+            extension and no path separators (sanitized on this side
+            regardless of what Lua sends — see sanitizeSoundKey() below);
+            the actual file, if any, must live at html/sounds/<sound>.ogg
+            for a `files{}` glob entry to have bundled it. `id` is an
+            opaque number this page never interprets, only echoes back via
+            onended bookkeeping and uses to route a later `audio:setGain`/
+            `audio:stop` to the right in-flight sound.
+
+        { action: 'audio:setGain', data: { id: <number>, gain: <number 0-1> } }
+            Smoothly ramps an ALREADY-PLAYING sound's gain toward a new
+            value over AUDIO_GAIN_RAMP_SECONDS, via GainNode's own
+            `linearRampToValueAtTime` — the concrete Web Audio capability
+            this whole bridge exists to use (continuous, click-free volume
+            scripting with no dependency on any FiveM native or authored
+            RTPC variable). A no-op if `id` doesn't currently refer to an
+            active sound (already ended, never started, or a typo'd id) —
+            never an error.
+
+        { action: 'audio:stop', data: { id: <number> } }
+            Stops an active sound immediately. Also a no-op if `id`
+            doesn't refer to an active sound, EXCEPT for one specific race:
+            if `id`'s own 'audio:play' is still asynchronously
+            fetching/decoding its file when this arrives, this records
+            that fact so playback never starts at all once the load
+            finishes — see stoppedBeforeStart below and handleAudioStop's
+            own comment for why this is needed (loading is async; a stop
+            can legitimately arrive before there is anything yet to stop).
+
+    CONFIDENCE NOTE — HONEST, NOT INDEPENDENTLY VERIFIED IN-ENGINE THIS
+    PASS: this bridge assumes FiveM's NUI (CEF-based) browser context lets
+    a Web Audio `AudioContext` actually produce sound without requiring the
+    same "user gesture to unlock audio" step a normal desktop Chrome tab
+    enforces under its autoplay policy. This is a REASONABLE, but not a
+    FIRST-PARTY-CONFIRMED, assumption: it rests on community precedent —
+    multiple independent, real, in-use FiveM NUI-audio resources
+    (plunkettscott/interact-sound, Xogy/xsound, QBus-xyz/xyz-3dsound,
+    Virgildev/v-k9's own use of interact-sound for bark playback — see
+    phase2_notes/dependency_and_audio_status.md and
+    phase2_notes/phase5_remaining_features_research.md §1 for the direct
+    reads backing each of these) freely playing audio from NUI pages with
+    no documented unlock/gesture workaround anywhere in any of them — but
+    no FiveM client was available in this environment to actually load
+    this page in-engine and confirm sound is audible this pass. If it
+    turns out CEF's NUI runtime DOES enforce an autoplay-gesture policy
+    after all, ensureAudioContext()'s best-effort `.resume()` call below
+    would not be sufficient on its own, and this would need a real fix
+    (e.g. some deliberate, non-audio user interaction to unlock — if even
+    that is possible on a page with pointer-events: none throughout, which
+    is itself a real open question this pass could not close). Flagging
+    this plainly rather than presenting it as verified.
+
+    GRACEFUL DEGRADATION — the other hard requirement this bridge is built
+    around: a missing/absent .ogg file must NEVER throw, log an error, or
+    warn to the console, because "no assets supplied yet" is the actual
+    shipped state of every install of this resource today, not an edge
+    case. Every function below that can fail (fetch, decodeAudioData,
+    AudioContext construction, node construction/start/stop) is wrapped so
+    its failure path is identical in observable effect to "the sound
+    simply didn't play" — nothing more. See sanitizeSoundKey/
+    loadSoundBuffer/handleAudioPlay's own comments for exactly which
+    failure maps to which no-op.
+
+    NO SetNuiFocus HERE EITHER — same rule as the HUD contract above,
+    unchanged by this addition: audio playback has no DOM element, no
+    visual affordance, and nothing to click — there is no reason this
+    would ever need focus, and none is requested anywhere in this file.
+    ======================================================================
 */
 
 (function () {
@@ -151,6 +248,298 @@
         applyStat('stamina', data.stamina);
         applyStat('hunger', data.hunger);
         applyStat('thirst', data.thirst);
+    }
+
+    // ------------------------------------------------------------------
+    // AUDIO BRIDGE — see this file's header "AUDIO BRIDGE CONTRACT" block
+    // for the full payload/behavior contract this section implements, and
+    // client/audio.lua for the Lua-side counterpart. Everything below is
+    // additive to the HUD code above/below it — no HUD behavior changes.
+    // ------------------------------------------------------------------
+
+    /** Seconds a GainNode ramp (audio:setGain) takes to reach its target —
+     * long enough to avoid an audible "step"/zipper artifact, short enough
+     * that a fast-changing distance still feels responsive. Code-local
+     * tuning constant, same posture as client/audio.lua's own
+     * AUDIO_MAX_DISTANCE/AUDIO_GAIN_POLL_MS (file-local, not exposed via
+     * the message payload — every 'audio:setGain' message uses this same
+     * ramp length). */
+    var AUDIO_GAIN_RAMP_SECONDS = 0.3;
+
+    /** Lazily-constructed singleton — this page's `ui_page` is loaded once
+     * for the entire client session (never re-opened like a modal), so one
+     * AudioContext for the page's whole lifetime is correct, not a leak.
+     * @type {AudioContext|null} */
+    var audioCtx = null;
+
+    /** Sticky failure flag — if constructing an AudioContext ever fails
+     * once (e.g. Web Audio genuinely unavailable in this runtime), don't
+     * retry the constructor on every subsequent 'audio:play' message; just
+     * keep degrading silently. */
+    var audioCtxConstructionFailed = false;
+
+    /** key (sanitized sound name, no extension) -> Promise<AudioBuffer|null>.
+     * Cached INCLUDING failed/negative results, so a repeatedly-triggered
+     * missing sound (the expected common case on a server with no assets
+     * yet) never re-fetches or re-decodes more than once per key for this
+     * page's whole lifetime.
+     * @type {Record<string, Promise<AudioBuffer|null>>} */
+    var soundBufferCache = {};
+
+    /** id -> { source: AudioBufferSourceNode, gain: GainNode } for every
+     * currently-playing sound this page knows about.
+     * @type {Record<number, { source: AudioBufferSourceNode, gain: GainNode }>} */
+    var activeSounds = {};
+
+    /** ids that received an 'audio:stop' while their matching 'audio:play'
+     * was still asynchronously loading/decoding — checked (and cleared)
+     * the moment that load settles, so playback never starts for an id
+     * that was already told to stop. Without this, a play/stop pair that
+     * arrives in quick succession could still audibly start playing,
+     * because the buffer fetch/decode that 'audio:play' kicks off is
+     * asynchronous and may not have resolved yet when 'audio:stop' for the
+     * SAME id arrives moments later.
+     * @type {Record<number, boolean>} */
+    var stoppedBeforeStart = {};
+
+    /**
+     * Sanitizes a sound key defensively, independent of whatever
+     * client/audio.lua sends — this page never trusts the other side of
+     * an NUI bridge to have already validated its own payload (same
+     * standing convention this file's clampPercent already follows for
+     * the HUD payload). Strips everything but lowercase alphanumerics/
+     * underscore/hyphen, so this can never be used to request a path
+     * outside html/sounds/ (no '/', no '..', no query string) even though
+     * nothing reaching this function today originates from untrusted
+     * player input (see client/audio.lua's header on soundName's actual
+     * provenance) — defense in depth, not a response to a live gap.
+     * @param {*} raw
+     * @returns {string|null} sanitized key, or null if nothing usable remains
+     */
+    function sanitizeSoundKey(raw) {
+        if (typeof raw !== 'string') return null;
+        var key = raw.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+        return key.length > 0 ? key : null;
+    }
+
+    /**
+     * Clamps a gain value into Web Audio's meaningful 0-1 range, coercing
+     * anything non-numeric to 0 (silent) rather than letting a malformed
+     * payload reach a GainNode as NaN, which would otherwise throw.
+     * @param {*} raw
+     * @returns {number}
+     */
+    function clampGain(raw) {
+        var n = Number(raw);
+        if (!isFinite(n)) return 0;
+        if (n < 0) return 0;
+        if (n > 1) return 1;
+        return n;
+    }
+
+    /**
+     * Returns this page's singleton AudioContext, constructing it on first
+     * use. Returns null (never throws) if Web Audio isn't available in
+     * this runtime at all, or if construction failed once already — every
+     * caller below already treats a null return as "silently do nothing,"
+     * which is the correct behavior for both cases.
+     * @returns {AudioContext|null}
+     */
+    function ensureAudioContext() {
+        if (audioCtx) return audioCtx;
+        if (audioCtxConstructionFailed) return null;
+
+        try {
+            var Ctor = window.AudioContext || window.webkitAudioContext;
+            if (!Ctor) {
+                audioCtxConstructionFailed = true;
+                return null;
+            }
+            audioCtx = new Ctor();
+        } catch (err) {
+            audioCtxConstructionFailed = true;
+            return null;
+        }
+
+        // Best-effort resume for a context that starts life 'suspended'
+        // pending a user-gesture unlock — a real desktop-browser autoplay
+        // policy behavior. See this file's header "CONFIDENCE NOTE" for
+        // this bridge's honest, NOT independently in-engine-verified
+        // assumption that FiveM's own NUI/CEF runtime does not enforce
+        // this same restriction. This call is harmless either way:
+        // resume() on an already-running context is a documented no-op
+        // success, and a refused/failed resume() degrades to exactly the
+        // same "no audible sound, no error" outcome a missing file already
+        // produces below.
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(function () {
+                // Swallowed deliberately — see comment above.
+            });
+        }
+
+        return audioCtx;
+    }
+
+    /**
+     * Fetches + decodes html/sounds/<key>.ogg, caching the resulting
+     * promise (including a resolved-to-null failure) so this is attempted
+     * at most once per key for this page's lifetime. Every failure mode —
+     * a 404 (the expected, normal case on a server with no assets
+     * supplied yet), a network error, or a decode failure on a corrupt/
+     * unsupported file — resolves to `null` rather than rejecting, and
+     * produces zero console output, per this file's header "GRACEFUL
+     * DEGRADATION" requirement.
+     * @param {AudioContext} ctx
+     * @param {string} key already-sanitized via sanitizeSoundKey
+     * @returns {Promise<AudioBuffer|null>}
+     */
+    function loadSoundBuffer(ctx, key) {
+        if (Object.prototype.hasOwnProperty.call(soundBufferCache, key)) {
+            return soundBufferCache[key];
+        }
+
+        var promise = fetch('sounds/' + key + '.ogg')
+            .then(function (resp) {
+                if (!resp.ok) return null; // e.g. 404 — the expected, normal case until real assets are supplied
+                return resp.arrayBuffer();
+            })
+            .then(function (buf) {
+                if (!buf) return null;
+                return ctx.decodeAudioData(buf);
+            })
+            .catch(function () {
+                // Any failure anywhere in the chain above (network error,
+                // malformed/corrupt/unsupported file, decode failure)
+                // degrades to the same "no sound" outcome as a plain 404 —
+                // deliberately no console output here.
+                return null;
+            });
+
+        soundBufferCache[key] = promise;
+        return promise;
+    }
+
+    /**
+     * Handles one `audio:play` payload — see this file's header "AUDIO
+     * BRIDGE CONTRACT" for the full shape. Starts playback once (and only
+     * if) the requested file both exists and decodes successfully; every
+     * other outcome (bad payload, Web Audio unavailable, missing/corrupt
+     * file, a matching 'audio:stop' that raced ahead of this async load)
+     * is a silent no-op.
+     * @param {{ id: number, sound: string, gain: number, loop: boolean }} data
+     */
+    function handleAudioPlay(data) {
+        if (!data || data.id === undefined || data.id === null) return;
+
+        var id = data.id;
+        var key = sanitizeSoundKey(data.sound);
+        if (!key) return;
+
+        var ctx = ensureAudioContext();
+        if (!ctx) return; // Web Audio unavailable in this runtime — silent degrade
+
+        var gainValue = clampGain(data.gain);
+        var loop = data.loop === true;
+
+        loadSoundBuffer(ctx, key).then(function (buffer) {
+            var wasStoppedEarly = !!stoppedBeforeStart[id];
+            delete stoppedBeforeStart[id];
+
+            if (!buffer || wasStoppedEarly) return;
+
+            try {
+                var gainNode = ctx.createGain();
+                gainNode.gain.value = gainValue;
+                gainNode.connect(ctx.destination);
+
+                var source = ctx.createBufferSource();
+                source.buffer = buffer;
+                source.loop = loop;
+                source.connect(gainNode);
+
+                source.onended = function () {
+                    // Fires both for a natural end (non-looping playback
+                    // finishing) AND for an explicit .stop() call
+                    // (handleAudioStop below already deletes this entry
+                    // itself too — deleting an already-absent key here is
+                    // a harmless no-op, so there is no double-cleanup bug
+                    // either order this fires in).
+                    delete activeSounds[id];
+                };
+
+                activeSounds[id] = { source: source, gain: gainNode };
+                source.start(0);
+            } catch (err) {
+                // Playback construction/start failing (e.g. an exhausted
+                // or closed AudioContext) degrades the same way a missing
+                // file does — no sound, no console output, no error
+                // visible anywhere a player would see it.
+                delete activeSounds[id];
+            }
+        });
+    }
+
+    /**
+     * Handles one `audio:setGain` payload — smoothly ramps an
+     * already-playing sound's gain via GainNode.gain.linearRampToValueAtTime,
+     * the concrete Web Audio capability this whole bridge exists to use
+     * (see this file's header). A no-op if `id` isn't currently active.
+     * @param {{ id: number, gain: number }} data
+     */
+    function handleAudioSetGain(data) {
+        if (!data || !audioCtx) return;
+
+        var active = activeSounds[data.id];
+        if (!active) return; // already ended, never started, or a stale/unknown id — silent no-op
+
+        var target = clampGain(data.gain);
+
+        try {
+            var now = audioCtx.currentTime;
+            active.gain.gain.cancelScheduledValues(now);
+            active.gain.gain.setValueAtTime(active.gain.gain.value, now);
+            active.gain.gain.linearRampToValueAtTime(target, now + AUDIO_GAIN_RAMP_SECONDS);
+        } catch (err) {
+            // Same silent-degrade posture as everywhere else in this bridge.
+        }
+    }
+
+    /**
+     * Handles one `audio:stop` payload. See this file's header contract
+     * note on the one real race this guards: 'audio:play' triggers an
+     * ASYNC fetch/decode before anything actually starts playing, so a
+     * fast-following 'audio:stop' for the same id can legitimately arrive
+     * before there is an active sound to stop yet — recorded in
+     * stoppedBeforeStart so handleAudioPlay's own async continuation
+     * checks it before ever calling start().
+     * @param {{ id: number }} data
+     */
+    function handleAudioStop(data) {
+        if (!data) return;
+
+        var id = data.id;
+        var active = activeSounds[id];
+
+        if (!active) {
+            stoppedBeforeStart[id] = true;
+            return;
+        }
+
+        delete activeSounds[id];
+
+        try {
+            active.source.stop();
+        } catch (err) {
+            // Already stopped/ended — harmless; onended (above) is the
+            // normal-path cleanup, this catch only guards the double-stop
+            // edge.
+        }
+        try {
+            active.source.disconnect();
+            active.gain.disconnect();
+        } catch (err) {
+            // Already disconnected — harmless.
+        }
     }
 
     /**
@@ -230,12 +619,23 @@
                 case 'hud:updateVitals':
                     handleUpdateVitals(msg.data);
                     break;
+                case 'audio:play':
+                    handleAudioPlay(msg.data);
+                    break;
+                case 'audio:setGain':
+                    handleAudioSetGain(msg.data);
+                    break;
+                case 'audio:stop':
+                    handleAudioStop(msg.data);
+                    break;
                 default:
-                    // Unknown action: ignore rather than throw. Other NUI
-                    // surfaces in this resource (none exist yet) would
-                    // use their own `<surface>:<verbNoun>` prefix per
-                    // phase4_hud_bridge_design.md §1, so this page simply
-                    // has nothing else to listen for today.
+                    // Unknown action: ignore rather than throw. Every NUI
+                    // surface this page listens for uses its own
+                    // `<surface>:<verbNoun>` prefix per
+                    // phase4_hud_bridge_design.md §1 ('hud:'/'audio:' so
+                    // far) — this default branch is what a THIRD, not-yet-
+                    // built surface's messages would silently fall into
+                    // until it adds its own case here.
                     break;
             }
         });

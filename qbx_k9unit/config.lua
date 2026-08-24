@@ -472,6 +472,30 @@ Config.Combat = {
         IsPlayerDownedOverride = nil,
     },
 
+    -- PHASE3_SPEC.md §12.5.3, implemented in server/defense.lua +
+    -- client/defense.lua. Per §12.0 item 2 this is a UI/auto-targeting
+    -- CONVENIENCE, never an AI takeover — the K9 never acts on its own; a
+    -- prompt is surfaced faster and the player still confirms.
+    --
+    -- Reuses Config.Combat.PropDragging.IsPlayerDownedOverride rather than
+    -- adding its own: "is this player down per the server's own scripted
+    -- laststand" is the same question for a drag target and a handler, and
+    -- the same native-unreliability caveat applies (IsPedDeadOrDying /
+    -- IsPedRagdoll read raw physics, not laststand state).
+    --
+    -- ALL NUMERIC VALUES BELOW ARE UNREVIEWED PLACEHOLDERS pending a
+    -- balance pass, same status as every other Phase 3 tuning number here.
+    HandlerDownDefense = {
+        handlerHealthThreshold   = 100,   -- fallback-only signal; the override above is the real check
+        triggerRadius            = 15.0,  -- how close the partner K9 must be to be prompted
+        hostileLookbackSeconds   = 10,    -- how far back an attacker hint stays relevant
+        pollIntervalMs           = 1000,
+        retriggerCooldownMs      = 30000, -- anti-spam; stamped at send, not at retry (see server/defense.lua)
+        promptTtlMs              = 10000, -- client-local clock, see that file's CLOCK-DOMAIN note
+        attackerReportCooldownMs = 500,
+        confirmKey               = 'G',   -- always rebindable client-side
+    },
+
     BiteAndHold = {
         range         = 2.5,    -- meters, self-initiated trigger range
         maxDurationMs = 15000,  -- hard timeout if never manually released — THIS IS the "no unbounded trap" guarantee for a non-consensual mechanic, PHASE3_SPEC.md §12.0 item 4. Never remove without an equally-hard replacement cap.

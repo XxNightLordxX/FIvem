@@ -208,19 +208,19 @@
       instance (REFACTOR_ROADMAP.md item 1's established convention — no
       hand-rolled cooldown/mutex table, per this file's own task-level
       instruction).
-    - `ResolveConnectedPlayerFromPed` below is a SMALL LOCAL COPY of
-      server/search.lua's function of the same name/purpose, not a shared
-      global — server/search.lua exposes no resource-global functions (see
-      its own FILE-TO-FILE CONTRACT), so there is nothing to reuse without
-      either expanding that file's contract or duplicating a small,
-      self-contained helper. Duplicating is the deliberate choice here
-      (mirrors client/movement.lua's own documented "small local copy vs.
-      expanding another file's contract" tradeoff for IsEntityModelK9) —
-      same reasoning, same conclusion, applied server-side. Kept IDENTICAL
-      in logic and doc comment to server/search.lua's original for the same
-      reason that file gives (avoids depending on an unverified
-      GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity)) native combo on
-      the single most security-sensitive check in this file).
+    - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)` and
+      `ResolveConnectedPlayerFromPed(entity)`, both resource-globals from
+      server/entities.lua (REFACTOR_ROADMAP.md item 2/item 2b) — do not
+      re-implement either resolve/existence-guard sequence here.
+      HandleOpenK9Inventory below used to define its own bare
+      `if entity == 0 then` check (no `DoesEntityExist` guard at all — the
+      weakest surviving copy of this pattern in the whole resource, per the
+      Revision 5 audit) plus a small local copy of
+      `ResolveConnectedPlayerFromPed`, duplicated from server/search.lua's
+      function of the same name/purpose because, at the time this file was
+      written, server/search.lua exposed no resource-global functions to
+      reuse. Both are now the shared server/entities.lua globals instead —
+      see HandleOpenK9Inventory's own comment for the exact migration.
     ======================================================================
 ]]
 
@@ -305,26 +305,15 @@ AddEventHandler('onResourceStart', function(resourceName)
     )
 end)
 
---- Resolves a ped entity to the currently-connected player's server id it
---- belongs to, or nil if it doesn't belong to any currently-connected
---- player. Small local copy of server/search.lua's function of the same
---- name — see this file's header FILE-TO-FILE CONTRACT for why this is
---- duplicated rather than shared, and server/search.lua's own doc comment
---- on this exact logic for the full "why not
---- GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))" rationale (that
---- native combo was never independently confirmed reliable SERVER-side this
---- session either).
---- @param entity number
---- @return number? targetServerId
-local function ResolveConnectedPlayerFromPed(entity)
-    for _, playerIdStr in ipairs(GetPlayers()) do
-        local playerId = tonumber(playerIdStr)
-        if playerId and GetPlayerPed(playerId) == entity then
-            return playerId
-        end
-    end
-    return nil
-end
+-- ResolveConnectedPlayerFromPed(entity) used to be defined here as a small
+-- local copy of server/search.lua's function of the same name/purpose.
+-- Extracted to server/entities.lua as a resource-global per
+-- REFACTOR_ROADMAP.md item 2b (three independent copies existed by then —
+-- this file, server/search.lua, server/combat.lua) — see this file's
+-- header FILE-TO-FILE CONTRACT and server/entities.lua's own doc comment
+-- for the full "why not GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))"
+-- rationale, preserved there. HandleOpenK9Inventory below now calls the
+-- shared global instead.
 
 --- Resolves the `owner`/`groups` RegisterStash arguments for a given K9
 --- citizenid, per Config.K9Inventory.accessScope. See this file's header
@@ -413,10 +402,19 @@ end
 --- in-flight mutex, cooldown) already passed. Mirrors
 --- server/search.lua's HandleSearchTarget validation-order discipline
 --- exactly, applied to a different capability grant:
----   1. Resolve `targetNetId` to a live entity — reject if it doesn't exist.
----   2. Cross-check the resolved entity's REAL type is a ped (never trust a
----      claimed type — there's no client-supplied targetType here at all,
+---   1-2. Resolve `targetNetId` to a live, currently-existing entity AND
+---      cross-check its REAL type is a ped in one call — never trust a
+---      claimed type (there's no client-supplied targetType here at all,
 ---      unlike search.lua, since this feature only ever targets a K9 ped).
+---      REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this
+---      function's own bare `if entity == 0 then` check — no
+---      `DoesEntityExist` call, no netId-type guard at all, the weakest
+---      surviving copy of this pattern in the resource per the Revision 5
+---      audit — followed by a SEPARATE `GetEntityType(entity) ~= 1` check.
+---      Both are now server/entities.lua's shared `ResolveNetworkEntity()`,
+---      called with expectedEntityType = 1 (ped-only, same restriction as
+---      before, not loosened) to fold both into one call and add the
+---      missing `DoesEntityExist` guard.
 ---   3. Resolve the entity to a currently-connected player (never an NPC).
 ---   4. Confirm the target's LIVE server-side ped model is a configured K9
 ---      model (IsConfiguredK9Model) — this is specifically a "K9 gear"
@@ -441,13 +439,10 @@ end
 --- @param targetNetId number
 --- @return table result
 local function HandleOpenK9Inventory(source, targetNetId)
-    local entity = NetworkGetEntityFromNetworkId(targetNetId)
-    if entity == 0 then
-        return { ok = false, reason = 'invalid_target' }
-    end
-
-    -- GetEntityType: 1 = ped, 2 = vehicle, 3 = object.
-    if GetEntityType(entity) ~= 1 then
+    -- GetEntityType: 1 = ped, 2 = vehicle, 3 = object. Ped-only restriction
+    -- preserved exactly (see this function's own doc comment above).
+    local entity = ResolveNetworkEntity(targetNetId, 1)
+    if not entity then
         return { ok = false, reason = 'invalid_target' }
     end
 

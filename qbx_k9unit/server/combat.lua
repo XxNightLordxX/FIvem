@@ -69,6 +69,13 @@
     Server events (RegisterNetEvent, client->server), THIS FILE:
     - 'qbx_k9unit:server:requestBiteHold' (targetNetId: number)
     - 'qbx_k9unit:server:releaseBiteHold' ()
+    - 'qbx_k9unit:server:reportBiteHoldTargetDied' ()
+      QA-fix completion (see this event's own handler doc comment for the
+      full trust-boundary/verification writeup): sent by client/combat.lua's
+      bite-hold TARGET death-detection thread, no arguments — `source` names
+      the reporting (claimed-target) client. Re-verified against
+      ActiveHolds/IsEntityDead server-side before acting, never trusted
+      alone.
     - 'qbx_k9unit:server:requestTakedown' (targetNetId: number)
 
     Client events (server->client), registered by client/combat.lua:
@@ -216,9 +223,11 @@
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
-    - Calls HasK9Access(source) (server/certifications.lua) and
-      ResolveNetworkEntity(netId, expectedEntityType?) (server/entities.lua)
-      — does not re-implement either.
+    - Calls HasK9Access(source) (server/certifications.lua),
+      ResolveNetworkEntity(netId, expectedEntityType?) (server/entities.lua),
+      and ResolveConnectedPlayerFromPed(entity) (server/entities.lua,
+      REFACTOR_ROADMAP.md item 2b — see the PLAYER-VS-NPC RESOLUTION
+      section below) — does not re-implement any of the three.
     - Calls NewCooldown()/NewMutex() (server/cooldowns.lua) — every
       cooldown/in-flight-guard below is one of these constructors, never a
       hand-rolled table, per REFACTOR_ROADMAP.md item 1's own standing
@@ -271,11 +280,18 @@
     ever resolve to an entity that IS some connected player's own ped) and
     gets both facts (is-a-player, AND that player's own server id) from
     one already-trusted mechanism instead of two natives of differing
-    verified reliability. Duplicated here (not extracted to
-    server/entities.lua) since this is the SECOND independent call site for
-    this exact helper — worth flagging to coder-architect as a
-    REFACTOR_ROADMAP-style extraction candidate now that there are two, not
-    mandated by this pass.
+    verified reliability.
+
+    EXTRACTION UPDATE (REFACTOR_ROADMAP.md item 2b): this file's own copy
+    was flagged above (when this comment was first written) as "worth
+    flagging to coder-architect as an extraction candidate now that there
+    are two" — that observation was already stale on arrival, since
+    server/inventory.lua had independently hand-copied the identical
+    function before this file landed, making three. `ResolveConnectedPlayerFromPed`
+    is now a resource-global exposed by server/entities.lua (same file,
+    same responsibility, as `ResolveNetworkEntity`); this file's own local
+    copy is deleted and ValidateCombatRequest below calls the shared
+    global instead, with no change to its own logic or call site.
     ======================================================================
 
     NON-COMPLIANCE DETECTION (PHASE3_SPEC.md §12.0 item 8, point 2) — real,
@@ -411,23 +427,12 @@ local function NotifyPlayer(target, description, notifyType)
     })
 end
 
---- Resolves a ped entity to the currently-connected player's server id it
---- belongs to, or nil if it doesn't belong to any currently-connected
---- player (an NPC, or a stale/despawned handle). See this file's header
---- "PLAYER-VS-NPC RESOLUTION" block for why this exact pattern (not
---- IsPedAPlayer) was chosen — duplicated from server/search.lua's own
---- ResolveConnectedPlayerFromPed, same implementation, same reasoning.
---- @param entity number
---- @return number? targetServerId
-local function ResolveConnectedPlayerFromPed(entity)
-    for _, playerIdStr in ipairs(GetPlayers()) do
-        local playerId = tonumber(playerIdStr)
-        if playerId and GetPlayerPed(playerId) == entity then
-            return playerId
-        end
-    end
-    return nil
-end
+-- ResolveConnectedPlayerFromPed(entity) used to be defined here as a local
+-- function (duplicated from server/search.lua's own copy). Extracted to
+-- server/entities.lua as a resource-global per REFACTOR_ROADMAP.md item
+-- 2b — see this file's header "PLAYER-VS-NPC RESOLUTION" section's
+-- "EXTRACTION UPDATE" note for the full reasoning. ValidateCombatRequest
+-- below now calls that shared global instead.
 
 --- PHASE3_SPEC.md §12.0 item 5. Never trusts a client-supplied "I am
 --- wanted" (or "that target is wanted") claim — always reads server-side
@@ -512,6 +517,53 @@ local function IsTargetDowned(targetPed, isPlayerTarget, targetSrc)
     if type(metadata) ~= 'table' then return false end
     return metadata.isdead == true or metadata.inlaststand == true
 end
+
+-- RED-TEAM FINDING (PropDragging), resource-start WARNING, not an assert.
+-- Config.Combat.PropDragging.IsPlayerDownedOverride is nil by default --
+-- IsTargetDowned's own doc comment above and config.lua's own comment on
+-- this field both already disclose that the fallback
+-- (metadata.isdead/.inlaststand) is a best-effort guess, not a verified
+-- state machine. What neither previously spelled out this loudly: on most
+-- QB/qbx ambulance integrations that metadata is set by a CLIENT-self-
+-- reported event, not a server-verified one, so on a default install a
+-- player can flip it true to become an always-eligible drag target (LOW
+-- impact -- they can self-release at any time via releaseDrag below, and no
+-- XP/reward is attached to being the drag TARGET), or flip it false while
+-- genuinely downed to become permanently undraggable -- which defeats the
+-- mechanic's entire purpose against an incapacitated player.
+--
+-- WARNING, NOT ASSERT -- deliberately a WEAKER guard than
+-- server/inventory.lua's accessScope assert or server/main.lua's
+-- nudgeRequiresUnlocked/server/search.lua's own onResourceStart asserts.
+-- Those asserts exist because their misconfigured value provided NO real
+-- access control at all (a total defeat). This default is different in
+-- kind, not just degree: it is a documented, already-disclosed
+-- "best-effort" default (the SAME framing config.lua already gives
+-- WantedStatusCheckOverride's identical nil-default case), it still
+-- functions in the mechanic's intended direction for the ordinary,
+-- non-adversarial case, and Config.Features.PropDragging itself defaults to
+-- `false` (this codebase's "ship disabled until acceptance criteria are
+-- fully met" convention) -- hard-failing resource start over a
+-- disabled-by-default, already-disclosed best-effort gap would block every
+-- server that flips PropDragging on without also wiring a real override on
+-- day one, for a risk this file already discloses rather than hides. A
+-- loud, actionable, printed warning -- impossible to miss in server console
+-- output, unlike a comment only read by whoever opens this file -- is the
+-- proportionate response here, not a hard stop.
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    if Config.Features.PropDragging and Config.Combat.PropDragging.IsPlayerDownedOverride == nil then
+        print('[qbx_k9unit] WARNING: Config.Features.PropDragging is enabled but ' ..
+            'Config.Combat.PropDragging.IsPlayerDownedOverride is nil. The default fallback ' ..
+            '(metadata.isdead/.inlaststand) is typically a CLIENT-self-reported flag on QB/qbx ' ..
+            'ambulance integrations, not a server-verified state machine -- a player can spoof it ' ..
+            'true to always qualify as a drag target, or spoof it false to become permanently ' ..
+            'undraggable while genuinely downed. Supply a real IsPlayerDownedOverride tied to your ' ..
+            "own ambulance/laststand resource for a server-authoritative check (see config.lua's " ..
+            'own comment on this field).')
+    end
+end)
 
 --- Best-effort, non-restraint-implying rejection copy (guardrail 4) —
 --- shared between BiteAndHold, NonLethalTakedown, and PropDragging since
@@ -845,7 +897,7 @@ end
 --- @param now number
 local function SampleCompliance(targetNetId, hold, now)
     local targetPed = ResolveNetworkEntity(targetNetId, 1)
-    if not targetPed then return end -- gone/despawned; the maintenance loop's own expiry/disconnect cleanup handles teardown, not this function
+    if not targetPed then return end -- DEFENSE IN DEPTH ONLY, should not normally trigger: the maintenance thread's own resolvability check (RED-TEAM FINDING, see its own comment) now ends the hold BEFORE this function is ever called with an unresolvable target — kept here in case a future call site ever calls this function directly without going through that check first
 
     local cfg = Config.Combat.NonComplianceDetection
     local compliance = hold.compliance
@@ -924,7 +976,7 @@ end
 --- @return boolean exceeded
 local function DragExceedsMaxDistance(hold, targetNetId)
     local targetPed = ResolveNetworkEntity(targetNetId, 1)
-    if not targetPed then return false end -- despawned; expiry/disconnect cleanup handles it, not this check
+    if not targetPed then return false end -- DEFENSE IN DEPTH ONLY, should not normally trigger: same "maintenance thread's own resolvability check already ends this hold first" reasoning as SampleCompliance's own identical guard above
 
     local k9Ped = GetPlayerPed(hold.holderSrc)
     if k9Ped == 0 then return false end -- holder already disconnected; the playerDropped handler tears this down independently
@@ -967,6 +1019,40 @@ CreateThread(function()
                 local ok, err = pcall(EndHold, targetNetId, 'timeout')
                 if not ok then
                     print(('[qbx_k9unit] combat EndHold(timeout) errored for netId %s: %s'):format(targetNetId, tostring(err)))
+                end
+            elseif not ResolveNetworkEntity(targetNetId, 1) then
+                -- RED-TEAM FINDING (PropDragging), generalized to every
+                -- effectType: DragExceedsMaxDistance/SampleCompliance below
+                -- both used to bail out silently the moment their own
+                -- internal ResolveNetworkEntity(targetNetId, 1) call
+                -- returned nil, on the stated assumption that "the
+                -- maintenance loop's own expiry/disconnect cleanup handles
+                -- teardown" — but the ONLY disconnect cleanup that exists
+                -- (the playerDropped handler below) fires on a full
+                -- disconnect, never on ped destruction/recreation without
+                -- one. If a held/dragged player's ped is destroyed and
+                -- replaced with a new network id without disconnecting
+                -- (e.g. some ambulance/revive flows), the OLD targetNetId
+                -- becomes permanently unresolvable, silently skipped by
+                -- both checks below forever — leaving nothing but the hard
+                -- `hold.expiresAt` timeout above to ever clear it, up to
+                -- Config.Combat.BiteAndHold.maxDurationMs/
+                -- Config.Combat.PropDragging.maxDragDurationMs later. This
+                -- check catches that gap directly, for every effectType at
+                -- once (bite/takedown/drag, player or NPC target alike) —
+                -- a target that has become permanently unresolvable is
+                -- ended immediately rather than left to the hard timeout,
+                -- the same class of fix as this file's own
+                -- reportBiteHoldTargetDied handler above (a target that
+                -- "went away without disconnecting"), applied generically
+                -- here instead of only for the client-reported-death case.
+                -- Server-side ResolveNetworkEntity reflects real global
+                -- entity existence (not "streamed to a particular client"),
+                -- so a nil result for an ALREADY-successfully-resolved
+                -- hold's target is a strong, not a transient, signal.
+                local ok, err = pcall(EndHold, targetNetId, 'target_unresolvable')
+                if not ok then
+                    print(('[qbx_k9unit] combat EndHold(target_unresolvable) errored for netId %s: %s'):format(targetNetId, tostring(err)))
                 end
             elseif hold.effectType == 'drag' and DragExceedsMaxDistance(hold, targetNetId) then
                 local ok, err = pcall(EndHold, targetNetId, 'max_distance_exceeded')
@@ -1061,6 +1147,62 @@ RegisterNetEvent('qbx_k9unit:server:releaseBiteHold', function()
     if not hold or hold.effectType ~= 'bite' or hold.holderSrc ~= src then return end
 
     EndHold(targetNetId, 'released')
+end)
+
+--- QA-fix completion: client/combat.lua's bite-hold TARGET death-detection
+--- thread reports its own death here so the HOLDER's side gets freed
+--- properly. Without this, the holder's MyEngagedTargetNetId/
+--- IsBiteHoldEngaged() state (client/combat.lua) only ever clears on a
+--- 'qbx_k9unit:client:biteHoldEnded' relay, which EndHold below only ever
+--- sends when THIS file ends the hold — until now, nothing did that for a
+--- target who died mid-hold, so the holder stayed stuck on the
+--- already_engaged lockout for up to Config.Combat.BiteAndHold.maxDurationMs
+--- (15s default). client/combat.lua's own death-detection thread already
+--- clears the TARGET's own local restriction on death; this closes the
+--- remaining HOLDER-side half of that same finding.
+---
+--- TRUST BOUNDARY, not a convenience event: `source` here is the CLAIMED
+--- TARGET reporting its own death, and a modified client could fire this
+--- unprompted at any time. Two independent checks gate it, not one:
+---   1. `source` must currently be the (player) TARGET of an active 'bite'
+---      hold — reverse-scans ActiveHolds by hold.targetSrc rather than
+---      trusting a client-supplied targetNetId, the same "never trust a
+---      client-claimed id, only ever act on server-held state" posture
+---      every other handler in this file already applies. A source that
+---      isn't genuinely the target of anything is a silent no-op.
+---   2. The claim itself ("I died") is independently RE-VERIFIED against
+---      this player's own live server-side ped via IsEntityDead — a
+---      DELIBERATE choice to verify, not the "can't verify, so don't
+---      pretend to" call this codebase makes elsewhere for tracking's
+---      forged-trail risk: unlike that case, IsEntityDead(targetPed) is
+---      not a new or unverified native here — it is the SAME native
+---      ValidateCombatRequest above already calls, server-side, on the
+---      same kind of ped, for the identical "requireAlive" fact, so a
+---      real, already-trusted verification mechanism exists and costs
+---      nothing extra to use here too. A stale/false claim (target not
+---      actually reported dead server-side) is rejected, not honored.
+--- Even a successful lie has a low ceiling regardless: the worst outcome of
+--- a false report is ending a hold `source` is already the target of —
+--- something that player could otherwise only end by genuinely dying or
+--- waiting out the timer, not a capability escalation against anyone else.
+RegisterNetEvent('qbx_k9unit:server:reportBiteHoldTargetDied', function()
+    local src = source
+
+    local targetNetId = nil
+    for netId, hold in pairs(ActiveHolds) do
+        if hold.effectType == 'bite' and hold.isPlayerTarget and hold.targetSrc == src then
+            targetNetId = netId
+            break
+        end
+    end
+    if not targetNetId then return end -- src is not the target of any active bite hold -- ignore
+
+    local targetPed = GetPlayerPed(src)
+    if targetPed == 0 or not IsEntityDead(targetPed) then
+        return -- claim does not match this player's own live server-side state -- ignore, never trust the claim alone
+    end
+
+    EndHold(targetNetId, 'target_died')
 end)
 
 --[[ ================= NON-LETHAL TAKEDOWN ================= ]]

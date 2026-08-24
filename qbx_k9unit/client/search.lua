@@ -321,6 +321,14 @@ exports.ox_target:addGlobalPlayer({
 -- 'whine' / 'aggressive_bark') — deliberately never the requester's private
 -- totalWeight/contrabandFound (those never leave the callback above).
 RegisterNetEvent('qbx_k9unit:client:playContrabandAlert', function(netId, alertTier)
+    -- SOURCE-ORIGIN GUARD (coder-security pass — see client/combat.lua's
+    -- own "SOURCE-ORIGIN GUARD" header block for the full sourced
+    -- writeup/confidence grading, not re-derived here). Cosmetic-only
+    -- payoff (a forged call just plays a sound naming an arbitrary
+    -- alertTier string at an arbitrary netId), applied for resource-wide
+    -- consistency with every other `qbx_k9unit:client:*` handler, not
+    -- because this one carries real exploit severity on its own.
+    if source ~= 65535 then return end
     -- Reuses the same placeholder sound-bank plumbing client/main.lua's
     -- playBark handler already establishes (SPEC.md §7: bark/alert audio
     -- needs bundled asset files that don't exist in this resource yet;

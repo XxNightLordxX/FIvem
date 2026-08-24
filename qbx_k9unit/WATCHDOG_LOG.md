@@ -757,3 +757,297 @@ other three unsynced commits (`cb8f240`, `0020c2b`, `afde4f5`).
 - FearStress residual: one sustained forged reporter is still
   indistinguishable server-side from one real continuous shooter
   (disclosed in-code at `0020c2b`, deliberately not claimed closed).
+
+---
+
+## 2026-08-24 — Pass #7 (whole-project vantage; run as a subagent, NOT the
+top-level session — see Platform note below)
+
+**Platform note, upfront:** this pass's tool list has no `ListAgents`/Agent
+tool at all (checked at the start, per this role's standing instruction —
+it is simply absent, not merely failing), confirming this instance is
+running as a subagent, not the top-level session Passes #5/#6 ran as.
+Nothing found below could be dispatched directly; everything is reported
+for the invoking session to act on. Scope for this pass was also
+explicitly narrowed to `qbx_k9unit/WATCHDOG_LOG.md` only — no other file
+was touched, including the several real findings below that would
+normally get a direct fix.
+
+**Window:** 5 commits since Pass #6's marker (`afde4f5`) —
+`3536b1e` (Phase 3 combat radial entry point), `575c1b7` (Phase 5 research:
+ProximityAudioFX/PropAttachments/FetchMechanic, notes only), `3b98dca`
+(REFACTOR_ROADMAP Revision 5: whole-codebase netId/player-resolver audit),
+`52a58a1` (K9 partnership registry, recovered from a mid-task agent death),
+`94fbc4e` (PropDragging implementation + four combat defect fixes). **The
+tree was not holding still while this pass ran**: `git status` showed
+`client/combat.lua`, `client/radial.lua`, `server/combat.lua`,
+`server/entities.lua`, `server/inventory.lua`, `server/search.lua` all
+modified-uncommitted throughout, and the diff sizes grew between separate
+checks within this same pass (e.g. `server/combat.lua`'s uncommitted diff
+went from 48 to 158 changed lines partway through). Per this project's
+established convention (Pass #3/#4 did the same), that live work was
+**read for context where it directly bore on a finding below, but not
+deep-reviewed** — everything in this entry that cites the working tree
+rather than `HEAD` says so explicitly; everything else was read via
+`git show 94fbc4e:<path>` for stability.
+
+### Health baseline
+
+- `luac5.4 -p` at `HEAD` (`94fbc4e`): all 30 `.lua` files parse, no errors.
+- `luac5.4 -p` on the live, uncommitted working tree: also clean (no
+  syntax errors introduced by the in-flight work as of the last check).
+- `luacheck` at `HEAD` (root `.luacheckrc`, `fxmanifest.lua` excluded per
+  its own established scope): **0 warnings / 0 errors across 29 files.**
+- 2 new `.lua` files since Pass #6: `client/partnership.lua`,
+  `server/partnership.lua` (both from `52a58a1`), accounting for the
+  28→30 file count growth.
+
+### Regression spot-checks — all five INTACT (re-verified at `HEAD`, not assumed)
+
+- `AgilityBasicJump` still read: `client/movement.lua:936`
+  (`if not Config.Features.AgilityBasicJump then`).
+- Role-aware `LeashPairs[x] = { partner, isK9 }` still in place:
+  `server/main.lua:806-807`, still the only mutation site (`doDetachLeash`
+  region, lines 822-827).
+- `RevokeCertificationOffline` still calls `RefreshCertificationCache` —
+  confirmed in-body, not just in a comment: the function starts at
+  `server/certifications.lua:670` and the real call is at line 746, inside
+  its own body (read the full function, not just grepped both symbols
+  independently).
+- `client/vehicle.lua`'s `onResourceStop` cleanup still registered
+  (line 197).
+- `client/radial.lua`'s `lib.registerRadial` (line 521) still precedes
+  `lib.addRadialItem` (line 531) at `HEAD`. **Note:** the working tree's
+  uncommitted diff adds ~50 more lines to this file (a new "Drag /
+  Release" item, see below) — not yet re-verified for the split's
+  ordering once that lands, since it's still moving.
+
+### Item 1 — flag-off safety sweep (the priority item this pass)
+
+**Method:** grepped every `client/*.lua` for `RegisterNetEvent(`, then for
+each one checked whether the handler body (or an enclosing `if
+Config.Features.X then` block wrapping the whole file section) re-gates on
+the owning flag, rather than trusting that the flag being `false`
+server-side means the server simply never sends the trigger. A locally
+forged `TriggerEvent` reaches these handlers regardless of what the server
+would have done, so a handler that applies an effect unconditionally
+breaks the "false means inert" invariant even if no legitimate code path
+ever fires it with the flag off.
+
+**`client/combat.lua`'s fix (this session, prior to this pass, `94fbc4e`)
+verified solid.** All fourteen `RegisterNetEvent` handlers are correctly
+partitioned into three `if Config.Features.X then ... end` blocks
+(`BiteAndHold` lines 15-122, `NonLethalTakedown` 124-213, `PropDragging`
+215-295 in the working copy) — no shared OR, no handler outside its own
+mechanic's gate. `onResourceStop` (line 1060) and the `pcall(EndHold, ...)`
+guard the commit message describes are both present (the latter in
+`server/combat.lua:967/972`, correctly server-side, not client).
+
+**Three further, previously-unflagged instances of the exact same defect
+class found this pass, all still open at `HEAD`:**
+
+1. **`client/kennel.lua`'s `deployKennelAt`/`removeKennel` handlers
+   (lines 130, 188) have no `Config.Features.DeployableKennel` check at
+   all.** The flag is only checked in `RequestDeployKennel()` (line 100,
+   the player-initiated request path) and in a separate `if
+   Config.Features.DeployableKennel then ... end` block (lines 244-265,
+   the ox_target/UI registration) — neither wraps these two
+   server-issued receivers. A forged `deployKennelAt(x, y, z)` spawns a
+   real networked prop at attacker-chosen coordinates with the feature off
+   (only a `type()` check on the three arguments); a forged
+   `removeKennel(netId)` calls `DeleteEntity` on **any** currently-streamed
+   networked entity the attacker supplies a valid netId for, not
+   necessarily a kennel — the more serious of the two, since it's an
+   arbitrary-entity-deletion primitive independent of `DeployableKennel`'s
+   state.
+2. **`client/medkit.lua`'s `applyMedkitHeal` handler (line 129) has no
+   `Config.Features.K9Medkit` check.** The file's only reference to that
+   flag (line 89) is inside the ox_target `canInteract` predicate for the
+   *request* path. The handler itself does `SetEntityHealth(PlayerPedId(),
+   newHealth)` on any numeric argument — an unbounded, cooldown-free,
+   item-free self-heal reachable with `K9Medkit = false`.
+3. **`client/progression.lua`'s `xpTierChanged` handler (line 138) has no
+   `Config.Features.XPProgression` check anywhere in the file** (grepped
+   the whole file for the flag — the only hit is a header comment).
+   `ApplyXPTierMoveRateEffect()` sets `K9MoveRateModifiers.xpTier` from the
+   forged payload's `speedMultiplier` unconditionally and calls
+   `RecomputeK9MoveRate()`. Impact is bounded but real: `movement.lua`'s
+   composer only applies a non-1.0 override while `IsOwnModelK9()` is true
+   and clamps the product to `[0.1, 2.0]`, so this is a self-only, up-to-
+   2x speed modifier reachable with `XPProgression = false`, not an
+   other-player-affecting exploit.
+
+**Checked and confirmed clean (same pattern, no defect):**
+`client/partnership.lua` gates its entire back half behind a single
+file-scope `if not Config.Features.HandlerPartnership then return end`
+(line 202) *before* any `RegisterNetEvent` call, so the handlers
+(`partnerUpRequest`, `partnershipEstablished`, `partnershipEnded`) are
+never even registered when the flag is off — the correct shape.
+`client/wellbeing.lua`'s `wellbeingUpdate` handler (line 167) is not
+itself gated, but the effect-application function it calls,
+`ApplyMoveRateModifiers()`, individually gates each of its four move-rate
+contributions on its own owning flag (`Config.Features.FatigueSystem`
+etc., lines 98/106/115/143/153) — a disabled stat's modifier is simply
+never touched, so this is a deliberately layered defense, not a gap.
+`client/hud.lua` gates its entire tail (including its poll thread) behind
+a single early `if not Config.Features.HealthStaminaHUD then return end`
+(line 142) — same correct shape as partnership.lua.
+
+**Two low-severity instances noted for completeness, not fixed or
+escalated:** `client/main.lua`'s `playBark` handler is ungated, but
+`BasicBarkSounds` is a Phase-1 base feature that defaults `true` (not one
+of the "ships false" flags this invariant is about) — forging it just
+plays a sound, by design always reachable. `client/search.lua`'s
+`playContrabandAlert` handler (line 323) is ungated against
+`Config.Features.ContrabandAlerts = false`, but its only effect is playing
+a sound on a resolved nearby entity — cosmetic, no gameplay state change,
+much lower priority than the three above.
+
+**Server-side spot check (the actual security boundary, separate
+question):** every server-side `RegisterNetEvent`/`lib.callback.register`
+handler checked this pass for a newly-landed feature (`server/kennel.lua`'s
+`requestDeployKennel`, `server/medkit.lua`'s `useK9Medkit`,
+`server/wellbeing.lua`'s `petK9`, `server/partnership.lua`'s
+`requestPartnerUp` via `CheckPartnershipEligibility`, `server/combat.lua`'s
+`requestBiteHold` via `ValidateCombatRequest`) does correctly check its own
+`Config.Features.X` flag before honoring a client-initiated request. The
+gap above is specifically about client-side receivers of *server-issued*
+instructions, not server-side trust of client requests.
+
+**Recommendation:** dispatch all three findings above (kennel.lua,
+medkit.lua, progression.lua) to whichever agent is doing this session's
+security sweep, in that priority order (arbitrary entity deletion >
+unbounded self-heal > bounded self-speed-boost). Same shape, same fix each
+time: add `if not Config.Features.X then return end` as the first line of
+each handler body.
+
+### Item 2 — documentation-vs-reality drift: method and hit rate
+
+**Method:** sampled load-bearing status claims specifically about the
+features this window's commits touched (Phase 3 combat entry point,
+partnership registry, PropDragging), rather than re-sampling old claims
+already verified clean in Passes #5/#6.
+
+**4 claims sampled, 2 confirmed accurate, 2 confirmed stale:**
+
+- **HIT.** `server/partnership.lua`'s header (as corrected in `94fbc4e`)
+  claims `server/certifications.lua` calls `ForceBreakPartnershipForCitizenId`
+  from "three places... [the third with] TWO branches" (RevokeCertification,
+  RevokeCertificationOffline, and OnJobUpdate's two branches = 4 total call
+  sites). Grepped all four: lines 644, 788, 837, 891 — all real, all
+  present. Accurate.
+- **HIT.** `REFACTOR_ROADMAP.md`'s Revision 5 (`3b98dca`) claim of raw
+  `NetworkGetEntityFromNetworkId` copies at "`server/kennel.lua` (3),
+  `client/kennel.lua` (2)... `server/inventory.lua` (1)" — counted all
+  three at `HEAD`: 3, 2, 1 respectively. Exact match.
+- **MISS.** The same Revision 5 claim's fourth count, "`client/combat.lua`
+  (5)," is now stale: **actual count at `HEAD` is 9**, not 5. Cause
+  identified, not just observed: `3b98dca` (the roadmap audit) landed
+  *before* `94fbc4e` (PropDragging), and PropDragging's drag-handling code
+  added 4 more inline `NetworkGetEntityFromNetworkId` + `DoesEntityExist`
+  guards (all individually safe — each does include the existence check;
+  this is a duplication/maintainability gap, not a security one) without
+  adopting the shared resolver. A doc that was correct when written went
+  stale within the same review window because unrelated work landed after
+  the audit but before this pass — the exact "some of what you're
+  checking isn't about code changes" case this role exists to catch.
+- **MISS, larger.** `SPEC.md`'s top-of-file Status paragraph (last
+  rewritten `885c6ea`, confirmed accurate as of Pass #6) is now wrong in
+  three places, and **so are `README.md` and `CHANGELOG.md`, identically**
+  — none of the three docs files were touched by any of this window's 5
+  commits. All three still say: Phase 3 combat "has no in-game entry
+  point" / "is still not reachable by any player" (false since `3536b1e`);
+  the partnership registry / `server/partnership.lua` "does not exist,
+  only its schema does" (false since `52a58a1`); and (`SPEC.md`/README.md
+  only) "`PropDragging` has no code at all" (false since `94fbc4e`). This
+  is plain staleness, not a fabricated-control case like `CHANGELOG.md`'s
+  `accessScope` claim in Pass #6, but it's the same failure mode at scale:
+  a server owner or the next implementing agent reading any of the three
+  primary docs right now would be told the wrong thing about three
+  separate, currently-shipped-behind-a-flag features.
+
+**Also re-confirmed still accurate, not re-litigated:**
+`Config.K9Inventory.accessScope`'s hard `'department'` assert
+(`server/inventory.lua:293-300`, Pass #6's fix) is untouched by this
+window's commits and the live in-flight diff to that file (which touches a
+different section, lines 208+, migrating netId-resolver duplication) does
+not go near it.
+
+### Item 3 — per-feature status: implemented / reachable / enabled / reviewed
+
+| Feature | Implemented | Reachable in-game | Enabled (flag) | Reviewed |
+|---|---|---|---|---|
+| BiteAndHold | Yes | Yes (`client/radial.lua`, `3536b1e`) | No (false) | Yes (2 passes + this one) |
+| NonLethalTakedown | Yes | Yes (same radial item set) | No (false) | Yes |
+| PropDragging | Yes (`94fbc4e`) | **No** — `RequestDrag`/`ReleaseDrag`/`IsDragEngaged` have zero callers anywhere at `HEAD` (grepped) | No (false) | Partial (author-disclosed gaps only) |
+| HandlerPartnership | Yes (`52a58a1`) | Yes — `exports.ox_target:addGlobalPlayer` "Partner Up" option | No (false) | Partial (recovered mid-task-death work, not independently reviewed this pass beyond the header-claim spot check above) |
+| HandlerDownDefense | **No** — flag and comments only, no function bodies anywhere | No | No (false) | N/A |
+| Recall | **No** — same, flag/comments only | No | No (false) | N/A |
+| AgilityAdvanced | Yes (prior window) | Yes | No (false) | Yes (prior passes) |
+
+**In-flight, not yet landed as of this pass's last check:** the working
+tree's uncommitted `client/radial.lua` diff adds a "Drag / Release" item
+mirroring Bite & Hold's context-sensitive pattern — **this closes the
+PropDragging reachability gap above**, found already being fixed while
+writing this entry, not left open. Per this project's convention (Pass #4
+did the same for a different in-flight fix), not counted as done above
+since it wasn't committed at the time of the last check, but flagged here
+so the next pass doesn't rediscover it as new. The same uncommitted batch
+also migrates `server/kennel.lua`, `server/inventory.lua`, and
+`server/combat.lua`'s server-side netId/player-resolver duplication onto
+`server/entities.lua`'s shared globals (`ResolveNetworkEntity`,
+a new `ResolveConnectedPlayerFromPed` — REFACTOR_ROADMAP items 2 and 2b),
+and adds a `reportBiteHoldTargetDied` trust-boundary handler plus a
+disclosed red-team note about `PropDragging`'s `IsPlayerDownedOverride`
+metadata trust assumption. None of this was deep-reviewed here (heavy
+churn mid-pass, per this entry's own scope note above) — worth a first
+real look once it commits.
+
+### Verdict
+
+No regressions in the five standing checks. Full syntax/lint baseline
+clean at `HEAD`. Three new, real instances of the exact flag-off-safety
+defect class this session already fixed once in `client/combat.lua` — none
+of them registered/reachable enough to be under live exploit today in the
+sense that none has an enabled flag, but all three are reachable via a
+locally forged event *regardless* of flag state, which is precisely the
+invariant this resource claims to hold everywhere. Two documentation
+findings: one roadmap count gone stale mid-window from unrelated work
+landing after the audit (low stakes, easy fix), and one bigger one — all
+three of `SPEC.md`/`README.md`/`CHANGELOG.md` now describe three
+already-shipped-behind-a-flag features as either unreachable or
+unimplemented, identically and simultaneously, because none of the five
+commits in this window touched any doc file.
+
+### Prioritized recommendation for the invoking session
+
+1. **Dispatch the three flag-off-safety findings** (`client/kennel.lua`
+   deploy/remove, `client/medkit.lua` applyMedkitHeal,
+   `client/progression.lua` xpTierChanged) to a security-focused pass —
+   same one-line fix each, cheap, and this is the second time this exact
+   defect class has been found in one session, which suggests a repo-wide
+   convention check (e.g. a luacheck-style grep-based check: "every
+   `client/*.lua` `RegisterNetEvent` handler must reference its owning
+   `Config.Features` flag somewhere in its own body or an enclosing
+   file-scope guard") would be worth adding once the current parallel
+   batch settles, so a 13th feature doesn't reintroduce it a third time.
+2. **Let the in-flight `server/{entities,kennel,inventory,combat}.lua` +
+   `client/{combat,radial}.lua` batch land, then do a first real review of
+   it** — it's already fixing the PropDragging-reachability gap and the
+   REFACTOR_ROADMAP item 2/2b duplication this pass flagged, so re-flagging
+   either now would be redundant; the value is in confirming it landed
+   clean once committed, not in re-deriving what it's already fixing.
+3. **Sync `SPEC.md`, `README.md`, and `CHANGELOG.md` in one pass** once
+   the in-flight batch above lands too (so the sync captures both this
+   window's changes and that batch's, rather than needing two doc passes
+   back to back) — all three need the same three corrections (combat entry
+   point, partnership registry existence, PropDragging code existence/
+   reachability), so this is one dispatch, not three.
+4. **Build HandlerDownDefense and/or Recall** now that their shared
+   blocker (the partnership registry) exists — this is the next real
+   feature-completion step for Phase 3, distinct from the safety/docs
+   cleanup above, and is genuinely unblocked for the first time this
+   session.
+5. Carried forward unchanged, no new information this window: bark-audio
+   placeholder asset gap (two scoped candidate paths from Pass #6, still
+   neither attempted); `fxmanifest.lua` still pins no dependency versions.

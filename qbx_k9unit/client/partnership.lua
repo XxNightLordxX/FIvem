@@ -336,6 +336,20 @@ end
 --- Mirrors client/movement.lua's leashAttachRequest handler exactly.
 --- @param fromServerId number
 RegisterNetEvent('qbx_k9unit:client:partnerUpRequest', function(fromServerId)
+    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
+    -- "SOURCE-ORIGIN GUARD" header block and
+    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- not re-derived here). Without this, a forged local
+    -- `TriggerEvent('qbx_k9unit:client:partnerUpRequest', <any server id>)`
+    -- would pop this client's real accept/decline prompt with zero server
+    -- contact -- annoying/spoofable UX even though accepting still routes
+    -- through server/partnership.lua's own re-validated
+    -- CheckPartnershipEligibility. Confidence: MEDIUM-HIGH, the official
+    -- documented pattern for distinguishing a genuine server-sent event
+    -- from a local self-trigger, not independently verified in-engine
+    -- this pass.
+    if source ~= 65535 then return end
+
     local fromPlayer = GetPlayerFromServerId(fromServerId)
     local fromName = (fromPlayer ~= -1 and GetPlayerName(fromPlayer)) or ('Officer #' .. fromServerId)
 
@@ -363,6 +377,22 @@ end)
 --- @param partnerServerId number
 --- @param isK9 boolean -- true only on the client whose OWN character is the K9-role party
 RegisterNetEvent('qbx_k9unit:client:partnershipEstablished', function(partnerServerId, isK9)
+    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
+    -- "SOURCE-ORIGIN GUARD" header block and
+    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- not re-derived here). Without this, a forged local
+    -- `TriggerEvent('qbx_k9unit:client:partnershipEstablished', <any
+    -- server id>, true)` would make this client BELIEVE it is partnered
+    -- with an arbitrary player, with zero server contact -- no
+    -- server-side capability is granted by this alone today, but
+    -- PartnershipState is becoming a capability input for
+    -- HandlerDownDefense/Recall, which makes closing this now rather than
+    -- after those land the right order. Confidence: MEDIUM-HIGH, the
+    -- official documented pattern for distinguishing a genuine
+    -- server-sent event from a local self-trigger, not independently
+    -- verified in-engine this pass.
+    if source ~= 65535 then return end
+
     PartnershipState = { partnerServerId = partnerServerId, isK9 = isK9 }
     lib.notify({
         title = 'K9 Unit',
@@ -381,6 +411,21 @@ end)
 --- leashDetached.
 --- @param reason string -- e.g. 'broken' (self-initiated) or a plain reason like 'certification_revoked'/'department_changed' (server-triggered); never the raw 'system:<reason>' DB sentinel, which stays server-internal
 RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
+    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
+    -- "SOURCE-ORIGIN GUARD" header block and
+    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- not re-derived here). Without this, a forged local
+    -- `TriggerEvent('qbx_k9unit:client:partnershipEnded', 'anything')`
+    -- would desync this client's PartnershipState from the server's real
+    -- state with zero server contact (e.g. a player faking their own
+    -- teardown to dodge a future partnership-gated obligation, or an
+    -- attacker resetting a target's cached state ahead of
+    -- HandlerDownDefense/Recall consuming it). Confidence: MEDIUM-HIGH,
+    -- the official documented pattern for distinguishing a genuine
+    -- server-sent event from a local self-trigger, not independently
+    -- verified in-engine this pass.
+    if source ~= 65535 then return end
+
     PartnershipState = nil
 
     local description = 'Partnership ended.'

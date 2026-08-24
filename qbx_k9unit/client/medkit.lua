@@ -43,41 +43,23 @@
     session, not assumed from memory.
 
     FILE-TO-FILE CONTRACT:
-    - Builds its own local `K9ModelHashes` set from the shared `Config.Peds`
-      table, mirroring server/certifications.lua's own `K9ModelHashes`
-      precomputation — deliberately NOT calling any server-global
-      (`IsConfiguredK9Model` is server-only) since this is a client-side
-      display filter only, not the real check (server/medkit.lua re-derives
-      the target's real model server-side regardless).
+    - Calls client/main.lua's `IsEntityModelK9(entity)` (REFACTOR_ROADMAP.md
+      item 3) as its client-side display filter — deliberately NOT calling
+      any server-global (`IsConfiguredK9Model` is server-only), since
+      server/medkit.lua re-derives the target's real model server-side
+      regardless. Used to build its own local `K9ModelHashes` set from
+      `Config.Peds` (deleted this pass — see IsEntityModelK9's own doc
+      comment in client/main.lua for the full "5 independent copies"
+      finding this consolidation closes).
+    - Calls client/main.lua's `ResolvePlayerServerIdFromPed(entity)`
+      (REFACTOR_ROADMAP.md item 2b) in the "Treat K9" onSelect handler
+      below — used to be a local copy of this file's own; extracted once
+      client/wellbeing.lua's "Pet K9"/"Feed K9" handlers turned out to be
+      hand-copying the identical function.
     - Triggers `qbx_k9unit:server:useK9Medkit` (server/medkit.lua) and
       handles `qbx_k9unit:client:applyMedkitHeal` (server/medkit.lua) — see
       that file's header for the full event/callback contract.
 ]]
-
-local K9ModelHashes = {}
-for _, pedEntry in ipairs(Config.Peds) do
-    K9ModelHashes[GetHashKey(pedEntry.model)] = true
-end
-
---- Resolves a targeted ped entity to the server id of the player it
---- belongs to, or nil if it isn't (currently) a real player's own ped.
---- CLIENT-SIDE ONLY — NetworkGetPlayerIndexFromPed + GetPlayerServerId is
---- the standard, well-established client-side combo for this.
---- server/search.lua's own header flags this SAME native combo as
---- unverified SERVER-side only; that caveat does not apply to this
---- client-side use, and server/medkit.lua never calls this combo itself —
---- see its header for why.
---- @param entity number
---- @return number? targetServerId
-local function ResolvePlayerServerIdFromPed(entity)
-    local playerIndex = NetworkGetPlayerIndexFromPed(entity)
-    if playerIndex == -1 then return nil end
-
-    local targetServerId = GetPlayerServerId(playerIndex)
-    if not targetServerId or targetServerId == 0 then return nil end
-
-    return targetServerId
-end
 
 exports.ox_target:addGlobalPlayer({
     {
@@ -87,7 +69,7 @@ exports.ox_target:addGlobalPlayer({
         distance = Config.K9Medkit.range,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.K9Medkit then return false end
-            return K9ModelHashes[GetEntityModel(entity)] == true
+            return IsEntityModelK9(entity)
         end,
         onSelect = function(data)
             local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
@@ -127,6 +109,41 @@ exports.ox_target:addGlobalPlayer({
 --- server-side — this handler never adds/interprets a delta of its own.
 --- @param newHealth number
 RegisterNetEvent('qbx_k9unit:client:applyMedkitHeal', function(newHealth)
+    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
+    -- "SOURCE-ORIGIN GUARD" header block and
+    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- not re-derived here). Without this, a forged local
+    -- `TriggerEvent('qbx_k9unit:client:applyMedkitHeal', <anything>)`
+    -- would reach the exact same SetEntityHealth call a genuine server
+    -- push does, with zero server contact. Confidence: MEDIUM-HIGH, the
+    -- official documented pattern for distinguishing a genuine
+    -- server-sent event from a local self-trigger, not independently
+    -- verified in-engine this pass.
+    if source ~= 65535 then return end
+
+    -- FEATURE GATE -- this handler was previously registered
+    -- unconditionally regardless of Config.Features.K9Medkit (the only
+    -- prior reference to that flag in this file was inside the ox_target
+    -- `canInteract` predicate above, which only hides the REQUEST side --
+    -- it never reached this receiver). Without this, a forged event
+    -- reached a live, uncapped, cooldown-free SetEntityHealth self-heal
+    -- even with K9Medkit = false. Matches client/hud.lua / client/vision.lua
+    -- / client/combat.lua's "gate at registration" precedent.
+    if not Config.Features.K9Medkit then return end
+
     if type(newHealth) ~= 'number' then return end
-    SetEntityHealth(PlayerPedId(), newHealth)
+
+    -- RANGE CHECK (coder-security, this pass) -- `newHealth` was
+    -- previously type-checked only, never range-checked. server/medkit.lua
+    -- always computes it inside [currentHealth, GetEntityMaxHealth(ped)]
+    -- (see that file's HandleUseK9Medkit, step 11), so this clamp is a
+    -- true no-op for a genuine server push -- but is the ONLY thing that
+    -- would have stopped a forged event carrying an arbitrary numeric
+    -- newHealth (e.g. 99999) from being applied verbatim as a free,
+    -- uncapped self-heal, independently of whether the origin guard above
+    -- holds. Complementary, not redundant, with that guard.
+    local ped = PlayerPedId()
+    newHealth = math.max(0, math.min(newHealth, GetEntityMaxHealth(ped)))
+
+    SetEntityHealth(ped, newHealth)
 end)

@@ -42,6 +42,12 @@
     - THIS FILE calls client/main.lua's CanShowK9UI() and DenyK9UIAccess()
       before acting, same as every other gated client action in this
       resource.
+    - THIS FILE calls client/main.lua's ResolveNetworkEntity(netId)
+      (REFACTOR_ROADMAP.md item 2) in the removeKennel handler and the
+      onResourceStop cleanup below — do not re-implement the
+      NetworkDoesEntityExistWithNetworkId/NetworkGetEntityFromNetworkId/
+      DoesEntityExist sequence here; both were 2 of the 11 copies the
+      Revision 5 whole-codebase audit found still bypassing this helper.
     - THIS FILE does NOT touch client/vehicle.lua's or
       client/movement.lua's state — kennels are a wholly independent
       mechanic.
@@ -56,6 +62,17 @@
 -- resource (e.g. LEASH_REQUEST_TTL_MS, PendingKennelPlacements' own TTL in
 -- server/kennel.lua).
 local REQUEST_MODEL_TIMEOUT_MS = 5000
+
+-- Recognized kennel prop model hashes (primary + fallback, config.lua's
+-- Config.DeployableKennel) -- built once at file load, used ONLY by the
+-- removeKennel handler's defense-in-depth model check below (see that
+-- handler's own comment for why). Not the same table client/main.lua's
+-- K9ModelHashes covers (that one is PED models; this is the kennel OBJECT
+-- prop), so it is not a duplicate of an existing global.
+local KennelPropModelHashes = {
+    [GetHashKey(Config.DeployableKennel.propModel)] = true,
+    [GetHashKey(Config.DeployableKennel.fallbackPropModel)] = true,
+}
 
 -- Currently-active kennel THIS client deployed, if any (nil otherwise).
 -- Local-only, never read from another file. This is a CLIENT-SIDE MIRROR
@@ -128,6 +145,26 @@ end, false)
 --- @param y number
 --- @param z number
 RegisterNetEvent('qbx_k9unit:client:deployKennelAt', function(x, y, z)
+    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
+    -- "SOURCE-ORIGIN GUARD" header block and
+    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- not re-derived here). 65535 is FiveM's documented client-side
+    -- sentinel for "this event genuinely came from the server"
+    -- (citizenfx/fivem-docs, "Secure your events"). Without this, a
+    -- forged local `TriggerEvent('qbx_k9unit:client:deployKennelAt', x, y,
+    -- z)` would spawn a real networked object at attacker-chosen
+    -- coordinates with zero server contact. Confidence: MEDIUM-HIGH, the
+    -- official documented pattern, not independently verified in-engine
+    -- this pass.
+    if source ~= 65535 then return end
+
+    -- FEATURE GATE -- this handler was previously registered
+    -- unconditionally regardless of Config.Features.DeployableKennel,
+    -- breaking this resource's "flag off means genuinely inert" invariant
+    -- (client/hud.lua / client/vision.lua / client/combat.lua precedent).
+    -- Matches server/kennel.lua's own per-handler gating convention.
+    if not Config.Features.DeployableKennel then return end
+
     if type(x) ~= 'number' or type(y) ~= 'number' or type(z) ~= 'number' then return end
 
     local modelHash = LoadModelWithTimeout(Config.DeployableKennel.propModel)
@@ -186,17 +223,52 @@ end)
 --- any client that doesn't have this netId streamed in.
 --- @param netId number
 RegisterNetEvent('qbx_k9unit:client:removeKennel', function(netId)
+    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
+    -- "SOURCE-ORIGIN GUARD" header block and
+    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- not re-derived here). THIS is the highest-severity handler in this
+    -- file to guard: without this check, and before the feature gate and
+    -- model check below existed, a forged local
+    -- `TriggerEvent('qbx_k9unit:client:removeKennel', <any streamed netId>)`
+    -- was an arbitrary-entity-DeleteEntity primitive -- not scoped to
+    -- kennels at all, since the only prior validation was `type(netId) ==
+    -- 'number'`. Confidence: MEDIUM-HIGH, the official documented pattern
+    -- for distinguishing a genuine server-sent event from a local
+    -- self-trigger, not independently verified in-engine this pass.
+    if source ~= 65535 then return end
+
+    -- FEATURE GATE -- this handler was previously registered
+    -- unconditionally regardless of Config.Features.DeployableKennel. See
+    -- deployKennelAt's own comment above for the same reasoning.
+    if not Config.Features.DeployableKennel then return end
+
     if type(netId) ~= 'number' then return end
 
     if myKennelNetId == netId then
         myKennelNetId = nil
     end
 
-    if not NetworkDoesEntityExistWithNetworkId(netId) then return end
-    local entity = NetworkGetEntityFromNetworkId(netId)
-    if DoesEntityExist(entity) then
-        DeleteEntity(entity)
-    end
+    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this handler's
+    -- own inline NetworkDoesEntityExistWithNetworkId -> NetworkGetEntityFromNetworkId
+    -- -> DoesEntityExist sequence.
+    local entity = ResolveNetworkEntity(netId)
+    if not entity then return end
+
+    -- DEFENSE-IN-DEPTH MODEL CHECK (coder-security, this pass): even with
+    -- the origin guard and feature gate above, this is a DeleteEntity call
+    -- driven entirely by a caller-supplied netId -- server/kennel.lua's own
+    -- dispatch site only ever sends a real kennel's netId, but nothing
+    -- upstream of this line re-derives that fact. Restricting the delete to
+    -- an entity whose CURRENT model actually matches a configured kennel
+    -- prop turns "arbitrary entity deletion" (any streamed vehicle/ped/
+    -- object) into, at worst, "delete some other player's legitimately
+    -- placed kennel prop" -- narrower, and free (a live model read, no
+    -- extra round trip) -- should the origin guard above ever be defeated
+    -- by something this pass could not evaluate (see its own confidence
+    -- note).
+    if not KennelPropModelHashes[GetEntityModel(entity)] then return end
+
+    DeleteEntity(entity)
 end)
 
 -- Resource-restart safety net (same class of fix as client/vehicle.lua's
@@ -214,11 +286,11 @@ AddEventHandler('onResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     if not myKennelNetId then return end
 
-    if NetworkDoesEntityExistWithNetworkId(myKennelNetId) then
-        local entity = NetworkGetEntityFromNetworkId(myKennelNetId)
-        if DoesEntityExist(entity) then
-            DeleteEntity(entity)
-        end
+    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): same inline
+    -- sequence as the removeKennel handler above, now the shared resolver.
+    local entity = ResolveNetworkEntity(myKennelNetId)
+    if entity then
+        DeleteEntity(entity)
     end
     myKennelNetId = nil
 end)
