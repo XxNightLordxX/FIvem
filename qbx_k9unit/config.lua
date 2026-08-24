@@ -161,6 +161,70 @@ Config.XPTiers = {
 }
 
 -- ======================================================================
+-- PHASE 4 — XP PROGRESSION (Config.Features.XPProgression, server/progression.lua).
+-- Per-action award VALUES that accumulate toward Config.XPTiers' thresholds
+-- above (that table was drafted early and sat unused until this pass).
+-- PHASE4_SPEC.md §13.4.1 — the exact award-action list (searchContrabandFound/
+-- trackSourceResolved/biteHoldSuccess/takedownSuccess) is taken verbatim from
+-- that section, not invented here. Every value below is an unreviewed
+-- placeholder pending economy-balance-agent/config-validator review
+-- (SPEC.md §9 item 4), same status Config.XPTiers itself already carries.
+-- ======================================================================
+Config.XP = {
+    awards = {
+        -- server/search.lua's HandleSearchTarget, at the point
+        -- `contrabandFound == true` is already known (existing Phase 2
+        -- success path — this is a new CONSUMER of that outcome, no change
+        -- to search.lua's own validation order/cooldowns).
+        searchContrabandFound = 25,
+        -- server/tracking.lua's findTrackableSource resolving `found = true`
+        -- is NOT, by itself, the award trigger — see trackArrivalRadius/
+        -- trackArrivalTTLMs below. PHASE4_SPEC.md §13.4.1 open question 3
+        -- explicitly flags that awarding on `found = true` alone lets a K9
+        -- farm XP by repeatedly triggering a search without ever completing
+        -- it; this implementation closes that by requiring the K9's own
+        -- client to subsequently arrive within trackArrivalRadius of the
+        -- SERVER's resolved coordinate before this amount is granted.
+        trackSourceResolved   = 10,
+        -- server/combat.lua's requestBiteHold success (PHASE3_SPEC.md
+        -- §12.5.1). NOT YET WIRED: server/combat.lua does not exist in this
+        -- codebase as of this pass (Phase 3 combat is being built
+        -- separately/concurrently). Whoever lands it should call
+        -- `AwardXP(citizenid, 'biteHoldSuccess')` (server/progression.lua,
+        -- resource-global) from that success path — see
+        -- server/progression.lua's own header for the exact call contract.
+        biteHoldSuccess       = 20,
+        -- server/combat.lua's requestTakedown success (PHASE3_SPEC.md
+        -- §12.5.2) — same NOT YET WIRED note as biteHoldSuccess above.
+        takedownSuccess       = 30,
+    },
+
+    -- 'citizenid' (default, per PHASE4_SPEC.md §13.2's own default and
+    -- phase2_notes/phase4_xp_schema_notes.md §4's schema sketch, which
+    -- assumes this): XP belongs to the K9 character itself and is portable
+    -- across a department change (k9_progression is keyed by citizenid
+    -- alone, no job column). 'job' would need a composite (citizenid, job)
+    -- primary key instead, mirroring k9_certifications — NOT implemented by
+    -- this pass; PHASE4_SPEC.md §13.6 item 2 flags this as a genuinely open
+    -- product call still needing explicit sign-off. Left at the documented
+    -- default rather than silently guessed differently.
+    scopePerCitizenidOrJob = 'citizenid',
+
+    -- EXTENSION beyond PHASE4_SPEC.md §13.2's own sketch (that section only
+    -- specified `awards`/`scopePerCitizenidOrJob`) — added to actually
+    -- resolve open question 3 above rather than leave the farm exploit it
+    -- flags unresolved. The `findTrackableSource` reveal itself stays
+    -- purely client-cosmetic (no XP consequence at that point, per §11.6);
+    -- `trackSourceResolved` XP is only granted once the K9's own client
+    -- reports arrival within this radius of the coordinate the SERVER
+    -- resolved — server/tracking.lua re-measures live distance itself
+    -- against its own server-held pending-arrival state, never a
+    -- client-supplied coordinate or distance claim.
+    trackArrivalRadius = 3.0,    -- meters
+    trackArrivalTTLMs  = 60000,  -- how long a resolved-but-unreached source stays eligible for a late arrival report before expiring — prevents a stale pending-arrival slot from awarding XP for a long-abandoned search
+}
+
+-- ======================================================================
 -- CONTRABAND ALERT THRESHOLDS — Phase 2, placeholder pending
 -- config-validator/economy review against actual ox_inventory item weights.
 -- Order matters: server/search.lua walks this list and keeps the LAST tier
@@ -262,37 +326,104 @@ Config.Vision = {
 -- ======================================================================
 -- PHASE 3 — COMBAT & ADVANCED AGILITY (PHASE3_SPEC.md §12.2).
 --
--- IMPORTANT — this is a DELIBERATELY PARTIAL extraction of PHASE3_SPEC.md
--- §12.2's full `Config.Combat` sketch, not the whole table. Only the
--- `AgilityAdvanced` sub-table is added here, because it is the ONLY Phase 3
--- combat/agility sub-feature actually implemented in this pass (see
--- client/movement.lua's own ADVANCED AGILITY block). `BiteAndHold`,
--- `NonLethalTakedown`, `PropDragging`, `HandlerDownDefense`, and the
--- cross-cutting `RequireWantedStatus`/`WantedStatusCheckOverride`/
--- `NonComplianceDetection` knobs are DELIBERATELY NOT added yet:
---   - `BiteAndHold`/`NonLethalTakedown`/`PropDragging`'s player-target
---     paths are blocked on PHASE3_SPEC.md §12.0 item 8 (the client-relay/
---     non-cooperating-target-client architecture question), explicitly
---     unresolved and being worked by coder-security as of this pass — do
---     not add their config entries as if they were ready to be wired up.
+-- UPDATE (coder-security, this pass): PHASE3_SPEC.md §12.0 item 8 (the
+-- client-relay/non-cooperating-target-client architecture question) is now
+-- RESOLVED (Revision 4) — see that item's own "ship it, with binding
+-- guardrails" verdict. `BiteAndHold` and `NonLethalTakedown` (including
+-- their PLAYER-target paths, gated by `RequireWantedStatus` below) are
+-- implemented this pass in `server/combat.lua` / `client/combat.lua`,
+-- under item 8's five binding guardrails. `Config.Features.BiteAndHold`/
+-- `NonLethalTakedown` STAY `false` above regardless — shipping the code
+-- gated-off-by-default is not the same decision as flipping either flag on
+-- a live server, which still wants its own separate go/no-go (balance
+-- review, anim preview for BiteAndHold — see server/combat.lua's header).
+--
+-- STILL DELIBERATELY NOT ADDED — genuinely different, still-open blockers:
+--   - `PropDragging` is OUT OF SCOPE for this pass (not requested, not
+--     implemented) — its config entries stay absent rather than added as
+--     dead placeholders. It shares item 8's Category B relay exposure for
+--     its drag-speed-limit half (see item 8's own write-up) and ADDITIONALLY
+--     needs PHASE3_SPEC.md §12.0 item 6's downed-check contract for a
+--     player target, so it is not simply "the same pattern, one more
+--     feature" — left for whoever picks it up next to design/implement
+--     against item 8's already-resolved guardrails directly.
 --   - `HandlerDownDefense` is blocked on a DIFFERENT, separately open item
 --     — PHASE3_SPEC.md §12.0 item 7 / phase2_notes/
 --     phase3_handler_partnership_decision.md ("who is this K9's handler,
---     independent of momentary leash state" — genuinely unresolved,
---     needs a human product decision or a dedicated design pass, not a
---     guess). Its own mechanics never touch a target ped's state (per
---     §12.0 item 2's UI/auto-targeting-convenience reading), so it is NOT
---     blocked by item 8 — but it cannot be meaningfully implemented yet
---     regardless, since (a) resolving "who is the handler" is exactly
---     item 7's open question, and (b) it is a "pure consumer" of the
---     `requestBiteHold`/`requestTakedown` action paths (§12.3), which do
---     not exist in this codebase yet and are themselves blocked. Adding
---     numeric placeholders for it here with nothing real to wire them to
---     would be misleading, not helpful groundwork.
--- Re-diff this block against PHASE3_SPEC.md §12.2 in full once those items
--- are resolved, rather than assuming this partial copy stays in sync.
+--     independent of momentary leash state" — genuinely unresolved, needs
+--     a human product decision or a dedicated design pass, not a guess).
+--     Now that `requestBiteHold`/`requestTakedown` exist for it to
+--     pre-select a target into (§12.3's "pure consumer" framing), item 7 is
+--     the ONLY remaining blocker for this feature specifically.
+-- Re-diff this block against PHASE3_SPEC.md §12.2 in full if either of the
+-- above is picked up later, rather than assuming this copy stays in sync.
 -- ======================================================================
 Config.Combat = {
+    -- Applies to BiteAndHold and NonLethalTakedown's player-target paths
+    -- below (and would apply to PropDragging's, if/when that's built).
+    -- PHASE3_SPEC.md §12.0 item 5 — RESOLVED, secure-by-default.
+    RequireWantedStatus = true, -- a K9 may only target a PLAYER who is flagged wanted/suspect. Does NOT affect NPC targets (a "wanted" concept doesn't apply to an NPC this resource has no reason to protect from griefing).
+
+    -- function(playerId: number) -> boolean, OPTIONAL, nil by default.
+    -- Expected to be the NORMAL path for a real server, not the exceptional
+    -- one — PHASE3_SPEC.md §12.0 item 5's own fragmentation note flags the
+    -- default metadata guess below as LOWER CONFIDENCE than
+    -- PropDragging's equivalent (`IsPlayerDownedOverride`, not yet added —
+    -- see this file's PropDragging note above), because there is no single
+    -- ecosystem-dominant convention for exposing a networked player's
+    -- "wanted" state the way there is for a downed/laststand flag. Wire
+    -- this directly to your dispatch resource's own export/state
+    -- (cd_dispatch/ps-dispatch/qs-dispatch/in-house all differ). If this
+    -- errors when called, server/combat.lua FAILS CLOSED (treats the
+    -- target as NOT eligible) rather than falling back to the default
+    -- metadata guess below — a broken override must never silently widen
+    -- who can be targeted.
+    WantedStatusCheckOverride = nil,
+    -- Default best-effort check used ONLY when the override above is nil:
+    -- reads `metadata.wanted` / `metadata.iswanted` off the target's own
+    -- qbx_core PlayerData if present. See the confidence note above before
+    -- relying on this in production — most real servers are expected to
+    -- supply the override instead.
+
+    -- PHASE3_SPEC.md §12.0 item 8 — DETECTION ONLY, NEVER ENFORCEMENT (see
+    -- that item's guardrail 3: no server-authoritative consequence may ever
+    -- be conditioned on one of these signals firing). Real, implemented
+    -- sampling in `server/combat.lua`, not a sketch — see that file's own
+    -- "NON-COMPLIANCE DETECTION" section for the full design writeup this
+    -- table's fields map onto.
+    NonComplianceDetection = {
+        enabled                = true,
+        positionSampleWindowMs = 500,   -- how often the shared sampling thread re-reads every active hold/ragdoll's target position
+        speedTolerance         = 1.0,   -- m/s of slack — GENERIC fallback only, not used by BiteAndHold (see biteHoldSpeedTolerance below, which item 8 explicitly recommends tightening for that specific check) — UNTUNED
+        biteHoldIdleCeiling    = 0.3,   -- m/s -- a compliant BiteAndHold target is near-stationary (may turn in place); observed speed above (idleCeiling + biteHoldSpeedTolerance) is a candidate violation. UNTUNED placeholder, per item 8's own numbers.
+        biteHoldSpeedTolerance = 0.5,   -- m/s -- item 8's own tightened recommendation for BiteAndHold specifically (the shipped generic speedTolerance=1.0 above was flagged as too loose stacked on a 0.3 m/s idle ceiling). UNTUNED.
+        biteHoldViolationSamples = 2,   -- consecutive over-threshold samples required before flagging — never a single noisy sample, per item 8's "never auto-punish/flag on one sample" instinct (mirrors server/tracking.lua's own FORGED TRAIL DECISION reasoning).
+        takedownNetDisplacementMeters = 3.0, -- meters -- NonLethalTakedown uses NET DISPLACEMENT from the ragdoll-start position over the whole window as its primary signal instead of a continuous speed check (a genuine ragdoll produces noisy per-tick velocity from falling/sliding that a speed check would false-positive on) — see server/combat.lua's own comment for the disclosed simplification versus item 8's fuller "sustained consistent heading, not random tumbling drift" framing. UNTUNED.
+        action                 = 'log', -- 'log' | 'notify_staff' -- deliberately NEVER 'auto_kick'/'auto_ban': a false positive from lag/desync must not itself become a punitive action without human review.
+        -- function(playerId: number, effectType: string, evidence: table) -> nil, OPTIONAL, nil by default.
+        -- A server that wants automated response beyond log/notify_staff
+        -- builds it here, on top of real evidence — this resource never
+        -- takes a punitive action on its own initiative. Any error raised
+        -- by this callback is caught and logged; it never interrupts the
+        -- sampling thread for other active holds.
+        OnViolationOverride    = nil,
+    },
+
+    BiteAndHold = {
+        range         = 2.5,    -- meters, self-initiated trigger range
+        maxDurationMs = 15000,  -- hard timeout if never manually released — THIS IS the "no unbounded trap" guarantee for a non-consensual mechanic, PHASE3_SPEC.md §12.0 item 4. Never remove without an equally-hard replacement cap.
+        cooldownMs    = 20000,  -- per-K9 cooldown between attempts
+    },
+    NonLethalTakedown = {
+        range               = 3.0,
+        minTargetSpeed      = 4.0,   -- m/s, SERVER-COMPUTED from a short position-sample window at request time (see server/combat.lua's own note on why this is a bounded two-sample measurement, not a continuously-running per-ped tracker) — never a client-claimed "I am sprinting" flag. Applies identically whether the target is an NPC or a player.
+        speedSampleWindowMs = 250,   -- how long the server waits between its two position samples to compute the target's speed for the check above — UNTUNED, and itself re-validates everything (existence, proximity, already-held, eligibility) again after the wait, same TOCTOU discipline as this resource's other yielding server calls.
+        ragdollDurationMs   = 4000,  -- hard cap on BOTH the forced-ragdoll hold and the SetEntityCanBeDamaged(false) bracket — THIS IS the "no unbounded trap" guarantee for this mechanic, PHASE3_SPEC.md §12.0 item 4 (named there explicitly as "the ragdoll/damage-suppression window in NonLethalTakedown"). UNTUNED.
+        cooldownMs          = 25000, -- per-K9 cooldown
+        targetCooldownMs    = 30000, -- per-target cooldown -- stops repeat takedowns of the same already-downed target by multiple K9s in quick succession
+        healthFloor         = 100,   -- backstop only, NOT the primary non-lethal mechanism -- primary mechanism is the SetEntityCanBeDamaged bracket above
+    },
+
     AgilityAdvanced = {
         -- DECIDED (PHASE3_SPEC.md §12.0 item 3, Revision 2, unaffected by
         -- the Revision 3 PvP reversal): multi-height capsule-sweep raycast
@@ -502,4 +633,84 @@ Config.K9Medkit = {
     -- commented out until a server actually needs it, so it isn't mistaken
     -- for an active default. See server/medkit.lua's IsMedkitUserAuthorized.
     -- IsMedkitUserAuthorizedOverride = function(usingPlayerServerId) return false end,
+}
+
+-- ======================================================================
+-- PHASE 4 — K9 WELLBEING (Config.Features.FatigueSystem / MoodSystem /
+-- FearStressSystem / DistractionSystem / InjuryLimping — ALL still `false`
+-- by default). PHASE4_SPEC.md §13.0 Decision 1 / §13.2 / §13.4.3: ONE
+-- shared config table, ONE shared server/wellbeing.lua + client/wellbeing.lua
+-- pair, ONE shared per-citizenid stat store and tick loop backing all five
+-- independently-gated stats — mirrors Config.Tracking's existing
+-- Scent/Blood/Gunpowder precedent (three independently-toggleable flags,
+-- one shared file pair). ALL NUMERIC VALUES BELOW ARE UNREVIEWED
+-- PLACEHOLDERS pending a config-validator/economy-balance-agent pass
+-- (SPEC.md §9 item 4's scope, widened by PHASE4_SPEC.md §13.5) — do not
+-- flip any of the five owning Config.Features flags to `true` on a live
+-- server before that review happens.
+-- ======================================================================
+Config.Wellbeing = {
+    tickIntervalMs = 5000, -- ONE shared server-side decay/regen tick for all five stats -- see server/wellbeing.lua's header for why this beats five independent timers
+
+    Fatigue = {
+        max                     = 100,
+        sprintDecayPerTick      = 2.0,  -- applied per tick while server-computed speed indicates sprinting
+        idleRegenPerTick        = 1.0,  -- per tick while not sprinting
+        restRegenPerTick        = 4.0,  -- NOT WIRED THIS PASS -- see server/wellbeing.lua's open-question note; rest-source detection (PHASE4_SPEC.md §13.4.3.1 open question 1) is left unresolved, same as the spec itself leaves it, rather than inventing an unreviewed detection mechanism
+        restRadius              = 5.0,
+        restSources             = { 'water_bowl' }, -- PLACEHOLDER, not wired to any real detection this pass
+        speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty
+        speedPenaltyMultiplier  = 0.85, -- fed into RecomputeK9MoveRate() (client/movement.lua, K9MoveRateModifiers.fatigue), never a standalone SetPedMoveRateOverride call
+        -- NOT in PHASE4_SPEC.md §13.2's sketch verbatim -- added here
+        -- because "sprinting" needs a concrete speed cutoff to classify
+        -- from a server-side rolling position-sample (meters travelled per
+        -- tick / tickIntervalMs). This file's own independent
+        -- implementation of the general technique PHASE3_SPEC.md §12.5.2
+        -- describes for NonLethalTakedown's speed gate (that document was
+        -- not re-read this pass, per this session's file-scope boundary --
+        -- reconcile against server/combat.lua's real implementation once
+        -- Phase 3 lands, if the two ever need to agree exactly). Unreviewed
+        -- placeholder like every other numeric value in this table.
+        sprintSpeedThreshold    = 4.0,  -- meters/second, averaged over one tick interval
+    },
+    Mood = {
+        max                          = 100,
+        damageDecayAmount            = 15,  -- flat decrement per logged damage event where the K9 itself is the victim (server/wellbeing.lua's own independent consumer of the relayDamageEvent relay server/tracking.lua also consumes)
+        petRegenAmount               = 10,  -- per "Pet K9" ox_target interaction
+        petCooldownMs                = 30000, -- per (interactor, target) pair -- stops repeat-pet spam
+        feedRegenAmount              = 20,  -- per configured food item use
+        feedItemName                 = 'k9_treat', -- PLACEHOLDER item name, needs to exist in the target server's ox_inventory items table
+        passiveRegenPerTick          = 0.2,
+        performancePenaltyThreshold  = 25,
+        performancePenaltyMultiplier = 0.9, -- fed into RecomputeK9MoveRate() (K9MoveRateModifiers.mood) -- resolves PHASE4_SPEC.md §13.4.3.2 open question 1 by taking reading (a), the document's own tentative recommendation (a movement-speed multiplier via the shared composer, not a success-chance penalty on a security-critical callback)
+    },
+    FearStress = {
+        max                      = 100,
+        gunfireRadius            = 20.0, -- meters -- reuses Phase 2's relayWeaponFire relay (server/tracking.lua also consumes it), new CONSUMER not new native
+        gunfireLookbackSeconds   = 15,
+        risePerNearbyShotPerTick = 5.0,
+        passiveDecayPerTick      = 1.0,
+        hesitationThreshold      = 70,
+        hesitationDurationMs     = 8000,  -- how long a rejected Phase 3 combat-command attempt stays refused before the K9 may retry, absent a manual calm-down
+        calmDownReduceAmount     = 40,    -- "Calm Down" command's effect (self-only, see server/wellbeing.lua)
+        calmDownCooldownMs       = 15000,
+    },
+    Distraction = {
+        flashbangImmune     = true, -- ASPIRATIONAL CONFIG ONLY -- NOT implemented this pass, genuinely integration-dependent (PHASE4_SPEC.md §13.4.3.4) on an unconfirmed third-party flashbang/stun resource's own event shape. Do not treat this as a shipped guarantee.
+        meatBaitItemName    = 'k9_meat_bait',      -- PLACEHOLDER
+        meatBaitDurationMs  = 6000,
+        meatBaitRadius      = 8.0,
+        whistleItemName     = 'k9_ultrasonic_whistle', -- PLACEHOLDER
+        whistleDurationMs   = 4000,
+        whistleRadius       = 15.0,
+        perTargetCooldownMs = 20000, -- stops the same K9 being re-distracted back-to-back
+    },
+    Injury = {
+        max                     = 100,
+        sprintBlockThreshold    = 30, -- below this, sprint input is blocked (client-local, see PHASE4_SPEC.md §13.0 Decision 3's disclosed bounded limitation)
+        jumpBlockThreshold      = 20, -- below this, jump input is blocked
+        speedPenaltyMultiplier  = 0.7, -- fed into RecomputeK9MoveRate() (K9MoveRateModifiers.injury)
+        damageDecayAmount       = 10, -- flat decrement per logged damage event -- independent value from Mood's own damageDecayAmount, same detection source
+        passiveRegenPerTick     = 0.1, -- deliberately very slow -- K9Medkit (Config.K9Medkit, via RestoreInjury) is the intended primary recovery path, not natural regen
+    },
 }

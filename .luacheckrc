@@ -132,16 +132,47 @@ globals = {
     -- client/kennel.lua (Phase 5 R&D, DeployableKennel)
     "RequestDeployKennel",
     -- server/wellbeing.lua (Phase 4, PHASE4_SPEC.md §13.1 sub-phase 4c/4d,
-    -- the Injury wellbeing stat) -- FORWARD-DECLARED ONLY: this global is
-    -- read (never written) by server/medkit.lua, guarded behind a
-    -- `type(RestoreInjury) == 'function'` existence check, since
-    -- server/wellbeing.lua itself has not been implemented as of this
-    -- pass. Listed here so luacheck doesn't flag a legitimate forward
-    -- reference to this resource's own established cross-file-global
-    -- convention as an undefined-global typo -- once server/wellbeing.lua
-    -- ships and defines it for real, this entry stays correct with no
-    -- change needed.
-    "RestoreInjury",
+    -- the unified wellbeing subsystem). RestoreInjury is read (never
+    -- written) by server/medkit.lua behind a `type(RestoreInjury) ==
+    -- 'function'` existence check; that guard is kept even now that
+    -- server/wellbeing.lua really defines it, per this resource's
+    -- "runtime existence guard, not a load-order assumption" convention.
+    -- IsHesitating/IsDistracted are the read-only accessors PHASE4_SPEC.md
+    -- §13.5 names as the cross-cutting dependency Phase 3's
+    -- server/combat.lua consumes.
+    "RestoreInjury", "IsHesitating", "IsDistracted",
+    -- client/wellbeing.lua (Phase 4) -- the calm-down action a future
+    -- radial entry calls rather than re-deriving its own validation.
+    "RequestK9CalmDown",
+    -- server/progression.lua (Phase 4, PHASE4_SPEC.md §13.4.1,
+    -- XPProgression) -- real, implemented this pass. AwardXP/GetXPTier are
+    -- read from server/tracking.lua (the only current call sites) behind a
+    -- `type(AwardXP) == 'function'` / `type(GetXPTier) == 'function'`
+    -- existence guard each (same soft-dependency convention as
+    -- RestoreInjury above), even though server/progression.lua itself
+    -- already exists as of this pass -- the guard is kept regardless, per
+    -- this resource's own "runtime existence guard, not a load-order
+    -- assumption" convention (see fxmanifest.lua's own comment on
+    -- server/medkit.lua's ordering for the precedent this follows).
+    "AwardXP", "GetXPTier", "GetXP",
+    -- client/movement.lua's PHASE4_SPEC.md §13.0 Decision 2 "move-rate
+    -- composer" -- FORWARD-DECLARED ONLY, same shape as RestoreInjury
+    -- above: neither symbol exists in this codebase as of this pass (the
+    -- wellbeing-subsystem/Phase 3 PropDragging work that is meant to land
+    -- this composer had not shipped it yet when server/progression.lua and
+    -- client/progression.lua were written). client/progression.lua reads
+    -- BOTH behind `if K9MoveRateModifiers then ... end` /
+    -- `type(RecomputeK9MoveRate) == 'function'` existence guards and never
+    -- calls SetPedMoveRateOverride directly itself -- see that file's own
+    -- header for the full coordination note. Once the composer ships for
+    -- real, these two entries stay correct with no change needed here.
+    "K9MoveRateModifiers", "RecomputeK9MoveRate",
+    -- client/progression.lua (Phase 4, PHASE4_SPEC.md §13.4.1) -- real,
+    -- implemented this pass. Exposed for a future HUD/display need
+    -- (PHASE4_SPEC.md §13.4.1's own "additive read, not a new
+    -- authorization surface" framing), not currently consumed elsewhere in
+    -- this resource.
+    "GetCurrentXPTier",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the

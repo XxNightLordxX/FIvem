@@ -303,6 +303,39 @@ DamageRelayCooldown.RegisterPlayerDropped()
 local WeaponFireRelayCooldown = NewCooldown()
 WeaponFireRelayCooldown.RegisterPlayerDropped()
 
+-- PHASE 4 ADDITION (coder-backend, XPProgression pass) -- PendingTrackArrival[src]
+-- = { trackType, coords, expiresAt }. Backs Config.XP.awards.trackSourceResolved
+-- (config.lua, PHASE4_SPEC.md §13.4.1 open question 3): findTrackableSource's
+-- own `found = true` reveal below is deliberately NOT the XP award trigger --
+-- awarding there would let a K9 farm XP by repeatedly triggering a search
+-- without ever completing it (the exact gap that open question flags,
+-- explicitly left unresolved by PHASE4_SPEC.md and closed here). Instead, a
+-- successful resolve stores where the K9 would need to walk to, and XP is
+-- only granted once 'qbx_k9unit:server:reportTrackSourceArrival' below
+-- confirms the K9's OWN LIVE server-side position is within
+-- Config.XP.trackArrivalRadius of that stored coordinate -- never a
+-- client-claimed distance/arrival boolean. Single-slot per source (a fresh
+-- resolve overwrites any earlier pending arrival for that source, mirroring
+-- server/main.lua's PendingLeashRequests single-slot-per-target shape) --
+-- plain table + manual playerDropped cleanup, NOT a NewCooldown/NewMutex
+-- shape (this isn't a rate limiter, it's a short-lived one-shot claim
+-- ticket), same reasoning server/main.lua's own PendingLeashRequests
+-- declaration gives for its own shape.
+local PendingTrackArrival = {}
+
+-- Defense-in-depth rate limit on the reportTrackSourceArrival event below --
+-- same "never leave a per-source ingest path fully unbounded" posture this
+-- file already applies to every other event handler (DamageRelayCooldown,
+-- WeaponFireRelayCooldown, ScentDropRelayCooldown). This is NOT the primary
+-- anti-farm mechanism (that's PendingTrackArrival's single-use-then-cleared
+-- shape below, plus TrackQueryCooldown already throttling how often a fresh
+-- pending arrival can even be created) -- it just bounds how fast a client
+-- can spam this specific event while a pending arrival exists but the K9
+-- hasn't reached it yet.
+local TrackArrivalReportCooldown = NewCooldown()
+TrackArrivalReportCooldown.RegisterPlayerDropped()
+local TRACK_ARRIVAL_REPORT_COOLDOWN_MS = 2000
+
 -- Per-source rate limit on the 'swapItems' ox_inventory hook below (added
 -- this pass, SPEC.md §9 items 11/17, phase2_notes/scent_source_resolution.md).
 -- UNLIKE DamageRelayCooldown/WeaponFireRelayCooldown above, this is NOT
@@ -595,6 +628,40 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     if ped == 0 then return { found = false } end -- defensive: no live ped to read a position from
     local myCoords = GetEntityCoords(ped) -- NEVER a client-supplied coordinate
 
+    -- PHASE 4 ADDITION (coder-backend, XPProgression pass, PHASE4_SPEC.md
+    -- §13.4.1 item (a)): "crossing a threshold... changes... the server's
+    -- own authoritative scentRange value for that K9, read by
+    -- server/tracking.lua's findTrackableSource in place of
+    -- Config.Tracking.<Type>.maxRange." Read via a `type(GetXPTier) ==
+    -- 'function'` runtime existence guard (server/progression.lua, same
+    -- soft-dependency convention as server/medkit.lua's RestoreInjury call
+    -- site) — this callback works identically whether or not
+    -- server/progression.lua happens to be loaded, and is unaffected by
+    -- fxmanifest.lua's server_scripts ordering either way (no load-order
+    -- assumption is made). Only ever RAISES maxRange (never lowers it below
+    -- this type's own configured baseline) — an uncached/base-tier
+    -- citizenid's tier.scentRange (Config.XPTiers[1] = 5.0) is smaller than
+    -- every Config.Tracking.<Type>.maxRange default (40.0) as shipped, so
+    -- this is purely an XP-earned BONUS on top of the type's own tuning,
+    -- never a silent regression of it, regardless of how the two tables get
+    -- tuned relative to each other later. Applied uniformly to all three
+    -- trackTypes (scent/blood/gunpowder) — Config.XPTiers has one
+    -- `scentRange` value per tier, not one per trackType, so this reads it
+    -- as "the K9's general resolved-source detection range," not literally
+    -- scoped to the 'scent' trackType by name; flagged here as a judgment
+    -- call on ambiguous spec wording, not a silently-picked interpretation.
+    local maxRange = trackingConfig.maxRange
+    if Config.Features.XPProgression and type(GetXPTier) == 'function' then
+        local trackerPlayer = exports.qbx_core:GetPlayer(source)
+        local trackerCitizenid = trackerPlayer and trackerPlayer.PlayerData and trackerPlayer.PlayerData.citizenid
+        if trackerCitizenid then
+            local tier = GetXPTier(trackerCitizenid)
+            if tier and type(tier.scentRange) == 'number' and tier.scentRange > maxRange then
+                maxRange = tier.scentRange
+            end
+        end
+    end
+
     local sourceCoords
 
     -- 'scent' / 'blood' / 'gunpowder': nearest still-fresh logged entry
@@ -612,7 +679,7 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     for _, entry in ipairs(TrackableLog[trackType]) do
         if (now - entry.loggedAt) < maxAgeMs then
             local dist = #(myCoords - entry.coords)
-            if dist <= trackingConfig.maxRange and (not nearestDist or dist < nearestDist) then
+            if dist <= maxRange and (not nearestDist or dist < nearestDist) then
                 nearestDist = dist
                 sourceCoords = entry.coords
             end
@@ -621,6 +688,21 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
 
     if not sourceCoords then
         return { found = false }
+    end
+
+    -- PHASE 4 ADDITION (coder-backend, XPProgression pass) -- see
+    -- PendingTrackArrival's own declaration comment above for the full
+    -- anti-farm rationale. Only bothers tracking a pending arrival at all
+    -- when the feature is enabled, per SPEC.md §3's "read the flag at the
+    -- point of use" rule -- when XPProgression is false this is simply dead
+    -- state nobody ever reads (reportTrackSourceArrival's own handler below
+    -- also re-checks the flag independently).
+    if Config.Features.XPProgression then
+        PendingTrackArrival[source] = {
+            trackType = trackType,
+            coords = sourceCoords, -- the SAME server-resolved coordinate returned to the client below -- never re-derived from a later client claim
+            expiresAt = now + Config.XP.trackArrivalTTLMs,
+        }
     end
 
     return {
@@ -632,6 +714,59 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
         -- anyway for future-proofing (e.g. a later per-type override).
         breaksAtWater = Config.WaterTrackingDecay.breaksTrail,
     }
+end)
+
+--- PHASE 4 ADDITION (coder-backend, XPProgression pass). Fired by
+--- client/tracking.lua's own render thread the FIRST tick it observes its
+--- local distance to the resolved source coordinate drop to/below
+--- Config.XP.trackArrivalRadius — see that file's own comment for the exact
+--- client-side trigger. No payload: this handler re-measures the CALLER'S
+--- OWN LIVE server-side position against the coordinate THIS SERVER already
+--- resolved and stored in PendingTrackArrival above — never a client-claimed
+--- distance, arrival boolean, or coordinate. A modified client calling this
+--- event with no real search having resolved anything, or from far away, or
+--- repeatedly, gets nothing: no pending entry / an expired entry / a live
+--- distance still over the radius all fall through to a silent no-op below.
+RegisterNetEvent('qbx_k9unit:server:reportTrackSourceArrival', function()
+    local src = source
+
+    if not Config.Features.XPProgression then return end -- real server-side no-op regardless of client UI state, per §3
+    if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive
+
+    if not TrackArrivalReportCooldown.Consume(src, TRACK_ARRIVAL_REPORT_COOLDOWN_MS) then
+        return -- silent no-op: rate-limited, not an error worth notifying about
+    end
+
+    local pending = PendingTrackArrival[src]
+    if not pending then return end -- no resolved-but-unreached source is currently pending for this source
+
+    if GetGameTimer() > pending.expiresAt then
+        PendingTrackArrival[src] = nil -- stale — drop it rather than leave it around for a later, unrelated report to consume
+        return
+    end
+
+    local ped = GetPlayerPed(src)
+    if ped == 0 then return end -- defensive: no live ped to read a position from
+
+    local dist = #(GetEntityCoords(ped) - pending.coords) -- LIVE server-side measurement, never a client-supplied distance
+    if dist > Config.XP.trackArrivalRadius then return end -- not actually there yet, regardless of what the client's own render thread believes
+
+    -- Single-use: consumed now, regardless of what AwardXP below does with
+    -- it, so a second report for the same resolved source (whether a
+    -- retry, a race, or an attempted repeat) cannot double-award.
+    PendingTrackArrival[src] = nil
+
+    local trackerPlayer = exports.qbx_core:GetPlayer(src)
+    local trackerCitizenid = trackerPlayer and trackerPlayer.PlayerData and trackerPlayer.PlayerData.citizenid
+    if not trackerCitizenid then return end
+
+    -- Runtime existence guard, same soft-dependency convention as this
+    -- file's own GetXPTier call site above and server/medkit.lua's
+    -- RestoreInjury precedent — no load-order assumption on
+    -- server/progression.lua either way.
+    if type(AwardXP) == 'function' then
+        AwardXP(trackerCitizenid, 'trackSourceResolved')
+    end
 end)
 
 -- Cleans up this file's per-source ephemeral state on disconnect, same

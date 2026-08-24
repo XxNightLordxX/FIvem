@@ -70,6 +70,8 @@ client_scripts {
     'client/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
     'client/kennel.lua',   -- Phase 5 R&D (DeployableKennel, phase2_notes/phase5_features_research.md §5)
     'client/medkit.lua',   -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4)
+    'client/wellbeing.lua', -- Phase 4 (unified Fatigue/Mood/FearStress/Distraction/Injury subsystem, PHASE4_SPEC.md §13.0 Decision 1)
+    'client/progression.lua', -- Phase 4 (XPProgression, PHASE4_SPEC.md §13.4.1)
 }
 
 server_scripts {
@@ -90,6 +92,20 @@ server_scripts {
     'server/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
     'server/kennel.lua',    -- Phase 5 R&D (DeployableKennel, phase2_notes/phase5_features_research.md §5) -- loaded after cooldowns.lua (NewCooldown at file-load time) and certifications.lua (HasK9Access)
     'server/medkit.lua',    -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4) -- loaded after cooldowns.lua (NewCooldown/NewMutex at file-load time) and certifications.lua (IsConfiguredK9Model); no ordering dependency on server/wellbeing.lua since RestoreInjury is called through a runtime existence guard, not a load-order assumption
+    -- Phase 4 (unified wellbeing subsystem, PHASE4_SPEC.md §13.0 Decision 1) --
+    -- loaded after cooldowns.lua (NewCooldown at file-load time) and
+    -- certifications.lua (HasK9Access). Deliberately loaded AFTER
+    -- server/tracking.lua: both register a handler for the same
+    -- relayDamageEvent/relayWeaponFire client events (FiveM fires every
+    -- registered handler, so this is an additional CONSUMER of an existing
+    -- signal, not a replacement -- PHASE4_SPEC.md §13.0's own "a new
+    -- consumer, not a new detection mechanism" framing), and each keeps its
+    -- own independent rate limit.
+    'server/wellbeing.lua',
+    -- Phase 4 (XPProgression, PHASE4_SPEC.md §13.4.1) -- loaded after
+    -- tracking.lua/search.lua, which call AwardXP/GetXPTier through runtime
+    -- existence guards rather than a load-order assumption.
+    'server/progression.lua',
 }
 
 lua54 'yes'
