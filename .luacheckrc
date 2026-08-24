@@ -90,6 +90,12 @@ read_globals = {
     -- ENTITY-STATE native this resource calls that wasn't already covered
     -- by the GetEntityHealth/GetEntityMaxHealth reads above
     "SetEntityHealth",
+    -- K9 move-rate composer (client/movement.lua RecomputeK9MoveRate(),
+    -- Phase 4, PHASE4_SPEC.md §13.0 Decision 2) -- the ONE call site for
+    -- this native anywhere in this resource (see that function's own
+    -- header comment for the "one and only call" confirmation and this
+    -- native's honest confidence grading).
+    "SetPedMoveRateOverride",
     -- Timers / misc client natives
     "GetGameTimer", "DrawMarker", "DisableControlAction",
     "ClearPedTasksImmediately", "TaskStartScenarioInPlace", "IsPedShooting",
@@ -181,16 +187,29 @@ globals = {
     -- server/medkit.lua's ordering for the precedent this follows).
     "AwardXP", "GetXPTier", "GetXP",
     -- client/movement.lua's PHASE4_SPEC.md §13.0 Decision 2 "move-rate
-    -- composer" -- FORWARD-DECLARED ONLY, same shape as RestoreInjury
-    -- above: neither symbol exists in this codebase as of this pass (the
-    -- wellbeing-subsystem/Phase 3 PropDragging work that is meant to land
-    -- this composer had not shipped it yet when server/progression.lua and
-    -- client/progression.lua were written). client/progression.lua reads
-    -- BOTH behind `if K9MoveRateModifiers then ... end` /
-    -- `type(RecomputeK9MoveRate) == 'function'` existence guards and never
-    -- calls SetPedMoveRateOverride directly itself -- see that file's own
-    -- header for the full coordination note. Once the composer ships for
-    -- real, these two entries stay correct with no change needed here.
+    -- composer" -- REAL, IMPLEMENTED (coder-frontend pass, real-bug fix):
+    -- a qa-tester finding caught client/wellbeing.lua unconditionally
+    -- writing K9MoveRateModifiers.fatigue/.injury/.mood and calling
+    -- RecomputeK9MoveRate() with NEITHER symbol defined anywhere in this
+    -- codebase (this comment previously read "FORWARD-DECLARED ONLY --
+    -- neither symbol exists," which was accurate at the time it was
+    -- written but is now stale) -- a guaranteed hard error the instant any
+    -- wellbeing feature flag flipped true, latent only because every such
+    -- flag defaults to false in config.lua. Both symbols are now defined
+    -- for real in client/movement.lua: K9MoveRateModifiers is a plain
+    -- table of named multiplier contributions (fatigue/injury/mood/
+    -- xpTier/dragging, each defaulting to 1.0), and RecomputeK9MoveRate()
+    -- composes them multiplicatively, clamps to [0.1, 2.0], and makes the
+    -- single real SetPedMoveRateOverride call for the K9's own ped -- see
+    -- that function's own header comment in client/movement.lua for the
+    -- full composition/clamp/interaction writeup. client/progression.lua
+    -- still reads BOTH behind `if K9MoveRateModifiers then ... end` /
+    -- `type(RecomputeK9MoveRate) == 'function'` existence guards even
+    -- though they now really exist -- that's intentional, not stale
+    -- itself: this resource's documented convention is a runtime
+    -- existence guard, not a load-order assumption (see fxmanifest.lua's
+    -- own comment on server/medkit.lua's ordering for the same precedent),
+    -- so those guards are correct to keep regardless of load order.
     "K9MoveRateModifiers", "RecomputeK9MoveRate",
     -- client/progression.lua (Phase 4, PHASE4_SPEC.md §13.4.1) -- real,
     -- implemented this pass. Exposed for a future HUD/display need

@@ -40,6 +40,23 @@
     - 'qbx_k9unit:client:leashDetached' (reason: string) [THIS FILE]
     ======================================================================
 
+    PHASE 4 ADDITION (this pass, coder-frontend, real-bug fix): also owns
+    the shared K9 move-rate composer, `K9MoveRateModifiers` (table) +
+    `RecomputeK9MoveRate()` (function) — PHASE4_SPEC.md §13.0 Decision 2.
+    QA had found client/wellbeing.lua unconditionally writing
+    `K9MoveRateModifiers.fatigue`/`.injury`/`.mood` and calling
+    `RecomputeK9MoveRate()` with neither symbol defined anywhere in this
+    codebase — latent only because every wellbeing feature flag defaults to
+    `false` in config.lua, and a real bug (hard error, "attempt to index a
+    nil value") the instant one is enabled. This is the real fix: the
+    composer itself, not a guard added to wellbeing.lua that would have
+    silently swallowed every wellbeing speed-penalty write instead. See the
+    "MOVE-RATE COMPOSER" block below (near AgilityBasicJump) for the full
+    writeup: composition rule, clamp range and why, the check that this
+    doesn't fight AgilityBasicJump/the leash pull-back/AgilityAdvanced's
+    vault, and an honest confidence grading on `SetPedMoveRateOverride`
+    itself.
+
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes resource-global (no `local`) functions consumed by
       client/radial.lua:
@@ -51,6 +68,21 @@
             only sends a request.
         DetachLeash()
         IsLeashed() -> boolean
+    - THIS FILE exposes the resource-global move-rate composer consumed by
+      client/wellbeing.lua and client/progression.lua (PHASE4_SPEC.md §13.0
+      Decision 2), and reserves a slot for Phase 3's PropDragging
+      (client/combat.lua) to use once that lands:
+        K9MoveRateModifiers (table)  -- named multiplier contributions, one
+            key per contributing system (`fatigue`, `injury`, `mood`,
+            `xpTier`, `dragging`), each defaulting to 1.0 (no effect).
+            Callers set their OWN key directly (e.g.
+            `K9MoveRateModifiers.fatigue = 0.85`) and then call
+            RecomputeK9MoveRate() — never call SetPedMoveRateOverride
+            directly from any other file.
+        RecomputeK9MoveRate() -- composes every present modifier
+            multiplicatively, clamps to [0.1, 2.0], and makes the single
+            real SetPedMoveRateOverride call for the K9's own ped. Safe to
+            call with no valid/K9 ped (no-op/neutral-reset, never an error).
     - THIS FILE calls client/main.lua's global CanShowK9UI() before
       initiating a request (radial.lua is also expected to gate
       visibility, but per SPEC.md §3's "must not be triggerable by a
@@ -671,6 +703,212 @@ exports.ox_target:addGlobalPlayer({
         end,
     },
 })
+
+-- ======================================================================
+-- MOVE-RATE COMPOSER (PHASE4_SPEC.md §13.0 Decision 2) -- REAL BUG FIX,
+-- qa-tester finding: client/wellbeing.lua (Phase 4) writes
+-- K9MoveRateModifiers.fatigue/.injury/.mood and calls RecomputeK9MoveRate()
+-- unconditionally (no existence guard, unlike client/progression.lua's own
+-- defensive `if K9MoveRateModifiers then`/`type(RecomputeK9MoveRate) ==
+-- 'function'` checks) on the assumption that THIS FILE defines both --
+-- which, until this pass, it did not: neither symbol existed anywhere in
+-- this codebase (confirmed by grep before this pass). The moment any
+-- wellbeing feature flag flips true, client/wellbeing.lua's own
+-- ApplyMoveRateModifiers() would hard-error on its very first write
+-- ("attempt to index a nil value") -- latent only because every wellbeing
+-- flag defaults to false in config.lua. This section is the real fix:
+-- implementing the composer for real, not bolting a guard onto
+-- wellbeing.lua that would have silently swallowed every wellbeing
+-- speed-penalty write instead (a worse failure -- it would look like it
+-- works while doing nothing).
+--
+-- WHY THIS LIVES HERE: this file already owns every other "own body,
+-- native locomotion" concern (camera mode, AgilityBasicJump's suppression
+-- below, the leash elastic pull-back above) -- PHASE4_SPEC.md §13.3's
+-- file/module plan names this file as the composer's home for exactly
+-- that reason, not a new module.
+--
+-- WHY MULTIPLICATIVE COMPOSITION: each contributing system (Fatigue,
+-- Injury, Mood, XPProgression's tier bonus, and the reserved slot for
+-- Phase 3's PropDragging) expresses its own effect as an independent
+-- fractional scale of NORMAL speed (e.g. "0.85x while fatigued", "1.15x at
+-- Elite tier") -- these are proportions of the base rate, not independent
+-- absolute deltas meant to be summed. Proportional penalties should
+-- compound proportionally: 0.85 * 0.85 (a fatigued AND injured K9 running
+-- two independent 15% penalties) is the mathematically correct combined
+-- effect; an additive model (1 - (0.15 + 0.15)) would need a different
+-- unit entirely and doesn't generalize past two simultaneous penalties
+-- without going negative. Multiplying every active modifier together is
+-- the standard way to combine several independent fractional-scale
+-- effects, and it has the convenient property that any modifier left at
+-- its neutral default of 1.0 (an inactive/disabled system) is a true no-op
+-- in the product -- nothing below has to special-case "this system isn't
+-- contributing right now."
+--
+-- CLAMP RANGE [0.1, 2.0], AND WHY: mirrors this codebase's own established
+-- defensive-clamping precedent for exactly this failure class -- the
+-- `math.max(_, 0.1)` floor this file's own leash pull-back thread already
+-- uses above (zoneSize guard) and client/tracking.lua uses twice
+-- (sampleIntervalMeters/markerSpacing guards) against a
+-- misconfigured-to-zero-or-negative value. 0.1 as the floor: the lowest
+-- realistic legitimate combination shipped today (Injury 0.7 * Fatigue
+-- 0.85 * Mood 0.9 ~= 0.535, config.lua's Config.Wellbeing) sits
+-- comfortably above it, so this floor is a defensive backstop against a
+-- MISCONFIGURED multiplier (a config typo, or a future PropDragging value
+-- near 0) freezing the K9 solid, not a value any correct combination of
+-- today's shipped systems is expected to reach. 2.0 as the ceiling:
+-- today's highest shipped multiplier (XPProgression's Elite tier, 1.15,
+-- config.lua's Config.XPTiers) is well under it, so 2.0 exists purely to
+-- stop a misconfigured or unreviewed-future-system multiplier from
+-- launching the K9 to an unreasonable speed, while leaving generous
+-- headroom for a legitimate future stacked-bonus design without needing
+-- this clamp revisited.
+--
+-- INTERACTION CHECK WITH THIS FILE'S OTHER MOVEMENT LOGIC (done before
+-- writing this, per this task's explicit instruction):
+--   - AgilityBasicJump's suppression thread below calls
+--     DisableControlAction(0, INPUT_JUMP/INPUT_DUCK, true) every frame --
+--     a different native entirely (blocks an input action, doesn't touch
+--     move rate) -- no interaction with SetPedMoveRateOverride below.
+--   - The leash elastic pull-back thread above corrects position directly
+--     via SetEntityCoords, never via a move-rate override -- again no
+--     shared native, no interaction. A leashed K9's move RATE (as opposed
+--     to how far it's allowed to drift from its partner) is unaffected by
+--     leash state and is expected to keep responding normally to whatever
+--     this composer computes.
+--   - AgilityAdvanced's vault further below drives an instantaneous
+--     velocity impulse via SetEntityVelocity, a one-shot native distinct
+--     from the persistent move-rate override this composer maintains --
+--     no interaction (a vault's brief arc is an externally-applied
+--     velocity kick, not ground-locomotion animation speed, which is the
+--     documented scope of SetPedMoveRateOverride).
+--   - This resource's ONLY call site for SetPedMoveRateOverride, anywhere,
+--     is RecomputeK9MoveRate() below (confirmed by grep before writing
+--     this) -- exactly PHASE4_SPEC.md §13.0 Decision 2's "one and only
+--     call" requirement.
+--
+-- CONFIDENCE NOTE ON SetPedMoveRateOverride ITSELF, stated honestly per
+-- this codebase's own convention (see client/hud.lua's "STAMINA NATIVE --
+-- CONFIDENCE NOTE" for the standard this follows): the native's
+-- NAME/existence as a real, callable FiveM ped native is HIGH confidence
+-- (linked from phase2_notes/phase3_combat_natives.md's own
+-- natives-to-verify list, and independently named by both
+-- PHASE3_SPEC.md §12.5.4 and PHASE4_SPEC.md §13.0 as the intended
+-- mechanism for exactly this class of effect -- multiple independent
+-- planning passes converge on the same native). Its PRECISE runtime
+-- semantics -- specifically (a) whether a set value persists indefinitely
+-- until explicitly changed vs. decaying/resetting on its own, and (b)
+-- whether it needs to be re-asserted every tick to keep affecting a live
+-- player ped, the way DisableControlAction's own contract explicitly
+-- requires -- were NOT independently re-verified against
+-- raw.githubusercontent.com/citizenfx/natives or a live client this
+-- session. PHASE3_SPEC.md §12.5.4 already flags an expectation that
+-- PropDragging will need to "re-assert every tick" for this same native.
+-- This composer is written to be SAFE either way regardless of which is
+-- true: every real caller (client/wellbeing.lua on each pushed snapshot,
+-- client/progression.lua on each tier change, and this file's own
+-- onResourceStop reset below) re-invokes RecomputeK9MoveRate() on its own
+-- change events rather than assuming one set-and-forget call is
+-- sufficient, so if the native DOES require periodic re-assertion, the
+-- overall system degrades to "correct within one state-change event," not
+-- "silently wrong forever." A native-api-assistant pass to independently
+-- confirm exact persistence semantics is recommended before this ships to
+-- a live server, same standard this file already applies to its own
+-- AgilityAdvanced/door-interaction natives.
+-- ======================================================================
+
+--- Named multiplier contributions toward the K9's own single effective
+--- move-rate override (PHASE4_SPEC.md §13.0 Decision 2). Every contributing
+--- system sets its OWN named key here and then calls RecomputeK9MoveRate()
+--- -- nothing should ever call SetPedMoveRateOverride directly except
+--- RecomputeK9MoveRate() itself, below. An absent/nil key is treated
+--- identically to 1.0 (no effect) by the compose loop below, so a
+--- contributing system whose owning Config.Features flag is disabled
+--- simply never touches its key and never affects the product.
+--- @type table<string, number>
+K9MoveRateModifiers = {
+    fatigue = 1.0,  -- client/wellbeing.lua, Config.Features.FatigueSystem
+    injury = 1.0,   -- client/wellbeing.lua, Config.Features.InjuryLimping
+    mood = 1.0,     -- client/wellbeing.lua, Config.Features.MoodSystem
+    xpTier = 1.0,   -- client/progression.lua, Config.Features.XPProgression
+    dragging = 1.0, -- RESERVED for Phase 3's PropDragging (client/combat.lua, PHASE3_SPEC.md §12.5.4) -- not yet a real contributor; present so that file's eventual composer write has a ready slot without needing to edit this table.
+}
+
+local MOVE_RATE_MIN = 0.1 -- see this section's header comment for the full clamp-range justification
+local MOVE_RATE_MAX = 2.0
+
+-- Tracks the last value THIS resource actually applied via
+-- SetPedMoveRateOverride, so onResourceStop below only resets the native
+-- when this resource actually changed it away from neutral -- same "don't
+-- clobber state we never touched" discipline as this file's existing
+-- isFirstPersonK9View onResourceStop handler above.
+local lastAppliedMoveRate = 1.0
+
+--- The single, only call site for SetPedMoveRateOverride in this resource
+--- (PHASE4_SPEC.md §13.0 Decision 2). Composes every entry currently in
+--- K9MoveRateModifiers multiplicatively (see this section's header comment
+--- for why multiplicative, not additive), clamps the result defensively,
+--- and applies it once. Safe to call at any time, from any file, whether
+--- or not the local player currently has a valid/K9 ped -- every early
+--- return below is a deliberate no-op, never an error.
+function RecomputeK9MoveRate()
+    local ped = PlayerPedId()
+    if not ped or ped == 0 or not DoesEntityExist(ped) then
+        return -- no valid ped to apply anything to yet (e.g. between spawns) -- nothing to do, not an error
+    end
+
+    if not IsOwnModelK9() then
+        -- Not currently playing a K9 character -- none of the wellbeing/XP/
+        -- dragging modifiers above are meaningful for a human character's
+        -- move speed. Reset to neutral rather than silently no-op-ing:
+        -- FiveM's SetPlayerModel keeps the SAME ped index across a model
+        -- swap, so a stale non-1.0 override applied while this ped was
+        -- last a K9 could otherwise persist onto the human character after
+        -- a K9-to-human model change, permanently speeding up or slowing
+        -- down a player who is no longer even playing K9 content.
+        if lastAppliedMoveRate ~= 1.0 then
+            SetPedMoveRateOverride(ped, 1.0)
+            lastAppliedMoveRate = 1.0
+        end
+        return
+    end
+
+    local effective = 1.0
+    for _, modifier in pairs(K9MoveRateModifiers) do
+        if type(modifier) == 'number' then
+            effective = effective * modifier
+        end
+        -- non-number entries are ignored defensively rather than erroring
+        -- -- should never happen with every documented caller, but a
+        -- composer this many independent systems write into is exactly the
+        -- kind of shared state worth being defensive about.
+    end
+
+    effective = math.max(MOVE_RATE_MIN, math.min(MOVE_RATE_MAX, effective))
+
+    SetPedMoveRateOverride(ped, effective)
+    lastAppliedMoveRate = effective
+end
+
+-- qa-tester-class hygiene, same reasoning as isFirstPersonK9View's own
+-- onResourceStop handler above: a resource restart while a non-neutral
+-- move-rate override is active would otherwise leave the K9 permanently
+-- sped up/slowed down with no code left running to ever reverse it. Only
+-- resets when THIS resource actually applied a non-1.0 value, so an
+-- unrelated resource's own independent SetPedMoveRateOverride call (the
+-- disclosed, pre-existing FiveM limitation PHASE4_SPEC.md §13.0 Decision 2
+-- itself flags -- a single global-per-entity native this resource cannot
+-- fully own) is never clobbered by this handler.
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    if lastAppliedMoveRate ~= 1.0 then
+        local ped = PlayerPedId()
+        if ped and ped ~= 0 and DoesEntityExist(ped) then
+            SetPedMoveRateOverride(ped, 1.0)
+        end
+        lastAppliedMoveRate = 1.0
+    end
+end)
 
 -- AgilityBasicJump (Config.Features.AgilityBasicJump): SPEC.md §6.1 bullet
 -- 3 bundles jump AND crouch together ("The K9 player can run, jump, and
