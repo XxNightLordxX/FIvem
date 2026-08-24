@@ -342,3 +342,228 @@ left untouched rather than risking a collision.
   start implementation.
 - Bark-audio asset gap and the HUD-visibility-gate disagreement remain
   open with no change in status; carry forward again.
+
+---
+
+## 2026-08-23 — Pass #4 (whole-project vantage; ran alongside ~18 concurrent file/feature-level agents per the live "maximum parallelism" directive)
+
+**Scope note, upfront:** this pass explicitly does not re-review every line
+(that's what the concurrent QA/spec-conformance/refactor/wiring/exploit
+agents running right now are for) — it checks that the batch since Pass #3
+matches its own commit messages, that the project's own docs (`CHANGELOG.md`,
+`REFACTOR_ROADMAP.md`, `SPEC.md`/`PHASE3_SPEC.md`) are/aren't drifting from
+what's actually shipped, and looks specifically for the kind of cross-file
+interaction a single-file reviewer has no reason to go looking for.
+
+**Reviewed:** `git log --oneline 37d6765..cf0f90f -- qbx_k9unit` — the 8
+commits Pass #3 hadn't seen yet: `f44f8c8` (Phase 4 HUD visibility-gate
+design fork resolved: gate on `CanShowK9UI()`, not `IsOwnModelK9()`),
+`ac29069` (shared `server/cooldowns.lua` extraction), `531c537` (luacheck
+CI added), `258d2b1` (Phase 4 vitality HUD wired into the manifest),
+`09082df` (door-interaction nudge-open), `efe07c5` (search TOCTOU fix),
+`f70d28f` (3 native-correctness sweep fixes), `cf0f90f` (`PHASE3_SPEC.md`
+Revision 3: PvP re-opened by explicit product override). **Important
+caveat: the repo did not hold still during this pass.** Four more commits
+(`cc78fc6`, `b37f00d`, `4536f17`, `6ba0fd2`) and a fifth (`9e99e5d`,
+Phase 3 `AgilityAdvanced`) landed *while this review was running*, plus
+live uncommitted work touching `CHANGELOG.md`, `README.md`,
+`client/{hud,main,radial,search,vehicle,tracking}.lua`,
+`server/{certifications,main,tracking}.lua`, `config.lua`, and
+`.luacheckrc` was still in flight as this entry was being written. Per
+this project's own established convention (Pass #3 did the same for the
+cooldown extraction), that live work was **not** deep-reviewed here —
+noted for awareness, left for the next pass once it lands.
+
+### `luac5.4 -p` / `luacheck` baseline
+
+Ran against all 15 `.lua` files in the resource (14 checked by `luacheck`
+per its own `.luacheckrc` scope — `fxmanifest.lua` is intentionally
+excluded, same as every prior pass's convention): **all pass `luac5.4 -p`
+with no syntax errors; `luacheck` reports 0 warnings / 0 errors across all
+14 files.** This is the first pass where `luacheck` itself could be run
+directly (installed in this sandbox) rather than only trusted via CI —
+confirmed clean, not just assumed from `531c537`'s commit message.
+
+### Commit-message-vs-diff spot checks
+
+- **`efe07c5` (search TOCTOU fix):** verified in full. The re-check
+  (`if not HasK9Access(source) then ... return { ok = false, reason =
+  'access_revoked' } end`, `server/search.lua`) lands exactly where the
+  commit message says (immediately after the awaited
+  `GetInventoryItems` call, before `totalWeight`/tier/broadcast), logs
+  `search_failed` to `k9_search_log` as claimed, and `client/search.lua`'s
+  existing generic `else` branch (line 198) already handles the new
+  `access_revoked` reason with no client-side change needed, exactly as
+  the commit message asserts. **Matches.**
+- **`ac29069` (cooldown/mutex extraction):** verified the "fails closed on
+  a nil/non-positive threshold" claim directly — `server/cooldowns.lua`'s
+  `IsOnCooldown` (both the flat and nested variants, lines ~146-161 and
+  ~245-256) return `true` (blocked) rather than silently disabling the
+  cooldown, exactly as described. Spot-checked `server/main.lua`'s
+  `DoorScratchCooldown`/`DoorScratchByDoorCooldown` migration onto
+  `NewCooldown()` — present, consistent with the dual-cooldown shape
+  Pass #3 flagged as the specific behavior-preservation risk to watch.
+  **Matches**, though this pass did not re-diff every one of the 11
+  migrated call sites line-by-line (left to the concurrent QA/regression
+  agents' file-level passes).
+- **`f70d28f` (three native-correctness fixes) — one real commit-message/
+  diff mismatch found, not a code bug:** the `config.lua` husky-typo fix
+  and the `tracking.lua` `GetWaterHeightNoWaves` comment fix are both
+  present exactly as described. **The claimed third fix — "client/hud.lua:
+  fixed inverted stamina semantics" — is not in this commit's diff at
+  all** (`git show --stat f70d28f` touches only `client/tracking.lua` and
+  `config.lua`). `git blame` shows the correct `100 -
+  GetPlayerSprintStaminaRemaining(...)` formula was already present in
+  `client/hud.lua` from the moment it was authored, one commit earlier
+  (`258d2b1`, 19 seconds before `f70d28f`). Net effect: the shipped code
+  is correct (the stamina bug the commit message describes does not
+  exist in the current tree), but the commit message describes a fix that
+  a different, concurrent pass had already baked into the file's first
+  version — a benign case of two agents independently catching the same
+  finding, where the second one's commit message wasn't trimmed down to
+  match its actual diff. Flagging for accuracy, not because anything needs
+  fixing in `.lua`.
+- **`cf0f90f` (`PHASE3_SPEC.md` Revision 3):** confirmed doc-only (`git
+  show --stat` — one file, 1530 lines touched, no `.lua`). Confirmed
+  `SPEC.md` §2's non-goals list was **not** given a "player-vs-player K9
+  combat" bullet (Revision 2 had flagged that fold-in step as pending;
+  Revision 3 correctly says not to take it now, and `SPEC.md` itself
+  currently has no such bullet — checked directly).
+- **`f44f8c8`, `531c537`, `258d2b1`, `09082df`:** spot-checked against
+  their diffs; all match their commit messages. `258d2b1`'s manifest wiring
+  (`ui_page 'html/index.html'`, `files {...}`, `client/hud.lua` in
+  `client_scripts`) is present exactly as described.
+
+### New finding: a real, small cross-file regression from `f70d28f`'s config fix — already caught and being fixed by concurrent work
+
+`f70d28f` corrected `config.lua`'s `Config.Peds` husky entry
+(`a_c_huskie` → `a_c_husky`). The three generic model-*recognition*
+tables (`client/main.lua`'s `K9ModelHashes`, `client/movement.lua`'s
+`k9ModelHashesForTargeting`, `server/certifications.lua`'s
+`K9ModelHashes`) all derive their keys by iterating `Config.Peds` at load
+time, so they picked up the fix automatically — no problem there. But
+`client/movement.lua` also has two **hand-written, literal-string**
+breed-to-*scenario* tables that don't iterate `Config.Peds`:
+`K9_SIT_SCENARIO_BY_MODEL_HASH` (Sit action) and
+`K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH` (Scratch-to-Alert action, added
+one commit later in `09082df` — and authored with the *already-corrected*
+`a_c_husky` string, so it never broke). At `f70d28f`'s own commit,
+`K9_SIT_SCENARIO_BY_MODEL_HASH` still keyed off `GetHashKey('a_c_huskie')`
+— a real, verified miss against `GetHashKey('a_c_husky')` (the actual
+model), which would have silently fallen through to
+`K9_SIT_DEFAULT_SCENARIO` (Shepherd) instead of the intended Retriever
+substitute for a Husky K9's Sit action. Cosmetic-only (no security/
+correctness impact — worst case is the wrong idle animation plays), but a
+genuine, confirmed regression, and exactly the kind of interaction a
+file-scoped reviewer of either `config.lua` or `client/movement.lua` alone
+could plausibly miss (the fix commit touched the former; the stale table
+lives in the latter, in code that predates the fix commit by several
+commits). **Status: as of this pass, a concurrent, uncommitted diff to
+`client/movement.lua` (from whichever agent is implementing Phase 3's
+`AgilityAdvanced`, landed moments later as `9e99e5d`) already corrects
+`K9_SIT_SCENARIO_BY_MODEL_HASH`'s key to `a_c_husky` — found already fixed
+in flight, not left open.** Wrote up the underlying *pattern* (hand-copied
+`Config.Peds` string literals with no enforcement mechanism keeping them in
+sync) as a new item in `REFACTOR_ROADMAP.md`'s Revision 3 note and folded
+it into near-term item 3, since a 3rd or 4th such table is a realistic
+risk for future breed-specific features (Phase 3 agility, future bark
+variety).
+
+### Documentation currency — findings and one edit made, one deliberately left alone
+
+- **`REFACTOR_ROADMAP.md` — stale, updated this pass.** Its near-term
+  item 1 (the cooldown/TTL/mutex helper) was still written up as "do
+  next"/"highest-value item... precisely because it's overdue" despite
+  having shipped in `ac29069`. Added a Revision 3 status note at the top
+  marking item 1 **DONE** (verified, not just taken on the commit
+  message's word — see the fail-closed check above), confirmed item 2
+  (defensive netId resolution) is still genuinely open (`ac29069`'s own
+  file list never touched it), and folded in the breed-to-scenario-table
+  finding above as a widened item 3. Original retrospective text left
+  intact underneath, per this document's own established pattern of
+  layering revision notes rather than rewriting history.
+- **`CHANGELOG.md` — confirmed stale (still says "nudge-open is not
+  implemented" under Known Limitations, and has no entry at all for the
+  cooldown extraction, luacheck CI, TOCTOU fix, native-correctness sweep,
+  or Phase 3 Revision 3), but deliberately NOT touched here.** Checked
+  before writing anything: a docs-agent instance is actively editing
+  `CHANGELOG.md` right now (confirmed via `git diff` on the live working
+  tree partway through this pass — the in-progress rewrite already covers
+  scent-tracking closure, nudge-open, the TOCTOU fix, and the Revision 3
+  PvP change, and reads accurate against what's actually shipped from a
+  spot check). Left entirely alone to avoid colliding with it, per this
+  pass's own instructions.
+- **`SPEC.md`'s top-of-file Status paragraph is now more stale than Pass
+  #1 judged it** — it still describes Phase 2 as "actual logic still
+  mid-implementation by concurrent agents," which was accurate when
+  written but is now well behind reality (Phase 2 is implementation-
+  complete except scent-tracking, which itself is being closed out in the
+  same live work this pass observed but didn't review). Not fixed here,
+  consistent with `PHASE3_SPEC.md`/`PHASE4_SPEC.md`'s own stated reason
+  for staying as separate documents rather than being folded in: no
+  incremental-edit tool access to a ~113KB file safely, real risk of
+  corrupting reviewed content for a prose-only fix. Flagging for whoever
+  next has safe edit access to `SPEC.md` to fold in a status-paragraph
+  refresh alongside the Phase 2/3/4 section folds already pending.
+- **Two new planning documents appeared uncommitted during this pass and
+  were not deep-reviewed** (out of scope, and actively in flux):
+  `PHASE4_SPEC.md` (detailed spec for the 9 non-HUD Phase 4 features,
+  explicitly scoped to exclude `HealthStaminaHUD`) and
+  `phase2_notes/phase5_features_research.md` (native/pattern research for
+  Phase 5). Both landed committed later in this same pass
+  (`b37f00d`, `4536f17`) — noted for the record that planning work is now
+  running two phases ahead of implementation (Phase 2 substantially
+  shipped, Phase 3 mid-implementation, Phase 4/5 already speced/
+  researched), which is a healthy lead time, not a concern by itself.
+
+### Regression spot-checks carried forward from Pass #3 — all still present
+
+Re-checked the 8 items Pass #3 confirmed (not a fresh re-derivation, a
+targeted re-grep against current `HEAD`): `AgilityBasicJump` gate,
+`LeashPairs[x] = { partner, isK9 }`, `RevokeCertificationOffline` →
+`RefreshCertificationCache`, `client/vehicle.lua`'s `onResourceStop`
+cleanup, leash pull-back's `IsInK9Vehicle` check, radial's
+`lib.registerRadial`/`lib.addRadialItem` split, `client/search.lua`'s
+netId-capture-before-animation + water-crossing draw-order fixes, and the
+door-scratch dual-cooldown/entity-type-check/vehicle-tuck exclusion — all
+confirmed still present in the current tree (now migrated onto
+`server/cooldowns.lua` for the cooldown-shaped ones, behavior unchanged).
+
+### Verdict
+
+**No uncaught regressions.** One real (but already self-healing, cosmetic-
+only) cross-file regression found and confirmed being fixed in concurrent
+flight; one commit-message/diff mismatch found (`f70d28f`'s hud.lua claim)
+that doesn't correspond to any actual code defect; `REFACTOR_ROADMAP.md`
+updated to reflect item 1's completion; `CHANGELOG.md` correctly left to
+the docs-agent already handling it; `SPEC.md`'s top-level staleness
+reconfirmed and left for a safe-incremental-edit pass. Full `luac5.4 -p`
+and (newly, directly-run) `luacheck` baselines both clean.
+
+### For next pass
+
+- Confirm the in-flight work observed but not reviewed here actually
+  landed cleanly: Phase 3 `AgilityAdvanced` (`9e99e5d`, already committed
+  by the end of this pass — worth a first real look), scent-tracking's
+  `server/tracking.lua` `swapItems` hook implementation (still uncommitted
+  as of this pass's end), and whatever `client/main.lua`/`client/radial.lua`
+  changes were mid-flight (not yet identified what they wire up).
+- Re-verify `REFACTOR_ROADMAP.md`'s item 2 (defensive netId resolution)
+  status — still open as of this pass; check it hasn't been silently
+  addressed by any of the in-flight work above without an update here.
+- Confirm `CHANGELOG.md`'s in-progress rewrite actually landed and reads
+  consistent with whatever else committed after it (the docs-agent was
+  working from a snapshot that itself kept moving during this pass).
+- Re-check `PHASE3_SPEC.md` §12.0 item 8 (the client-relay/non-cooperating-
+  client architecture question) — flagged in this pass's briefing as being
+  worked by a coder-security instance live; not yet resolved as of the
+  version reviewed here (`cf0f90f`), status unknown by the time this pass
+  ended given how much else landed concurrently.
+- Once Phase 3 implementation is further along, re-run the same 8
+  Pass-#3-era regression spot-checks plus this pass's breed-to-scenario-
+  table fix, and confirm `REFACTOR_ROADMAP.md`'s widened item 3 (or a
+  dedicated fix) actually lands for `K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH`'s
+  sibling table if a similar drift ever recurs there.
+- Bark-audio placeholder asset gap and the HUD-visibility-gate
+  disagreement (the latter resolved by `f44f8c8` this pass, see above) —
+  bark-audio remains open with no change in status; carry forward again.

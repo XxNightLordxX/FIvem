@@ -1,5 +1,74 @@
 # qbx_k9unit — Technical Debt / Refactor Roadmap
 
+**Revision 3 — near-term item 1 landed, watchdog Pass #4, 2026-08-23.**
+Near-term item 1 below (the shared `NewCooldown`/`NewNestedCooldown`/
+`NewMutex` extraction) **shipped** in commit `ac29069` as
+`server/cooldowns.lua`, migrating all 11 previously hand-rolled
+cooldown/mutex tables across `server/main.lua`, `server/certifications.lua`,
+`server/tracking.lua`, `server/search.lua` onto it, per that commit's own
+message: reviewed by three independent passes plus a direct old-vs-new
+numeric-constant comparison, all behavior-preserving, with one real latent
+bug (a nil/non-positive threshold silently and permanently disabling a
+cooldown) caught and fixed to fail closed instead. Re-verified this pass:
+`server/cooldowns.lua`'s `IsOnCooldown` methods do return `true` (blocked)
+rather than `false` (allowed) when `threshold` is nil/non-positive — see
+`server/cooldowns.lua:146-161` and `:245-256`. The item's write-up below is
+kept as-is (historical record of the debt as it stood pre-extraction), not
+rewritten, per this document's own established convention of layering
+status corrections rather than silently editing history — see the
+**"STATUS: DONE"** marker on the item 1 heading below for the current
+state.
+
+**Near-term item 2 (defensive-netId-resolution helper) is still open** —
+`ac29069` scoped itself to the cooldown/mutex extraction only (confirmed by
+its own file list: `fxmanifest.lua`, `server/certifications.lua`,
+`server/cooldowns.lua`, `server/main.lua`, `server/search.lua`,
+`server/tracking.lua` — no `ResolveNetworkEntity` helper, no client-side
+change). Still 6 independent copies of that pattern as of this pass; no
+change from the retrospective below.
+
+**New pattern found this pass, same root cause as item 3 below, not
+previously tracked:** `client/movement.lua` carries two more
+`Config.Peds`-adjacent literal-string tables that item 3 doesn't cover —
+`K9_SIT_SCENARIO_BY_MODEL_HASH` and `K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH`
+(breed-name -> scenario-name maps for the Sit and Scratch-to-Alert
+actions). Unlike the three *model-recognition* tables item 3 already
+tracks (which all derive their keys by iterating `Config.Peds` at load
+time, so a `Config.Peds` edit can never desync them), these two are
+separately hand-written literal `{ a_c_shepherd = ..., a_c_husky = ... }`
+tables that must be kept in sync with `Config.Peds`' actual model strings
+by hand. This is exactly how the `a_c_huskie` → `a_c_husky` typo fix
+(`f70d28f`) briefly desynced them: `config.lua` and the three
+`Config.Peds`-iterating tables were fixed, but at `f70d28f`'s own commit
+neither breed-to-scenario table was — `K9_SIT_SCENARIO_BY_MODEL_HASH` kept
+the stale `a_c_huskie` key (a real, confirmed miss: `GetHashKey('a_c_husky')`
+no longer matches the table's `GetHashKey('a_c_huskie')` entry, silently
+falling back to `K9_SIT_DEFAULT_SCENARIO` for a Husky K9's Sit action
+instead of the intended Retriever substitute), while
+`K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH` (added one commit later in
+`09082df`) was authored with the already-corrected `a_c_husky` string and
+so never broke. See `WATCHDOG_LOG.md`'s Pass #4 entry for the full
+before/after; as of this pass a concurrent, uncommitted diff already
+corrects `K9_SIT_SCENARIO_BY_MODEL_HASH`'s key too, so this should not need
+a separate fix — but the underlying **pattern** (hand-copied breed-string
+literals that must track `Config.Peds` without any mechanism enforcing
+it) remains, and a 3rd such table is a realistic future risk (Phase 3's
+`PHASE3_SPEC.md` §12.5.5 Advanced Agility work and any future bark-variety
+work are exactly the kind of per-breed feature likely to add a 4th).
+Recommend folding a fourth line item into item 3 below: **either** extend
+`IsEntityModelK9`-style consolidation to expose a single
+`Config.Peds`-driven `model -> scenario` builder function that all
+breed-to-scenario tables call (`BuildScenarioTableByModel({shepherd=...,
+rottweiler=..., chop=..., husky=...})`) so a future config typo fix only
+needs to touch `config.lua`, **or** at minimum add a one-line assertion at
+each table's construction site that every `Config.Peds` entry has a
+corresponding scenario mapping (fails loudly at resource start instead of
+silently falling back to the default scenario for an unmapped breed).
+Low urgency (cosmetic-only misses, not a security/correctness issue), but
+cheap to bundle with whichever coder-architect pass eventually does item 3.
+
+---
+
 **Revision 2 — Phase 2 retrospective, 2026-08-23.** Phase 2 (tracking,
 search, vision, door interaction — client + server, all four sub-areas) has
 now fully landed. This revision re-reads the real, shipped code in
@@ -127,7 +196,13 @@ the eligibility model, not "is playing a K9"). Revision 1's call that this
 "is not blocking Phase 2's critical path" and "cheap to fix any time" was
 correct on both counts — it wasn't fixed, and nothing got worse from
 leaving it. This is the one item where "premature to act" turned out to be
-the right read, not just a hedge.
+the right read, not just a hedge. **Revision 3 update:** see the new
+breed-to-scenario-table note at the top of this document — a *related but
+distinct* pair of tables (not counted in the "3 copies" above, since they
+map to scenario names, not booleans) turned out to be exactly the failure
+mode this item's "cheap to fix any time" framing was implicitly betting
+against; worth widening this item's scope to cover them when it's finally
+picked up.
 
 ### Item 4 (shared gated-cooldown-broadcast helper) — partially confirmed, payoff smaller than framed
 
@@ -196,7 +271,15 @@ beyond continuing to update it as Phase 3 files land.
 
 ### Near-term (do next)
 
-#### 1. Extract the shared cooldown/TTL/mutex helper now — retroactively, not preemptively
+#### 1. Extract the shared cooldown/TTL/mutex helper now — retroactively, not preemptively — **STATUS: DONE (`ac29069`)**
+
+**Landed 2026-08-23 as `server/cooldowns.lua`** (`NewCooldown`,
+`NewNestedCooldown`, `NewMutex`), migrating all 11 tables named in the
+retrospective above across `server/main.lua`, `server/certifications.lua`,
+`server/tracking.lua`, `server/search.lua`. See the Revision 3 note at the
+top of this document for verification detail. The write-up immediately
+below is retained as the original problem statement for the record, not
+because the item is still open.
 
 **What's wrong:** 11 independent hand-rolled cooldown/mutex tables and 3
 independent periodic-sweep threads now exist across `server/main.lua`,
@@ -244,7 +327,11 @@ overdue — do it before Phase 3 (`PHASE3_SPEC.md`) adds its own cooldowns
 using the same hand-rolled convention, which would make this a 12+-table
 migration instead of an 11-table one.
 
-#### 2. Extract the "resolve network entity defensively" helper — same call, now backed by 6 real instances instead of 2
+#### 2. Extract the "resolve network entity defensively" helper — same call, now backed by 6 real instances instead of 2 — **STATUS: still open**
+
+**Confirmed still open this pass** — `ac29069` (item 1 above) did not touch
+this pattern; still 6 independent copies, no `ResolveNetworkEntity` helper
+anywhere in the tree as of this pass.
 
 **What's wrong:** now 6 independent copies (4 client: `client/main.lua`,
 `client/vehicle.lua`, `client/movement.lua`, `client/search.lua`; 2
@@ -254,18 +341,22 @@ resolve pattern, confirmed above.
 **Scope:** unchanged from Revision 1's proposal — one client-side
 `ResolveNetworkEntity(netId)` global in `client/main.lua`, reused by
 `playBark`, `ResolveVehicleFromState`, `playDoorScratch`, and
-`playContrabandAlert`; one server-side equivalent in the `server/utils.lua`
-module from item 1, with an optional expected-entity-type parameter, reused
+`playContrabandAlert`; one server-side equivalent, reused
 by `relayDoorScratch` and `HandleSearchTarget` (the latter keeps its own
 additional `GetEntityType`-vs-claimed-`targetType` cross-check on top,
-since that's request-specific, not part of the generic resolve).
+since that's request-specific, not part of the generic resolve). Since
+item 1's `server/cooldowns.lua` already established the "new shared
+`server/*.lua` module" convention, the server-side half of this item can
+either join that file or get its own `server/entities.lua` — either is
+consistent with the shipped precedent now.
 
 **Payoff:** Same reasoning as Revision 1, at 3x the current duplication —
 one audited place for "does this netId actually resolve to something real"
 instead of 6 independently-written (if consistently correct) copies.
 
-**Order:** Alongside item 1; both belong in the same coder-architect pass
-since the server-side pieces land in the same new `server/utils.lua`.
+**Order:** Now the single highest-value item remaining on this roadmap —
+item 1 (its natural pairing) is done; do this next, still ahead of Phase 3
+implementation start for the same reason item 1's "order" note gave.
 
 #### 3. Consolidate the `Config.Peds` model-hash tables — no longer time-sensitive, still cheap
 
@@ -277,6 +368,12 @@ hasn't grown a 4th copy. Keep the same proposed fix (expose
 change diff — but there's no more urgency argument for doing it before any
 particular Phase 3 file; bundle it into whichever coder-architect pass
 does items 1/2 as a cheap rider, rather than sequencing around it.
+**Revision 3:** widen this item's scope to also cover
+`K9_SIT_SCENARIO_BY_MODEL_HASH`/`K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH`
+(see the Revision 3 note at the top of this document) when picked up — same
+root cause (a `Config.Peds` model string hand-copied into another literal
+table), slightly higher real-world payoff than the pure model-recognition
+tables since this pair already desynced once.
 
 ### Medium-term
 
@@ -285,13 +382,13 @@ does items 1/2 as a cheap rider, rather than sequencing around it.
 Confirmed the two broadcasts share a real tail shape, but the payoff is a
 handful of lines at one call site, not a bug-prevention story — no
 stamp-order or access-check bug occurred at either site without the
-helper. Worth doing as a small bonus once item 1's `NewCooldown` exists
-(the broadcast tail becomes trivial to wrap around it), but not worth
-sequencing ahead of items 1-2, and not worth a dedicated pass on its own.
-Do **not** extend this to `BroadcastContrabandAlert` — that broadcast's
-distance-filtering is a real, deliberate difference in scope (leaking a
-specific target's search outcome vs. a location-only sound cue), correctly
-kept separate in the shipped code, and should stay separate.
+helper. Worth doing as a small bonus now that item 1's `NewCooldown`
+exists (the broadcast tail becomes trivial to wrap around it), but not
+worth sequencing ahead of item 2, and not worth a dedicated pass on its
+own. Do **not** extend this to `BroadcastContrabandAlert` — that
+broadcast's distance-filtering is a real, deliberate difference in scope
+(leaking a specific target's search outcome vs. a location-only sound cue),
+correctly kept separate in the shipped code, and should stay separate.
 
 #### 5. `FindNearestEntity` — the 3rd occurrence has technically arrived, but shapes still diverge enough to wait
 
@@ -301,7 +398,7 @@ entity scans (age-filtered log array vs. distance-filtered live entity
 pool). A generic `FindNearestEntity(pool, maxDistance, predicate)` could
 cover all three with an optional predicate parameter, but the payoff is
 still modest (3 call sites, ~10-15 lines each). Reasonable to fold into the
-same coder-architect pass as items 1-3 if it's cheap once that context is
+same coder-architect pass as items 2-3 if it's cheap once that context is
 loaded, but not worth a dedicated pass.
 
 #### 6. `Config.LeashMaxDistance`'s triple-duty overload — unchanged, still not urgent
@@ -337,32 +434,28 @@ independently of the others.
 
 ## Suggested delegation
 
-- **coder-architect**: items 1, 2, 3, and (as a cheap rider) 5 — one
-  coordinated structural pass: new `server/utils.lua`
-  (`NewCooldown`/dual-key cooldown/`NewTTLTable`/shared sweep runner),
-  migrate the 11 existing tables and 3 sweep threads onto it, add
-  `ResolveNetworkEntity` client- and server-side and migrate the 6 existing
-  call sites, add `IsEntityModelK9` to `client/main.lua` and delete
-  `client/movement.lua`'s local copy. Reasonable to split into per-file
-  migration PRs (main.lua / certifications.lua / tracking.lua / search.lua
-  / client files) given the size increase from Revision 1's original
-  scoping.
+- **coder-architect**: item 2 (now the top remaining item) and, as a cheap
+  rider, items 3 and 5 — add `ResolveNetworkEntity` client- and
+  server-side and migrate the 6 existing call sites, add `IsEntityModelK9`
+  to `client/main.lua` and delete `client/movement.lua`'s local copy
+  (widened per Revision 3 to also cover the two breed-to-scenario tables).
+  Item 1 (cooldown/TTL/mutex) is done; no further action needed there
+  beyond the periodic regression spot-check watchdog passes already do.
 - **coder-backend**: reviewer/co-implementer on the server-side half of the
-  above (main.lua, certifications.lua, tracking.lua, search.lua migrations)
-  given the security-sensitive nature of several of these checks
-  (door-scratch flood fix, search target type cross-check).
+  above (main.lua, search.lua migrations) given the security-sensitive
+  nature of several of these checks (search target type cross-check).
 - **coder-frontend**: reviewer/co-implementer on the client-side half
   (main.lua, vehicle.lua, movement.lua, search.lua's
   `ResolveNetworkEntity` migration and `IsEntityModelK9` consolidation).
-- **correctness-overseer / qa-tester**: this pass is higher-stakes than
-  Revision 1's proposed extraction, since it now touches 4 shipped,
-  reviewed server files instead of 1. Verify every migrated call site is a
-  byte-identical behavior refactor — in particular, that the
-  `lastDoorScratchAt`/`lastDoorScratchAtByDoor` dual-cooldown fix and the
-  `lastTargetSearchAt`/`SearchInFlight` TTL-vs-`playerDropped` split survive
-  the move onto shared helpers without regressing the specific exploit/bug
-  findings that produced them.
-- **project-lead**: sequence items 1-2 ahead of `PHASE3_SPEC.md`
-  implementation start — every additional Phase 3 file that hand-rolls a
-  cooldown or a netId-resolve before this migration lands makes the
-  eventual migration one file larger.
+- **correctness-overseer / qa-tester**: item 2's migration is the same
+  class of risk item 1's was — verify every migrated call site preserves
+  the existing entity-type/proximity checks byte-for-byte, in particular
+  `relayDoorScratch`'s entity-type restriction and `HandleSearchTarget`'s
+  `targetType` cross-check, which must not get generalized away by a
+  shared helper.
+- **project-lead**: sequence item 2 ahead of `PHASE3_SPEC.md`
+  implementation start for the same reason item 1 was sequenced ahead of
+  it — Phase 3's `AgilityAdvanced` work (already landing as of this pass)
+  is client-local and doesn't touch netId resolution, but `BiteAndHold`/
+  `NonLethalTakedown`/`PropDragging` will, once PHASE3_SPEC.md §12.0 item 8
+  is resolved.
