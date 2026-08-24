@@ -219,6 +219,20 @@ end
 --- Re-queries the active-cert row for (citizenid, jobName) and updates the
 --- in-memory cache. Exposed globally (no `local`) — see FILE-TO-FILE
 --- CONTRACT above for every call site.
+---
+--- Regression-test fix: this is the single most-called function in the
+--- cert system (grant, both revoke paths, PlayerLoaded, OnJobUpdate, and
+--- server/main.lua's onResourceStart backfill loop — which iterates every
+--- connected player in one handler invocation — all call it), yet unlike
+--- GrantCertification's INSERT (pcall-wrapped specifically because MySQL
+--- errors are expected there) this read was previously unguarded. Per the
+--- backfill loop's own comment in server/main.lua, an uncaught error here
+--- would abort processing for every subsequent player in that loop — the
+--- exact class of ship-blocking bug already found and fixed once in this
+--- file for a different root cause. Wrap the read in pcall and, on
+--- failure, log it and fail CLOSED (cache `active = false`) rather than
+--- leaving stale/wrong cache state — matches this file's own access-gating
+--- posture of never treating an unreadable cert row as an active grant.
 --- @param citizenid string
 --- @param jobName string
 --- @return boolean active — the freshly-cached value, so callers (e.g.
@@ -226,10 +240,19 @@ end
 --- local Certifications table below) don't need their own accessor just
 --- to resync a dependent value like the k9certified metadata mirror.
 function RefreshCertificationCache(citizenid, jobName)
-    local activeId = MySQL.scalar.await('SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
+    local queryOk, activeIdOrErr = pcall(MySQL.scalar.await, 'SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
         citizenid, jobName,
     })
-    local active = activeId ~= nil
+
+    if not queryOk then
+        print(('[qbx_k9unit] RefreshCertificationCache query failed for %s/%s: %s'):format(citizenid, jobName, tostring(activeIdOrErr)))
+        -- FAIL CLOSED: an unreadable cert row must never be treated as an
+        -- active grant — see doc comment above.
+        Certifications[citizenid] = { active = false, job = jobName }
+        return false
+    end
+
+    local active = activeIdOrErr ~= nil
     Certifications[citizenid] = { active = active, job = jobName }
     return active
 end
@@ -342,6 +365,26 @@ local function IsCertifyActionOnCooldown(granterSrc)
     return not CertifyActionCooldown.Consume(granterSrc)
 end
 
+--- Regression-test fix (extract at the 3rd occurrence — this codebase's own
+--- established convention, see server/cooldowns.lua's own extraction
+--- precedent): GrantCertification, RevokeCertification, and
+--- RevokeCertificationOffline each independently re-resolved the granter's
+--- OWN citizenid via exports.qbx_core:GetPlayer(granterSrc) and notified on
+--- failure with byte-identical logic. Single source of truth now — calls
+--- NotifyPlayer itself on failure so every call site can just early-return
+--- on a nil result.
+--- @param granterSrc number
+--- @return string? citizenid — nil if unresolvable (NotifyPlayer already sent)
+local function ResolveGranterCitizenId(granterSrc)
+    local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
+    local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
+    if not granterCitizenid then
+        NotifyPlayer(granterSrc, 'Unable to resolve your own citizen ID.', 'error')
+        return nil
+    end
+    return granterCitizenid
+end
+
 --- SPEC.md §4.2/§4.3 grant flow. Called by both event 2 and command 6.
 --- @param granterSrc number
 --- @param targetServerId number
@@ -419,12 +462,8 @@ local function GrantCertification(granterSrc, targetServerId)
         return
     end
 
-    local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
-    local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
-    if not granterCitizenid then
-        NotifyPlayer(granterSrc, 'Unable to resolve your own citizen ID.', 'error')
-        return
-    end
+    local granterCitizenid = ResolveGranterCitizenId(granterSrc)
+    if not granterCitizenid then return end
 
     local insertOk, insertResultOrErr = pcall(MySQL.insert.await, 'INSERT INTO k9_certifications (citizenid, job, granted_by) VALUES (?, ?, ?)', {
         targetCitizenid, jobName, granterCitizenid,
@@ -532,12 +571,8 @@ local function RevokeCertification(granterSrc, targetServerId)
         return
     end
 
-    local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
-    local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
-    if not granterCitizenid then
-        NotifyPlayer(granterSrc, 'Unable to resolve your own citizen ID.', 'error')
-        return
-    end
+    local granterCitizenid = ResolveGranterCitizenId(granterSrc)
+    if not granterCitizenid then return end
 
     -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
     -- row matches (SPEC.md §4.3).
@@ -610,12 +645,8 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
         return
     end
 
-    local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
-    local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
-    if not granterCitizenid then
-        NotifyPlayer(granterSrc, 'Unable to resolve your own citizen ID.', 'error')
-        return
-    end
+    local granterCitizenid = ResolveGranterCitizenId(granterSrc)
+    if not granterCitizenid then return end
 
     -- SECURITY FIX (coder-security review): this command exists ONLY to
     -- reach a genuinely disconnected target (see this function's header
