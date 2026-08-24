@@ -69,9 +69,11 @@ sound names with no real audio behind them — see
 both. `Config.Features.ProximityAudioFX`, `PropAttachments`,
 `FetchMechanic`, and `CameraFeedPiP` remain uncoded.
 
-**Phase 3 (combat/action features)** is mostly still design work, with one
-real exception: `AgilityAdvanced` is fully implemented behind its
-still-`false` flag (`client/movement.lua`). `PHASE3_SPEC.md`'s design
+**Phase 3 (combat/action features)** now has `BiteAndHold`/
+`NonLethalTakedown` fully implemented and registered — `server/combat.lua`
+and a real `client/combat.lua` counterpart both exist and are wired into
+`fxmanifest.lua` — alongside `AgilityAdvanced`, fully implemented behind
+its still-`false` flag (`client/movement.lua`). `PHASE3_SPEC.md`'s design
 scoping has also moved forward — a recent reversal puts player-vs-player K9
 combat in scope, and the two cross-cutting design forks that were blocking
 implementation (the client-relay/non-cooperating-target-client
@@ -79,16 +81,23 @@ architecture, and which officer counts as a given K9's "handler"
 independent of leash state) have both been resolved as design decisions.
 The handler-partnership resolution is a **design decision only** — a new,
 dedicated partnership registry, not a reuse of the existing leash pairing —
-and that registry has **not** been implemented, so `HandlerDownDefense`
-remains fully uncoded. A substantial `server/combat.lua` implementing
-`BiteAndHold`/`NonLethalTakedown` exists in this branch's working tree
-under the resolved architecture's guardrails, but it is **deliberately not
-registered in `fxmanifest.lua`** and has **no client half** — it does not
-run, is not part of this install, and should not be treated as a working
-feature. `PropDragging` is out of scope for that file and remains fully
-uncoded. Do not enable `Config.Features.BiteAndHold`, `NonLethalTakedown`,
-or `HandlerDownDefense` — see `CHANGELOG.md`'s Known Limitations for the
-full detail.
+and that registry has **not** been implemented (`server/partnership.lua`
+does not exist, only its `k9_partnerships` schema does), so
+`HandlerDownDefense` remains fully uncoded, and `PHASE3_SPEC.md`'s Recall
+mechanic — which depends on that same registry — is likewise
+unimplemented. Completing `client/combat.lua` also found and fixed a real
+safety bug: `SetEntityCanBeDamaged` is confirmed client-only, so
+`NonLethalTakedown`'s NPC-target branch calling it server-side was a
+silent no-op — a "non-lethal" takedown against an NPC could actually kill
+it before this fix. Despite now being code-complete and registered,
+`BiteAndHold`/`NonLethalTakedown` have **no in-game entry point**:
+`client/combat.lua` exposes `RequestBiteHold()`/`ReleaseBiteHold()`/
+`RequestTakedown()` as globals, but nothing — not the radial menu, not an
+ox_target option, not a command — calls them yet. `PropDragging` is out of
+scope for `server/combat.lua` and remains fully uncoded. Do not enable
+`Config.Features.BiteAndHold`, `NonLethalTakedown`, or
+`HandlerDownDefense` — see `CHANGELOG.md`'s Known Limitations for the full
+detail.
 
 ## Dependencies
 
@@ -112,14 +121,16 @@ Qbox/QBCore data model only — there is no ESX support.
    `qbx_k9unit/sql/install.sql` against your database with your usual DB
    client (phpMyAdmin, HeidiSQL, the `mysql` CLI, etc.) — this resource does
    not auto-execute it. It creates `k9_certifications` (see
-   [Database](#database) below), plus `k9_search_log` (Phase 2 search
-   audit trail) and `k9_partnerships` (schema landed ahead of its own
+   [Database](#database) below), `k9_search_log` (Phase 2 search audit
+   trail), `k9_partnerships` (schema landed ahead of its own
    implementation — no code reads or writes it yet, see
-   [Database](#database)). All three are idempotent
-   (`CREATE TABLE IF NOT EXISTS`) if you accidentally run it twice. **Note:
-   `Config.Features.XPProgression`'s `k9_progression` table is not yet in
-   this migration file** — see [Database](#database) below before enabling
-   that flag.
+   [Database](#database)), and `k9_progression` (Phase 4 XP persistence —
+   see [Database](#database); this table was missing from earlier drafts
+   of this migration, so no K9's XP ever actually survived a restart
+   before it was added). All four are idempotent
+   (`CREATE TABLE IF NOT EXISTS`) if you accidentally run it twice or are
+   applying it to a database that has already been running without one of
+   them.
 3. Add to `server.cfg`, after the five dependencies above (`ox_inventory`
    must be started too, even if you leave every flag that actually uses it —
    Phase 2's `Config.Features.SearchZones`/`ContrabandAlerts`, and Phase 4's
@@ -187,7 +198,7 @@ HUD/badge display**. It is never read by any server-side authorization
 check — the database table above is the only thing that actually grants
 access.
 
-`qbx_k9unit/sql/install.sql` also creates two more tables:
+`qbx_k9unit/sql/install.sql` also creates three more tables:
 
 - **`k9_search_log`** — an append-only audit trail for every completed
   Phase 2 contraband search (`server/search.lua`), one row per attempt that
@@ -200,20 +211,24 @@ access.
   registry (`PHASE3_SPEC.md` §12.0 item 7), landed ahead of its own
   implementation. **No `.lua` file in this resource reads or writes this
   table yet** — `server/partnership.lua` does not exist. It exists so the
-  eventual implementation (needed for `Config.Features.HandlerDownDefense`)
-  has an already-reviewed table to build against. Safe to ignore until
-  that file ships.
-
-**Known gap: `Config.Features.XPProgression`'s `k9_progression` table is
-referenced by `server/progression.lua` but does not yet exist in
-`sql/install.sql`.** Every `k9_progression` query in that file is
-pcall-wrapped, so a missing table fails safely rather than crashing the
-resource — XP still accumulates correctly in the in-memory cache for the
-remainder of a server session (every gameplay effect keeps working), but
-every read/write against the missing table silently errors, so nothing is
-ever actually saved: a restart, or even a reconnect, loses all XP earned
-so far. Do not enable `Config.Features.XPProgression` on a live server
-until `k9_progression` has landed in `sql/install.sql`.
+  eventual implementation (needed for `Config.Features.HandlerDownDefense`,
+  and for `PHASE3_SPEC.md`'s Recall mechanic, which depends on the same
+  registry) has an already-reviewed table to build against. Safe to ignore
+  until that file ships.
+- **`k9_progression`** — one row per citizenid (`xp` column, atomically
+  upserted via `INSERT ... ON DUPLICATE KEY UPDATE`), backing
+  `Config.Features.XPProgression` (`server/progression.lua`). Survives a
+  department change, unlike `k9_certifications` — see
+  [Config.Features.XPProgression](#configfeaturesxpprogression) below.
+  **This table was missing from this migration file until this pass** —
+  every `k9_progression` query in `server/progression.lua` is
+  pcall-wrapped, so the gap never crashed the resource, it just meant every
+  award silently failed to persist: XP still worked correctly in-memory for
+  the rest of a session (every tier-based gameplay effect kept applying),
+  but a restart or even a reconnect lost all of it. It's present now;
+  nothing further is required beyond re-running `sql/install.sql` once
+  against an existing database if `XPProgression` was already enabled
+  without it (`CREATE TABLE IF NOT EXISTS` makes this safe).
 
 ## How certification works, day one
 
@@ -468,25 +483,35 @@ independently from the pull-back/detach distances.
 
 ### Config options not yet wired up
 
-These exist in `config.lua` but **no functioning code in this resource
-uses them** — unlike Phase 2/4/5's implemented flags/tables (see
+These exist in `config.lua`. Most have **no functioning code in this
+resource using them at all** — unlike Phase 2/4/5's implemented
+flags/tables (see
 [Phase 2 configuration](#phase-2-configuration-not-enabled-by-default),
 [Phase 4 configuration](#phase-4-configuration-not-enabled-by-default), and
 [Phase 5 configuration](#phase-5-configuration-not-enabled-by-default)
-below), which are implemented and reviewed even though they default off:
+below), which are implemented and reviewed even though they default off.
+`BiteAndHold`/`NonLethalTakedown` below are a partial exception to that
+framing — their code is real, registered, and does run; the gap for those
+two is a missing in-game trigger, not missing/unregistered code:
 
 - `Config.Features.HandlerDownDefense`, `PropDragging` (Phase 3) — no code
   at all. `HandlerDownDefense` is blocked on a design decision
   (a dedicated "K9 partnership" registry, `phase2_notes/phase3_handler_partnership_decision.md`)
-  that has been made but not yet implemented; `PropDragging` is explicitly
-  out of scope for the Phase 3 work that has landed so far.
-- `Config.Features.BiteAndHold`, `NonLethalTakedown` (Phase 3) — **real
-  server-side code exists** (`server/combat.lua`) but is deliberately **not
-  registered in `fxmanifest.lua`** and has **no client half**
-  (`client/combat.lua` does not exist yet) — it does not run on this
-  install. Treat these exactly like a phase with no code at all until that
-  changes; do not enable either flag. See `CHANGELOG.md`'s Known
-  Limitations for the full detail.
+  that has been made but not yet implemented — the registry itself,
+  `server/partnership.lua`, does not exist; only its `k9_partnerships`
+  schema does (see [Database](#database) above). `PropDragging` is
+  explicitly out of scope for the Phase 3 work that has landed so far.
+- `Config.Features.BiteAndHold`, `NonLethalTakedown` (Phase 3) — **real,
+  registered client and server code now exists** (`server/combat.lua` +
+  `client/combat.lua`, both wired into `fxmanifest.lua`), but it has **no
+  in-game entry point** — nothing calls `client/combat.lua`'s exposed
+  `RequestBiteHold()`/`ReleaseBiteHold()`/`RequestTakedown()` globals (not
+  the radial menu, not an ox_target option, not a command). Do not enable
+  either flag — even setting them to `true` would not make the feature
+  reachable through this resource's own UI, only through a modified client
+  or a debug command. See `CHANGELOG.md`'s Known Limitations for the full
+  detail, including a real safety bug fixed while building the client
+  half.
 - `Config.Features.ContrabandScreenFX` (Phase 4) — no code at all.
 - `Config.Features.ProximityAudioFX`, `PropAttachments`, `FetchMechanic`,
   `CameraFeedPiP` (Phase 5) — no code at all.
@@ -894,20 +919,51 @@ callback names and payload keys.
 `boolean`, default `false`. Gates a per-K9 `ox_inventory` gear stash
 (`server/inventory.lua`, `client/inventory.lua`), opened via an "Open K9
 Gear" ox_target option on the K9's own ped. The K9 player can always open
-their own stash; who else can is set by `Config.K9Inventory.accessScope`:
+their own stash; who else can is controlled by
+`Config.K9Inventory.accessScope`, which is **hard-locked to `'department'`
+— any player whose job is a key in `Config.Departments` (any grade) may
+also open it, the same "shared field equipment" framing this resource
+already gives `Config.K9Vehicles`. Setting this to anything other than
+`'department'` in `config.lua` crashes the resource at startup**: a
+resource-start `assert` in `server/inventory.lua` enforces this
+deliberately, because there is no server-owner-facing alternative — see
+below for why.
 
-- `'department'` (default) — any player whose job is a key in
-  `Config.Departments` (any grade) may also open it — "shared field
-  equipment," the same framing this resource already gives
-  `Config.K9Vehicles`.
-- `'ownerOnly'` — only the K9's own citizenid may open it.
-- An unrecognized/misconfigured value **fails closed** to `'ownerOnly'`,
-  never to the more permissive `'department'`.
+**There used to be a documented `'ownerOnly'` option ("restricted to the
+K9's own citizenid"). It never actually worked, and has been removed as a
+selectable option, not merely discouraged or deprecated.** A security
+review traced `ox_inventory`'s real stash-access path
+(`loadInventoryData`'s stash branch and `openInventory`'s own post-resolve
+check, both in `modules/inventory/server.lua`/`server.lua`) and found that
+access is gated **exclusively** by `stash.groups`, via
+`server.hasGroup(player, groups)` — both real check sites are written
+`stash.groups and ... and not hasGroup(...)`, so a `nil` `groups` value
+(what `'ownerOnly'` produced) short-circuits straight to **allow, for
+every caller, unconditionally**. `RegisterStash`'s `owner` argument (the
+thing `'ownerOnly'` actually set) is used only for `Inventories` table
+keying and DB persistence — it is never compared against the requesting
+player's own identity anywhere in `ox_inventory`, and `ox_inventory`'s own
+upstream documentation describes the boolean-owner form as explicitly
+letting a player "request other player's stashes," so this was never a
+bug in `ox_inventory` that could have been relied on getting fixed. Net
+effect: once any K9's stash had been registered in a session (trivially
+true the first time that K9 opened their own gear), **any connected
+player who knew or guessed that K9's citizenid could open the stash
+directly from a modified client with full read/write access** — bypassing
+proximity, `HasK9Access`, this resource's own cooldown/mutex, and the
+feature flag itself, since `ox_inventory` has no concept of that flag.
+There is also no `ox_inventory` mechanism available to build a real
+per-owner ACL from instead — `groups` is the only access-control primitive
+its stash system actually provides — so a genuine "K9's own citizenid
+only" mode is not currently implementable against this dependency at all,
+not merely unbuilt. See `server/inventory.lua`'s header for the full
+source trace. If you need owner-only access on your server, it must come
+from a different mechanism outside this resource (e.g. your own
+`ox_inventory` fork/patch); do not attempt to reintroduce an `'ownerOnly'`
+value here without first confirming `ox_inventory` itself has grown a real
+owner-based access check.
 
-The real access boundary is `ox_inventory`'s own `RegisterStash`
-owner/groups check, set at registration time from the value above — this
-resource's own callback re-check is defense-in-depth on top of that, not a
-substitute for it. Other fields:
+Other fields:
 
 - `Config.K9Inventory.slots` (default `5`) / `.maxWeight` (default `8000`,
   the same gram-equivalent unit `ox_inventory` items use) — the stash's
@@ -981,7 +1037,20 @@ own flag is `true` — a fully-disabled subsystem starts no thread at all.
   `hesitationThreshold` (default `70`) imposes a temporary command-refusal
   state (`hesitationDurationMs`, default `8000`ms) that a self-only "Calm
   Down" action (`/k9calmdown`) can reduce early (`calmDownReduceAmount`,
-  `calmDownCooldownMs`).
+  `calmDownCooldownMs`). The gunfire input now **dedupes by reporting
+  source** rather than counting raw relayed events, closing the primary
+  way one spamming/forged report could multiply a nearby K9's stress far
+  beyond what one real, continuously-firing shooter would cause. This is a
+  mitigation, not a full fix: the relay event is payload-less and
+  forgeable by design (reused from Phase 2's gunpowder tracking, where a
+  forged entry is harmless), and a single determined attacker can still
+  keep re-touching it at its own rate limit to hold a nearby K9's
+  stress/hesitation elevated indistinguishably from real, continuous
+  nearby gunfire — a disclosed residual risk, not something claimed to be
+  fully closed. Inert until both `FearStressSystem` and a real consumer of
+  `IsHesitating()` are enabled — today that's only the still-`false`,
+  no-in-game-entry-point `BiteAndHold`/`NonLethalTakedown` combat feature
+  (see [Config options not yet wired up](#config-options-not-yet-wired-up)).
 - **Distraction** (`Config.Wellbeing.Distraction`) — a thrown meat-bait
   item (`/k9meatbait`) or an ultrasonic whistle (`/k9whistle`) briefly
   distracts every K9 within the configured radius. **Deliberately usable
@@ -998,25 +1067,41 @@ own flag is `true` — a fully-disabled subsystem starts no thread at all.
 ### `Config.Features.XPProgression`
 
 `boolean`, default `false`. Gates server-authoritative XP accumulation per
-K9 citizenid (`server/progression.lua`), intended to persist in a
-`k9_progression` table (one row per citizenid, survives a department
-change — unlike certification, which is job-scoped). **That table is not
-yet in `sql/install.sql`** — see [Database](#database) above before
-enabling this flag; XP works in-memory for a session but nothing currently
-survives a restart. `Config.XP.awards`
-defines flat XP amounts per action key:
+K9 citizenid (`server/progression.lua`), persisted in the `k9_progression`
+table (one row per citizenid, survives a department change — unlike
+certification, which is job-scoped). **This table was missing from
+`sql/install.sql` until this pass** — every `server/progression.lua` query
+against it is pcall-wrapped, so this never crashed the resource, it just
+meant no K9's XP ever actually survived a restart or reconnect; the table
+is now present (see [Database](#database) above), so a normal
+`sql/install.sql` re-run against an existing database is all that's needed
+to start persisting correctly. `Config.XP.awards` defines flat XP amounts
+per action key:
 
 - `searchContrabandFound` (default `25`) — a successful Phase 2 contraband
-  search.
+  search. **The actual `AwardXP` call for this was previously dead
+  code** — `config.lua`'s own comment already described this call site,
+  but nothing anywhere had actually wired it up, so no K9 could earn XP
+  from a search regardless of this flag. `server/search.lua` now really
+  calls it.
 - `trackSourceResolved` (default `10`) — awarded only once the K9's own
   client actually **arrives** within `Config.XP.trackArrivalRadius`
   (default `3.0`m) of a resolved scent/blood/gunpowder source within
   `Config.XP.trackArrivalTTLMs` (default `60000`ms) — not just on the
   trail resolving, which would otherwise let a K9 farm XP by repeatedly
-  triggering a search without ever finishing it.
+  triggering a search without ever finishing it. Wiring this call up also
+  introduced, and this same pass also closed, a second farming gap: a K9
+  already standing at (or who forges) a source's location could otherwise
+  round-trip resolve→report-arrival for free XP with no real travel.
+  `server/tracking.lua` now requires the K9's live distance to the source
+  at resolve time to be at least 15m before an arrival ticket is even
+  created — the cosmetic trail reveal itself is unaffected, only XP
+  eligibility is gated on this.
 - `biteHoldSuccess` (default `20`) / `takedownSuccess` (default `30`) —
-  defined for the Phase 3 combat feature to call, but **not currently
-  wired to anything**, since that feature isn't registered (see
+  now wired to real call sites in `server/combat.lua` (`EndHold` and
+  `HandleTakedownRequest` respectively), but still dormant in practice:
+  `BiteAndHold`/`NonLethalTakedown` ship `false` and have no in-game
+  trigger yet (see
   [Config options not yet wired up](#config-options-not-yet-wired-up)).
 
 Crossing a threshold in `Config.XPTiers` immediately applies that tier's
@@ -1199,8 +1284,11 @@ job, rank, proximity, or ped model:
   connected-player status, and access independently of the client's
   ox_target selection, and re-checks live proximity before ever mutating
   state — but the real access boundary for the stash itself is
-  `ox_inventory`'s own owner/groups check, not this resource's own
-  re-check, which is defense-in-depth on top of it.
+  `ox_inventory`'s own **`groups`** check (`server.hasGroup`), not its
+  `owner` argument (which is keying/persistence-only and was never a real
+  ACL — see [Config.Features.K9Inventory](#configfeaturesk9inventory)
+  below) and not this resource's own re-check, which is defense-in-depth
+  on top of the real `groups` gate.
 - K9 Medkit (`server/medkit.lua`) and the wellbeing subsystem's Pet/Feed/
   Distraction interactions (`server/wellbeing.lua`) all independently
   re-derive the target's live model and live proximity, and consume a real,
@@ -1293,14 +1381,23 @@ job, rank, proximity, or ped model:
   submenu branch (same file, no new file) — see
   [Config.Features.AdvancedBarkRadial](#configfeaturesadvancedbarkradial)
   above.
-- `server/combat.lua` — **Phase 3, NOT registered in `fxmanifest.lua`, NOT
-  functional.** A substantial `BiteAndHold`/`NonLethalTakedown`
-  implementation exists in this branch's working tree, built under a
-  resolved client-relay-architecture design decision, but it has no
-  client-side counterpart (`client/combat.lua` does not exist) and is not
-  wired into the manifest — it is inert. See `CHANGELOG.md`'s Known
-  Limitations for the full detail; do not treat this as installed or
-  working.
+- `server/combat.lua`, `client/combat.lua` — **Phase 3, both registered in
+  `fxmanifest.lua`, both flags still `false`, no in-game entry point.**
+  `BiteAndHold`/`NonLethalTakedown` are fully implemented under the
+  resolved client-relay-architecture design decision (§12.0 item 8) and
+  both halves now run — a real change from an earlier state where
+  `server/combat.lua` existed with no client counterpart and was
+  deliberately excluded from the manifest. Completing the client half
+  found and fixed a real safety bug: `SetEntityCanBeDamaged` is
+  client-only, so `NonLethalTakedown`'s NPC-target branch calling it
+  server-side was a silent no-op that could let a "non-lethal" takedown
+  actually kill an NPC — see `CHANGELOG.md`. Despite running, the feature
+  has **no way to be triggered in a live game**: `client/combat.lua`
+  exposes `RequestBiteHold()`/`ReleaseBiteHold()`/`RequestTakedown()` as
+  globals, but `client/radial.lua` was not extended to call them, and no
+  other command/ox_target option does either. Do not treat this as a
+  usable feature; see `CHANGELOG.md`'s Known Limitations for the full
+  detail.
 
 There are no `exports` declared by this resource (no `server_exports` /
 `client_exports` in `fxmanifest.lua`) — integration by other resources is

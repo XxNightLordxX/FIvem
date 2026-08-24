@@ -12,18 +12,31 @@ closing the one gap this phase still had disclosed as of Pass #4. Every
 Phase 2 `Config.Features` flag still defaults to `false`; `ScentTracking`
 specifically stays `false` pending a one-time verification of that hook
 against a live `ox_inventory` install (see `CHANGELOG.md`'s Known
-Limitations). Phase 3 (combat/action) is **partially coded, mostly still
-design work**: `AgilityAdvanced` is fully implemented behind its flag. Both
-cross-cutting design forks that were blocking the rest of this phase have
-been resolved as design decisions — §12.0 item 8's client-relay/
+Limitations). Phase 3 (combat/action) is **now code-complete for two of
+its four features, but still not a usable, shipped feature**:
+`AgilityAdvanced` is fully implemented behind its flag, and so — as of
+this pass — are `BiteAndHold`/`NonLethalTakedown`: `server/combat.lua` now
+has a real `client/combat.lua` counterpart and both are registered in
+`fxmanifest.lua` (previously, `server/combat.lua` existed alone,
+deliberately unregistered, with no client half at all). Completing the
+client half also fixed a real safety bug — `SetEntityCanBeDamaged` is
+confirmed client-only, so `NonLethalTakedown`'s NPC-target branch calling
+it server-side was a silent no-op that could let a "non-lethal" takedown
+against an NPC actually kill it. Despite that, the feature has **no
+in-game entry point**: nothing calls `client/combat.lua`'s exposed
+`RequestBiteHold()`/`ReleaseBiteHold()`/`RequestTakedown()` globals (not
+`client/radial.lua`, not an ox_target option, not a command), so it
+remains unreachable through this resource's own UI regardless of flag
+state. Both cross-cutting design forks that were blocking the rest of this
+phase have been resolved as design decisions — §12.0 item 8's client-relay/
 non-cooperating-client architecture, and item 7's handler-partnership link
 (a new, dedicated `k9_partnerships` registry, not a reuse of `LeashPairs`)
-— but the partnership registry itself has **not** been implemented, so
-`HandlerDownDefense` remains uncoded. A substantial `server/combat.lua`
-implementing `BiteAndHold`/`NonLethalTakedown` exists in the tree but is
-deliberately **not** registered in `fxmanifest.lua` and has no client half
-yet, so it is inert, not a shipped feature; `PropDragging` has no code at
-all. Phase 4 (inventory, progression, vitality) now has real
+— but the partnership registry itself has **not** been implemented
+(`server/partnership.lua` does not exist, only its schema does, see §4.3's
+sibling table discussion / `README.md`'s Database section), so
+`HandlerDownDefense` remains uncoded and the Recall mechanic that also
+depends on that same registry is likewise unimplemented; `PropDragging`
+has no code at all. Phase 4 (inventory, progression, vitality) now has real
 implementations behind still-`false` flags for `HealthStaminaHUD`,
 `K9Inventory`, `K9Medkit`, the unified wellbeing subsystem (Fatigue/Mood/
 FearStress/Distraction/Injury), and `XPProgression`; only
