@@ -567,3 +567,100 @@ and (newly, directly-run) `luacheck` baselines both clean.
 - Bark-audio placeholder asset gap and the HUD-visibility-gate
   disagreement (the latter resolved by `f44f8c8` this pass, see above) —
   bark-audio remains open with no change in status; carry forward again.
+
+---
+
+## 2026-08-24 — Pass #5 (scheduled trigger; run by the top-level session)
+
+**Scope:** the 8 commits since Pass #4 (`3a604e7..8d3efa4`), plus this
+pass's own recovery work after four concurrent implementation agents were
+killed mid-write by a session usage limit. Deliberately does NOT re-review
+every line of the eight commits — each landed with its own review pass at
+the time; this checks for regressions, drift, and anything the interrupted
+agents left in a broken state.
+
+### Commits since Pass #4
+
+`5afef62` scent-tracking source resolution (closed Phase 2's last disclosed
+gap), `9e1bb48` ResolveNetworkEntity extraction (REFACTOR_ROADMAP near-term
+item 2 — the item Pass #4 named as top priority, now DONE), `0587c0e`
+K9Inventory, `5f5e142` DeployableKennel, `89b8668` K9Medkit + manifest
+wiring, `29706d8` AdvancedBarkRadial, `969d10b` handler-partnership
+decision (PHASE3_SPEC §12.0 item 7 — the second of Pass #4's two named
+blockers, now RESOLVED in design), `8d3efa4` wellbeing subsystem + XP
+progression.
+
+Both blockers Pass #4 flagged as gating their phases are now closed:
+scent-tracking landed in code, and item 7 landed as a design decision
+(implementation still pending). PHASE3_SPEC §12.0 item 8 (client-relay
+architecture) was also resolved by a coder-security pass during this window.
+
+### Interrupted-agent recovery (this pass's main finding)
+
+Four agents died mid-write. Their partial output was assessed rather than
+assumed good: all five orphaned files parsed clean and ended at natural
+statement boundaries, but none were registered in `fxmanifest.lua`, so all
+were dead code — an accidentally-safe state, not a designed one.
+
+- **wellbeing + XP progression** (4 files) were complete and fully
+  event-paired in both directions; only the final manifest/lint wiring was
+  missing. Finished by hand and committed as `8d3efa4`. Verified before
+  committing that all six feature flags still default `false`, that the
+  wellbeing tick thread is gated at REGISTRATION (not inside the loop, per
+  this resource's convention), and that each net handler independently
+  re-validates its own flag so a disabled feature is a genuine server-side
+  no-op. Its second handler on `relayDamageEvent`/`relayWeaponFire` uses the
+  separate `RegisterNetEvent`/`AddEventHandler` idiom — an additional
+  consumer alongside `server/tracking.lua`'s, which is the documented intent.
+- **`server/combat.lua`** (811 lines, BiteAndHold/NonLethalTakedown) is a
+  server half with NO client half — `client/combat.lua` was never written,
+  despite a second agent's report implying it existed. It fires six client
+  events with no handlers anywhere. Left uncommitted and unregistered
+  (therefore inert); dispatched to coder-frontend to complete. **Do not
+  register `server/combat.lua` in the manifest until its client half lands.**
+- One stale `.luacheckrc` comment corrected: it claimed `server/search.lua`
+  reads `AwardXP`; `server/tracking.lua` is the only call site.
+
+### Regression spot-checks — all five intact
+
+`Config.Features.AgilityBasicJump` still read (`client/movement.lua:639`);
+role-aware `LeashPairs[a] = { partner, isK9 }` structure still in place
+(`server/main.lua:189`); `RevokeCertificationOffline` still calls
+`RefreshCertificationCache` (`server/certifications.lua`, in-body, not just
+in a comment — verified against the real function range after a first grep
+returned only comment matches); vehicle `onResourceStop` cleanup still
+present (`client/vehicle.lua:197`); `client/radial.lua`'s
+`lib.registerRadial`-then-`lib.addRadialItem` split still correct and still
+in that order (lines 411/421).
+
+### Baseline health
+
+`luac5.4 -p` passes on all 26 `.lua` files. `luacheck` is clean across the
+resource EXCEPT `server/combat.lua`'s 10 warnings — confined to the
+uncommitted, unregistered file above and assigned to the agent completing
+it. Every manifest-listed file exists on disk.
+
+### Externally-uncertain facts
+
+- **Bark-audio placeholder gap: STILL OPEN, no change.** Confirmed no
+  `.ogg`/`.wav`/`.awc`/`.rel` asset ships anywhere in the resource, and
+  `'qbx_k9unit_sounds'` is still the placeholder soundset in
+  `client/main.lua`/`client/movement.lua`. `29706d8`'s AdvancedBarkRadial
+  added three more placeholder sound names, widening rather than closing
+  this gap — as that commit itself disclosed. Carry forward.
+- **Dependency maintenance status: only PARTIALLY re-verified, question
+  stands.** `overextended/ox_lib` (3.39.0) and `overextended/ox_target`
+  (1.18.1) both serve a live `main` fxmanifest, so those repos are alive.
+  But the GitHub API is gated for out-of-scope repos in this environment
+  and `oxmysql`'s manifest returned no version line, so recency-of-activity
+  and the Overextended-vs-CommunityOx governance question could NOT be
+  settled. Recording this as unresolved rather than reading "repo responds"
+  as "actively maintained." Carry forward for a pass with real API access.
+
+### SPEC "Done"/"Resolved" claims vs. code
+
+No new mismatch found in this window. Pass #4's flagged staleness in
+`SPEC.md`'s top-of-file Status paragraph (still describing Phase 2 as
+mid-implementation) was partly addressed by `5afef62`'s §9/§11.5 edits, but
+the header paragraph itself should be re-checked next pass now that Phase 2
+is genuinely complete.
