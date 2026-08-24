@@ -77,6 +77,7 @@ client_scripts {
     'client/defense.lua', -- Phase 3 HandlerDownDefense client half -- soft dependency on client/combat.lua's IsBiteHoldEngaged via a runtime existence guard, so no hard load-order requirement
     'client/propattachment.lua', -- Phase 5 R&D (PropAttachments). Also owns the generic AttachPropToOwnPed/DetachAndDeleteProp mechanic that client/bonetool.lua and client/fetch.lua both reuse rather than hand-rolling a third copy.
     'client/bonetool.lua',       -- Dev-only bone-index sweep (BoneSweepDevTool). Placed here for topical grouping only; calls propattachment's globals at runtime, so no load-order requirement.
+    'client/fetch.lua',          -- Phase 5 (FetchMechanic). Loaded AFTER client/propattachment.lua deliberately: it reuses that file's AttachPropToOwnPed/DetachAndDeleteProp rather than hand-rolling a third prop-attach copy. The calls are runtime existence-guarded so this is a preference, not a hard requirement. Note what this feature is NOT -- the K9 does not walk the ball back on its own; it cannot, because the K9 is a connected player's character and nothing here scripts a player's ped movement. The return leg is a real, server-validated player action.
     'client/screenfx.lua', -- Phase 4 (ContrabandScreenFX). Held out of this manifest until its two timecycle natives were verified against primary source (no native is allowlisted here on an unverified assertion); both are now confirmed client-only. Registers its OWN handler for qbx_k9unit:client:applyContrabandScreenFx rather than extending client/search.lua -- an additional consumer, the same pattern server/wellbeing.lua and server/tracking.lua use for relayDamageEvent. No load-order dependency.
     'client/audio.lua', -- Phase 5 NUI audio bridge. PLUMBING ONLY -- no audio files ship with this resource (html/sounds/CREDITS.md records an egress-blocked sourcing attempt and four unverified CC0 leads). Every play against a not-yet-supplied html/sounds/<key>.ogg degrades to a silent no-op end to end. Has no caller yet: client/main.lua's PlaySoundOnNetworkEntity is deliberately still on the RAGE path, so this loads inert.
     'client/proximityaudio.lua', -- Phase 5 (ProximityAudioFX). Distance-scaled gain over client/audio.lua's NUI bridge, so it loads after it. Registers no net-event handlers at all -- a security sweep confirmed the forged-event class does not apply. Silent until an operator supplies html/sounds/<key>.ogg, by design.
@@ -173,6 +174,14 @@ server_scripts {
     -- re-checked per invocation, console explicitly rejected).
     'server/propattachment.lua',
     'server/bonetool.lua',
+    -- Phase 5 (FetchMechanic) server half. Loaded after cooldowns.lua
+    -- (NewCooldown at file-load time -- hard requirement), entities.lua and
+    -- certifications.lua. Never trusts a bare netId: every pickup/deliver
+    -- request is resolved through ResolveNetworkEntity, model-checked against
+    -- an allowlist, and cross-checked for equality against the server's own
+    -- tracked ball. Every ball carries an absolute lifetime ceiling
+    -- independent of any activity path, so none can outlive its cycle.
+    'server/fetch.lua',
     'server/recall.lua',
     -- Partnership-tenure milestone XP bonus (Config.Features.PartnershipTenureBonus,
     -- COMPLEMENTARY_FEATURES.md item 7) -- the first gameplay consequence
