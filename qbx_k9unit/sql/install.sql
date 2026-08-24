@@ -396,3 +396,146 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
   -- single citizenid; a partnership's is scoped to TWO).
   UNIQUE KEY `uq_one_active_partnership_per_handler` (`active_partner_handler_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_progression
+--
+-- SCHEMA LANDING BEHIND ITS OWN IMPLEMENTATION -- deliberately noted, not
+-- swept under the rug. `server/progression.lua` (Phase 4,
+-- `Config.Features.XPProgression`) shipped already reading and writing
+-- this exact table -- `SELECT xp FROM k9_progression WHERE citizenid = ?
+-- LIMIT 1` and `INSERT INTO k9_progression (citizenid, xp) VALUES (?, ?)
+-- ON DUPLICATE KEY UPDATE ...` -- before this table existed anywhere in
+-- this migration file. Both call sites are pcall-wrapped (per that file's
+-- own "a DB failure must never surface as a caller-visible failure"
+-- posture for a non-security-relevant read/write), so the missing table
+-- did NOT throw or appear in any obvious error path: every award silently
+-- no-op'd at the DB layer (the in-memory K9XP cache still worked, so
+-- gameplay looked correct for the remainder of a session) while
+-- `LoadXPForCitizenid` silently fell back to a logged-but-easy-to-miss
+-- "query failed" line and a 0-XP baseline on every reconnect/restart. If
+-- `Config.Features.XPProgression` was ever flipped to `true` against a
+-- database missing this table, no K9's XP would have persisted a single
+-- point across a restart, with nothing forcing that fact into view. This
+-- table closes that gap. THE SPEC/DESIGN ARTIFACT GOVERNING ITS SHAPE
+-- PREDATES THIS EDIT: this `CREATE TABLE` is intentionally the same shape
+-- already reviewed and sketched (not applied) in
+-- phase2_notes/phase4_xp_schema_notes.md section 4, derived here directly
+-- from server/progression.lua's real, currently-shipping queries rather
+-- than re-derived from scratch -- the two agree because the sketch is
+-- what that file was written against.
+--
+-- Governing spec: PHASE4_SPEC.md section 13.4.1 (`Config.Features.
+-- XPProgression`), and phase2_notes/phase4_xp_schema_notes.md's own
+-- persistence-decision note (sections 2-4) for the full "why a table, not
+-- qbx_core metadata" rationale -- restated briefly here: (1) atomic
+-- accumulation via a single `INSERT ... ON DUPLICATE KEY UPDATE
+-- xp = xp + VALUES(xp)` needs a real UPSERT target, not a Lua-side
+-- metadata read-modify-write race across concurrent XP-award sources
+-- (search/tracking/combat success paths); (2) offline correction/
+-- inspection must work without loading another player's full metadata
+-- blob out of band; (3) admin/ops queryability ("list every K9 at Elite
+-- tier," "average XP in department X") without scanning every player's
+-- JSON. Same three reasons SPEC.md section 4.3 already accepted once for
+-- `k9_certifications` over metadata.
+--
+-- Owner file: `server/progression.lua`. That file's own header documents
+-- the full event/callback contract; the two queries relevant to this
+-- table's shape are:
+--   SELECT xp FROM k9_progression WHERE citizenid = ? LIMIT 1;
+--   INSERT INTO k9_progression (citizenid, xp) VALUES (?, ?)
+--     ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp), updated_at = CURRENT_TIMESTAMP;
+-- The second parameter of the INSERT is the per-award DELTA (e.g. a
+-- configured `Config.XP.awards[actionKey]` value, always a positive
+-- integer per config.lua's current award table), NOT the new running
+-- total -- `VALUES(xp)` on the `ON DUPLICATE KEY UPDATE` branch refers to
+-- that just-bound delta, giving a single-statement atomic
+-- increment-or-create with no separate SELECT-then-UPDATE round trip and
+-- no read-modify-write race across concurrent award sources. This is WHY
+-- `citizenid` below must be a real UNIQUE/PRIMARY key: an
+-- `ON DUPLICATE KEY UPDATE` against a column with no unique constraint
+-- backing it does not upsert at all -- MySQL/MariaDB would simply INSERT
+-- a brand-new row every time, silently accumulating one row per award
+-- per citizenid instead of one row per citizenid, and `SELECT ... LIMIT 1`
+-- would then return whichever row happens to sort first rather than the
+-- citizenid's real total. `citizenid` is declared PRIMARY KEY for exactly
+-- this reason.
+--
+-- Scope: ONE ROW PER CITIZENID, not per (citizenid, job) -- per
+-- server/progression.lua's own header ("XP survives a department change,
+-- unlike k9_certifications") and config.lua's `Config.XP.
+-- scopePerCitizenidOrJob` comment (currently only 'citizenid' is
+-- implemented; 'job' is flagged there as a still-open product call, per
+-- PHASE4_SPEC.md section 13.6 item 2 -- NOT guessed at here). If that call
+-- is ever made, the fix is a migration on this table (composite
+-- `PRIMARY KEY (citizenid, job)` instead of `citizenid` alone, mirroring
+-- `k9_certifications`' job-scoping), not a rewrite.
+--
+-- Deliberately NOT an append-only log like `k9_search_log`: this is a
+-- live profile row UPDATEd in place on every award (an atomic increment),
+-- not an audit trail of individual award events. Whether a separate
+-- append-only `k9_xp_log`-style table is also worth adding for
+-- anti-cheat/dispute auditing is a distinct, still-open question
+-- (phase2_notes/phase4_xp_schema_notes.md section 6 item 2) -- not
+-- decided or added here.
+--
+-- `xp`'s tier is intentionally NOT computed in SQL (no generated column
+-- the way `k9_certifications.active_cert_key` is generated):
+-- `Config.XPTiers` is code-side and config-driven; server/progression.lua's
+-- `ResolveTier` walks it in Lua exactly the way `server/search.lua` walks
+-- `Config.ContrabandAlertTiers`. Baking tier thresholds into a SQL CASE
+-- expression here would create a second, driftable copy of the same
+-- boundaries config.lua already owns.
+--
+-- No FK to a `players` table, for the identical reason `k9_certifications`
+-- and `k9_search_log` above declare none (see either table's header
+-- comment): this resource's migration must not depend on qbx_core's own
+-- schema existing first, and a player-data reset/delete workflow on
+-- another resource's table must never be able to fail this table's
+-- constraints. Relational integrity to qbx_core players is enforced at
+-- the application layer, same convention used throughout this file.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once -- including against a
+-- database that has already been running with
+-- `Config.Features.XPProgression` enabled and this table silently
+-- missing: this migration only ever CREATEs, never DROPs/rewrites, so
+-- applying it introduces no destructive step against any pre-existing
+-- production data (there was never any real row to lose here in the
+-- first place, since every prior write attempt failed silently at the
+-- DB layer).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_progression` (
+  `citizenid`  VARCHAR(50)  NOT NULL,                    -- qbx_core / QBCore citizenid convention, matches every other k9_* table
+  `xp`         INT UNSIGNED NOT NULL DEFAULT 0,          -- accumulated total; source of truth for Config.XPTiers lookups
+                                                          -- (server/progression.lua's ResolveTier). UNSIGNED guards against a
+                                                          -- negative value at the type level, but is not a substitute for
+                                                          -- app-layer clamping if a future "reduce/reset XP" admin path is
+                                                          -- ever added (see phase2_notes/phase4_xp_schema_notes.md section 6
+                                                          -- item 3) -- no such path exists in this codebase today.
+  `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                                                          -- bumped by the ON UPDATE clause AND explicitly re-set by
+                                                          -- progression.lua's own UPSERT (`updated_at = CURRENT_TIMESTAMP`
+                                                          -- in the ON DUPLICATE KEY UPDATE branch) -- belt-and-suspenders,
+                                                          -- but harmless since both always agree; a cheap "is this K9's
+                                                          -- progression stale/abandoned" signal without needing a
+                                                          -- separate log table.
+
+  PRIMARY KEY (`citizenid`)
+  -- `citizenid` is the PRIMARY KEY, not a surrogate `id` + separate UNIQUE
+  -- KEY the way `k9_certifications`/`k9_search_log`/`k9_partnerships` use
+  -- an AUTO_INCREMENT id -- this table is a one-row-per-citizenid live
+  -- profile, not an append-mostly audit log, so there is no historical
+  -- row to preserve alongside the "current" one and no reason for a
+  -- separate identity column. This IS the unique key
+  -- `INSERT ... ON DUPLICATE KEY UPDATE` above depends on to upsert
+  -- correctly instead of silently accumulating duplicate rows per
+  -- citizenid -- see the integration note above.
+
+  -- Optional, NOT added here: `KEY idx_xp (xp)` for a leaderboard-style
+  -- "top K9s by XP" admin query. No spec/config in this resource asks for
+  -- that query today -- adding an index nothing queries yet is
+  -- speculative cost for no confirmed benefit; add it if/when that query
+  -- is actually built.
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
