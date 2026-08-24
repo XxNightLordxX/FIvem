@@ -67,6 +67,9 @@ client_scripts {
     'client/search.lua',   -- Phase 2
     'client/vision.lua',   -- Phase 2
     'client/hud.lua',      -- Phase 4
+    'client/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
+    'client/kennel.lua',   -- Phase 5 R&D (DeployableKennel, phase2_notes/phase5_features_research.md §5)
+    'client/medkit.lua',   -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4)
 }
 
 server_scripts {
@@ -76,10 +79,17 @@ server_scripts {
     -- files since main.lua/certifications.lua/tracking.lua/search.lua all
     -- call these resource-global constructors at their own file-load time.
     'server/cooldowns.lua',
+    -- REFACTOR_ROADMAP.md near-term item 2: shared defensive netId->entity
+    -- resolver (ResolveNetworkEntity), loaded alongside cooldowns.lua and
+    -- before main.lua/search.lua, its two consumers.
+    'server/entities.lua',
     'server/main.lua',
     'server/certifications.lua',
     'server/tracking.lua', -- Phase 2
     'server/search.lua',   -- Phase 2
+    'server/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
+    'server/kennel.lua',    -- Phase 5 R&D (DeployableKennel, phase2_notes/phase5_features_research.md §5) -- loaded after cooldowns.lua (NewCooldown at file-load time) and certifications.lua (HasK9Access)
+    'server/medkit.lua',    -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4) -- loaded after cooldowns.lua (NewCooldown/NewMutex at file-load time) and certifications.lua (IsConfiguredK9Model); no ordering dependency on server/wellbeing.lua since RestoreInjury is called through a runtime existence guard, not a load-order assumption
 }
 
 lua54 'yes'

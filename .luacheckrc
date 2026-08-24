@@ -60,17 +60,32 @@ read_globals = {
     "GetVehicleNumberPlateText", "IsPedInAnyVehicle",
     "GetEntityHealth", "GetEntityMaxHealth", "GetEntityForwardVector",
     "ApplyForceToEntity",
+    -- K9Medkit (client/medkit.lua, server/medkit.lua, Phase 4,
+    -- PHASE4_SPEC.md §13.4.4) -- health-restore write native, the one
+    -- ENTITY-STATE native this resource calls that wasn't already covered
+    -- by the GetEntityHealth/GetEntityMaxHealth reads above
+    "SetEntityHealth",
     -- Timers / misc client natives
     "GetGameTimer", "DrawMarker", "DisableControlAction",
     "ClearPedTasksImmediately", "TaskStartScenarioInPlace", "IsPedShooting",
     "PlaySoundFromEntity", "SetFollowPedCamViewMode",
     "GetPlayerSprintStaminaRemaining",
+    -- AgilityAdvanced capsule-sweep vault (client/movement.lua, Phase 3,
+    -- PHASE3_SPEC.md §12.5.5/§12.0 item 3) -- confirmed real natives per
+    -- phase2_notes/phase3_combat_natives.md §5
+    "StartShapeTestCapsule", "GetShapeTestResult", "SetEntityVelocity",
     -- NUI bridge (client/hud.lua)
     "SendNUIMessage", "RegisterNUICallback",
     -- Vision natives (see client/vision.lua -- these are the actual CFX
     -- native names, distinct from this resource's own IsNightVisionActive/
     -- IsThermalVisionActive wrapper functions declared below)
     "SetNightvision", "IsNightvisionActive", "SetSeethrough", "IsSeethroughActive",
+    -- DeployableKennel (client/kennel.lua, server/kennel.lua, Phase 5 R&D,
+    -- phase2_notes/phase5_features_research.md §5) -- object creation/
+    -- placement/model-loading natives, none previously used anywhere else
+    -- in this resource
+    "CreateObject", "PlaceObjectOnGroundProperly", "DeleteEntity",
+    "RequestModel", "HasModelLoaded", "SetModelAsNoLongerNeeded", "IsModelValid",
     -- Server-side implicit global inside event handlers
     "source",
     -- ox_lib / oxmysql / export surface
@@ -95,7 +110,15 @@ globals = {
     -- server/main.lua
     "ForceDetachLeashForSource", "ForceDetachOfficerLeashForSource",
     -- client/main.lua
-    "IsOwnModelK9", "CanShowK9UI",
+    "IsOwnModelK9", "CanShowK9UI", "DenyK9UIAccess", "PlaySoundOnNetworkEntity",
+    -- server/entities.lua (REFACTOR_ROADMAP.md near-term item 2) AND,
+    -- separately, client/main.lua's OWN client-side function of the same
+    -- name -- two distinct Lua VMs (server vs. client), same name by
+    -- design for readability (same concept, mirrored API), same
+    -- "shared name is intentional, not a shared symbol" convention
+    -- client/main.lua's own header already documents for
+    -- HasK9Access(source) vs. client/main.lua's HasK9Access().
+    "ResolveNetworkEntity",
     -- client/movement.lua
     "ToggleK9Camera", "K9Sit", "IsLeashed", "RequestLeashAttach", "DetachLeash",
     -- client/tracking.lua
@@ -106,6 +129,19 @@ globals = {
     -- client/vision.lua
     "IsThermalVisionActive", "IsNightVisionActive", "ToggleThermalVision",
     "ToggleNightVision",
+    -- client/kennel.lua (Phase 5 R&D, DeployableKennel)
+    "RequestDeployKennel",
+    -- server/wellbeing.lua (Phase 4, PHASE4_SPEC.md §13.1 sub-phase 4c/4d,
+    -- the Injury wellbeing stat) -- FORWARD-DECLARED ONLY: this global is
+    -- read (never written) by server/medkit.lua, guarded behind a
+    -- `type(RestoreInjury) == 'function'` existence check, since
+    -- server/wellbeing.lua itself has not been implemented as of this
+    -- pass. Listed here so luacheck doesn't flag a legitimate forward
+    -- reference to this resource's own established cross-file-global
+    -- convention as an undefined-global typo -- once server/wellbeing.lua
+    -- ships and defines it for real, this entry stays correct with no
+    -- change needed.
+    "RestoreInjury",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the

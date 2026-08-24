@@ -390,3 +390,80 @@ Config.DeployableKennel = {
 -- could raise without a real code change to the registry shape itself.
 -- Deliberately NOT modeled as a per-area/spatial limit — see that file's
 -- header for why.
+
+-- ======================================================================
+-- PHASE 4 — K9 INVENTORY (ox_inventory stash). Backs
+-- Config.Features.K9Inventory (still `false` above, per this resource's
+-- "ship disabled until acceptance criteria are fully met" convention).
+-- See PHASE4_SPEC.md §13.4.2 for the full security-critical integration
+-- writeup this table backs, and server/inventory.lua's own header for the
+-- concrete implementation (RegisterStash owner/groups derivation,
+-- confidence-graded ox_inventory export notes). Transcribed from
+-- PHASE4_SPEC.md §13.2's sketch, with `accessScope`'s Open Question (§13.4.2
+-- item 1 / §13.6 item 3) RESOLVED below rather than left as a placeholder.
+-- Every numeric value is still an unreviewed placeholder pending a
+-- config-validator/economy-balance-agent pass (SPEC.md §9 item 4,
+-- PHASE4_SPEC.md §13.5), same status every other Phase 3/4 sketch table in
+-- this file carries — do not default Config.Features.K9Inventory to `true`
+-- before that pass happens.
+-- ======================================================================
+Config.K9Inventory = {
+    slots         = 5,
+    maxWeight     = 8000,  -- grams-equivalent, same units ox_inventory's own item .weight fields use (unit convention confirmed: phase2_notes/contraband_search_contract.md §1)
+    interactRange = 2.0,
+
+    -- RESOLVED (coder-backend, this pass — see server/inventory.lua's header
+    -- "RESOLVED DESIGN DECISION" section for the full reasoning, including
+    -- why an 'ownerOnly' server is fully supported too, and why an
+    -- unrecognized value here fails CLOSED to 'ownerOnly', not
+    -- 'department'): 'department' (default) — any player whose job is a
+    -- key in Config.Departments (any grade) may open a given K9's gear
+    -- stash, shared-field-equipment framing, the same posture
+    -- Config.K9Vehicles already gives patrol-vehicle trunk access. Set to
+    -- 'ownerOnly' to instead restrict access to only the K9 player's own
+    -- citizenid (a personal-locker framing) — both values are fully
+    -- implemented, this is a real per-deployment product choice, not a
+    -- placeholder pending code.
+    accessScope   = 'department',
+
+    -- nil = no item whitelist enforced (ox_inventory's own slot/weight
+    -- limits are the only restriction). NOTE: as of this pass, setting this
+    -- to a non-nil list has NO EFFECT — see server/inventory.lua's header
+    -- CONFIDENCE NOTE for why item-whitelist enforcement (a
+    -- registerHook-style mechanism, PHASE4_SPEC.md §13.4.2's own genuinely
+    -- unresolved implementation question) was deliberately not built this
+    -- pass rather than half-implemented. Left nil, not a placeholder list,
+    -- so a server owner who sets this doesn't mistakenly believe it's
+    -- already enforced.
+    allowedItems  = nil,
+}
+
+-- ======================================================================
+-- PHASE 4 — K9 MEDKIT (Config.Features.K9Medkit, still `false` by default).
+-- PHASE4_SPEC.md §13.4.4/§13.2. Item consumption + heal validation live in
+-- server/medkit.lua; see that file's header for the full security-critical
+-- writeup (mirrors server/search.lua's contraband-search trust boundary,
+-- per that document's own explicit direction to reuse it as the template).
+-- ALL NUMERIC VALUES BELOW ARE UNREVIEWED PLACEHOLDERS pending a
+-- config-validator/economy-balance-agent pass (SPEC.md §9 item 4's scope,
+-- widened by PHASE4_SPEC.md §13.5) — do not flip Config.Features.K9Medkit
+-- to `true` on a live server before that review happens.
+-- ======================================================================
+Config.K9Medkit = {
+    itemName      = 'k9_medkit', -- PLACEHOLDER item name — must exist in the target server's ox_inventory items table; NOT registered as a hotbar-"useable" item by this resource, see server/medkit.lua's header for why
+    healthRestore = 50,          -- native health units restored to the K9's REAL ped health, clamped to GetEntityMaxHealth server-side, never allowed to overheal
+    injuryRestore = 40,          -- restores Config.Wellbeing.Injury's tracked value once server/wellbeing.lua (PHASE4_SPEC.md §13.1 sub-phase 4c/4d) exists — a no-op today, see server/medkit.lua's header
+    range         = 2.0,         -- meters — server-enforced max distance between the using player and the target K9's own live positions, checked BEFORE any item consumption or health mutation
+    cooldownMs    = 60000,       -- per-target (K9 citizenid) cooldown, prevents repeated instant-heal spam against the same K9
+    -- Job names, in addition to any job ∈ Config.Departments, allowed to use
+    -- this item on a K9 — mirrors PHASE3_SPEC.md §12.0 item 4's resolved
+    -- "default metadata/job convention + override hook" pattern for the
+    -- identical class of external-EMS-integration problem.
+    emsJobs       = { 'ambulance' },
+    -- IsMedkitUserAuthorizedOverride: function(usingPlayerServerId) -> boolean,
+    -- OPTIONAL. Forward-looking override hook for a server whose EMS/
+    -- qualification system isn't captured by a flat job-name list — left
+    -- commented out until a server actually needs it, so it isn't mistaken
+    -- for an active default. See server/medkit.lua's IsMedkitUserAuthorized.
+    -- IsMedkitUserAuthorizedOverride = function(usingPlayerServerId) return false end,
+}
