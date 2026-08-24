@@ -10,9 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 Phase 2 (tracking, contraband search, vision, door interaction) has landed
 on this branch as a complete feature set with real client and server
 implementations, but it has **not** been through the same release-readiness
-pass Phase 1 got before shipping — there is no version bump yet, and Phase 3
-(combat/action features) hasn't had any implementation start, only design
-scoping. Everything below is pending final packaging.
+pass Phase 1 got before shipping — there is no version bump yet. Since Phase
+2 landed, this branch has also picked up scent tracking's previously-missing
+server-side source resolution, a resource-wide cooldown/mutex refactor, a
+`luacheck` CI job, the certification-revocation TOCTOU fix below, three
+native-correctness corrections, door interaction's previously-deferred
+nudge-open half, and the first (still feature-flagged-off) slice of Phase
+4's vitality HUD. Phase 3
+(combat/action features) still has **no implementation** — `PHASE3_SPEC.md`
+has been revised (Revision 3: player-vs-player K9 combat is now a settled,
+in-scope design decision, reversing an earlier NPC-only default), but that
+is a design-document change only, not code. Everything below is pending
+final packaging.
 
 ### Added
 
@@ -23,6 +32,19 @@ scoping. Everything below is pending final packaging.
   own `Config.Features` flag. Trails render as ground markers with
   configurable spacing and decay across water crossings, cutting off
   cleanly at the water's edge rather than vanishing outright.
+- **Scent trail source resolution (`server/tracking.lua`)** — closes the
+  gap the previous entry in this file flagged as an explicit, disclosed
+  "can never functionally succeed" blocker. A real, first-party
+  `ox_inventory` server-side hook,
+  `exports.ox_inventory:registerHook('swapItems', ...)`, now feeds a
+  ground-drop's coordinates into the same `TrackableLog`/nearest-source
+  lookup blood and gunpowder already used, so "Track Scent" can now
+  actually resolve to a real dropped-item location instead of always
+  reporting "not found." The hook fires server-to-server (never a
+  client-triggerable event), so unlike blood/gunpowder's relay events it
+  has no "forged trail" acceptable-risk framing to write — the reported
+  source can't be spoofed by a modified client the way a fabricated damage
+  or weapon-fire report could be.
 - **Contraband search** — a certified handler can search a nearby vehicle
   or person via ox_target ("Search Vehicle" / "Search Person"), with the
   server performing the real, container-recursive inventory read and
@@ -38,10 +60,25 @@ scoping. Everything below is pending final packaging.
   playing a configured K9 character. Deliberately gated on the K9 model
   alone, not certification — treated as innate perception, not a granted
   departmental privilege.
-- **Door interaction (scratch-to-alert)** — a certified handler can scratch
-  at a nearby door-like object via ox_target to broadcast an alert sound to
-  everyone with that door streamed in. This is alert-only in this drop;
-  nudge-open is not implemented.
+- **Door interaction (scratch-to-alert + nudge-open)** — a certified
+  handler can scratch at a nearby door-like object via ox_target to
+  broadcast an alert sound to everyone with that door streamed in
+  (server-authoritative: `server/main.lua` independently resolves,
+  existence-checks, and proximity-checks the claimed door before ever
+  broadcasting, never trusting the client's own door guess). A second,
+  separate "Nudge Door" ox_target option on the same objects has now
+  landed too, previously deferred as out of scope for Phase 2's first
+  drop. Its safety design is deliberate and non-negotiable: it never calls
+  any door-lock/CDoor native and never reads, writes, freezes, or moves
+  the door entity in any way — the only real-world safe design available,
+  since most door-lock resources manage their own lock flag entirely
+  outside GTA's native door system, so treating "not registered there" as
+  "unlocked" would be a real bypass, not a theoretical one. The feature's
+  only actual effect is a cosmetic push impulse and sound applied to the
+  K9's own ped (never the door), gated purely by interaction distance and
+  `CanShowK9UI()`. It has **zero server involvement** — no
+  `TriggerServerEvent`, no callback, nothing server-authoritative touched
+  anywhere in the implementation.
 - **Full Phase 2 config schema** — `Config.Tracking`, `Config.SearchZones`,
   `Config.SearchContrabandItems`, `Config.DoorInteraction`,
   `Config.Vision`, and related tuning tables, plus a `Config.Features`
@@ -51,8 +88,60 @@ scoping. Everything below is pending final packaging.
   start if `Config.DoorInteraction.nudgeRequiresUnlocked` has been set to
   `false`. It's documented as a hard safety requirement (nudge-open must
   never be able to bypass a locked door), not a server-tunable option, so
-  a bad value now fails loudly at startup instead of silently shipping a
-  future lockpick-equivalent bypass once nudge-open is eventually built.
+  a bad value now fails loudly at startup instead of silently allowing a
+  future lockpick-equivalent bypass. Now that nudge-open has actually
+  landed (see the Added entry above), this assertion — not a runtime
+  branch inside the feature itself — is the full extent of how this field
+  is enforced: nudge-open has no real lock-state read anywhere for it to
+  meaningfully gate, by design, so a future implementer would have to
+  deliberately remove this assertion before wiring a real (dangerous)
+  lock-state branch off it.
+- **Shared cooldown/TTL/mutex helper (`server/cooldowns.lua`)** — a pure
+  structural extraction, not a redesign. The 11 independent hand-rolled
+  cooldown/mutex tables that had accumulated across `server/main.lua`,
+  `server/certifications.lua`, `server/tracking.lua`, and `server/search.lua`
+  now build on three shared constructors: `NewCooldown` (flat
+  `key -> lastTouchedAt`, covers 9 of the 11 — bark, leash-request,
+  door-scratch, certify-action, damage/weapon-fire relay, and search
+  cooldowns), `NewNestedCooldown` (the two-level per-source/per-track-type
+  shape `server/tracking.lua`'s scent/blood/gunpowder query cooldown
+  needs), and `NewMutex` (the plain acquire/release lock
+  `server/search.lua`'s in-flight guard needs). Every migrated call site
+  keeps its exact original threshold, key shape, and cleanup timing
+  (`playerDropped` handler or periodic sweep, matching whichever the
+  original table used) — behavior is unchanged, only the duplicated
+  bookkeeping code across four files is not. Loaded first among this
+  resource's own `server_scripts`, since the other four files call these
+  constructors at their own file-load time.
+- **Added `luacheck` to CI**, alongside the existing `luac5.4 -p` syntax
+  check (`.github/workflows/lua-check.yml`), configured via a new
+  repo-root `.luacheckrc` with a curated `read_globals` list of the real
+  FiveM/CFX natives this resource actually calls and a `globals` list of
+  its own cross-file globals (`Config`, `NewCooldown`/`NewNestedCooldown`/
+  `NewMutex`, `HasK9Access`, etc.) so real, intentional patterns aren't
+  flagged as undefined/unused. `unused_args` and `max_line_length` are
+  deliberately left off, with the reasoning documented inline in
+  `.luacheckrc` itself. The one real finding it surfaced — an "empty if
+  branch" warning (542) on `client/search.lua`'s deliberately-silent
+  `on_cooldown`/`search_in_progress` UX branch — turned out to be a false
+  positive, not a bug, and is suppressed with an inline
+  `-- luacheck: ignore 542` comment rather than "fixed" by changing
+  behavior.
+- **Phase 4 vitality HUD (`client/hud.lua`, still off by default)** — this
+  resource's first NUI surface: a passive, always-visible-while-relevant
+  overlay showing health/stamina/hunger/thirst for the active K9
+  character, gated by the new `Config.Features.HealthStaminaHUD` flag
+  (ships `false`). Visibility uses the same `CanShowK9UI()` gate (K9 model
+  **and** live server-side access check) the radial menu already uses —
+  this HUD is treated as a department-issued monitoring instrument, not
+  the K9's innate perception, so unlike thermal/night vision it does
+  **not** display for an uncertified player just because they're
+  K9-modeled. Pushes to the NUI are change-threshold- and
+  heartbeat-driven rather than a fixed poll broadcast, to avoid spamming
+  `SendNUIMessage`, and the overlay never calls `SetNuiFocus` — it has no
+  interactive element to focus, by design. Wired into `fxmanifest.lua`
+  (`ui_page`, `html/index.html`/`style.css`/`app.js`) but genuinely inert
+  end-to-end while the flag stays `false`.
 
 ### Security
 
@@ -104,29 +193,96 @@ fixes:
   loaded into a K9 vehicle could still be offered the "Scratch to Alert"
   option, which made no sense in that state. Mirrors the existing
   vehicle-tuck exclusion already applied to the leash pull-back logic.
+- **Closed a certification-revocation TOCTOU gap in contraband search.**
+  `HasK9Access` was only checked once, at the moment a search request came
+  in — but `server/search.lua`'s `ox_inventory` read can genuinely yield
+  (an uncached vehicle trunk triggers a real lazy DB load), and a
+  supervisor could revoke the searching officer's certification during
+  that window. Without a second check, an already-decertified officer's
+  in-flight search would still return its full result to them and could
+  still trigger the contraband-alert broadcast to bystanders.
+  `HasK9Access` is now re-checked immediately after that awaited read
+  returns, before any result or broadcast is produced — rejected with a
+  distinct `access_revoked` reason (logged to `k9_search_log` as
+  `search_failed`, since a real inventory-read attempt did occur) rather
+  than letting the in-flight search complete.
+- **Corrected an invalid ped model in the K9 roster.** `Config.Peds`'
+  Husky entry shipped as `a_c_huskie`, which is not a real GTA native ped
+  model name — nobody could actually create or play a husky-modeled
+  character under that spelling at all, so the roster entry was silently,
+  completely non-functional rather than merely mis-labeled. The real
+  native model is `a_c_husky`; `Config.Peds` now uses it.
+- **Fixed the Phase 4 HUD's stamina reading being inverted.**
+  `GetPlayerSprintStaminaRemaining` actually tracks sprint *exertion* —
+  rising toward 100 as the player tires — despite its name, confirmed
+  against multiple independent, widely-used community HUD resources.
+  `client/hud.lua` now displays `100 - GetPlayerSprintStaminaRemaining(...)`
+  so the stamina bar reads full-when-fresh and draining-when-tired, the
+  way a stamina bar should.
+- **Corrected an inaccurate native call shape in the water-crossing
+  check.** `client/tracking.lua`'s water-detection helper called
+  `GetWaterHeightNoWaves` with a trailing `0.0` argument as if the height
+  were an input parameter; it's actually an extra Lua return value, and
+  Lua silently discards an unused extra argument — so this was never a
+  behavior bug, only a call shape that misdescribed the native. The call
+  and its surrounding comment now match the real, community-confirmed
+  `local found, waterHeight = GetWaterHeightNoWaves(x, y, z)` convention.
 
 ### Known Limitations
 
-- **`Config.Features.ScentTracking` MUST remain `false` on a live server.**
-  Scent tracking's server-side source resolution is not implemented —
-  the server always reports "not found" for a scent trail's origin. The
-  research half of this gap is now closed: a tech-scout pass confirmed a
-  real, server-side `ox_inventory` hook
-  (`exports.ox_inventory:registerHook('swapItems', ...)`) that fires on
-  every item drop and resolves to a live, non-client-claimed position —
-  see `phase2_notes/scent_source_resolution.md` and `SPEC.md` §9 item 17
-  for the confirmed mechanism and the exact `server/tracking.lua` change
-  it implies. The `.lua` implementation itself has **not** been written
-  yet, so this remains an explicit, disclosed gap (not a hidden
-  shortcut), and it still ships disabled by default. **Do not flip this
-  flag to `true` until the `server/tracking.lua` implementation lands**
-  — doing so will not deliver a working feature and the acceptance
-  criteria for scent tracking are not currently met end-to-end.
-- Door interaction ships as scratch-to-alert only; nudge-open (opening a
-  locked door) is not implemented in this drop, and the config safety
-  guard described above exists specifically to keep it safe to add later.
-- Phase 3 (combat/action features) has design scoping only
-  (`PHASE3_SPEC.md`) — no implementation has started.
+- **`Config.Features.ScentTracking` still ships `false` by default**, but
+  is no longer a hard "can never functionally succeed" exception — its
+  server-side source resolution (the `ox_inventory` `swapItems` hook
+  described in the Added entry above) is now implemented. What remains is
+  a verification gap, not a missing implementation: the hook's exact
+  name/payload shape was confirmed this pass by direct source-reading
+  (`ox_inventory`'s own `modules/inventory/server.lua`, corroborated two
+  independent ways) rather than by an independent test against a live
+  install, and the recommended one-time dev-time mitigation — logging
+  `json.encode(payload)` once against your actual target-server
+  `ox_inventory` version to confirm field names before relying on this in
+  production — has **not** been performed as part of this pass. Do a
+  one-time verification of that hook against your own `ox_inventory`
+  install before enabling this flag in production; see
+  `phase2_notes/scent_source_resolution.md` §2/§6 for the full confidence
+  breakdown.
+- Door interaction's nudge-open sub-feature is now implemented, but purely
+  as a cosmetic push impulse/sound on the K9's own ped — it never reads or
+  changes the door's actual lock state, and by design has no way to detect
+  whether a given door is genuinely passable versus locked. It is not, and
+  is not intended to be, an actual door-opening mechanic; treat it as
+  flavor, not a functional unlock. `Config.DoorInteraction.nudgeRequiresUnlocked`
+  remains hard-pinned to `true` via the resource-start assertion described
+  above, since there is still no real lock-state check anywhere in this
+  feature for that field to meaningfully gate.
+- The husky ped-model fix above was scoped to `Config.Peds` itself.
+  `client/movement.lua`'s Sit and Scratch-to-alert scenario lookup tables
+  (`K9_SIT_SCENARIO_BY_MODEL_HASH` / `K9_DOOR_SCRATCH_SCENARIO_BY_MODEL_HASH`)
+  still key on the old `a_c_huskie` spelling as of this writing, so a real
+  husky K9 currently falls back to the default Shepherd sit/bark animation
+  rather than the intended Retriever substitution until those two lookup
+  tables are updated to the corrected model name.
+- Phase 4's new vitality HUD (`Config.Features.HealthStaminaHUD`, still
+  `false` by default) reads hunger/thirst from
+  `QBX.PlayerData.metadata.hunger`/`.thirst` on the assumption those field
+  names and a 0-100 scale match a live `qbx_core` install — this has
+  **not** been independently verified against a real install this
+  session (medium confidence per the design note it implements). Confirm
+  against your own server's actual metadata schema before enabling this
+  flag. Health and stamina are sourced from real client natives instead
+  and are not affected by this caveat.
+- Phase 3 (combat/action features) still has **no implementation** — only
+  design scoping (`PHASE3_SPEC.md`). That document's Revision 3 reverses
+  its own earlier NPC-only default: player-vs-player K9 combat is now a
+  settled, in-scope design decision for whenever Phase 3 implementation
+  eventually starts. This is a design-document change only — no `.lua`
+  file was touched to produce it, and no combat code of any kind exists
+  yet. The same revision leaves one item explicitly unresolved and
+  flagged blocking: whether a non-cooperating player's client can be
+  *prevented* (not merely detected) from ignoring a relayed combat
+  restriction — no `Config.Combat` flag should be enabled and no
+  player-target combat implementation should start until that question is
+  answered.
 - This batch has not yet had the same end-to-end release-readiness
   sign-off Phase 1 received; treat everything above as pending final
   packaging, not a shipped release.

@@ -186,8 +186,10 @@ Config.ContrabandAlertTiers = {
 Config.Tracking = {
     Scent = {
         maxRange         = 40.0,  -- max distance from the K9's current position to a valid scent source at search time
+        maxAgeSeconds    = 900,   -- how long a dropped item stays trackable as a scent source (§9 item 17 close-out, 2026-08-23). Deliberately longer than Blood/Gunpowder's 300s/120s -- a physical dropped item sitting on the ground doesn't decay the way a damage/gunfire event does. Judgment call, not independently confirmed against real gameplay balance -- phase2_notes/scent_source_resolution.md §4 flags this as worth a product-manager/config-validator/economy-balance-agent pass; revisit if playtesting says otherwise.
         markerSpacing    = 3.0,   -- meters between rendered trail markers/checkpoints
         searchCooldownMs = 5000,  -- per-player cooldown on re-issuing a "search" command of this type
+        relayCooldownMs  = 1000,  -- per-dropping-player cap on how often the ox_inventory 'swapItems' hook (server/tracking.lua) logs a new scent-source entry. UNLIKE Blood/Gunpowder's field of the same name, this is NOT closing an anti-forgery gap -- the hook is server-to-server, so `payload.source` cannot be spoofed to claim a drop that didn't happen. It's defense-in-depth against a rapid drop/pickup/drop loop growing the server-side scent log unbounded between prune passes. Placeholder pending tuning.
     },
     Blood = {
         maxRange         = 40.0,
@@ -256,3 +258,135 @@ Config.Vision = {
     Thermal = { toggleKey = 'K' }, -- drives SetSeethrough(true/false) -- see §11.6
     Night   = { toggleKey = 'J' }, -- drives SetNightvision(true/false) -- see §11.6
 }
+
+-- ======================================================================
+-- PHASE 3 — COMBAT & ADVANCED AGILITY (PHASE3_SPEC.md §12.2).
+--
+-- IMPORTANT — this is a DELIBERATELY PARTIAL extraction of PHASE3_SPEC.md
+-- §12.2's full `Config.Combat` sketch, not the whole table. Only the
+-- `AgilityAdvanced` sub-table is added here, because it is the ONLY Phase 3
+-- combat/agility sub-feature actually implemented in this pass (see
+-- client/movement.lua's own ADVANCED AGILITY block). `BiteAndHold`,
+-- `NonLethalTakedown`, `PropDragging`, `HandlerDownDefense`, and the
+-- cross-cutting `RequireWantedStatus`/`WantedStatusCheckOverride`/
+-- `NonComplianceDetection` knobs are DELIBERATELY NOT added yet:
+--   - `BiteAndHold`/`NonLethalTakedown`/`PropDragging`'s player-target
+--     paths are blocked on PHASE3_SPEC.md §12.0 item 8 (the client-relay/
+--     non-cooperating-target-client architecture question), explicitly
+--     unresolved and being worked by coder-security as of this pass — do
+--     not add their config entries as if they were ready to be wired up.
+--   - `HandlerDownDefense` is blocked on a DIFFERENT, separately open item
+--     — PHASE3_SPEC.md §12.0 item 7 / phase2_notes/
+--     phase3_handler_partnership_decision.md ("who is this K9's handler,
+--     independent of momentary leash state" — genuinely unresolved,
+--     needs a human product decision or a dedicated design pass, not a
+--     guess). Its own mechanics never touch a target ped's state (per
+--     §12.0 item 2's UI/auto-targeting-convenience reading), so it is NOT
+--     blocked by item 8 — but it cannot be meaningfully implemented yet
+--     regardless, since (a) resolving "who is the handler" is exactly
+--     item 7's open question, and (b) it is a "pure consumer" of the
+--     `requestBiteHold`/`requestTakedown` action paths (§12.3), which do
+--     not exist in this codebase yet and are themselves blocked. Adding
+--     numeric placeholders for it here with nothing real to wire them to
+--     would be misleading, not helpful groundwork.
+-- Re-diff this block against PHASE3_SPEC.md §12.2 in full once those items
+-- are resolved, rather than assuming this partial copy stays in sync.
+-- ======================================================================
+Config.Combat = {
+    AgilityAdvanced = {
+        -- DECIDED (PHASE3_SPEC.md §12.0 item 3, Revision 2, unaffected by
+        -- the Revision 3 PvP reversal): multi-height capsule-sweep raycast
+        -- is the Phase 3 default. 'taggedProp' remains a documented,
+        -- theoretical per-server override shape but has NO implementation
+        -- in this codebase — client/movement.lua asserts loudly at
+        -- resource start if this is ever set to anything other than
+        -- 'raycast', rather than silently no-op'ing.
+        detectionMethod = 'raycast',
+        maxVaultHeight  = 1.2,   -- meters -- PHASE3_SPEC.md §12.2 sketch value, UNTUNED (see client/movement.lua's own tuning-constants note: PHASE3_SPEC.md §12.5.5 lists exact height bands/capsule radius/forward distance as in-engine tuning work, not a design fork)
+        vaultCooldownMs = 2000,  -- ms, UNTUNED placeholder, same status as above
+    },
+}
+
+-- ======================================================================
+-- PHASE 5 (R&D) — DEPLOYABLE KENNEL (Config.Features.DeployableKennel,
+-- still `false` by default — see this block's own note on that below).
+-- phase2_notes/phase5_features_research.md §5: "handler places a world...
+-- kennel object... server-authoritative validation (proximity,
+-- certification, one-per-handler limit), with cleanup on resource stop/
+-- handler disconnect." See client/kennel.lua and server/kennel.lua for the
+-- full implementation and their own file-header contracts.
+--
+-- PROP MODEL CONFIDENCE — read before changing `propModel` below:
+-- `phase5_features_research.md` §5 found exactly ONE lead for a real
+-- vanilla GTA doghouse/kennel prop name (`prop_doghouse_01`, sourced from
+-- a DIFFERENT, unrelated FiveM resource's config default —
+-- `fruitmob/murderface-pets`), and explicitly could NOT cross-verify it
+-- against a second independent source this session (gtax.dev/gtahash.com/
+-- a GTA Wiki "Doghouse" page were all blocked by this environment's
+-- egress proxy). Per this project's established two-independent-source
+-- confidence convention (see client/hud.lua's own stamina-native
+-- confidence note for the same discipline applied to a native, applied
+-- here to an asset name instead): PLAUSIBLE, NOT VERIFIED. Confirm it
+-- actually streams/loads in-engine before treating it as settled — do not
+-- silently upgrade this comment's confidence just because the feature
+-- shipped without incident in one test session.
+-- ======================================================================
+Config.DeployableKennel = {
+    -- Try this first. Single-source, unconfirmed lead — see the note
+    -- above. client/kennel.lua's LoadModelWithTimeout() falls back to
+    -- `fallbackPropModel` below if this model hash never loads within
+    -- REQUEST_MODEL_TIMEOUT_MS, rather than silently placing nothing or
+    -- erroring the whole feature out.
+    propModel = 'prop_doghouse_01',
+
+    -- Deliberately NOT a second guess at a "kennel-shaped" model name — a
+    -- second unverified guess would carry the exact same single-source
+    -- risk this fallback exists to avoid. Reuses `prop_tennis_ball`, the
+    -- ONE prop name this same research pass (§4, FetchMechanic) rated
+    -- highest-confidence "confirmed real and available" of any prop
+    -- mentioned anywhere in that document — it traces to a real, working,
+    -- source-read community script's shipped config default, not just a
+    -- bare name reference. It is NOT thematically a kennel; it exists
+    -- purely as a safe, visible, definitely-real placeholder so a bad
+    -- `propModel` lead degrades to "an oddly-shaped but real object
+    -- appears" rather than a silent failure or a broken/invisible entity.
+    -- Swap for a real doghouse/kennel asset (custom-modeled or a
+    -- confirmed vanilla prop) once one is verified in-engine.
+    fallbackPropModel = 'prop_tennis_ball',
+
+    -- Meters in front of the handler's own live server-side position
+    -- (server/kennel.lua computes this from GetEntityForwardVector, never
+    -- a client-claimed coordinate — see that file's header) where the
+    -- kennel spawns before PlaceObjectOnGroundProperly snaps it to the
+    -- ground. UNTUNED placeholder, same status as PHASE3_SPEC.md's own
+    -- vault-tuning constants (client/movement.lua) — a reasonable-looking
+    -- default, not a playtested value.
+    placementForwardOffsetMeters = 2.0,
+
+    -- ox_target interaction range for the "Pick Up Kennel" option
+    -- (client/kennel.lua). Reuses the same order of magnitude as
+    -- Config.VehicleInteractMeters's role for vehicle entry/exit rather
+    -- than inventing an unrelated scale.
+    interactDistanceMeters = 2.5,
+
+    -- Per-source rate limit on *requesting* a new placement (server/
+    -- kennel.lua's DeployCooldown) — spam defense only, distinct from the
+    -- one-active-kennel-per-handler limit below (a handler who already has
+    -- an active kennel is refused regardless of this cooldown; this only
+    -- throttles how fast repeated requests can even reach that check).
+    deployCooldownMs = 5000,
+
+    -- How long server/kennel.lua holds a "waiting for the client to
+    -- confirm it actually created the object" slot open before it expires
+    -- and frees up for a new attempt — mirrors LEASH_REQUEST_TTL_MS's exact
+    -- reasoning in server/main.lua (a request nobody ever answers must not
+    -- linger indefinitely).
+    pendingPlacementTtlMs = 15000,
+}
+-- ONE-KENNEL-PER-HANDLER LIMIT (not a config knob — see server/kennel.lua's
+-- header for the full "your call, documented" reasoning): the server-side
+-- registry is a single-slot `Kennels[citizenid]`, not an array, so this is
+-- a hardcoded invariant, not something a `maxActivePerHandler` field here
+-- could raise without a real code change to the registry shape itself.
+-- Deliberately NOT modeled as a per-area/spatial limit — see that file's
+-- header for why.

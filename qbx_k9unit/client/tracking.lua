@@ -54,13 +54,15 @@
     ======================================================================
 
     FILE-TO-FILE CONTRACT (client side):
-    - THIS FILE exposes four resource-global (no `local`) functions,
+    - THIS FILE exposes five resource-global (no `local`) functions,
       consumed by client/radial.lua's "Track Scent" / "Track Blood" /
-      "Track Gunpowder" items per §11.3's radial.lua row (not wired by this
-      file's own pass — grepping client/radial.lua as of this pass shows it
-      does not call these yet; that wiring is coder-architect's own file to
-      extend, per §11.3's file-plan row assigning that extension to
-      client/radial.lua itself, not this one):
+      "Track Gunpowder" items per §11.3's radial.lua row. UPDATED (stale
+      "not wired yet" note removed, integration-verifier finding): all five
+      are confirmed called from client/radial.lua as of this pass — see
+      that file's Track Scent/Blood/Gunpowder item handlers, which use
+      GetActiveTrackType()/StopTracking() to distinguish "toggle off THIS
+      type" from "a DIFFERENT type is active, defer to StartTrack()'s own
+      rejection" before calling the matching Start*Track():
         StartScentTrack()
         StartBloodTrack()
         StartGunpowderTrack()
@@ -70,6 +72,7 @@
             in §11's acceptance criteria) — a manual-cancel item, mirroring
             Attach/Detach Leash's single context-sensitive radial item.
         IsTracking() -> boolean
+        GetActiveTrackType() -> 'scent'|'blood'|'gunpowder'|nil
     - THIS FILE calls client/main.lua's CanShowK9UI() at the top of every
       Start*Track() call — "don't trust the caller already checked," the
       same posture client/movement.lua's RequestLeashAttach() documents for
@@ -97,6 +100,22 @@ local trackingState = nil
 function IsTracking()
     return trackingState ~= nil
 end
+
+--- In-flight guard + staleness token for StartTrack()'s awaited server
+--- callback (qa-tester finding, this pass): `lib.callback.await` yields for
+--- the duration of a full server round-trip, during which `trackingState`
+--- is still nil/unchanged, so neither `IsTracking()` nor
+--- `trackingState.brokenByWater` can catch a second concurrent
+--- Start*Track() call, or a StopTracking() call, that happens WHILE the
+--- first call is still pending. `startInFlight` rejects a second concurrent
+--- Start*Track() outright (cheap — never even issues a second server
+--- callback). `trackRequestGeneration` additionally guards against the
+--- narrower race `startInFlight` alone can't close: StopTracking() firing
+--- while the ONE in-flight request is still pending, which must not let
+--- that pending request "resurrect" a session the player already
+--- explicitly stopped once it finally resolves.
+local startInFlight = false
+local trackRequestGeneration = 0
 
 --- @return 'scent'|'blood'|'gunpowder'|nil
 --- regression-tester finding: client/radial.lua's three Track items each
@@ -140,7 +159,32 @@ local function StartTrack(trackType)
         return
     end
 
+    -- In-flight guard (qa-tester finding, this pass) — reject a second
+    -- concurrent Start*Track() outright rather than letting two overlapping
+    -- lib.callback.await calls race each other; see this function's own
+    -- startInFlight/trackRequestGeneration declaration comment above for
+    -- the full race description.
+    if startInFlight then
+        lib.notify({ title = 'K9 Unit', description = 'Already starting a track — please wait.', type = 'error' })
+        return
+    end
+
+    startInFlight = true
+    trackRequestGeneration = trackRequestGeneration + 1
+    local myGeneration = trackRequestGeneration
+
     local result = lib.callback.await('qbx_k9unit:server:findTrackableSource', false, trackType)
+
+    startInFlight = false
+
+    -- Staleness check — if StopTracking() (or, defensively, another
+    -- Start*Track() call) ran WHILE the await above was pending, this
+    -- result is stale and must not resurrect/stomp whatever the player's
+    -- most recent action actually was.
+    if myGeneration ~= trackRequestGeneration then
+        return
+    end
+
     -- NOTE: §11.4 item 1's response shape has no `reason` field (unlike
     -- searchTarget's, §11.4 item 2), so "nothing nearby" / "on cooldown" /
     -- "no access" all collapse to the same found = false here
@@ -192,6 +236,12 @@ end
 --- capability granted") — no confirmation notification needed, matching
 --- how DetachLeash() doesn't narrate every internal-state clear either.
 function StopTracking()
+    -- Bumps trackRequestGeneration so a StartTrack() call still awaiting
+    -- its server callback at the moment this runs discards its eventual
+    -- result as stale instead of resurrecting the session being stopped
+    -- here — see StartTrack()'s own startInFlight/trackRequestGeneration
+    -- declaration comment (qa-tester finding, this pass) for the full race.
+    trackRequestGeneration = trackRequestGeneration + 1
     trackingState = nil
     -- The render thread below naturally stops drawing once IsTracking() is
     -- false, mirroring how client/movement.lua's DetachLeash() comment
@@ -212,6 +262,17 @@ end
 -- real cost).
 local TRACK_TICK_MS = 250
 local TRACK_IDLE_TICK_MS = 1000
+
+-- trackType -> the Config.Tracking sub-table holding its tuning values.
+-- Built once at file load rather than re-derived per tick via a
+-- ternary/if-else chain (refactor-strategist finding, cosmetic-only, zero
+-- behavior change) -- mirrors server/tracking.lua's own TRACK_TYPE_CONFIG
+-- lookup table for the identical trackType-to-config mapping.
+local TRACKING_STATE_CONFIG = {
+    scent = Config.Tracking.Scent,
+    blood = Config.Tracking.Blood,
+    gunpowder = Config.Tracking.Gunpowder,
+}
 
 -- DrawMarker type 1 = a flat cylinder/checkpoint ring — a reasonable,
 -- unremarkable choice for a ground breadcrumb (matches the "checkpoint"
@@ -309,11 +370,7 @@ CreateThread(function()
             local totalDist = #(sourceCoords - myCoords)
 
             if totalDist > 0.1 then
-                local trackingConfig = Config.Tracking[
-                    trackingState.trackType == 'scent' and 'Scent'
-                    or trackingState.trackType == 'blood' and 'Blood'
-                    or 'Gunpowder'
-                ]
+                local trackingConfig = TRACKING_STATE_CONFIG[trackingState.trackType]
                 local dir = (sourceCoords - myCoords) / totalDist
 
                 -- OPEN QUESTION, not resolved by SPEC.md §11 either way

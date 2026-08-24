@@ -1048,6 +1048,40 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     `server/tracking.lua` still needs to be written per that note's §4/§7
     before this item can be closed out and the flag safely enabled.
 
+    **Update (coder-backend implementation pass, 2026-08-24) — the
+    `.lua` implementation described above is now written.**
+    `server/tracking.lua` registers
+    `exports.ox_inventory:registerHook('swapItems', ...)` at file load
+    exactly per that note's §4, feeds a
+    new `TrackableLog.scent` entry (structurally identical to
+    blood/gunpowder's), and `findTrackableSource`'s `'scent'` branch no
+    longer special-cases `sourceCoords = nil` — it now shares the same
+    nearest-fresh-entry-within-`maxRange` loop as blood/gunpowder.
+    `config.lua` gained `Config.Tracking.Scent.maxAgeSeconds` (`900`,
+    longer than blood/gunpowder since a dropped item doesn't decay the way
+    a damage/gunfire event does — a judgment call, not independently
+    tuned) and `.relayCooldownMs` (`1000`, defense-in-depth against ingest
+    volume, NOT an anti-forgery measure — the hook is server-to-server, so
+    `payload.source` cannot be spoofed). The Scent Tracking acceptance
+    criteria in §11.5 are now believed met end-to-end by this resource's
+    own logic (server-authoritative resolution, no client-supplied
+    coordinate anywhere in the path, access/cooldown checks unchanged from
+    the rest of this callback). **One residual, disclosed gap remains,
+    genuinely unclosed by this pass:** the `swapItems` hook's exact
+    name/payload shape was confirmed by direct source-reading this session
+    (HIGH confidence, two independent corroborations — see
+    `phase2_notes/scent_source_resolution.md` §2/§6), not by an
+    independent test against a live `ox_inventory` install, and that
+    note's own recommended one-time dev-time verification (logging
+    `json.encode(payload)` once against the actual target-server
+    `ox_inventory` version) has **not** been performed as part of this
+    pass — no live install was available in this environment to run it
+    against. `Config.Features.ScentTracking` therefore **still ships
+    `false`** and this item is **not** being marked fully closed; see
+    `CHANGELOG.md`'s Known Limitations section for the exact remaining
+    caveat and recommended verification step before any server owner
+    enables this flag in production.
+
 ---
 
 ## 10. Consultations I could not get this session
