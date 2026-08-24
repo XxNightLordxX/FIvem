@@ -1,5 +1,164 @@
 # qbx_k9unit — Technical Debt / Refactor Roadmap
 
+**Revision 5 — whole-codebase audit post-growth (14→28 Lua files),
+2026-08-24.** This resource roughly doubled in one session — 14 files to
+28 — largely written by parallel agents with no visibility into each
+other's work. This revision is the first pass to read the *whole* tree
+since that growth, rather than the single-item verification Revisions 3
+and 4 each did. Headline: the core mechanism this roadmap has tracked
+since Revision 1 — the same already-recognized pattern getting hand-rolled
+again by whoever touches the codebase next — held again, including against
+the one item (item 2) this document had marked fully closed. Every finding
+below was checked directly against the current source, not inferred from
+file/function names.
+
+**Correction to item 2's status — the important one.** Item 2
+(`ResolveNetworkEntity`) carries a **STATUS: DONE** marker below. That is
+accurate only for the 6 call sites it was built and migrated against in
+Revision 4's pass (`client/main.lua`, `client/vehicle.lua`,
+`client/movement.lua`, `client/search.lua`, `server/main.lua`,
+`server/search.lua`). It should be read as **DONE for the original 6 call
+sites, REOPENED by 11 new copies** written afterward, in files whose
+authors had no visibility into the extraction. Confirmed directly against
+`server/entities.lua`'s implementation — this is not a false positive:
+
+- **`server/kennel.lua` — 3 copies.** `RemoveKennelForCitizenid`'s
+  `NetworkDoesEntityExistWithNetworkId`/`NetworkGetEntityFromNetworkId`/
+  `DoesEntityExist` sequence (~217); `confirmKennelPlaced` (~318), which
+  *also* separately re-derives the `KennelModelHashes` model-hash check and
+  a `GetEntityType(entity) ~= 3` check (`server/kennel.lua:334-341`) — both
+  of which `ResolveNetworkEntity`'s `expectedEntityType` parameter already
+  folds into the one call; and the `onResourceStop` sweep (~443).
+- **`client/kennel.lua` — 2 copies.** The `removeKennel` net-event handler
+  (~195) and its own `onResourceStop` handler (~217).
+- **`client/combat.lua` — 5 copies.** The four NPC-relay handlers plus the
+  shared maintenance thread each independently call
+  `NetworkGetEntityFromNetworkId(npcNetId)` with no
+  `ResolveNetworkEntity` in sight, spread across ~442-571.
+- **`server/inventory.lua` — 1 copy, highest priority of the group.**
+  `HandleOpenK9Inventory` (`server/inventory.lua:444-446`) reproduces a
+  bare `if entity == 0 then` check — **no `DoesEntityExist` call, no
+  netId-existence check at all** — the precise weaker form
+  `ResolveNetworkEntity` was built to replace, and weaker even than the
+  pattern it replaced elsewhere (the client-side copies above at least call
+  `NetworkDoesEntityExistWithNetworkId` first). This sits inside the exact
+  callback whose own file header (`server/inventory.lua:176-177`) claims
+  gets "`server/search.lua`-level scrutiny." Recording this honestly rather
+  than over- or under-stating it: practical exploitability looks limited,
+  because the very next check in the same function,
+  `ResolveConnectedPlayerFromPed` (~454), can only resolve to a *live
+  connected player's own ped* — a nonzero netId that fails the (missing)
+  existence check has nowhere useful to land from this path alone. It's a
+  real regression in defensive posture and the clearest case for going
+  first, not a demonstrated live exploit.
+
+For calibration: `server/combat.lua`, the sibling file to
+`client/combat.lua`, *did* adopt the resolver correctly — it calls
+`ResolveNetworkEntity(targetNetId, 1)` at `server/combat.lua:532` and
+`:700`. This is specifically a client-file, written-in-a-hurry problem in
+this batch, not evidence the extraction is hard to find or awkward to use.
+
+**Item 3 is now understated.** Revision 3 tracked 3 boolean
+model-recognition tables (`client/main.lua`'s `K9ModelHashes`,
+`client/movement.lua`'s `k9ModelHashesForTargeting`,
+`server/certifications.lua`'s `K9ModelHashes`) plus the two breed→scenario
+literal tables, and judged a 4th of either kind "a realistic future risk."
+Both have now happened. The boolean set doubled to 6: three more
+independent copies exist at `client/wellbeing.lua` (~70), `client/medkit.lua`
+(~57), and `client/inventory.lua` (~77, named `k9ModelHashesForTargeting`
+there too). Each is individually disclosed with its own honest "small
+local copy, mirrors X" comment (confirmed at `client/wellbeing.lua:64`,
+`client/medkit.lua:46-47`) — this is documented duplication, not
+sloppiness, same character as the original 3. A 3rd breed→scenario table
+also appeared, exactly as predicted: `client/combat.lua`'s
+`K9_BITE_HOLD_SCENARIO_BY_MODEL_HASH` (built ~264-271, used ~223 and ~329).
+It's correctly keyed with `a_c_husky` — no repeat of the `a_c_huskie` typo
+`f70d28f` caused — so there is no live bug here, only further confirmation
+the pattern keeps recurring. Recommend upgrading this item from "cheap
+rider, no particular urgency" to **do soon, as a cheap rider on whichever
+pass migrates item 2's four bypassing files**: promote
+`IsEntityModelK9(entity)` — the local copy in `client/movement.lua:528-530`
+already has the right signature and reads `Config.Peds` correctly — to a
+`client/main.lua` resource-global, and delete the four client-side
+duplicates (`client/movement.lua`, `client/wellbeing.lua`,
+`client/medkit.lua`, `client/inventory.lua`). Leave
+`server/certifications.lua`'s copy alone; it's server-side and a resource
+global can't cross the realm boundary.
+
+**New item — a fresh instance of item-2-shaped debt:
+`ResolveConnectedPlayerFromPed` / `ResolvePlayerServerIdFromPed`.** The
+"scan connected players, match by ped, return the server id" helper
+`server/search.lua` originally wrote (`ResolveConnectedPlayerFromPed`,
+`server/search.lua:401`) is now hand-copied verbatim across three server
+files — the original plus `server/inventory.lua:319` and
+`server/combat.lua:383` — and its client-side, native-`Ped`-typed
+counterpart `ResolvePlayerServerIdFromPed` across two client files,
+`client/medkit.lua:72` and `client/wellbeing.lua:240`. Five independent
+copies total — the same count that triggered item 2's original extraction.
+Worth recording: `server/combat.lua`'s own header (`server/combat.lua:274-278`)
+already flags its copy as a "REFACTOR_ROADMAP-style extraction candidate
+now that there are two" — and that comment was stale on arrival, because
+`server/inventory.lua` had already made it three by the time
+`server/combat.lua` landed; none of these three server files had
+visibility into either of the other two. Proposed fix, following item 2's
+own precedent exactly: add `ResolveConnectedPlayerFromPed` as a second
+function in `server/entities.lua` (same responsibility as
+`ResolveNetworkEntity`, not a new shared-utility concern) and add
+`ResolvePlayerServerIdFromPed` alongside `ResolveNetworkEntity` in
+`client/main.lua`.
+
+**Checked and confirmed fine this pass — recorded so a future pass doesn't
+re-litigate these:**
+
+- **Item 1 (`server/cooldowns.lua`)** is fully and consistently adopted
+  across all six new files that needed a cooldown/mutex this session, each
+  with correct cleanup — a clean win under exactly the parallel-authorship
+  stress test that broke item 2. No hand-rolled cooldown table was found
+  anywhere in the 14 new files.
+- **The ~28 `playerDropped` handlers now registered across the resource**
+  are high in count but not in cost. `server/cooldowns.lua` explicitly
+  anticipated many independent registrations (FiveM fires every registered
+  handler for the same event; this scales fine), and the 7 handlers that
+  aren't cooldown-table cleanup each clean up genuinely different
+  per-player state. Watch, don't act.
+- **The `type(x) == 'function'` guard convention**, used wherever one file
+  calls a resource-global exposed by another, is applied consistently and
+  is deliberate defense-in-depth, not a workaround for a real load-order
+  bug — `fxmanifest.lua`'s file ordering is already correct for every
+  cross-file global currently in use.
+- **`config.lua`'s ~700 lines** remain navigable, with the same consistent
+  per-feature block formatting maintained across the session's growth.
+- **The ox_target registration-gating split** (some options gated on a
+  feature flag at load time, others gated inside the option's own handler)
+  is pre-existing behavior, documented per-feature at each site — not new
+  drift introduced this session.
+
+**Priority ordering for whoever picks this up next:**
+
+1. Migrate the four files bypassing `ResolveNetworkEntity` onto it.
+   `server/inventory.lua` first (weakest surviving check, sits in a
+   file-header-claimed high-scrutiny callback); then `server/kennel.lua`
+   (3 sites, one of which also collapses its separate model-hash/
+   `GetEntityType` checks into `expectedEntityType`); then
+   `client/kennel.lua` and `client/combat.lua`.
+2. Extract `ResolveConnectedPlayerFromPed` (into `server/entities.lua`) and
+   `ResolvePlayerServerIdFromPed` (into `client/main.lua`) per the new item
+   above — same shape as item 2, now at the same 5-copy threshold that
+   justified item 2's own extraction.
+3. Promote `IsEntityModelK9` to a `client/main.lua` global and delete the
+   four client-side duplicate boolean tables, as a cheap rider on either
+   pass above.
+
+Medium-term, verdicts otherwise unchanged: the breed→scenario-table
+consolidation (item 3's widened scope, now 3 tables, still no live bug) and
+`FindNearestEntity` (item 5 — `client/combat.lua`'s `FindNearestCombatTarget`,
+`client/combat.lua:304`, is now a 3rd copy of the exact live-pool,
+distance-filtered shape alongside `client/radial.lua` and
+`client/vehicle.lua`, separate from `server/tracking.lua`'s already-noted
+related-but-different age-filtered-log-array shape — four related
+implementations total now, the extraction argument a little stronger, the
+"shapes still diverge enough to wait" verdict unchanged).
+
 **Revision 4 — near-term item 2 landed, coder-architect pass, 2026-08-24.**
 Near-term item 2 below (the shared `ResolveNetworkEntity` defensive-netId-
 resolution helper) **shipped** this pass as a client-side global in
@@ -361,7 +520,22 @@ overdue — do it before Phase 3 (`PHASE3_SPEC.md`) adds its own cooldowns
 using the same hand-rolled convention, which would make this a 12+-table
 migration instead of an 11-table one.
 
-#### 2. Extract the "resolve network entity defensively" helper — same call, now backed by 6 real instances instead of 2 — **STATUS: DONE (2026-08-24, coder-architect)**
+#### 2. Extract the "resolve network entity defensively" helper — same call, now backed by 6 real instances instead of 2 — **STATUS: DONE for the original 6 call sites, REOPENED by 11 new copies (2026-08-24 whole-codebase audit)**
+
+**Reopened 2026-08-24.** A whole-codebase audit (see the Revision 5 note at
+the top of this document for full detail) found 11 new independent copies
+of the same defensive-resolve pattern written after this item shipped, by
+files that had no visibility into the extraction: `server/kennel.lua` (3),
+`client/kennel.lua` (2), `client/combat.lua` (5), and `server/inventory.lua`
+(1, the highest-priority of the group — it reproduces a bare `entity == 0`
+check with no `DoesEntityExist` call at all, inside a callback its own file
+header claims gets "`server/search.lua`-level scrutiny"). The DONE marker
+below and the "Landed this pass" paragraph immediately after it describe
+what shipped in the 2026-08-24 coder-architect pass and remain accurate for
+the 6 original call sites; they are retained as-is per this document's
+layering convention. Treat this item as **open again** for the 4 files
+listed above until they're migrated — see the Revision 5 note's priority
+ordering for sequencing (`server/inventory.lua` first).
 
 **Landed this pass** as `client/main.lua`'s `ResolveNetworkEntity(netId)`
 (client-side) and `server/entities.lua`'s `ResolveNetworkEntity(netId,
@@ -401,8 +575,58 @@ instead of 6 independently-written (if consistently correct) copies.
 **Order:** Now the single highest-value item remaining on this roadmap —
 item 1 (its natural pairing) is done; do this next, still ahead of Phase 3
 implementation start for the same reason item 1's "order" note gave.
+**Revision 5 note:** this "done" status covers only the original 6 call
+sites — see the reopened-status note above and item 2b immediately below
+for the current picture.
 
-#### 3. Consolidate the `Config.Peds` model-hash tables — no longer time-sensitive, still cheap
+#### 2b. Extract the shared player-resolution-from-ped helper (`ResolveConnectedPlayerFromPed` / `ResolvePlayerServerIdFromPed`) — new this revision, same shape as item 2
+
+**Added 2026-08-24 (whole-codebase audit).** See the Revision 5 note at the
+top of this document for the full write-up; summarized here for the
+roadmap's own record.
+
+**What's wrong:** the "scan connected players, match by ped, return the
+server id" helper `server/search.lua` originally wrote
+(`ResolveConnectedPlayerFromPed`, `server/search.lua:401`) is now hand-copied
+verbatim across three server files — the original plus
+`server/inventory.lua:319` and `server/combat.lua:383` — and its
+client-side, native-`Ped`-typed counterpart `ResolvePlayerServerIdFromPed`
+across two client files, `client/medkit.lua:72` and
+`client/wellbeing.lua:240`. Five independent copies total, none sharing an
+implementation — the same count that triggered item 2's own extraction.
+`server/combat.lua`'s own header (`server/combat.lua:274-278`) already
+flags its copy as an extraction candidate "now that there are two," and
+that comment was stale on arrival: `server/inventory.lua` had already made
+it three by the time `server/combat.lua` landed, with neither file aware of
+the other.
+
+**Scope:** add `ResolveConnectedPlayerFromPed(entity)` as a second function
+in `server/entities.lua` (same responsibility as `ResolveNetworkEntity`,
+not a new shared-utility concern), and add
+`ResolvePlayerServerIdFromPed(ped)` alongside `ResolveNetworkEntity` in
+`client/main.lua`. Migrate all 5 call sites onto the shared versions.
+
+**Payoff:** same reasoning as item 2 — one audited place for "does this ped
+actually belong to a currently-connected player" instead of 5
+independently-written (if so far consistently correct) copies.
+
+**Order:** do immediately after item 2's reopened migration (item 1's and
+item 2's own pairing precedent applies here too — same root file,
+`server/entities.lua`, same natural pairing with `client/main.lua`).
+
+#### 3. Consolidate the `Config.Peds` model-hash tables — UPGRADED to do-soon (2026-08-24 audit), still cheap
+
+**Revision 5 update:** the "4th copy" and "3rd breed→scenario table" this
+item and Revision 3's note both flagged as future risks have both now
+happened — see the Revision 5 note at the top of this document for the
+full inventory (3 new boolean-table copies in `client/wellbeing.lua`,
+`client/medkit.lua`, `client/inventory.lua`; a 3rd, correctly-keyed
+breed→scenario table in `client/combat.lua`). No live bug in either case,
+but the recurrence is no longer hypothetical, so this item is upgraded
+from "no urgency" to **do soon, as a cheap rider on whichever pass
+migrates item 2's four bypassing files** — same proposed fix as below,
+now also covering the four (not one) client-side boolean-table
+duplicates.
 
 **Status change from Revision 1:** was "near-term, cheap, not blocking."
 Confirmed over a full Phase 2 cycle that it isn't blocking anything and
@@ -435,6 +659,16 @@ broadcast's distance-filtering is a real, deliberate difference in scope
 correctly kept separate in the shipped code, and should stay separate.
 
 #### 5. `FindNearestEntity` — the 3rd occurrence has technically arrived, but shapes still diverge enough to wait
+
+**Revision 5 update:** `client/combat.lua`'s `FindNearestCombatTarget`
+(`client/combat.lua:304`) is a further copy of the exact live-pool,
+distance-filtered shape — a 3rd instance of that specific shape alongside
+`client/radial.lua` and `client/vehicle.lua`, on top of (not the same as)
+`server/tracking.lua`'s already-noted related-but-different
+age-filtered-log-array shape below. Four related implementations total
+now. The extraction argument is a little stronger than Revision 2 found it,
+but the verdict is unchanged — still worth folding in cheaply if the
+context is already loaded for items 2/2b/3, not worth a dedicated pass.
 
 `server/tracking.lua`'s nearest-fresh-log-entry scan is related to but not
 identical to `client/radial.lua`'s and `client/vehicle.lua`'s nearest-
@@ -473,10 +707,33 @@ independently of the others.
   Revisit before Phase 3 (`PHASE3_SPEC.md`) starts adding its own globals,
   using the export-tracking doc to judge whether the list has gotten
   unwieldy — same trigger condition as before, just now one phase closer.
+- **`playerDropped` handler count (~28 across the resource, Revision 5
+  audit)** — high in count, not in cost. `server/cooldowns.lua` explicitly
+  anticipated many independent registrations (FiveM fires every registered
+  handler for the same event; this scales fine regardless of count), and
+  the 7 handlers that aren't cooldown-table cleanup each clean up
+  genuinely different per-player state. No consolidation recommended;
+  re-check only if a future handler is found duplicating another's cleanup
+  logic rather than covering new state.
+- **`type(x) == 'function'` cross-file-global guard convention (Revision 5
+  audit)** — confirmed deliberate defense-in-depth, not a workaround for a
+  real load-order bug; `fxmanifest.lua`'s file ordering is already correct
+  for every cross-file global currently in use. No action needed.
+- **`config.lua` size (~700 lines) and ox_target registration-gating split
+  (Revision 5 audit)** — both re-checked after the 14→28 file growth; the
+  config remains navigable with consistent per-feature block formatting,
+  and the target-gating split (some options gated at load time, others
+  inside their own handler) is pre-existing, documented per-feature
+  behavior, not new drift. No action needed.
 
 ---
 
 ## Suggested delegation
+
+**Revision 5 note:** the bullets below predate item 2's REOPENED status and
+the new item 2b (see the Revision 5 note at the top of this document) —
+read them alongside, not in place of, that note's priority ordering when
+sequencing work from this pass.
 
 - **coder-architect**: item 2 (now the top remaining item) and, as a cheap
   rider, items 3 and 5 — add `ResolveNetworkEntity` client- and
