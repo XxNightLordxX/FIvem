@@ -404,6 +404,116 @@ if Config.Features.GunpowderSniffing then
     }
 end
 
+--- Bite & Hold / Release — PHASE3_SPEC.md §12.5.1. A single
+--- context-sensitive item, following the SAME toggle shape as Attach/Detach
+--- Leash above: client/combat.lua's RequestBiteHold()/ReleaseBiteHold()/
+--- IsBiteHoldEngaged() are a start/stop pair with an "am I engaged" query,
+--- exactly mirroring IsLeashed()-driven Attach/Detach — so this is written
+--- as ONE item, not two, per that established precedent (two separate
+--- always-visible "Bite & Hold" and "Release" entries would mean one of
+--- them is always a no-op click depending on current state, which is
+--- exactly the shape client/radial.lua's own Leash/Track items already
+--- rejected). Unlike Detach Leash (which skips the access gate entirely on
+--- the way out, since client/movement.lua's DetachLeash() itself never
+--- re-checks access), the Release branch here still re-checks CanShowK9UI()
+--- first: client/combat.lua's own header frames ReleaseBiteHold() as
+--- "always available while engaged" only with respect to the SERVER-side
+--- re-check (never re-validating HasK9Access/feature-flag on the way out),
+--- not as a client-side UI-gate exemption the way Detach Leash's own
+--- comment explicitly documents — so this keeps the same "gate every call
+--- into client/combat.lua" posture as every other item here rather than
+--- assume a client-side exemption client/combat.lua's own comment never
+--- actually claims for this specific function.
+---
+--- STRUCTURE CHOICE — flat top-level item, NOT nested under a "Combat"
+--- submenu: unlike Bark's submenu (which nests because Config.
+--- AdvancedBarkRadial is a variable-length, config.lua-driven LIST of
+--- variants sharing one action), BiteAndHold is a single fixed action, and
+--- this menu already has a precedent for keeping multiple thematically-
+--- related-but-functionally-distinct fixed actions flat rather than
+--- grouping them: the three Track items above (Scent/Blood/Gunpowder) are
+--- exactly that shape and were deliberately NOT nested under a "Track"
+--- submenu. BiteAndHold/NonLethalTakedown below follow that same flat
+--- precedent, not Bark's nesting one. Config.Features.BiteAndHold gate
+--- (stays `false` by default — see config.lua).
+if Config.Features.BiteAndHold then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_bite_hold',
+        label = 'Bite & Hold / Release',
+        icon = 'paw',
+        onSelect = function()
+            -- Release is NOT gated on CanShowK9UI(), matching the Detach
+            -- Leash branch above and SPEC.md §9 item 3b's "no unbounded
+            -- trap" requirement. ReleaseBiteHold()'s own doc comment claims
+            -- exactly this exemption ("always available while engaged, same
+            -- no consent/access gate on the way out"), and server/combat.lua's
+            -- releaseBiteHold handler never re-checks HasK9Access or the
+            -- feature flag on the way out either -- only that this src is
+            -- genuinely the holder.
+            --
+            -- Gating this would strand a K9 that loses access WHILE engaged
+            -- (decertified mid-hold by a supervisor, model swap, or an
+            -- operator flipping the feature flag): DenyK9UIAccess() would
+            -- fire, the menu would refuse, and the hold would persist to the
+            -- server's timeout with no way for the holder to let go. Mid-
+            -- action revocation is a real path in this resource, not a
+            -- hypothetical -- see server/search.lua's mid-flight
+            -- HasK9Access re-check and certifications.lua's
+            -- ForceDetachLeashForSource teardown on revoke.
+            if IsBiteHoldEngaged() then
+                ReleaseBiteHold()
+                return
+            end
+
+            if not CanShowK9UI() then
+                DenyK9UIAccess()
+                return
+            end
+
+            -- RequestBiteHold() itself finds the nearest eligible target and
+            -- notifies "no eligible target in range" on failure — nothing
+            -- further to do here, same "call straight through, no
+            -- re-derived logic in this file" posture as Sit/Vehicle above.
+            RequestBiteHold()
+        end,
+    }
+end
+
+--- Non-Lethal Takedown — PHASE3_SPEC.md §12.5.2. A single one-shot action
+--- item, NOT a context-sensitive toggle like Bite & Hold above:
+--- client/combat.lua exposes only RequestTakedown(), with no matching
+--- "release"/"cancel" counterpart and no IsTakedownEngaged()-style query —
+--- the forced ragdoll it triggers always ends on its own (server-driven
+--- EndHold on timeout, per client/combat.lua's own CLOCK-DOMAIN NOTE and
+--- DEFENSE IN DEPTH backstop), never by a second player action the way
+--- releasing a bite hold does. This mirrors Sit's shape (a single always-
+--- "go" action), not Leash/Bite & Hold's toggle shape, because the
+--- underlying capability itself has no second state to toggle back from.
+--- Kept flat (not nested), same "Track precedent over Bark precedent"
+--- reasoning as Bite & Hold above. Config.Features.NonLethalTakedown gate
+--- (stays `false` by default — see config.lua).
+if Config.Features.NonLethalTakedown then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_takedown',
+        label = 'Non-Lethal Takedown',
+        icon = 'zzz',
+        onSelect = function()
+            if not CanShowK9UI() then
+                DenyK9UIAccess()
+                return
+            end
+
+            -- RequestTakedown() itself finds the nearest eligible target and
+            -- notifies on failure; the server independently re-derives
+            -- eligibility (e.g. the fleeing/speed gate) from live position
+            -- samples regardless of anything this client claims — see
+            -- client/combat.lua's own comment on RequestTakedown() for why
+            -- no local "is the target fleeing" pre-check belongs here.
+            RequestTakedown()
+        end,
+    }
+end
+
 if Config.Features.RadialMenu then
     -- Register the actual submenu contents FIRST (lib.registerRadial),
     -- keyed by id 'k9unit' — this is the id the opener item below points
