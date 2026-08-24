@@ -99,6 +99,26 @@ local function SetPreviewBoneIndex(boneIndex)
     print(('[qbx_k9unit] bonetool: previewing bone index %d'):format(boneIndex))
 end
 
+-- ======================================================================
+-- REGISTRATION-TIME FEATURE GATE (coder-security, this pass) — the preview
+-- draw thread below, the RegisterNetEvent handler, and the onResourceStop
+-- cleanup hook are now all inside this single `if`, evaluated once at this
+-- file's own load time. Config.lua is a shared_scripts file, loaded in full
+-- before any client_scripts file runs, so Config.Features.BoneSweepDevTool
+-- already holds its real value here — not a load-order gamble. Mirrors this
+-- SAME file's own client/propattachment.lua sibling gate and this
+-- resource's server/bonetool.lua precedent ('/k9bonetool' is only ever
+-- RegisterCommand'd inside its own flag-checked onResourceStart): a
+-- dev-only sweep tool left merely "gated inside the handler" would still
+-- run a per-frame draw thread (once triggered) and a registered, reachable
+-- event on every production client that never opted in — this makes it
+-- genuinely inert instead, not merely hidden. The FEATURE GATE check
+-- already inside the handler below is kept regardless, as defense-in-depth
+-- (same "layered checks" posture as the SOURCE-ORIGIN GUARD immediately
+-- below it).
+-- ======================================================================
+if Config.Features and Config.Features.BoneSweepDevTool == true then
+
 --- PREVIEW draw loop — only does real work while `sweepActive` is true, and
 --- backs off to a slow poll otherwise so this thread costs nothing for the
 --- overwhelming majority of a session where the tool isn't in use (this
@@ -198,3 +218,5 @@ AddEventHandler('onResourceStop', function(resourceName)
     DetachAndDeleteProp(testEntity)
     testEntity = nil
 end)
+
+end -- if Config.Features.BoneSweepDevTool -- REGISTRATION-TIME FEATURE GATE, see this block's own opening comment

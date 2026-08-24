@@ -238,6 +238,34 @@ local function RemovePropAttachmentForCitizenid(citizenid)
     TriggerClientEvent('qbx_k9unit:client:removeK9PropAttachment', -1, attachment.netId)
 end
 
+-- ======================================================================
+-- REGISTRATION-TIME FEATURE GATE (coder-security, this pass) — everything
+-- below (all four RegisterNetEvent handlers, the playerDropped/onResourceStop
+-- cleanup hooks, and the onResourceStart config-safety guard) is now inside
+-- this single `if`, evaluated once at this file's own load time. Config.lua
+-- is a shared_scripts file, loaded in full before any server_scripts file
+-- runs, so Config.Features.PropAttachments already holds its real
+-- true/false value by the time this line executes — this is NOT a
+-- load-order gamble.
+-- WHY THIS MATTERS BEYOND THE EXISTING PER-HANDLER `if not
+-- Config.Features.PropAttachments then return end` CHECKS ALREADY INSIDE
+-- each handler below (kept, deliberately, as defense-in-depth — same
+-- "layered checks over a single point of failure" posture as the
+-- SOURCE-ORIGIN GUARD in client/propattachment.lua remaining even though
+-- the feature gate also exists): a per-handler check still means
+-- 'qbx_k9unit:server:requestToggleK9PropAttachment' (etc.) IS a registered,
+-- reachable event on a server with the feature left off — a client can
+-- still fire it, still reach this file's Lua, and only then get turned
+-- away. Wrapping the registration itself in the flag means an operator who
+-- has never opted into PropAttachments has a server where these events do
+-- not exist AT ALL — genuinely inert, not merely hidden behind an early
+-- return. This resource's own established convention already does this at
+-- COMMAND-registration time (server/bonetool.lua's '/k9bonetool' is only
+-- ever RegisterCommand'd inside its own flag-checked onResourceStart) —
+-- this applies the identical reasoning to RegisterNetEvent/AddEventHandler.
+-- ======================================================================
+if Config.Features.PropAttachments then
+
 --- Step 1: toggle. See this file's header EVENT/CALLBACK CONTRACT item 1.
 RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     local src = source
@@ -483,3 +511,5 @@ AddEventHandler('onResourceStart', function(resourceName)
 
     print('[qbx_k9unit] propattachment.lua: PropAttachments feature is enabled and config-validated.')
 end)
+
+end -- if Config.Features.PropAttachments -- REGISTRATION-TIME FEATURE GATE, see this block's own opening comment

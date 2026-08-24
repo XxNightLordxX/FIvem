@@ -187,6 +187,39 @@ function RequestToggleK9PropAttachment()
     TriggerServerEvent('qbx_k9unit:server:requestToggleK9PropAttachment')
 end
 
+-- ======================================================================
+-- REGISTRATION-TIME FEATURE GATE (coder-security, this pass) — the command
+-- below, all three RegisterNetEvent handlers, the own-death auto-detach
+-- thread, and the onResourceStop hook are now all inside this single `if`,
+-- evaluated once at this file's own load time (config.lua is a
+-- shared_scripts file, loaded in full before any client_scripts file runs,
+-- so Config.Features.PropAttachments already holds its real value here —
+-- not a load-order gamble). AttachPropToOwnPed/DetachAndDeleteProp/
+-- GetPropAttachmentModelHashes/RequestToggleK9PropAttachment above stay
+-- OUTSIDE this gate on purpose — see this file's own FILE-TO-FILE CONTRACT
+-- header ("Neither function is gated on Config.Features.PropAttachments")
+-- for AttachPropToOwnPed/DetachAndDeleteProp specifically (client/bonetool.lua
+-- calls both regardless of THIS flag, gated instead on its own
+-- BoneSweepDevTool flag); RequestToggleK9PropAttachment already gates
+-- itself internally and must stay reachable-but-inert for a future radial
+-- entry per its own doc comment, same as client/kennel.lua's
+-- RequestDeployKennel.
+-- WHY THIS MATTERS BEYOND THE EXISTING PER-HANDLER `if not
+-- Config.Features.PropAttachments then return end` CHECKS ALREADY INSIDE
+-- each handler below (kept, deliberately, as defense-in-depth, same
+-- "layered checks" posture as the SOURCE-ORIGIN GUARD remaining even though
+-- the feature gate also exists): a per-handler check still means
+-- '/k9propattach' and all three 'qbx_k9unit:client:*' events ARE registered
+-- and reachable on a client with the feature left off. Wrapping the
+-- registration itself means a server that has never opted into
+-- PropAttachments ships clients where this command/these events do not
+-- exist AT ALL, and the death-poll thread never starts — genuinely inert,
+-- not merely hidden behind an early return, matching this resource's own
+-- server/bonetool.lua precedent (its '/k9bonetool' command is only ever
+-- RegisterCommand'd inside its own flag-checked onResourceStart).
+-- ======================================================================
+if Config.Features.PropAttachments then
+
 RegisterCommand('k9propattach', function()
     RequestToggleK9PropAttachment()
 end, false)
@@ -334,3 +367,5 @@ AddEventHandler('onResourceStop', function(resourceName)
     DetachAndDeleteProp(myVestEntity)
     myVestEntity = nil
 end)
+
+end -- if Config.Features.PropAttachments -- REGISTRATION-TIME FEATURE GATE, see this block's own opening comment

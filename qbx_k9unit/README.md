@@ -11,12 +11,20 @@ officer using this resource. This resource does **not** spawn, despawn, or
 possess a ped on anyone's behalf — certification is purely an access-control
 layer on top of a player who is already playing as a dog.
 
-> **Read this before you deploy.** This resource ships with several files
-> that exist on disk but are **not currently loaded** by `fxmanifest.lua`,
-> and one Phase 3 feature the previous revision of this document incorrectly
-> described as unimplemented. See
+> **Read this before you deploy.** This is a large, actively-developed
+> resource with several `Config.Features` flags whose backing code landed
+> only very recently. As of this pass, every file this document previously
+> flagged as "written but not loaded by `fxmanifest.lua`" (the public
+> exports, the admin/audit commands, the tenure bonus, the NUI audio
+> bridge, and the contraband screen effect) **has been wired into the
+> manifest** — see
 > [Known issues — code that exists but does not run](#known-issues--code-that-exists-but-does-not-run)
-> before you assume "the file is here" means "the feature works."
+> for the small number of gaps that remain (a fresh batch of Phase 5 R&D
+> files, still landing as of this writing, and one plumbing file with no
+> caller yet). Do not assume a file's presence on disk means it runs —
+> check that section, not just this paragraph, since this resource is
+> being edited by multiple agents in parallel and this snapshot can go
+> stale quickly.
 
 ## Status at a glance
 
@@ -26,7 +34,7 @@ layer on top of a player who is already playing as a dog.
 | 2 | Tracking, search zones/contraband, vision, door interaction | Implemented, reviewed, ships **disabled** |
 | 3 | Bite & Hold, Non-Lethal Takedown, Prop Dragging, Advanced Agility, Handler Partnership, Handler-Down Defense | Implemented, ships **disabled**; combat mechanics have an open client-trust caveat — do not enable on a live server without reading it |
 | 4 | K9 Inventory, K9 Medkit, wellbeing (Fatigue/Mood/FearStress/Distraction/Injury), XP progression, vitality HUD | Implemented, ships **disabled**. `ContrabandScreenFX` has a client file but is not wired up end-to-end (see Known issues) |
-| 5 | Deployable kennel, advanced bark radial | Implemented (R&D-grade), ships **disabled**. `ProximityAudioFX`, `PropAttachments`, `FetchMechanic` have no code. `CameraFeedPiP` is confirmed impossible with current natives (see below) |
+| 5 | Deployable kennel, advanced bark radial | Implemented (R&D-grade), ships **disabled**. `ProximityAudioFX`, `PropAttachments`, and `FetchMechanic` now have real client/server code on disk (`client/proximityaudio.lua`, `client/propattachment.lua`+`server/propattachment.lua`, `client/fetch.lua`+`server/fetch.lua`), but **none of it is registered in `fxmanifest.lua`** as of this pass, so all three remain completely inert regardless of their flags — see Known issues. `CameraFeedPiP` is confirmed impossible with current natives (see below) |
 
 Only **five** `Config.Features` flags ship `true`: `LeashMechanics`,
 `RadialMenu`, `VehicleEntryExit`, `BasicBarkSounds`, `AgilityBasicJump`.
@@ -91,14 +99,19 @@ concurrently with this documentation pass — re-check this section against
 the file's current contents if `sql/install.sql` has changed since
 2026-08-24.)
 
-One caveat: `server/tenure.lua` (see
-[Known issues](#known-issues--code-that-exists-but-does-not-run) below)
-queries a `tenure_bonus_tier_granted` column on `k9_partnerships` that does
-**not** exist in `sql/install.sql`. That file is not currently loaded by
-`fxmanifest.lua`, and its own query is `pcall`-wrapped specifically because
-the column is only proposed, not applied — so this is not a live break, but
-if `server/tenure.lua` is ever wired into the manifest, the migration must
-be updated first or the feature will silently no-op forever.
+**Correction to an earlier draft of this section:** it previously claimed
+`server/tenure.lua` queries a `tenure_bonus_tier_granted` column on
+`k9_partnerships` that does not exist in `sql/install.sql`, and that the
+file wasn't loaded by `fxmanifest.lua`. Both are now false — verified
+against the current tree: `sql/install.sql`'s `k9_partnerships`
+`CREATE TABLE` already includes `tenure_bonus_tier_granted` (with
+`sql/migrations/0003_add_k9_partnerships_tenure_bonus_tier_granted.sql`
+available for an existing database that predates it), and `server/tenure.lua`
+is listed in `fxmanifest.lua`'s `server_scripts`. `server/tenure.lua`'s
+queries remain `pcall`-wrapped regardless, so a database that hasn't run
+migration 0003 yet still degrades to a silent no-op rather than an error —
+that defensive behavior was never the bug, only the "column/file don't
+exist" framing was.
 
 ### `k9_certifications`
 
@@ -315,7 +328,7 @@ before understanding this.
 | `DistractionSystem` | `false` | A thrown meat-bait item or ultrasonic whistle briefly distracts nearby K9s. | Deliberately usable by **any** player — not gated on K9 UI access. |
 | `InjuryLimping` | `false` | Damage decays it; blocks sprint/jump input client-locally below a threshold; restored by `K9Medkit`. | Client-local enforcement, not a server-side boundary. |
 | `XPProgression` | `false` | Server-authoritative XP per K9 citizenid, persisted in `k9_progression`. | See its own section below for award triggers and anti-farming measures. |
-| `ContrabandScreenFX` | `false` | **See [Known issues](#known-issues--code-that-exists-but-does-not-run) — a client file exists but the flag is inert end-to-end.** | Not usable regardless of value. |
+| `ContrabandScreenFX` | `false` | A brief self-only `SetTimecycleModifier` screen effect for the K9's **own handler** (the searcher, never the searched player or a bystander) on a contraband find at or above a configured alert tier. | **Now fully wired end-to-end**: `client/screenfx.lua` is loaded (`fxmanifest.lua`), and `server/search.lua`'s search-success path fires the `qbx_k9unit:client:applyContrabandScreenFx` event it listens for. An earlier draft of this table said the client file was inert with no server trigger — both halves are real now. Still ships `false`, and `Config.ContrabandScreenFX.modifierName` remains an unverified candidate timecycle-modifier name (harmless no-op if wrong, per this resource's usual convention for an unconfirmed asset name) — see [Known issues](#known-issues--code-that-exists-but-does-not-run) for the current, narrower list of gaps. |
 
 ### Phase 5 — audio/props/camera R&D (all ship `false`)
 
@@ -386,9 +399,15 @@ survives a disconnect or resource restart**.
   this flag's current value.
 - `Config.Partnership.ProximityMeters` (default `5.0`m), `.RequestTTLMs`
   (default `30000`ms), `.RequestCooldownMs` (default `1000`ms).
-- **Foundation only**, with one real exception now: `HandlerDownDefense`
-  (above) reads this registry to know who to notify. `PHASE3_SPEC.md`'s
-  Recall mechanic still has zero code.
+- **No longer foundation-only.** `HandlerDownDefense` (above) reads this
+  registry to know who to notify, and `PHASE3_SPEC.md`'s Recall mechanic
+  (`Config.Features.Recall`, `server/recall.lua` + `client/recall.lua`, the
+  `/k9recall` command) is also real, implemented code now — an earlier
+  draft of this section said Recall "still has zero code," which is no
+  longer true. Recall is the handler's escape hatch for any active
+  bite/takedown/drag their partnered K9 is holding, and is deliberately
+  never gated behind `HasK9Access`/`CanShowK9UI` on either party, since a
+  decertified handler must still be able to call their dog off mid-engagement.
 - **Disclosed reconnect gap**: nothing re-syncs a reconnecting client's own
   view of an already-established partnership — `IsPartnered()`/
   `GetPartnerServerId()` (client-side) can under-report until a fresh
@@ -421,17 +440,14 @@ Crossing a `Config.XPTiers` threshold applies that tier's
 
 **This resource's first exports, added 2026-08-24.**
 
-> **Critical: as shipped, these exports do not run.** `server/exports.lua`
-> and `client/exports.lua` exist on disk, but neither file is listed in
-> `fxmanifest.lua`'s `server_scripts`/`client_scripts`, and `fxmanifest.lua`
-> declares no `server_exports`/`client_exports` block either. FiveM only
-> registers an `exports(...)` call from a file that is actually loaded by
-> the manifest — until `fxmanifest.lua` is updated to include these two
-> files, calling any export documented below from another resource will
-> fail with "no such export." This is documented here as the intended,
-> reviewed contract for when that wiring lands, not as a currently-working
-> feature. See
-> [Known issues](#known-issues--code-that-exists-but-does-not-run) below.
+> **These exports are live.** An earlier draft of this section warned that
+> `server/exports.lua`/`client/exports.lua` existed on disk but were not
+> listed in `fxmanifest.lua`, so calling any export below would fail with
+> "no such export." That is no longer true — both files are now in
+> `fxmanifest.lua`'s `server_scripts`/`client_scripts` (each self-registers
+> via a plain `exports('name', fn)` call at load time, so no
+> `server_exports`/`client_exports` manifest key is needed on top of that).
+> Every export documented below is callable from another resource today.
 
 Both files share these design rules: every export is **read-only** (no
 grant/revoke/award/mutation is exposed), every table return is a **fresh
@@ -465,21 +481,32 @@ a breaking change (removed/renamed export, narrowed return shape) bumps
 **No mutation export exists** (no `GrantCertification`, `AwardXP`,
 `ForceDetachLeashForSource`, etc.) — deliberately, so a bug in an
 integrating resource cannot bypass this resource's own eligibility/
-proximity/cooldown checks. There is also no `k9_search_log` read-back
-export and no "list all K9 citizenids"/"list all active partnerships"
-export — both would require new query/authorization logic this pass
-deliberately did not invent unreviewed (see `server/exports.lua`'s own
-header for the full reasoning).
+proximity/cooldown checks. There is still no **exported** `k9_search_log`
+read-back or "list all K9 citizenids"/"list all active partnerships"
+accessor — both would require new query/authorization logic
+`server/exports.lua`'s own header deliberately did not invent unreviewed.
+(As of this pass there is now other, ACE-gated precedent for reading
+`k9_search_log` back inside this resource — see `server/admin.lua`'s
+`/k9auditsearch` command under [Commands](#commands) — but that is a
+console/ACE-authorized admin command, not a public export any resource
+can call, and does not by itself justify adding one without the same
+access-scope review `server/exports.lua`'s header calls for.)
 
-**Six outbound events are documented but not yet wired**: a
-`qbx_k9unit:events:*` namespace (`certificationGranted`,
-`certificationRevoked`, `partnershipEstablished`, `partnershipEnded`,
-`searchCompleted`, `xpTierReached`) is specified in `server/exports.lua`'s
-header with the exact call site and payload shape each would need, but
-**none of them currently fire** — implementing them requires editing
-`server/certifications.lua`/`partnership.lua`/`progression.lua`/`search.lua`
-at their existing success points, which has not been done. Do not
-`AddEventHandler` for these expecting them to fire today.
+**All six outbound events are now wired and firing.** An earlier draft of
+this section said a `qbx_k9unit:events:*` namespace
+(`certificationGranted`, `certificationRevoked`, `partnershipEstablished`,
+`partnershipEnded`, `searchCompleted`, `xpTierReached`) was specified in
+`server/exports.lua`'s header but that none of them fired yet. That is no
+longer true — `server/certifications.lua`, `server/partnership.lua`,
+`server/progression.lua`, and `server/search.lua` each now call a shared
+`FireOutboundEvent(...)` helper at the exact success points
+`server/exports.lua`'s header originally specified (grant, both revoke
+paths and the auto-revoke-on-job-change path, partnership established,
+partnership ended, search completed, and an XP tier crossing
+respectively). `AddEventHandler` for any of these six today and they will
+fire under real gameplay conditions — not gated on any `Config.Features`
+flag, since certification/search/partnership/XP are this resource's core
+mechanics rather than phase-numbered toggles.
 
 ### Client exports (`client/exports.lua`)
 
