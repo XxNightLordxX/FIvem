@@ -168,6 +168,18 @@ globals = {
     -- client/main.lua's own header already documents for
     -- HasK9Access(source) vs. client/main.lua's HasK9Access().
     "ResolveNetworkEntity",
+    -- REFACTOR_ROADMAP.md Revision 5 items 2b and 3, extracted this pass.
+    -- ResolveConnectedPlayerFromPed (server/entities.lua) replaced three
+    -- verbatim hand-copies in server/search.lua, server/inventory.lua and
+    -- server/combat.lua; ResolvePlayerServerIdFromPed and IsEntityModelK9
+    -- (both client/main.lua) replaced the client-side equivalents in
+    -- client/medkit.lua and client/wellbeing.lua. Note
+    -- ResolveConnectedPlayerFromPed deliberately scans GetPlayers()/
+    -- GetPlayerPed rather than using NetworkGetPlayerIndexFromPed — that
+    -- native combo was never verified server-side, and the scan is
+    -- strictly more conservative. Do not "clean it up" into the native.
+    "ResolveConnectedPlayerFromPed", "ResolvePlayerServerIdFromPed",
+    "IsEntityModelK9",
     -- client/movement.lua
     "ToggleK9Camera", "K9Sit", "IsLeashed", "RequestLeashAttach", "DetachLeash",
     -- client/tracking.lua
@@ -265,6 +277,15 @@ globals = {
     -- fxmanifest.lua's own comment on that file names as its exposed
     -- surface for a future client/radial.lua entry, not yet wired up.
     "RequestPartnerUp", "BreakPartnership", "IsPartnered", "GetPartnerServerId",
+    -- RefreshPartnershipStateFromServer yields on a server callback and
+    -- re-syncs the local cache before returning fresh IsPartnered()/
+    -- GetPartnerServerId() values. It exists because the local cache can
+    -- under-report after a reconnect (nothing re-syncs an already-partnered
+    -- client), and a naive IsPartnered()-driven radial toggle would then
+    -- offer "Partner Up" to exactly the player who needs the exit. Kept in
+    -- client/partnership.lua rather than called raw from client/radial.lua,
+    -- so every partnership round trip stays owned by one file.
+    "RefreshPartnershipStateFromServer",
     -- client/combat.lua's PropDragging trigger surface (Phase 3,
     -- PHASE3_SPEC.md §12.5.4) -- same self-initiated-trigger plus
     -- zero-consent-release shape as RequestBiteHold/ReleaseBiteHold above.

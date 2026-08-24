@@ -175,12 +175,31 @@
       Mirrors respondLeashAttach's exact verified-match + TTL re-check
       discipline. On acceptance, RE-VALIDATES eligibility (TOCTOU, same as
       leash) and then runs the DB establish flow under
-      PartnershipEstablishMutex.
+      PartnershipEstablishMutex -- and, inside that mutex-protected critical
+      section, RE-VALIDATES HasK9Access/department membership a SECOND
+      time, immediately before the INSERT (red-team fix; see that critical
+      section's own "RED-TEAM FINDING FIX" comment for the exact race this
+      closes that the earlier, pre-mutex re-check alone could not).
     - 'qbx_k9unit:server:breakPartnership' ()
       Either party, at any time, ZERO consent needed -- mirrors leash's
       detachLeash exactly (PHASE3_SPEC.md §12.0 item 7 point 3's own "no
       unbounded trap" restatement, now applied to a persistent relationship
       rather than only a transient one).
+
+    Callbacks (ox_lib lib.callback), THIS FILE:
+    - 'qbx_k9unit:server:getPartnershipState' () -> isPartnered: boolean, partnerServerId: number?, isK9: boolean?
+      Server-authoritative "am I currently partnered, and with whom"
+      read for the CALLING player, resolved via a fresh RefreshPartnershipCache
+      call (never a stale read, never a client claim) -- modeled directly
+      on server/certifications.lua's 'qbx_k9unit:server:hasK9Access'
+      callback, this resource's own established precedent for exactly this
+      "client-triggerable, server-authoritative status read" shape. Added
+      specifically to close client/partnership.lua's own documented
+      cache-staleness gap for a client that reconnects (or whose own
+      resource restarts) while already genuinely partnered per the DB --
+      see that file's header for the full writeup of why a purely local
+      read cannot be trusted at that moment, and why this callback is the
+      fix rather than a client-side workaround.
 
     Client events (server->client), registered by client/partnership.lua:
     - 'qbx_k9unit:client:partnerUpRequest' (fromServerId: number)
@@ -619,6 +638,18 @@ local function CheckPartnershipEligibility(initiatorSrc, targetSrc)
         k9Citizenid, officerCitizenid = initiatorCitizenid, targetCitizenid
     end
 
+    -- NOT the final authority for either check below, same disclosed
+    -- caveat as the already-partnered pre-check above: at REQUEST time
+    -- (called from requestPartnerUp) this is only ever an early, honest
+    -- rejection. At ACCEPT time (called from respondPartnerUp) it is a
+    -- TOCTOU re-check of what was true when the request was first sent --
+    -- but it still runs BEFORE PartnershipEstablishMutex.TryAcquire, so a
+    -- revoke landing between THIS check returning true and the INSERT
+    -- actually committing would otherwise slip through uncaught. See
+    -- respondPartnerUp's critical-section comment (search for "RED-TEAM
+    -- FINDING FIX") for where both of these are re-run a SECOND time,
+    -- inside the mutex, immediately before the INSERT, to close that
+    -- specific window.
     if not HasK9Access(k9Src) then
         return false, nil, nil, 'not_certified'
     end
@@ -752,6 +783,45 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
     -- mutex's own doc comment for why this matters more here than an
     -- ordinary single-request failure would).
     local ranOk, outcomeOrErr = pcall(function()
+        -- RED-TEAM FINDING FIX (MEDIUM, TOCTOU on eligibility, not just on
+        -- "already partnered"): CheckPartnershipEligibility above re-ran
+        -- HasK9Access(k9Src) and the officer's department check, but it ran
+        -- BEFORE PartnershipEstablishMutex.TryAcquire and before this
+        -- pcall's own critical section even began -- a real, exploitable
+        -- window, not a theoretical one. Concretely: RevokeCertification's
+        -- online branch (server/certifications.lua) runs its UPDATE,
+        -- refreshes ITS OWN certification cache, then calls
+        -- ForceBreakPartnershipForCitizenId for the now-decertified
+        -- citizenid -- and THAT call's own SELECT (inside
+        -- DoBreakPartnership) can complete BEFORE the INSERT below commits,
+        -- since oxmysql pools connections and gives no completion-order
+        -- guarantee across these two independent call chains. If that
+        -- SELECT runs first, it finds no active partnership row yet (this
+        -- one doesn't exist until the INSERT below runs), no-ops, and the
+        -- INSERT then lands anyway -- establishing a live partnership for a
+        -- citizenid that was just decertified a moment earlier. Nothing
+        -- re-validates an established partnership afterwards, by this
+        -- file's own documented "role frozen at establishment, never
+        -- re-derived" design (see this file's header), so a race landing
+        -- this way would otherwise stand indefinitely. Re-checking HERE,
+        -- inside the mutex, immediately before the INSERT, closes that
+        -- window -- same fix shape as server/search.lua's
+        -- HandleSearchTarget re-checking HasK9Access(source) immediately
+        -- after its own genuinely-yielding await (see that file's own doc
+        -- comment, validation step 8: "the earlier callback-registration
+        -- check only proves access at REQUEST time... re-check immediately
+        -- before computing/broadcasting anything"), applied here to an
+        -- establishment instead of a search.
+        if not HasK9Access(k9Src) then
+            return 'not_certified'
+        end
+
+        local officerPlayerNow = exports.qbx_core:GetPlayer(officerSrc)
+        local officerJobNow = officerPlayerNow and officerPlayerNow.PlayerData and officerPlayerNow.PlayerData.job
+        if not officerJobNow or not Config.Departments[officerJobNow.name] then
+            return 'officer_not_in_department'
+        end
+
         -- Fresh, AUTHORITATIVE re-check immediately before the INSERT --
         -- the cache-based check inside CheckPartnershipEligibility above is
         -- a fast early-reject only, not the final word (see this file's
@@ -816,13 +886,20 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         return
     end
 
-    if outcomeOrErr == 'already_partnered' then
-        NotifyPlayer(fromServerId, PartnershipRejectReasonMessage('already_partnered'), 'error')
-        NotifyPlayer(src, PartnershipRejectReasonMessage('already_partnered'), 'error')
-        return
-    elseif outcomeOrErr == 'insert_failed' then
+    if outcomeOrErr == 'insert_failed' then
         NotifyPlayer(fromServerId, 'An error occurred while setting up the partnership.', 'error')
         NotifyPlayer(src, 'An error occurred while setting up the partnership.', 'error')
+        return
+    elseif outcomeOrErr ~= 'ok' then
+        -- Covers 'already_partnered' plus the TOCTOU-fix critical-section
+        -- outcomes above ('not_certified', 'officer_not_in_department') --
+        -- all three are ordinary eligibility rejections that already have a
+        -- correct message in PARTNERSHIP_REJECT_MESSAGES, so this handles
+        -- any of them generically rather than needing a new named `elseif`
+        -- arm (and a second place to keep in sync) every time the critical
+        -- section gains one more re-check.
+        NotifyPlayer(fromServerId, PartnershipRejectReasonMessage(outcomeOrErr), 'error')
+        NotifyPlayer(src, PartnershipRejectReasonMessage(outcomeOrErr), 'error')
         return
     end
 
@@ -905,6 +982,40 @@ RegisterNetEvent('qbx_k9unit:server:breakPartnership', function()
     -- notification client-side, only error/ack paths use server-side
     -- NotifyPlayer directly" convention (compare doDetachLeash, which never
     -- calls NotifyPlayer itself either).
+end)
+
+--- Server-authoritative "am I currently partnered, and with whom" read for
+--- the CALLING player -- modeled directly on server/certifications.lua's
+--- `qbx_k9unit:server:hasK9Access` callback (this resource's own
+--- established precedent for a client-triggerable, server-authoritative
+--- status read). Added specifically to close the gap client/partnership.lua's
+--- own header discloses ("KNOWN CACHE-STALENESS GAP"): that file's local
+--- `PartnershipState` is populated ONLY by the `partnershipEstablished`
+--- client event, which nothing in this file's contract re-sends to a
+--- client that reconnects (or whose own resource restarts) while already
+--- genuinely partnered per this table -- a future consumer that decides
+--- between "Partner Up" and "Break Partnership" purely from that local
+--- cache could therefore offer the wrong one at exactly the moment it
+--- matters. Calls RefreshPartnershipCache (a fresh DB read, same
+--- fail-closed discipline as every other caller of it in this file) rather
+--- than reading the `Partnerships` cache directly, so a caller of this
+--- callback never has to separately reason about whether the SERVER's own
+--- cache might itself be stale.
+--- @param source number (implicit, ox_lib callback convention)
+--- @return boolean isPartnered
+--- @return number? partnerServerId -- nil if not partnered, OR partnered but the partner isn't currently online
+--- @return boolean? isK9 -- true if the CALLER is the K9-role party; nil if not partnered
+lib.callback.register('qbx_k9unit:server:getPartnershipState', function(source)
+    local Player = exports.qbx_core:GetPlayer(source)
+    local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+    if not citizenid then return false, nil, nil end
+
+    local partnerCitizenid, isK9 = RefreshPartnershipCache(citizenid)
+    if not partnerCitizenid then return false, nil, nil end
+
+    local partnerPlayer = exports.qbx_core:GetPlayerByCitizenId(partnerCitizenid)
+    local partnerServerId = partnerPlayer and partnerPlayer.PlayerData and partnerPlayer.PlayerData.source
+    return true, partnerServerId, isK9
 end)
 
 --- Resource-global (no `local`) -- exposed for server/certifications.lua to

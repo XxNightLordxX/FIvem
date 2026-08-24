@@ -128,6 +128,46 @@
 -- and its own "nothing outside this file should read it directly" rule.
 local K9XP = {}
 
+-- CONFIG-SAFETY GUARD (config audit finding, this pass — same precedent as
+-- server/inventory.lua's `Config.K9Inventory.accessScope` assert and
+-- server/main.lua's `nudgeRequiresUnlocked` assert). This file's own header
+-- SCOPING section, config.lua's own comment on this field, and README.md's
+-- `Config.Features.XPProgression` section all already document that only
+-- `'citizenid'` is implemented — but until now nothing ever READ the value
+-- to enforce that, so a server owner who set `'job'` (a documented, but
+-- explicitly NOT-YET-built, alternative — PHASE4_SPEC.md §13.6 item 2) got
+-- silently citizenid-scoped behaviour with no warning at all: every award
+-- and lookup in this file goes straight through K9XP[citizenid] and the
+-- `k9_progression` table's plain `citizenid` key, never once branching on
+-- this config field.
+--
+-- This is NOT a "feature merely unimplemented, pick the other value and
+-- wait" situation the way an inert placeholder would be — `k9_progression`
+-- (sql/install.sql) has a plain `VARCHAR(50) citizenid` PRIMARY KEY and NO
+-- job column at all. 'job' scoping would need a composite (citizenid, job)
+-- key instead (mirroring `k9_certifications`), which is a SCHEMA change,
+-- not a config choice this file could honor today even if it tried to
+-- switch on the value — the current schema cannot express per-job XP
+-- totals at all. Failing loudly at resource start, rather than letting a
+-- misconfigured value silently produce behaviour the operator did not
+-- choose, matches the established precedent above.
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    assert(
+        Config.XP.scopePerCitizenidOrJob == 'citizenid',
+        "[qbx_k9unit] Config.XP.scopePerCitizenidOrJob must be 'citizenid' -- " ..
+        "'job' is a documented-but-unimplemented alternative (PHASE4_SPEC.md §13.6 item 2), " ..
+        'not a selectable config choice this file can honor: the `k9_progression` table ' ..
+        '(sql/install.sql) has a plain `citizenid` PRIMARY KEY and no job column at all, so ' ..
+        "job-scoped XP totals cannot even be persisted under the current schema, let alone " ..
+        'read/written correctly by this file, which unconditionally keys every K9XP cache ' ..
+        'entry and every k9_progression query by citizenid alone. Setting this to anything ' ..
+        "other than 'citizenid' would silently keep citizenid-scoped behaviour with no " ..
+        'warning, misleading an operator who believes they configured job-scoped progression.'
+    )
+end)
+
 --- Resolves `xp` to the matching entry in Config.XPTiers. Identical walk
 --- shape to server/search.lua's ResolveAlertTier — Config.XPTiers[1] is the
 --- mandatory `xp = 0` baseline (same role Config.ContrabandAlertTiers'

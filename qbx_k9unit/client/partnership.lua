@@ -4,11 +4,15 @@
     Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7 /
     §12.3's file-plan entry) — the client half of server/partnership.lua
     (read in full before this file was written; that file's header is the
-    authoritative contract for everything below). Delivers exactly what
-    fxmanifest.lua's own comment on this file promises, no more: the
-    Partner Up consent prompt, an ox_target option, and
+    authoritative contract for everything below). Originally delivered
+    exactly what fxmanifest.lua's own comment on this file promised, no
+    more: the Partner Up consent prompt, an ox_target option, and
     IsPartnered()/GetPartnerServerId() as resource-globals for a future
-    radial entry.
+    radial entry. A red-team-driven pass (see "KNOWN CACHE-STALENESS GAP,
+    AND ITS FIX" below) later added a fifth resource-global,
+    RefreshPartnershipStateFromServer(), that fxmanifest.lua's own comment
+    on this file does not yet mention — flagged here, and to that
+    comment's owner, rather than silently left out of sync.
 
     This mirrors client/movement.lua's leash subsystem shape wherever the
     two mechanics are actually alike (the consent handshake), and
@@ -47,7 +51,7 @@
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
-    - THIS FILE exposes four resource-global (no `local`) functions:
+    - THIS FILE exposes five resource-global (no `local`) functions:
         RequestPartnerUp(targetServerId: number)
             Step 1 of the consent handshake, self-initiated side. Mirrors
             RequestLeashAttach(): re-checks CanShowK9UI() itself (never
@@ -67,26 +71,41 @@
             RestoreInjury, AwardXP/GetXPTier).
         IsPartnered() -> boolean
         GetPartnerServerId() -> number?
-            Read-only accessors over this file's local `PartnershipState`
-            cache, for that same future radial entry to decide which of
-            the two above to call. See "KNOWN CACHE-STALENESS GAP" below
-            for an honest limitation on what these can currently promise.
+            Read-only, SYNCHRONOUS (never yields) accessors over this
+            file's local `PartnershipState` cache, for that same future
+            radial entry to decide which of the two above to call. See
+            "KNOWN CACHE-STALENESS GAP, AND ITS FIX" below for exactly when
+            these two are safe to read directly and when a caller MUST call
+            RefreshPartnershipStateFromServer() first instead.
+        RefreshPartnershipStateFromServer() -> isPartnered: boolean, partnerServerId: number?
+            YIELDS (awaits an ox_lib callback round-trip to
+            server/partnership.lua's `qbx_k9unit:server:getPartnershipState`)
+            to re-sync `PartnershipState` from server-authoritative truth,
+            then returns the now-fresh IsPartnered()/GetPartnerServerId()
+            values. This is the fix for "KNOWN CACHE-STALENESS GAP, AND ITS
+            FIX" below -- call this FIRST, at any decision point where a stale answer
+            from the two synchronous accessors above could strand a player
+            (e.g. a future radial item picking between "Partner Up" and
+            "Break Partnership").
     - THIS FILE calls client/main.lua's CanShowK9UI()/DenyK9UIAccess() for
       the REQUEST side only (see "TERMINATION MUST NEVER BE GATED" below
       for why BreakPartnership() itself does not call either).
     - THIS FILE is the ONLY client file that registers a handler for the
-      three partnership client events above, or triggers the three
-      partnership server events above -- server/partnership.lua's own
-      header states this explicitly ("keep the full subsystem confined to
-      one client/one server file", mirroring server/main.lua's own leash
-      convention). Do not let a second partnership code path grow in
+      three partnership client events above, triggers the three
+      partnership server events above, or calls the
+      'qbx_k9unit:server:getPartnershipState' callback above (always
+      through RefreshPartnershipStateFromServer(), never directly) --
+      server/partnership.lua's own header states this explicitly ("keep
+      the full subsystem confined to one client/one server file",
+      mirroring server/main.lua's own leash convention). Do not let a
+      second partnership code path grow in
       client/radial.lua or elsewhere.
     ======================================================================
 
     TOP-OF-FILE FEATURE GATE -- WHY THE WHOLE FILE, NOT A PER-HANDLER CHECK:
     `if not Config.Features.HandlerPartnership then return end` immediately
     below means this file registers NOTHING at all (no ox_target option, no
-    RegisterNetEvent, none of the four resource-globals above are even
+    RegisterNetEvent, none of the five resource-globals above are even
     defined) when the flag is false, its default. This is deliberately
     STRONGER than the per-handler gating this resource uses elsewhere (e.g.
     server/kennel.lua's `if not Config.Features.DeployableKennel then return
@@ -153,49 +172,78 @@
     principle applied to the one place a stale local cache could otherwise
     strand a player.
 
-    KNOWN CACHE-STALENESS GAP (disclosed, not silently worked around):
-    the flip side of the paragraph above is that IsPartnered()/
-    GetPartnerServerId() -- the two accessors fxmanifest.lua's own comment
-    asks this file to expose for a future radial entry -- CAN under-report
-    (return "not partnered" / nil for a player who genuinely IS still
-    partnered per the DB) immediately after this client's own reconnect or
-    resource restart, for the exact reason above: nothing in
-    server/partnership.lua's current contract re-syncs a reconnecting
-    client's view of an already-established partnership. This is a real,
-    disclosed gap in the CONSUMED contract, not something this file can
-    close on its own without a new server-side callback (analogous to
+    KNOWN CACHE-STALENESS GAP, AND ITS FIX (previously disclosed as an open
+    gap this file could not close on its own; NOW CLOSED -- see
+    RefreshPartnershipStateFromServer() above): the two synchronous
+    accessors, IsPartnered()/GetPartnerServerId(), CAN under-report (return
+    "not partnered" / nil for a player who genuinely IS still partnered per
+    the DB) immediately after this client's own reconnect or resource
+    restart, for the exact reason the paragraph above this one explains:
+    nothing in server/partnership.lua's contract re-sends
+    'qbx_k9unit:client:partnershipEstablished' (or any other event) to a
+    reconnecting client's view of an already-established partnership --
+    RefreshPartnershipCache (server-side) silently repopulates the
+    SERVER's own cache on PlayerLoaded/onResourceStart but never tells the
+    client anything on its own. Reading `PartnershipState` directly at that
+    moment is therefore still unsafe. What CLOSES this gap for real is
+    server/partnership.lua's `qbx_k9unit:server:getPartnershipState`
+    lib.callback (added specifically for this, modeled on
     client/main.lua's existing 'qbx_k9unit:server:hasK9Access' callback,
-    but for partnership status) that does not exist in server/
-    partnership.lua today -- flagged for whoever wires the future radial
-    entry this file's globals exist for for real, so that entry point does
-    not silently assume this cache is always accurate. In the meantime the
-    practical impact is narrow: BreakPartnership() itself is unaffected
-    (see above, by design), the ox_target "Partner Up" option below could
-    display available to an already-partnered-but-just-reconnected player,
-    but the server's own CheckPartnershipEligibility 'already_partnered'
-    check still authoritatively rejects that request with a clear
-    notification either way -- a UX rough edge, not a security or
-    trap-the-player issue.
+    the established precedent for exactly this "client-triggerable,
+    server-authoritative status read" shape) and this file's own
+    RefreshPartnershipStateFromServer() wrapper around it. A future
+    consumer that needs a genuinely fresh answer (a radial item deciding
+    between "Partner Up" and "Break Partnership" is the concrete case this
+    was built for -- see below) MUST call
+    RefreshPartnershipStateFromServer() and use ITS return values, not
+    IsPartnered()/GetPartnerServerId() read cold -- those two remain
+    correct only as a synchronous, no-round-trip convenience for callers
+    that don't need freshness at that exact instant (e.g. the ox_target
+    "Partner Up" predicate below, which is display-only and already
+    tolerates the server's own CheckPartnershipEligibility rejecting a
+    stale-looking request with a clear notification either way -- see the
+    predicate's own comment).
 
-    SEPARATE, ALSO DISCLOSED FINDING (not this file's to fix -- reported
-    upstream, noted here only because it affects how stale a real
-    partnership can get in practice today): server/partnership.lua's own
-    header claims "server/certifications.lua calls
-    `ForceBreakPartnershipForCitizenId` from three places (RevokeCertification's
-    online branch, RevokeCertificationOffline, and the
-    QBCore:Server:OnJobUpdate handler's TWO branches)" -- grepped
-    server/certifications.lua directly before writing this file and found
-    ZERO call sites for `ForceBreakPartnershipForCitizenId` anywhere in
-    that file today. A certification revoke or department change
-    therefore currently does NOT automatically tear down an active
-    partnership server-side, despite the header's claim -- the function
-    exists and is exposed correctly, it is simply never called yet. This
-    makes BreakPartnership() being unconditionally available (see above)
-    more important in practice today, not less: for now it is the ONLY
-    reliable way an affected party can end a partnership that should have
-    been auto-terminated but was not. Out of scope for this file to fix
-    (server/certifications.lua is owned elsewhere) -- reported to the
-    orchestrating agent rather than silently patched.
+    THE CONCRETE CASE THIS WAS BUILT FOR: a dual-mode radial item that
+    picks "Partner Up" vs. "Break Partnership" purely from IsPartnered()
+    would, without the fix above, read stale `false` for a player who
+    reconnected while genuinely still partnered, offer them "Partner Up",
+    and never offer the one control that actually works unconditionally
+    (BreakPartnership() -- see "TERMINATION MUST NEVER BE GATED" above).
+    That player would hit a server-side 'already_partnered' rejection
+    instead of an exit -- exactly the "unbounded trap" PHASE3_SPEC.md
+    §12.0 item 7 point 3 forbids, reintroduced through a stale read rather
+    than a missing control. Calling RefreshPartnershipStateFromServer()
+    before that decision is what avoids it.
+
+    PREVIOUSLY-DISCLOSED FINDING, NOW CORRECTED (this project has twice
+    shipped a header describing a control that did not actually exist --
+    `accessScope`'s owner-only mode was one instance; this paragraph, as
+    originally written, was the second, and both were only caught by
+    someone verifying the claim against the actual code rather than
+    trusting the header): this section previously stated that
+    server/partnership.lua's header claim -- "server/certifications.lua
+    calls `ForceBreakPartnershipForCitizenId` from three places
+    (RevokeCertification's online branch, RevokeCertificationOffline, and
+    the QBCore:Server:OnJobUpdate handler's TWO branches)" -- was false,
+    because a grep of server/certifications.lua at the time this file was
+    first written found ZERO call sites. That was accurate when written.
+    It is NOT accurate anymore: commit 94fbc4e added four real call sites
+    in server/certifications.lua (RevokeCertification's online branch;
+    RevokeCertificationOffline; and the QBCore:Server:OnJobUpdate handler's
+    two branches, department-loss and cert-revoke-due-to-job-change) --
+    re-verified directly against that file's current contents, not assumed
+    from the header alone. A certification revoke or department change
+    NOW DOES automatically tear down an active partnership server-side.
+    BreakPartnership() remains unconditionally available regardless (see
+    "TERMINATION MUST NEVER BE GATED" above) -- that was never contingent
+    on whether the automatic teardown existed, and stays correct either
+    way -- but it is no longer the ONLY path off a partnership; it is the
+    manual, self-initiated one alongside four automatic ones. A future
+    reader should not conclude from any stale copy of this paragraph that
+    BreakPartnership() is still the only teardown path -- verify against
+    server/certifications.lua directly, as this correction did, rather than
+    trusting either this file's or that file's header claim on its own.
     ======================================================================
 ]]
 
@@ -220,6 +268,29 @@ end
 --- @return number?
 function GetPartnerServerId()
     return PartnershipState and PartnershipState.partnerServerId or nil
+end
+
+--- Re-syncs `PartnershipState` from server-authoritative truth via
+--- server/partnership.lua's `qbx_k9unit:server:getPartnershipState`
+--- lib.callback -- the fix for this file's header "KNOWN CACHE-STALENESS
+--- GAP, AND ITS FIX" (read that section before calling this from anywhere
+--- new). YIELDS (an ox_lib callback round-trip) -- unlike
+--- IsPartnered()/GetPartnerServerId() above, which stay synchronous,
+--- local-only reads for every caller that doesn't need freshness at that
+--- exact instant. Deliberately the ONLY call site in this codebase for
+--- that callback -- a future radial item should call THIS function, not
+--- `lib.callback.await('qbx_k9unit:server:getPartnershipState', ...)`
+--- directly, so client/partnership.lua stays the one file that owns every
+--- partnership-related client/server round trip (this file's own
+--- FILE-TO-FILE CONTRACT above); a second, independent call site in
+--- client/radial.lua would be exactly the "second partnership code path"
+--- that discipline exists to prevent.
+--- @return boolean isPartnered -- the now-fresh value, same as IsPartnered() immediately after this returns
+--- @return number? partnerServerId -- the now-fresh value, same as GetPartnerServerId() immediately after this returns
+function RefreshPartnershipStateFromServer()
+    local isPartneredNow, partnerServerId, isK9 = lib.callback.await('qbx_k9unit:server:getPartnershipState', false)
+    PartnershipState = isPartneredNow and { partnerServerId = partnerServerId, isK9 = isK9 } or nil
+    return IsPartnered(), GetPartnerServerId()
 end
 
 --- Step 1 of the consent handshake, self-initiated side. Does NOT

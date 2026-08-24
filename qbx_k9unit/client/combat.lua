@@ -301,17 +301,16 @@
 -- NPC-relay handler — restoring genuine inertness when the feature(s) are
 -- off, exactly like every sibling file's own top-level gate.
 --
--- THIS GATE DOES NOT FIX: the underlying trust-boundary gap once at least
--- one flag IS true — none of the handlers below independently re-verify
--- that a given `applyBiteHold`/`forceRagdoll`/`applyDragSpeedLimit`/
--- `applyNpcBiteHold`/`applyNpcTakedown`/`dragStarted` invocation genuinely
--- came from the server rather than a local self-trigger. That is a
--- DIFFERENT, deeper fix (making the receiving side itself robust against a
--- locally-forged event, not just gating whether it's reachable at all) —
--- explicitly NOT attempted here per the coordinator's own scoping, and
--- routed to a dedicated coder-security pass under PHASE3_SPEC.md §12.0
--- item 8's already-open client-relay trust boundary. Do not read this
--- comment block's presence as "solved" — only "off is inert again."
+-- THIS GATE DOES NOT FIX (on its own): the underlying trust-boundary gap
+-- once at least one flag IS true — the per-mechanic gate only decides
+-- whether a handler EXISTS on this server at all, not whether a given
+-- invocation of it, once registered, genuinely came from the server. See
+-- "SOURCE-ORIGIN GUARD" immediately below the per-mechanic gating section
+-- for the dedicated fix for that half, landed separately (coder-security,
+-- phase2_notes/client_event_trust_boundary.md). Do not read this comment
+-- block's presence alone as "solved" — only "off is inert again"; the
+-- origin guard below is what actually closes the self-triggering gap for
+-- the "on" case.
 -- ======================================================================
 if not (Config.Features.BiteAndHold or Config.Features.NonLethalTakedown or Config.Features.PropDragging) then
     return
@@ -591,16 +590,80 @@ end
 -- closes.
 -- ======================================================================
 
+-- ======================================================================
+-- SOURCE-ORIGIN GUARD (coder-security, this pass, per design assessment
+-- phase2_notes/client_event_trust_boundary.md — read that document in full
+-- before touching this block; this comment is a summary of it, not a
+-- replacement for it). Fixes the specific gap the per-mechanic gate above
+-- explicitly disclaimed: once a mechanic's flag is on, its handlers are
+-- reachable, and nothing previously stopped a modified client from firing
+-- one of them on itself via the public `TriggerEvent('qbx_k9unit:client:...',
+-- ...)` Lua API — zero server contact required — for indefinite
+-- self-invincibility/self-benefit, or (the NPC-relay handlers specifically)
+-- for grief against a DIFFERENT K9's in-flight NPC effect by guessing/
+-- observing that NPC's netId.
+--
+-- THE FIX: every `qbx_k9unit:client:*` handler below starts with
+-- `if source ~= 65535 then return end`. 65535 is FiveM's documented sentinel
+-- value for "this event's source is the server itself" inside a client-side
+-- RegisterNetEvent handler (citizenfx/fivem-docs, "Secure your events" —
+-- read directly from the docs' own GitHub source, not a summary/mirror).
+--
+-- CONFIDENCE — graded honestly, not asserted as settled:
+--   - HIGH: the public `TriggerEvent` API a self-triggering client would
+--     actually use cannot forge a custom origin for the dispatched event —
+--     confirmed by reading `TRIGGER_EVENT_INTERNAL`'s own native
+--     declaration (citizenfx/fivem, primary source), which takes no
+--     origin/source parameter at all.
+--   - MEDIUM-HIGH, not certain: that comparing client-side `source` against
+--     the literal `65535` is what actually distinguishes a genuine
+--     server-sent `TriggerClientEvent` from a local self-trigger on THIS
+--     client. This is the official first-party pattern for exactly this
+--     scenario, but the design pass backing this change could not fetch
+--     `forum.cfx.re` (egress-blocked) for independent corroboration beyond
+--     a WebSearch summary, and could not trace the raw engine code that
+--     actually populates `source` on a networked event receive. It
+--     explicitly recommends empirically confirming this against a live
+--     client before leaning on it further: trigger one of these events
+--     genuinely from the server, and separately via
+--     `TriggerEvent('qbx_k9unit:client:forceRagdoll', 0)` from this same
+--     client's own console/another local test resource, and confirm
+--     `source`/`type(source)` actually differ the two ways (also worth
+--     confirming `source` is a Lua number here, not a string, since a
+--     `"65535" ~= 65535` mismatch would silently make this check
+--     always-true — fail closed, not exploitable, but a confusing bug to
+--     debug blind). That empirical check has NOT been performed as part of
+--     this change; this guard ships on the strength of the official
+--     documented pattern alone.
+--
+-- WHAT THIS DOES NOT CLOSE:
+--   1. PHASE3_SPEC.md §12.0 item 8's own residual gap — a legitimately
+--      TARGETED player's client honestly receiving a genuine server-sent
+--      Category B event and then simply choosing not to execute it (skip
+--      the DisableControlAction calls, run a patched build of this
+--      resource, etc.). That is a different problem than this guard
+--      addresses ("did this invocation come from the network at all," not
+--      "did the receiving client honor it"), already resolved elsewhere as
+--      an accepted, guardrailed risk (item 8's own detection-not-prevention
+--      posture). Do not read this guard as further progress on that item.
+--   2. A client operating below the public Lua API layer (raw network
+--      packet forgery, a hooked/patched game process) — out of scope for
+--      any client-side Lua-level mitigation, same as every other native-call
+--      trust boundary already disclosed in this file's header.
+-- ======================================================================
+
 if Config.Features.BiteAndHold then
     -- HOLDER-SIDE receivers — server/combat.lua's own header: "Sent ONLY to
     -- the HOLDING K9's own client — starts/ends its own local cosmetic
     -- stance."
     RegisterNetEvent('qbx_k9unit:client:biteHoldStarted', function(targetNetId, expiresAt)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         MyEngagedTargetNetId = targetNetId
         PlayBiteHoldStance()
     end)
 
     RegisterNetEvent('qbx_k9unit:client:biteHoldEnded', function(targetNetId, reason)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         if MyEngagedTargetNetId ~= targetNetId then return end -- stale/foreign event, e.g. a race with a brand-new hold — never clear a DIFFERENT hold's state
         MyEngagedTargetNetId = nil
         ClearPedTasksImmediately(PlayerPedId())
@@ -624,6 +687,7 @@ if Config.Features.BiteAndHold then
     --- @param holderNetId number
     --- @param expiresAt number -- server GetGameTimer() timestamp; NOT compared directly against this client's own clock, see header
     RegisterNetEvent('qbx_k9unit:client:applyBiteHold', function(holderNetId, expiresAt)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         ActiveBiteHold = {
             holderNetId = holderNetId,
             localDeadline = GetGameTimer() + Config.Combat.BiteAndHold.maxDurationMs,
@@ -632,6 +696,7 @@ if Config.Features.BiteAndHold then
 
     --- @param reason string
     RegisterNetEvent('qbx_k9unit:client:endBiteHold', function(reason)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         ActiveBiteHold = nil
     end)
 
@@ -663,8 +728,9 @@ if Config.Features.BiteAndHold then
     --- @param npcNetId number
     --- @param expiresAt number -- server GetGameTimer() timestamp; NOT compared directly against this client's own clock, see header CLOCK-DOMAIN NOTE
     RegisterNetEvent('qbx_k9unit:client:applyNpcBiteHold', function(npcNetId, expiresAt)
-        local npcPed = NetworkGetEntityFromNetworkId(npcNetId)
-        if npcPed == 0 or not DoesEntityExist(npcPed) then return end -- despawned/streamed-out between the server's grant and this event arriving — nothing to apply to
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
+        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        if not npcPed then return end -- despawned/streamed-out between the server's grant and this event arriving — nothing to apply to
 
         NetworkRequestControlOfEntity(npcPed)
 
@@ -691,9 +757,10 @@ if Config.Features.BiteAndHold then
     --- @param npcNetId number
     --- @param reason string
     RegisterNetEvent('qbx_k9unit:client:endNpcBiteHold', function(npcNetId, reason)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         ActiveNpcEffects[npcNetId] = nil
-        local npcPed = NetworkGetEntityFromNetworkId(npcNetId)
-        if npcPed ~= 0 and DoesEntityExist(npcPed) then
+        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        if npcPed then
             NetworkRequestControlOfEntity(npcPed)
             SetBlockingOfNonTemporaryEvents(npcPed, false)
         end
@@ -714,6 +781,7 @@ if Config.Features.NonLethalTakedown then
     --- reference).
     --- @param expiresAt number -- server GetGameTimer() timestamp; NOT compared directly against this client's own clock, see header
     RegisterNetEvent('qbx_k9unit:client:forceRagdoll', function(expiresAt)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         local ped = PlayerPedId()
 
         SetEntityCanBeDamaged(ped, false)
@@ -734,6 +802,7 @@ if Config.Features.NonLethalTakedown then
 
     --- @param reason string
     RegisterNetEvent('qbx_k9unit:client:endForceRagdoll', function(reason)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         if not ActiveForcedRagdoll then return end
         ActiveForcedRagdoll = nil
         SetEntityCanBeDamaged(PlayerPedId(), true)
@@ -757,8 +826,9 @@ if Config.Features.NonLethalTakedown then
     --- @param npcNetId number
     --- @param expiresAt number -- server GetGameTimer() timestamp; NOT compared directly against this client's own clock, see header CLOCK-DOMAIN NOTE
     RegisterNetEvent('qbx_k9unit:client:applyNpcTakedown', function(npcNetId, expiresAt)
-        local npcPed = NetworkGetEntityFromNetworkId(npcNetId)
-        if npcPed == 0 or not DoesEntityExist(npcPed) then return end
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
+        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        if not npcPed then return end
 
         NetworkRequestControlOfEntity(npcPed)
 
@@ -782,9 +852,10 @@ if Config.Features.NonLethalTakedown then
     --- @param npcNetId number
     --- @param reason string
     RegisterNetEvent('qbx_k9unit:client:endNpcTakedown', function(npcNetId, reason)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         ActiveNpcEffects[npcNetId] = nil
-        local npcPed = NetworkGetEntityFromNetworkId(npcNetId)
-        if npcPed ~= 0 and DoesEntityExist(npcPed) then
+        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        if npcPed then
             NetworkRequestControlOfEntity(npcPed)
             SetEntityCanBeDamaged(npcPed, true)
         end
@@ -804,6 +875,7 @@ if Config.Features.PropDragging then
     --- @param isPlayerTarget boolean
     --- @param expiresAt number -- server GetGameTimer() timestamp; NOT compared directly against this client's own clock, see header CLOCK-DOMAIN NOTE
     RegisterNetEvent('qbx_k9unit:client:dragStarted', function(targetNetId, isPlayerTarget, expiresAt)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         ActiveDragAsHolder = {
             targetNetId = targetNetId,
             isPlayerTarget = isPlayerTarget == true,
@@ -821,11 +893,12 @@ if Config.Features.PropDragging then
     --- @param targetNetId number
     --- @param reason string
     RegisterNetEvent('qbx_k9unit:client:dragEnded', function(targetNetId, reason)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         if not ActiveDragAsHolder or ActiveDragAsHolder.targetNetId ~= targetNetId then return end -- stale/foreign event, e.g. a race with a brand-new drag — never clear a DIFFERENT drag's state
 
         local wasNpcTarget = not ActiveDragAsHolder.isPlayerTarget
-        local targetPed = NetworkGetEntityFromNetworkId(targetNetId)
-        if targetPed ~= 0 and DoesEntityExist(targetPed) then
+        local targetPed = ResolveNetworkEntity(targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        if targetPed then
             NetworkRequestControlOfEntity(targetPed)
             DetachEntity(targetPed, true, false)
             if wasNpcTarget then
@@ -843,6 +916,7 @@ if Config.Features.PropDragging then
     -- above.
     --- @param expiresAt number -- server GetGameTimer() timestamp; NOT compared directly against this client's own clock, see header CLOCK-DOMAIN NOTE
     RegisterNetEvent('qbx_k9unit:client:applyDragSpeedLimit', function(expiresAt)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         ActiveDragSpeedLimit = {
             localDeadline = GetGameTimer() + Config.Combat.PropDragging.maxDragDurationMs,
         }
@@ -850,6 +924,7 @@ if Config.Features.PropDragging then
 
     --- @param reason string
     RegisterNetEvent('qbx_k9unit:client:endDragSpeedLimit', function(reason)
+        if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         if not ActiveDragSpeedLimit then return end
         ActiveDragSpeedLimit = nil
 
@@ -877,8 +952,38 @@ end
 -- SHARED MAINTENANCE THREAD — single shared thread (never one per active
 -- effect), mirroring server/combat.lua's own "one shared maintenance
 -- thread, not one thread per active effect" discipline (which itself
--- mirrors server/tracking.lua's PruneTrackableLogs precedent). Picks the
--- LARGEST Wait() the currently-active state actually needs:
+-- mirrors server/tracking.lua's PruneTrackableLogs precedent).
+--
+-- QA FIX (backstop starvation, this pass) — the ORIGINAL structure here was
+-- a single `if <Wait(0)-class states> then ... else <Wait(0)-class states'
+-- deadline checks skipped entirely, other states' deadline checks run>
+-- end`, i.e. it treated "which native calls need Wait(0) this tick" and
+-- "which effects' expiry backstops get checked at all this tick" as the SAME
+-- decision. Those are not the same player, let alone the same role: a
+-- player can simultaneously be a BiteAndHold TARGET (ActiveBiteHold) and an
+-- NPC-effect HOLDER (ActiveNpcEffects, from that same player's own K9
+-- separately biting/taking down an NPC) — the server does not treat these
+-- roles as mutually exclusive, and PropDragging's own ActiveDragAsHolder/
+-- ActiveDragSpeedLimit added since only widened the same combinable set.
+-- While ANY Wait(0)-class state was truthy, the old code's `else` branch —
+-- the ONLY place ActiveForcedRagdoll's and every ActiveNpcEffects entry's
+-- deadline backstop were checked — never ran at all, for as long as the
+-- Wait(0)-class state stayed active. A lost endNpcBiteHold/endNpcTakedown/
+-- endForceRagdoll message could then leave that OTHER effect's
+-- damage-immunity or flee-suppression window stuck past its own
+-- Config.Combat.*.maxDurationMs/ragdollDurationMs bound for as long as the
+-- unrelated Wait(0)-class effect kept running — up to that effect's own
+-- ~11s window, on top of whatever the stuck effect's own bound already was.
+-- FIXED below by decoupling the two questions entirely: every effect's own
+-- per-tick native-reassertion AND its own expiry backstop are gated ONLY on
+-- THAT effect's own state variable, every single loop iteration,
+-- unconditionally of every other effect's state. Only the Wait() DURATION
+-- at the bottom of the loop still depends on which states are active
+-- (unchanged reasoning from before this fix — see below), since that
+-- decision genuinely is "the largest wait every currently-active state can
+-- tolerate," unlike "should this state's backstop run at all," which must
+-- never depend on a different state.
+--
 --   - BiteAndHold (a Category B effect applied TO this client), an active
 --     drag AS HOLDER (Category A attach re-assertion, PLUS — NPC target
 --     only — the Category-A-equivalent direct move-rate override), and an
@@ -901,15 +1006,67 @@ end
 --     player who is never targeted and isn't currently a K9 mid-action): a
 --     cheap idle poll, never a tight loop spinning for a feature that
 --     isn't currently doing anything on this client at all.
+--
+-- QA FIX (target death, this pass) — see the ActiveBiteHold block below for
+-- a second, unrelated fix landed in the same pass: BiteAndHold previously
+-- had no 'target_died' end condition at all, so a target killed by
+-- unrelated gunfire and respawned kept sprint/fire disabled on the NEW body
+-- (DisableControlAction always targets whatever PlayerPedId() currently
+-- returns, which after a resurrect is the same handle, healed) until the
+-- ORIGINAL hold's timer elapsed. Bounded by maxDurationMs already (not an
+-- unbounded trap), but undisclosed and needlessly slow. Fixed client-side by
+-- treating this client's own death as an immediate local end for the
+-- restriction; see that block's own comment for why this cannot fully close
+-- the gap without a server-side end condition, and what server/combat.lua
+-- would need to do so.
 -- ======================================================================
 CreateThread(function()
     while true do
-        if ActiveBiteHold or ActiveDragAsHolder or ActiveDragSpeedLimit then
-            if ActiveBiteHold then
+        local now = GetGameTimer()
+
+        if ActiveBiteHold then
+            local myPed = PlayerPedId()
+
+            if IsEntityDead(myPed) then
+                -- TARGET DIED mid-hold (e.g. unrelated gunfire) — stop
+                -- enforcing immediately rather than waiting for
+                -- ActiveBiteHold.localDeadline. Without this, the
+                -- DisableControlAction calls below would keep firing every
+                -- tick against whatever PlayerPedId() returns, which after
+                -- this ped is resurrected (same handle, healed — the
+                -- standard FiveM respawn flow does not allocate a new ped)
+                -- is the player's OWN restored body, wrongly still
+                -- sprint/fire-suppressed until the original hold's timer
+                -- ran out. Clearing here the moment death is observed (this
+                -- thread already runs at Wait(0) while ActiveBiteHold is
+                -- set, so this is detected within a frame or two of death,
+                -- well before any respawn timer elapses) means no further
+                -- DisableControlAction call ever lands on the resurrected
+                -- ped.
+                --
+                -- CLIENT-SIDE HALF ONLY — this does not, and cannot, tell
+                -- server/combat.lua the hold ended early: this file has no
+                -- access-gate/authority to unilaterally end the server's own
+                -- K9ActiveEffect bookkeeping, and the HOLDING K9's own
+                -- client (MyEngagedTargetNetId / IsBiteHoldEngaged) is a
+                -- completely different client that receives no signal from
+                -- this block at all. Reporting the death is the best this
+                -- half can do; it does NOT by itself free the holder's
+                -- "Release" toggle or let the server stop counting this as
+                -- an active hold — that still needs a server-side
+                -- 'target_died' end condition (see below) to be complete.
+                -- Best-effort notify so server/combat.lua CAN act on it once
+                -- that handler exists — inert (no registered listener) until
+                -- it does, same "client fires ahead of the server catching
+                -- up" pattern already used elsewhere in this resource for a
+                -- not-yet-landed contract.
+                TriggerServerEvent('qbx_k9unit:server:reportBiteHoldTargetDied')
+                ActiveBiteHold = nil
+            else
                 DisableControlAction(0, INPUT_SPRINT, true)
                 DisableControlAction(0, INPUT_ATTACK, true)
 
-                if GetGameTimer() >= ActiveBiteHold.localDeadline then
+                if now >= ActiveBiteHold.localDeadline then
                     -- Backstop only — see header "DEFENSE IN DEPTH". In the
                     -- normal case server/combat.lua's own maintenance
                     -- thread already sent endBiteHold before this ever
@@ -917,118 +1074,127 @@ CreateThread(function()
                     ActiveBiteHold = nil
                 end
             end
+        end
 
-            if ActiveDragAsHolder then
-                local targetPed = NetworkGetEntityFromNetworkId(ActiveDragAsHolder.targetNetId)
-                local targetExists = targetPed ~= 0 and DoesEntityExist(targetPed)
+        if ActiveDragAsHolder then
+            local targetPed = ResolveNetworkEntity(ActiveDragAsHolder.targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
 
-                if targetExists then
-                    NetworkRequestControlOfEntity(targetPed) -- best-effort, see header "NETWORK OWNERSHIP OF THE TARGET PED"
+            if targetPed then
+                NetworkRequestControlOfEntity(targetPed) -- best-effort, see header "NETWORK OWNERSHIP OF THE TARGET PED"
 
-                    -- PHASE3_SPEC.md §12.0 item 8's own "new finding":
-                    -- DetachEntity is very likely NOT ownership-gated
-                    -- either (citizenfx/fivem issue #3726), so a hostile
-                    -- target's own client can call it on itself at any
-                    -- moment. Re-asserting the attach EVERY TICK (never
-                    -- one-shot) is the ONLY thing that puts it back —
-                    -- binding guardrail 2. Offset/bone index are an
-                    -- UNREVIEWED placeholder approximating a collar/scruff
-                    -- drag position (same "no new architecture, mirrors
-                    -- client/vehicle.lua's own AttachEntityToEntity call
-                    -- shape for the vehicle-load case" precedent this
-                    -- resource already established) — flagged for
-                    -- coder-frontend/an in-engine pass to tune, not
-                    -- asserted as final.
-                    AttachEntityToEntity(targetPed, PlayerPedId(), 0, 0.0, -0.6, 0.0, 0.0, 0.0, 0.0, true, false, false, false, 2, true)
+                -- PHASE3_SPEC.md §12.0 item 8's own "new finding":
+                -- DetachEntity is very likely NOT ownership-gated
+                -- either (citizenfx/fivem issue #3726), so a hostile
+                -- target's own client can call it on itself at any
+                -- moment. Re-asserting the attach EVERY TICK (never
+                -- one-shot) is the ONLY thing that puts it back —
+                -- binding guardrail 2. Offset/bone index are an
+                -- UNREVIEWED placeholder approximating a collar/scruff
+                -- drag position (same "no new architecture, mirrors
+                -- client/vehicle.lua's own AttachEntityToEntity call
+                -- shape for the vehicle-load case" precedent this
+                -- resource already established) — flagged for
+                -- coder-frontend/an in-engine pass to tune, not
+                -- asserted as final.
+                AttachEntityToEntity(targetPed, PlayerPedId(), 0, 0.0, -0.6, 0.0, 0.0, 0.0, 0.0, true, false, false, false, 2, true)
 
-                    if not ActiveDragAsHolder.isPlayerTarget then
-                        -- NPC target: no relay problem for the speed-limit
-                        -- half either (this K9's own client already fully
-                        -- commands this entity, same posture as
-                        -- applyNpcBiteHold/applyNpcTakedown) — re-asserted
-                        -- every tick, same discipline as the attach above
-                        -- and phase2_notes/phase3_combat_natives.md §4's
-                        -- own "must be looped, not one-shot" requirement
-                        -- for this exact native.
-                        SetPedMoveRateOverride(targetPed, Config.Combat.PropDragging.dragSpeedMultiplier)
-                    end
-                end
-
-                if GetGameTimer() >= ActiveDragAsHolder.localDeadline then
-                    -- Backstop only — see header "DEFENSE IN DEPTH". In the
-                    -- normal case server/combat.lua's own maintenance
-                    -- thread already sent dragEnded before this ever fires.
-                    if targetExists then
-                        DetachEntity(targetPed, true, false)
-                        if not ActiveDragAsHolder.isPlayerTarget then
-                            SetPedMoveRateOverride(targetPed, 1.0)
-                        end
-                    end
-                    ActiveDragAsHolder = nil
+                if not ActiveDragAsHolder.isPlayerTarget then
+                    -- NPC target: no relay problem for the speed-limit
+                    -- half either (this K9's own client already fully
+                    -- commands this entity, same posture as
+                    -- applyNpcBiteHold/applyNpcTakedown) — re-asserted
+                    -- every tick, same discipline as the attach above
+                    -- and phase2_notes/phase3_combat_natives.md §4's
+                    -- own "must be looped, not one-shot" requirement
+                    -- for this exact native.
+                    SetPedMoveRateOverride(targetPed, Config.Combat.PropDragging.dragSpeedMultiplier)
                 end
             end
 
-            if ActiveDragSpeedLimit then
-                local ped = PlayerPedId()
-                -- See header "MOVE-RATE COMPOSER SCOPE" for why this
-                -- branches on IsOwnModelK9() rather than unconditionally
-                -- going through client/movement.lua's shared composer —
-                -- re-checked FRESH every tick (not decided once at
-                -- apply-time) since the correct branch depends on this
-                -- client's CURRENT model.
+            if now >= ActiveDragAsHolder.localDeadline then
+                -- Backstop only — see header "DEFENSE IN DEPTH". In the
+                -- normal case server/combat.lua's own maintenance
+                -- thread already sent dragEnded before this ever fires.
+                if targetPed then
+                    DetachEntity(targetPed, true, false)
+                    if not ActiveDragAsHolder.isPlayerTarget then
+                        SetPedMoveRateOverride(targetPed, 1.0)
+                    end
+                end
+                ActiveDragAsHolder = nil
+            end
+        end
+
+        if ActiveDragSpeedLimit then
+            local ped = PlayerPedId()
+            -- See header "MOVE-RATE COMPOSER SCOPE" for why this
+            -- branches on IsOwnModelK9() rather than unconditionally
+            -- going through client/movement.lua's shared composer —
+            -- re-checked FRESH every tick (not decided once at
+            -- apply-time) since the correct branch depends on this
+            -- client's CURRENT model.
+            if IsOwnModelK9() and K9MoveRateModifiers then
+                K9MoveRateModifiers.dragging = Config.Combat.PropDragging.dragSpeedMultiplier
+                RecomputeK9MoveRate()
+            else
+                SetPedMoveRateOverride(ped, Config.Combat.PropDragging.dragSpeedMultiplier)
+            end
+
+            if now >= ActiveDragSpeedLimit.localDeadline then
+                -- Backstop only — see header "DEFENSE IN DEPTH".
+                ActiveDragSpeedLimit = nil
                 if IsOwnModelK9() and K9MoveRateModifiers then
-                    K9MoveRateModifiers.dragging = Config.Combat.PropDragging.dragSpeedMultiplier
+                    K9MoveRateModifiers.dragging = 1.0
                     RecomputeK9MoveRate()
                 else
-                    SetPedMoveRateOverride(ped, Config.Combat.PropDragging.dragSpeedMultiplier)
+                    SetPedMoveRateOverride(ped, 1.0)
                 end
+                DetachEntity(ped, true, false) -- defense in depth, same reasoning as endDragSpeedLimit's own restore
+            end
+        end
 
-                if GetGameTimer() >= ActiveDragSpeedLimit.localDeadline then
-                    -- Backstop only — see header "DEFENSE IN DEPTH".
-                    ActiveDragSpeedLimit = nil
-                    if IsOwnModelK9() and K9MoveRateModifiers then
-                        K9MoveRateModifiers.dragging = 1.0
-                        RecomputeK9MoveRate()
+        if ActiveForcedRagdoll and now >= ActiveForcedRagdoll.localDeadline then
+            -- Backstop only — see header "DEFENSE IN DEPTH". Restoring
+            -- damageability is the load-bearing half of this backstop
+            -- (an un-restored bracket is a target-side exploit, not
+            -- merely a UX bug), so this branch does it directly rather
+            -- than waiting on a lost network event. Checked EVERY tick,
+            -- independently of every other state above — see this
+            -- thread's own header "QA FIX (backstop starvation)" for why
+            -- this must never be conditioned on ActiveBiteHold/
+            -- ActiveDragAsHolder/ActiveDragSpeedLimit's own truthiness.
+            ActiveForcedRagdoll = nil
+            SetEntityCanBeDamaged(PlayerPedId(), true)
+        end
+
+        -- Same backstop reasoning as ActiveForcedRagdoll above, applied
+        -- to every currently-active NPC relay effect — a lost
+        -- endNpcBiteHold/endNpcTakedown network event must not leave an
+        -- NPC permanently flee-suppressed or permanently undamageable.
+        -- Also checked EVERY tick unconditionally, same fix.
+        for npcNetId, effect in pairs(ActiveNpcEffects) do
+            if now >= effect.localDeadline then
+                ActiveNpcEffects[npcNetId] = nil
+                local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+                if npcPed then
+                    NetworkRequestControlOfEntity(npcPed)
+                    if effect.kind == 'bite' then
+                        SetBlockingOfNonTemporaryEvents(npcPed, false)
                     else
-                        SetPedMoveRateOverride(ped, 1.0)
+                        SetEntityCanBeDamaged(npcPed, true)
                     end
-                    DetachEntity(ped, true, false) -- defense in depth, same reasoning as endDragSpeedLimit's own restore
                 end
             end
+        end
 
+        -- Wait DURATION selection only — unlike the backstop checks above,
+        -- this genuinely is a single "largest wait every currently-active
+        -- state can tolerate" decision, so it stays a single if/elseif/else
+        -- here (see this thread's own header for why this is NOT the same
+        -- kind of decision as "should a backstop run at all").
+        if ActiveBiteHold or ActiveDragAsHolder or ActiveDragSpeedLimit then
             Wait(0)
         else
-            local now = GetGameTimer()
-
-            if ActiveForcedRagdoll and now >= ActiveForcedRagdoll.localDeadline then
-                -- Backstop only — see header "DEFENSE IN DEPTH". Restoring
-                -- damageability is the load-bearing half of this backstop
-                -- (an un-restored bracket is a target-side exploit, not
-                -- merely a UX bug), so this branch does it directly rather
-                -- than waiting on a lost network event.
-                ActiveForcedRagdoll = nil
-                SetEntityCanBeDamaged(PlayerPedId(), true)
-            end
-
-            -- Same backstop reasoning as ActiveForcedRagdoll above, applied
-            -- to every currently-active NPC relay effect — a lost
-            -- endNpcBiteHold/endNpcTakedown network event must not leave an
-            -- NPC permanently flee-suppressed or permanently undamageable.
-            for npcNetId, effect in pairs(ActiveNpcEffects) do
-                if now >= effect.localDeadline then
-                    ActiveNpcEffects[npcNetId] = nil
-                    local npcPed = NetworkGetEntityFromNetworkId(npcNetId)
-                    if npcPed ~= 0 and DoesEntityExist(npcPed) then
-                        NetworkRequestControlOfEntity(npcPed)
-                        if effect.kind == 'bite' then
-                            SetBlockingOfNonTemporaryEvents(npcPed, false)
-                        else
-                            SetEntityCanBeDamaged(npcPed, true)
-                        end
-                    end
-                end
-            end
-
             Wait(ActiveForcedRagdoll and 100 or 500)
         end
     end
@@ -1065,8 +1231,8 @@ AddEventHandler('onResourceStop', function(resourceName)
     end
 
     for npcNetId, effect in pairs(ActiveNpcEffects) do
-        local npcPed = NetworkGetEntityFromNetworkId(npcNetId)
-        if npcPed ~= 0 and DoesEntityExist(npcPed) then
+        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        if npcPed then
             NetworkRequestControlOfEntity(npcPed)
             if effect.kind == 'bite' then
                 SetBlockingOfNonTemporaryEvents(npcPed, false)
@@ -1077,8 +1243,8 @@ AddEventHandler('onResourceStop', function(resourceName)
     end
 
     if ActiveDragAsHolder then
-        local targetPed = NetworkGetEntityFromNetworkId(ActiveDragAsHolder.targetNetId)
-        if targetPed ~= 0 and DoesEntityExist(targetPed) then
+        local targetPed = ResolveNetworkEntity(ActiveDragAsHolder.targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        if targetPed then
             NetworkRequestControlOfEntity(targetPed)
             DetachEntity(targetPed, true, false)
             if not ActiveDragAsHolder.isPlayerTarget then
