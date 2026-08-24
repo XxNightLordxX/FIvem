@@ -173,7 +173,33 @@ itself (this file isn't even wired into `fxmanifest.lua` yet), but it should
 not ship as-is, and it's worth a note to whoever is finishing
 `client/propattachment.lua` before it does.
 
-### NEW, unrecorded: `NotifyPlayer` — 12 independent copies, not the "2, closed" Revision 2 recorded
+### RESOLVED 2026-08-24: `NotifyPlayer` — was 13 copies, not the "2, closed" Revision 2 recorded
+
+> **Status: DONE.** Extracted to `server/notify.lua` (a new shared-helper file
+> alongside `cooldowns.lua`/`entities.lua`, not folded into `entities.lua` as
+> this section originally suggested — "which toast, with what title" is a third
+> responsibility, unrelated to timing state or reference resolution, and this
+> resource's stated convention is one shared file per responsibility).
+> Registered in `fxmanifest.lua` before all consumers; `NotifyPlayer` declared
+> in `.luacheckrc`.
+>
+> **The final count was 13, not 12** — a 13th copy landed in `server/fetch.lua`
+> while the extraction was in progress, in a file that did not exist when the
+> audit below ran. It was caught by a final grep sweep rather than by trusting
+> the audit's number. That is the third time on this project a duplication
+> count has been wrong in the low direction.
+>
+> `server/admin.lua` and `server/bonetool.lua` deliberately keep a one-line
+> local wrapper over the shared global, because each varies the notification
+> title in a way players actually see; flattening those to the generic title
+> would have been a regression disguised as a cleanup. Those wrappers must call
+> `_G.NotifyPlayer(...)` explicitly — a bare call inside a same-named local
+> function recurses into itself rather than reaching the global.
+>
+> The original analysis is kept below unedited, per this document's own
+> "layer corrections, don't rewrite history" convention.
+
+#### Original analysis (Revision 6, now resolved)
 
 Revision 2 tracked `NotifyPlayer` duplication, found it stayed at 2 copies
 through Phase 2, and closed it as a non-issue. It did not stay at 2. Current

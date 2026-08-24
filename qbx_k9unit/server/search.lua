@@ -135,6 +135,13 @@
       establish. No load-order assumption on server/progression.lua either
       way. See config.lua's `Config.XP.awards.searchContrabandFound` comment
       for the award's own design rationale.
+    - ECONOMY-AUDIT FIX (this pass): THIS FILE also owns `ContrabandXpState`
+      below (per-resolved-target last-awarded contraband weight cache) —
+      see that table's own declaration comment, right after
+      TargetSearchCooldown, for the XP-farm hole it closes and why it is
+      deliberately NOT a server/cooldowns.lua tracker instance despite the
+      "always use NewCooldown" convention every OTHER piece of file-local
+      state in this file follows.
     ======================================================================
 ]]
 
