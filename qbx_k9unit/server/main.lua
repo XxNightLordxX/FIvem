@@ -34,7 +34,13 @@
       player" to validate against, because the K9 IS the player's own
       ped, always — so THIS FILE resolves the sender's own ped/netId
       itself (GetPlayerPed(source) -> NetworkGetNetworkIdFromEntity)
-      rather than trusting a client-supplied netId claim.
+      rather than trusting a client-supplied netId claim. `barkType` is
+      also length-capped (BARK_TYPE_MAX_LENGTH, see that constant's own
+      comment) — coder-security finding, 2026-08-23: the per-second
+      BarkCooldown throttles CALL frequency but never bounded payload
+      SIZE, so an eligible client could otherwise turn every accepted
+      once-a-second call into a large -1-broadcast (bandwidth
+      amplification), independent of any future barkType enum.
     - 'qbx_k9unit:server:requestLeashAttach' (targetServerId: number)
       Initiator (either the K9 or the officer, per SPEC.md §6.1) asks to
       attach to `targetServerId`. Server validates eligibility/proximity/
@@ -205,6 +211,15 @@ local LeashPairs = {}
 -- (e.g. after the initiator has moved away, disconnected, or paired with
 -- someone else in the meantime) — consumed (cleared) on any response,
 -- valid or not. Local: nothing outside this file needs it.
+--
+-- SECURITY/UX FIX (coder-security, exploit-tester + qa-tester finding,
+-- 2026-08-23): this is a single-slot table keyed only by target, so a
+-- second request arriving for a target that already has a live, unexpired
+-- entry would previously overwrite it wholesale with no notification to
+-- the superseded initiator. requestLeashAttach now rejects a second
+-- request outright while a live one is still pending for that target — see
+-- that handler's own comment for the full writeup and why "reject the
+-- second caller" was chosen over "notify the superseded first caller."
 local PendingLeashRequests = {}
 local LEASH_REQUEST_TTL_MS = 30000
 
@@ -343,6 +358,24 @@ local BARK_COOLDOWN_MS = 1000
 local BarkCooldown = NewCooldown(BARK_COOLDOWN_MS)
 BarkCooldown.RegisterPlayerDropped()
 
+-- SECURITY FIX (coder-security, exploit-tester + qa-tester finding,
+-- 2026-08-23): BarkCooldown above rate-limits CALLS to this event (one
+-- accepted broadcast/sec/certified account), but nothing previously bounded
+-- the SIZE of the `barkType` payload each accepted call broadcasts —
+-- `type(barkType) == 'string'` passes for a string of any length. A
+-- modified client held by a legitimately-certified officer (the cooldown
+-- doesn't stop a low-and-slow abuser, only a fast-spam one) can still call
+-- this directly with an arbitrarily large string, turning every accepted,
+-- once-a-second call into a sustained bandwidth-amplification broadcast
+-- (TriggerClientEvent(..., -1, ...) below fans it out to every connected
+-- player). client/main.lua's playBark handler doesn't even read `barkType`
+-- for anything today (see its own comment) — a short cap costs the real
+-- feature nothing. Value chosen to comfortably fit the one real value in
+-- use today ('bark', see client/radial.lua's Bark item) plus headroom for a
+-- handful of short Phase 5 AdvancedBarkRadial variants, without leaving
+-- room to smuggle a large payload through this event.
+local BARK_TYPE_MAX_LENGTH = 16
+
 --- Relays a bark to every client so anyone near the K9 entity hears it.
 --- Gated by Config.Features.BasicBarkSounds AND HasK9Access(source) —
 --- both re-checked HERE, server-side, regardless of whether the client UI
@@ -355,6 +388,11 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
 
     if not Config.Features.BasicBarkSounds then return end -- silent no-op
     if type(barkType) ~= 'string' then return end -- defensive: never trust client payload shape
+    -- SECURITY FIX (see BARK_TYPE_MAX_LENGTH's own comment above): cap length
+    -- BEFORE the cert/cooldown checks below so an oversized payload from an
+    -- otherwise-eligible, on-cooldown account is rejected outright, not just
+    -- rate-limited.
+    if #barkType > BARK_TYPE_MAX_LENGTH then return end -- silent no-op: oversized payload, never trust client payload shape
     if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
 
     if not BarkCooldown.Consume(src) then
@@ -368,7 +406,10 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     -- config.lua — Phase 1 only needs a single generic bark per §6.1.
     -- Treat barkType as an opaque passthrough string, don't invent a
     -- validation enum unless client/radial.lua's comment says otherwise
-    -- for Phase 5's AdvancedBarkRadial.
+    -- for Phase 5's AdvancedBarkRadial. It IS still length-capped
+    -- (BARK_TYPE_MAX_LENGTH above) purely as a bandwidth/abuse bound, not a
+    -- content restriction — that check is independent of whether an enum
+    -- ever gets added.
     TriggerClientEvent('qbx_k9unit:client:playBark', -1, netId, barkType)
 end)
 
@@ -652,6 +693,34 @@ RegisterNetEvent('qbx_k9unit:server:requestLeashAttach', function(targetServerId
     local ok, _, _, reason = CheckLeashEligibility(src, targetServerId)
     if not ok then
         NotifyPlayer(src, LeashRejectReasonMessage(reason), 'error')
+        return
+    end
+
+    -- SECURITY/UX FIX (coder-security, exploit-tester + qa-tester finding,
+    -- 2026-08-23): PendingLeashRequests is a single-slot table keyed only
+    -- by TARGET, with no check here for an already-live, unexpired pending
+    -- request before overwriting it wholesale below. If player A requests a
+    -- leash to target T, then before T responds player B (also
+    -- independently eligible per CheckLeashEligibility above) requests to
+    -- that SAME T, B's request used to silently clobber A's entry — A was
+    -- never notified their request vanished, and if T then accepted what
+    -- they believed was still A's prompt, respondLeashAttach's
+    -- `pending.from == fromServerId` check would fail against B's
+    -- now-stored value, leaving T with a generic "no longer valid" error
+    -- and A with nothing at all. This is a denial-of-service/UX-integrity
+    -- gap on the REQUEST phase only — it does not weaken the leash
+    -- system's consent/detach guarantees, since respondLeashAttach's
+    -- match+TTL check still requires the correct initiator either way.
+    -- Reject the SECOND request outright rather than silently overwriting
+    -- the first: same "notify the caller of their own rejected action"
+    -- convention CheckLeashEligibility's rejection path above already
+    -- uses, rather than trying to notify a THIRD party (A) about an action
+    -- they themselves didn't take. Checked BEFORE consuming the rate limit
+    -- below so a legitimately-rejected duplicate doesn't burn the caller's
+    -- own cooldown allowance.
+    local existingPending = PendingLeashRequests[targetServerId]
+    if existingPending and GetGameTimer() <= existingPending.expiresAt then
+        NotifyPlayer(src, 'That player already has a pending leash request.', 'error')
         return
     end
 
