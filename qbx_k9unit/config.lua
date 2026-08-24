@@ -47,6 +47,26 @@ Config.Features = {
     PropDragging         = false,
     AgilityAdvanced      = false, -- fence/window vault approximation
 
+    -- PHASE3_SPEC.md §12.0 item 7 (Revision 5, coder-architect) /
+    -- server/partnership.lua (coder-backend, this pass). Gates the
+    -- mutually-consented "Partner Up" registry ONLY -- HandlerDownDefense
+    -- and BiteAndHold's Recall actor (the two features this registry
+    -- unblocks) are each STILL independently gated by their OWN flags
+    -- above and remain unimplemented as of this pass regardless of this
+    -- flag's value; flipping this on by itself does not enable either.
+    -- DEFAULT DIVERGES FROM PHASE3_SPEC.md §12.0 item 7 point 5's OWN
+    -- "recommended default true" text -- deliberate, not an oversight: that
+    -- recommendation predates any real code existing, and this resource's
+    -- actual shipped convention for every other Phase 3 mechanic (see the
+    -- Config.Combat header comment above: BiteAndHold/NonLethalTakedown
+    -- ship fully implemented but still `false`) is that a newly-landed
+    -- Phase 3+ mechanic stays off by default until its own balance/security
+    -- go-live review, independent of implementation completeness. This flag
+    -- was directed to default `false` for exactly that reason -- flip only
+    -- after reviewing server/partnership.lua's own header for what is and
+    -- isn't independently verified.
+    HandlerPartnership   = false,
+
     -- Phase 4 (inventory, progression, vitality)
     K9Inventory          = false,
     XPProgression        = false,
@@ -436,6 +456,55 @@ Config.Combat = {
         maxVaultHeight  = 1.2,   -- meters -- PHASE3_SPEC.md §12.2 sketch value, UNTUNED (see client/movement.lua's own tuning-constants note: PHASE3_SPEC.md §12.5.5 lists exact height bands/capsule radius/forward distance as in-engine tuning work, not a design fork)
         vaultCooldownMs = 2000,  -- ms, UNTUNED placeholder, same status as above
     },
+}
+
+-- ======================================================================
+-- PHASE 3 — HANDLER/K9 PARTNERSHIP REGISTRY (Config.Features.HandlerPartnership,
+-- server/partnership.lua + client/partnership.lua). PHASE3_SPEC.md §12.0
+-- item 7 (Revision 5, coder-architect) / §12.3's file-plan entry.
+--
+-- OWN TOP-LEVEL BLOCK, DELIBERATELY NOT NESTED UNDER Config.Combat: this
+-- mechanic has its OWN file, its OWN feature flag (independent of
+-- BiteAndHold/HandlerDownDefense per the resolved design's explicit
+-- "one-flag-per-mechanic" reasoning), and its own owner (server/
+-- partnership.lua, not server/combat.lua) — nesting its tuning knobs inside
+-- Config.Combat (a different file's config namespace) would blur that
+-- ownership split for no benefit. Mirrors this file's own established
+-- convention of one dedicated top-level table per Phase 2/3 feature
+-- (Config.Tracking, Config.SearchZones, Config.DoorInteraction, Config.Vision,
+-- Config.Combat above) rather than a single everything-table.
+--
+-- This registry is a FOUNDATION only, in this pass — it establishes/
+-- persists/tears down a "who is my partner" relationship, with no combat
+-- consequence wired to it yet. BiteAndHold's Recall actor and
+-- HandlerDownDefense's trigger (the two features PHASE3_SPEC.md §12.0 item
+-- 7 names as blocked on this registry existing) are OUT OF SCOPE for this
+-- pass and remain unimplemented — see server/partnership.lua's own header
+-- for the exact accessor functions (`GetActivePartnerCitizenId`,
+-- `IsActivePartnerOf`) a future implementation of either should call rather
+-- than re-deriving its own partner lookup.
+-- ======================================================================
+Config.Partnership = {
+    -- PHASE3_SPEC.md §12.0 item 7 point 1 explicitly leaves "reuse
+    -- Config.CertifyProximityMeters or a dedicated
+    -- Config.Combat.PartnerProximityMeters" as an implementer's call, not a
+    -- design fork. A DEDICATED constant is used here (not a direct reuse of
+    -- Config.CertifyProximityMeters, and not nested under Config.Combat --
+    -- see this block's own header above) so this mechanic's own proximity
+    -- rule can be tuned independently of certification's without an
+    -- unrelated cross-feature edit. Same 5.0m default as
+    -- Config.CertifyProximityMeters purely because it's a reasonable
+    -- starting point for the same class of "stand near each other and
+    -- confirm" interaction, not because the two are meant to stay coupled.
+    ProximityMeters   = 5.0,
+
+    -- Mirrors server/main.lua's LEASH_REQUEST_TTL_MS / LEASH_REQUEST_COOLDOWN_MS
+    -- exactly (same "a request nobody answers shouldn't linger indefinitely
+    -- available for a stale accept" / "stop UI-harassment via repeat
+    -- prompts" reasoning as the leash consent handshake this mechanic
+    -- deliberately mirrors — PHASE3_SPEC.md §12.0 item 7 point 1).
+    RequestTTLMs      = 30000,
+    RequestCooldownMs = 1000,
 }
 
 -- ======================================================================

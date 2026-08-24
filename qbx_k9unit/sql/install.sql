@@ -232,15 +232,16 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
 -- =====================================================================
 -- qbx_k9unit :: k9_partnerships
 --
--- SCHEMA LANDING AHEAD OF IMPLEMENTATION -- deliberately. No `.lua` file
--- in this resource reads or writes this table yet. It is added now so
--- the eventual implementation of `server/partnership.lua` (not yet
--- written) has a reviewed, agreed-upon table to build against, per
--- PHASE3_SPEC.md's own working style of landing design artifacts ahead
--- of code (see that document's repeated "no .lua file was touched to
--- produce this revision" notes). Do not wire any query against this
--- table without also updating this comment block once it has a real
--- owner file.
+-- OWNER FILE NOW EXISTS -- `server/partnership.lua` (coder-backend, this
+-- pass) reads and writes this table for real; this comment block is
+-- updated in place per its own prior instruction to do so once that
+-- happened, rather than left describing a since-resolved "ahead of
+-- implementation" state (same "don't leave stale framing around a
+-- resolved item" standard PHASE3_SPEC.md's own revision history already
+-- applies to itself). The schema below is UNCHANGED from the version
+-- landed ahead of implementation -- `server/partnership.lua` was written
+-- to match these real columns/constraints exactly, not the other way
+-- around; see that file's own header for the schema-to-code mapping.
 --
 -- Governing spec: PHASE3_SPEC.md section 12.0, item 7 ("Handler-
 -- partnership link: reuse active leash pairing, or a new persistent
@@ -253,26 +254,28 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
 -- non-functional for its own primary use case -- an off-leash foot
 -- chase, where the pair is deliberately unleashed).
 --
--- Owner file (not yet written): `server/partnership.lua`. Per
--- PHASE3_SPEC.md section 12.0 item 7 and section 12.3, that file is
--- expected to:
---   * handle the "Partner Up" consent handshake (mirroring
+-- Owner file: `server/partnership.lua`. Per PHASE3_SPEC.md section 12.0
+-- item 7 and section 12.3, that file:
+--   * handles the "Partner Up" consent handshake (mirroring
 --     `server/main.lua`'s `PendingLeashRequests` pattern -- a TTL'd
 --     pending-request slot, one live request per target, consumed on
 --     any response -- NOT `k9_certifications`' grant-hierarchy model,
 --     since partnership is a peer relationship between two already-
 --     eligible parties, not a permission grant),
---   * maintain an in-memory `Partnerships[citizenid]` cache
+--   * maintains an in-memory `Partnerships[citizenid]` cache
 --     (`{ partner = partnerCitizenid, isK9 = boolean, active = true }`)
 --     refreshed via a `RefreshPartnershipCache` modeled on
 --     `certifications.lua`'s `RefreshCertificationCache` (same
 --     pcall/fail-closed discipline), populated on `PlayerLoaded` and via
 --     an `onResourceStart` backfill loop mirroring
 --     `certifications.lua`'s own restart-recovery pattern,
---   * expose a `ForceBreakPartnershipForSource`-equivalent teardown,
---     called alongside every existing `ForceDetachLeashForSource` /
---     `ForceDetachOfficerLeashForSource` call site in
---     `server/certifications.lua` (K9-role cert revocation, either
+--   * exposes a `ForceBreakPartnershipForCitizenId` teardown (citizenid-
+--     keyed, not source-keyed like leash's own equivalent -- see that
+--     function's own doc comment in server/partnership.lua for why an
+--     offline-capable teardown is a REQUIRED divergence from leash's
+--     shape here, not an optional one), called alongside every existing
+--     `ForceDetachLeashForSource` / `ForceDetachOfficerLeashForSource`
+--     call site in `server/certifications.lua` (K9-role cert revocation, either
 --     party's department change) -- automatic, no-consent-needed
 --     termination, mirroring the leash's own "no unbounded trap" rule.
 --

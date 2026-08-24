@@ -227,6 +227,30 @@ globals = {
     -- "global helper, private per-file state" convention as
     -- RequestLeashAttach/DetachLeash above.
     "RequestBiteHold", "ReleaseBiteHold", "IsBiteHoldEngaged", "RequestTakedown",
+    -- server/partnership.lua (Phase 3, HandlerPartnership registry,
+    -- PHASE3_SPEC.md §12.0 item 7/§12.3). RefreshPartnershipCache mirrors
+    -- server/certifications.lua's RefreshCertificationCache reuse hook
+    -- (called from this file's own onResourceStart backfill loop, exposed
+    -- globally for the same "documented reuse hook" reason). GetActivePartnerCitizenId/
+    -- IsActivePartnerOf are read-only accessors intended for BiteAndHold's
+    -- Recall actor and HandlerDownDefense's trigger, neither built yet --
+    -- see that file's own "FUTURE CONSUMERS" header section. ForceBreakPartnershipForCitizenId
+    -- is citizenid-keyed (not source-keyed, unlike leash's
+    -- ForceDetachLeashForSource/ForceDetachOfficerLeashForSource above) --
+    -- intended for server/certifications.lua's cert-revoke/department-change
+    -- call sites, which do not actually call it yet (a disclosed gap, not
+    -- fixed here -- see client/partnership.lua's own header for the
+    -- finding).
+    "RefreshPartnershipCache", "ForceBreakPartnershipForCitizenId",
+    "GetActivePartnerCitizenId", "IsActivePartnerOf",
+    -- client/partnership.lua (Phase 3, the client half of
+    -- server/partnership.lua above) -- RequestPartnerUp/BreakPartnership
+    -- mirror client/movement.lua's RequestLeashAttach/DetachLeash pair
+    -- exactly (self-initiated trigger + zero-consent termination).
+    -- IsPartnered/GetPartnerServerId are the read-only accessors
+    -- fxmanifest.lua's own comment on that file names as its exposed
+    -- surface for a future client/radial.lua entry, not yet wired up.
+    "RequestPartnerUp", "BreakPartnership", "IsPartnered", "GetPartnerServerId",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the

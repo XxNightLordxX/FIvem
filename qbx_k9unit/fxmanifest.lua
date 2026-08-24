@@ -73,6 +73,7 @@ client_scripts {
     'client/wellbeing.lua', -- Phase 4 (unified Fatigue/Mood/FearStress/Distraction/Injury subsystem, PHASE4_SPEC.md §13.0 Decision 1)
     'client/progression.lua', -- Phase 4 (XPProgression, PHASE4_SPEC.md §13.4.1)
     'client/combat.lua', -- Phase 3 (BiteAndHold/NonLethalTakedown, PHASE3_SPEC.md §12.5.1/§12.5.2) -- the client half of server/combat.lua; no ordering dependency on anything else in this list (reads Config.Combat/Config.Features from config.lua, already loaded via shared_scripts, and calls CanShowK9UI/DenyK9UIAccess from client/main.lua, which is loaded earlier in this same list, but Lua global-function resolution here is at CALL time, not load time, so this would still work even loaded first)
+    'client/partnership.lua', -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7/§12.3) -- the client half of server/partnership.lua (Partner Up consent prompt, ox_target option, IsPartnered()/GetPartnerServerId() for a future radial entry). Same "no ordering dependency" note as client/combat.lua above -- calls CanShowK9UI()/IsOwnModelK9() from client/main.lua only at CALL time (inside RequestPartnerUp/the ox_target predicate), never at file-load time.
 }
 
 server_scripts {
@@ -88,6 +89,22 @@ server_scripts {
     'server/entities.lua',
     'server/main.lua',
     'server/certifications.lua',
+    -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7
+    -- Revision 5/§12.3) -- loaded after server/cooldowns.lua (NewCooldown/
+    -- NewMutex at this file's own file-load time) and server/certifications.lua
+    -- (IsConfiguredK9Model/HasK9Access reuse at runtime inside the
+    -- eligibility check below). Per this file's own header note: loaded
+    -- AFTER certifications.lua even though certifications.lua's
+    -- RevokeCertification/RevokeCertificationOffline/OnJobUpdate call INTO
+    -- this file's ForceBreakPartnershipForCitizenId -- same "runtime
+    -- existence guard, not a load-order assumption" convention as every
+    -- other soft cross-file dependency in this manifest (see this file's
+    -- own comment on server/medkit.lua's RestoreInjury reuse below); those
+    -- three call sites guard the call with a `type(...) == 'function'`
+    -- check rather than assuming load order, since by the time any of them
+    -- can actually FIRE (a real player action), every server_scripts file
+    -- below has already finished loading regardless of manifest order.
+    'server/partnership.lua',
     'server/tracking.lua', -- Phase 2
     'server/search.lua',   -- Phase 2
     'server/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
