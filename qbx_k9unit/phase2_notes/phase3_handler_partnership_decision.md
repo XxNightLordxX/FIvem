@@ -1,6 +1,31 @@
 # DECISION NEEDED — Handler-partnership link for Phase 3 combat features
 
-Status: **BLOCKING, genuinely unresolved.** No further research pass can
+**RESOLVED (coder-architect, 2026-08-24, jlwood17190665@gmail.com) —
+see `PHASE3_SPEC.md` §12.0 item 7 (Revision 5) for the full decision and
+design.** Summary: **Option B (a new, DB-backed "K9 partnership" registry)
+was chosen; Option A (reuse `LeashPairs`) was rejected outright, not merely
+deprioritized** — Option A's disclosed limitation (no defense-mode support
+for an off-leash K9) fails `HandlerDownDefense`'s own named primary use
+case (an off-leash foot chase), which is exactly the scenario this
+document's own framing said the link needs to cover independent of
+momentary leash state. `PHASE3_SPEC.md` §12.0 item 7 scopes what this
+document's own "Cons" list for Option B left open (establishment,
+persistence, termination, authorization) using patterns this codebase has
+already reviewed and shipped (`k9_certifications`' schema conventions,
+leash's own consent handshake) — it is not left as a repeat of the two
+options below; read that section for the actual design (new
+`server/partnership.lua`, a `k9_partnerships` DB table, a mutually-
+consented "Partner Up" action, a new `Config.Features.HandlerPartnership`
+flag). This document's own original content is left below unmodified as
+the historical record of the evidence review that led to this resolution
+— per this codebase's own audit-trail convention (see `k9_certifications`'
+append-mostly design in `sql/install.sql`) — not because it still describes
+an open question.
+
+---
+
+Status (historical, as originally written — see resolution banner above):
+**BLOCKING, genuinely unresolved.** No further research pass can
 close this on its own — `phase2_notes/phase3_combat_patterns.md` and
 `phase2_notes/phase3_combat_natives.md` were both checked for evidence and
 neither says anything about how other K9/handler scripts model an ongoing
@@ -134,7 +159,9 @@ the same conclusion.
   can't be resolved from available research.
 - `PHASE3_SPEC.md` §12.5.3 — `HandlerDownDefense`'s concrete dependency on
   this decision.
-- `PHASE3_SPEC.md` §12.7 item 7 — the quick-reference entry.
+- `PHASE3_SPEC.md` §12.7 item 8 — the quick-reference entry (numbered 8,
+  not 7, in that section's own list; corrected here since this document
+  originally pointed at the wrong number).
 - `PHASE3_SPEC.md` §12.1 — sub-phase dependency graph (3b, 3e blocked;
   3a/3c/3d are not).
 - `server/main.lua`'s `LeashPairs` — the existing structure Option A would

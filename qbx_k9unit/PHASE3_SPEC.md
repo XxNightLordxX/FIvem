@@ -96,11 +96,42 @@ against `SPEC.md` directly if the two ever drift. In particular, `SPEC.md`
 bullet when this document is eventually folded in — Revision 3 reverses that
 specific conclusion.
 
+**Revision 5 (coder-architect resolution pass): coder-architect,
+2026-08-24, jlwood17190665@gmail.com.** The one remaining genuinely-open
+item this document carried since its original draft — §12.0 item 7,
+"handler-partnership link: reuse active leash pairing, or a new persistent
+registry?" (extracted into its own dedicated doc,
+`phase2_notes/phase3_handler_partnership_decision.md`, per that file's own
+note that it is "the **one remaining item** out of PHASE3_SPEC.md's original
+four cross-cutting design forks") — is resolved here with a concrete,
+scoped design, not a restatement of the two options. **Decision: a new,
+DB-backed "K9 partnership" registry (Option B), established by an explicit,
+mutually-consented action independent of momentary leash state — reusing
+`LeashPairs` (Option A) is rejected outright**, not adopted as a
+lower-cost default, because Option A's disclosed gap (no defense-mode
+support for an off-leash K9) is not a minor residual cost the way similar
+disclosed gaps elsewhere in this document are (e.g. item 5's wanted-status
+ecosystem-fragmentation caveat) — it is a failure on `HandlerDownDefense`'s
+own named primary use case, an off-leash foot chase, per §12.0 item 2's own
+framing of why this link is needed "independent of momentary leash state"
+in the first place. See item 7 below for the full design (schema,
+establish/end conditions, authorization, persistence rationale) and the
+now-updated §12.1 (sub-phase ordering), §12.3 (new `server/partnership.lua`
+file entry), §12.5.1/§12.5.3 (BiteAndHold's Recall actor and
+HandlerDownDefense's trigger, now pointing at a concrete mechanism instead
+of a hedge), §12.6, and §12.7 (quick-reference). `phase2_notes/
+phase3_handler_partnership_decision.md` is updated with a resolution banner
+pointing back here rather than left to read as still-open. No `.lua` file
+was touched to produce this revision either — this remains a design/
+spec-only pass, not committed; `server/partnership.lua` does not exist yet.
+
 **Read §12.0 first.** Item 8 — whether a non-cooperating client can be
 prevented (not merely detected) from ignoring a relayed combat effect — is
 now **RESOLVED as of Revision 4** (coder-security's analysis; see item 8
-below). **No `Config.Features` flag in this phase should be flipped to
-`true` on a live server, and no implementation should start on
+below), and item 7 — the handler-partnership link — is now **RESOLVED as of
+Revision 5** (coder-architect's analysis; see item 7 below). **No
+`Config.Features` flag in this phase should be flipped to `true` on a live
+server, and no implementation should start on
 `BiteAndHold`/`NonLethalTakedown`/`PropDragging`'s player-target code paths,
 until:**
 - **item 8's concrete guardrails are actually built, not merely
@@ -116,8 +147,13 @@ until:**
   discipline, not further design,
 - **item 6 (PropDragging's downed-integration contract) is actually built**
   before `PropDragging`'s player-target path ships (NPC-target dragging
-  remains unblocked and can proceed independently), and
-- **items 1–5 and 7 get an explicit human sign-off** — they are settled
+  remains unblocked and can proceed independently),
+- **item 7 (`server/partnership.lua`, the K9 partnership registry) is
+  actually built** before `BiteAndHold`'s Recall actor or
+  `HandlerDownDefense` ship (their non-Recall/non-defense-trigger paths —
+  bite-and-hold's own bite/release, takedown, dragging — do not depend on
+  it and are unaffected), and
+- **items 1–7 get an explicit human sign-off** — they are settled
   defaults for this document, not yet a green light for implementation to
   start.
 
@@ -402,21 +438,206 @@ path):**
    path is enabled — an explicit, small, well-scoped piece of work, not an
    open-ended unknown the way it was in the original (pre-Revision-2) draft.
 
-### STILL OPEN — genuinely unresolved, one of them explicitly blocking
+### NO LONGER OPEN — item 7 resolved this pass; item 8 already resolved (Revision 4)
 
-#### 7. Handler-partnership link: reuse active leash pairing, or a new persistent registry? (unchanged from Revision 2, was item 4 in the original draft)
+This section heading originally read "STILL OPEN — genuinely unresolved,
+one of them explicitly blocking." As of Revision 5, both items formerly
+listed here have a real, concrete resolution (item 8 in Revision 4, item 7
+below in Revision 5) — the heading is updated rather than left describing a
+state that no longer exists, per this document's own standard of not
+leaving stale framing around a resolved fork (see how Revision 3/4 already
+rewrote item 1's and item 8's own headers rather than merely appending a
+new verdict underneath old wording).
 
-**Genuinely unresolved — nothing about the PvP reversal bears on this
-question, and this document still does not force an answer it can't
-support.** Neither `phase2_notes/phase3_combat_patterns.md` nor
-`phase2_notes/phase3_combat_natives.md` researched or surfaced anything
-about how other K9/handler-pair scripts model an ongoing partnership link
-independent of a leash-equivalent mechanic. Resolving this still needs one
-of: (a) an explicit product decision that reusing the leash pairing's real
-functional limitation (no defense support for an off-leash K9 mid-chase) is
-an acceptable Phase 3 trade-off, or (b) a scoped design pass for a new "K9
-partnership" registry — (a) remains the lower-cost **default-if-forced**,
-not elevated to a decision here.
+#### 7. Handler-partnership link: reuse active leash pairing, or a new persistent registry? — RESOLVED (Revision 5, coder-architect): new persistent registry (Option B), not a reuse of `LeashPairs`
+
+**Why this couldn't be closed by more research, and why it's closed by
+design work instead.** Neither `phase2_notes/phase3_combat_patterns.md` nor
+`phase2_notes/phase3_combat_natives.md` surfaced anything about how other
+K9/handler-pair scripts model an ongoing partnership link independent of a
+leash-equivalent mechanic, because — as
+`phase2_notes/phase3_handler_partnership_decision.md` already correctly
+diagnosed — the surveyed ecosystem is overwhelmingly a
+handler-commands-NPC-dog architecture, where "who is the handler" is
+trivial and definitionally always true. That precedent genuinely does not
+transfer to this codebase's player-plays-the-dog model. This was never a
+research gap that a third combat-pattern survey would close; it is a
+product/design fork this document owed a real answer to, the same way item
+1 (PvP scope) and item 5 (target eligibility) needed a decision rather than
+more research. This revision makes that decision and does the scoped design
+pass the dedicated doc asked for, rather than leaving "(a) or (b), your
+call" standing.
+
+**Decision: Option B — a new, DB-backed "K9 partnership" registry,
+established by an explicit, mutually-consented "Partner Up" action,
+independent of momentary leash state.** Option A (reuse `LeashPairs`) is
+evaluated below and **rejected outright**, not merely deprioritized as the
+lower-cost default the dedicated doc offered.
+
+**Why Option A is rejected, not just costed against Option B:**
+- `server/main.lua`'s `LeashPairs` is explicitly ephemeral, in-memory,
+  session-scoped state for a *movement-restriction* mechanic (see that
+  file's own header: "this is a live session mechanic, not part of the
+  certification/permission system"). Reusing it for "who is my ongoing
+  combat partner" would silently repurpose a Phase 1 mechanic's transient
+  state as if it were a durable relationship, which it was never designed
+  to be and does not behave like (it is torn down on distance
+  safety-valve, on either party's own detach, on cert revoke, on job
+  change — see `certifications.lua`'s `ForceDetachLeashIfOnline`/
+  `ForceDetachOfficerLeashForSource` call sites).
+- More importantly: `HandlerDownDefense`'s own motivating scenario (per
+  §12.0 item 2's framing, restated in the task that produced this
+  revision: "who is this K9's handler right now, independent of momentary
+  leash state — the leash is transient/consensual and gets detached
+  constantly during normal gameplay") is, concretely, a foot chase — a K9
+  pursuing a fleeing suspect while its handler, now alone, takes damage
+  supporting that chase from a distance or securing the scene. A K9 is
+  routinely, deliberately unleashed for exactly this kind of active work
+  (leash's own movement-restriction nature makes it actively
+  counterproductive to keep attached during a chase). This means Option A
+  would leave `HandlerDownDefense` **non-functional for the scenario the
+  feature exists to cover**, working only in the comparatively rare case
+  where the pair happens to still be leashed at the moment the handler
+  takes damage. That is not the same shape as this document's other
+  accepted, disclosed gaps (compare: item 5's wanted-status
+  ecosystem-fragmentation caveat still lets the eligibility gate do its
+  job in the overwhelming common case; item 8's non-cooperating-client gap
+  still leaves the feature meaningfully working against a compliant
+  target, which is the common case). Shipping Option A under the label
+  "handler-partnership link, resolved" would be presenting a check that
+  looks like it does the job while not doing it for the case that matters
+  most — the exact class of shortcut this document's own established bar
+  (already applied in items 4, 6, and 8 above) refuses to accept when a
+  real alternative is buildable. One is, here: Option B.
+- Cost is real but not prohibitive: the dedicated doc's own "Cons" list for
+  Option B (what establishes/ends a partnership, whether it persists, DB
+  table or ephemeral, who's authorized) is exactly the scope this revision
+  works through below, using patterns this codebase has already reviewed
+  and shipped (`k9_certifications`' schema conventions, leash's own consent
+  handshake) rather than inventing new ones.
+
+**The concrete design (scoped, not left abstract):**
+
+1. **Establishment — mirrors leash's own consent handshake, not
+   certification's grant hierarchy.** A new "Partner Up" action, initiated
+   by either party (K9-role or officer-role) against the other, requiring
+   the *other* party's explicit accept/decline — reusing the exact
+   `PendingLeashRequests`-style pattern (`server/main.lua`) already
+   reviewed and shipped for leash-attach: a TTL'd pending-request slot, one
+   live request per target at a time, consumed on any response. This is a
+   deliberate reuse of the **consent** precedent (unlike combat's own item
+   4 resolution, which explicitly opted out of consent for a different
+   reason) — designating an ongoing partner is a cooperative relationship
+   between two willing parties, exactly like leash, not an apprehension
+   action against an unwilling one. Eligibility at establishment time,
+   re-verified server-side exactly like `CheckLeashEligibility`: both
+   parties currently pass `HasK9Access`-equivalent checks for the same
+   department, live proximity (reuse `Config.CertifyProximityMeters` or a
+   dedicated `Config.Combat.PartnerProximityMeters` — implementer's call,
+   not a design fork), and the K9-role party is currently on a configured
+   K9 model (`IsConfiguredK9Model`, already exposed globally by
+   `certifications.lua` for exactly this kind of reuse).
+2. **Persistence — DB-backed (new `k9_partnerships` table), not ephemeral
+   like `LeashPairs`.** This is the crux of why Option B differs
+   structurally from Option A rather than just relabeling the same shape:
+   the entire reason this registry needs to exist is to survive precisely
+   the moments `LeashPairs` does not — including a resource restart
+   mid-shift, which an in-memory-only table could never recover from (no
+   physical/game state exists to reconstruct a partnership from the way,
+   say, a still-attached leash's own game state could theoretically hint
+   at a pairing). `server/certifications.lua`'s `onResourceStart` backfill
+   loop already establishes the pattern this resource uses for exactly
+   this class of problem (DB-backed state repopulating an in-memory cache
+   for already-connected players after a restart) — `k9_partnerships`
+   should follow the same shape: schema modeled directly on
+   `sql/install.sql`'s `k9_certifications` conventions (append-mostly
+   audit rows, an `active` flag, `established_by`/`ended_by`
+   citizenid columns, a generated-column unique constraint analogous to
+   `active_cert_key` — here needing **two** such constraints, since both
+   "at most one active partnership per K9 citizenid" and "at most one
+   active partnership per handler citizenid" must hold, unlike
+   certification's single `(citizenid, job)` invariant), an in-memory
+   cache (`Partnerships[citizenid] = { partner = partnerCitizenid, isK9 =
+   boolean, active = true }`, refreshed via a `RefreshPartnershipCache`
+   modeled on `RefreshCertificationCache`'s own pcall/fail-closed
+   discipline), and a `PlayerLoaded`-driven refresh plus an
+   `onResourceStart` backfill loop mirroring `certifications.lua`'s. This
+   is a real, actually-new design surface (as the dedicated doc correctly
+   flagged) but every piece of it is a direct application of a pattern
+   this codebase has already designed, reviewed, and shipped once — not a
+   novel invention.
+3. **Termination — either party can break it at will, no consent needed to
+   exit, PLUS automatic teardown on the same triggers that already force-
+   detach a leash.** Mirrors leash's own hard "no unbounded trap" rule
+   (§12.0 item 4's own restatement of that principle), now also applied to
+   a persistent relationship rather than only a transient one. Automatic
+   teardown call sites: add a `ForceBreakPartnershipForSource`-equivalent
+   call alongside every existing `ForceDetachLeashForSource`/
+   `ForceDetachOfficerLeashForSource` call site in
+   `server/certifications.lua` (K9-role cert revocation, either party's
+   department change) — the exact call-site list that file already
+   maintains for leash, extended with one more line per site rather than a
+   new independent mechanism. Character deletion is a real edge case this
+   revision does **not** scope further — flagged for whoever implements to
+   check qbx_core's actual character-deletion hook shape, rather than
+   guessed at here, matching this document's own established practice
+   (e.g. item 5's honest "lower confidence" flag) of not inventing detail
+   it can't back up.
+4. **Authorization — mutual consent only, no certifier-grade hierarchy.**
+   Unlike certification granting (which needs a rank/grade check because it
+   *is* the permission system, §4.2), partnership is a peer relationship
+   between two parties who are each already independently eligible
+   (department membership / K9 model) — mutual consent is the correct and
+   sufficiently-scoped gate here, matching leash's own authorization model,
+   not certification's.
+5. **New feature flag and file:** `Config.Features.HandlerPartnership`
+   (recommended default `true`), following this resource's own established
+   one-flag-per-mechanic convention (`LeashMechanics` has its own flag
+   despite being just as foundational) rather than piggybacking on
+   `BiteAndHold`'s or `HandlerDownDefense`'s flags — a server should be
+   able to disable partner-designation independently (e.g. one that wants
+   `BiteAndHold`'s Recall restricted to active-leash teams only, without
+   exposing a persistent "partner up" action at all). New file,
+   `server/partnership.lua` — see the updated §12.3 file/module plan below.
+6. **Why not a lighter, ephemeral-but-detach-independent middle option**
+   (an in-memory table that simply isn't cleared on leash-detach, without a
+   full DB table)? Considered and rejected: it would leave exactly the same
+   restart-survivability gap Option A leaves, just relabeled — the reason
+   this resolution reaches for a DB-backed store instead of another
+   in-memory table is specifically that a real handler/K9 partnership is a
+   session-spanning (plausibly shift-spanning) relationship by design
+   intent, matching `k9_certifications`' precedent for "state that must
+   survive a restart and be independently checkable," not `LeashPairs`'
+   precedent for "state that only needs to survive as long as this exact
+   session's live physical mechanic does."
+
+**Consumers, made concrete (see §12.5.1/§12.5.3 for the full per-feature
+text):**
+- `BiteAndHold`'s Recall actor: server-side, checks
+  `Partnerships[recallerCitizenid].active and Partnerships[recallerCitizenid].partner == heldK9Citizenid`
+  in addition to (never instead of) an active hold-state entry already
+  existing — never client-claimed.
+- `HandlerDownDefense`'s trigger: on a certified handler's health crossing
+  `handlerHealthThreshold`, look up `Partnerships[handlerCitizenid]`; if an
+  active partnership resolves to a K9 citizenid who is currently online,
+  notify that K9's client per the existing §12.5.3 event contract. If no
+  active partnership exists (never partnered, or partnership broken), this
+  is a **silent no-op** — `HandlerDownDefense` now has a real, disclosed
+  prerequisite (an established partnership) distinct from mere
+  certification, which should be stated plainly in any player-facing
+  documentation/README update once implemented, not left implicit.
+
+**Sub-phase impact (§12.1 updated below):** 3b (`BiteAndHold`) and 3e
+(`HandlerDownDefense`) are no longer blocked on an open design question —
+they are now blocked on `server/partnership.lua` existing as real, tested
+code, the same "concrete, scoped, buildable prerequisite" shape as item 6's
+resolution for `PropDragging`'s player-target path, not an unresolved
+unknown.
+
+**Still needs the same human sign-off already required for items 1–5**
+(per this document's own opening note) before implementation starts — this
+resolution supplies the missing design, it does not add a new gate beyond
+the one this document already asked for.
 
 #### 8. The client-relay architecture problem for a live-player target — RESOLVED (Revision 4, coder-security); was NEW/BLOCKING under Revision 3
 
@@ -846,10 +1067,10 @@ easy-to-silently-regress requirements this revision adds.
 | Sub-phase | Feature(s) | Why this order |
 |---|---|---|
 | **3a — independent, start immediately** | `AgilityAdvanced` | Pure client-local own-body movement — does not touch target/combat logic at all, entirely unaffected by the PvP reversal. Detection method is decided (§12.0 item 3) — remaining work is in-engine tuning. |
-| **3b — foundational, blocked on §12.0 items 7 and 8** | `BiteAndHold` | Establishes the shared hold/incapacitate ephemeral state + Recall actor every later combat feature reuses or mirrors, **and** is the first feature to need the Category A/B relay split and player-target eligibility gate from §12.0 items 5/8. Item 7 (handler-partnership link) and item 8 (non-cooperating-client architecture question) are both blockers for this sub-phase's *player-target* path; the NPC-target path is blocked only on item 7. |
+| **3b — foundational, depends on `server/partnership.lua` (§12.0 item 7, resolved Revision 5) existing** | `BiteAndHold` | Establishes the shared hold/incapacitate ephemeral state + Recall actor every later combat feature reuses or mirrors, **and** is the first feature to need the Category A/B relay split and player-target eligibility gate from §12.0 items 5/8. Item 7 is resolved (a concrete, scoped `server/partnership.lua` build, no longer an open design question) and item 8 (non-cooperating-client architecture question) is resolved (Revision 4) — both are now real, buildable prerequisites for this sub-phase's *player-target* path rather than blockers awaiting design; the NPC-target path only needs `server/partnership.lua` for its Recall actor. |
 | **3c — depends on 3b's target infra** | `NonLethalTakedown` | Reuses whatever target-effect shape 3b establishes, including the relay pattern for a player target; additionally needs the server-computed speed-gate state (§12.5.2) for both NPC and player targets. Same item 8 exposure as 3b for its player-target path. |
 | **3d — depends on 3b/3c's target infra** | `PropDragging` | NPC-target dragging is **fully unblocked** (§12.0 item 6's native check suffices there). Player-target dragging is blocked on §12.0 item 6's metadata-check contract actually being built (a small, well-scoped task, not an open unknown) **and** shares item 8's speed-limit-relay exposure for the drag-speed half specifically (the initial attach itself is Category A and unaffected by item 8). |
-| **3e — depends on Phase 2's tracking infra AND §12.0 item 7** | `HandlerDownDefense` | Reuses Phase 2's `server/tracking.lua` damage-event log; is a pure consumer of 3b/3c's own target-action paths (§12.0 item 2's UI-convenience reading), so it inherits whatever eligibility/compliance posture those paths land on rather than adding a new one. Still blocked on item 7. |
+| **3e — depends on Phase 2's tracking infra AND `server/partnership.lua` (§12.0 item 7, resolved Revision 5)** | `HandlerDownDefense` | Reuses Phase 2's `server/tracking.lua` damage-event log; is a pure consumer of 3b/3c's own target-action paths (§12.0 item 2's UI-convenience reading), so it inherits whatever eligibility/compliance posture those paths land on rather than adding a new one. No longer blocked on an open design fork — blocked on `server/partnership.lua` existing as real, tested code, same shape as item 6's PropDragging prerequisite. |
 
 ---
 
@@ -948,7 +1169,8 @@ Continuing the trust-model-driven split precedent §11.3 established:
 | `client/combat.lua` | **New** | BiteAndHold + NonLethalTakedown self-initiated triggers (the K9 player's own local anim, calls the server callbacks below), PropDragging's client-side trigger (folded in per the original file-count reasoning, unaffected by the PvP reversal — still one file, not two). **New in Revision 3:** this file also registers, unconditionally for EVERY client regardless of whether that player is ever a K9 (see the trust-boundary note below), the target-side handlers `qbx_k9unit:client:applyBiteHold` / `qbx_k9unit:client:forceRagdoll` / `qbx_k9unit:client:applyDragSpeedLimit` (§12.0 item 8's Category B relay targets). |
 | `server/combat.lua` | **New** | BiteAndHold + NonLethalTakedown server authority: re-validates access/range/target-scope, resolves player-vs-NPC via `IsPedAPlayer` (never client-claimed), applies §12.0 item 5's `RequireWantedStatus` gate for player targets, computes the server-side speed gate for takedown, applies the health floor plus `SetEntityCanBeDamaged` bracketing (for an NPC target directly; for a player target by relaying the bracket request to that target's own client, per §12.0 item 8), and owns the ephemeral "who's currently held/recalled" state (mirrors `LeashPairs`' shape/hygiene conventions — disconnect cleanup, no unbounded growth). **New in Revision 3:** also owns the `NonComplianceDetection` sampling sketched in §12.2 — flagged as a real candidate for its own file (`server/combat_integrity.lua`) once actually designed by coder-security, since it's materially different in kind from the existing simple speed-gate check (a rolling sample window per active effect, not a one-shot check at request time) — left as coder-architect's call, not mandated here. |
 | `client/defense.lua` | **New** | HandlerDownDefense's client-side presentation **only** — per §12.0 item 2's reading, this never applies any state to or takes control of the K9 player's own ped; it only streamlines target selection into the existing `client/combat.lua` action paths, which still require the player's own confirming input and still go through §12.0 item 5's eligibility gate when the pre-selected target is a player. |
-| `server/defense.lua` | **New** | Hooks into `server/tracking.lua`'s existing damage-event log (Phase 2); watches for a partnered handler's health crossing the threshold and, if a partnership link resolves (§12.0 item 7 — still open), notifies the partner K9's client. |
+| `server/defense.lua` | **New** | Hooks into `server/tracking.lua`'s existing damage-event log (Phase 2); watches for a partnered handler's health crossing the threshold and, per §12.0 item 7 (resolved Revision 5), looks up `server/partnership.lua`'s `Partnerships` table for that handler's citizenid — notifies the partner K9's client if an active partnership resolves to a currently-online K9, silent no-op otherwise. |
+| `server/partnership.lua` | **New (§12.0 item 7, Revision 5)** | Owns the "K9 partnership" registry: the `k9_partnerships` DB table (schema modeled on `sql/install.sql`'s `k9_certifications` conventions — see item 7's full design), the in-memory `Partnerships[citizenid] = { partner, isK9, active }` cache with a `RefreshPartnershipCache` mirroring `RefreshCertificationCache`'s pcall/fail-closed discipline, the "Partner Up" consent handshake (mirrors `server/main.lua`'s `PendingLeashRequests` TTL'd single-slot pattern), break/teardown (manual, plus automatic teardown wired alongside every existing `ForceDetachLeashForSource`/`ForceDetachOfficerLeashForSource` call site in `server/certifications.lua`), and a `PlayerLoaded`/`onResourceStart` backfill pair mirroring `certifications.lua`'s own. Gated by a new, dedicated `Config.Features.HandlerPartnership` flag (recommended default `true`), not by `BiteAndHold`'s or `HandlerDownDefense`'s flags. Loaded after `server/cooldowns.lua` (uses `NewCooldown`-style rate limiting on the Partner Up request path, mirroring leash-request's own cooldown) and `server/certifications.lua` (`IsConfiguredK9Model` reuse, and because certifications.lua's revoke/job-change paths need to call into this file's teardown function — load-order note for whoever writes `fxmanifest.lua`'s server_scripts list). |
 | `client/movement.lua` | **Extends** | `AgilityAdvanced`'s vault trigger and multi-height capsule-sweep detection (§12.0 item 3) — entirely unaffected by the PvP reversal. |
 | `config.lua` | **Extends** | Adds §12.2's `Config.Combat` table verbatim (pending the balance review flagged there). |
 | `fxmanifest.lua` | **Extends** | Adds the new client/server files above to their respective script lists. |
@@ -993,8 +1215,12 @@ this, unchanged reasoning from Revision 1/2.
 - Effect: the K9 plays a latch/bite animation oriented at the target; the
   target enters a "held" state lasting up to
   `Config.Combat.BiteAndHold.maxDurationMs`, ending early on (a) the K9
-  player selecting "Release," or (b) — once §12.0 item 7 is resolved — a
-  recognized partner handler issuing "Recall," whichever comes first. The
+  player selecting "Release," or (b) — per §12.0 item 7, resolved Revision
+  5 — the K9's registered partner (per `server/partnership.lua`'s
+  `Partnerships` table, checked server-side:
+  `Partnerships[recallerCitizenid].active and Partnerships[recallerCitizenid].partner
+  == heldK9Citizenid`, never a client-claimed relationship) issuing
+  "Recall," whichever comes first. The
   hard `maxDurationMs` cap is, per §12.0 item 4, this mechanic's version of
   the leash's "no unbounded trap" guarantee — it is not merely a balance
   knob, it is load-bearing for this feature's non-consensual design being
@@ -1060,8 +1286,10 @@ version):**
 - Does a held target take any damage over the hold duration? Unchanged
   recommendation from Revision 2 (no — purely a control/mobility
   restriction).
-- §12.0 item 7 (handler-partnership link, for the Recall actor) still
-  applies and is still open.
+- §12.0 item 7 (handler-partnership link, for the Recall actor) is
+  **resolved (Revision 5)** — Recall's authorization now depends on
+  `server/partnership.lua` existing as real code, a concrete build
+  prerequisite rather than an open design question.
 
 ### 12.5.2 Non-lethal takedown (`Config.Features.NonLethalTakedown`)
 
@@ -1150,17 +1378,42 @@ only):**
   downstream validation the same way a manual attempt against an
   ineligible target would, and the K9 player falls back to the normal
   radial flow.
-- Partnership link: unchanged, still §12.0 item 7, still open.
+- **Partnership link — RESOLVED (Revision 5, §12.0 item 7):** "whose K9
+  should be notified" is no longer undefined. On a certified handler's
+  health crossing `handlerHealthThreshold`, `server/defense.lua` looks up
+  that handler's citizenid in `server/partnership.lua`'s `Partnerships`
+  table. If an active partnership resolves to a K9 citizenid who is
+  currently online, that K9's client is notified per the event contract
+  below. **If no active partnership exists — the handler was never
+  partnered, or a prior partnership was broken — this is a silent no-op:
+  `HandlerDownDefense` simply does not fire for that handler.** This is a
+  new, real, disclosed prerequisite this feature did not have under either
+  of Revision 2's or the original draft's framing: a "Partner Up" action
+  (§12.0 item 7) must have been completed at least once for a given
+  handler/K9 pair before `HandlerDownDefense` can ever trigger for them —
+  mere K9 certification is no longer sufficient on its own. Flag this
+  explicitly in any player-facing documentation/README update once
+  implemented (e.g. "requires designating a K9 partner via Partner Up"),
+  not left implicit the way an unresolved item 7 previously made it
+  impossible to even state precisely.
 
 **Reality check:** unchanged from Revision 2 — this feature needs no new
 native capability of its own; it inherits whatever compliance posture
 `BiteAndHold`/`NonLethalTakedown` land on for their player-target paths
-(§12.0 item 8), since it's a pure consumer of those actions.
+(§12.0 item 8), since it's a pure consumer of those actions. The one new
+dependency this revision adds is non-native: `server/partnership.lua`
+existing as real, tested code (§12.0 item 7).
 
-**Event/callback contract:** unchanged from Revision 2.
+**Event/callback contract:** unchanged from Revision 2, with one addition —
+`server/defense.lua`'s damage-threshold handler now calls into
+`server/partnership.lua`'s partner-lookup accessor (an exposed, resource-
+global function analogous to `HasK9Access`/`IsConfiguredK9Model`'s reuse
+pattern, not a re-derived copy of the `Partnerships` table's internals)
+before deciding whether to notify anyone.
 
 **Open questions (remaining):**
-- §12.0 item 7 remains this feature's own blocking question.
+- §12.0 item 7 is resolved — the remaining work is `server/partnership.lua`
+  existing as real code (§12.1's 3e dependency), not a design question.
 - `handlerHealthThreshold`'s relationship to the target server's real
   downed/laststand system — unchanged, a config-validator item, not a
   design fork.
@@ -1314,9 +1567,11 @@ approximation, no real climbing animation exists or is expected to exist.
   recommended — same "re-review once the file exists" precedent as the
   door-interaction and contraband-search security reviews in
   `phase2_notes/`.
-- §12.0 item 7 (handler-partnership link) still needs a human product
-  decision or a dedicated design pass before `BiteAndHold`'s Recall actor
-  and `HandlerDownDefense`'s handler-lookup can be finalized.
+- §12.0 item 7 (handler-partnership link) is **resolved (Revision 5)** —
+  `BiteAndHold`'s Recall actor and `HandlerDownDefense`'s handler-lookup
+  now have a concrete mechanism (`server/partnership.lua`'s `Partnerships`
+  registry) to build against; what remains is implementation, plus the
+  same human sign-off already required for items 1–6, not further design.
 - **New for Revision 3:** recommend a **coder-architect** pass on §12.3's
   new trust-boundary note — the `qbx_k9unit:client:apply*` handlers are the
   first client-side surface in this resource that must run generically on
@@ -1376,14 +1631,38 @@ Revision 2, sign-off still needed per the note at the top of §12.0:**
    effort-only player-facing copy; non-punitive detection defaults) — see
    §12.0 item 8 for the full analysis and reasoning against this codebase's
    own established risk bar.
+8. **Handler-partnership link — RESOLVED (Revision 5, coder-architect):
+   a new, DB-backed "K9 partnership" registry (Option B), NOT a reuse of
+   `LeashPairs` (Option A, rejected outright — not merely deprioritized)**
+   (§12.0 item 7). Option A is rejected because its disclosed limitation
+   (no defense-mode support for an off-leash K9) isn't a minor residual
+   gap the way comparable disclosed gaps elsewhere in this document are —
+   it fails `HandlerDownDefense`'s own named primary use case (an off-leash
+   foot chase), which is exactly why the original framing needed a link
+   "independent of momentary leash state" in the first place. The
+   resolution scopes what the dedicated doc's own "Cons" list for Option B
+   left open: establishment via a mutually-consented "Partner Up" action
+   (mirrors leash's own consent handshake, `PendingLeashRequests`-style),
+   a new `k9_partnerships` DB table modeled on `k9_certifications`'
+   schema conventions (persisted, not ephemeral — the entire reason this
+   registry needs to outlive `LeashPairs`), termination mirroring leash's
+   "no unbounded trap, no consent needed to exit" rule plus automatic
+   teardown on cert revocation/department change, mutual-consent-only
+   authorization (no certifier-grade hierarchy needed, unlike
+   certification granting), and a new, dedicated
+   `Config.Features.HandlerPartnership` flag and `server/partnership.lua`
+   file (§12.3). `BiteAndHold`'s Recall actor and `HandlerDownDefense`'s
+   trigger both now consume this registry concretely (§12.5.1/§12.5.3) —
+   `HandlerDownDefense` picks up a new, disclosed prerequisite as a
+   consequence (a partnership must be established at least once before it
+   can ever fire for a given pair). No longer blocks `BiteAndHold`'s 3b or
+   `HandlerDownDefense`'s 3e sub-phase as an open design question — both
+   are now blocked only on `server/partnership.lua` existing as real,
+   tested code, the same concrete-prerequisite shape as item 6's
+   `PropDragging` resolution.
 
-**Still genuinely open — needs a human decision-maker or delegated
-specialist before implementation starts on the affected feature(s):**
-8. Handler-partnership link: reuse active leash pairing, or a new
-   persistent registry? — **genuinely unresolved, blocks `BiteAndHold`'s
-   3b sub-phase and `HandlerDownDefense`'s 3e sub-phase** (§12.0 item 7).
-   Unaffected by the PvP reversal; still needs a product decision or a
-   dedicated design pass, not a guess.
+**Still genuinely open — needs native/config-tuning verification, not a
+design decision:**
 9. Native/animation verification still outstanding: the bite/attack anim's
    in-engine visual quality across breeds (§12.5.1) and the vault animation
    for a quadruped skeleton (§12.5.5) — unaffected by the PvP reversal,
