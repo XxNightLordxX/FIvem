@@ -124,6 +124,32 @@
     forged-trail-style accepted-risk framing to write — there is no risk of
     that specific shape to accept.
 
+    ADDENDUM (coder-security finding A, this pass — THE "revisit ONLY if a
+    later phase..." TRIGGER ABOVE HAS NOW FIRED): Config.Features.XPProgression
+    landed this same pass and is precisely that later phase — it conditions
+    something server-authoritative (real XP, and therefore a real
+    speedMultiplier/scentRange bonus via Config.XPTiers) on a resolved trail
+    source, via trackSourceResolved (PendingTrackArrival /
+    reportTrackSourceArrival below). Revisiting confirmed this decision's
+    own reasoning still holds for the REVEAL itself (a forged/phantom
+    location remains cosmetic-only — no money/items/permissions/evidence
+    hinges on where the marker trail points), but exposed a SEPARATE,
+    orthogonal gap the XP wiring introduced: nothing required the K9 to
+    travel any meaningful distance between a source being logged and that
+    same K9 reporting arrival at it, so a K9 who plants a source at their
+    own feet (forged, for blood/gunpowder) or simply already happens to be
+    standing right next to one (true for ANY trackType, including scent's
+    non-forgeable hook) could round-trip resolve→arrive for XP with zero
+    travel — a stationary farm, not a forged-location problem. This is NOT
+    fixed by adding corroboration to relayDamageEvent/relayWeaponFire (the
+    false-negative-risk reasoning above for why that was rejected still
+    applies unchanged) — it's fixed at the ARRIVAL-ELIGIBILITY layer
+    instead, orthogonally to the forged-trail question this section
+    otherwise concerns itself with: see `MIN_TRACK_XP_DISTANCE` and its
+    call site in findTrackableSource below. The forged-trail accepted-risk
+    DECISION above still stands, unmodified, for the REVEAL; only the new
+    XP-ticket eligibility gate is new.
+
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 2, per SPEC.md §11.4 items 1, 3, 4.
     Identical in shape to server/certifications.lua's contract block so
@@ -162,11 +188,25 @@
        QUERY-side cooldown (how often a K9 can re-run "Track Gunpowder"),
        not this LOGGING-side cooldown (how often a single shooter's fire
        events get recorded at all). Do not conflate the two.
+    4. 'qbx_k9unit:server:reportTrackSourceArrival' () [THIS FILE] PHASE 4
+       ADDITION (Config.Features.XPProgression, PHASE4_SPEC.md §13.4.1).
+       Fired by client/tracking.lua's render thread the first tick it
+       observes its own live distance to a resolved source drop to/below
+       Config.XP.trackArrivalRadius (client/tracking.lua's own header, EVENT/
+       CALLBACK CONTRACT item 4, confirms this wiring — added same pass as
+       this entry). No payload — a trigger only. THIS FILE re-measures the
+       caller's OWN live server-side position against the coordinate it
+       already resolved and stored in `PendingTrackArrival` (below) —
+       NEVER a client-claimed distance/arrival boolean. Rate-limited by
+       `TrackArrivalReportCooldown` (defense-in-depth only, see that
+       tracker's own declaration comment — the primary anti-farm mechanism
+       is `PendingTrackArrival`'s single-use-then-cleared shape, not this
+       rate limit).
 
     ox_inventory hooks (exports.ox_inventory:registerHook, ox_inventory ->
     THIS FILE, server-to-server — added this pass, SPEC.md §9 items 11/17,
     phase2_notes/scent_source_resolution.md):
-    4. 'swapItems' [THIS FILE]
+    5. 'swapItems' [THIS FILE]
        Registered once at file load. Fires synchronously, server-side,
        whenever ox_inventory processes ANY slot-to-slot item move —
        filtered here to `payload.toType == 'drop'` (a ground-drop) only.
@@ -322,6 +362,24 @@ WeaponFireRelayCooldown.RegisterPlayerDropped()
 -- ticket), same reasoning server/main.lua's own PendingLeashRequests
 -- declaration gives for its own shape.
 local PendingTrackArrival = {}
+
+-- SECURITY FIX (coder-security finding A, this pass) -- see this file's
+-- header FORGED TRAIL DECISION addendum for the full exploit writeup this
+-- closes. A deliberately LOCAL implementation constant (mirrors
+-- server/search.lua's own MAX_CONTAINER_RECURSION_DEPTH precedent for the
+-- same "internal defensive bound, not a server-owner tuning knob" posture),
+-- not a Config.* field: findTrackableSource below only creates a
+-- PendingTrackArrival ticket (i.e. only makes a resolved source eligible
+-- for trackSourceResolved XP at all) when the K9's OWN live distance to the
+-- resolved source, AT THE MOMENT OF RESOLUTION, is at least this far --
+-- otherwise arrival would already be satisfied (or nearly so) with no
+-- meaningful travel required, which is exactly the stationary-farm gap
+-- finding A identified. Sized well above Config.XP.trackArrivalRadius
+-- (3.0 as shipped) so reaching the source from resolve-time position always
+-- requires genuine, non-trivial movement -- comfortably below every
+-- Config.Tracking.<Type>.maxRange default (40.0), so this does not make
+-- otherwise-legitimate, genuinely-distant resolves ineligible.
+local MIN_TRACK_XP_DISTANCE = 15.0
 
 -- Defense-in-depth rate limit on the reportTrackSourceArrival event below --
 -- same "never leave a per-source ingest path fully unbounded" posture this
@@ -697,7 +755,27 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     -- point of use" rule -- when XPProgression is false this is simply dead
     -- state nobody ever reads (reportTrackSourceArrival's own handler below
     -- also re-checks the flag independently).
-    if Config.Features.XPProgression then
+    --
+    -- SECURITY FIX (coder-security finding A, this pass) -- see this file's
+    -- header FORGED TRAIL DECISION addendum for the full exploit writeup:
+    -- `nearestDist` (the K9's OWN live distance to `sourceCoords`, computed
+    -- entirely server-side above -- never a client value) must clear
+    -- MIN_TRACK_XP_DISTANCE before a ticket is created at all. Without this,
+    -- a K9 who is ALREADY standing within Config.XP.trackArrivalRadius of a
+    -- source at the moment they resolve it (trivially: they just planted
+    -- that exact source themselves via relayDamageEvent/relayWeaponFire or
+    -- an item-drop at their own feet, but this also applied to any
+    -- GENUINE source that merely happened to already be nearby) could
+    -- immediately follow up with reportTrackSourceArrival and be awarded
+    -- XP for zero meaningful travel -- round-robining scent/blood/gunpowder
+    -- turned this into a near-continuous, fully-stationary farm limited
+    -- only by TrackArrivalReportCooldown. This check requires the K9 to
+    -- cover real distance between resolving a source and arriving at it,
+    -- regardless of whether that source was forged or genuine -- the
+    -- client-cosmetic marker-trail REVEAL below is entirely unaffected (it
+    -- still returns `found = true`/`coords` either way); only XP-ticket
+    -- eligibility is gated on this.
+    if Config.Features.XPProgression and nearestDist >= MIN_TRACK_XP_DISTANCE then
         PendingTrackArrival[source] = {
             trackType = trackType,
             coords = sourceCoords, -- the SAME server-resolved coordinate returned to the client below -- never re-derived from a later client claim
@@ -786,3 +864,32 @@ end)
 -- longer a dedicated handler for this file's cooldown state — each tracker
 -- owns clearing its own entry for the disconnecting source, same net
 -- effect as before.
+--
+-- QA FIX (this pass): `PendingTrackArrival` is NOT one of those tracker
+-- instances (it's a plain table storing {trackType, coords, expiresAt}, not
+-- a `key -> lastTouchedAtMs` cooldown shape — see its own declaration
+-- comment above for why none of NewCooldown/NewNestedCooldown/NewMutex
+-- fit), so it was never actually covered by any of the RegisterPlayerDropped
+-- calls above, DESPITE that same declaration comment's own claim of "plain
+-- table + manual playerDropped cleanup" — no such handler previously
+-- existed anywhere in this file. Left uncleaned, a disconnecting source's
+-- pending ticket would sit until its own `expiresAt` TTL lapses (up to
+-- Config.XP.trackArrivalTTLMs, 60s) — not just an unbounded-growth concern
+-- (bounded anyway by the TTL and by there being at most one connected
+-- player per source id at a time) but a genuine misattribution risk: FiveM
+-- recycles numeric server ids, so a new, unrelated player could be assigned
+-- the disconnecting player's old source id before that TTL lapses and,
+-- inside that window, unknowingly stand within Config.XP.trackArrivalRadius
+-- of a coordinate resolved for a DIFFERENT citizenid's earlier search
+-- entirely — awarding trackSourceResolved XP to the wrong K9 for a search
+-- they never made. Clearing this below on the disconnecting source's own
+-- playerDropped closes that window, mirroring server/main.lua's
+-- PendingLeashRequests target-side cleanup (that table's own precedent for
+-- "plain table, manual handler" — see this file's PendingTrackArrival
+-- declaration comment) for the exact same key shape (keyed by a single
+-- source, no initiator/target pairing to additionally scan for, unlike
+-- PendingLeashRequests' own two-sided cleanup).
+AddEventHandler('playerDropped', function(_reason)
+    local src = source
+    PendingTrackArrival[src] = nil
+end)

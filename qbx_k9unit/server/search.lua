@@ -120,6 +120,16 @@
       targetType-vs-GetEntityType cross-check is NOT delegated to that
       helper and stays local to this file — see HandleSearchTarget's own
       comment for why.
+    - PHASE 4 ADDITION (QA fix, this pass): THIS FILE also calls
+      `AwardXP(citizenid, actionKey)`, resource-global from
+      server/progression.lua, from inside HandleSearchTarget once
+      `contrabandFound == true` is known — via a
+      `type(AwardXP) == 'function'` runtime existence guard, the same
+      soft-dependency convention server/tracking.lua's own AwardXP/GetXPTier
+      call sites and server/medkit.lua's RestoreInjury call site already
+      establish. No load-order assumption on server/progression.lua either
+      way. See config.lua's `Config.XP.awards.searchContrabandFound` comment
+      for the award's own design rationale.
     ======================================================================
 ]]
 
@@ -747,6 +757,31 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- per completed search attempt, fire-and-forget, never delays this
     -- return.
     LogSearchAttempt(source, targetType, plate, citizenid, contrabandFound and 'found' or 'clean', totalWeight, alertTier.alert)
+
+    -- PHASE 4 ADDITION (QA fix, this pass): Config.XP.awards.searchContrabandFound
+    -- (PHASE4_SPEC.md §13.4.1). config.lua's own comment on this award key
+    -- already documented this exact call site ("at the point
+    -- contrabandFound == true is already known") but the actual AwardXP
+    -- call was never wired up here despite that comment claiming it was.
+    -- Awards the REQUESTING OFFICER's own citizenid — deliberately NOT the
+    -- local `citizenid` variable in this function's outer scope above,
+    -- which (for a 'person' targetType only; left nil for 'vehicle') holds
+    -- the SEARCHED TARGET's citizenid, not the searcher's — reusing it here
+    -- would incorrectly award XP to the person who just got searched, not
+    -- the K9 who performed the search. Resolved independently via `source`,
+    -- the same derivation LogSearchAttempt already performs internally for
+    -- its own `searcher_citizenid` audit column (not reused directly since
+    -- that function doesn't expose the resolved value back to its caller).
+    -- Same runtime-existence-guard convention as server/tracking.lua's own
+    -- GetXPTier/AwardXP call sites and server/medkit.lua's RestoreInjury —
+    -- no load-order assumption on server/progression.lua either way.
+    if contrabandFound and Config.Features.XPProgression and type(AwardXP) == 'function' then
+        local searcherPlayer = exports.qbx_core:GetPlayer(source)
+        local searcherCitizenid = searcherPlayer and searcherPlayer.PlayerData and searcherPlayer.PlayerData.citizenid
+        if searcherCitizenid then
+            AwardXP(searcherCitizenid, 'searchContrabandFound')
+        end
+    end
 
     -- The requester who performed a real, gated, proximity-checked search
     -- learns the real number — this is the ONE place totalWeight is

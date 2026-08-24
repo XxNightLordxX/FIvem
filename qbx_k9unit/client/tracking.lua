@@ -46,11 +46,25 @@
     3. 'qbx_k9unit:server:relayWeaponFire' () [server/tracking.lua]
        Fired by THIS FILE on a debounced false->true transition of
        IsPedShooting(PlayerPedId()). No payload, same reasoning as above.
+    4. 'qbx_k9unit:server:reportTrackSourceArrival' () [server/tracking.lua]
+       PHASE 4 ADDITION (Config.Features.XPProgression,
+       Config.XP.awards.trackSourceResolved). Fired by THIS FILE's render
+       thread below the FIRST tick it observes its own live distance to the
+       resolved source coordinate drop to/below Config.XP.trackArrivalRadius
+       — gated by a per-session `trackingState.arrivalReported` flag so it
+       fires exactly once per resolved source, never once per tick (the
+       server's own TrackArrivalReportCooldown is defense-in-depth against a
+       modified client, not something this file relies on to paper over a
+       spam-every-frame implementation here). No payload — this is a
+       TRIGGER only, never a claimed distance/arrival boolean/coordinate;
+       the server re-measures the caller's own live position against its
+       own server-held resolved coordinate before awarding anything (see
+       server/tracking.lua's own doc comment on this handler).
 
-    No client events (server->client) for this file at all — §11.4 item 7
-    is explicit that tracking-result delivery is request/response shaped
-    (the callback above), not a fire-and-forget event pair, matching the
-    already-shipped 'qbx_k9unit:server:hasK9Access' pattern.
+    No other client events (server->client) for this file at all — §11.4
+    item 7 is explicit that tracking-result delivery is request/response
+    shaped (the callback above), not a fire-and-forget event pair, matching
+    the already-shipped 'qbx_k9unit:server:hasK9Access' pattern.
     ======================================================================
 
     FILE-TO-FILE CONTRACT (client side):
@@ -82,6 +96,11 @@
       confirmed landed in config.lua as of this pass, including the
       relayCooldownMs amendments beyond §11.2's original text — those
       fields are server/tracking.lua's own concern, not read by this file).
+    - PHASE 4 ADDITION: THIS FILE also reads Config.Features.XPProgression
+      and Config.XP.trackArrivalRadius (config.lua is a shared_script, same
+      access pattern as the Config.Tracking reads above) to decide WHEN to
+      fire event 4 above — never to decide whether to award XP itself (that
+      stays entirely server-side, server/tracking.lua's own concern).
 
     DEPENDENCY NOTE: this file has no compile-time dependency on
     client/search.lua (different trust model, different file) or
@@ -93,7 +112,12 @@
 --- successful Start*Track() call below, cleared by StopTracking() or by
 --- the render thread's own water-break bookkeeping.
 --- Not exposed directly — always go through IsTracking()/StopTracking().
---- @type { trackType: 'scent'|'blood'|'gunpowder', coords: vector3, breaksAtWater: boolean, brokenByWater: boolean } | nil
+--- `arrivalReported` (PHASE 4 addition): set true the first tick this
+--- session's live distance to `coords` drops to/below
+--- Config.XP.trackArrivalRadius, so 'qbx_k9unit:server:reportTrackSourceArrival'
+--- fires exactly once per resolved source — see this file's header EVENT/
+--- CALLBACK CONTRACT item 4 and the render thread below.
+--- @type { trackType: 'scent'|'blood'|'gunpowder', coords: vector3, breaksAtWater: boolean, brokenByWater: boolean, arrivalReported: boolean } | nil
 local trackingState = nil
 
 --- @return boolean
@@ -203,6 +227,7 @@ local function StartTrack(trackType)
         coords = result.coords,
         breaksAtWater = Config.WaterTrackingDecay.breaksTrail,
         brokenByWater = false,
+        arrivalReported = false, -- PHASE 4 addition, see this file's header EVENT/CALLBACK CONTRACT item 4
     }
     -- Setting trackingState is sufficient to "wake" the render thread below
     -- — mirrors the exact comment already on client/movement.lua's
@@ -368,6 +393,27 @@ CreateThread(function()
             -- coordinate does not, for the lifetime of one Start*Track()
             -- call).
             local totalDist = #(sourceCoords - myCoords)
+
+            -- PHASE 4 ADDITION (Config.Features.XPProgression,
+            -- Config.XP.awards.trackSourceResolved) — see this file's header
+            -- EVENT/CALLBACK CONTRACT item 4. Fired the FIRST tick our own
+            -- live distance to the resolved source drops to/below
+            -- Config.XP.trackArrivalRadius, gated by `arrivalReported` so a
+            -- sustained standstill at the source doesn't retrigger this
+            -- every tick — this is a TRIGGER only, the server re-measures
+            -- its OWN live distance against its OWN stored coordinate before
+            -- awarding anything (server/tracking.lua's
+            -- reportTrackSourceArrival handler never trusts this call as a
+            -- claim of arrival). Checked unconditionally (not nested inside
+            -- the `totalDist > 0.1` marker-drawing branch below) so arriving
+            -- close enough that totalDist itself falls under 0.1 still
+            -- reports — that branch only guards drawing markers along a
+            -- remaining line, not this check.
+            if Config.Features.XPProgression and not trackingState.arrivalReported
+                and totalDist <= Config.XP.trackArrivalRadius then
+                trackingState.arrivalReported = true
+                TriggerServerEvent('qbx_k9unit:server:reportTrackSourceArrival')
+            end
 
             if totalDist > 0.1 then
                 local trackingConfig = TRACKING_STATE_CONFIG[trackingState.trackType]

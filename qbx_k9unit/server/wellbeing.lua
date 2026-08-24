@@ -156,6 +156,18 @@
       validation once it exists — guard with
       `type(IsHesitating) == 'function'`, the same forward-compatible
       pattern server/medkit.lua already uses for RestoreInjury.
+      DISCLOSED RESIDUAL RISK (coder-security finding B, this pass — full
+      writeup on the relayWeaponFire AddEventHandler below): the fearStress
+      input this accessor's return value is derived from is fed by a
+      payload-less, forgeable event, deduped by reporting source this pass
+      to close the primary amplification vector, but a single sustained
+      forged reporter can still keep a nearby K9's fearStress elevated
+      indistinguishably from genuine continuous nearby gunfire. Whoever
+      wires server/combat.lua's own call to this accessor should be aware
+      hesitation can be externally forced/renewed by a non-participant
+      bystander, not just by real combat — not a reason to skip calling
+      this (PHASE4_SPEC.md §13.5 still requires it), just a known limitation
+      to weigh if live abuse reports ever come in.
     - IsDistracted(citizenid: string) -> boolean — same shape as
       IsHesitating, for Distraction's own "breaks command" state
       (PHASE4_SPEC.md §13.4.3.4's reading of that state as a server-enforced
@@ -199,7 +211,11 @@ local WellbeingStats = {}
 -- that file) — see this file's header CONFIDENCE GRADING item 1 for the
 -- full reasoning on why this is a small, disclosed duplication rather than
 -- reaching into another file's internals.
--- RecentGunfire[i] = { coords = vector3, loggedAt = <GetGameTimer() ms> }
+-- RecentGunfire[i] = { coords = vector3, loggedAt = <GetGameTimer() ms>, source = number }
+-- `source` added this pass (coder-security finding B) so nearbyShots below
+-- can dedupe by reporting source rather than counting raw log entries — see
+-- the relayWeaponFire AddEventHandler's own header comment for the full
+-- exploit/fix writeup.
 local RecentGunfire = {}
 
 --- @param value number
@@ -321,6 +337,59 @@ end)
 -- ALREADY-REGISTERED 'qbx_k9unit:server:relayWeaponFire' event. Only logs
 -- into RecentGunfire while FearStressSystem is enabled — per this file's
 -- own "never gate/track anything a disabled flag hasn't activated" rule.
+--
+-- SECURITY FINDING B (coder-security, this pass), DISCLOSED, NOT FULLY
+-- CLOSED — read before extending this section or wiring server/combat.lua's
+-- IsHesitating() gate against it:
+-- 'relayWeaponFire' is payload-less and forgeable BY DESIGN
+-- (server/tracking.lua's own header "FORGED TRAIL DECISION" already accepts
+-- this for ITS OWN gunpowder-tracking consumer, on the grounds that a
+-- forged entry there only ever plants a harmless phantom trail location —
+-- no real capability hinges on it). That acceptance does NOT automatically
+-- extend to THIS consumer: unlike Mood/Injury's relayDamageEvent handler
+-- above (self-only — it can only ever decrement the REPORTING player's own
+-- citizenid), this handler deliberately affects OTHER connected K9s within
+-- Config.Wellbeing.FearStress.gunfireRadius, with no wanted-status or
+-- K9-model requirement on the reporter — required by the feature's own
+-- design (a K9 near a firefight it isn't itself part of should still get
+-- stressed, PHASE4_SPEC.md §13.4.3.3), but it means ANY connected player,
+-- K9 or not, can call this repeatedly to affect a bystander K9 they have no
+-- other interaction with. Today this is inert (nothing reads
+-- IsHesitating() yet); once server/combat.lua gates bite-hold/takedown on
+-- it, a sustained forged report becomes a real, renewable denial of a K9's
+-- combat commands, not merely a cosmetic nuisance — the same category of
+-- "accepted-risk invalidated by a later phase" server/tracking.lua's header
+-- already flags as the ONE condition that would require revisiting ITS OWN
+-- acceptance ("revisit ONLY if a later phase ever conditions something
+-- server-authoritative on a resolved trail source").
+--
+-- FIXED THIS PASS (real, not just disclosed): `RecentGunfire` entries now
+-- record the reporting `source`, and TickWellbeing's own nearbyShots
+-- computation below counts DISTINCT reporting sources within range/lookback
+-- (not raw log-entry count) — this closes the primary AMPLIFICATION vector
+-- (one attacker's client bypassing its own local debounce and hammering
+-- this event at the ingest cooldown's own rate limit, 300ms as configured,
+-- previously let ONE source's spam pile up arbitrarily many log entries
+-- within one Config.Wellbeing.FearStress.gunfireLookbackSeconds window,
+-- multiplying fearStress's rise far beyond what one shooter's real,
+-- continuous automatic fire should ever cause). Deduping by source bounds
+-- one reporter's contribution to exactly what one continuously-firing real
+-- shooter would also cause — which is the intended mechanic, not a gap.
+--
+-- NOT CLOSED, DISCLOSED RESIDUAL RISK: deduping by source does not, and
+-- structurally cannot without a real corroboration signal (this event
+-- carries no payload to corroborate against, by design — see
+-- server/tracking.lua's header for why adding one is a real can of worms,
+-- not a cheap fix), prevent a SINGLE determined attacker from sustaining
+-- elevated fearStress/hesitation on a nearby K9 indefinitely by repeatedly
+-- re-touching this event at the ingest cooldown's own rate, with zero real
+-- gunfire ever happening — mechanically indistinguishable, server-side,
+-- from that one attacker genuinely firing continuously nearby the whole
+-- time. Flagged explicitly for whoever wires server/combat.lua's
+-- IsHesitating() gate, and for coder-security's next pass, rather than
+-- landed silently — revisit if live abuse confirms this is a real problem
+-- in practice, mirroring the exact "revisit if a later phase changes the
+-- stakes" framing server/tracking.lua's own header already uses.
 -- ======================================================================
 RegisterNetEvent('qbx_k9unit:server:relayWeaponFire')
 
@@ -343,7 +412,11 @@ AddEventHandler('qbx_k9unit:server:relayWeaponFire', function()
     -- reacts to ANY nearby gunfire (PHASE4_SPEC.md §13.4.3.3's own
     -- "gunfire happened nearby" framing), not just gunfire a K9 itself
     -- caused.
-    RecentGunfire[#RecentGunfire + 1] = { coords = GetEntityCoords(ped), loggedAt = GetGameTimer() }
+    -- `source = src` added this pass (coder-security finding B) so
+    -- TickWellbeing's nearbyShots computation below can dedupe by reporting
+    -- source instead of counting raw log entries — see this section's own
+    -- header comment above for the full exploit/fix writeup.
+    RecentGunfire[#RecentGunfire + 1] = { coords = GetEntityCoords(ped), loggedAt = GetGameTimer(), source = src }
 end)
 
 -- ======================================================================
@@ -677,11 +750,25 @@ local function TickWellbeing()
                     end
 
                     if Config.Features.FearStressSystem then
+                        -- SECURITY FIX (coder-security finding B, this
+                        -- pass): count DISTINCT reporting sources within
+                        -- range/lookback, not raw log-entry count — see the
+                        -- relayWeaponFire AddEventHandler's own header
+                        -- comment above for the full exploit/fix writeup.
+                        -- One source's repeated reports (whether genuine
+                        -- sustained automatic fire or a spammed forged
+                        -- event) now contributes AT MOST ONE toward
+                        -- nearbyShots per tick, same as one real,
+                        -- continuously-firing shooter should.
                         local nearbyShots = 0
+                        local seenSources = {}
                         local lookbackMs = Config.Wellbeing.FearStress.gunfireLookbackSeconds * 1000
                         for _, entry in ipairs(RecentGunfire) do
                             if (now - entry.loggedAt) <= lookbackMs and #(entry.coords - coords) <= Config.Wellbeing.FearStress.gunfireRadius then
-                                nearbyShots = nearbyShots + 1
+                                if not seenSources[entry.source] then
+                                    seenSources[entry.source] = true
+                                    nearbyShots = nearbyShots + 1
+                                end
                             end
                         end
 
@@ -698,10 +785,58 @@ local function TickWellbeing()
 
                     TriggerClientEvent('qbx_k9unit:client:wellbeingUpdate', src, SnapshotOf(stats))
                 end
+            elseif ped ~= 0 then
+                -- QA FIX (this pass): a currently-connected player who is
+                -- NOT (or no longer) K9-modeled must not leave a stale
+                -- `stats.lastCoords` sample sitting around from the last
+                -- tick they WERE K9-modeled. Left unreset, the very next
+                -- tick after they switch back to a K9 model (possibly at a
+                -- completely different location — a ped-swap, a teleport, a
+                -- fresh spawn) would compute Fatigue's sprint-speed sample
+                -- as the distance between that stale position and their new
+                -- one divided by a SINGLE tickIntervalMs, producing a huge
+                -- bogus "sprint" speed and applying one wrong
+                -- sprintDecayPerTick hit. Only touches `lastCoords` — never
+                -- the rest of `stats` (fatigue/mood/fearStress/injury
+                -- deliberately persist across a model switch or
+                -- disconnect/reconnect within the same server session, per
+                -- this file's own header). Reads `WellbeingStats` directly
+                -- rather than `EnsureStats` so this never creates a fresh
+                -- entry for a citizenid that has never actually been
+                -- K9-modeled this session.
+                local citizenid = ResolveCitizenid(src)
+                local stats = citizenid and WellbeingStats[citizenid]
+                if stats then
+                    stats.lastCoords = nil
+                end
             end
         end
     end
 end
+
+--- QA FIX (this pass): the reset above only covers a player who stays
+--- CONNECTED after leaving a K9 model — it can never run for a player who
+--- disconnects outright (they no longer appear in `GetPlayers()` on the
+--- very next tick, so the `elseif ped ~= 0` branch above never sees them).
+--- Left unhandled, a K9 who logs off mid-session and reconnects later
+--- (possibly to a completely different spawn location, per qbx_core's own
+--- spawn-selection logic) would hit the exact same bogus-sprint-speed bug
+--- the reset above closes for the stay-connected case. `WellbeingStats`
+--- itself deliberately is NOT cleared here (this file's header: "a K9 who
+--- logs off tired should still be tired on reconnect within the same
+--- server session") — only `lastCoords` is nulled, mirroring the reset
+--- above exactly. `exports.qbx_core:GetPlayer(source)` is still resolvable
+--- here — `playerDropped` fires before the framework fully tears down the
+--- player object, same timing server/progression.lua's own `K9XP` eviction
+--- handler and server/certifications.lua's own playerDropped handler
+--- already rely on.
+AddEventHandler('playerDropped', function(_reason)
+    local citizenid = ResolveCitizenid(source)
+    local stats = citizenid and WellbeingStats[citizenid]
+    if stats then
+        stats.lastCoords = nil
+    end
+end)
 
 if Config.Features.FatigueSystem or Config.Features.MoodSystem
     or Config.Features.FearStressSystem or Config.Features.DistractionSystem
