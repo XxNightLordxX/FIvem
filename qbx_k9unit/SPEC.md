@@ -97,11 +97,17 @@ placeholder sound names). `ProximityAudioFX`, `PropAttachments`, and
 (`client/proximityaudio.lua`; `client/propattachment.lua` +
 `server/propattachment.lua`; `client/fetch.lua` + `server/fetch.lua`) —
 an earlier revision of this paragraph said all three "remain uncoded,"
-which is stale at the source-file level. **None of the three are usable**,
-though: as of this pass none of those files are listed in
-`fxmanifest.lua`, so all three remain completely inert regardless of their
-flags — see `README.md`'s Known Issues section for the current,
-fast-moving state of exactly which files are and aren't wired in.
+which is stale at the source-file level. **Two of the three are now wired**
+(corrected 2026-08-24, second watchdog pass): `client/propattachment.lua`,
+`server/propattachment.lua` and `client/proximityaudio.lua` were registered in
+`fxmanifest.lua` once a security review cleared them — that review closed an
+arbitrary-entity delete and moved registration behind the feature flag rather
+than letting handlers self-reject. `FetchMechanic` (`client/fetch.lua` +
+`server/fetch.lua`) is the only one still unregistered, and it is held for
+process reasons rather than any unresolved finding: both files were being
+actively edited when the registration pass ran, and the security sweep that
+covered them found them clean. All three still ship `false`. See `README.md`'s
+Known Issues section for the current, fast-moving state.
 `CameraFeedPiP` remains uncoded and confirmed infeasible — unchanged. A
 further research pass (`phase2_notes/phase5_remaining_features_research.md`)
 reframed, but did not by itself close, `ProximityAudioFX`'s and
@@ -118,8 +124,12 @@ identical mouth/jaw attach point) turned out not to need a documented bone
 *name* at all, only a bone *index*, obtainable by an in-engine
 `GetWorldPositionOfEntityBone` sweep against a live K9 model — a
 dev-only sweep tool for exactly this now exists as
-`client/bonetool.lua`/`server/bonetool.lua`, also not yet wired into
-`fxmanifest.lua`. `CameraFeedPiP` was already concluded infeasible in a
+`client/bonetool.lua`/`server/bonetool.lua`, and both halves are now
+registered in `fxmanifest.lua` (corrected 2026-08-24 — the "not yet wired"
+claim that stood here was stale). It is dual-gated:
+`Config.Features.BoneSweepDevTool` (default `false`) at command-registration
+time, plus an ACE check re-run on every invocation against its own separate
+principal, with the console explicitly rejected. Dev servers only. `CameraFeedPiP` was already concluded infeasible in a
 prior pass and was not re-researched. Coordinated directly by
 the top-level session (peer-agent-to-peer delegation is not available in
 this environment; see §10). *(Status paragraph refreshed 2026-08-24 — see
