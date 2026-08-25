@@ -70,6 +70,22 @@ read_globals = {
     -- four death-check gates that had never once fired. Never allowlist a
     -- native here on an assumption; run the check.
     "GetConvarInt", "NetworkGetEntityOwner",
+    -- client/tablet.lua's NUI focus handling. Both verified 2026-08-25
+    -- rather than assumed, by two different routes because they answer
+    -- differently:
+    --   SetNuiFocus -- ext/native-decls/SetNuiFocus.md returns HTTP 200,
+    --     ns: CFX, apiset: client. Directly confirmed.
+    --   IsDisabledControlJustPressed -- its decl page 404s, which for a
+    --     legacy R* native means "no CFX decl page was ever written", NOT
+    --     "does not exist". Confirmed instead against the official
+    --     natives.json: IS_DISABLED_CONTROL_JUST_PRESSED, hash
+    --     0x91AEF906BCA88877. Several equally ubiquitous legacy natives
+    --     already in this list (IsEntityAttached, IsEntityOnFire) 404 the
+    --     same way, so a 404 alone is never grounds to reject a native --
+    --     nor grounds to accept one. Check the hash database.
+    -- Both are client-only, which is correct: NUI focus and control state
+    -- have no server-side meaning.
+    "SetNuiFocus", "IsDisabledControlJustPressed",
     -- GET_RESOURCE_STATE. Used by server/tracking.lua's ox_inventory
     -- capability probe as the first gate, because accessing an export on a
     -- resource that is not started can throw rather than return nil.
@@ -274,6 +290,32 @@ globals = {
     -- why it is bounded by Config.HighCommand.maxXpPerGrant and audited on
     -- every use.
     "IsHighCommand", "AwardXPDirect",
+    -- client/tablet.lua -- the K9 command tablet. OpenTablet/CloseTablet are
+    -- exposed so the radial and any other entry point route through the SAME
+    -- open/close path rather than each managing NUI focus themselves. That
+    -- matters more here than the usual DRY argument: this is the first
+    -- focus-taking surface in this resource, and a stuck NUI focus locks a
+    -- player out of their own character with no recovery short of a
+    -- reconnect. One close path, reachable from everywhere, is the whole
+    -- defence -- so never call SetNuiFocus directly from a second site.
+    "OpenTablet", "CloseTablet",
+    -- server/permissions.lua -- the grantable-permission layer. High command
+    -- grants a named capability, or a per-person feature grant or block, to
+    -- one specific handler or K9.
+    -- HasPermission is the hot path, consulted by server/certifications.lua
+    -- and others behind the usual type(fn) == 'function' guard so those
+    -- files still work with Config.Features.PermissionGrants off.
+    -- Two properties worth remembering before touching any of these:
+    --   * a grant only ever WIDENS access. Resolution is grant, then high
+    --     command, then the legacy rank gate, then deny -- so revoking a
+    --     grant from someone who also qualifies by RANK does not remove
+    --     their access, and the caller has to be able to tell the operator
+    --     that rather than reporting a successful revoke.
+    --   * revoke deactivates a row, never deletes one. This is an
+    --     authorization audit trail: who gave whom what power, and when it
+    --     was taken away.
+    "HasPermission", "GrantPermission", "RevokePermission",
+    "ListActivePermissionsForCitizenId", "ListPermissionRoster",
     -- Seams opened so other files can reach logic that was previously locked
     -- inside an ox_target closure or a `local`. Each verified defined before
     -- being declared here: client/inventory.lua:195, client/medkit.lua:181,

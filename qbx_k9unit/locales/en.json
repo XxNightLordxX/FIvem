@@ -155,6 +155,16 @@
     "usage_givexp": "Usage: /k9givexp [server id] [amount]",
     "xp_system_unavailable": "XP progression is disabled on this server, so there's nothing to grant."
   },
+  "permissions": {
+    "grant_notify_target": "High command granted you: %s",
+    "revoke_notify_target": "High command revoked: %s"
+  },
+  "tablet": {
+    "open_failed_generic": "The tablet can't open right now.",
+    "reason_feature_disabled": "The tablet is turned off on this server.",
+    "reason_missing_item": "You need your tablet on you to open it.",
+    "reason_not_authorized": "You're not authorized to use the tablet."
+  },
   "inventory": {
     "open_gear_target_label": "Open K9 Gear",
     "reason_feature_disabled": "K9 gear access is disabled on this server.",

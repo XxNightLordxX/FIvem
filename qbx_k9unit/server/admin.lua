@@ -551,6 +551,16 @@ local function IsAuthorizedAdmin(source)
     -- server/certifications.lua's IsEligibleCertifier.
     if job.isboss then return true end
 
+    -- PERMISSION GRANT BYPASS (server/permissions.lua, Config.Features.PermissionGrants,
+    -- resolution-order STEP 1) -- an active granted 'k9.audit' permission
+    -- ALLOWS outright, checked before the high-command bypass and the
+    -- auditGrade comparison below, matching config.lua's own documented
+    -- "first match wins" order. Guarded by a `type(...) == 'function'`
+    -- runtime existence check -- this function still works exactly as
+    -- before if server/permissions.lua is ever removed or
+    -- Config.Features.PermissionGrants is false.
+    if type(HasPermission) == 'function' and HasPermission(Player.PlayerData.citizenid, 'k9.audit') then return true end
+
     -- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
     -- project-owner-directed this pass) -- auditGrade is explicitly one of
     -- the gates a High Command officer must bypass (see that file's own

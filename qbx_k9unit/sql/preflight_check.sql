@@ -38,7 +38,7 @@ SELECT
     x.table_name AS `table`,
     CASE
         WHEN x.tbl_exists = 0
-            THEN 'OK - absent; install.sql will create it'
+            THEN 'OK - absent, install.sql will create it'
         WHEN x.cols_found = x.cols_expected
             THEN 'OK - already present and is ours'
         ELSE CONCAT('!! CONFLICT - a DIFFERENT table already uses this name (matched only ',
@@ -113,3 +113,42 @@ FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
   AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions')
 ORDER BY TABLE_NAME;
+
+
+-- ---------------------------------------------------------------------
+-- CHECK 4: do you have CREATE ROUTINE on this database?
+--
+-- Migrations 0003 and 0004, and every script in sql/rollback/, create a
+-- temporary stored procedure, call it once, and drop it again. That
+-- needs the CREATE ROUTINE privilege. Some managed/shared hosts do not
+-- grant it.
+--
+-- THIS IS ONLY A PROBLEM FOR UPGRADES AND ROLLBACKS, NOT FOR A FRESH
+-- INSTALL. `install.sql` on its own needs no routine privilege at all,
+-- and already produces the final table shape, indexes and constraints in
+-- a single pass -- so a brand-new install on a restricted host is fine.
+--
+-- The privilege may be granted on this database specifically OR globally,
+-- so both are checked. Without it, migration 0003/0004 and every rollback
+-- script stop with exactly this (real error text, reproduced on a
+-- restricted user):
+--
+--   ERROR 1370 (42000) at line 172: alter routine command denied to user
+--   'fivem_limited'@'localhost' for routine
+--   'k9priv.qbx_k9unit_migration_0004_add_active_cert_key_column'
+--
+-- Nothing is damaged when that happens -- the file simply stops.
+-- ---------------------------------------------------------------------
+SELECT
+    CASE WHEN (
+        (SELECT COUNT(*) FROM INFORMATION_SCHEMA.SCHEMA_PRIVILEGES
+          WHERE PRIVILEGE_TYPE = 'CREATE ROUTINE'
+            AND TABLE_SCHEMA = DATABASE()
+            AND REPLACE(GRANTEE, '''', '') = CURRENT_USER())
+      + (SELECT COUNT(*) FROM INFORMATION_SCHEMA.USER_PRIVILEGES
+          WHERE PRIVILEGE_TYPE = 'CREATE ROUTINE'
+            AND REPLACE(GRANTEE, '''', '') = CURRENT_USER())
+    ) > 0
+      THEN 'OK - CREATE ROUTINE available, migrations and rollback scripts will run'
+      ELSE 'NOTE - this user has no CREATE ROUTINE. A FRESH install.sql still works fine and is unaffected. But migrations 0003/0004 and every sql/rollback/ script will stop with ERROR 1370 (nothing is damaged). Ask your host to GRANT CREATE ROUTINE, or have them run those files for you.'
+    END AS create_routine_verdict;

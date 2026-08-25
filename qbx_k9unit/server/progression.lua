@@ -1016,6 +1016,72 @@ function AwardXP(citizenid, actionKey)
     end
 end
 
+--- Awards an EXPLICIT XP amount, for /k9givexp only.
+---
+--- This deliberately breaks the invariant AwardXP above exists to protect.
+--- AwardXP takes an actionKey and looks the amount up in config precisely so
+--- that no caller -- and therefore, transitively, no client -- can ever name
+--- an arbitrary number. Weakening AwardXP to accept an amount would have
+--- removed that guarantee for every one of its callers, so this is a
+--- separate entry point rather than a new parameter.
+---
+--- What bounds it instead:
+---   * server/highcommand.lua is the ONLY caller, and re-resolves the
+---     caller's rank server-side on every invocation.
+---   * the amount is clamped to Config.HighCommand.maxXpPerGrant there.
+---   * every grant is logged with granter, target, amount and new total.
+---
+--- Deliberately NOT subject to AwardXPCooldown or the shared XP mint budget.
+--- Those exist to bound how fast a PLAYER can farm XP through gameplay; a
+--- high-command grant is an audited administrative act, and silently
+--- swallowing one because a farming budget was exhausted would look to the
+--- officer like the command simply did nothing.
+---
+--- @param citizenid string
+--- @param amount number a positive integer; fractional values are floored
+--- @param reason string? free-text, for the failure log only
+--- @return number|nil newTotal nil if the award was rejected
+function AwardXPDirect(citizenid, amount, reason)
+    if not Config.Features.XPProgression then return nil end
+    if type(citizenid) ~= 'string' or citizenid == '' then return nil end
+    -- amount ~= amount catches NaN, which would otherwise poison the total.
+    if type(amount) ~= 'number' or amount ~= amount or amount <= 0 then return nil end
+    if amount == math.huge then return nil end
+    amount = math.floor(amount)
+
+    local oldXp = K9XP[citizenid] or 0
+    local oldTier = ResolveTier(oldXp)
+    local newXp = oldXp + amount
+    K9XP[citizenid] = newXp
+
+    -- Non-blocking, matching AwardXP's own persistence shape: a fresh thread
+    -- so the .await is real (and so the pcall around it can actually catch a
+    -- DB error -- a pcall around a non-await MySQL call catches nothing,
+    -- because the worker runs the query long after the pcall frame is gone).
+    CreateThread(function()
+        local ok, err = pcall(MySQL.insert.await, [[
+            INSERT INTO k9_progression (citizenid, xp) VALUES (?, ?)
+              ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp), updated_at = CURRENT_TIMESTAMP
+        ]], { citizenid, amount })
+        if not ok then
+            print(('[qbx_k9unit] progression: AwardXPDirect UPSERT failed for %s -- %d XP (%s) granted in memory but NOT persisted: %s')
+                :format(citizenid, amount, tostring(reason), tostring(err)))
+        end
+    end)
+
+    local newTier = ResolveTier(newXp)
+    if newTier ~= oldTier then
+        FireOutboundEvent('qbx_k9unit:events:xpTierReached', citizenid, CopyTier(newTier), CopyTier(oldTier))
+        local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+        local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+        if type(onlineSrc) == 'number' then
+            PushTierSnapshot(onlineSrc, newTier)
+        end
+    end
+
+    return newXp
+end
+
 AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     if not Player or not Player.PlayerData then return end
     local citizenid = Player.PlayerData.citizenid

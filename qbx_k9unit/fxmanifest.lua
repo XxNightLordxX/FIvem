@@ -95,6 +95,20 @@ client_scripts {
     'client/movement.lua',
     'client/agility.lua', -- AgilityAdvanced (fence/window vault), extracted from client/movement.lua. Self-contained: no shared local state with its old home, and nothing else in the resource read its locals. No load-order dependency -- calls CanShowK9UI()/IsOwnModelK9() at call time only.
     'client/radial.lua',
+    -- K9 command tablet (Config.Features.CommandTablet). Two surfaces in
+    -- one: high command gets a control console, and every certified handler
+    -- or K9 gets a read-only view of their own record plus the ability to
+    -- TRIGGER what they hold, as an alternative to keybinds and commands.
+    -- It routes each action to the same client function the keybind calls
+    -- rather than reimplementing it -- a forked entry point is how one path
+    -- ends up guarded and the other does not, which this resource has
+    -- already been bitten by once (ScratchAtDoor/NudgeDoor).
+    -- NOTE this is the FIRST focus-taking NUI surface here. A stuck focus
+    -- locks a player out of their own character, so the close path is
+    -- deliberately singular: OpenTablet/CloseTablet are globals precisely so
+    -- no other site calls SetNuiFocus itself. Its html assets are listed in
+    -- files{} above once the UI lands.
+    'client/tablet.lua',
     'client/vehicle.lua',
     'client/tracking.lua', -- Phase 2
     'client/search.lua',   -- Phase 2
@@ -150,6 +164,18 @@ server_scripts {
     -- no ordinary caller can name an amount; this one is bounded by
     -- Config.HighCommand.maxXpPerGrant and audited on every use.
     'server/highcommand.lua',
+    -- Grantable permissions (Config.Features.PermissionGrants). Grouped with
+    -- the shared helpers for the same reason highcommand.lua is: it exposes
+    -- HasPermission(), which other server files consult behind the usual
+    -- type(fn) == 'function' guard. Loaded after highcommand.lua because a
+    -- permission check falls through to a high-command check when no grant
+    -- exists; again a consistency choice, not a hard requirement, since the
+    -- lookup happens at call time.
+    -- Owns the k9_permissions table: both the four admin capabilities and
+    -- the per-person feature grants and blocks, which share that table keyed
+    -- feature.<Name> and block.<Name> so they inherit its audit trail and
+    -- its one-active-row-per-key guarantee for free.
+    'server/permissions.lua',
     'server/main.lua',
     'server/certifications.lua',
     -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7

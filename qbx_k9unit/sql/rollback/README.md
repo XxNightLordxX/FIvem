@@ -18,13 +18,43 @@ you already have a backup.
 
 | Word | What it actually means |
 |---|---|
-| **table** | One spreadsheet-like store of rows. This resource uses four of them. |
+| **table** | One spreadsheet-like store of rows. This resource uses five of them. |
 | **column** | One field on every row — like one spreadsheet column. |
 | **index** | A lookup shortcut the database keeps so searches are fast. It holds no data of its own; deleting one never deletes rows. |
-| **migration** | A numbered file that changes the shape of a table. `sql/migrations/0001…0004`. |
+| **migration** | A numbered file that changes the shape of a table. `sql/migrations/0001…0005`. |
 | **rollback** / **down script** | A file in this folder that undoes one migration. |
 | **schema** | The *shape* of your tables — the columns and indexes. Separate from the *data* (the rows). |
 | **drop** | Delete permanently. Dropping a table deletes every row in it, forever. |
+
+---
+
+## STEP 0 — Before you install anything: run the safety check
+
+If you have not installed this resource yet, or you are about to upgrade,
+run this first. It is **read-only** — it changes nothing and is safe on a
+live server:
+
+```bash
+mysql -u YOUR_USER -p YOUR_DATABASE < ../preflight_check.sql
+```
+
+It answers three questions in a few seconds: is your database server new
+enough, does anything already own one of our five table names, and does
+your database user have the privileges the migration files need.
+
+**You want every line to start with `OK`.** A line starting with `!!` means
+stop and fix that first. The most important one it catches:
+
+```
+k9_certifications  !! CONFLICT - a DIFFERENT table already uses this name
+                      (matched only 0 of 7 expected columns).
+                      Do NOT install until this is resolved.
+```
+
+That means some other resource already has a table with the same name.
+Installing will not damage it — but this resource will not be able to use
+it either, and you will get confusing `Unknown column` errors later. See
+"Will this affect my existing database?" in `OPERATOR_RUNBOOK.md`.
 
 ---
 
@@ -42,7 +72,7 @@ against, and `YOUR_MYSQL_USER` with your MySQL username (often `root`).
 It will ask for your password — typing nothing and pressing Enter is fine
 if your database has no password.
 
-**What it does:** saves a copy of all four qbx_k9unit tables into one
+**What it does:** saves a copy of all five qbx_k9unit tables into one
 timestamped file. It only reads; it changes nothing.
 
 **How to tell it worked:** you will see a block like this, and the last
@@ -60,6 +90,7 @@ line of the command will not be an error:
    k9_search_log        3
    k9_partnerships      2
    k9_progression       2
+   k9_permissions       1
 
  TO PUT IT ALL BACK, run exactly this one line:
 
@@ -276,7 +307,7 @@ nothing was deleted, so just try again.
 **Run it unmodified and it does nothing at all.** That is deliberate: you
 cannot wipe your K9 data by pasting the wrong file.
 
-This deletes all four tables and everything in them, permanently. Your
+This deletes all five tables and everything in them, permanently. Your
 STEP 1 backup is the only way back.
 
 ---
@@ -289,7 +320,7 @@ Use the line the backup script printed in STEP 1:
 mysql -h 127.0.0.1 -P 3306 -u YOUR_USER -p YOUR_DATABASE < qbx_k9unit-backup-....sql
 ```
 
-This puts all four tables back exactly as they were when you took the
+This puts all five tables back exactly as they were when you took the
 backup. Anything written *after* the backup is not in it.
 
 **How to tell it worked:**
@@ -301,7 +332,7 @@ SELECT COUNT(*) FROM k9_progression;
 ```
 The numbers should match the "Rows saved" list the backup printed.
 
-Tested end to end: dropping all four tables and restoring from a backup
+Tested end to end: dropping all five tables and restoring from a backup
 returns every row, and every calculated column, exactly as it was.
 
 ---
@@ -314,8 +345,9 @@ returns every row, and every calculated column, exactly as it was.
 | `0004_down.sql` | migration 0004 | **No** | Yes |
 | `0003_down.sql` | migration 0003 | No rows, but loses one column's values | Yes |
 | `0002_down.sql` | migration 0002 | **No — does nothing on purpose** | Yes |
+| `0005_down.sql` | migration 0005 | **No — does nothing on purpose** | Yes |
 | `0001_down.sql` | migration 0001 | **No — does nothing on purpose** | Yes |
-| `uninstall_all.sql` | the whole install | **YES, all four tables** — inert until you arm it | Yes |
+| `uninstall_all.sql` | the whole install | **YES, all five tables** — inert until you arm it | Yes |
 
 **Why do `0001_down.sql` and `0002_down.sql` do nothing?** Those two
 migrations each create a table. The only way to undo "create a table" is

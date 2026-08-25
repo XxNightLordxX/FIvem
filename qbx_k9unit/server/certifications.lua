@@ -305,6 +305,18 @@ function HasK9Access(source)
     local job = Player.PlayerData.job
     if not job or not Config.Departments[job.name] then return false end
 
+    -- PERMISSION GRANT BYPASS (server/permissions.lua, Config.Features.PermissionGrants,
+    -- resolution-order STEP 1 -- see that file's own header for the full
+    -- 4-step contract: "an active granted 'k9.access' permission -> ALLOW",
+    -- checked before the high-command bypass and the legacy cert-cache/
+    -- autoAccessGrade gate below, matching config.lua's own documented
+    -- "first match wins" order). Guarded by a `type(...) == 'function'`
+    -- runtime existence check, this resource's established soft-dependency
+    -- convention -- this function still works exactly as before if
+    -- server/permissions.lua is ever removed or Config.Features.PermissionGrants
+    -- is false (HasPermission re-checks that flag itself and returns false).
+    if type(HasPermission) == 'function' and HasPermission(Player.PlayerData.citizenid, 'k9.access') then return true end
+
     -- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
     -- project-owner-directed this pass) -- "the certification requirement
     -- itself" is explicitly one of the gates a High Command officer must
@@ -443,6 +455,16 @@ local function IsEligibleCertifier(source)
     -- job.isboss always qualifies regardless of the configured numeric
     -- threshold.
     if job.isboss then return true end
+
+    -- PERMISSION GRANT BYPASS (server/permissions.lua, Config.Features.PermissionGrants,
+    -- resolution-order STEP 1) -- an active granted 'k9.certify' permission
+    -- ALLOWS outright, checked before the high-command bypass and the
+    -- certifierGrade comparison below, matching config.lua's own documented
+    -- "first match wins" order. Guarded by a `type(...) == 'function'`
+    -- runtime existence check -- this function still works exactly as
+    -- before if server/permissions.lua is ever removed or
+    -- Config.Features.PermissionGrants is false.
+    if type(HasPermission) == 'function' and HasPermission(Player.PlayerData.citizenid, 'k9.certify') then return true end
 
     -- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
     -- project-owner-directed this pass) -- certifierGrade is explicitly one
