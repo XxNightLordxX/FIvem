@@ -25,19 +25,39 @@ Every count in this document (leaf-key total, files migrated, groups) was checke
 Here is exactly how each number below was produced, so you can reproduce it:
 
 - **Commit these numbers were checked at:** not recorded this pass — this
-  update (2026-08-25, docs-consolidation pass) had no shell/git access, so
-  it could re-verify the count directly against `locales/en.json` but could
-  not read `git rev-parse HEAD`. The previous recorded commit, `9808e56`
-  (full hash `9808e568809bdf96c60ea2716ad1b65b03ec9456`), is stale — this
-  file's key count moved from 306 to 311 since then, so at least one more
-  commit has landed. Whoever next has shell access should replace this line
-  with the real current commit.
-- **Total leaf keys (311):** counted directly from `locales/en.json` — every line matching a `"name": "text"` pattern nested inside a group. Reproduce with either a small script (recursively count non-object values in the parsed JSON) or `grep -cE '^\s{2,}"[a-zA-Z0-9_]+":\s*"' locales/en.json`. Both independently gave 311 as of this pass.
-- **Zero files left with hardcoded text:** checked two ways — (1) every locale key in `en.json` has at least one real call site in the Lua code, and every `locale(...)` call in the Lua code points at a key that actually exists (a "both directions" cross-check), and (2) the two files most recently in question, `server/combat.lua` and `server/bonetool.lua`, were directly confirmed to call `locale()` (27 and 3 times respectively — `grep -c "locale(" server/combat.lua server/bonetool.lua`) rather than still holding hardcoded text.
-- **File counts (47 total: 25 client + 22 server):** `ls qbx_k9unit/client/*.lua | wc -l` and `ls qbx_k9unit/server/*.lua | wc -l`. Re-confirmed this pass — still 47.
-- **To check whether all of this is still current:** run `git rev-parse HEAD` and compare against whatever commit is recorded above once someone fills it back in; re-run the checks above yourself, especially if you know a new feature landed since — a new feature almost always means new locale keys.
+  update (2026-08-25, documentation-consolidation pass) had no shell/git
+  access, so it could re-verify counts directly against `locales/en.json`
+  and the `client/`/`server/` directory listings, but could not read
+  `git rev-parse HEAD`. Whoever next has shell access should replace this
+  line with the real current commit.
+- **Total leaf keys (359, not 311):** counted directly from `locales/en.json`
+  this pass, using the exact command this file already documents —
+  `grep -cE '^\s{2,}"[a-zA-Z0-9_]+":\s*"' locales/en.json` — cross-checked
+  with a second, independently-written regex that gave the same number. The
+  previously-recorded 311 is stale; this file has grown substantially since
+  then (see the three new groups below).
+- **Top-level groups (27, not 24):** `grep -cE '^  "[a-zA-Z0-9_]+": \{' locales/en.json`.
+  Three groups have been added since this was last counted: `highcommand`,
+  `permissions`, `tablet` — matching the three new files below.
+- **File counts (51 total: 26 client + 25 server, not 47):** directly listed
+  this pass. Four files have been added since 47 was last counted:
+  `client/tablet.lua`, `server/permissions.lua`, `server/integrations.lua`,
+  `server/highcommand.lua`.
+- **Not re-verified this pass, flagged rather than guessed:** whether every
+  key in `en.json` still has a real call site and vice versa (the "both
+  directions" cross-check), and the "33 call `locale()`, 14 don't" file
+  breakdown below — both predate the four new files above and should be
+  re-run, not assumed still accurate.
+- **To check whether all of this is still current:** run `git rev-parse HEAD`
+  and compare against whatever commit is recorded above once someone fills
+  it back in; re-run the checks above yourself, especially if you know a new
+  feature landed since — a new feature almost always means new locale keys.
 
-Of those 47 `.lua` files, 33 call `locale()` for real player-facing text, and the other 14 were checked and confirmed to have no player-facing text at all (pure background logic, or plumbing that only sends numbers/booleans to the UI). 33 + 14 = 47. Nothing is left unchecked.
+Of the 47 `.lua` files counted as of the last full pass, 33 called `locale()`
+for real player-facing text and the other 14 were confirmed to have no
+player-facing text at all. That breakdown has not been re-run against the
+four new files listed above — do not assume it still sums to the new total
+of 51 without re-checking.
 
 ## Where the text actually lives, and its current shape
 
@@ -51,7 +71,7 @@ All English text is in one file: `locales/en.json`. It's plain JSON, organized a
 
 is looked up in Lua as `locale('combat.no_target_in_range')`.
 
-As of the commit above, there are **24 top-level groups**: `admin`, `agility`, `bonetool`, `certifications`, `combat`, `common`, `defense`, `fetch`, `inventory`, `kennel`, `leash`, `medkit`, `movement`, `partnership`, `progression`, `propattachment`, `radial`, `recall`, `search`, `tenure`, `tracking`, `vehicle`, `vision`, `wellbeing`. Most groups are named after the `.lua` file whose text they hold (`vision.*` for `client/vision.lua`'s text, and so on). This document doesn't try to list every one of the 311 individual keys — that list changes often, and `en.json` itself is always the accurate, up-to-date source for it. What this document does keep track of is the small set of keys that are deliberately **shared across multiple files** — see the next section — because those are easy to accidentally duplicate if you don't know they already exist.
+As of this pass, there are **27 top-level groups**: `admin`, `agility`, `bonetool`, `certifications`, `combat`, `common`, `defense`, `fetch`, `highcommand`, `inventory`, `kennel`, `leash`, `medkit`, `movement`, `partnership`, `permissions`, `progression`, `propattachment`, `radial`, `recall`, `search`, `tablet`, `tenure`, `tracking`, `vehicle`, `vision`, `wellbeing`. Most groups are named after the `.lua` file whose text they hold (`vision.*` for `client/vision.lua`'s text, and so on). This document doesn't try to list every one of the 359 individual keys — that list changes often, and `en.json` itself is always the accurate, up-to-date source for it. What this document does keep track of is the small set of keys that are deliberately **shared across multiple files** — see the next section — because those are easy to accidentally duplicate if you don't know they already exist.
 
 ## Shared keys — check this list before adding a new one
 

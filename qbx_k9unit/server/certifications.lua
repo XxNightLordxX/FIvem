@@ -941,35 +941,44 @@ end
 --- certification revoke into a reported failure — the base revoke is the
 --- security-critical action; this cascade is a consistency cleanup on top
 --- of it. A failure here leaves a specialization row stranded active
---- under a now-inactive base certification, which HasSpecialization below
---- already treats as inert regardless (it re-checks the base cert cache
---- on every read, not just at revoke time) — see that function's own doc
---- comment.
+--- under a now-inactive base certification.
+---
+--- DB-AUTHORITATIVE, NOT CACHE-BASED: reads the active specialization set
+--- fresh from `k9_certification_specializations` rather than from the
+--- in-memory `Specializations` cache, DELIBERATELY — this function is
+--- called from RevokeCertificationOffline (a genuinely offline citizenid
+--- whose cache entry has already been evicted by `playerDropped`, per
+--- this file's own cache-lifecycle convention) just as often as from the
+--- online revoke path, and a cache-based read would silently cascade
+--- nothing for exactly that offline case.
 --- @param citizenid string
 --- @param jobName string
 --- @param revokedByCitizenidOrSentinel string -- citizenid, or 'system:job_change'
 --- @param reason string -- passed straight through to the outbound event, matching this file's existing certificationRevoked reason tagging ('certification_revoked' | 'department_changed' | 'job_changed')
 local function RevokeAllSpecializationsForCitizenJob(citizenid, jobName, revokedByCitizenidOrSentinel, reason)
-    -- Read the active set BEFORE the UPDATE so the outbound event below can
-    -- name exactly which specializations were revoked, not just that "some"
-    -- were.
-    local activeSet = Specializations[citizenid] and Specializations[citizenid][jobName]
+    local selectOk, rowsOrErr = pcall(MySQL.query.await,
+        'SELECT specialization FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND active = 1', {
+            citizenid, jobName,
+        })
+    if not selectOk then
+        print(('[qbx_k9unit] RevokeAllSpecializationsForCitizenJob pre-read failed for %s/%s: %s -- base certification revoke already committed; specialization rows may be stranded active'):format(citizenid, jobName, tostring(rowsOrErr)))
+        return
+    end
+
     local revokedKeys = {}
-    if activeSet then
-        for key in pairs(activeSet) do
-            revokedKeys[#revokedKeys + 1] = key
-        end
+    for _, row in ipairs(rowsOrErr or {}) do
+        revokedKeys[#revokedKeys + 1] = row.specialization
     end
     if #revokedKeys == 0 then return end -- nothing active to cascade -- common case, avoid a needless UPDATE
 
-    local ok, err = pcall(
+    local updateOk, updateErr = pcall(
         MySQL.update.await,
         'UPDATE k9_certification_specializations SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
         { revokedByCitizenidOrSentinel, citizenid, jobName }
     )
 
-    if not ok then
-        print(('[qbx_k9unit] RevokeAllSpecializationsForCitizenJob UPDATE failed for %s/%s: %s -- base certification revoke already committed; specialization rows may be stranded active until the next refresh'):format(citizenid, jobName, tostring(err)))
+    if not updateOk then
+        print(('[qbx_k9unit] RevokeAllSpecializationsForCitizenJob UPDATE failed for %s/%s: %s -- base certification revoke already committed; specialization rows may be stranded active until the next refresh'):format(citizenid, jobName, tostring(updateErr)))
         return
     end
 
@@ -1456,10 +1465,13 @@ end
 --- entire point of this path) and NO model check (revoke never runs the
 --- model check regardless of online/offline status, per §4.2.5 being
 --- grant-only).
+--- CERTIFICATION DEPTH (this pass, Part A §2): `reason` is a NEW, OPTIONAL
+--- fourth argument — see RevokeCertification's own identical doc comment.
 --- @param granterSrc number
 --- @param citizenid string
 --- @param job string
-local function RevokeCertificationOffline(granterSrc, citizenid, job)
+--- @param reason string? -- 'retired'|'reassigned'|'disciplinary'|'performance'|'other', or nil
+local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     if not IsEligibleCertifier(granterSrc) then
         NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_revoke'), 'error')
         return
@@ -1471,6 +1483,11 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
 
     if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
         NotifyPlayer(granterSrc, locale('certifications.usage_decertify_offline'), 'error')
+        return
+    end
+
+    if reason ~= nil and not VALID_REVOKE_REASONS[reason] then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_revoke_reason'), 'error')
         return
     end
 
@@ -1517,10 +1534,13 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
     -- raise an uncaught script error, and a SQL transaction would not
     -- resolve the one genuine ambiguity a thrown error can leave behind
     -- here either).
+    -- CERTIFICATION DEPTH (this pass, Part A §2): `revoke_reason` added,
+    -- same positional shift as RevokeCertification's own UPDATE above —
+    -- this call site's own test assertion was updated to match.
     local updateOk, affectedRowsOrErr = pcall(
         MySQL.update.await,
-        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
-        { granterCitizenid, citizenid, job }
+        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP, revoke_reason = ? WHERE citizenid = ? AND job = ? AND active = 1',
+        { granterCitizenid, reason, citizenid, job }
     )
 
     if not updateOk then
@@ -1609,6 +1629,13 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
         ForceBreakPartnershipForCitizenId(citizenid, 'certification_revoked')
     end
 
+    -- CERTIFICATION DEPTH (this pass, Part B §11): same cascade as
+    -- RevokeCertification's online branch — DB-authoritative, so this
+    -- works correctly for this genuinely-offline citizenid (see
+    -- RevokeAllSpecializationsForCitizenJob's own doc comment for why it
+    -- deliberately does not rely on the in-memory cache here).
+    RevokeAllSpecializationsForCitizenJob(citizenid, job, granterCitizenid, 'certification_revoked')
+
     NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
 end
 
@@ -1682,10 +1709,17 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     -- transaction would not resolve the one genuine ambiguity a thrown
     -- error can leave behind" reasoning as RevokeCertification above —
     -- this is this function's only write.
+    -- CERTIFICATION DEPTH (this pass, Part A §2): `revoke_reason` is
+    -- always 'reassigned' for this automatic path — an accurate,
+    -- non-punitive category for "this handler changed department,"
+    -- distinct from the mechanism tag ('job_changed') the outbound event
+    -- below already carries. Same positional shift as the two manual
+    -- revoke paths above; this call site's own test assertion was
+    -- updated to match.
     local updateOk, updateErr = pcall(
         MySQL.update.await,
-        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
-        { 'system:job_change', citizenid, oldJob }
+        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP, revoke_reason = ? WHERE citizenid = ? AND job = ? AND active = 1',
+        { 'system:job_change', 'reassigned', citizenid, oldJob }
     )
 
     if not updateOk then
@@ -1760,6 +1794,10 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     if type(ForceBreakPartnershipForCitizenId) == 'function' then
         ForceBreakPartnershipForCitizenId(citizenid, 'certification_revoked')
     end
+
+    -- CERTIFICATION DEPTH (this pass, Part B §11): same cascade as both
+    -- manual revoke paths above.
+    RevokeAllSpecializationsForCitizenJob(citizenid, oldJob, 'system:job_change', 'certification_revoked')
 end)
 
 lib.callback.register('qbx_k9unit:server:hasK9Access', function(source)
@@ -1770,8 +1808,12 @@ RegisterNetEvent('qbx_k9unit:server:certifyHandler', function(targetServerId)
     GrantCertification(source, targetServerId)
 end)
 
-RegisterNetEvent('qbx_k9unit:server:revokeHandler', function(targetServerId)
-    RevokeCertification(source, targetServerId)
+-- CERTIFICATION DEPTH (this pass, Part A §2): `reason` is a new, optional
+-- second argument — an existing client that only ever sends one argument
+-- (e.g. client/movement.lua's `TriggerServerEvent('qbx_k9unit:server:revokeHandler',
+-- GetPlayerServerId(targetPlayer))`) is unaffected: `reason` is simply nil.
+RegisterNetEvent('qbx_k9unit:server:revokeHandler', function(targetServerId, reason)
+    RevokeCertification(source, targetServerId, reason)
 end)
 
 RegisterCommand('k9certify', function(source, args)
@@ -1796,7 +1838,9 @@ RegisterCommand('k9decertify', function(source, args)
         NotifyPlayer(source, locale('certifications.usage_decertify'), 'error')
         return
     end
-    RevokeCertification(source, targetServerId)
+    -- CERTIFICATION DEPTH (this pass, Part A §2): args[2], an optional
+    -- reason code — nil if omitted, exactly like before this pass.
+    RevokeCertification(source, targetServerId, args[2])
 end, false)
 
 -- Offline-capable counterpart to /k9decertify — see RevokeCertificationOffline
@@ -1810,7 +1854,9 @@ RegisterCommand('k9decertifyoffline', function(source, args)
         NotifyPlayer(source, locale('certifications.usage_decertify_offline'), 'error')
         return
     end
-    RevokeCertificationOffline(source, citizenid, job)
+    -- CERTIFICATION DEPTH (this pass, Part A §2): args[3], an optional
+    -- reason code — nil if omitted, exactly like before this pass.
+    RevokeCertificationOffline(source, citizenid, job, args[3])
 end, false)
 
 -- CONFIDENCE NOTE (not silently asserted as verified fact): no qbx_core

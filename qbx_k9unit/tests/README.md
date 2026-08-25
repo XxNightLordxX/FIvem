@@ -4,7 +4,7 @@
 
 This folder holds automated tests for qbx_k9unit's Lua code — mostly server-side code, plus one client-side file. An automated test is a small script that runs the real game-resource code and checks it behaves correctly, without needing a running FiveM server.
 
-To run them, open a terminal in this folder and run `./run.sh`. A passing run prints `[PASS]` next to every check and ends with `ALL SPEC FILES PASSED (17 file(s))`. Anything else — any `[FAIL]` line, or a message like `SPEC FILE(S) FAILED: ...` — needs attention. Before you assume the code is broken, though, read "Two false alarms" below: there are two specific situations that make this suite go red for reasons that have nothing to do with a bug.
+To run them, open a terminal in this folder and run `./run.sh`. A passing run prints `[PASS]` next to every check and ends with `ALL SPEC FILES PASSED (N file(s))` (41 as of 2026-08-25, see "The numbers below expire" — this count moves often). Anything else — any `[FAIL]` line, or a message like `SPEC FILE(S) FAILED: ...` — needs attention. Before you assume the code is broken, though, read "Two false alarms" below: there are two specific situations that make this suite go red for reasons that have nothing to do with a bug.
 
 Before this suite existed, the only safety net for this resource was `luac5.4 -p` (checks the Lua is written correctly) and `luacheck` (flags unused/undefined variables). Neither one can catch a *logic* bug — code that runs without error but does the wrong thing. Several real bugs found in QA passes on this resource (players farming XP, a way to steal another player's networked item, a tracking-data bug, a bug that could lock a player out of an ability) would all have been caught by a test like the ones in this folder.
 
@@ -27,8 +27,9 @@ You need `lua5.4` installed and on your `PATH` — the same Lua version the real
 
 A passing run ends with:
 ```
-ALL SPEC FILES PASSED (17 file(s))
+ALL SPEC FILES PASSED (41 file(s))
 ```
+(41 as of 2026-08-25 — see "The numbers below expire" below; this changes often.)
 A failing run instead prints `SPEC FILE(S) FAILED: <names>` and exits with a non-zero status, which is what a CI job checks for.
 
 ### Two false alarms — read this before you panic at a red run
@@ -96,19 +97,43 @@ One real limit: a `local function` inside a production file can only be reached 
 | `client/main.lua` | Whether a model counts as a K9, the "can this player use K9 features right now" check (including its short-term cache), and the client-side bark sound/network-entity helpers. This is currently the only client-side file with test coverage — see "What's NOT covered" for why. | Directly for the plain functions; indirectly for the one event handler. |
 | `server/exports.lua` + `client/exports.lua` | Every export this resource offers to other resources (9 server-side, 18 client-side): that each one works correctly, that the exact right number of exports gets registered, and that each one's safety checks (bad argument types, a missing dependency, an unexpected error) behave as documented. | Directly — every export tested is the real, registered one. |
 
+**The table above predates several of the 41 files listed below** (e.g.
+`recall`, `highcommand`, `permissions`, `integrations`, `tablet`, `breed`,
+`defense`, `vehiclecombatguard`, and every `client*` spec besides
+`client/main.lua` have no row here) — flagged rather than silently left
+looking complete; whoever next touches this file should extend the table
+to match, not assume the list above is exhaustive.
+
 ## The numbers below expire — here's how to re-check them
 
-This suite currently has **17 spec files** and **698 individual tests**, all passing. Both of those numbers will very likely be wrong by the time you read this, because several people work on this codebase at once and new spec files get added often — this exact number has already changed twice within a single working session. Treat any test count in this document as **probably stale**, and re-run the suite yourself before repeating a number from here to anyone else.
+This folder has **41 spec files** as of 2026-08-25 (counted directly by
+listing `tests/*_spec.lua`, not by trusting an earlier version of this
+document — a prior version of this file said 17, which is far out of date).
+This document's earlier per-file, per-test breakdown (698 individual tests
+across 17 files) predates most of the files that exist today and is **not
+reproduced here** rather than left stale, since this pass had no shell/git
+access and could not run `./run.sh` to regenerate it. Treat any test count
+in this document as **probably stale by the time you read it** — several
+people work on this codebase at once and new spec files get added often —
+and re-run the suite yourself before repeating a number from here to anyone
+else.
 
-Here is exactly how this number was produced, so you can reproduce it the same way:
+Files present as of this pass (41): `cooldowns`, `exports`, `defense`,
+`recall`, `mainserver`, `admin`, `tenure`, `inventory`, `certifications`,
+`clientmovement`, `clientagility`, `clientvision`, `partnership`,
+`vehiclecombatguard`, `propattachment`, `clienttracking`, `notify`,
+`combat`, `clientradial`, `clientsearch`, `bonetool`, `clientaudio`,
+`clienthud`, `clientscreenfx`, `clientprogression`, `clientproximityaudio`,
+`entities`, `medkit`, `kennel`, `progression`, `wellbeing`,
+`clientwellbeing`, `fetch`, `search`, `highcommand`, `permissions`,
+`integrations`, `clienttablet`, `clientcombat`, `main`, `clientbreed`
+(each suffixed `_spec.lua`).
 
-- **Commit it was measured at:** `9808e56` (full hash `9808e568809bdf96c60ea2716ad1b65b03ec9456`), made 2026-08-25 09:45:22 UTC, message "Guard prop attachment against cross-citizen netId collisions".
-- **Command used:** `cd qbx_k9unit/tests && ./run.sh`, then adding up each spec file's own `N passed, M failed` line by hand. `run.sh` itself only prints an overall pass/fail verdict, not one combined number, so the total has to be added up from the per-file lines.
-- **To check whether it's still current:** run `git rev-parse HEAD`. If that doesn't say `9808e56`, don't trust the numbers below — re-run `./run.sh` and re-add the per-file numbers yourself.
-
-Per-file counts from that run: exports 135, fetch 88, combat 69, defense 54, certifications 47, propattachment 45, kennel 39, main 38, cooldowns 32, wellbeing 32, admin 28, entities 20, tenure 19, inventory 17, progression 14, search 12, notify 9. (28+47+69+32+54+20+135+88+17+39+38+9+14+45+12+19+32 = 698.)
-
-This total was 355 across 10 files, then 434 across 12 files, earlier in this same working session — each of those was accurate when written and stale within about an hour. That's expected here, not a sign of a problem.
+**Whoever next has shell access should run `cd qbx_k9unit/tests && ./run.sh`,
+add up each spec file's own `N passed, M failed` line by hand (`run.sh`
+itself only prints an overall pass/fail verdict, not one combined number),
+and replace this section with the real current commit hash, file count, and
+test total** — the same way earlier versions of this section did.
 
 ### Why you can't just search for `t.test(` and count instead
 
