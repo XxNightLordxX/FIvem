@@ -314,6 +314,39 @@ AttackerReportCooldown.RegisterPlayerDropped()
 local DefenseTriggerCooldown = NewCooldown(Config.Combat.HandlerDownDefense.retriggerCooldownMs)
 DefenseTriggerCooldown.RegisterPlayerDropped()
 
+-- POLL-INTERVAL VALIDATION (QA follow-up, this pass): the two cooldown
+-- thresholds above (attackerReportCooldownMs/retriggerCooldownMs) are both
+-- validated at resource-start time by server/cooldowns.lua's own
+-- AssertValidDefaultThreshold, which now hard-ERRORS on a non-nil,
+-- non-positive value rather than silently failing closed forever -- but
+-- that guard lives INSIDE NewCooldown's constructor and has no visibility
+-- into pollIntervalMs at all, since that value never passes through
+-- NewCooldown; it feeds a bare `Wait()` call directly in the maintenance
+-- thread below. That makes it the one number in this exact Config block
+-- with NO loud-failure backstop, and a different (worse) failure mode than
+-- a bad cooldown threshold: `Wait()` throws on a non-number argument, and
+-- that throw is NOT inside the `pcall` below (the pcall only wraps
+-- TryNotifyPartnerK9, deliberately, so a per-player error there can't kill
+-- the shared thread for every OTHER player) -- an uncaught error here kills
+-- the THREAD ITSELF, silently disabling HandlerDownDefense for every player
+-- for the rest of this resource's uptime, with nothing more than a generic
+-- Lua traceback in the console to say why. Same posture as
+-- AssertValidDefaultThreshold, applied here to the one Config number that
+-- constructor can't reach: a loud, immediate, resource-start error naming
+-- the bad value, before the thread is ever created, instead of a silent
+-- kill on the very first tick. Captured once into a local (not re-read from
+-- Config every loop iteration) so the validated value is exactly what the
+-- thread below actually uses.
+local PollIntervalMs = Config.Combat.HandlerDownDefense.pollIntervalMs
+assert(
+    type(PollIntervalMs) == 'number' and PollIntervalMs == PollIntervalMs and PollIntervalMs > 0,
+    ('[qbx_k9unit] server/defense.lua: Config.Combat.HandlerDownDefense.pollIntervalMs must be a positive number ' ..
+     '(got %s). This value feeds a bare Wait() in the maintenance thread below -- 0/negative/nil/NaN there ' ..
+     'either busy-loops or throws and silently kills that thread forever (disabling HandlerDownDefense for every ' ..
+     'player until this resource restarts with a fixed config), rather than merely mistiming the poll.')
+        :format(tostring(PollIntervalMs))
+)
+
 -- RED-TEAM FINDING PARITY (QA follow-up): server/combat.lua's own
 -- `onResourceStart` prints a loud warning when `Config.Features.PropDragging`
 -- is on and `Config.Combat.PropDragging.IsPlayerDownedOverride` is nil,
@@ -522,7 +555,7 @@ end
 -- rather than one thread per connected player.
 CreateThread(function()
     while true do
-        Wait(Config.Combat.HandlerDownDefense.pollIntervalMs)
+        Wait(PollIntervalMs)
 
         for _, playerIdStr in ipairs(GetPlayers()) do
             local src = tonumber(playerIdStr)

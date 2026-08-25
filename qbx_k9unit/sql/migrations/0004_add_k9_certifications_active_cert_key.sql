@@ -53,8 +53,8 @@
 --
 -- IDEMPOTENT / SAFE TO RE-RUN, EACH PIECE INDEPENDENTLY: four separate
 -- INFORMATION_SCHEMA-guarded stored-procedure blocks below (one for the
--- generated column, one for the unique key, one for each of the two plain
--- indexes) -- each checks its own target's existence before acting, so
+-- generated column, one for each of the two plain indexes, one for the
+-- unique key) -- each checks its own target's existence before acting, so
 -- this file is safe to run against a database in ANY partial state (e.g.
 -- one that already has the plain indexes but not the generated column, or
 -- vice versa), not just the two extremes of "has everything" / "has
@@ -63,6 +63,28 @@
 -- built on it) -- this file's four blocks are ordered for exactly that
 -- dependency, so running the whole file top-to-bottom in one pass always
 -- works regardless of which pieces (if any) a given database already has.
+--
+-- ORDERING, REVISED (db-schema re-review, 2026-08-25): the two plain
+-- lookup indexes (`idx_citizen_job_active`, `idx_job_active`) are now
+-- applied BEFORE the unique key (`uq_one_active_cert_per_job`), not after.
+-- Reason: the unique key is the one step in this file that can legitimately
+-- fail with a real duplicate-entry error -- see "OPERATOR NOTE" below --
+-- on a database that already accumulated more than one simultaneously-
+-- active row for some (citizenid, job) pair before this constraint existed.
+-- Most SQL-import tools (the plain `mysql` CLI without `--force`, and most
+-- GUI import dialogs) abort the REST of a script on the first statement
+-- error in it. If the unique-key step ran before the two plain indexes and
+-- failed on a dirty database, the two plain indexes -- which have nothing
+-- to do with the duplicate-row conflict and would apply cleanly regardless
+-- -- would never get created on that run, silently leaving
+-- `idx_citizen_job_active` (the hot-path index `HasK9Access`'s cache-refresh
+-- query depends on) missing on exactly the installs that most need an
+-- operator to notice and fix something. With the unique key moved last, a
+-- database with pre-existing duplicate active rows still ends this file
+-- with the column and BOTH plain indexes successfully applied -- only the
+-- one step that genuinely cannot succeed until an operator resolves the
+-- duplicates (per the OPERATOR NOTE below) fails, and it fails last, after
+-- everything independent of it has already landed.
 --
 -- WHY NOT A PLAIN `ADD COLUMN IF NOT EXISTS` / `ADD INDEX IF NOT EXISTS`:
 -- same portability reasoning as migration 0003's own header (not repeated
@@ -147,37 +169,14 @@ CALL `qbx_k9unit_migration_0004_add_active_cert_key_column`();
 DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_active_cert_key_column`;
 
 -- ---------------------------------------------------------------------
--- Step 2: add `uq_one_active_cert_per_job` (unique key on the column just
--- added/confirmed above) if missing. Depends on Step 1 having already run
--- in this same pass, or on a database where the column was already
--- present from an earlier partial application.
--- ---------------------------------------------------------------------
-DELIMITER $$
-
-CREATE PROCEDURE `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`()
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM INFORMATION_SCHEMA.STATISTICS
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'k9_certifications'
-          AND INDEX_NAME = 'uq_one_active_cert_per_job'
-    ) THEN
-        ALTER TABLE `k9_certifications`
-            ADD UNIQUE KEY `uq_one_active_cert_per_job` (`active_cert_key`);
-    END IF;
-END$$
-
-DELIMITER ;
-
-CALL `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`();
-
-DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`;
-
--- ---------------------------------------------------------------------
--- Step 3: add `idx_citizen_job_active` if missing (server/admin.lua's
+-- Step 2: add `idx_citizen_job_active` if missing (server/admin.lua's
 -- '/k9auditcert' relies on this exact index -- see sql/install.sql's own
--- comment on it and server/admin.lua's QueryCertificationHistory).
+-- comment on it and server/admin.lua's QueryCertificationHistory). This
+-- step is independent of the generated column above and of the unique key
+-- below -- it is applied here, BEFORE the unique key, precisely so it
+-- still lands even if the unique-key step further down fails on a database
+-- with pre-existing duplicate active rows (see the "ORDERING, REVISED"
+-- note in this file's header).
 -- ---------------------------------------------------------------------
 DELIMITER $$
 
@@ -202,9 +201,10 @@ CALL `qbx_k9unit_migration_0004_add_idx_citizen_job_active`();
 DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_idx_citizen_job_active`;
 
 -- ---------------------------------------------------------------------
--- Step 4: add `idx_job_active` if missing (SPEC.md 4.3's admin-path
+-- Step 3: add `idx_job_active` if missing (SPEC.md 4.3's admin-path
 -- "list all certified handlers in department X" query relies on this
--- exact index -- see sql/install.sql's own comment on it).
+-- exact index -- see sql/install.sql's own comment on it). Same
+-- independence-from-the-unique-key reasoning as Step 2 above applies here.
 -- ---------------------------------------------------------------------
 DELIMITER $$
 
@@ -227,3 +227,37 @@ DELIMITER ;
 CALL `qbx_k9unit_migration_0004_add_idx_job_active`();
 
 DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_idx_job_active`;
+
+-- ---------------------------------------------------------------------
+-- Step 4: add `uq_one_active_cert_per_job` (unique key on the column added
+-- in Step 1) if missing. Depends on Step 1 having already run in this same
+-- pass, or on a database where the column was already present from an
+-- earlier partial application. Deliberately placed LAST: this is the one
+-- step in this file that can legitimately fail with a real duplicate-entry
+-- error on a database that already accumulated more than one
+-- simultaneously-active row for some (citizenid, job) pair -- see the
+-- "OPERATOR NOTE" below and the "ORDERING, REVISED" note in this file's
+-- header for why Steps 2 and 3 above (independent of this one) are applied
+-- first, so they still land even if this step fails.
+-- ---------------------------------------------------------------------
+DELIMITER $$
+
+CREATE PROCEDURE `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'k9_certifications'
+          AND INDEX_NAME = 'uq_one_active_cert_per_job'
+    ) THEN
+        ALTER TABLE `k9_certifications`
+            ADD UNIQUE KEY `uq_one_active_cert_per_job` (`active_cert_key`);
+    END IF;
+END$$
+
+DELIMITER ;
+
+CALL `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`();
+
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`;
