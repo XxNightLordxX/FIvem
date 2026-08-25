@@ -254,6 +254,71 @@
        call in a `pcall` whose very next line unconditionally releases the
        mutex, so release is no longer contingent on every internal return
        path being enumerated correctly — see RunUseK9MedkitMutation below.
+
+    4. ITEM CONSUMPTION ORDERING (NEW, fixed below) — found by
+       tests/medkit_spec.lua and independently confirmed by reading this
+       function directly: the previous shape stamped the target's cooldown
+       (then step 4) and called RemoveItem (then step 5) BEFORE computing
+       the heal via GetEntityHealth/GetEntityMaxHealth (then step 6). Any
+       failure in that read — a thrown error from either native, or any
+       future code added at that point — ran strictly AFTER the item had
+       already been removed and the cooldown already stamped, so the using
+       player lost their medkit, the target's cooldown was burned, and no
+       heal was ever applied, while the caller was told `medkit_failed`.
+       Neither of those two mutations is reversible after the fact (there
+       is no "give the item back" call, and rolling the cooldown stamp back
+       would itself be a race against a second concurrent attempt), so the
+       only correct fix is ordering, not a try/rollback: compute and
+       validate the heal FIRST, then treat `RemoveItem` as the actual point
+       of no return, and only stamp the cooldown / push the heal AFTER
+       `RemoveItem` has confirmed success. RunUseK9MedkitMutation below now
+       runs, in order: possession check -> compute+clamp the heal (can
+       still fail; nothing consumed or stamped yet) -> RemoveItem (the
+       real mutation; failure here is reported as `no_item` with nothing
+       stamped) -> cooldown stamp -> TriggerClientEvent, with the two
+       trailing side effects (RestoreInjury, the notify calls) now BOTH
+       pcall-wrapped so a throw in either can never turn an
+       already-committed heal into a reported failure.
+
+       COOLDOWN DECISION: the cooldown stamp moved from "before RemoveItem"
+       to "after RemoveItem succeeds" — i.e. the target's cooldown is now
+       burned if and only if a medkit was actually consumed. The old
+       "stamp before the mutating call" convention (mirrored from
+       server/search.lua) exists to close a TOCTOU race between two
+       concurrent requests racing past a check before either has mutated
+       anything; that race is already closed here independently, by
+       MedkitMutex serializing concurrent requests against the same target
+       citizenid (see finding 3 and MedkitMutex's own comment below) and by
+       neither ox_inventory call yielding (see OX_INVENTORY EXPORT
+       SIGNATURES above) — so this handler never actually has two
+       concurrent in-flight mutations against the same target to race
+       between in the first place. With that race already closed by other
+       means, stamping the cooldown before a mutation that might still
+       legitimately fail (RemoveItem returning `false`) bought nothing but
+       a real unfairness: a target blocked for the target's FULL cooldown
+       window because someone else's attempt errored or desynced, for a
+       heal that never happened. Stamping only on confirmed success removes
+       that unfairness without reopening the double-heal race it used to
+       guard against.
+
+       RESIDUAL WINDOW (disclosed, not claimed away): once `RemoveItem`
+       returns `true`, the item IS gone. The very next statement pushes
+       `qbx_k9unit:client:applyMedkitHeal` to the target's own client with
+       nothing fallible in between (no yield, no native call that can
+       throw sits between them), so there is no synchronous window in
+       which this SERVER script can still fail after that point. What
+       cannot be closed from here: this is a fire-and-forget network event
+       to a REMOTE client, not a transaction — the target's own client
+       could still fail to receive or apply it (already-observed edges:
+       the packet is simply lost, or the target dies from unrelated damage
+       in the network-latency gap and its own `IsEntityDead` guard in
+       client/medkit.lua's `applyMedkitHeal` correctly no-ops the heal — see
+       finding 2's addendum). There is no shared transaction between
+       ox_inventory (this server) and a networked ped's health (that
+       client), and there cannot be one without a fundamentally different,
+       server-authoritative-write design this task does not ask for — so
+       this window is real, is not claimed to be zero, and is kept as
+       small as ordering alone can make it rather than pretended away.
     ======================================================================
 ]]
 
@@ -385,25 +450,31 @@ end
 ---   2. Per-target cooldown check.
 ---   3. Item possession check via GetItemCount — reject if the using
 ---      player doesn't actually carry the configured medkit item.
----   4. Stamp the cooldown NOW, before removing the item or healing
----      anything (TOCTOU-safe ordering discipline, mirrors
----      server/search.lua's "stamp before the awaited call" rule, applied
----      here even though neither ox_inventory call below yields today —
----      see this file's header).
----   5. Remove exactly one medkit item via RemoveItem — if this
----      unexpectedly fails despite step 3's check having just passed
----      (should not happen given neither call yields in between, but never
----      assumed), reject WITHOUT applying any health/Injury change. The
----      cooldown stamped in step 4 is not rolled back in this edge case —
----      an intentional, documented tradeoff, the same one
----      server/search.lua's own stamp-before-work ordering already accepts.
----   6. Compute the clamped new health value from a live
----      GetEntityHealth/GetEntityMaxHealth read and push it to the
----      target's own client to self-apply (see this file's header on why,
----      and CORRECTNESS PASS finding 1 for why this read can never
----      disagree with the target client's own later read).
+---   4. Compute AND validate the clamped new health value from a live
+---      GetEntityHealth/GetEntityMaxHealth read — BEFORE the item is
+---      removed (CORRECTNESS PASS finding 4: this used to run AFTER
+---      RemoveItem, so any failure here consumed the item and burned the
+---      cooldown for a heal that was never applied). See CORRECTNESS PASS
+---      finding 1 for why this read can never disagree with the target
+---      client's own later read.
+---   5. Remove exactly one medkit item via RemoveItem — the genuine point
+---      of no return: everything fallible in the normal sense (step 4) has
+---      already succeeded by this line. If RemoveItem itself unexpectedly
+---      fails despite step 3's check having just passed (should not happen
+---      given neither ox_inventory call yields in between, but never
+---      assumed), reject WITHOUT stamping the cooldown and WITHOUT applying
+---      any health/Injury change — nothing was actually consumed, so
+---      nothing should be charged against the target's cooldown either.
+---   6. Stamp the cooldown NOW that the item is confirmed consumed, then
+---      immediately push the heal to the target's own client to
+---      self-apply (see this file's header on why the client self-applies,
+---      and CORRECTNESS PASS finding 4 for the residual, honestly-disclosed
+---      window that remains between "item removed" and "heal actually
+---      landing on the target's own client").
 ---   7. Call RestoreInjury(citizenid, ...) if and only if server/wellbeing.lua
----      has defined it (forward-compatible no-op otherwise).
+---      has defined it (forward-compatible no-op otherwise), then notify
+---      both players — both wrapped so a throw in either can never flip an
+---      already-committed heal back to a reported failure.
 --- @param usingPed number
 --- @param targetPed number
 --- @param source number
@@ -436,19 +507,12 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
         return { ok = false, reason = 'no_item' }
     end
 
-    -- Stamp the cooldown NOW, before removing the item / healing anything
-    -- below — see this function's own doc comment, step 4.
-    MedkitCooldown.Touch(targetCitizenid, requestedAt)
-
-    local removed = exports.ox_inventory:RemoveItem(source, Config.K9Medkit.itemName, 1)
-    if not removed then
-        -- Should not happen given the possession check above (neither
-        -- ox_inventory call yields, per this file's header) — never
-        -- treated as "item consumed" if this ever does fail.
-        return { ok = false, reason = 'no_item' }
-    end
-
-    -- Server-authoritative clamp: reads are not the flagged
+    -- CORRECTNESS PASS finding 4 (see this file's header): compute AND
+    -- validate the heal BEFORE the item is removed, not after. This used
+    -- to run after RemoveItem, which meant any failure here (the reads
+    -- below, or anything added here in future) consumed the caller's item
+    -- and burned the target's cooldown for a heal that was never actually
+    -- applied. Server-authoritative clamp: reads are not the flagged
     -- SetEntityHealth-reliability uncertainty (see this file's header) —
     -- only the WRITE, which happens on the target's OWN client below.
     local currentHealth = GetEntityHealth(targetPed)
@@ -458,10 +522,41 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- future config value were ever negative by mistake.
     newHealth = math.max(newHealth, currentHealth)
 
+    -- RemoveItem is the genuine point of no return for this function: it is
+    -- the one call here that both mutates real state AND can legitimately
+    -- fail (returns `false`). Everything that can still fail in the normal
+    -- sense (the health reads/clamp above) has already run and succeeded
+    -- by this line — see CORRECTNESS PASS finding 4.
+    local removed = exports.ox_inventory:RemoveItem(source, Config.K9Medkit.itemName, 1)
+    if not removed then
+        -- Should not happen given the possession check above (neither
+        -- ox_inventory call yields, per this file's header) — never
+        -- treated as "item consumed" if this ever does fail. The
+        -- cooldown below is NOT stamped in this branch either — nothing
+        -- was actually consumed or healed, so the target's cooldown must
+        -- stay untouched (see CORRECTNESS PASS finding 4's cooldown
+        -- discussion).
+        return { ok = false, reason = 'no_item' }
+    end
+
+    -- Cooldown is stamped ONLY once the item has been genuinely consumed —
+    -- see CORRECTNESS PASS finding 4 for why this moved from "before
+    -- RemoveItem" to "after RemoveItem succeeds".
+    MedkitCooldown.Touch(targetCitizenid, requestedAt)
+
+    -- The heal push is sent on the very next line after the point of no
+    -- return, with nothing fallible in between — see CORRECTNESS PASS
+    -- finding 4 for the one residual, undocumented-away window that
+    -- remains here regardless (there is no cross-system transaction
+    -- between ox_inventory and a networked client entity).
     TriggerClientEvent('qbx_k9unit:client:applyMedkitHeal', targetServerId, newHealth)
 
-    -- Forward-compatible no-op until server/wellbeing.lua (PHASE4_SPEC.md
-    -- §13.1 sub-phase 4c/4d) ships RestoreInjury — see this file's header.
+    -- Everything below this line is best-effort and MUST NOT be able to
+    -- flip the result back to ok=false — the item is gone and the heal has
+    -- already been pushed, so from the caller's perspective the treat has
+    -- already succeeded. RestoreInjury already had its own pcall; the
+    -- notify calls are now wrapped the same way for the same reason (see
+    -- CORRECTNESS PASS finding 4).
     if type(RestoreInjury) == 'function' then
         local ok = pcall(RestoreInjury, targetCitizenid, Config.K9Medkit.injuryRestore)
         if not ok then
@@ -469,9 +564,14 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
         end
     end
 
-    NotifyPlayer(source, locale('medkit.treated_success'), 'success')
-    if targetServerId ~= source then
-        NotifyPlayer(targetServerId, locale('medkit.target_treated_notice'), 'inform')
+    local notifyOk, notifyErr = pcall(function()
+        NotifyPlayer(source, locale('medkit.treated_success'), 'success')
+        if targetServerId ~= source then
+            NotifyPlayer(targetServerId, locale('medkit.target_treated_notice'), 'inform')
+        end
+    end)
+    if not notifyOk then
+        print(('[qbx_k9unit] useK9Medkit post-heal notify error for citizenid %s: %s'):format(targetCitizenid, tostring(notifyErr)))
     end
 
     return { ok = true }

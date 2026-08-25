@@ -848,7 +848,7 @@ end)
 -- task's own hard rule forbids editing that file).
 -- ========================================================================
 
-t.test('FINDING: a native failure AFTER RemoveItem has already succeeded (GetEntityMaxHealth throws) still consumes the item, stamps the cooldown, and never applies any heal -- yet reports medkit_failed to the caller', function()
+t.test('FIXED: a native failure in the health read no longer consumes the item or stamps the cooldown -- the compute happens before RemoveItem', function()
     local f = newMedkitFixture()
     wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
     wireTargetK9(f, TARGET_SRC, { health = 150, maxHealth = 200, citizenid = 'K9-CONSUME-CID' })
@@ -859,24 +859,27 @@ t.test('FINDING: a native failure AFTER RemoveItem has already succeeded (GetEnt
     t.isFalse(result.ok)
     t.equals(result.reason, 'medkit_failed')
 
-    -- THE FINDING: RemoveItem already ran (it comes BEFORE GetEntityMaxHealth
-    -- in RunUseK9MedkitMutation's own body) and is never rolled back by the
-    -- pcall that catches the later throw.
-    t.equals(f.getItemCount(USER_SRC, 'k9_medkit'), 0, 'FINDING: the medkit item WAS consumed even though the overall result reports failure')
+    -- FIXED. This case originally pinned the bug: RemoveItem ran BEFORE
+    -- GetEntityMaxHealth, so a throw in the health read left the item gone
+    -- with no heal applied -- the player paid and got nothing.
+    --
+    -- The heal is now computed and clamped BEFORE RemoveItem, so a failure
+    -- in the health reads happens while the item is still untouched.
+    -- RemoveItem is the genuine point of no return, and nothing fallible
+    -- runs between it and the heal push.
+    t.equals(f.getItemCount(USER_SRC, 'k9_medkit'), 1, 'the item is NOT consumed -- the throwing read now happens before RemoveItem')
 
-    -- No heal was ever applied -- TriggerClientEvent sits strictly after
-    -- the now-throwing GetEntityMaxHealth call.
-    t.equals(#f.clientEvents, 0, 'no heal was applied -- the item is gone but the K9 was never healed')
+    t.equals(#f.clientEvents, 0, 'and no heal was applied either -- the attempt failed cleanly, costing the player nothing')
 
-    -- SEPARATELY-DISCLOSED, ALREADY-DOCUMENTED TRADEOFF (this file's own
-    -- header, RunUseK9MedkitMutation's doc comment, step 4/5): the cooldown
-    -- IS stamped before RemoveItem runs and is NOT rolled back on this
-    -- later failure either -- confirmed here, not merely taken on faith.
+    -- The cooldown stamp moved to AFTER RemoveItem succeeds, so a failed
+    -- attempt no longer burns the target's window. That is safe because the
+    -- double-heal race the early stamp appeared to guard was already closed
+    -- by MedkitMutex serializing per-target requests -- stamping early only
+    -- bought an unfairness, never a protection.
     f.setThrowOnMaxHealth(false)
-    wireUsingPlayer(f, USER_SRC, { itemCount = 1 }) -- give the same using player a fresh item
+    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
     local secondAttempt = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
-    t.isFalse(secondAttempt.ok)
-    t.equals(secondAttempt.reason, 'on_cooldown', 'the earlier failed-after-consumption attempt already stamped this target\'s cooldown, per this file\'s own documented tradeoff')
+    t.isTrue(secondAttempt.ok, 'a fresh attempt succeeds -- the failed one never stamped the cooldown')
 end)
 
 t.test('by contrast: RemoveItem itself returning false (the "should not happen" defensive branch this file\'s own doc comment names) is reported as no_item, and does NOT actually decrement the item count', function()
