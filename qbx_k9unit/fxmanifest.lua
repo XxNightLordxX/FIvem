@@ -59,12 +59,23 @@ files {
     -- The NUI audio layer fetches 'sounds/<key>.ogg' relative to
     -- html/index.html, so every shipped sound needs its own entry here or it
     -- 404s on the client and the loader degrades to silence -- which looks
-    -- exactly like the feature being off. Only bark.ogg exists so far.
-    -- As of 2026-08-25 every Config.Features flag ships true, including
-    -- AdvancedBarkRadial and ProximityAudioFX, so the four sounds those
-    -- two gate are now reachable and will 404 into silence until they are
-    -- sourced and listed here. Add each new sound by name as it lands.
+    -- exactly like the feature being off.
+    -- COMPLETE as of 2026-08-25: all five keys the bridge can request now
+    -- ship. Four come from client/audio.lua's SOUND_NAME_TO_FILE_KEY map;
+    -- the fifth, growl_ambient, comes from Config.ProximityAudioFX.soundName
+    -- via ToAudioFileKey's lowercase fallback, which is easy to miss when
+    -- auditing this list against that map alone.
+    -- Provenance and licences are recorded in html/sounds/CREDITS.md -- read
+    -- it before adding or replacing any file here. The three extra barks are
+    -- genuinely distinct takes from the same source recording as bark.ogg,
+    -- not copies of it, and growl_ambient is a seam-verified loop (the
+    -- proximity layer plays it with loop = true, so an edge fade would put an
+    -- audible gap in every repeat).
     'html/sounds/bark.ogg',
+    'html/sounds/bark_alert.ogg',
+    'html/sounds/bark_aggressive.ogg',
+    'html/sounds/bark_calm.ogg',
+    'html/sounds/growl_ambient.ogg',
     -- ox_lib 'locale' has been declared at the top of this manifest since Phase
     -- 1, promising localisation that did not exist -- every player-facing
     -- string was hardcoded English until now. That migration is COMPLETE as of
@@ -101,8 +112,8 @@ client_scripts {
     'client/bonetool.lua',       -- Dev-only bone-index sweep (BoneSweepDevTool). Placed here for topical grouping only; calls propattachment's globals at runtime, so no load-order requirement.
     'client/fetch.lua',          -- Phase 5 (FetchMechanic). Loaded AFTER client/propattachment.lua deliberately: it reuses that file's AttachPropToOwnPed/DetachAndDeleteProp rather than hand-rolling a third prop-attach copy. A QA pass added a note here claiming this ordering was a HARD REQUIREMENT because the two globals are only defined inside propattachment's feature gate, making the flags coupled. THAT IS WRONG and is corrected here rather than left standing: AttachPropToOwnPed and DetachAndDeleteProp are defined at propattachment.lua:79 and :123, UNCONDITIONALLY -- the PropAttachments gate is at :174, after both, and that file's own header states plainly that neither function is gated. So the globals exist whenever the file loads, regardless of the flag. It IS true that client/fetch.lua calls them without a type() guard, so the load ORDER above still matters; the flags are NOT coupled and no nil-global call is reachable. Note what this feature is NOT -- the K9 does not walk the ball back on its own; it cannot, because the K9 is a connected player's character and nothing here scripts a player's ped movement. The return leg is a real, server-validated player action.
     'client/screenfx.lua', -- Phase 4 (ContrabandScreenFX). Held out of this manifest until its two timecycle natives were verified against primary source (no native is allowlisted here on an unverified assertion); both are now confirmed client-only. Registers its OWN handler for qbx_k9unit:client:applyContrabandScreenFx rather than extending client/search.lua -- an additional consumer, the same pattern server/wellbeing.lua and server/tracking.lua use for relayDamageEvent. No load-order dependency.
-    'client/audio.lua', -- Phase 5 NUI audio bridge. The NUI audio bridge, and it is LIVE: client/main.lua's PlaySoundOnNetworkEntity calls PlayK9Sound() (guarded with type()), and html/sounds/bark.ogg ships and is listed in this manifest's files{} block. Four of the five sound keys this bridge can request still have no file (see html/sounds/CREDITS.md for provenance and licensing of what does ship); each of those degrades to a silent no-op end to end, which looks exactly like the feature being off.
-    'client/proximityaudio.lua', -- Phase 5 (ProximityAudioFX). Distance-scaled gain over client/audio.lua's NUI bridge, so it loads after it. Registers no net-event handlers at all -- a security sweep confirmed the forged-event class does not apply. Silent until an operator supplies html/sounds/<key>.ogg, by design.
+    'client/audio.lua', -- Phase 5 NUI audio bridge. The NUI audio bridge, and it is LIVE: client/main.lua's PlaySoundOnNetworkEntity calls PlayK9Sound() (guarded with type()), and all five sound keys this bridge can request now ship and are listed in this manifest's files{} block (see html/sounds/CREDITS.md for provenance and licensing). A key with no file degrades to a silent no-op end to end, which looks exactly like the feature being off -- so keep that list complete.
+    'client/proximityaudio.lua', -- Phase 5 (ProximityAudioFX). Distance-scaled gain over client/audio.lua's NUI bridge, so it loads after it. Registers no net-event handlers at all -- a security sweep confirmed the forged-event class does not apply. Its sound, growl_ambient.ogg, now ships (Config.ProximityAudioFX.soundName -> ToAudioFileKey's lowercase fallback, not the SOUND_NAME_TO_FILE_KEY map).
     'client/recall.lua', -- Phase 3 Recall (client half). Exposes RequestRecall() and the k9recall command. Deliberately does NOT call CanShowK9UI()/DenyK9UIAccess() -- Recall is a TERMINATION path and gating one is how the unbounded trap this resource forbids gets built.
     'client/exports.lua', -- Public client-side export surface. No load-order dependency: every wrapped function is reached through a `type(fn) == 'function'` guard plus pcall, so an export over a file that early-returns under its own feature flag returns a documented nil/false rather than erroring.
 }

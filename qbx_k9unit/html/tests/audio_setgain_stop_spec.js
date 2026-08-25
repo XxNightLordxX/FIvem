@@ -20,9 +20,10 @@
     client/audio.lua's own AUDIO_MAX_LOOP_MS (60s) safety-ceiling calls
     StopK9Sound() -- sending 'audio:stop' -- on EVERY long-lived
     ProximityAudioFX loop sound whether or not it ever actually started
-    (growl_ambient.ogg does not exist on disk, per audio_play_spec.js's own
-    "one real file, four missing" note, so loadSoundBuffer resolves to a
-    null buffer and activeSounds[id] is never populated at all); with
+    (a 404 leaves loadSoundBuffer resolving to a null buffer, so
+    activeSounds[id] is never populated at all -- these tests drive that
+    with sandbox.js's MISSING_SOUND_KEY, since growl_ambient.ogg now
+    genuinely ships and would take the success path); with
     Config.Features.ProximityAudioFX now on, client/proximityaudio.lua's
     discovery thread re-triggers a BRAND NEW id for the same nearby K9
     roughly every 60 seconds it stays in range, so this leaked one
@@ -48,7 +49,7 @@
 'use strict';
 
 const t = require('./testkit');
-const { createHarness, waitFor } = require('./sandbox');
+const { createHarness, waitFor, MISSING_SOUND_KEY } = require('./sandbox');
 
 async function playAndWaitStarted(h, id, opts) {
     h.postMessage('audio:play', Object.assign({ id, sound: 'bark', gain: 0.5, loop: false }, opts));
@@ -200,13 +201,13 @@ t.test('LEAK FIX: an audio:stop that arrives AFTER its id\'s own audio:play alre
     const N = 200;
 
     // Reproduces client/audio.lua's real leak-triggering shape: N distinct
-    // loop=true 'audio:play' requests for a sound key that 404s
-    // (growl_ambient.ogg genuinely does not exist on disk -- see
-    // audio_play_spec.js's own sanity test), so activeSounds[id] is NEVER
-    // populated for any of them (handleAudioPlay's own
-    // `if (!buffer || wasStoppedEarly) return;`).
+    // loop=true 'audio:play' requests for a sound key that 404s, so
+    // activeSounds[id] is NEVER populated for any of them (handleAudioPlay's
+    // own `if (!buffer || wasStoppedEarly) return;`). MISSING_SOUND_KEY is
+    // used rather than a real key because the leak needs a genuine 404 --
+    // all five shipped keys now decode successfully.
     for (let id = 1; id <= N; id++) {
-        h.postMessage('audio:play', { id, sound: 'growl_ambient', gain: 1, loop: true });
+        h.postMessage('audio:play', { id, sound: MISSING_SOUND_KEY, gain: 1, loop: true });
     }
 
     // Let every one of the N loads fully settle (all real 404s) BEFORE any
@@ -245,7 +246,7 @@ t.test('LEAK FIX: the SAME check holds for the very first and very last id of a 
     const N = 50;
 
     for (let id = 1; id <= N; id++) {
-        h.postMessage('audio:play', { id, sound: 'growl_ambient', gain: 1, loop: true });
+        h.postMessage('audio:play', { id, sound: MISSING_SOUND_KEY, gain: 1, loop: true });
     }
     await new Promise((r) => setTimeout(r, 300));
     for (let id = 1; id <= N; id++) {

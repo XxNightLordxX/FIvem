@@ -450,3 +450,308 @@ Carried over from `AUDIO_SOURCING.md` so this caution isn't lost:
   public-domain status, and confirming it needs the specific recording's
   real production date. Not a quick win; don't pursue without dedicated
   recording-date research.
+
+---
+
+# AUDIO SHIP PASS 2 — 2026-08-25 — the four remaining files
+
+Author: jlwood17190665@gmail.com. This pass ships `bark_alert.ogg`,
+`bark_aggressive.ogg`, `bark_calm.ogg` and `growl_ambient.ogg` — the four
+keys that were still 404ing. Every section above is preserved unchanged;
+this section is additive.
+
+**Nothing in this pass is synthesized or fabricated.** Every byte descends
+from one of two OpenGameArt submissions, both of whose pages were fetched
+with `curl` and whose licence fields were read out of the **raw HTML**
+this pass, not from a search summary and not from the record left in this
+file by earlier passes.
+
+## Correction to the "LICENCE VERIFICATION PASS" section above — independently reproduced
+
+That section states, under "The OpenGameArt one is a trap", that
+`dog-barking-mono`'s CC0 string appears *only* as a collection name and
+that "The licence field itself says OGA-BY 3.0". **That is not what the
+page says, and this pass reproduced the earlier "AUDIO SHIP PASS"
+correction independently before reading either section's conclusion.**
+
+Raw bytes of the page's own `field-name-field-art-licenses` block, fetched
+2026-08-25 (`curl -sS -L https://opengameart.org/content/dog-barking-mono`,
+HTTP 200), reformatted here only by inserting line breaks — no words
+changed, nothing removed:
+
+```html
+<div class="field field-name-field-art-licenses field-type-taxonomy-term-reference field-label-above">
+  <div class="field-label">License(s):&nbsp;</div>
+  <div class="field-items">
+    <div class="field-item even"><div class='license-icon'>
+      <a href='http://opengameart.org/content/oga-by-30-faq' target='_blank'>
+      <img src='.../license_images/oga-by.png' alt='' title=''>
+      <div class='license-name'>OGA-BY 3.0</div></a></div></div>
+    <div class="field-item odd"><div class='license-icon'>
+      <a href='http://creativecommons.org/publicdomain/zero/1.0/' target='_blank'>
+      <img src='.../license_images/cc0.png' alt='' title=''>
+      <div class='license-name'>CC0</div></a></div></div>
+  </div>
+</div>
+```
+
+The `Collections:` field is a **separate** `<div class="field
+field-name-collect ...">` immediately after it, and *that* is where the
+string "CC0 Audio - Uploader: HaelDB" lives. So both things are true at
+once: there IS a collection whose title contains "CC0", *and* the
+`License(s):` taxonomy field independently lists CC0 as a second licence
+alongside OGA-BY 3.0, linking to the actual CC0 legal code.
+
+**This changes nothing about what is credited.** Following this project's
+rule that a dual-licensed asset is credited under the STRICTER of the two
+offered licences — valid under either reading — everything derived from
+this submission below is credited under **OGA-BY 3.0** and carries its
+attribution line, exactly as `bark.ogg` already does.
+
+## Correction to "Outstanding follow-up — corrected, docs-consolidation pass"
+
+That section says the four remaining files are "**not yet in
+`fxmanifest.lua`** because they don't exist yet". As of this pass they DO
+exist, in this folder. They are still not in `fxmanifest.lua`, which is
+owned by someone else — the four lines needed are recorded at the bottom
+of this section. **Until those lines are added the four new files 404 on
+the client exactly as if they were still missing.**
+
+## Source 1 — the three barks
+
+- **Submission page:** https://opengameart.org/content/dog-barking-mono
+- **Direct file:** https://opengameart.org/sites/default/files/dog_barking_mono.wav
+- **Author (page's own `Author:` field):** `Brandon Morris` — the page renders
+  this as "Brandon Morris<br/>(Submitted by HaelDB)".
+- **Licence, quoted from the page's `License(s):` field:** `OGA-BY 3.0`
+  (linking `http://opengameart.org/content/oga-by-30-faq`) **and** `CC0`
+  (linking `http://creativecommons.org/publicdomain/zero/1.0/`).
+  **Credited under OGA-BY 3.0**, the stricter of the two.
+- **Attribution text (as OGA-BY 3.0 requires):** "Dog barking mono" by
+  Brandon Morris (HaelDB),
+  https://opengameart.org/content/dog-barking-mono, licensed under
+  OGA-BY 3.0.
+- **Date retrieved:** 2026-08-25
+- **Downloaded file:** `HTTP 200`, 179848 bytes — matching the page's own
+  `type="audio/x-wav; length=179848"` exactly.
+  `sha256 bbd0f908b3514dd3bd7d2bc04dcf64f8d360a161e7f43cac5d6761e7add79451`
+- **`file`:** `RIFF (little-endian) data, WAVE audio, Microsoft PCM, 16 bit, mono 44100 Hz`
+- This is the SAME submission `bark.ogg` above already ships from, so its
+  licence was already cleared for this resource — re-verified from the raw
+  page this pass regardless rather than trusted from this file's own record.
+
+**Why this source, for three different-sounding barks:** the file is a
+single take containing **four separate barks** (the page's own tags say
+`4`, `barks`, `pitch`). `bark.ogg` above uses the **first**. This pass uses
+the **other three**, so all four shipped barks are genuinely different
+recorded barks by the same dog, not one bark copied four times:
+
+| File | Source region of `dog_barking_mono.wav` | Measured f0 |
+|---|---|---|
+| `bark.ogg` (already shipped) | bark 1, 0.000–0.350s | ~233 Hz |
+| `bark_aggressive.ogg` | bark 2, 0.508–0.838s — the loudest, fullest of the four | ~222 Hz |
+| `bark_alert.ogg` | bark 3, 1.105–1.435s — a natural double bark, the highest-pitched | ~387 Hz |
+| `bark_calm.ogg` | bark 4, 1.653–1.858s — first hump only | ~210 Hz |
+
+Segment boundaries were read off a 10 ms RMS envelope of the source, not
+guessed: each bark's onset and its decay back to the recording's −83 dBFS
+noise floor were located, and every trim starts in that noise floor rather
+than on a waveform edge. Bark 4 is the exception and is documented as such
+below — the source file ends mid-decay at 2.0386 s, so bark 4 has no
+natural end in the recording.
+
+## Source 2 — the ambient growl
+
+- **Submission page:** https://opengameart.org/content/dog-growls
+- **Direct file:** https://opengameart.org/sites/default/files/archive_1.zip
+  (the page displays the filename as `archive.zip`; the actual href is
+  `archive_1.zip`). `HTTP 200`, 70374 bytes.
+  `sha256 d5776044754a63705688d0efa44fa294531f25a816b65a8525906b080033527c`
+- **Author (page's own `Author:` field):** `congusbongus`
+- **Licence, quoted from the page's `License(s):` field:** `CC-BY 3.0`
+  (linking `http://creativecommons.org/licenses/by/3.0/`). This field
+  contains exactly **one** licence item — checked the same way as the
+  two-item case above, so the single-item reading is a measured
+  difference, not an assumption.
+- **The page also carries a `Copyright/Attribution Notice:` field, quoted
+  verbatim:**
+
+  > Derived from Dogs growling.wav by juskiddink
+  > https://freesound.org/people/juskiddink/sounds/121565/
+  > http://creativecommons.org/licenses/by/3.0/
+
+- **Date retrieved:** 2026-08-25
+- **Page body:** "6 clips of medium-large dog growls" — delivered as
+  `0.ogg`–`5.ogg`, all already **Ogg Vorbis, mono, 44100 Hz**, i.e. already
+  this bridge's exact target format.
+
+### The upstream link in that notice was followed and verified, not assumed
+
+Because this OpenGameArt submission declares itself a *derivative*, the
+original was checked directly rather than taking the derivative's word for
+the chain:
+
+- **Upstream page:** https://freesound.org/people/juskiddink/sounds/121565/
+  (`curl`, HTTP 200; `<title>Freesound - Dogs growling.wav by juskiddink</title>`)
+- **Upstream author:** juskiddink
+- **Upstream licence, quoted verbatim from that page:** "Attribution 4.0 —
+  You are free to share (to copy, distribute and transmit) and to remix
+  (to adapt and modify) as long as you credit the author", linking
+  `http://creativecommons.org/licenses/by/4.0/`.
+- Note the version difference and that it is harmless here: the OGA
+  derivative's notice cites CC-BY **3.0** (the version in force when
+  congusbongus derived it); Freesound displays the original as CC-BY **4.0**
+  today. Both are attribution-only — **no NonCommercial, no ShareAlike in
+  either** — so the whole chain clears this project's licence bar, and
+  neither version's obligation is skipped: both parties are credited below.
+
+**Attribution text for `growl_ambient.ogg` (both links in the chain, as
+CC-BY requires):** "Dog growls" by congusbongus,
+https://opengameart.org/content/dog-growls, licensed under CC-BY 3.0;
+derived from "Dogs growling.wav" by juskiddink,
+https://freesound.org/people/juskiddink/sounds/121565/, licensed under
+CC-BY 4.0.
+
+## Ruled out this pass, with the reason, so nobody re-tries it
+
+- **OpenGameArt "Dog sounds" by pauliuw** —
+  https://opengameart.org/content/dog-sounds — licence field reads `CC0`
+  (single item, verified in raw HTML), which would have been the simplest
+  possible licence outcome. **Rejected on provenance and on quality.**
+  Provenance: the page body says, in the author's own words, "9 dog
+  sounds(barking, growling, squalling). **Some of the sounds are recordced
+  through mp3 player.**" A CC0 grant over material the uploader
+  re-recorded from someone else's playback does not establish it was
+  theirs to release — the same objection this file already records against
+  `lavenderdotpet/CC0-Public-Domain-Sounds`. Quality, independently:
+  `Dog Bark 1.wav` measures peak 1.0000 with **4 clipped samples** and a
+  **DC offset of −0.0623**; `Dog Bark.wav` has DC +0.0225. Its barks also
+  sit at f0 ≈ 500–630 Hz (a small dog), wrong for a police K9.
+- **OpenGameArt "Dog Grunt" by qubodup** —
+  https://opengameart.org/content/dog-grunt — licence field `CC0`, clean
+  provenance (the author's own dog), technically clean audio. Not used
+  only because the submission is a **single 0.58 s grunt**: looping one
+  short grunt as a continuous ambient bed would read as an obvious
+  repeating artefact. Kept here as a genuinely CC0 fallback if the CC-BY
+  attribution above ever becomes unwelcome.
+
+---
+
+## `bark_alert.ogg`
+
+- **Source URL:** https://opengameart.org/content/dog-barking-mono (see "Source 1" above)
+- **Author:** Brandon Morris (submitted by OpenGameArt user HaelDB)
+- **License:** OGA-BY 3.0 — credited under the stricter of the two licences the page's `License(s):` field offers (the other being CC0). Attribution line as given in "Source 1" above.
+- **Date retrieved:** 2026-08-25
+- **Derivation:** bark 3 of the source take (1.105–1.435 s) — a natural double bark and the highest-pitched of the four. DC-blocking high-pass at 70 Hz; pitched **up 5 %** (`asetrate=46305` then resampled back to 44100 with soxr) to sharpen it further into an attention-getting alert; 4 ms fade-in, 50 ms fade-out; gain ×1.519 to a 0.42 peak.
+- **Exact commands:**
+  - `ffmpeg -y -ss 1.1050 -t 0.3300 -i dog_barking_mono.wav -af "highpass=f=70,asetrate=46305,aresample=44100:resampler=soxr,afade=t=in:st=0:d=0.004,afade=t=out:st=0.2643:d=0.050" -ac 1 -ar 44100 -c:a pcm_f32le bark_alert_raw.wav`
+  - `ffmpeg -y -i bark_alert_raw.wav -af volume=1.519000 -c:a libvorbis -qscale:a 5 -ac 1 -ar 44100 bark_alert.ogg`
+- **Measured (not intended) properties:** `file` -> `Ogg data, Vorbis audio, mono, 44100 Hz, ~96000 bps`; `ffprobe` -> `codec_name=vorbis`, `sample_rate=44100`, `channels=1`, `channel_layout=mono`, `duration=0.314286`, `size=6721`, `probe_score=100`. `head -c4 | od -c` -> `O g g S`.
+- **Quality measurements:** peak **0.4234** (no sample reaches 1.0; **0 clipped samples**), RMS 0.0522, **DC offset +0.000038** (bark.ogg's own is −0.003701, so this is cleaner than the reference file), first 2 ms at **−64.3 dBFS** and last 2 ms at −180 dBFS (digital silence) — no click at either edge.
+- **Verified Ogg Vorbis (OggS magic bytes):** yes
+- **File size:** 6,721 bytes
+- `sha256 cd26297a4e9d7a464164cb27f531966ef19c8f96cf1984bd853065649fa94f37`
+
+## `bark_aggressive.ogg`
+
+- **Source URL:** https://opengameart.org/content/dog-barking-mono (see "Source 1" above)
+- **Author:** Brandon Morris (submitted by OpenGameArt user HaelDB)
+- **License:** OGA-BY 3.0 — credited under the stricter of the two licences the page's `License(s):` field offers (the other being CC0). Attribution line as given in "Source 1" above.
+- **Date retrieved:** 2026-08-25
+- **Derivation:** bark 2 of the source take (0.508–0.838 s), the loudest and fullest of the four. DC-blocking high-pass at 70 Hz; pitched **down 6 %** (`asetrate=41454` then resampled back to 44100 with soxr) to suggest a heavier dog; 4 ms fade-in, 50 ms fade-out; gain ×1.031 to a 0.46 peak — deliberately the hottest of the four one-shots.
+- **Exact commands:**
+  - `ffmpeg -y -ss 0.5080 -t 0.3300 -i dog_barking_mono.wav -af "highpass=f=70,asetrate=41454,aresample=44100:resampler=soxr,afade=t=in:st=0:d=0.004,afade=t=out:st=0.3011:d=0.050" -ac 1 -ar 44100 -c:a pcm_f32le bark_aggressive_raw.wav`
+  - `ffmpeg -y -i bark_aggressive_raw.wav -af volume=1.031000 -c:a libvorbis -qscale:a 5 -ac 1 -ar 44100 bark_aggressive.ogg`
+- **Measured (not intended) properties:** `file` -> `Ogg data, Vorbis audio, mono, 44100 Hz, ~96000 bps`; `ffprobe` -> `codec_name=vorbis`, `sample_rate=44100`, `channels=1`, `channel_layout=mono`, `duration=0.351066`, `size=7119`, `probe_score=100`. `head -c4 | od -c` -> `O g g S`.
+- **Quality measurements:** peak **0.4564** (**0 clipped samples**), RMS 0.0672, **DC offset −0.000048**, first 2 ms at **−84.3 dBFS**, last 2 ms at −180 dBFS — no click at either edge. Spectral centroid over the audible span measures 865 Hz against `bark.ogg`'s 861 Hz, confirming the downward pitch shift introduced no high-frequency resampling artefact.
+- **Verified Ogg Vorbis (OggS magic bytes):** yes
+- **File size:** 7,119 bytes
+- `sha256 261d3141f0333924de9af926c450dd08e7a3199c8e79ffec5b772b14407d25f5`
+
+## `bark_calm.ogg`
+
+- **Source URL:** https://opengameart.org/content/dog-barking-mono (see "Source 1" above)
+- **Author:** Brandon Morris (submitted by OpenGameArt user HaelDB)
+- **License:** OGA-BY 3.0 — credited under the stricter of the two licences the page's `License(s):` field offers (the other being CC0). Attribution line as given in "Source 1" above.
+- **Date retrieved:** 2026-08-25
+- **Derivation:** bark 4 of the source take, **first hump only** (1.653–1.858 s). DC-blocking high-pass at 70 Hz; pitched **down 10 %** (`asetrate=39690` then resampled back to 44100 with soxr); gentle **3.8 kHz low-pass** to take the bite off the transient; 4 ms fade-in, 50 ms fade-out; gain ×0.640 to a 0.24 peak — deliberately the quietest of the four, so a calm bark reads as calm even at full proximity gain.
+- **Known caveat, stated plainly:** bark 4 is the one bark in the source that has **no natural end** — the recording stops at 2.0386 s while this bark is still decaying, and it is followed by a second hump this file deliberately excludes. The 50 ms fade-out ending at 1.858 s is therefore doing real work rather than merely tidying an already-silent tail. Measured result is a smooth decay to −62.4 dBFS in the final 2 ms with no discontinuity, but this is an edited ending, not the recording's own.
+- **Exact commands:**
+  - `ffmpeg -y -ss 1.6530 -t 0.2050 -i dog_barking_mono.wav -af "highpass=f=70,asetrate=39690,aresample=44100:resampler=soxr,lowpass=f=3800,afade=t=in:st=0:d=0.004,afade=t=out:st=0.1778:d=0.050" -ac 1 -ar 44100 -c:a pcm_f32le bark_calm_raw.wav`
+  - `ffmpeg -y -i bark_calm_raw.wav -af volume=0.640000 -c:a libvorbis -qscale:a 5 -ac 1 -ar 44100 bark_calm.ogg`
+- **Measured (not intended) properties:** `file` -> `Ogg data, Vorbis audio, mono, 44100 Hz, ~96000 bps`; `ffprobe` -> `codec_name=vorbis`, `sample_rate=44100`, `channels=1`, `channel_layout=mono`, `duration=0.227800`, `size=5680`, `probe_score=100`. `head -c4 | od -c` -> `O g g S`.
+- **Quality measurements:** peak **0.2407** (**0 clipped samples**), RMS 0.0508, **DC offset −0.000024**, first 2 ms at **−90.3 dBFS**, last 2 ms at −62.4 dBFS (inaudible, and the tail of a smooth fade rather than a cut).
+- **Verified Ogg Vorbis (OggS magic bytes):** yes
+- **File size:** 5,680 bytes
+- `sha256 cdcda486602d2161aca6c75f40ab351c39ecc8ebc5f19ecb361fc69f760de972`
+
+## `growl_ambient.ogg`
+
+- **Source URL:** https://opengameart.org/content/dog-growls (see "Source 2" above)
+- **Author:** congusbongus (OpenGameArt), derived from a recording by juskiddink (Freesound)
+- **License:** **CC-BY 3.0** for the OpenGameArt submission, quoted from its `License(s):` field; the upstream original it declares itself derived from is **CC-BY 4.0**, quoted from Freesound as: "Attribution 4.0 — You are free to share (to copy, distribute and transmit) and to remix (to adapt and modify) as long as you credit the author". Attribution-only at both links in the chain; no NonCommercial and no ShareAlike anywhere in it.
+- **Attribution text (required — both links in the chain):** "Dog growls" by congusbongus, https://opengameart.org/content/dog-growls, licensed under CC-BY 3.0; derived from "Dogs growling.wav" by juskiddink, https://freesound.org/people/juskiddink/sounds/121565/, licensed under CC-BY 4.0.
+- **Date retrieved:** 2026-08-25
+- **This is the one LOOPING file.** `client/proximityaudio.lua` starts it via `PlayK9Sound(netId, 'Growl_Ambient', { loop = true })`, and `client/audio.lua` re-polls its gain every 500 ms up to a 60 s ceiling. A loop must therefore be seamless at its wrap point; it must NOT be faded in or out at its edges, because an edge fade produces an audible gap on every single repeat. The high edge amplitudes measured below (0.2568 / 0.3444) are correct and intentional for that reason.
+- **Derivation, in full:**
+  1. All six source clips (`0.ogg`–`5.ogg`) DC-blocked with a one-pole filter (R = 0.9995, ≈7 Hz corner) — well below the ~110 Hz growl fundamental, so it removes drift without touching the growl.
+  2. Each clip trimmed to its **sustained plateau**: the span between the first and last 20 ms window within 8 dB of that clip's loudest window. This discards each clip's attack ramp and decay tail so that every crossfade below joins full-level material to full-level material — the thing that stops a loop from audibly "pumping".
+  3. The six plateaus concatenated in the order `3, 1, 4, 2, 5, 0` (varied deliberately so the loop does not read as one growl repeating), joined by **120 ms equal-power (sin/cos) crossfades**. Equal-power rather than linear because a growl is noise-like, where a linear crossfade dips about 3 dB mid-cross.
+  4. A **180 ms wrap-around crossfade** applied so the file loops seamlessly: the first 180 ms blends the head of the bed with the material that *follows* the loop end, which makes the last-sample-to-first-sample transition exactly the continuous transition that already existed inside the source bed.
+  5. Normalized to a 0.55 peak — below the one-shot barks, since this is a continuous bed that plays underneath them.
+  6. Encoded `-c:a libvorbis -qscale:a 4 -ac 1 -ar 44100` (q4 rather than the barks' q5: the content is low-frequency and noise-like, and q5 bought no measurable benefit while costing size on the one file long enough for size to matter).
+- **Measured (not intended) properties:** `file` -> `Ogg data, Vorbis audio, mono, 44100 Hz, ~86000 bps`; `ffprobe` -> `codec_name=vorbis`, `sample_rate=44100`, `channels=1`, `channel_layout=mono`, `duration=2.700000`, `size=28386`, `probe_score=100`. `head -c4 | od -c` -> `O g g S`.
+- **Quality measurements:** peak **0.5511** (**0 clipped samples**), RMS 0.1616, **DC offset −0.000087**. Level across the whole loop stays within an 11.3 dB spread (−22.6 to −11.3 dBFS) with **no dropout to silence anywhere** — it is a continuous bed, not a series of separated growls.
+- **Loop seam verified empirically, on the ENCODED file, against a control:** the `.ogg` was decoded back to PCM, concatenated with itself (what a looping `AudioBufferSourceNode` actually plays), and the wrap point measured.
+  - The decoded file is **119070 samples = exactly 2.700000 s**, i.e. the Vorbis round-trip preserved the sample count exactly and introduced no decoder padding gap at the loop point.
+  - **Exact single-sample step across the wrap: 0.019623 — the 87.1st percentile** of all sample-to-sample steps in the file. In other words the wrap transition is an entirely ordinary transition within this growl, not an edge.
+  - **Level step across the wrap: 1.41 dB — the 62.4th percentile** of the file's own 20 ms window-to-window level changes (median 1.01 dB, p95 3.19 dB). Well inside the growl's own natural variation.
+  - High-frequency (first-difference) energy in a 4 ms window centred on the seam measures 0.01552 against a median of 0.01288 and a p95 of 0.01911 elsewhere in the file — i.e. **below** the 95th percentile, so no click.
+  - **Control, to prove those numbers can actually detect a bad seam:** the identical bed truncated to the identical length with the wrap crossfade **omitted** was built and measured the same way. Its seam step is 0.045166, at the **99.42nd percentile** — flagged as a discontinuity by the same test that passes the shipped file. The test discriminates; it is not vacuously passing.
+- **Verified Ogg Vorbis (OggS magic bytes):** yes
+- **File size:** 28,386 bytes
+- `sha256 2e85bd00bdd2fe46049506ceed0f4788122ebbebd5d07792d214ae5ba3f3f380`
+
+---
+
+## Required follow-up in `fxmanifest.lua` (owned by someone else — NOT done by this pass)
+
+The four new files **will 404 exactly as before** until these four lines
+join `'html/sounds/bark.ogg'` in that file's `files{}` block:
+
+```lua
+    'html/sounds/bark_alert.ogg',
+    'html/sounds/bark_aggressive.ogg',
+    'html/sounds/bark_calm.ogg',
+    'html/sounds/growl_ambient.ogg',
+```
+
+Explicit entries, matching this manifest's existing convention rather than
+a glob — the reasoning for that is in the "glob support finding" section
+above and is unchanged.
+
+## Heads-up: `html/tests/` encodes "these four files do not exist" as a fixture
+
+`html/tests/sandbox.js`'s `realSoundsFetch()` deliberately reads the **real**
+`html/sounds/` directory, and its own comment says so: "(bark.ogg exists;
+bark_alert/bark_aggressive/bark_calm/growl_ambient do not, as of this
+task's own setup)". Shipping the four files therefore flips those tests'
+404 path to a 200 path, and `audio_play_spec.js` (3 cases) and
+`audio_setgain_stop_spec.js` (1 case) now fail for that reason alone —
+including the regression test for the recently-fixed `stoppedBeforeStart`
+leak, which needs a genuinely-absent file to exercise the leak path at all.
+
+This pass did **not** edit those specs — they belong to whoever owns
+`html/tests/`, and the fix is a test-design decision. The robust fix is to
+stop piggy-backing on "not sourced yet" and point the 404-path cases at a
+key that is guaranteed never to be a shipped asset (any key matching
+`app.js`'s `[a-z0-9_-]` sanitiser with no file behind it, e.g.
+`nonexistent_test_sound`), so the tests stay meaningful no matter which
+real sounds ship later.
+
+Worth noting what those failures actually prove, though: the sandbox
+reported decoding buffers of **6721** and **28386** bytes for `bark_alert`
+and `growl_ambient` — byte-for-byte the sizes of the files shipped above.
+The resource really does now find, fetch and decode the new audio through
+its own real code path.

@@ -44,13 +44,29 @@ function arrayBufferFromNodeBuffer(buf) {
  * Real-filesystem-backed fetch() for `sounds/<key>.ogg` lookups -- this is
  * what makes the "404 path is live and reachable" claim genuine rather
  * than asserted: it reads the ACTUAL html/sounds/ directory contents
- * (bark.ogg exists; bark_alert/bark_aggressive/bark_calm/growl_ambient do
- * not, as of this task's own setup), so a passing test here is a fact
- * about the real shipped asset directory, not a synthetic stand-in that
- * could quietly drift from it.
+ * so a passing test here is a fact about the real shipped asset
+ * directory, not a synthetic stand-in that could quietly drift from it.
+ *
+ * All five real sound keys now ship. The 404 path is therefore exercised
+ * with MISSING_SOUND_KEY below -- a key deliberately chosen never to be a
+ * real asset -- rather than by piggy-backing on whichever sounds happened
+ * to be unsourced that week. Those tests used to break the moment the
+ * missing files were added, which is a fragile way to test a code path
+ * that is about fetch() returning 404, not about our asset backlog.
  * @param {string} url
  * @returns {Promise<{ok: boolean, status: number, arrayBuffer: () => Promise<ArrayBuffer>}>}
  */
+/**
+ * A sound key guaranteed never to exist as a shipped asset, for exercising
+ * loadSoundBuffer's 404/degrade-to-silence path. It passes app.js's
+ * sanitizeSoundKey (lowercase, [a-z0-9_-]) so it reaches the fetch, and it
+ * is asserted absent from html/sounds/ by audio_play_spec.js's sanity test
+ * -- so if anyone ever ships a file by this name, the suite says so loudly
+ * instead of silently testing nothing.
+ * @type {string}
+ */
+const MISSING_SOUND_KEY = 'nonexistent_test_sound';
+
 function realSoundsFetch(url) {
     const m = /^sounds\/([a-z0-9_-]+)\.ogg$/.exec(url);
     if (!m) return Promise.reject(new Error(`realSoundsFetch: unexpected url ${JSON.stringify(url)}`));
@@ -382,6 +398,7 @@ module.exports = {
     createHarness,
     makeFakeAudioContextClass,
     realSoundsFetch,
+    MISSING_SOUND_KEY,
     waitFor,
     SOUNDS_DIR,
 };

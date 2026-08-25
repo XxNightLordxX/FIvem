@@ -4,30 +4,34 @@
     Covers `audio:play` (handleAudioPlay/loadSoundBuffer/ensureAudioContext/
     sanitizeSoundKey/clampGain in html/app.js) against the REAL
     html/sounds/ directory contents, not a synthetic always-ok/always-404
-    stand-in -- see sandbox.js's realSoundsFetch(). As of this task:
+    stand-in -- see sandbox.js's realSoundsFetch().
 
-        html/sounds/bark.ogg            EXISTS  -> the 200/decode-success path
-        html/sounds/bark_alert.ogg      MISSING -> the 404 path (client/audio.lua's SOUND_NAME_TO_FILE_KEY)
-        html/sounds/bark_aggressive.ogg MISSING -> the 404 path
-        html/sounds/bark_calm.ogg       MISSING -> the 404 path
-        html/sounds/growl_ambient.ogg   MISSING -> the 404 path (client/proximityaudio.lua's PROXIMITY_SOUND_NAME)
+    All five real sound keys now ship (bark, bark_alert, bark_aggressive,
+    bark_calm from client/audio.lua's SOUND_NAME_TO_FILE_KEY, plus
+    growl_ambient from Config.ProximityAudioFX.soundName via
+    ToAudioFileKey's lowercase fallback), so every one of them exercises
+    the 200/decode-success path.
 
-    i.e. exactly "one real file, four missing" per this task's own
-    framing -- the degrade-to-silence path is the NORMAL, common-case
-    outcome for 4 of this resource's 5 known sound keys today, not a rare
-    edge case.
+    The 404 / degrade-to-silence path is exercised with
+    sandbox.js's MISSING_SOUND_KEY instead. This spec previously drove
+    that path using whichever sounds were unsourced at the time, which
+    meant shipping the missing audio turned four green tests red without
+    anything actually regressing. The path under test is "fetch returned
+    404", not "our asset backlog is non-empty" -- so it is now tested with
+    a key chosen never to exist, and the sanity test below asserts both
+    halves of that assumption so neither can drift unnoticed.
 */
 'use strict';
 
 const fs = require('fs');
 const t = require('./testkit');
-const { createHarness, waitFor, SOUNDS_DIR } = require('./sandbox');
+const { createHarness, waitFor, SOUNDS_DIR, MISSING_SOUND_KEY } = require('./sandbox');
 
-t.test('sanity: html/sounds/ actually has exactly the "one real file, four missing" shape this spec assumes', () => {
-    t.isTrue(fs.existsSync(`${SOUNDS_DIR}/bark.ogg`), 'bark.ogg must exist for the 200/decode-success tests below to be meaningful');
-    for (const missing of ['bark_alert', 'bark_aggressive', 'bark_calm', 'growl_ambient']) {
-        t.isFalse(fs.existsSync(`${SOUNDS_DIR}/${missing}.ogg`), `${missing}.ogg must NOT exist for the 404-path tests below to be meaningful`);
+t.test('sanity: every real sound key ships, and MISSING_SOUND_KEY genuinely does not', () => {
+    for (const shipped of ['bark', 'bark_alert', 'bark_aggressive', 'bark_calm', 'growl_ambient']) {
+        t.isTrue(fs.existsSync(`${SOUNDS_DIR}/${shipped}.ogg`), `${shipped}.ogg must exist -- app.js can request this key, and a missing file is a silent 404 in play, indistinguishable from the feature being off`);
     }
+    t.isFalse(fs.existsSync(`${SOUNDS_DIR}/${MISSING_SOUND_KEY}.ogg`), `${MISSING_SOUND_KEY}.ogg must NOT exist, or every 404-path test below silently stops testing the 404 path`);
 });
 
 t.test('audio:play against a real, existing file (bark.ogg) actually starts playback', async () => {
@@ -45,9 +49,9 @@ t.test('audio:play against a real, existing file (bark.ogg) actually starts play
     t.near(ctx._lastCreatedGain.gain.value, 0.6, 0.0001, 'initial gain applied to the GainNode');
 });
 
-t.test('audio:play against a missing file (bark_alert.ogg, the live 404 path) degrades to silence -- no source ever created, no throw', async () => {
+t.test('audio:play against a missing file (the live 404 path) degrades to silence -- no source ever created, no throw', async () => {
     const h = createHarness();
-    h.postMessage('audio:play', { id: 2, sound: 'bark_alert', gain: 1, loop: false });
+    h.postMessage('audio:play', { id: 2, sound: MISSING_SOUND_KEY, gain: 1, loop: false });
 
     // Let the real (async) fetch/404 round-trip fully settle.
     await new Promise((r) => setTimeout(r, 200));
@@ -57,16 +61,21 @@ t.test('audio:play against a missing file (bark_alert.ogg, the live 404 path) de
     t.isUndefined(ctx._lastCreatedSource, 'no BufferSourceNode is ever created for a 404\'d sound');
 });
 
-t.test('every one of the four currently-missing sound keys independently 404s and stays silent', async () => {
-    const h = createHarness();
-    let id = 100;
-    for (const sound of ['bark_alert', 'bark_aggressive', 'bark_calm', 'growl_ambient']) {
-        h.postMessage('audio:play', { id: id++, sound, gain: 1, loop: false });
+t.test('every real sound key now decodes and plays -- the shipped asset set is complete end to end', async () => {
+    // The inverse of the old "four missing keys stay silent" test. Now that
+    // all five ship, the meaningful assertion is that each one actually
+    // reaches a playing BufferSourceNode through app.js's real fetch/decode
+    // path -- a file that is present but unreadable, or registered under the
+    // wrong name, would show up here rather than as silence in play.
+    for (const sound of ['bark', 'bark_alert', 'bark_aggressive', 'bark_calm', 'growl_ambient']) {
+        const h = createHarness();
+        h.postMessage('audio:play', { id: 100, sound, gain: 1, loop: false });
+        await new Promise((r) => setTimeout(r, 200));
+        const ctx = h.getAudioContextInstance();
+        t.isDefined(ctx._lastCreatedSource, `${sound}.ogg must reach a playing source`);
+        t.isTrue(ctx._lastCreatedSource._started, `${sound}.ogg's source must actually be started`);
+        t.isTrue(ctx._lastCreatedSource.buffer.byteLength > 0, `${sound}.ogg must decode to a non-empty buffer`);
     }
-    await new Promise((r) => setTimeout(r, 200));
-
-    const ctx = h.getAudioContextInstance();
-    t.isUndefined(ctx._lastCreatedSource, 'none of the four missing files ever produced a playing source');
 });
 
 t.test('repeated plays of the SAME missing sound key only fetch once (soundBufferCache caches the negative result too)', async () => {
@@ -78,13 +87,13 @@ t.test('repeated plays of the SAME missing sound key only fetch once (soundBuffe
         },
     });
 
-    h.postMessage('audio:play', { id: 1, sound: 'bark_alert', gain: 1, loop: false });
-    h.postMessage('audio:play', { id: 2, sound: 'bark_alert', gain: 1, loop: false });
-    h.postMessage('audio:play', { id: 3, sound: 'bark_alert', gain: 1, loop: false });
+    h.postMessage('audio:play', { id: 1, sound: MISSING_SOUND_KEY, gain: 1, loop: false });
+    h.postMessage('audio:play', { id: 2, sound: MISSING_SOUND_KEY, gain: 1, loop: false });
+    h.postMessage('audio:play', { id: 3, sound: MISSING_SOUND_KEY, gain: 1, loop: false });
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
 
-    t.equals(fetchUrls.filter((u) => u === 'sounds/bark_alert.ogg').length, 1, 'exactly one fetch for three plays of the same missing key');
+    t.equals(fetchUrls.filter((u) => u === `sounds/${MISSING_SOUND_KEY}.ogg`).length, 1, 'exactly one fetch for three plays of the same missing key');
 });
 
 t.test('a decode failure (corrupt/unsupported file) also degrades silently, distinct from a 404, same observable outcome', async () => {

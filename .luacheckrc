@@ -238,6 +238,30 @@ globals = {
     "EndActiveEffectForHolder",
     -- client/recall.lua -- the handler's escape hatch.
     "RequestRecall",
+    -- server/entities.lua -- the shared cross-feature netId claim registry.
+    -- ResolveNetworkEntity deliberately performs NO ownership or proximity
+    -- check (see its own doc comment), so every caller must add one. The
+    -- problem that forced a SHARED registry: DeployableKennel, FetchMechanic
+    -- and PropAttachments all spawn networked props and all fall back to the
+    -- same model, but each feature's ownership check only ever scanned its
+    -- OWN table -- so a netId naming another feature's live object read as
+    -- "unclaimed, safe to delete". Three per-feature checks that must be kept
+    -- in sync are three checks that will drift; one registry all three
+    -- consult cannot. Consumed by server/kennel.lua, server/fetch.lua and
+    -- server/propattachment.lua.
+    -- NOTE for anyone touching these: a Release path must NEVER be gated on
+    -- an access check. Termination and cleanup have to stay reachable even
+    -- for a caller who has lost access, or the fix becomes a permanent
+    -- stranded-entity trap -- a worse bug than the hijack it closed.
+    "ClaimNetworkEntity", "ReleaseNetworkEntity", "IsNetworkEntityClaimedByOther",
+    -- server/progression.lua -- validates a Config-supplied XP mint budget
+    -- parameter. Exists because a boundary value must never silently mean
+    -- "blocked forever": server/cooldowns.lua's IsOnCooldown already treats a
+    -- non-positive threshold as PERMANENTLY ON rather than "no cooldown", and
+    -- the budget's first implementation created each citizenid's bucket empty
+    -- and checked it in the same call, silently dropping the first XP award
+    -- of every session for every player.
+    "IsValidXpMintBudgetParam",
     -- Seams opened so other files can reach logic that was previously locked
     -- inside an ox_target closure or a `local`. Each verified defined before
     -- being declared here: client/inventory.lua:195, client/medkit.lua:181,
