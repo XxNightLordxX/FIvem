@@ -16,7 +16,10 @@
          resource isn't started, `nil` when ANY required export is missing
          (never a partial table that would silently no-op later), `{}` for
          `target.server` (no required methods for that realm), and a full
-         6-method table for `target.client` when everything is present.
+         8-method table for `target.client` when everything is present
+         (including `AddLocalEntity`/`RemoveLocalEntity`, added after the
+         shop-ped feature bypassed this whole layer -- see
+         DEVELOPER_REFERENCE.md §21).
       2. ox_target (the reference adapter): pure pass-through of
          AddGlobalPlayer/AddGlobalVehicle/AddGlobalObject/AddModel/
          AddSphereZone to the matching real export, and Remove() correctly
@@ -33,8 +36,12 @@
       4. qb-target's/qtarget's sphere-zone translation (AddCircleZone),
          including that an option missing its own `.distance` falls back
          to the zone's radius rather than silently losing range.
-      5. qtarget's simpler translation (`.onSelect`->`.action` bare rename,
-         `.groups`->`.job` rename, no canInteract re-signaturing).
+      5. qtarget's translation: `.onSelect`->`.action` bare rename,
+         `.groups`->`.job` rename, AND (confirmed against qtarget's own
+         source, not the ox_target compat shim that originally stood in for
+         it) the SAME `canInteract` re-signaturing qb-target needs --
+         real qtarget calls it `(entity, distance, optionTable)`, not
+         ox_target's `(entity, distance, coords, name)`.
       6. sleepless_interact's near-total pass-through, and its one real
          gap: AddSphereZone -> addCoords, where an option's own `.distance`
          is preserved and a missing one is backfilled from the zone radius.
@@ -135,18 +142,22 @@ end
 local OX_TARGET_METHODS = {
     'addGlobalPlayer', 'addGlobalVehicle', 'addGlobalObject', 'addModel', 'addSphereZone',
     'removeGlobalPlayer', 'removeGlobalVehicle', 'removeGlobalObject', 'removeModel', 'removeZone',
+    'addLocalEntity', 'removeLocalEntity',
 }
 local QB_TARGET_METHODS = {
     'AddGlobalPlayer', 'AddGlobalVehicle', 'AddGlobalObject', 'AddTargetModel', 'AddCircleZone',
     'RemoveGlobalPlayer', 'RemoveGlobalVehicle', 'RemoveGlobalObject', 'RemoveTargetModel', 'RemoveZone',
+    'AddTargetEntity', 'RemoveTargetEntity',
 }
 local QTARGET_METHODS = {
     'Player', 'Vehicle', 'Object', 'AddTargetModel', 'AddCircleZone',
     'RemovePlayer', 'RemoveVehicle', 'RemoveObject', 'RemoveTargetModel', 'RemoveZone',
+    'AddTargetEntity', 'RemoveTargetEntity',
 }
 local SLEEPLESS_METHODS = {
     'addGlobalPlayer', 'addGlobalVehicle', 'addGlobalObject', 'addModel', 'addCoords',
     'removeGlobalPlayer', 'removeGlobalVehicle', 'removeGlobalObject', 'removeModel', 'removeCoords',
+    'addLocalEntity', 'removeLocalEntity',
 }
 
 -- ========================================================================
@@ -186,14 +197,14 @@ t.test('ox_target factory returns nil on the client realm when a required export
     t.isNil(registered.target.ox_target('client'))
 end)
 
-t.test('ox_target factory returns a full 6-method client adapter when every export is present', function()
+t.test('ox_target factory returns a full 8-method client adapter when every export is present', function()
     local exportsTable = fakeResourceExports(OX_TARGET_METHODS)
     local registered = loadTargetCompat({
         resourceStates = { ox_target = 'started' },
         exportsStub = { ox_target = exportsTable },
     })
     local adapter = registered.target.ox_target('client')
-    for _, methodName in ipairs({ 'AddGlobalPlayer', 'AddGlobalVehicle', 'AddGlobalObject', 'AddModel', 'AddSphereZone', 'Remove' }) do
+    for _, methodName in ipairs({ 'AddGlobalPlayer', 'AddGlobalVehicle', 'AddGlobalObject', 'AddModel', 'AddSphereZone', 'Remove', 'AddLocalEntity', 'RemoveLocalEntity' }) do
         t.equals(type(adapter[methodName]), 'function', methodName .. ' must be a function')
     end
 end)
@@ -273,6 +284,26 @@ t.test('ox_target AddModel/Remove round-trips the model list', function()
     adapter.Remove(handle)
     t.equals(calls.removeModel[1], models)
     t.equals(calls.removeModel[2][1], 'qbx_k9unit:model')
+end)
+
+t.test('ox_target AddLocalEntity/RemoveLocalEntity forward the raw entity handle and options unchanged, with no options on removal', function()
+    local exportsTable, calls = fakeResourceExports(OX_TARGET_METHODS)
+    local registered = loadTargetCompat({
+        resourceStates = { ox_target = 'started' },
+        exportsStub = { ox_target = exportsTable },
+    })
+    local adapter = registered.target.ox_target('client')
+
+    local ped = 12345
+    local options = { { name = 'qbx_k9unit:shop', label = 'Shop' } }
+    local handle = adapter.AddLocalEntity(ped, options)
+    t.equals(calls.addLocalEntity[1], ped, 'the raw entity handle must reach ox_target unchanged')
+    t.equals(calls.addLocalEntity[2], options, 'options must reach ox_target unchanged, same as every other Add* here')
+    t.isNotNil(handle)
+
+    adapter.RemoveLocalEntity(handle)
+    t.equals(calls.removeLocalEntity[1], ped)
+    t.equals(calls.removeLocalEntity[2], nil, 'no options argument must be passed on removal -- this clears EVERY option this resource registered for the entity, confirmed via addLocalEntity/removeLocalEntity\'s own source')
 end)
 
 -- ========================================================================
@@ -411,6 +442,21 @@ t.test('qb-target AddSphereZone translates to AddCircleZone, backfilling missing
     t.equals(calls.RemoveZone[1], handle.id)
 end)
 
+t.test('qb-target AddLocalEntity/RemoveLocalEntity route through AddTargetEntity/RemoveTargetEntity keyed by the raw entity handle, clearing all options with no labels on removal', function()
+    local adapter, calls = newQbTargetAdapter()
+
+    local ped = 54321
+    local options = { { name = 'qbx_k9unit:shop', label = 'K9 Shop', distance = 3.0 } }
+    local handle = adapter.AddLocalEntity(ped, options)
+    t.equals(calls.AddTargetEntity[1], ped, 'the raw entity handle must be forwarded, not a netId')
+    t.equals(calls.AddTargetEntity[2].distance, 3.0)
+    t.equals(calls.AddTargetEntity[2].options[1].label, 'K9 Shop')
+
+    adapter.RemoveLocalEntity(handle)
+    t.equals(calls.RemoveTargetEntity[1], ped)
+    t.equals(calls.RemoveTargetEntity[2], nil, 'labels must be omitted on removal -- this adapter owns the entity outright and always clears everything')
+end)
+
 -- ========================================================================
 -- qtarget: simpler translation -- bare renames, no signature bridging
 -- ========================================================================
@@ -445,6 +491,71 @@ t.test('qtarget Remove dispatches by handle kind to the matching typed remove ex
     local handle = adapter.AddGlobalObject({ { name = 'qbx_k9unit:o', label = 'O' } })
     adapter.Remove(handle)
     t.equals(calls.RemoveObject[1][1], 'qbx_k9unit:o')
+end)
+
+t.test('qtarget canInteract is re-signatured back to (entity, distance, coords, name) -- confirmed against real qtarget source, NOT the ox_target shim', function()
+    local exportsTable, calls = fakeResourceExports(QTARGET_METHODS)
+    local registered = loadTargetCompat({
+        resourceStates = { qtarget = 'started' },
+        exportsStub = { qtarget = exportsTable },
+    })
+    local adapter = registered.target.qtarget('client')
+
+    local seenArgs
+    local options = {
+        {
+            name = 'qbx_k9unit:attachLeash',
+            label = 'Attach Leash',
+            canInteract = function(entity, distance, coords, name)
+                seenArgs = { entity = entity, distance = distance, coords = coords, name = name }
+                return true
+            end,
+        },
+    }
+    adapter.AddGlobalPlayer(options)
+    local sentOptions = calls.Player[1].options
+
+    -- Simulate real qtarget's OWN call convention (`data.canInteract(entity,
+    -- distance, data)` -- three arguments, the third being the qtarget
+    -- OPTION TABLE, the SAME convention as qb-target, not ox_target's own).
+    local result = sentOptions[1].canInteract(999, 4.0, sentOptions[1])
+    t.isTrue(result)
+    t.equals(seenArgs.entity, 999)
+    t.equals(seenArgs.distance, 4.0)
+    t.isNotNil(seenArgs.coords, 'coords must be re-derived via GetEntityCoords, never left nil')
+    t.equals(seenArgs.name, 'qbx_k9unit:attachLeash')
+end)
+
+t.test('qtarget canInteract failing safely returns false rather than throwing on a bad predicate', function()
+    local exportsTable, calls = fakeResourceExports(QTARGET_METHODS)
+    local registered = loadTargetCompat({
+        resourceStates = { qtarget = 'started' },
+        exportsStub = { qtarget = exportsTable },
+    })
+    local adapter = registered.target.qtarget('client')
+
+    adapter.AddGlobalPlayer({ { name = 'qbx_k9unit:broken', label = 'Broken', canInteract = function() error('boom') end } })
+    local sentOptions = calls.Player[1].options
+    local ok, result = pcall(sentOptions[1].canInteract, 1, 1, sentOptions[1])
+    t.isTrue(ok, 'the translated canInteract itself must never throw even if the original predicate does')
+    t.isFalse(result)
+end)
+
+t.test('qtarget AddLocalEntity/RemoveLocalEntity route through AddTargetEntity/RemoveTargetEntity with no labels on removal', function()
+    local exportsTable, calls = fakeResourceExports(QTARGET_METHODS)
+    local registered = loadTargetCompat({
+        resourceStates = { qtarget = 'started' },
+        exportsStub = { qtarget = exportsTable },
+    })
+    local adapter = registered.target.qtarget('client')
+
+    local ped = 111
+    local handle = adapter.AddLocalEntity(ped, { { name = 'qbx_k9unit:shop', label = 'K9 Shop' } })
+    t.equals(calls.AddTargetEntity[1], ped)
+
+    adapter.RemoveLocalEntity(handle)
+    t.equals(calls.RemoveTargetEntity[1], ped)
+    t.equals(calls.RemoveTargetEntity[2], nil)
 end)
 
 -- ========================================================================
@@ -495,6 +606,25 @@ t.test('sleepless_interact AddSphereZone translates to addCoords, injecting the 
 
     adapter.Remove(handle)
     t.equals(calls.removeCoords[1], 'coordid-1')
+end)
+
+t.test('sleepless_interact AddLocalEntity/RemoveLocalEntity forward the raw entity handle and options unchanged, with no `remove` argument on removal', function()
+    local exportsTable, calls = fakeResourceExports(SLEEPLESS_METHODS)
+    local registered = loadTargetCompat({
+        resourceStates = { sleepless_interact = 'started' },
+        exportsStub = { sleepless_interact = exportsTable },
+    })
+    local adapter = registered.target.sleepless_interact('client')
+
+    local ped = 222
+    local options = { { name = 'qbx_k9unit:shop', label = 'K9 Shop' } }
+    local handle = adapter.AddLocalEntity(ped, options)
+    t.equals(calls.addLocalEntity[1], ped)
+    t.equals(calls.addLocalEntity[2], options)
+
+    adapter.RemoveLocalEntity(handle)
+    t.equals(calls.removeLocalEntity[1], ped)
+    t.equals(calls.removeLocalEntity[2], nil, 'no `remove` argument must be passed -- this clears every option this resource registered for the entity')
 end)
 
 t.test('sleepless_interact factory returns nil when addCoords is missing (no sphere-zone equivalent available)', function()

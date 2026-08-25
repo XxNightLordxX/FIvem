@@ -34,20 +34,51 @@
     error.
 
     ======================================================================
-    A REAL PED, NOT A BARE SPHERE (this pass, coder-frontend). The owner's
+    A REAL PED, NOT A BARE SPHERE (originally coder-frontend). The owner's
     own words: "make the shop a dog ped." Previously this file built an
     invisible `ox_target` sphere zone at each configured location; it now
     spawns a real, visible ped there instead and targets THAT PED directly
-    via `exports.ox_target:addLocalEntity` -- confirmed the correct real
-    export for a locally-created (non-networked) entity handle by reading
-    ox_target's own client/api.lua directly this pass (`addEntity` takes a
+    via `K9Compat.Get('target').AddLocalEntity` -- the correct primitive for
+    a locally-created (non-networked) entity handle, originally confirmed by
+    reading ox_target's own client/api.lua directly (`addEntity` takes a
     NETWORK ID and is for networked entities; `addLocalEntity` takes a raw
-    entity handle and is the one this file's own non-networked peds need).
-    Which model, and any idle scenario it plays, is fully operator-
-    configurable (Config.K9EquipmentShop.pedModel/pedHeading/pedScenario,
-    or a per-location override of any of those three plus `label`) --
-    never hardcoded, and never validated against Config.Peds, since a shop
-    attendant is not a K9.
+    entity handle and is the one this file's own non-networked peds need),
+    and now also confirmed for qb-target/qtarget/sleepless_interact -- see
+    shared/compat/target.lua's own per-adapter comments for the full,
+    per-backend confirmation record this method goes through since this
+    pass (coder-backend). Which model, and any idle scenario it plays, is
+    fully operator-configurable (Config.K9EquipmentShop.pedModel/
+    pedHeading/pedScenario, or a per-location override of any of those three
+    plus `label`) -- never hardcoded, and never validated against
+    Config.Peds, since a shop attendant is not a K9.
+
+    ======================================================================
+    COMPAT LAYER (this pass, coder-backend). Both third-party calls this
+    file makes -- targeting the ped, and opening the shop UI -- now go
+    through `K9Compat.Get(...)` (shared/compat/core.lua) instead of a direct
+    `exports.ox_target`/`exports.ox_inventory` call, so this feature keeps
+    working on a server running qb-target/qtarget/sleepless_interact for
+    targeting, or a non-ox_inventory backend for the shop UI, per
+    Config.Compat. This closes a real gap: `AddLocalEntity`/
+    `RemoveLocalEntity` were never part of the target adapter contract until
+    this pass, because this shop-ped feature was built AFTER that contract
+    was first written and nobody re-checked its call sites against it (see
+    DEVELOPER_REFERENCE.md §21 for the fuller writeup of that failure
+    shape). `K9Compat.Get('target')`/`K9Compat.Get('inventory')` are NEVER
+    `nil` and every method on them is already `pcall`-safe (see core.lua's
+    own header) -- this file adds no additional nil-check or pcall of its
+    own around either call. If nothing usable is detected for a system,
+    that system's methods are safe no-ops (return `nil`/do nothing) rather
+    than an error: a shop with no usable target adapter places no
+    interactive ped (silent, logged once by the compat layer itself, not by
+    this file); a shop with no usable inventory adapter shows a ped that,
+    once interacted with, opens nothing (the ped and its prompt still
+    render -- the compat layer's own no-op stub has no way to hide a menu
+    OPTION this file already built before calling it, only to make the
+    underlying action itself go nowhere). `K9Compat`/`shared/compat/core.lua`
+    are shared_scripts loaded ahead of every client_scripts entry (see
+    fxmanifest.lua), so `K9Compat` is always defined by the time this file's
+    own top-level code runs.
 
     NATIVES VERIFIED THIS PASS, against https://runtime.fivem.net/doc/natives.json
     (every one of these has NO decl page at
@@ -172,10 +203,14 @@
     ======================================================================
     FXMANIFEST.LUA PLACEMENT: unchanged from before this pass --
     `client/equipmentshop.lua` is already listed in client_scripts, no
-    reordering needed (still reads only `Config`, already loaded via
-    shared_scripts, and calls only `exports.ox_target`/`exports.ox_inventory`,
-    both already-loaded dependencies, plus `lib.callback.await`, already a
-    hard dependency of this whole resource via ox_lib).
+    reordering needed. Reads only `Config`, already loaded via
+    shared_scripts; calls only `K9Compat.Get(...)` (shared/compat/*.lua,
+    ALSO loaded via shared_scripts, and therefore already defined by the
+    time any client_scripts entry runs -- see fxmanifest.lua's own
+    shared_scripts ordering), which in turn reaches `exports.ox_target`/
+    `exports.ox_inventory` (or whatever else Config.Compat resolved) on this
+    file's behalf; plus `lib.callback.await`, already a hard dependency of
+    this whole resource via ox_lib.
 ]]
 
 -- ======================================================================
@@ -193,6 +228,9 @@ local ActiveLocations = {}
 
 --- @type table<string, number> -- [locationKey] = live ped entity handle
 local SpawnedPeds = {}
+
+--- @type table<string, table> -- [locationKey] = the opaque handle K9Compat.Get('target').AddLocalEntity returned for SpawnedPeds[key], passed back to RemoveLocalEntity UNTOUCHED (see shared/compat/target.lua's own header on why this value's shape is private to whichever adapter produced it -- never inspected or reshaped here)
+local SpawnedTargetHandles = {}
 
 --- The exact location table object last used to spawn/respawn
 --- `SpawnedPeds[key]`, compared field-by-field on every worker tick
@@ -389,19 +427,29 @@ local function SpawnShopPed(key, loc)
 
     local label = (type(loc.label) == 'string' and loc.label ~= '') and loc.label or 'K9 Supply'
 
-    -- Target THE PED directly (addLocalEntity, a raw entity handle -- see
-    -- this file's header for why this, not addEntity/a bare sphere zone).
-    exports.ox_target:addLocalEntity(ped, {
+    -- Target THE PED directly (AddLocalEntity, a raw entity handle -- see
+    -- this file's header for why this, not AddModel/a bare sphere zone).
+    -- Routed through K9Compat (shared/compat/core.lua) rather than
+    -- `exports.ox_target:addLocalEntity` directly this pass -- see this
+    -- file's own "COMPAT LAYER" header section. The returned handle is
+    -- OPAQUE and private to whichever adapter produced it (see
+    -- shared/compat/target.lua's own header) -- recorded here, passed to
+    -- RemoveLocalEntity UNTOUCHED in DespawnShopPed below, never inspected.
+    -- A `nil` handle (no usable target adapter detected) is recorded as-is;
+    -- DespawnShopPed's own `if handle then` guard already treats that as
+    -- "nothing to remove", so no ped is targetable but nothing errors.
+    local handle = K9Compat.Get('target').AddLocalEntity(ped, {
         {
             name = 'qbx_k9unit:equipmentShop:' .. key,
             label = label,
             icon = 'fas fa-shopping-basket',
             groups = ShopGroups,
             onSelect = function()
-                exports.ox_inventory:openInventory('shop', { type = ShopType })
+                K9Compat.Get('inventory').OpenShop(ShopType)
             end,
         },
     })
+    SpawnedTargetHandles[key] = handle
 end
 
 --- Deletes `key`'s currently-spawned ped BY ITS OWN RECORDED HANDLE -- never
@@ -414,11 +462,15 @@ local function DespawnShopPed(key)
     local ped = SpawnedPeds[key]
     if not ped then return end
 
+    local handle = SpawnedTargetHandles[key]
     SpawnedPeds[key] = nil
+    SpawnedTargetHandles[key] = nil
     SpawnedLocSnapshot[key] = nil
 
     if DoesEntityExist(ped) then
-        exports.ox_target:removeLocalEntity(ped)
+        if handle then
+            K9Compat.Get('target').RemoveLocalEntity(handle)
+        end
         DeleteEntity(ped)
     end
 end

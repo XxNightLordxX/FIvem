@@ -86,9 +86,10 @@
     so it is requested from whoever owns the tablet's server-side glue
     (this pass's own report), with escalated wording in 'item' mode per
     the coordinator's own instruction. This file's OWN, client-side
-    defence is narrower but real: IsOxInventoryUseCapable() below guards
-    the `useItem` export call itself (mirrors client/inventory.lua's
-    IsOxInventoryOpenCapable), so a missing/outdated ox_inventory
+    defence is narrower but real: IsInventoryUseCapable() below guards the
+    K9Compat-routed `UseItem` call itself (asks shared/compat/core.lua's own
+    detection result, not `exports.ox_inventory` directly -- see that
+    function's own doc comment), so a missing/outdated/undetected inventory
     degrades to a logged warning + a player-facing notify, never an
     uncaught error out of an item-use event.
     The radial entry point (this pass's own report names the exact item)
@@ -390,17 +391,23 @@ if openMode == 'command' or openMode == 'both' then
 end
 
 if openMode == 'item' or openMode == 'both' then
-    --- Runtime existence guard for exports.ox_inventory:useItem -- mirrors
-    --- client/inventory.lua's IsOxInventoryOpenCapable exactly (same
-    --- GetResourceState + pcall'd export-access shape): ox_inventory being
-    --- a hard fxmanifest.lua dependency only guarantees it was RUNNING when
-    --- THIS resource started, never that the export still exists for the
-    --- rest of the session.
+    --- Runtime existence guard for the K9Compat-detected inventory's
+    --- UseItem method -- same PURPOSE as the pre-compat-layer
+    --- `IsOxInventoryUseCapable` this replaces (mirrors
+    --- client/inventory.lua's IsOxInventoryOpenCapable's GetResourceState +
+    --- pcall'd export-access shape at the adapter-build layer), but now
+    --- asks the compat layer's own detection result instead of probing
+    --- `exports.ox_inventory` directly, so this guard -- and its warning --
+    --- are correct for WHATEVER inventory Config.Compat resolved, not only
+    --- ox_inventory. `K9Compat.Which('inventory')` returns a non-nil
+    --- resourceName only when a real, verified adapter is currently active
+    --- for this realm; `K9Compat.Get('inventory')` itself is NEVER nil (see
+    --- shared/compat/core.lua's own header) so it cannot be used for this
+    --- existence check on its own -- its no-op stub would silently satisfy
+    --- a bare `type(...) == 'table'` test.
     --- @return boolean
-    local function IsOxInventoryUseCapable()
-        if GetResourceState('ox_inventory') ~= 'started' then return false end
-        local ok, useItemExport = pcall(function() return exports.ox_inventory.useItem end)
-        return ok and type(useItemExport) == 'function'
+    local function IsInventoryUseCapable()
+        return K9Compat.Which('inventory') ~= nil
     end
 
     -- Purely LOCAL client event (never networked -- no `source`, no
@@ -418,8 +425,8 @@ if openMode == 'item' or openMode == 'both' then
     -- for the item's mere EXISTENCE); documented here, and in this pass's
     -- own report, not assumed silently.
     AddEventHandler('qbx_k9unit:client:useTabletItem', function(data, slot)
-        if not IsOxInventoryUseCapable() then
-            print('[qbx_k9unit] WARNING: the K9 Command Tablet item was used, but exports.ox_inventory:useItem is unavailable (ox_inventory missing/outdated) -- cannot open.')
+        if not IsInventoryUseCapable() then
+            print('[qbx_k9unit] WARNING: the K9 Command Tablet item was used, but no usable inventory adapter is currently detected (Config.Compat) -- cannot open. Run /k9compat (if enabled) to see why.')
             lib.notify({ title = locale('common.notify_title'), description = locale('tablet.open_failed_generic'), type = 'error' })
             return
         end
@@ -433,8 +440,14 @@ if openMode == 'item' or openMode == 'both' then
         -- items.lua, which this resource does not own; consumeItemOnUse is
         -- a documented EXPECTATION for what that field should be set to
         -- (0/false for a reusable tablet), not an enforced override -- see
-        -- this pass's own report.
-        exports.ox_inventory:useItem(data, function(approved)
+        -- this pass's own report. Routed through K9Compat.Get('inventory')
+        -- rather than `exports.ox_inventory:useItem` directly this pass
+        -- (shared/compat/core.lua) -- the adapter's own UseItem is already
+        -- pcall-safe and guarantees `cb` fires exactly once even if the
+        -- underlying export throws (see shared/compat/inventory.lua's own
+        -- UseItem doc comment), so no additional guard is needed here
+        -- beyond the IsInventoryUseCapable() check above.
+        K9Compat.Get('inventory').UseItem(data, function(approved)
             if approved then OpenTablet() end
         end)
     end)

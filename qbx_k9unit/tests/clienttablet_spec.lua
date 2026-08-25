@@ -172,25 +172,42 @@ local function newTabletFixture(opts)
         return cfg.result
     end
 
-    -- exports.ox_inventory.useItem / .Items -- colon-call syntax
-    -- (`exports.ox_inventory:useItem(...)`) means the REAL first argument
-    -- is the table itself; captured but irrelevant to every assertion
-    -- below, which only cares about `data`/the approval callback.
+    -- FAKE K9COMPAT -- client/tablet.lua no longer calls
+    -- `exports.ox_inventory:useItem` directly (routed through
+    -- `K9Compat.Get('inventory').UseItem` this pass, see that file's own
+    -- IsInventoryUseCapable doc comment); the real shared/compat/
+    -- inventory.lua adapter is covered by its own dedicated spec
+    -- (tests/compatinventory_spec.lua), so this fixture only needs a
+    -- minimal fake whose `Which('inventory')` mirrors the OLD
+    -- IsOxInventoryUseCapable's "is a usable inventory currently detected"
+    -- gate (`setOxInventoryStarted` below still drives it, same test
+    -- semantics as before) and whose `Get('inventory').UseItem` behaves
+    -- like the real ox_inventory adapter's own UseItem -- calls `cb`
+    -- synchronously with `useItemApproves`, recording `data` the same way
+    -- every existing assertion on `f.useItemCalls` already expects.
     local oxInventoryStarted = true
     local useItemApproves = true
     local useItemCalls = {}
-    local exportsStub = {
-        ox_inventory = {
-            useItem = function(_self, data, cb)
-                useItemCalls[#useItemCalls + 1] = data
-                cb(useItemApproves)
-            end,
-        },
+    local fakeK9Compat = {
+        Which = function(system)
+            if system == 'inventory' then
+                return oxInventoryStarted and 'ox_inventory' or nil
+            end
+            return nil
+        end,
+        Get = function(system)
+            if system == 'inventory' then
+                return {
+                    UseItem = function(data, cb)
+                        useItemCalls[#useItemCalls + 1] = data
+                        cb(useItemApproves)
+                    end,
+                }
+            end
+            return {}
+        end,
     }
-    local function GetResourceState(resourceName)
-        if resourceName == 'ox_inventory' then
-            return oxInventoryStarted and 'started' or 'missing'
-        end
+    local function GetResourceState(_resourceName)
         return 'started'
     end
 
@@ -211,7 +228,7 @@ local function newTabletFixture(opts)
         CreateThread = CreateThread, Wait = Wait,
         RegisterCommand = RegisterCommand, RegisterNUICallback = RegisterNUICallback,
         AddEventHandler = AddEventHandler, GetCurrentResourceName = GetCurrentResourceName,
-        GetResourceState = GetResourceState, exports = exportsStub,
+        GetResourceState = GetResourceState, K9Compat = fakeK9Compat,
         ExecuteCommand = ExecuteCommand, TriggerServerEvent = TriggerServerEvent,
 
         -- FEATURE_TRIGGERS dependencies -- plain call-recording stand-ins

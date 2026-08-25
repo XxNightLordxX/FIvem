@@ -769,6 +769,36 @@ end
 --   * Removal is by name (`removeGlobalPlayer`/`removeGlobalVehicle`/
 --     `removeGlobalObject`/`removeModel`), the exact same `.name` field
 --     ox_target's own removal uses.
+--   * `addLocalEntity(entityIds, options)`/`removeLocalEntity(entityIds,
+--     remove)` are real, confirmed exports, byte-identical in shape to
+--     ox_target's own (see this factory's AddLocalEntity/RemoveLocalEntity
+--     below). ONE CONFIRMED TRAP, deliberately NOT triggered by this
+--     adapter: setting `option.qtarget = true` on a translated option
+--     silently switches this backend's own `onSelect` to receiving a bare
+--     entity handle instead of the `{ entity = ... }` table every onSelect
+--     in this resource actually reads -- this adapter's methods never set
+--     that field (they pass options straight through, unlike
+--     qb-target's/qtarget's TranslateOption, which never touches it
+--     either), so this trap does not apply here, but it is exactly the kind
+--     of thing a future edit to this factory could reintroduce by accident.
+--
+-- DISCLOSED, UNVERIFIED UNKNOWN: sleepless_interact's own resource manifest
+-- declares `provides { 'ox_target', 'qtarget' }` (so scripts written against
+-- either of those exports work unmodified against a sleepless_interact
+-- install). Whether that makes `GetResourceState('ox_target')`/
+-- `GetResourceState('qtarget')` report `'started'` when ONLY
+-- sleepless_interact is actually running -- which could affect which
+-- candidate this file's own detection walk reaches first -- was not
+-- independently confirmed this session. The failure mode is bounded either
+-- way, not solved blind: `OxTargetFactory`/`QtargetFactory` each still
+-- independently probe for THEIR OWN exact export names
+-- (`addGlobalPlayer`/`Player`/etc, camelCase vs PascalCase, both absent from
+-- sleepless_interact's real export list), so even if `GetResourceState`
+-- reports `'started'` for a name sleepless_interact merely `provides`,
+-- `VerifyMethods` in core.lua still rejects that candidate for missing
+-- methods and detection moves on -- it does not silently misdetect as a
+-- working ox_target/qtarget. Recorded here as an open question for whoever
+-- next has a live install to check, not treated as solved.
 --
 -- ONE GENUINE GAP: sleepless_interact has NO sphere-zone primitive. Its
 -- nearest equivalent is `addCoords(coords, options)`

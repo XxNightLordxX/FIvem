@@ -151,7 +151,7 @@ do
                 server = { 'GetInventoryItems', 'GetContainerFromSlot', 'GetItemCount', 'RemoveItem', 'RegisterStash', 'RegisterShop', 'RegisterHook' },
             },
             target = {
-                client = { 'AddGlobalPlayer', 'AddGlobalVehicle', 'AddGlobalObject', 'AddModel', 'AddSphereZone', 'Remove' },
+                client = { 'AddGlobalPlayer', 'AddGlobalVehicle', 'AddGlobalObject', 'AddModel', 'AddSphereZone', 'Remove', 'AddLocalEntity', 'RemoveLocalEntity' },
                 server = {},
             },
             framework = {
@@ -550,7 +550,7 @@ do
         local seenRealm
         clientCtx.K9Compat.RegisterAdapter('target', 'ox_target', function(realm)
             seenRealm = realm
-            return { AddGlobalPlayer = function() end, AddGlobalVehicle = function() end, AddGlobalObject = function() end, AddModel = function() end, AddSphereZone = function() end, Remove = function() end }
+            return { AddGlobalPlayer = function() end, AddGlobalVehicle = function() end, AddGlobalObject = function() end, AddModel = function() end, AddSphereZone = function() end, Remove = function() end, AddLocalEntity = function() end, RemoveLocalEntity = function() end }
         end)
         clientCtx.resourceStates['ox_target'] = 'started'
         clientCtx.env.Config.Compat.Systems.target.candidates = { 'ox_target' }

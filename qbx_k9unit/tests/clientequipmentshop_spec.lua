@@ -8,8 +8,8 @@
     that are actually load-bearing:
 
       - A real ped is created (not a bare sphere) and targeted directly via
-        `exports.ox_target:addLocalEntity` with the resolved model/heading/
-        scenario/label -- section B.
+        `K9Compat.Get('target').AddLocalEntity` with the resolved
+        model/heading/scenario/label -- section B.
       - ENTITY LIFECYCLE, this task's own named biggest risk: a ped is
         deleted BY ITS OWN RECORDED HANDLE when the player leaves
         PED_DESPAWN_RADIUS (section C), when its own location's data
@@ -136,20 +136,44 @@ local function newFixture(opts)
     local function SetBlockingOfNonTemporaryEvents(e, toggle) blockedCalls[#blockedCalls + 1] = { e, toggle } end
     local function TaskStartScenarioInPlace(e, name, timeToLeave, playIntro) scenarioCalls[#scenarioCalls + 1] = { e, name, timeToLeave, playIntro } end
 
-    local targetedEntities = {} -- [pedHandle] = options (from addLocalEntity)
+    -- FAKE K9COMPAT -- this file no longer calls `exports.ox_target`/
+    -- `exports.ox_inventory` directly (routed through K9Compat.Get(...)
+    -- this pass, see client/equipmentshop.lua's own "COMPAT LAYER" header
+    -- section); the real shared/compat/*.lua adapters are covered by their
+    -- own dedicated specs (tests/compattarget_spec.lua,
+    -- tests/compatinventory_spec.lua), so this fixture only needs a
+    -- minimal fake that records calls the same shape a real ox_target/
+    -- ox_inventory-backed adapter would, keeping every existing assertion
+    -- below (`f.targetedEntities`, `f.removedEntities`,
+    -- `f.openInventoryCalls`) meaningful without re-deriving the adapter
+    -- translation this spec does not own testing.
+    local targetedEntities = {} -- [pedHandle] = options (from AddLocalEntity)
     local removedEntities = {}
     local openInventoryCalls = {}
-    local exportsStub = {
-        ox_target = {
-            addLocalEntity = function(_self, entity, options) targetedEntities[entity] = options end,
-            removeLocalEntity = function(_self, entity)
-                removedEntities[#removedEntities + 1] = entity
-                targetedEntities[entity] = nil
-            end,
-        },
-        ox_inventory = {
-            openInventory = function(_self, kind, shopOpts) openInventoryCalls[#openInventoryCalls + 1] = { kind, shopOpts } end,
-        },
+    local fakeK9Compat = {
+        Get = function(system)
+            if system == 'target' then
+                return {
+                    AddLocalEntity = function(entity, options)
+                        targetedEntities[entity] = options
+                        return { entity = entity }
+                    end,
+                    RemoveLocalEntity = function(handle)
+                        if type(handle) ~= 'table' then return end
+                        removedEntities[#removedEntities + 1] = handle.entity
+                        targetedEntities[handle.entity] = nil
+                    end,
+                }
+            end
+            if system == 'inventory' then
+                return {
+                    OpenShop = function(shopType)
+                        openInventoryCalls[#openInventoryCalls + 1] = { 'shop', { type = shopType } }
+                    end,
+                }
+            end
+            return {}
+        end,
     }
 
     local function lib_callback_await(name, ...)
@@ -167,7 +191,7 @@ local function newFixture(opts)
         RegisterNetEvent = RegisterNetEvent,
         GetCurrentResourceName = function() return 'qbx_k9unit' end,
         print = printStub,
-        exports = exportsStub,
+        K9Compat = fakeK9Compat,
         lib = { callback = { await = lib_callback_await } },
         Config = opts.config,
         GetEntityCoords = GetEntityCoords,

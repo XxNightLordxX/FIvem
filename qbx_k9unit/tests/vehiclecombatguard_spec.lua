@@ -207,9 +207,9 @@ local function newVehicleFixture(opts)
     -- 'started', so detection deterministically resolves to it. Every
     -- REQUIRED_EXPORTS name (shared/compat/target.lua's OxTargetFactory)
     -- must exist as a callable function or the whole adapter is rejected as
-    -- unverified and silently falls back to the no-op stub -- the five
-    -- `remove*` names below are never actually called by anything this spec
-    -- exercises, but must still exist.
+    -- unverified and silently falls back to the no-op stub -- every
+    -- `remove*` name and `addLocalEntity`/`removeLocalEntity` below is never
+    -- actually called by anything this spec exercises, but must still exist.
     local addGlobalVehicleCalls = {}
     local exportsTable = {
         ox_target = {
@@ -223,6 +223,8 @@ local function newVehicleFixture(opts)
             removeGlobalObject = function() end,
             removeModel = function() end,
             removeZone = function() end,
+            addLocalEntity = function() end,
+            removeLocalEntity = function() end,
         },
     }
     local function IsDuplicityVersion() return false end -- client realm, for shared/compat/core.lua

@@ -170,6 +170,8 @@ local function newSearchFixture(opts)
     function oxTargetStub.removeGlobalObject() end
     function oxTargetStub.removeModel() end
     function oxTargetStub.removeZone() end
+    function oxTargetStub.addLocalEntity() end
+    function oxTargetStub.removeLocalEntity() end
 
     local function IsDuplicityVersion() return false end -- client realm, for shared/compat/core.lua
     local function GetResourceState(resourceName)
