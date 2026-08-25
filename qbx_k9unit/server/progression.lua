@@ -400,6 +400,28 @@ end)
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
+    -- PERFORMANCE FIX (QA pass): AwardXP (this file's ONLY write path to
+    -- `k9_progression`) is itself a no-op whenever Config.Features.XPProgression
+    -- is false, so on a server where the flag has never been enabled no
+    -- citizenid can have a real row to warm here -- this loop was still
+    -- running a real MySQL.scalar.await per connected player
+    -- (LoadXPForCitizenid) for a cache PushTierSnapshot immediately
+    -- discards anyway (it's gated on the same flag). Gated here the same
+    -- way the write path already is.
+    --
+    -- KNOWN TRADE-OFF, disclosed rather than silently accepted: GetXP/
+    -- GetXPTier (server/exports.lua, and this file's own doc comments) are
+    -- deliberately NOT gated on this flag, so an operator who enables it,
+    -- lets a citizenid earn real XP, disables it again, then restarts this
+    -- resource while that citizenid is still online reintroduces this
+    -- loop's own original "cache sits at 0 until next reconnect" gap for
+    -- that narrow case. Accepted here for the same reason
+    -- server/partnership.lua's identical-shape fix accepts the mirror
+    -- case: earning XP at all already required the flag to have been
+    -- deliberately turned on once; the common "flag has always been
+    -- false" default-install case this fix targets cannot exhibit it.
+    if not Config.Features.XPProgression then return end
+
     for _, playerIdStr in ipairs(GetPlayers()) do
         local src = tonumber(playerIdStr)
         if src then

@@ -243,6 +243,24 @@
       character is currently hesitating (FearStress) or distracted cannot
       have a bite-hold/takedown request granted; this is a check on the
       REQUESTING K9's own wellbeing state, never the target's.
+      SECURITY (coder-security, config-audit follow-up pass — see
+      ValidateCombatRequest's own inline comment below and
+      server/wellbeing.lua's IsHesitating doc comment for the full
+      writeup): IsHesitating()'s underlying signal (fearStress, driven by
+      the payload-less/forgeable 'relayWeaponFire' event) is not something
+      this file can independently verify — this call site is a hard reject
+      on a value server/wellbeing.lua itself documents as forgeable by ANY
+      connected player who gets physically near the TARGET K9 (not just by
+      that K9's own actions). server/wellbeing.lua's own
+      HESITATION_MAX_CONTINUOUS_MS bounds the worst case (a forged
+      hesitation episode cannot renew forever — every episode is followed
+      by a guaranteed window where this gate grants normally again), so
+      this is a disclosed, bounded nuisance risk, not an indefinite
+      denial-of-capability. If this call site's trust in IsHesitating() ever
+      changes (e.g. a soft penalty replaces the hard reject, or a
+      corroboration signal is added upstream), update wellbeing.lua's
+      matching disclosure in the same pass — this is exactly the kind of
+      cross-file disclosure that goes stale silently otherwise.
     - Calls AwardXP(citizenid, awardKey), resource-global from
       server/progression.lua, ONLY IF IT EXISTS (same runtime-existence-guard
       convention, mirroring server/tracking.lua's own trackSourceResolved
@@ -1033,78 +1051,99 @@ end
 -- misconfigured detection-sampling interval.
 local MAINTENANCE_INTERVAL_MS = 500
 
-CreateThread(function()
-    while true do
-        Wait(MAINTENANCE_INTERVAL_MS)
-        local now = GetGameTimer()
+-- PERFORMANCE FIX (QA pass), gated at thread-creation time ONLY — never
+-- re-checked inside the loop, matching the sibling compliance-sampling
+-- thread's own "Config is read once at resource start and never mutated at
+-- runtime" precedent immediately below. Safe because `ActiveHolds` cannot
+-- receive an entry from ANY path unless one of BiteAndHold/
+-- NonLethalTakedown/PropDragging is on: every write site (requestBiteHold,
+-- the takedown handler, requestDrag) routes through ValidateCombatRequest's
+-- `featureEnabled` parameter, which returns 'feature_disabled' and writes
+-- nothing before that write site is reached. HandlerDownDefense is included
+-- even though it never itself writes an ActiveHolds entry (it only relays a
+-- pre-selected-target NOTIFICATION to the K9's own client per this file's
+-- header/server/defense.lua's own "UI/auto-targeting CONVENIENCE, never an
+-- AI takeover" rule — the K9 must still separately trigger
+-- requestBiteHold/requestTakedown, independently re-gated on their own
+-- flags) — included here purely as defense-in-depth so this condition
+-- never has to be revisited if that division of responsibility ever
+-- changes. With all four false, `ActiveHolds` is provably always empty, so
+-- not running this thread is behaviorally identical to running it forever
+-- against an empty table — no hold can ever be stranded by this gate.
+if Config.Features.BiteAndHold or Config.Features.NonLethalTakedown or Config.Features.PropDragging or Config.Features.HandlerDownDefense then
+    CreateThread(function()
+        while true do
+            Wait(MAINTENANCE_INTERVAL_MS)
+            local now = GetGameTimer()
 
-        for targetNetId, hold in pairs(ActiveHolds) do
-            if now >= hold.expiresAt then
-                -- MEDIUM, QA-flagged this session: EndHold reaches AwardXP
-                -- (guarded only by a `type(...) == 'function'` existence
-                -- check, no pcall of its own) and TriggerClientEvent calls
-                -- that could theoretically error on bad state — the
-                -- compliance-sampling thread's own SampleCompliance call
-                -- is already pcall-wrapped for exactly this reason; this
-                -- call was not, despite both being shared, resource-wide
-                -- maintenance coroutines. An uncaught
-                -- error here would kill this thread PERMANENTLY (Lua
-                -- coroutines/threads do not resume after an unhandled
-                -- error), silently disabling expiry enforcement — the "no
-                -- unbounded trap" guarantee itself — for every future hold/
-                -- takedown/drag for the rest of the resource's uptime, and
-                -- would wedge whatever ActiveHolds/K9ActiveEffect entries
-                -- existed at that moment into a permanent already_held/
-                -- already_engaged lockout with nothing left running to ever
-                -- clear them. Mirrored here, not left asymmetric.
-                local ok, err = pcall(EndHold, targetNetId, 'timeout')
-                if not ok then
-                    print(('[qbx_k9unit] combat EndHold(timeout) errored for netId %s: %s'):format(targetNetId, tostring(err)))
-                end
-            elseif not ResolveNetworkEntity(targetNetId, 1) then
-                -- RED-TEAM FINDING (PropDragging), generalized to every
-                -- effectType: DragExceedsMaxDistance below (this thread)
-                -- and SampleCompliance (its own, separate compliance-
-                -- sampling thread) both used to bail out silently the
-                -- moment their own internal ResolveNetworkEntity(targetNetId, 1)
-                -- call returned nil, on the stated assumption that "the
-                -- maintenance loop's own expiry/disconnect cleanup handles
-                -- teardown" — but the ONLY disconnect cleanup that exists
-                -- (the playerDropped handler below) fires on a full
-                -- disconnect, never on ped destruction/recreation without
-                -- one. If a held/dragged player's ped is destroyed and
-                -- replaced with a new network id without disconnecting
-                -- (e.g. some ambulance/revive flows), the OLD targetNetId
-                -- becomes permanently unresolvable, silently skipped by
-                -- both checks forever — leaving nothing but the hard
-                -- `hold.expiresAt` timeout above to ever clear it, up to
-                -- Config.Combat.BiteAndHold.maxDurationMs/
-                -- Config.Combat.PropDragging.maxDragDurationMs later. This
-                -- check catches that gap directly, for every effectType at
-                -- once (bite/takedown/drag, player or NPC target alike) —
-                -- a target that has become permanently unresolvable is
-                -- ended immediately rather than left to the hard timeout,
-                -- the same class of fix as this file's own
-                -- reportBiteHoldTargetDied handler above (a target that
-                -- "went away without disconnecting"), applied generically
-                -- here instead of only for the client-reported-death case.
-                -- Server-side ResolveNetworkEntity reflects real global
-                -- entity existence (not "streamed to a particular client"),
-                -- so a nil result for an ALREADY-successfully-resolved
-                -- hold's target is a strong, not a transient, signal.
-                local ok, err = pcall(EndHold, targetNetId, 'target_unresolvable')
-                if not ok then
-                    print(('[qbx_k9unit] combat EndHold(target_unresolvable) errored for netId %s: %s'):format(targetNetId, tostring(err)))
-                end
-            elseif hold.effectType == 'drag' and DragExceedsMaxDistance(hold, targetNetId) then
-                local ok, err = pcall(EndHold, targetNetId, 'max_distance_exceeded')
-                if not ok then
-                    print(('[qbx_k9unit] combat EndHold(max_distance_exceeded) errored for netId %s: %s'):format(targetNetId, tostring(err)))
+            for targetNetId, hold in pairs(ActiveHolds) do
+                if now >= hold.expiresAt then
+                    -- MEDIUM, QA-flagged this session: EndHold reaches AwardXP
+                    -- (guarded only by a `type(...) == 'function'` existence
+                    -- check, no pcall of its own) and TriggerClientEvent calls
+                    -- that could theoretically error on bad state — the
+                    -- compliance-sampling thread's own SampleCompliance call
+                    -- is already pcall-wrapped for exactly this reason; this
+                    -- call was not, despite both being shared, resource-wide
+                    -- maintenance coroutines. An uncaught
+                    -- error here would kill this thread PERMANENTLY (Lua
+                    -- coroutines/threads do not resume after an unhandled
+                    -- error), silently disabling expiry enforcement — the "no
+                    -- unbounded trap" guarantee itself — for every future hold/
+                    -- takedown/drag for the rest of the resource's uptime, and
+                    -- would wedge whatever ActiveHolds/K9ActiveEffect entries
+                    -- existed at that moment into a permanent already_held/
+                    -- already_engaged lockout with nothing left running to ever
+                    -- clear them. Mirrored here, not left asymmetric.
+                    local ok, err = pcall(EndHold, targetNetId, 'timeout')
+                    if not ok then
+                        print(('[qbx_k9unit] combat EndHold(timeout) errored for netId %s: %s'):format(targetNetId, tostring(err)))
+                    end
+                elseif not ResolveNetworkEntity(targetNetId, 1) then
+                    -- RED-TEAM FINDING (PropDragging), generalized to every
+                    -- effectType: DragExceedsMaxDistance below (this thread)
+                    -- and SampleCompliance (its own, separate compliance-
+                    -- sampling thread) both used to bail out silently the
+                    -- moment their own internal ResolveNetworkEntity(targetNetId, 1)
+                    -- call returned nil, on the stated assumption that "the
+                    -- maintenance loop's own expiry/disconnect cleanup handles
+                    -- teardown" — but the ONLY disconnect cleanup that exists
+                    -- (the playerDropped handler below) fires on a full
+                    -- disconnect, never on ped destruction/recreation without
+                    -- one. If a held/dragged player's ped is destroyed and
+                    -- replaced with a new network id without disconnecting
+                    -- (e.g. some ambulance/revive flows), the OLD targetNetId
+                    -- becomes permanently unresolvable, silently skipped by
+                    -- both checks forever — leaving nothing but the hard
+                    -- `hold.expiresAt` timeout above to ever clear it, up to
+                    -- Config.Combat.BiteAndHold.maxDurationMs/
+                    -- Config.Combat.PropDragging.maxDragDurationMs later. This
+                    -- check catches that gap directly, for every effectType at
+                    -- once (bite/takedown/drag, player or NPC target alike) —
+                    -- a target that has become permanently unresolvable is
+                    -- ended immediately rather than left to the hard timeout,
+                    -- the same class of fix as this file's own
+                    -- reportBiteHoldTargetDied handler above (a target that
+                    -- "went away without disconnecting"), applied generically
+                    -- here instead of only for the client-reported-death case.
+                    -- Server-side ResolveNetworkEntity reflects real global
+                    -- entity existence (not "streamed to a particular client"),
+                    -- so a nil result for an ALREADY-successfully-resolved
+                    -- hold's target is a strong, not a transient, signal.
+                    local ok, err = pcall(EndHold, targetNetId, 'target_unresolvable')
+                    if not ok then
+                        print(('[qbx_k9unit] combat EndHold(target_unresolvable) errored for netId %s: %s'):format(targetNetId, tostring(err)))
+                    end
+                elseif hold.effectType == 'drag' and DragExceedsMaxDistance(hold, targetNetId) then
+                    local ok, err = pcall(EndHold, targetNetId, 'max_distance_exceeded')
+                    if not ok then
+                        print(('[qbx_k9unit] combat EndHold(max_distance_exceeded) errored for netId %s: %s'):format(targetNetId, tostring(err)))
+                    end
                 end
             end
         end
-    end
-end)
+    end)
+end
 
 -- Shared COMPLIANCE-SAMPLING thread — job (b) from this file's header,
 -- deliberately a SEPARATE thread from the expiry thread above rather than
