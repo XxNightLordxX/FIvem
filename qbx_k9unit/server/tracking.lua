@@ -169,6 +169,28 @@
     comment). Neither change touches the forged-trail DECISION above or the
     REVEAL — only trackSourceResolved's XP-ticket eligibility.
 
+    ADDENDUM 3 (coder-backend correctness pass, this pass — ADDENDUM 2's own
+    fix was STILL not sufficient): ADDENDUM 2 rations a single TrackableLog
+    ENTRY to one ticket ever and requires genuine elapsed time to redeem one,
+    but never touched how fast a fresh, never-ticketed entry can be produced
+    in the first place — and producing one is cheap: a modified client can
+    call the payload-less relayDamageEvent/relayWeaponFire directly (the same
+    forgeable-by-design surface the FORGED TRAIL DECISION above already
+    accepts for the REVEAL, but that decision was never re-evaluated against
+    this XP angle), and 'scent' needs no forgery at all — an ordinary,
+    unmodified drop/walk-away/walk-back/pick-up-and-repeat loop manufactures
+    a fresh entry every cycle. Config.Tracking.<Type>.searchCooldownMs
+    (5000ms shipped) was the only per-cycle throttle either path was actually
+    bound by, comfortably longer than MIN_TRACK_XP_DISTANCE's own real-travel
+    floor — enough for a farmer to sustain roughly one ticket every ~5s this
+    way, ~7,200 XP/hr, HIGHER than the ~3,600-4,200 XP/hr ADDENDUM 2 itself
+    treats as worth closing. Closed by `TrackTicketMintCooldown` (see its own
+    declaration comment below): a per-source, cross-trackType cooldown on
+    ticket-MINTING itself, independent of entry-manufacturing cost or which
+    trackType is used. Does not touch the REVEAL (`found = true`/`coords` is
+    unaffected) or ADDENDUM 1/2's own mechanisms, which still apply on top of
+    this for whatever tickets do get minted.
+
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 2, per SPEC.md §11.4 items 1, 3, 4.
     Identical in shape to server/certifications.lua's contract block so
@@ -238,7 +260,13 @@
        `ox_inventory` ends up running. If the check fails, this hook is
        never registered at all (not registered-then-early-returning) and
        one warning is printed; see `IsOxInventoryHookCapable()`'s own
-       call-site comment for the full reasoning. Otherwise unchanged: fires
+       call-site comment for the full reasoning. LIFECYCLE FIX (this pass):
+       registration is re-run (via `RegisterScentInventoryHook()`) not only
+       on THIS resource's own start but also on ox_inventory's OWN start —
+       see the `AddEventHandler('onResourceStart', ...)` call site's own
+       doc comment for why a bare `restart ox_inventory` would otherwise
+       silently and permanently kill scent tracking without ever restarting
+       this resource. Otherwise unchanged: fires
        synchronously, server-side, whenever ox_inventory processes ANY
        slot-to-slot item move — filtered here to `payload.toType == 'drop'`
        (a ground-drop) only.
@@ -492,6 +520,55 @@ local MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS = 25.0 -- ~90 km/h -- a local implementati
 local TrackArrivalReportCooldown = NewCooldown()
 TrackArrivalReportCooldown.RegisterPlayerDropped()
 local TRACK_ARRIVAL_REPORT_COOLDOWN_MS = 2000
+
+-- SECURITY FIX (coder-backend, this pass -- correctness-pass follow-up on
+-- ADDENDUM 2 above): ADDENDUM 2's `ticketIssued` + `minElapsedMs` pair closes
+-- "reuse the SAME stale entry indefinitely" and "teleport for ~0ms elapsed
+-- time" -- but neither one limits how FAST a brand-new, never-before-ticketed
+-- TrackableLog entry can be manufactured in the first place, only what a
+-- single already-existing entry can ever yield (one ticket, ever) or how
+-- much real travel a single redemption requires. That gap still lets a
+-- steady-state farm through both accepted-risk surfaces this file already
+-- documents:
+--   - Blood/Gunpowder: relayDamageEvent/relayWeaponFire are payload-less and
+--     forgeable BY DESIGN (see the FORGED TRAIL DECISION above, which
+--     explicitly scoped its "cosmetic-only, acceptable risk" verdict to the
+--     REVEAL -- it pre-dates, and was never re-evaluated against, this XP
+--     angle). A modified client can call either directly, at its own current
+--     position, on nothing but that event's relayCooldownMs (300-500ms).
+--   - Scent: needs NO forgery at all -- a genuine, unmodified client
+--     drop/walk-15m-away/walk-back/pick-back-up loop (ordinary ox_inventory
+--     actions) manufactures a fresh, never-ticketed entry every cycle.
+-- Either way, the only per-cycle throttle actually binding this loop today
+-- is Config.Tracking.<Type>.searchCooldownMs (5000ms shipped) -- comfortably
+-- longer than MIN_TRACK_XP_DISTANCE's own real-travel floor
+-- (15m / MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS = 600ms), so a farmer can sustain
+-- roughly one trackSourceResolved ticket every ~5s this way: ~7,200 XP/hr at
+-- the shipped 10-XP award -- HIGHER than the ~3,600-4,200 XP/hr ADDENDUM 2
+-- itself already treats as a real, worth-closing problem, and reachable via
+-- 'scent' by any ordinary player with zero forgery whatsoever.
+--
+-- FIX: one more cooldown, deliberately flat across ALL THREE trackTypes (not
+-- nested by trackType the way TrackQueryCooldown is) -- gates how often THIS
+-- SOURCE may ever MINT a new PendingTrackArrival ticket at all, independent
+-- of which trackType, independent of how cheaply a fresh entry was produced,
+-- and independent of the per-type searchCooldownMs above (which only ever
+-- throttled the QUERY, never the AWARD). Consumed at the exact point a
+-- ticket is minted (see the call site below) -- never at plain resolve-time,
+-- so a `found = false`-or-cosmetic-only resolve (nearestDist too small, no
+-- match, already-ticketed entry, or feature disabled) never spends this
+-- budget. TRACK_TICKET_MINT_COOLDOWN_MS is a local implementation constant,
+-- not a Config.* field -- same "internal defensive bound" posture
+-- MIN_TRACK_XP_DISTANCE's and MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS's own
+-- declaration comments already establish for this identical economy-audit
+-- context -- sized well above every Config.Tracking.<Type>.searchCooldownMs
+-- default (5000ms) specifically so THIS becomes the binding constraint on
+-- AWARD frequency regardless of entry-manufacturing cost, while never
+-- blocking the cosmetic reveal itself (`found = true`/`coords` above is
+-- entirely unaffected either way) or a single legitimate resolve-and-arrive.
+local TrackTicketMintCooldown = NewCooldown()
+TrackTicketMintCooldown.RegisterPlayerDropped()
+local TRACK_TICKET_MINT_COOLDOWN_MS = 30000
 
 -- Per-source rate limit on the 'swapItems' ox_inventory hook below (added
 -- this pass, SPEC.md §9 items 11/17, phase2_notes/scent_source_resolution.md).
@@ -810,9 +887,14 @@ end
 --- production) has NOT been performed as part of this implementation pass —
 --- flagging explicitly rather than silently skipping it, so whoever
 --- deploys this does it once before going live.
-AddEventHandler('onResourceStart', function(resourceName)
-    if GetCurrentResourceName() ~= resourceName then return end
-
+--- Pulled out to a named function (this pass) so it can be invoked from BOTH
+--- lifecycle points below — THIS resource's own `onResourceStart` (the
+--- original, only call site before this pass) and, NEW this pass,
+--- ox_inventory's OWN `onResourceStart` — see the `AddEventHandler` below
+--- this function for why the second call site is needed. Behavior at each
+--- individual call is completely unchanged from the original single-call-site
+--- version.
+local function RegisterScentInventoryHook()
     if not Config.Features.ScentTracking then return end -- nothing to gate for; do not probe/warn about a disabled-by-default feature
 
     if not IsOxInventoryHookCapable() then
@@ -844,6 +926,46 @@ AddEventHandler('onResourceStart', function(resourceName)
             ticketIssued = false, -- ANTI-FARM FIX (this pass) — see findTrackableSource's own comment on this field for the full writeup
         }
     end)
+end
+
+-- LIFECYCLE FIX (coder-backend, this pass): dispatches to
+-- RegisterScentInventoryHook() above on TWO distinct triggers, not just one.
+--
+-- Branch 1 (original, unchanged behavior): THIS resource's own start — see
+-- RegisterScentInventoryHook's own doc comment / the original single-call-site
+-- version's comments (still accurate) for the full "why onResourceStart, not
+-- file-load time" reasoning.
+--
+-- Branch 2 (NEW this pass — closes a real gap): ox_inventory's OWN start.
+-- Confirmed by direct source read of ox_inventory's `modules/hooks/server.lua`
+-- this pass: that module keeps its entire hook table in a plain file-local
+-- Lua variable (`local eventHooks = {}`), re-initialized empty every single
+-- time ox_inventory (re)loads. It DOES clean up correctly when THIS resource
+-- (the one that called registerHook) stops — it has its own
+-- `AddEventHandler('onResourceStop', ...)` that drops every hook whose
+-- `resource` field matches the stopping resource, confirmed via source, so
+-- this resource restarting alone (branch 1 re-firing) can never leave a
+-- stacked/duplicate hook behind. But it has NO symmetric mechanism to ask a
+-- still-running OTHER resource (this one) to re-register after ox_inventory
+-- ITSELF restarts — ox_inventory's fresh `eventHooks` table on restart simply
+-- has no memory of a hook a still-running qbx_k9unit registered against the
+-- PREVIOUS ox_inventory instance. Without this branch, a bare
+-- `restart ox_inventory` (a normal, real ops action, e.g. after an
+-- ox_inventory update) that does NOT also restart qbx_k9unit would leave
+-- scent tracking silently, permanently inert for the rest of qbx_k9unit's
+-- uptime — worse than the already-accepted "silently inert, loudly warned
+-- ONCE at our own startup" posture RegisterScentInventoryHook's own doc
+-- comment describes, since in this specific case no warning would ever print
+-- at all (nothing about THIS resource changed to trigger one). Re-running
+-- the exact same registration path here re-arms the hook against the
+-- freshly-restarted ox_inventory — idempotent to call repeatedly across
+-- however many times ox_inventory itself restarts, precisely because each
+-- restart already wiped ox_inventory's own hook table clean first, so there
+-- is never anything stale here to duplicate.
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_inventory' then
+        RegisterScentInventoryHook()
+    end
 end)
 
 --- SPEC.md §11.4 item 1. Resolves the nearest trackable source of
@@ -1022,8 +1144,17 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     -- have had a ticket minted from it, ever. Without this, walking
     -- MIN_TRACK_XP_DISTANCE away from the SAME still-fresh entry and back
     -- re-earned XP off the one real logged event indefinitely.
+    -- SECURITY FIX (coder-backend, this pass) -- `TrackTicketMintCooldown.Consume`
+    -- is deliberately the LAST condition checked (cheapest/most-defensive
+    -- checks first, same discipline this function's own doc comment already
+    -- establishes) and is a per-SOURCE, cross-trackType budget -- see that
+    -- cooldown's own declaration comment above for the full farm writeup
+    -- this closes. Ordered after `not nearestEntry.ticketIssued` so an
+    -- already-spent entry (which was never going to mint anything anyway)
+    -- doesn't burn this budget for nothing.
     if Config.Features.XPProgression and nearestDist >= MIN_TRACK_XP_DISTANCE
-        and nearestEntry and not nearestEntry.ticketIssued then
+        and nearestEntry and not nearestEntry.ticketIssued
+        and TrackTicketMintCooldown.Consume(source, TRACK_TICKET_MINT_COOLDOWN_MS, now) then
         nearestEntry.ticketIssued = true -- ration this entry to one ticket, ever -- the cosmetic reveal below is unaffected either way
         PendingTrackArrival[source] = {
             trackType = trackType,

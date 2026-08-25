@@ -555,3 +555,28 @@ jobs:
           if __name__ == "__main__":
               main()
           PYEOF
+
+  lua-tests:
+    name: lua5.4 unit tests (tests/)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Lua 5.4 (provides lua5.4 and luac5.4)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
+      - name: Run qbx_k9unit/tests suite
+        run: |
+          cd qbx_k9unit/tests
+          chmod +x run.sh
+          ./run.sh
+        # This resource had 48 files and zero automated tests until now. Every
+        # logic bug found this session -- three XP farms, a remote-steal, a
+        # registry desync, a hesitation lockout -- was caught by a human-style
+        # read, not by a tool. See tests/README.md for what the harness covers
+        # and, more usefully, what it deliberately does not: client/*.lua needs
+        # game natives, and server/search.lua's ResolveAlertTier is `local`
+        # with no testable entry point. run.sh exits non-zero on any failure.
