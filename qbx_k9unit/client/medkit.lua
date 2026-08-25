@@ -83,9 +83,29 @@ local function RequestTreatK9(targetServerId)
     local result = lib.callback.await('qbx_k9unit:server:useK9Medkit', false, targetServerId)
     if not result then return end
 
-    if result.ok then
-        lib.notify({ title = locale('common.notify_title'), description = locale('medkit.treated_success'), type = 'success' })
-    else
+    -- DUPLICATE-TOAST FIX (this pass, coder-backend): a `result.ok` branch
+    -- used to sit here and fire its own lib.notify(medkit.treated_success),
+    -- on this SAME using player's client, for the SAME successful treat
+    -- server/medkit.lua's RunUseK9MedkitMutation already notifies via
+    -- NotifyPlayer(source, locale('medkit.treated_success'), 'success')
+    -- (source there IS this client, the player who triggered this exact
+    -- callback) -- traced both call sites this pass and confirmed they reach
+    -- the identical player with the identical text for one successful
+    -- treat. Removed here, kept server-side: the server is the authority on
+    -- whether the treat actually succeeded (item consumption, cooldown,
+    -- mutex, health clamp all resolve server-side), while this client-side
+    -- branch only ever reflected an already-final `result.ok` it received
+    -- FROM that same server call -- so it had nothing of its own to add, and
+    -- dropping it cannot suppress any outcome the player wasn't already told
+    -- about by the server. Inverted to `if not result.ok then ... end`
+    -- (rather than an `if result.ok then <nothing> else ... end` shape) so
+    -- there is no empty branch left behind for luacheck to flag. Every
+    -- rejection reason below is UNCHANGED: server/medkit.lua notifies on NO
+    -- rejection path (confirmed by reading HandleUseK9Medkit/
+    -- RunUseK9MedkitMutation/the lib.callback.register wrapper in full), so
+    -- this remains the ONLY feedback a player gets for every one of those
+    -- reasons.
+    if not result.ok then
         -- Mirrors client/search.lua's own "unrecognized reason ->
         -- plain error notify" fallback discipline — no client-side
         -- change is required if server/medkit.lua ever adds a new
