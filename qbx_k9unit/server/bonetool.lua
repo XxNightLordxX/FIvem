@@ -211,17 +211,7 @@ local VALID_SUBCOMMAND_SET = { ['goto'] = true, next = true, prev = true, test =
 -- once via table.concat, same multi-line-notify pattern server/admin.lua's
 -- own NotifyPlayer call sites already establish as safe for ox_lib's
 -- notify (embedded '\n' renders as real line breaks there).
-local BONE_TOOL_USAGE = table.concat({
-    'K9 Bone Sweep Tool -- DEV SERVER ONLY.',
-    '/k9bonetool goto <index>  -- preview one exact index (marker + on-screen label)',
-    '/k9bonetool next [step]   -- step the preview forward (default 1)',
-    '/k9bonetool prev [step]   -- step the preview backward (default 1)',
-    '/k9bonetool known         -- list candidate indices from known bone names (still verify with goto)',
-    '/k9bonetool test          -- really attach a marker prop at the current preview index',
-    '/k9bonetool stop          -- stop the preview and remove any test prop',
-    'Found the right index? Record it in config.lua:',
-    '  Config.PropAttachments.boneIndex (vest) or Config.FetchMechanic.mouthBoneIndex (fetch mouth carry).',
-}, '\n')
+local BONE_TOOL_USAGE = locale('bonetool.usage')
 
 --- Sends an ox_lib notification to a specific player, using this file's own
 --- 'K9 Unit — Bone Tool' title. Deliberately kept as a thin LOCAL wrapper
@@ -287,7 +277,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
 
         if not IsPlayerAceAllowed(tostring(src), Config.BoneSweepTool.AcePermission) then
-            NotifyPlayer(src, 'You are not authorized to use this tool.', 'error')
+            NotifyPlayer(src, locale('bonetool.not_authorized'), 'error')
             return
         end
 
@@ -312,7 +302,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         if sub == 'goto' then
             local index = tonumber(args[2])
             if not index then
-                NotifyPlayer(src, 'Usage: /k9bonetool goto <index>', 'error')
+                NotifyPlayer(src, locale('bonetool.usage_goto'), 'error')
                 return
             end
             index = math.floor(index)

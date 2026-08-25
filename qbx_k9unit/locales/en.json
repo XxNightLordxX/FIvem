@@ -2,6 +2,8 @@
   "admin": {
     "cert_history_label": "Certification history for %s",
     "cert_row_format": "job=%s active=%s granted_by=%s granted_at=%s revoked_by=%s revoked_at=%s",
+    "dept_cert_row_format": "citizenid=%s granted_by=%s granted_at=%s",
+    "dept_roster_label": "Certified handlers for department %s",
     "no_results_found": "%s: no results found.",
     "not_authorized": "You are not authorized to run this command.",
     "partnership_history_label": "Partnership history for %s",
@@ -15,6 +17,7 @@
     "search_log_target_citizenid_label": "citizenid=%s",
     "search_log_target_plate_label": "plate=%s",
     "usage_auditcert": "Usage: /k9auditcert [citizenid] [limit]",
+    "usage_auditdept": "Usage: /k9auditdept [job] [limit]",
     "usage_auditpartner": "Usage: /k9auditpartner [citizenid] [limit]",
     "usage_auditsearch": "Usage: /k9auditsearch <officer|plate|person|recent> [value] [limit]",
     "usage_auditsearch_mode": "Usage: /k9auditsearch %s [citizenid] [limit]",
@@ -26,15 +29,18 @@
     "vault_keybind_label": "K9 Advanced Agility Vault (fence/window)"
   },
   "bonetool": {
-    "notify_title": "K9 Unit — Bone Tool",
-    "preview_bone_index": "Previewing bone index: %d\nLooks right? Record it in config.lua: Config.PropAttachments.boneIndex (vest) or Config.FetchMechanic.mouthBoneIndex (fetch mouth carry).\nRun /k9bonetool test to confirm with a real attach first.",
     "bone_index_label": "Bone Index: %d",
     "bone_index_label_test_attached": "Bone Index: %d (TEST PROP ATTACHED)",
-    "test_prop_load_failed": "Test prop failed to load.",
-    "test_attached": "Test-attached at bone index %d.\nWalk/turn around and, for a mouth-carry candidate, bark or pant to check for clipping before recording it.",
+    "known_sweep_footer": "GetPedBoneIndex's own not-found return value is NOT confirmed against primary source -- every value above is raw. Run /k9bonetool goto <n> on anything promising and look with your own eyes before trusting it.",
     "known_sweep_header": "K9 Bone Tool — known-name candidates (raw + UNFILTERED, read the last line):",
     "known_sweep_line": "  %s (0x%X) -> %s",
-    "known_sweep_footer": "GetPedBoneIndex's own not-found return value is NOT confirmed against primary source -- every value above is raw. Run /k9bonetool goto <n> on anything promising and look with your own eyes before trusting it."
+    "not_authorized": "You are not authorized to use this tool.",
+    "notify_title": "K9 Unit — Bone Tool",
+    "preview_bone_index": "Previewing bone index: %d\nLooks right? Record it in config.lua: Config.PropAttachments.boneIndex (vest) or Config.FetchMechanic.mouthBoneIndex (fetch mouth carry).\nRun /k9bonetool test to confirm with a real attach first.",
+    "test_attached": "Test-attached at bone index %d.\nWalk/turn around and, for a mouth-carry candidate, bark or pant to check for clipping before recording it.",
+    "test_prop_load_failed": "Test prop failed to load.",
+    "usage": "K9 Bone Sweep Tool -- DEV SERVER ONLY.\n/k9bonetool goto <index>  -- preview one exact index (marker + on-screen label)\n/k9bonetool next [step]   -- step the preview forward (default 1)\n/k9bonetool prev [step]   -- step the preview backward (default 1)\n/k9bonetool known         -- list candidate indices from known bone names (still verify with goto)\n/k9bonetool test          -- really attach a marker prop at the current preview index\n/k9bonetool stop          -- stop the preview and remove any test prop\nFound the right index? Record it in config.lua:\n  Config.PropAttachments.boneIndex (vest) or Config.FetchMechanic.mouthBoneIndex (fetch mouth carry).",
+    "usage_goto": "Usage: /k9bonetool goto <index>"
   },
   "certifications": {
     "grant_error": "An error occurred while certifying the target.",

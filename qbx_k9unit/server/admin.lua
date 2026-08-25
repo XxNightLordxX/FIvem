@@ -52,6 +52,25 @@
         surface to wrap. Nothing to add unless/until that state is ever
         persisted.
 
+    COVERAGE RE-CHECK (this pass, take 2): a schema review flagged
+    `idx_job_active` (`job`, `active`) on `k9_certifications` — sql/
+    install.sql's own comment on that index names the exact query it
+    exists to serve, "list all certified handlers in department X" — as
+    specified and indexed for but never queried by any code in this
+    resource. Confirmed independently before building on that premise: a
+    repo-wide search for `WHERE job` / `idx_job_active` found the CREATE
+    TABLE's own KEY declaration and doc comment, and nothing else — every
+    query this file already had (QueryCertificationHistory) filters on
+    `citizenid`, using `idx_citizen_job_active` as a prefix scan, never
+    `idx_job_active`. The index has been paying its write-amplification
+    cost on every INSERT/UPDATE to `k9_certifications` since it was added,
+    for a read path nothing exercised. CLOSED this pass: `/k9auditdept`
+    below, whose query is sql/install.sql's own documented `idx_job_active`
+    shape verbatim (`SELECT citizenid, granted_by, granted_at FROM
+    k9_certifications WHERE job = ? AND active = 1`), plus the same
+    ORDER BY/LIMIT discipline every other query in this file already
+    follows.
+
     ======================================================================
     ACCESS MODEL — THE FIRST ACE-GATED SURFACE IN THIS RESOURCE, disclosed
     explicitly (COMPLEMENTARY_FEATURES.md §9's own "precedent-setting
@@ -94,11 +113,12 @@
     ======================================================================
 
     SQL SAFETY — read before touching any query function below:
-      - This file constructs 8 distinct hardcoded SQL string templates in
-        total (COVERAGE RE-CHECK, this pass: was 7 —
+      - This file constructs 9 distinct hardcoded SQL string templates in
+        total (COVERAGE RE-CHECK, this pass: was 8 —
         QueryCertificationHistory:1, QueryPartnershipHistory:2,
         QuerySearchLogBy{Officer,Plate,Person}/QuerySearchLogRecent:4,
-        QueryProgressionSnapshot:1 (new, `/k9auditxp`) — verified by
+        QueryProgressionSnapshot:1, QueryDepartmentRoster:1 (new,
+        `/k9auditdept`) — verified by
         re-reading every `:format(`/literal-string call site below, not
         re-counted from memory). The security property that matters (every
         one of them is 100% hardcoded text, never built from a
@@ -148,7 +168,7 @@
         task's brief names directly.
 
     ======================================================================
-    COMMAND SURFACE (all four commands gated on
+    COMMAND SURFACE (all five commands gated on
     Config.Features.AdminAuditCommands AT REGISTRATION TIME — if that flag
     is not `true`, none of these commands exist at all, not merely a
     runtime no-op; see the onResourceStart block at the bottom of this
@@ -204,11 +224,66 @@
        threshold walk (a `local` function, not exposed as a
        resource-global) here as a second, driftable copy; an admin can
        compare the reported total against Config.XPTiers directly.
+
+    5. '/k9auditdept <job> [limit]'
+       Current ACTIVE certified-handler roster for one department (a
+       Config.Departments key), most recently GRANTED first. Added this
+       pass — see this file's header "COVERAGE RE-CHECK (this pass, take
+       2)" section above for why. Uses `idx_job_active` — the exact query
+       shape sql/install.sql's own comment on that index names ("list all
+       certified handlers in department X").
+
+       ARGUMENT SHAPE: a department name, validated against
+       `Config.Departments` the same way server/certifications.lua's
+       `/k9decertifyoffline` validates its own `job` argument
+       (`if not Config.Departments[job] then ... end`, that file's own
+       `RevokeCertificationOffline`) — reusing an existing, already-vetted
+       validation shape rather than inventing a new one for the same kind
+       of argument. A department name that is not a configured
+       `Config.Departments` key is rejected outright as `invalid_args`,
+       the same posture `IsValidCitizenId`/`NormalizePlateArg` already
+       take for this file's other string arguments — a typo'd/unconfigured
+       job could never have a matching row, so failing fast beats a
+       silent, confusing "no results found."
+
+       ACTIVE-ONLY, NOT FULL HISTORY: this command reports only
+       `active = 1` rows, never revoked ones. Three independent reasons,
+       not just "the index says so": (1) `idx_job_active`'s own
+       sql/install.sql doc comment names this exact query as "list all
+       certified handlers in department X" — a present-tense ROSTER
+       question, not a historical one; (2) `/k9auditcert` above already
+       covers full grant/revoke history (including every department) for
+       one citizenid — a second, department-scoped full-history view
+       would duplicate that command's job rather than serve the roster
+       use case this index exists for; (3) a revoked-history view keyed
+       by department, unlike `/k9auditcert`'s per-citizenid view, would
+       accumulate EVERY citizenid ever certified-then-revoked in that
+       department with no natural per-target scope to bound it — the
+       roster framing keeps this a small, bounded, genuinely useful
+       result set instead.
+
+       RESULT CAP: reuses `Config.AdminAudit.MaxResults.Certifications`
+       (still clamped into `[1, HARD_MAX_RESULTS]` by ClampLimit either
+       way) rather than a new dedicated config key — this queries the
+       exact same `k9_certifications` table `/k9auditcert` already caps
+       under that same key, and a roster is naturally smaller than a
+       full per-citizenid history in the common case (one row per
+       currently-certified handler, not one row per grant/revoke event
+       ever recorded), so the existing per-table cap is the right unit,
+       not a new one.
+
+       DISPLAY BOUNDARY: reuses the exact same three columns
+       `idx_job_active`'s own doc comment names — `citizenid, granted_by,
+       granted_at` — nothing wider. Deliberately does NOT also return
+       `revoked_by`/`revoked_at` (always NULL for an active-only row
+       anyway) or any column `/k9auditcert` does not already expose for
+       the very same table; this command widens WHO the query is scoped
+       by (department instead of citizenid), never WHAT is disclosed.
     ======================================================================
 
     RATE LIMITING: one shared NewCooldown() instance (server/cooldowns.lua
     — per this task's explicit "use the shared constructors" convention)
-    across all four commands, keyed by the CALLER's own source, mirroring
+    across all five commands, keyed by the CALLER's own source, mirroring
     server/certifications.lua's CertifyActionCooldown shape (one cooldown
     covering several related actions, not one per command). This is a
     DB-load/spam guard, not an authorization boundary — nothing here
@@ -242,8 +317,8 @@
     - THIS FILE exposes no resource-global functions of its own — nothing
       else in this resource needs to call into an admin/audit query.
     - THIS FILE performs SELECT-only queries against k9_certifications,
-      k9_partnerships, k9_search_log, and (this pass) k9_progression —
-      read sql/install.sql's header comments on all four tables (index
+      k9_partnerships, k9_search_log, and k9_progression — read
+      sql/install.sql's header comments on all four tables (index
       rationale, exact column shapes) before changing any query below.
     ======================================================================
 
@@ -408,6 +483,21 @@ local function IsValidCitizenId(value)
 end
 
 --- @param value string?
+--- @return boolean
+local function IsValidDepartment(value)
+    -- Same validation shape server/certifications.lua's
+    -- RevokeCertificationOffline already applies to its own `job` argument
+    -- (`if not Config.Departments[job] then ... end`) — reused here rather
+    -- than invented fresh, per this file's header "COMMAND SURFACE" item 5
+    -- "ARGUMENT SHAPE" reasoning. A typo'd/unconfigured department name
+    -- could never have a matching k9_certifications row, so this rejects
+    -- it outright as `invalid_args` instead of silently returning zero
+    -- results — same posture IsValidCitizenId/NormalizePlateArg already
+    -- take for this file's other string arguments.
+    return type(value) == 'string' and value ~= '' and Config.Departments[value] ~= nil
+end
+
+--- @param value string?
 --- @return string? trimmedPlate -- nil if invalid
 local function NormalizePlateArg(value)
     if type(value) ~= 'string' then return nil end
@@ -536,6 +626,19 @@ local function FormatProgressionRow(row)
     -- Deliberately reports the raw `xp` total only — see this file's
     -- header "COMMAND SURFACE" item 4 for why a tier is not derived here.
     return locale('admin.progression_row_format', tostring(row.xp), tostring(row.updated_at))
+end
+
+--- @param row table -- one k9_certifications row (active-only roster shape)
+--- @return string
+local function FormatDeptCertRow(row)
+    -- Deliberately omits `job` (already the query's own fixed argument —
+    -- same "never repeat the field the query is scoped by" convention
+    -- FormatCertRow above follows by omitting `citizenid`) and
+    -- `active`/`revoked_by`/`revoked_at` (always true/NULL/NULL for an
+    -- active-only roster row — see this file's header "COMMAND SURFACE"
+    -- item 5 "DISPLAY BOUNDARY" reasoning for why nothing wider than
+    -- idx_job_active's own documented column list is exposed here).
+    return locale('admin.dept_cert_row_format', tostring(row.citizenid), tostring(row.granted_by), tostring(row.granted_at))
 end
 
 --- Presents `rows` (already fetched, already bounded) to a connected
@@ -670,10 +773,28 @@ local function QueryProgressionSnapshot(citizenid)
     return SafeQuery(sql, { citizenid })
 end
 
+--- '/k9auditdept' query — see this file's header "COMMAND SURFACE" item 5
+--- and "COVERAGE RE-CHECK (this pass, take 2)" for the full reasoning.
+--- Uses `idx_job_active` (`job`, `active`) — this is sql/install.sql's own
+--- documented query for that index, verbatim, with only ORDER BY/LIMIT
+--- added on top (same discipline every other query function in this file
+--- already follows). `active = 1` restricts this to the CURRENT roster,
+--- never revoked history — see this file's header "ACTIVE-ONLY, NOT FULL
+--- HISTORY" reasoning. Ordered by `granted_at DESC` — MySQL sorts this
+--- server-side; this file never parses/compares that value in Lua (see
+--- header "SQL SAFETY").
+--- @param job string -- already validated against Config.Departments by IsValidDepartment
+--- @param limit number -- already clamped by ClampLimit
+--- @return table rows
+local function QueryDepartmentRoster(job, limit)
+    local sql = ('SELECT citizenid, granted_by, granted_at FROM k9_certifications WHERE job = ? AND active = 1 ORDER BY granted_at DESC LIMIT %d'):format(limit)
+    return SafeQuery(sql, { job })
+end
+
 -- ======================================================================
 -- COMMAND REGISTRATION — gated on Config.Features.AdminAuditCommands AT
 -- REGISTRATION TIME (this task's explicit convention): if the flag is not
--- `true`, none of the four commands below are ever registered at all, not
+-- `true`, none of the five commands below are ever registered at all, not
 -- merely a runtime no-op. A missing/nil flag is treated identically to
 -- `false` (feature disabled, no crash) — this resource must not fail to
 -- start for an unrelated server that hasn't touched config.lua's new
@@ -899,5 +1020,44 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
     end, false)
 
-    print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch, k9auditxp).')
+    --- '/k9auditdept <job> [limit]' — see this file's header "COMMAND
+    --- SURFACE" item 5 and "COVERAGE RE-CHECK (this pass, take 2)" for the
+    --- full reasoning (idx_job_active, specified/indexed for but never
+    --- queried until now). Reuses Config.AdminAudit.MaxResults.Certifications
+    --- as its result cap — see item 5's own "RESULT CAP" note for why no
+    --- new config key was added.
+    RegisterCommand('k9auditdept', function(source, args)
+        if not IsAuthorizedAdmin(source) then
+            LogAuditInvocation(source, 'k9auditdept', 'n/a', 'denied')
+            if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
+            return
+        end
+
+        if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
+            LogAuditInvocation(source, 'k9auditdept', 'n/a', 'rate_limited')
+            return
+        end
+
+        local job = args[1]
+        if not IsValidDepartment(job) then
+            LogAuditInvocation(source, 'k9auditdept', 'n/a', 'invalid_args')
+            local usage = locale('admin.usage_auditdept')
+            if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
+            return
+        end
+
+        local limit = ClampLimit(args[2], Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
+        local rows = QueryDepartmentRoster(job, limit)
+        local label = locale('admin.dept_roster_label', job)
+
+        LogAuditInvocation(source, 'k9auditdept', job, 'ok')
+
+        if source == 0 then
+            PrintRowsToConsole(label, rows, FormatDeptCertRow)
+        else
+            PresentRows(source, label, rows, FormatDeptCertRow)
+        end
+    end, false)
+
+    print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch, k9auditxp, k9auditdept).')
 end)
