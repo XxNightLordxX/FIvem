@@ -236,6 +236,16 @@ local HUD_IDLE_TICK_MS = 1000  -- design note §5.4: idle backoff while not visi
 local HUD_HEARTBEAT_MS = 1000  -- design note §5.3: forced re-push ceiling even with no real change
 local HUD_CHANGE_EPSILON = 0.5 -- design note §5.2: per-field change threshold (0-100 scale) before re-pushing; reused unchanged for the wellbeing numeric fields below (same 0-100 contract)
 
+-- Shared, reused (never mutated) metatable forcing dkjson (this runtime's
+-- `json.encode`, which SendNUIMessage's table-argument path encodes
+-- through) to serialize a table as a JSON object (`{}`/`{...}`) even when
+-- it has zero keys, rather than defaulting an empty table to `[]` — see
+-- PushVitals below, where this is applied to the `wellbeing`/`xpTier`
+-- sub-tables every push, for the full reasoning. One shared table reused
+-- via setmetatable on each push (never recreated per-push) so this costs
+-- nothing beyond the two setmetatable calls already cheap on their own.
+local JSON_FORCE_OBJECT_MT = { __jsontype = 'object' }
+
 -- Which of the five wellbeing HUD elements are live, computed ONCE at
 -- file-load time (see this file's header "GATING" note — the same
 -- check-once-not-every-tick posture applies here) so the poll thread below
@@ -462,6 +472,48 @@ end
 --- @param distracted boolean|nil
 --- @param xpTierLabel string|nil
 local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel)
+    -- See this file's header "WELLBEING / XP TIER EXTENSION" — any of
+    -- these five keys being nil above means it is simply ABSENT here (a
+    -- Lua table never stores a nil-valued key), which is exactly the
+    -- "absent, not blank/zeroed" signal html/app.js keys its per-row
+    -- show/hide off of.
+    --
+    -- WIRE-SHAPE FIX: with every wellbeing flag off and XPProgression off
+    -- (the shipped default — see config.lua) every key in both sub-tables
+    -- below is nil, leaving each an EMPTY Lua table. json.lua (dkjson,
+    -- this runtime's actual `json.encode` backing SendNUIMessage's table
+    -- argument — confirmed by reading
+    -- data/shared/citizen/scripting/lua/json.lua directly) cannot tell an
+    -- empty array from an empty object from table content alone and
+    -- defaults an empty table to a JSON array (`isarray({})` returns true
+    -- there since an empty `pairs` loop never trips its "not a
+    -- sequential-integer key" bailout) — so without a hint, this file
+    -- would silently send `wellbeing: []` / `xpTier: []` on the wire,
+    -- contradicting both this header's "always present as tables" promise
+    -- and html/app.js's own `{ ..., wellbeing?: object, xpTier?: object }`
+    -- JSDoc contract. dkjson's own `__jsontype = 'object'` metatable hint
+    -- (same file, checked right where it decides array-vs-object) exists
+    -- for exactly this ambiguity — applied to both sub-tables below so
+    -- they always encode as `{}`/`{...}`, never `[]`, regardless of how
+    -- many of their keys end up populated this push. html/app.js's current
+    -- bracket-property access (`wellbeing[stat]`, `wellbeing.distracted`)
+    -- happens to tolerate either shape today (property access on a JS
+    -- array works the same as on an object), so this was not an observed
+    -- runtime failure — this closes the gap before a stricter downstream
+    -- consumer (or a future app.js rewrite) could turn it into one.
+    local wellbeing = {
+        fatigue = fatigue,
+        mood = mood,
+        fearStress = fearStress,
+        injury = injury,
+        distracted = distracted,
+    }
+    local xpTier = {
+        label = xpTierLabel,
+    }
+    setmetatable(wellbeing, JSON_FORCE_OBJECT_MT)
+    setmetatable(xpTier, JSON_FORCE_OBJECT_MT)
+
     SendNUIMessage({
         action = 'hud:updateVitals',
         data = {
@@ -470,21 +522,8 @@ local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, moo
             stamina = stamina,
             hunger = hunger,
             thirst = thirst,
-            -- See this file's header "WELLBEING / XP TIER EXTENSION" —
-            -- any of these five keys being nil above means it is simply
-            -- ABSENT here (a Lua table never stores a nil-valued key),
-            -- which is exactly the "absent, not blank/zeroed" signal
-            -- html/app.js keys its per-row show/hide off of.
-            wellbeing = {
-                fatigue = fatigue,
-                mood = mood,
-                fearStress = fearStress,
-                injury = injury,
-                distracted = distracted,
-            },
-            xpTier = {
-                label = xpTierLabel,
-            },
+            wellbeing = wellbeing,
+            xpTier = xpTier,
         },
     })
 

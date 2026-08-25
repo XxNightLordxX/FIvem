@@ -53,10 +53,13 @@
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes five resource-global (no `local`) functions:
         RequestPartnerUp(targetServerId: number)
-            Step 1 of the consent handshake, self-initiated side. Mirrors
-            RequestLeashAttach(): re-checks CanShowK9UI() itself (never
-            trusts the caller already did), then only ever sends a
-            request -- never establishes anything locally.
+            Step 1 of the consent handshake, self-initiated side.
+            Re-checks eligibility itself (never trusts the caller already
+            did), then only ever sends a request -- never establishes
+            anything locally. NOT a straight CanShowK9UI() gate like
+            RequestLeashAttach() -- see this function's own doc comment
+            ("BUG FIX (this pass)") for why an unconditional CanShowK9UI()
+            check would silently deny every officer-initiated request.
         BreakPartnership()
             Ends the current partnership, zero consent, always available.
             Exposed for a future client/radial.lua context-sensitive
@@ -296,15 +299,53 @@ end
 --- Step 1 of the consent handshake, self-initiated side. Does NOT
 --- establish anything by itself -- see the partnershipEstablished handler
 --- below for where the pairing actually activates, after the target
---- accepts. Mirrors client/movement.lua's RequestLeashAttach() almost
---- line-for-line.
+--- accepts.
 --- @param targetServerId number
 function RequestPartnerUp(targetServerId)
     -- Re-check, don't trust the caller (ox_target predicate or a future
     -- radial item) already verified this -- cheap client-side sanity
     -- check before bothering the server, which re-validates authoritatively
     -- regardless (server/partnership.lua's CheckPartnershipEligibility).
-    if not CanShowK9UI() then
+    --
+    -- BUG FIX (this pass): the original version of this check was a
+    -- straight, unconditional `if not CanShowK9UI() then` -- mirroring
+    -- client/movement.lua's RequestLeashAttach() literally, per this
+    -- function's own former doc comment. That is wrong FOR THIS FILE
+    -- SPECIFICALLY: CanShowK9UI() == IsOwnModelK9() AND HasK9Access(), so
+    -- it is false for EVERY officer-role player by construction (an
+    -- officer is never modeled as a K9), regardless of that officer's own
+    -- department membership. Unlike leash (where this same shape is only
+    -- reached from a K9-only radial "self actions" menu per SPEC.md's own
+    -- item on that submenu, so the officer-initiated direction goes
+    -- through a different code path there), this file's RequestPartnerUp()
+    -- is the ONE AND ONLY entry point for the "Partner Up" ox_target
+    -- option below, whose own canInteract predicate
+    -- (`IsOwnModelK9() or IsEntityModelK9(entity)`) and this resource's own
+    -- PHASE3_SPEC.md §12.0 item 7 point 1 ("initiated by either party
+    -- (K9-role or officer-role) against the other") both explicitly
+    -- require an officer-initiated request to work. The unconditional gate
+    -- therefore silently denied 100% of officer-initiated "Partner Up"
+    -- attempts with a "you cannot use K9 features right now" notice,
+    -- before the request ever reached the server -- never a security hole
+    -- (server/partnership.lua's CheckPartnershipEligibility is the real
+    -- authority either way), but a real, total functional break of half
+    -- the documented handshake.
+    --
+    -- FIX: only apply the K9-shaped CanShowK9UI() pre-check when the LOCAL
+    -- player would actually be the prospective K9-role party
+    -- (IsOwnModelK9() true) -- mirrors CheckPartnershipEligibility's own
+    -- asymmetric eligibility model (K9-role needs HasK9Access-equivalent
+    -- certification; officer-role needs mere department membership, no
+    -- certification of their own -- see that function's own AUTHORIZATION
+    -- MODEL doc comment). An officer-role initiator has no cheap
+    -- client-side department-membership equivalent exposed as a
+    -- resource-global to pre-check locally -- same "no cheap client-side
+    -- equivalent, let the server answer with a specific reason" tradeoff
+    -- client/movement.lua's own "Certify K9 Handler" ox_target option
+    -- already documents for IsEligibleCertifier -- so this simply defers
+    -- that branch to the server's own CheckPartnershipEligibility, which
+    -- notifies the caller either way.
+    if IsOwnModelK9() and not CanShowK9UI() then
         DenyK9UIAccess()
         return
     end

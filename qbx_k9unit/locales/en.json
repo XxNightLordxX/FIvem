@@ -124,7 +124,6 @@
     "camera_third_person": "Third-person view.",
     "toggle_camera_keybind_label": "Toggle K9 First/Third Person Camera",
     "already_leashed": "You are already leashed.",
-    "leash_request_sent": "Leash request sent.",
     "leash_request_header": "K9 Leash Request",
     "leash_request_content": "%s wants to attach a leash to you. Accept?",
     "officer_fallback_name": "Officer #%d",
@@ -196,6 +195,7 @@
     "recall_label": "Recall K9",
     "toggle_vest_label": "Toggle K9 Vest",
     "deploy_kennel_label": "Deploy Kennel",
+    "open_inventory_label": "Open My Gear",
     "menu_open_label": "${common.notify_title}"
   },
   "recall": {
@@ -228,8 +228,10 @@
   },
   "vehicle": {
     "no_vehicle_nearby": "No K9 vehicle nearby.",
+    "already_in_vehicle": "You can't do that while already sitting in a vehicle.",
     "loaded": "Loaded into the vehicle.",
     "released": "Released from the vehicle.",
+    "vehicle_lost": "Lost contact with the vehicle — released.",
     "target_enter_label": "Load K9 Into Vehicle",
     "target_exit_label": "Release K9 From Vehicle"
   },

@@ -30,6 +30,8 @@
         RequestRecallFetchBall(), IsFetchCarryEngaged().
       - client/propattachment.lua's RequestToggleK9PropAttachment().
       - client/kennel.lua's RequestDeployKennel().
+      - client/inventory.lua's RequestOpenOwnK9Inventory().
+      - client/medkit.lua's RequestTreatNearestK9().
       - client/main.lua's HasK9Access() directly (not just via CanShowK9UI())
         for the one item — Fetch's Throw branch — whose own source file
         documents that it is deliberately gated on HasK9Access() alone, not
@@ -1063,6 +1065,87 @@ if Config.Features.DeployableKennel then
 
             if type(RequestDeployKennel) == 'function' then
                 RequestDeployKennel()
+            end
+        end,
+    }
+end
+
+--- Open My Gear -- Phase 4 (K9Inventory). Closes a real gap: client/inventory.lua
+--- exposes RequestOpenOwnK9Inventory() specifically as a "future
+--- client/radial.lua 'Open My Gear' item" entry point (see that file's own
+--- header, "RESOLVED" note), but until this pass nothing called it -- the
+--- only live entry point into a K9 player's own gear stash was the
+--- ox_target "Open K9 Gear" option on their own ped, awkward/unusual UX
+--- for targeting yourself (that file's own header names this exact
+--- awkwardness as the reason a self-service global was added).
+---
+--- `RequestOpenOwnK9Inventory()` takes no arguments and re-checks both
+--- CanShowK9UI() and Config.Features.K9Inventory internally (confirmed by
+--- reading client/inventory.lua directly, not assumed) -- this item's own
+--- CanShowK9UI() gate below is therefore redundant with the callee, same
+--- "check here too, even though the callee already checks" posture every
+--- other gated item in this file already uses (Toggle K9 Vest/Deploy Kennel
+--- immediately above are the closest precedent: both call a self-contained,
+--- already-gated global the exact same way). This is an INITIATION action
+--- (opens a stash against the local player's own ped), not a
+--- release/termination one, so the "no unbounded trap" exemption given to
+--- Detach Leash/Recall/etc. above does not apply here.
+if Config.Features.K9Inventory then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_open_inventory',
+        label = locale('radial.open_inventory_label'),
+        icon = 'briefcase',
+        onSelect = function()
+            if not CanShowK9UI() then
+                DenyK9UIAccess()
+                return
+            end
+
+            if type(RequestOpenOwnK9Inventory) == 'function' then
+                RequestOpenOwnK9Inventory()
+            end
+        end,
+    }
+end
+
+--- Treat K9 -- Phase 4 (K9Medkit). Closes a real gap: client/medkit.lua
+--- exposes RequestTreatNearestK9() specifically as a radial entry point
+--- (see that file's own header, "FILE-TO-FILE CONTRACT" -> "THIS FILE
+--- exposes one resource-global function for a radial entry point"), but
+--- until this pass nothing called it -- the only live entry point into the
+--- treat-request sequence was the ox_target "Treat K9" option on a
+--- specifically-targeted K9 player, leaving a handler with no visible
+--- nearby K9 (or who simply prefers the radial) no way to self-initiate the
+--- same request against the nearest eligible K9.
+---
+--- Label reuses `medkit.treat_target_label` ("Treat K9") rather than
+--- minting a byte-identical second key -- same "reuse an existing key
+--- when the English matches exactly" convention this file already applies
+--- to Partner Up's `partnership.partner_up_target_label` and the opener's
+--- `${common.notify_title}` cross-reference (see this file's own header /
+--- locales/README.md).
+---
+--- `RequestTreatNearestK9()` takes no arguments and re-checks both
+--- CanShowK9UI() and Config.Features.K9Medkit internally (confirmed by
+--- reading client/medkit.lua directly, not assumed) -- this item's own
+--- CanShowK9UI() gate below is therefore redundant with the callee, same
+--- posture as Open My Gear immediately above. This is an INITIATION action
+--- (starts a treat request against a found target), not a
+--- release/termination one, so the "no unbounded trap" exemption given to
+--- Detach Leash/Recall/etc. above does not apply here.
+if Config.Features.K9Medkit then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_treat_nearest',
+        label = locale('medkit.treat_target_label'),
+        icon = 'kit-medical',
+        onSelect = function()
+            if not CanShowK9UI() then
+                DenyK9UIAccess()
+                return
+            end
+
+            if type(RequestTreatNearestK9) == 'function' then
+                RequestTreatNearestK9()
             end
         end,
     }

@@ -199,9 +199,35 @@ local PROXIMITY_SCAN_INTERVAL_MS = ProximityAudioFXConfig.scanIntervalMs or 2500
 -- + a 500ms poll thread producing no audible effect at all). Kept as this
 -- file's own independent constant rather than importing audio.lua's private
 -- one, matching this codebase's "file-local tuning constants" convention
--- (audio.lua's own header) -- HAND-SYNC REQUIRED if audio.lua's
--- AUDIO_MAX_DISTANCE is ever retuned below this value.
-local PROXIMITY_TRIGGER_DISTANCE_METERS = ProximityAudioFXConfig.triggerDistance or 25.0
+-- (audio.lua's own header).
+--
+-- FOUND THIS PASS: the comment above used to say "HAND-SYNC REQUIRED if
+-- audio.lua's AUDIO_MAX_DISTANCE is ever retuned below this value" and left
+-- it at that -- a documented hazard with NOTHING actually enforcing it. If
+-- Config.ProximityAudioFX.triggerDistance is ever configured (or defaulted)
+-- above audio.lua's real ceiling, every ambient loop this file starts would
+-- silently sit at gain 0.0 forever, with no error and no console output --
+-- exactly the failure mode this resource's own audio header warns is easy
+-- to ship unnoticed.
+--
+-- Clamped below against a LOCAL copy of audio.lua's current 30.0 ceiling
+-- (AUDIO_MAX_DISTANCE_CEILING), not a live cross-file read of it: a real
+-- accessor (client/audio.lua exposing e.g. GetK9AudioMaxDistance()) would
+-- need a new entry in this repo's root .luacheckrc `globals` list, which
+-- this pass's author does not own (see this resource's own "DO NOT EDIT
+-- .luacheckrc" convention) -- requested separately, not silently worked
+-- around with a suppression. This local copy at least defends the ACTUAL
+-- realistic misconfiguration path (an operator/owner raising
+-- Config.ProximityAudioFX.triggerDistance without knowing about
+-- audio.lua's ceiling) -- it does NOT defend the other direction (audio.lua's
+-- own AUDIO_MAX_DISTANCE being lowered below this copy's value) -- that
+-- half of the hazard remains a hand-sync requirement until the accessor
+-- above can ship. HAND-SYNC REQUIRED, still, for that direction only.
+local AUDIO_MAX_DISTANCE_CEILING = 30.0 -- MUST match client/audio.lua's own private AUDIO_MAX_DISTANCE
+local PROXIMITY_TRIGGER_DISTANCE_METERS = math.min(
+    ProximityAudioFXConfig.triggerDistance or 25.0,
+    AUDIO_MAX_DISTANCE_CEILING
+)
 
 -- RAGE-audio-style placeholder sound name, translated by client/audio.lua's
 -- ToAudioFileKey() the exact same way BARK_SOUND_NAME is (client/main.lua)

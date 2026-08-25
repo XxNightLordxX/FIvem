@@ -137,13 +137,32 @@ function EnterNearestK9Vehicle()
 
     if IsInK9Vehicle() then return end -- already in one
 
+    local ped = PlayerPedId()
+    -- Real-defect guard (client-logic review finding): IS_PED_IN_ANY_VEHICLE
+    -- (verified against the Cfx native reference, PED namespace, BOOL
+    -- return) catches the case where this ped is already a genuine
+    -- occupant of SOME vehicle via ordinary game controls (any ped model,
+    -- including a K9 model, can be walked up to a car and seated with the
+    -- vanilla "enter vehicle" control — nothing about that path goes
+    -- through this file). vehicleState only tracks OUR OWN attach, so
+    -- IsInK9Vehicle() above reads false in that case and would otherwise
+    -- let this function freeze/hide/attach a ped that the game still
+    -- separately considers seated in a (possibly different) vehicle.
+    -- ReleasePedFromVehicleState()'s teleport-out on exit never calls
+    -- TASK_LEAVE_VEHICLE or clears that seat assignment, so without this
+    -- guard the ped could end up in a corrupted "phantom seated" state
+    -- after this file's own exit path finishes.
+    if IsPedInAnyVehicle(ped, false) then
+        lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.already_in_vehicle'), type = 'error' })
+        return
+    end
+
     local vehicle = FindNearestK9Vehicle(Config.VehicleInteractMeters)
     if not vehicle then
         lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.no_vehicle_nearby'), type = 'error' })
         return
     end
 
-    local ped = PlayerPedId()
     -- "Tucked away" treatment: frozen, invisible, no collision, AND
     -- attached to the vehicle. SPEC.md §6.1 only says "hidden/frozen," but
     -- freezing in place without attaching would leave the K9 stranded,
@@ -200,6 +219,77 @@ AddEventHandler('onResourceStop', function(resourceName)
 
     ReleasePedFromVehicleState(PlayerPedId(), ResolveVehicleFromState())
     vehicleState = nil
+end)
+
+-- Vehicle-despawn watchdog (client-logic review finding): the native
+-- states EnterNearestK9Vehicle() applies to the ped are entity-persisted,
+-- exactly like the resource-restart case above, but restarting THIS
+-- resource is not the only way vehicleState can be left pointing at
+-- nothing. This ped is only ATTACHED to the vehicle, never actually
+-- SetPedIntoVehicle'd into a seat, so the game does not count it as an
+-- occupant — the vehicle can still be deleted out from under a riding K9
+-- by anything else running on this server (a vehicle-cleanup script, the
+-- game's own unoccupied-vehicle population sweep, another player's
+-- DeleteEntity, despawning after entering water and sinking, etc.) with no
+-- event this file is told about. Without this, ExitK9Vehicle() still WORKS
+-- afterward (ReleasePedFromVehicleState already tolerates vehicle == nil,
+-- and client/radial.lua's "Enter/Exit Vehicle" item calls it with no
+-- requirement to be near any entity) — but nothing tells the player their
+-- ride is gone, and this file's OWN ox_target "Release From Vehicle"
+-- option specifically (canInteract requires hovering a live entity that
+-- equals ResolveVehicleFromState()) becomes permanently unreachable the
+-- moment the vehicle stops existing, since there is no entity left to
+-- hover. This thread closes that gap by self-releasing and telling the
+-- player why, rather than leaving them frozen/invisible relying on
+-- knowing to open the radial menu instead.
+--
+-- One persistent thread for the resource's whole lifetime, matching
+-- client/movement.lua's leash pull-back thread's own established
+-- idle/active dual-interval convention, rather than spawning a new thread
+-- per ride — sleeps at a long interval whenever no ride is active, so this
+-- costs nothing on the ~0.01ms resmon idle benchmark while unused.
+--
+-- Debounced over several consecutive misses rather than acting on a single
+-- failed resolve: ResolveVehicleFromState() (via client/main.lua's
+-- ResolveNetworkEntity) also reads nil for a vehicle that is merely not
+-- currently streamed in to THIS client at this instant, not only for one
+-- that has actually been deleted — a single miss is not reliable proof the
+-- vehicle is gone for good, and a rider should never be ejected over a
+-- momentary streaming hiccup.
+local VEHICLE_WATCHDOG_IDLE_MS = 2000
+local VEHICLE_WATCHDOG_ACTIVE_MS = 1000
+local VEHICLE_WATCHDOG_MISS_THRESHOLD = 3 -- consecutive misses before treating the vehicle as actually gone
+
+CreateThread(function()
+    local missStreak = 0
+
+    while true do
+        local sleepMs = VEHICLE_WATCHDOG_IDLE_MS
+
+        if vehicleState then
+            sleepMs = VEHICLE_WATCHDOG_ACTIVE_MS
+
+            if ResolveVehicleFromState() then
+                missStreak = 0
+            else
+                missStreak = missStreak + 1
+                if missStreak >= VEHICLE_WATCHDOG_MISS_THRESHOLD then
+                    missStreak = 0
+                    -- Same cleanup ExitK9Vehicle()/onResourceStop already run —
+                    -- vehicle is nil here by construction (that's what triggered
+                    -- this branch), so ReleasePedFromVehicleState just restores
+                    -- the ped in place per its own documented nil-vehicle path.
+                    ReleasePedFromVehicleState(PlayerPedId(), nil)
+                    vehicleState = nil
+                    lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.vehicle_lost'), type = 'error' })
+                end
+            end
+        else
+            missStreak = 0
+        end
+
+        Wait(sleepMs)
+    end
 end)
 
 -- Register the ox_target vehicle options for every model in

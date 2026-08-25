@@ -4,10 +4,24 @@
     NUI AUDIO BRIDGE — closes this resource's oldest disclosed gap (Phase 1's
     placeholder bark soundset; see client/main.lua's BARK_SOUND_NAME/
     K9_SOUND_SET header comment) by giving PlaySoundOnNetworkEntity (that
-    file, NOT edited here — see "ONE-LINE CHANGE main.lua STILL NEEDS"
-    below) a second, real playback path through this resource's existing
+    file) a second, real playback path through this resource's existing
     NUI page, alongside its current, harmless-no-op PlaySoundFromEntity
     call into the RAGE audio engine.
+
+    CORRECTED THIS PASS (was stale): earlier drafts of this header described
+    the one-line PlaySoundOnNetworkEntity -> PlayK9Sound delegate call as
+    "STILL NEEDED" / not yet wired. That is no longer true and was found
+    stale on re-read: client/main.lua's PlaySoundOnNetworkEntity (around its
+    own line 315) already calls `if type(PlayK9Sound) == 'function' then
+    PlayK9Sound(netId, soundName) end` immediately after its existing
+    PlaySoundFromEntity call, with exactly the runtime-existence guard this
+    file's own "GATING" section below requires. This file itself was NOT
+    edited to make that happen (still true) — the wiring lives entirely in
+    client/main.lua, owned by someone else — but readers of this header
+    should not go looking for a pending integration note; there isn't one
+    anymore. (fxmanifest.lua's own load-order comment on this file, "Has no
+    caller yet", is ALSO stale for the same reason and belongs to that
+    file's owner to correct — flagged, not fixed here.)
 
     AUTHORITATIVE BACKGROUND — read before touching this file:
       - phase2_notes/dependency_and_audio_status.md, "Question 2" (the pass
@@ -57,11 +71,12 @@
         question exactly as client/hud.lua's header instructs; do not bolt
         SetNuiFocus onto this file's focus-free lifecycle.
 
-      - Does NOT edit client/main.lua. PlaySoundOnNetworkEntity there is
-        left byte-for-byte as it is. Wiring it to this file's PlayK9Sound()
-        below is a genuine one-line addition, owned by whoever owns that
-        file — reported separately (see the integration notes handed back
-        with this pass), not made here.
+      - Does NOT edit client/main.lua. This file only DEFINES PlayK9Sound/
+        StopK9Sound/IsK9SoundActive; client/main.lua's PlaySoundOnNetworkEntity
+        is the one that CALLS PlayK9Sound (guarded with
+        `type(PlayK9Sound) == 'function'`) — already wired there as of this
+        pass, not a pending integration. See this file's header correction
+        above.
 
       - Does NOT add a JS -> Lua NUI callback / RegisterNUICallback of any
         kind. Every message this file sends is one-directional
@@ -153,12 +168,13 @@ local AUDIO_MAX_DISTANCE = 30.0
 
 -- How often a LOOPING sound's gain gets recomputed against its source
 -- entity's live position (see PlayK9Sound's `opts.loop`). Only relevant to
--- loop=true playback — nothing in this resource passes loop=true yet (see
--- this file's header "WHAT THIS FILE DELIBERATELY DOES NOT DO"; a future
--- ProximityAudioFX-style continuous growl/pant loop is the realistic first
--- real consumer). Deliberately slower than client/hud.lua's 250ms vitals
--- poll: a loop's volume drifting smoothly over half a second is inaudible
--- as "steps" the way a fast-changing numeric HUD readout would be.
+-- loop=true playback — client/proximityaudio.lua's continuous ambient
+-- growl loop (Config.Features.ProximityAudioFX) is this pass's real
+-- consumer (corrected from an earlier draft of this comment, which
+-- predated that file and claimed "nothing... passes loop=true yet").
+-- Deliberately slower than client/hud.lua's 250ms vitals poll: a loop's
+-- volume drifting smoothly over half a second is inaudible as "steps" the
+-- way a fast-changing numeric HUD readout would be.
 local AUDIO_GAIN_POLL_MS = 500
 
 -- Hard safety ceiling on a looping sound's own polling thread. If nothing
@@ -275,7 +291,7 @@ end
 --- wrong or absent" posture).
 --- @param netId number netId of the entity the sound should appear to come from — same resolution path as client/main.lua's ResolveNetworkEntity/PlaySoundOnNetworkEntity
 --- @param soundName string one of this resource's existing placeholder sound-name strings (client/main.lua's BARK_SOUND_NAME, config.lua's Config.AdvancedBarkRadial `sound` values) — NOT a filename; see ToAudioFileKey() above for the translation
---- @param opts table? optional `{ loop: boolean }`. Nothing in this resource passes loop=true yet — see this file's header disclosure.
+--- @param opts table? optional `{ loop: boolean }`. client/proximityaudio.lua's ambient growl loop is the current loop=true consumer (see this file's header correction near AUDIO_GAIN_POLL_MS).
 --- @return number? id the id to later pass to StopK9Sound (only meaningful for loop=true), or nil if nothing was sent (bad args / entity not resolvable on this client)
 function PlayK9Sound(netId, soundName, opts)
     if type(soundName) ~= 'string' or soundName == '' then return nil end

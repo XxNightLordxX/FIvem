@@ -377,9 +377,26 @@ function RequestLeashAttach(targetPlayerServerId)
     end
 
     TriggerServerEvent('qbx_k9unit:server:requestLeashAttach', targetPlayerServerId)
-    -- The target's client is the one that shows the actual accept/decline
-    -- prompt (see leashAttachRequest below), not this one.
-    lib.notify({ title = locale('common.notify_title'), description = locale('movement.leash_request_sent'), type = 'inform' })
+    -- Bug fix (this pass): this used to ALSO show its own optimistic local
+    -- "Leash request sent." notify here, immediately, unconditionally —
+    -- but server/main.lua's requestLeashAttach handler already sends the
+    -- one real, authoritative confirmation via NotifyPlayer (which itself
+    -- triggers 'ox_lib:notify', an ox_lib-owned client event this resource
+    -- doesn't need to duplicate) ONLY once the request is actually
+    -- accepted server-side (passes CheckLeashEligibility, isn't a
+    -- duplicate pending request, isn't rate-limited) — using the EXACT
+    -- same locale string this local call used (locale('leash.request_sent')
+    -- vs. this call's locale('movement.leash_request_sent'), both "Leash
+    -- request sent."). On the success path this meant the requester saw
+    -- the same message twice; on every rejection path (invalid target,
+    -- ineligible, a duplicate pending request already exists, or the
+    -- silent rate-limit no-op) it was actively WRONG — the requester saw
+    -- "Leash request sent." first regardless, then either a contradicting
+    -- error right after or, in the rate-limited case, incorrect
+    -- confirmation with no error ever following it. Removed here in favor
+    -- of the server's single authoritative notify for both outcomes — the
+    -- target's client is the one that shows the actual accept/decline
+    -- prompt (see leashAttachRequest below) either way.
 end
 
 --- Detaches the current leash, if any, with ZERO consent required from
