@@ -1,0 +1,326 @@
+/*
+    qbx_k9unit/html/tablet.css
+
+    Stylesheet for html/tablet.html ONLY -- this is a separate document
+    from html/index.html (see html/tablet.js's own "ARCHITECTURE NOTE"),
+    so this file does not need, and deliberately does not repeat,
+    html/style.css's global `pointer-events: none` rule: unlike the
+    passive HUD, this page needs real mouse and keyboard input -- it is
+    the first interactive, focus-taking surface in this resource.
+
+    Visual design here is a functional first pass (dark panel, readable
+    contrast, obvious clickable affordances) -- not a signed-off UX/visual
+    pass, same provisional status html/style.css's own HUD rules carry
+    (see that file's TODO(coder-ui) note).
+*/
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+    color: #f2f2f2;
+}
+
+.k9tablet-root {
+    width: 100%;
+    height: 100%;
+}
+
+.k9tablet-backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.k9tablet-panel {
+    width: min(920px, 92vw);
+    height: min(640px, 88vh);
+    display: flex;
+    flex-direction: column;
+    background: #14161a;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+}
+
+.k9tablet-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: #1c1f26;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.k9tablet-title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.k9tablet-close-btn {
+    background: transparent;
+    border: none;
+    color: #f2f2f2;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.k9tablet-close-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.k9tablet-notice {
+    margin: 0;
+    padding: 8px 18px;
+    font-size: 13px;
+}
+
+.k9tablet-notice--ok {
+    background: rgba(127, 209, 127, 0.15);
+    color: #9bd17f;
+}
+
+.k9tablet-notice--error {
+    background: rgba(224, 92, 92, 0.15);
+    color: #e08a8a;
+}
+
+.k9tablet-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 10px 18px 0 18px;
+}
+
+.k9tablet-tab {
+    background: transparent;
+    border: none;
+    color: #b7bcc6;
+    padding: 8px 14px;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.k9tablet-tab--active {
+    background: #14161a;
+    color: #f2f2f2;
+    font-weight: 600;
+}
+
+.k9tablet-screen {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 16px 18px;
+}
+
+.k9tablet-status-block {
+    padding: 24px 18px;
+    text-align: center;
+}
+
+.k9tablet-error-text {
+    color: #e08a8a;
+}
+
+.k9tablet-muted {
+    color: #9aa0ab;
+    font-size: 13px;
+}
+
+.k9tablet-hint {
+    margin-top: 4px;
+}
+
+.k9tablet-section-heading {
+    margin: 18px 0 8px 0;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #9aa0ab;
+}
+
+.k9tablet-section-heading:first-child {
+    margin-top: 0;
+}
+
+.k9tablet-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.k9tablet-search {
+    flex: 1 1 auto;
+    background: #1c1f26;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #f2f2f2;
+    padding: 8px 10px;
+    font-size: 13px;
+}
+
+.k9tablet-btn {
+    background: #2a3f56;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: #f2f2f2;
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.k9tablet-btn:hover {
+    background: #35506e;
+}
+
+.k9tablet-btn[disabled] {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.k9tablet-btn--danger {
+    background: #5a2a2a;
+}
+
+.k9tablet-btn--danger:hover {
+    background: #703636;
+}
+
+.k9tablet-link-btn {
+    background: transparent;
+    border: none;
+    color: #7fb2e0;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0 0 12px 0;
+}
+
+.k9tablet-truncated-note {
+    font-size: 12px;
+    color: #d1b37f;
+    margin: 0 0 10px 0;
+}
+
+.k9tablet-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.k9tablet-table th,
+.k9tablet-table td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.k9tablet-table th {
+    color: #9aa0ab;
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+}
+
+.k9tablet-cert-status--yes {
+    color: #9bd17f;
+}
+
+.k9tablet-cert-status--no {
+    color: #9aa0ab;
+}
+
+.k9tablet-cert-list,
+.k9tablet-feature-list,
+.k9tablet-capability-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.k9tablet-cert-row,
+.k9tablet-feature-row,
+.k9tablet-capability-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    background: #1c1f26;
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.k9tablet-cert-dept,
+.k9tablet-feature-label,
+.k9tablet-capability-label {
+    flex: 1 1 auto;
+}
+
+.k9tablet-cert-granter {
+    color: #9aa0ab;
+    font-size: 12px;
+}
+
+.k9tablet-feature-state,
+.k9tablet-capability-state {
+    font-size: 12px;
+    color: #9aa0ab;
+    white-space: nowrap;
+}
+
+.k9tablet-feature-state--available {
+    color: #9bd17f;
+}
+
+.k9tablet-feature-state--blocked {
+    color: #e08a8a;
+}
+
+.k9tablet-feature-state--global_off,
+.k9tablet-feature-state--not_certified,
+.k9tablet-feature-state--requires_grant_missing {
+    color: #d1b37f;
+}
+
+.k9tablet-feature-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.k9tablet-givexp {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.k9tablet-givexp-input {
+    width: 100px;
+    background: #1c1f26;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #f2f2f2;
+    padding: 7px 10px;
+    font-size: 13px;
+}
+
+.k9tablet-xp-line {
+    font-size: 14px;
+}
+
+.k9tablet-person-name {
+    margin: 0 0 2px 0;
+}

@@ -1,0 +1,249 @@
+/*
+    html/tests/tablet_open_close_spec.js
+
+    Covers html/tablet.js's open/close lifecycle: the tablet:ready
+    handshake, tablet:open making the page visible and kicking off
+    tablet:requestMyRecord, the loading/error/timeout states for that
+    fetch, and every path back to closed (Close button, Escape inside this
+    document, and a Lua-initiated tablet:close push) -- per this file's own
+    header, the close path is the single most safety-critical thing here
+    (a stuck NUI focus locks the player out of their own game), so every
+    close trigger is proven independently, not just one of them.
+*/
+'use strict';
+
+const t = require('./testkit');
+const { createHarness, jsonResponse } = require('./tablet-sandbox');
+const { findByText, findByTag } = require('./tablet-dom-stub');
+
+function routeFetch(handlers) {
+    return function (url) {
+        const name = url.split('/').pop();
+        const h = handlers[name];
+        if (!h) return Promise.reject(new Error('tablet_open_close_spec: unhandled NUI callback ' + name));
+        return Promise.resolve(jsonResponse(h()));
+    };
+}
+
+const NEVER_RESOLVING_MY_RECORD = {
+    'tablet:requestMyRecord': () => new Promise(() => {}),
+};
+
+t.test('fires exactly one tablet:ready POST at startup, to the GetParentResourceName()-scoped URL, with an empty JSON body', async () => {
+    let resolvedFetch;
+    const fetchPromise = new Promise((resolve) => { resolvedFetch = resolve; });
+
+    createHarness({
+        fetchImpl: (url, init) => {
+            resolvedFetch({ url, init });
+            return Promise.resolve(jsonResponse({}));
+        },
+    });
+
+    const call = await fetchPromise;
+    t.equals(call.url, 'https://qbx_k9unit/tablet:ready');
+    t.equals(call.init.method, 'POST');
+    t.equals(call.init.body, '{}');
+});
+
+t.test('before any tablet:open message, the page renders nothing at all', async () => {
+    const h = createHarness({ fetchImpl: routeFetch({}) });
+    await new Promise((r) => setImmediate(r));
+    t.equals(h.getRoot().children.length, 0, 'root stays empty until tablet:open arrives');
+});
+
+t.test('tablet:open makes the page visible immediately and shows a loading state while requestMyRecord is in flight', async () => {
+    const h = createHarness({ fetchImpl: routeFetch(NEVER_RESOLVING_MY_RECORD) });
+    h.postMessage('tablet:open', { capabilities: {}, strings: {}, maxXpPerGrant: 500 });
+    await new Promise((r) => setImmediate(r));
+
+    t.isTrue(findByText(h.getRoot(), 'K9 Command Tablet').length >= 1, 'title renders even before viewer data arrives');
+    t.isTrue(findByText(h.getRoot(), 'Loading...').length >= 1, 'a loading message is shown, never a blank screen');
+});
+
+t.test('a successful tablet:requestMyRecord renders certifications, XP/tier, and the abilities list', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({
+                ok: true,
+                viewer: { citizenid: 'ABC123', name: 'Rex', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false },
+                certifications: [{ departmentKey: 'police', departmentLabel: 'Los Santos Police Department', active: true, grantedBy: 'XYZ999' }],
+                xp: 1250,
+                tierLabel: 'Trained K9',
+                myFeatures: [
+                    { key: 'Recall', label: 'Recall your K9', category: 'Combat', actionable: true, state: 'available' },
+                    { key: 'BiteAndHold', label: 'Bite and Hold', category: 'Combat', actionable: true, state: 'requires_grant_missing' },
+                ],
+            }),
+        }),
+    });
+
+    h.postMessage('tablet:open', { capabilities: {}, strings: {}, maxXpPerGrant: null });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const root = h.getRoot();
+    t.isTrue(findByText(root, 'Los Santos Police Department').length >= 1, 'certification department label rendered');
+    t.isTrue(findByText(root, '1250 — Trained K9').length >= 1, 'XP + tier line rendered');
+    t.isTrue(findByText(root, 'Recall your K9').length >= 1, 'available feature label rendered');
+    t.isTrue(findByText(root, 'Bite and Hold').length >= 1, 'grant-required feature label rendered too');
+    t.equals(findByText(root, 'Requires a grant (not granted)').length, 1, 'the ungranted feature shows the correct, distinct status text');
+
+    // Only the AVAILABLE + actionable feature gets a trigger button.
+    const useButtons = findByText(root, 'Use');
+    t.equals(useButtons.length, 1, 'exactly one Use button -- only for the available+actionable feature');
+});
+
+t.test('clicking Use on an available ability fires tablet:triggerFeature with the right key, then refreshes myRecord', async () => {
+    let triggerCalls = 0;
+    let myRecordCalls = 0;
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => {
+                myRecordCalls++;
+                return {
+                    ok: true,
+                    viewer: { citizenid: 'ABC123', name: 'Rex', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false },
+                    certifications: [],
+                    xp: null,
+                    tierLabel: null,
+                    myFeatures: [{ key: 'Recall', label: 'Recall your K9', category: null, actionable: true, state: 'available' }],
+                };
+            },
+            'tablet:triggerFeature': () => {
+                triggerCalls++;
+                return { ok: true, message: 'Recall sent.' };
+            },
+        }),
+    });
+
+    h.postMessage('tablet:open', {});
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const useBtn = findByText(h.getRoot(), 'Use')[0];
+    t.isDefined(useBtn, 'Use button exists');
+    useBtn.click();
+
+    const lastTriggerBody = () => h.fetchCalls.filter((c) => c.url.endsWith('tablet:triggerFeature')).slice(-1)[0].body;
+    await new Promise((r) => setTimeout(r, 30));
+
+    t.equals(triggerCalls, 1);
+    t.equals(lastTriggerBody().feature, 'Recall');
+    t.isTrue(myRecordCalls >= 2, 'myRecord is re-fetched after the trigger settles (never trusts local cached state)');
+});
+
+t.test('a fetch that never resolves eventually shows the synthesized timeout error, with a working Retry', async () => {
+    let attempts = 0;
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => {
+                attempts++;
+                if (attempts === 1) return new Promise(() => {}); // first attempt hangs forever
+                return { ok: true, viewer: { citizenid: 'A', name: 'A', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] };
+            },
+        }),
+    });
+
+    h.postMessage('tablet:open', {});
+    // Compressed NUI_TIMEOUT_MS -- see tablet-sandbox.js's own header.
+    await new Promise((r) => setTimeout(r, 60));
+
+    t.isTrue(findByText(h.getRoot(), 'The server did not respond in time.').length >= 1, 'synthetic timeout renders a clear, specific failure state, never a blank screen');
+    const retryBtn = findByText(h.getRoot(), 'Retry')[0];
+    t.isDefined(retryBtn);
+    retryBtn.click();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    t.equals(attempts, 2, 'Retry re-issues the request');
+});
+
+t.test('an explicit ok:false response with a message renders that message verbatim', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({ 'tablet:requestMyRecord': () => ({ ok: false, error: 'server_error', message: 'Database unavailable.' }) }),
+    });
+    h.postMessage('tablet:open', {});
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    t.isTrue(findByText(h.getRoot(), 'Database unavailable.').length >= 1);
+});
+
+t.test('the Close button hides the page immediately and fires tablet:close, even if that fetch hangs forever', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: { citizenid: 'A', name: 'A', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:close': () => new Promise(() => {}), // must never block the local close
+        }),
+    });
+    h.postMessage('tablet:open', {});
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    t.isTrue(h.getRoot().children.length > 0, 'sanity: page is open first');
+
+    const closeBtn = findByTag(h.getRoot(), 'button').filter((b) => b._textContent === '×')[0];
+    t.isDefined(closeBtn, 'close button (×) exists');
+    closeBtn.click();
+
+    t.equals(h.getRoot().children.length, 0, 'root is cleared SYNCHRONOUSLY on click -- never waits on the tablet:close round trip');
+    t.isTrue(h.fetchCalls.some((c) => c.url.endsWith('tablet:close')), 'tablet:close was still fired (fire-and-forget)');
+});
+
+t.test('pressing Escape inside this document closes the tablet and notifies Lua', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: { citizenid: 'A', name: 'A', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:close': () => ({}),
+        }),
+    });
+    h.postMessage('tablet:open', {});
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    h.dispatchKeydown('Escape');
+    t.equals(h.getRoot().children.length, 0, 'Escape closes exactly like the Close button');
+    t.isTrue(h.fetchCalls.some((c) => c.url.endsWith('tablet:close')));
+});
+
+t.test('Escape is a no-op while the tablet is already closed -- no throw, no spurious tablet:close call', async () => {
+    const h = createHarness({ fetchImpl: routeFetch({}) });
+    await new Promise((r) => setImmediate(r));
+    h.dispatchKeydown('Escape');
+    t.equals(h.fetchCalls.filter((c) => c.url.endsWith('tablet:close')).length, 0);
+});
+
+t.test('a Lua-initiated tablet:close push hides the page and fully resets state for the next open', async () => {
+    let myRecordCalls = 0;
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => {
+                myRecordCalls++;
+                return { ok: true, viewer: { citizenid: 'A', name: 'A', isHighCommand: false, effectivePermissions: [], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] };
+            },
+        }),
+    });
+
+    h.postMessage('tablet:open', {});
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    t.isTrue(h.getRoot().children.length > 0);
+
+    h.postMessage('tablet:close', {});
+    t.equals(h.getRoot().children.length, 0, 'Lua-initiated close also hides the page');
+
+    // Reopening fetches fresh data again rather than reusing anything stale.
+    h.postMessage('tablet:open', {});
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    t.equals(myRecordCalls, 2, 'myRecord is re-fetched from scratch on the second open');
+});
+
+t.test('an unknown message action is ignored -- no throw, no state change', async () => {
+    const h = createHarness({ fetchImpl: routeFetch({}) });
+    await new Promise((r) => setImmediate(r));
+    h.postMessage('some:futureAction', { anything: true });
+    h.postRawMessage(undefined);
+    h.postRawMessage({ action: 5 });
+    t.equals(h.getRoot().children.length, 0, 'still closed, no throw for any of the three');
+});
+
+t.run();

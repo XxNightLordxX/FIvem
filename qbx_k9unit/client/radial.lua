@@ -202,7 +202,14 @@
 --- Model plausibility isn't filtered here — the server independently
 --- re-validates via CheckLeashEligibility (server/main.lua) regardless.
 --- @return number? candidateServerId
-local function FindNearestLeashCandidate()
+--- SEAM OPENED 2026-08-25: was `local`. client/tablet.lua calls this so the
+--- tablet's own action routes through the SAME candidate-resolution logic the
+--- radial uses, rather than carrying a second copy that would drift out of
+--- sync the first time either is fixed. Kept a plain global to match this
+--- resource's existing cross-file convention; callers guard with
+--- type(fn) == 'function' since client/radial.lua returns early when its own
+--- feature flag is off, in which case this is never defined.
+function FindNearestLeashCandidate()
     local myPed = PlayerPedId()
     local myCoords = GetEntityCoords(myPed)
     local nearestPlayer, nearestDist
@@ -236,7 +243,14 @@ end
 --- security boundary, and CheckPartnershipEligibility re-derives the real
 --- model server-side regardless.
 --- @return number? candidateServerId
-local function FindNearestPartnerCandidate()
+--- SEAM OPENED 2026-08-25: was `local`. client/tablet.lua calls this so the
+--- tablet's own action routes through the SAME candidate-resolution logic the
+--- radial uses, rather than carrying a second copy that would drift out of
+--- sync the first time either is fixed. Kept a plain global to match this
+--- resource's existing cross-file convention; callers guard with
+--- type(fn) == 'function' since client/radial.lua returns early when its own
+--- feature flag is off, in which case this is never defined.
+function FindNearestPartnerCandidate()
     local myPed = PlayerPedId()
     local myCoords = GetEntityCoords(myPed)
     local nearestPlayer, nearestDist

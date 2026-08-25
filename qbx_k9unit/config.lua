@@ -434,16 +434,40 @@ Config.FeatureControl = {
 -- convenience.
 -- ======================================================================
 Config.CommandTablet = {
-    -- Command that opens it. Also reachable from the K9 radial menu.
+    -- HOW PLAYERS OPEN THE TABLET. Pick one:
+    --   'command' -- a chat command only. No item needed. Simplest, and the
+    --                right choice if you do not want another inventory item
+    --                to manage.
+    --   'item'    -- using an ox_inventory item opens it. The command is not
+    --                registered at all in this mode, so there is no way to
+    --                open it without the item in hand.
+    --   'both'    -- either works. The item is a convenience, not a gate.
+    -- Any other value is treated as 'command' and warns loudly at startup,
+    -- rather than silently leaving players with no way in at all.
+    openMode = 'both',
+
+    -- The chat command, used by 'command' and 'both'. Also reachable from
+    -- the K9 radial menu in every mode -- the radial is a UI affordance, not
+    -- a third open mode, and it honours the same authorization either way.
     command = 'k9tablet',
 
-    -- Optional ox_inventory item that must be carried to open it. nil
-    -- disables the requirement entirely. If you set this, the item must
-    -- exist in YOUR ox_inventory items table -- this resource cannot
-    -- create it, and an unregistered name resolves to a count of zero
-    -- forever, which reads to a player as the tablet being broken. A
-    -- startup warning fires if it cannot be resolved.
-    requiredItem = nil,
+    -- The ox_inventory item, used by 'item' and 'both'.
+    --
+    -- READ THIS BEFORE SETTING openMode = 'item': the item must already
+    -- exist in YOUR ox_inventory items table. This resource cannot create
+    -- it, and an unregistered name resolves to a count of zero forever --
+    -- which, in 'item' mode, means NOBODY can open the tablet and nothing
+    -- explains why. A startup warning fires if the name cannot be resolved,
+    -- and in 'item' mode that warning is escalated, because there is no
+    -- command to fall back on. Four other placeholder item names in this
+    -- config have the same requirement (k9_medkit, k9_treat, k9_meat_bait,
+    -- k9_ultrasonic_whistle); see the operator runbook's checklist.
+    itemName = 'k9_tablet',
+
+    -- Whether the item is consumed on use. Almost certainly false -- a
+    -- tablet is equipment, not a consumable -- but exposed because some
+    -- servers issue single-use loaner devices.
+    consumeItemOnUse = false,
 
     -- Max roster rows returned in one query. Clamped server-side; a
     -- non-positive or non-number value falls back to the default rather

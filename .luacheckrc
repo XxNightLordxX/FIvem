@@ -86,6 +86,19 @@ read_globals = {
     -- Both are client-only, which is correct: NUI focus and control state
     -- have no server-side meaning.
     "SetNuiFocus", "IsDisabledControlJustPressed",
+    -- ExecuteCommand -- verified 2026-08-25, HTTP 200, ns: CFX,
+    -- apiset: shared. client/tablet.lua uses it to route a tablet action
+    -- through the SAME RegisterCommand handler a player typing the command
+    -- would hit, rather than reimplementing the action. That is deliberate:
+    -- a forked entry point is how one path ends up guarded and the other
+    -- does not, which this resource has already been bitten by once
+    -- (ScratchAtDoor/NudgeDoor checked vehicle state in ox_target's
+    -- canInteract but not inside the function). The tradeoff, documented at
+    -- the call site, is that a command handler has no synchronous return
+    -- value, so the tablet can only report "submitted", never "succeeded" --
+    -- the command's own handler notifies the real outcome, exactly as it
+    -- does for chat-typed usage.
+    "ExecuteCommand",
     -- GET_RESOURCE_STATE. Used by server/tracking.lua's ox_inventory
     -- capability probe as the first gate, because accessing an export on a
     -- resource that is not started can throw rather than return nil.
@@ -299,6 +312,16 @@ globals = {
     -- reconnect. One close path, reachable from everywhere, is the whole
     -- defence -- so never call SetNuiFocus directly from a second site.
     "OpenTablet", "CloseTablet",
+    -- client/radial.lua -- candidate resolution for the leash and partner
+    -- actions. Both were `local` until 2026-08-25; client/tablet.lua called
+    -- them as globals, which would have been a nil call at runtime, so the
+    -- tablet's leash and partner buttons would simply have errored. The seam
+    -- was opened rather than letting the tablet carry its own copy: two
+    -- implementations of "who is standing near me and eligible" drift apart
+    -- the first time either is fixed. Callers guard with
+    -- type(fn) == 'function' because client/radial.lua returns early when
+    -- its own feature flag is off, in which case neither is ever defined.
+    "FindNearestLeashCandidate", "FindNearestPartnerCandidate",
     -- server/permissions.lua -- the grantable-permission layer. High command
     -- grants a named capability, or a per-person feature grant or block, to
     -- one specific handler or K9.

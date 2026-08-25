@@ -228,12 +228,13 @@
     deliberate asymmetry, not an oversight -- flagged for coder-ui/coder-frontend
     to confirm or override once the tablet's own UX is designed.
 
-    LOCALE KEYS THIS FILE NEEDS (requested from the locales/en.json owner --
-    NOT invented inline; only TWO new keys, kept deliberately minimal per the
-    "no granter-facing toast" decision above; two more EXISTING keys are
-    reused as-is):
-      permissions.grant_notify_target  = "You have been granted a new capability: %s"
-      permissions.revoke_notify_target = "A capability you held has been revoked: %s"
+    LOCALE KEYS THIS FILE NEEDS -- only TWO new keys, kept deliberately
+    minimal per the "no granter-facing toast" decision above; ALREADY
+    LANDED in locales/en.json (confirmed by direct read, not assumed) with
+    this exact English text -- documented here for reference, not as an
+    open request:
+      permissions.grant_notify_target  = "High command granted you: %s"
+      permissions.revoke_notify_target = "High command revoked: %s"
       (reused, already present) common.unable_to_resolve_citizenid
       (reused, already present) common.target_no_longer_online -- NOT currently reachable by any path in this file (GrantPermission/RevokePermission take a citizenid, never a server id, so there is no "target must be online" failure mode to report) -- listed only because ListActivePermissionsForCitizenId/ListPermissionRoster's callers may want it for their own UI; this file itself never calls locale() with it.
 
@@ -914,6 +915,39 @@ function ListPermissionRoster(callerSrc, permissionKey)
         out[i] = { citizenid = row.citizenid, grantedBy = row.granted_by, grantedAt = row.granted_at }
     end
     return true, out
+end
+
+-- ======================================================================
+-- TABLET CALLBACKS -- see this file's header "TABLET NETWORK CONTRACT" for
+-- the full writeup. Gated on Config.Features.CommandTablet AT REGISTRATION
+-- TIME (this resource's "gate at registration, not just inside the
+-- handler" convention, mirrored from client/tablet.lua's own identical
+-- top-of-file gate): if that flag is not `true`, neither callback below is
+-- ever registered at all, not merely a runtime no-op. Independent of
+-- Config.Features.PermissionGrants -- GrantPermission/RevokePermission
+-- themselves already re-check that flag and fail closed with
+-- 'feature_disabled' if it is off, so registering these callbacks
+-- regardless of PermissionGrants' value is safe and lets the tablet render
+-- a clear "feature disabled" reason rather than the callback not existing
+-- at all.
+-- ======================================================================
+if Config.Features and Config.Features.CommandTablet == true then
+    lib.callback.register('qbx_k9unit:server:tabletGrantPermission', function(source, targetCitizenid, permissionKey)
+        local ok, outcome = GrantPermission(source, targetCitizenid, permissionKey)
+        if ok then return { ok = true } end
+        return { ok = false, reason = outcome }
+    end)
+
+    lib.callback.register('qbx_k9unit:server:tabletRevokePermission', function(source, targetCitizenid, permissionKey)
+        local ok, outcome, stillHasAccess = RevokePermission(source, targetCitizenid, permissionKey)
+        if ok then
+            if stillHasAccess then
+                return { ok = true, reason = stillHasAccess }
+            end
+            return { ok = true }
+        end
+        return { ok = false, reason = outcome }
+    end)
 end
 
 -- ======================================================================

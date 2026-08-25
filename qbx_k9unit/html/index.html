@@ -164,5 +164,27 @@
     </div>
 
     <script src="app.js"></script>
+
+    <!--
+        K9 Command Tablet (Config.Features.CommandTablet) -- see
+        html/tablet.html/tablet.js/tablet.css/tablet-bridge.js. Deliberately
+        isolated in its own document, loaded via this <iframe>, rather than
+        a panel added to this file's own DOM/JS/CSS -- see html/tablet.js's
+        own "ARCHITECTURE NOTE" header for the full reasoning. This is the
+        ONLY addition this feature makes to this file: everything above this
+        comment (the passive HUD, app.js) is completely unmodified and
+        unaware this exists.
+
+        Starts hidden (see style.css's `.k9tablet-wrap.hidden` rule,
+        mirroring `#k9hud.hidden` above) until html/tablet-bridge.js's relay
+        receives a 'tablet:open' SendNUIMessage push and un-hides it.
+        tablet-bridge.js is the ONLY script that touches this element or
+        anything inside this iframe from this document's side -- it never
+        touches app.js's own DOM/state, and app.js never touches this.
+    -->
+    <div id="k9tablet-wrap" class="k9tablet-wrap hidden" aria-hidden="true">
+        <iframe id="k9tablet-frame" src="tablet.html" title="K9 Command Tablet" tabindex="-1"></iframe>
+    </div>
+    <script src="tablet-bridge.js"></script>
 </body>
 </html>

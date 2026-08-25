@@ -524,13 +524,52 @@ t.test('PER-MECHANIC GATING: with only PropDragging on, BiteAndHold/NonLethalTak
     t.isNotNil(f.netEventNames['qbx_k9unit:client:dragStarted'])
 end)
 
-t.test('FINDING (disclosed, not fixed here -- outside this spec\'s file-ownership boundary): the per-mechanic gating fix only closed the RECEIVING side, not the SENDING side -- RequestBiteHold/RequestTakedown still exist and still TriggerServerEvent even with their own mechanic flag off, as long as ANY of the three top-level flags is on', function()
+-- This case previously PINNED the opposite behaviour as a disclosed,
+-- unfixed finding: the per-mechanic gate had only ever closed the RECEIVING
+-- side, so RequestBiteHold/RequestTakedown/RequestDrag remained defined and
+-- still fired at the server whenever ANY of the three top-level flags was
+-- on. That was never a security hole -- the server gates each mechanic
+-- independently and rejected it -- but it contradicted this file's own
+-- stated "per-mechanic, not just per-file, inertness" goal, and it sent a
+-- doomed request the player got no useful feedback from.
+-- The sending side is now gated too. Do NOT revert this to the old
+-- expectation: a request that cannot possibly succeed should be refused
+-- here, with a reason the player can read, rather than travelling to the
+-- server to be silently dropped.
+t.test('PER-MECHANIC GATING, SENDING SIDE: with its own flag off, RequestBiteHold refuses locally and never reaches the server', function()
     local f = newCombatFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = true })
     f.setCanShowK9UI(true)
     f.addPoolPed(50, { x = 0.5 })
-    t.isNotNil(f.env.RequestBiteHold, 'RequestBiteHold is defined even though Config.Features.BiteAndHold is false here')
+    -- Still DEFINED -- the file-level gate is "any of the three", and
+    -- PropDragging is on here, so the file loads and declares all three.
+    -- The refusal is inside the function, not at declaration time.
+    t.isNotNil(f.env.RequestBiteHold, 'RequestBiteHold is still defined: the file-level gate is satisfied by PropDragging')
     f.env.RequestBiteHold()
-    t.equals(#f.serverEvents, 1, 'a requestBiteHold event was sent to the server even though this mechanic\'s own receiver handlers are never registered on this client -- the server independently gates on the same flag and would reject it, so this is not a security hole, but it is a real inconsistency with this file\'s own "per-mechanic, not just per-file, inertness" goal')
+    t.equals(#f.serverEvents, 0, 'no requestBiteHold event may reach the server when Config.Features.BiteAndHold is false')
+    t.equals(#f.notifyCalls, 1, 'the player must be told why, not left with a silent no-op')
+    t.equals(f.notifyCalls[1].description, locale('combat.bite_hold_feature_disabled'))
+    t.equals(f.notifyCalls[1].type, 'error')
+end)
+
+t.test('PER-MECHANIC GATING, SENDING SIDE: the same holds for RequestTakedown and RequestDrag', function()
+    -- Only BiteAndHold on, so the other two must each refuse locally.
+    local f = newCombatFixture({ biteAndHold = true, nonLethalTakedown = false, propDragging = false })
+    f.setCanShowK9UI(true)
+    f.addPoolPed(50, { x = 0.5 })
+    f.env.RequestTakedown()
+    t.equals(#f.serverEvents, 0, 'RequestTakedown must not reach the server with NonLethalTakedown off')
+    f.env.RequestDrag()
+    t.equals(#f.serverEvents, 0, 'RequestDrag must not reach the server with PropDragging off')
+end)
+
+t.test('PER-MECHANIC GATING: the gate does NOT block the mechanic that IS enabled', function()
+    -- The regression that matters most: an over-broad gate would silently
+    -- disable a feature the operator turned on.
+    local f = newCombatFixture({ biteAndHold = true, nonLethalTakedown = false, propDragging = false })
+    f.setCanShowK9UI(true)
+    f.addPoolPed(50, { x = 0.5 })
+    f.env.RequestBiteHold()
+    t.equals(#f.serverEvents, 1, 'BiteAndHold is enabled here and must still reach the server')
     t.equals(f.serverEvents[1].event, 'qbx_k9unit:server:requestBiteHold')
 end)
 

@@ -547,6 +547,18 @@ end
 --- client/radial.lua's "Bite & Hold / Release" item when not currently
 --- engaged (see IsBiteHoldEngaged() below for the toggle).
 function RequestBiteHold()
+    -- PER-MECHANIC FEATURE GATE. This file's top-level gate only checks that
+    -- AT LEAST ONE of BiteAndHold/NonLethalTakedown/PropDragging is on, so
+    -- without this check all three request functions existed and fired at
+    -- the server whenever any one of the three was enabled. The server
+    -- validates its own flag independently, so this was never a security
+    -- hole -- but it contradicted this file's own stated design, and it sent
+    -- a doomed request the player got no useful feedback from.
+    if not Config.Features.BiteAndHold then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.bite_hold_feature_disabled'), type = 'error' })
+        return
+    end
+
     if not CanShowK9UI() then
         DenyK9UIAccess()
         return
@@ -586,6 +598,18 @@ end
 --- (server/combat.lua's own HandleTakedownRequest), never a client claim,
 --- so this function does not try to pre-filter on it.
 function RequestTakedown()
+    -- PER-MECHANIC FEATURE GATE. This file's top-level gate only checks that
+    -- AT LEAST ONE of BiteAndHold/NonLethalTakedown/PropDragging is on, so
+    -- without this check all three request functions existed and fired at
+    -- the server whenever any one of the three was enabled. The server
+    -- validates its own flag independently, so this was never a security
+    -- hole -- but it contradicted this file's own stated design, and it sent
+    -- a doomed request the player got no useful feedback from.
+    if not Config.Features.NonLethalTakedown then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.takedown_feature_disabled'), type = 'error' })
+        return
+    end
+
     if not CanShowK9UI() then
         DenyK9UIAccess()
         return
@@ -646,6 +670,18 @@ end
 
 --- Self-initiated PropDragging trigger — PHASE3_SPEC.md §12.5.4.
 function RequestDrag()
+    -- PER-MECHANIC FEATURE GATE. This file's top-level gate only checks that
+    -- AT LEAST ONE of BiteAndHold/NonLethalTakedown/PropDragging is on, so
+    -- without this check all three request functions existed and fired at
+    -- the server whenever any one of the three was enabled. The server
+    -- validates its own flag independently, so this was never a security
+    -- hole -- but it contradicted this file's own stated design, and it sent
+    -- a doomed request the player got no useful feedback from.
+    if not Config.Features.PropDragging then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.drag_feature_disabled'), type = 'error' })
+        return
+    end
+
     if not CanShowK9UI() then
         DenyK9UIAccess()
         return

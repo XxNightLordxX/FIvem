@@ -73,6 +73,9 @@
   "combat": {
     "already_held": "That target is already held by another K9.",
     "blocked_by_vehicle": "Not available while your K9 is loaded into a vehicle.",
+    "bite_hold_feature_disabled": "Bite and hold is turned off on this server.",
+    "drag_feature_disabled": "Suspect dragging is turned off on this server.",
+    "takedown_feature_disabled": "Non-lethal takedown is turned off on this server.",
     "bite_hold_attempted": "Bite and hold attempted — restraint is not guaranteed against an uncooperative target.",
     "distracted": "Your K9 is distracted and not responding to commands.",
     "drag_attempted": "Attempting to drag the target — this is not guaranteed against an uncooperative target.",

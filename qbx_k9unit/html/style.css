@@ -198,3 +198,38 @@ body {
     font-variant-numeric: tabular-nums;
     opacity: 0.9;
 }
+
+/*
+    ======================================================================
+    K9 COMMAND TABLET WRAPPER (Config.Features.CommandTablet) -- added this
+    pass. This governs ONLY the <iframe> shell added to index.html's own
+    document (see that file's comment on it); the tablet's actual UI lives
+    in its own separate document/stylesheet (html/tablet.html /
+    html/tablet.css), which this file has no influence over. Everything
+    above this comment is the pre-existing HUD and is unmodified.
+
+    Deliberately NOT `pointer-events: none` -- unlike every rule above,
+    this wrapper is the one part of this document that SHOULD accept mouse
+    input while visible (the iframe it holds is this resource's first
+    interactive, focus-taking surface). It still starts, and returns to,
+    fully non-interactive via `display: none` while hidden -- the same
+    "genuinely absent, not just invisible" posture as `.k9hud-row--hidden`
+    above -- so it can never intercept a click while the tablet is closed.
+    ======================================================================
+*/
+.k9tablet-wrap {
+    position: fixed;
+    inset: 0;
+    pointer-events: auto;
+}
+
+.k9tablet-wrap.hidden {
+    display: none;
+}
+
+.k9tablet-wrap iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: transparent;
+}
