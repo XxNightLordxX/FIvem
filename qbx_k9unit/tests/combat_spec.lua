@@ -669,6 +669,67 @@ t.test('REGRESSION: with a valid Config.Combat.BiteAndHold.cooldownMs, BiteHoldC
     t.isTrue(#f.clientEvents > afterRelease, 'cooldown elapsed at the CONFIGURED threshold, proving the real value (not a fallback) is in effect')
 end)
 
+-- REGRESSION, DEEPER FINDING (this pass, while verifying the fix above):
+-- requestBiteHold/HandleTakedownRequest used to re-read
+-- Config.Combat.BiteAndHold/NonLethalTakedown.cooldownMs/targetCooldownMs
+-- RAW, a second time, as a per-call IsOnCooldown/Consume override -- which
+-- SILENTLY SHADOWED each tracker's own constructor default (the one
+-- ResolveConfiguredThresholdMs now protects) at the one place that actually
+-- gates a real request. Fixed by dropping the redundant override entirely
+-- (see requestBiteHold/HandleTakedownRequest's own comments in
+-- server/combat.lua) so the ALREADY-RESOLVED, safe constructor default is
+-- what actually governs enforcement, not a second, unguarded raw read. The
+-- test above (cooldownMs = 0) only proves the file still LOADS; this proves
+-- the mechanic itself keeps WORKING on the fallback, rather than merely
+-- failing closed forever with a warning.
+t.test('REGRESSION: Config.Combat.BiteAndHold.cooldownMs = 0 -- BiteAndHold keeps WORKING on the 20000ms fallback, not just failing closed forever', function()
+    local f = newCombatFixture({
+        biteAndHoldCfg = { range = 2.5, maxDurationMs = 15000, cooldownMs = 0, targetCooldownMs = 35000 },
+    })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.isTrue(#f.clientEvents > 0, 'BiteAndHold must still be usable at least once, even with a misconfigured cooldown')
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    local afterRelease = #f.clientEvents
+
+    f.advance(19999) -- 1ms short of the 20000ms fallback (config.lua's own shipped default)
+    wireNpcTarget(f, 501)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+    t.equals(#f.clientEvents, afterRelease, 'still on the FALLBACK 20000ms cooldown -- proves a real, working cooldown is in effect, not "always allowed" (which would be fail-OPEN) and not "always denied forever" (which would defeat the whole point of this fix)')
+
+    f.advance(2) -- now past the 20000ms fallback
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+    t.isTrue(#f.clientEvents > afterRelease, 'and the mechanic recovers once the FALLBACK threshold elapses -- BiteAndHold is fully functional throughout, on a safe substituted value')
+end)
+
+t.test('REGRESSION: Config.Combat.NonLethalTakedown.cooldownMs = 0 -- NonLethalTakedown keeps WORKING on the 25000ms fallback', function()
+    local f = newCombatFixture({
+        takedownCfg = { range = 3.0, minTargetSpeed = 4.0, speedSampleWindowMs = 250, ragdollDurationMs = 4000, cooldownMs = 0, targetCooldownMs = 30000, healthFloor = 100 },
+    })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { x = 0, y = 0, z = 0 })
+
+    -- Drive the fleeing-target speed sample: the target moves during the
+    -- Wait() window, same technique this file's own requestTakedown tests
+    -- already use.
+    local function attemptTakedown(netId)
+        f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { netId }, function()
+            local ped = netId + 100000
+            f.setCoords(ped, 100, 0, 0) -- far enough to clear minTargetSpeed = 4.0 m/s over a 250ms window
+        end)
+    end
+
+    attemptTakedown(500)
+    t.isTrue(#f.clientEvents > 0, 'NonLethalTakedown must still be usable at least once, even with a misconfigured cooldown')
+    local afterFirst = #f.clientEvents
+
+    wireNpcTarget(f, 501, { x = 0, y = 0, z = 0 })
+    attemptTakedown(501)
+    t.equals(#f.clientEvents, afterFirst, 'still on the FALLBACK 25000ms per-K9 cooldown -- a second takedown by the SAME K9 is correctly denied, not silently unlimited')
+end)
+
 t.test('with every combat feature flag off, the maintenance thread is never created, and requests are silently feature-gated', function()
     local f = newCombatFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = false })
     wireK9(f, K9_SRC)

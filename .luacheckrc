@@ -424,6 +424,11 @@ globals = {
     -- hand-rolled copies. Two files deliberately keep a thin local wrapper
     -- over it to preserve their own distinct notification title.
     "NotifyPlayer",
+    -- server/events.lua -- the shared outbound-event helper, extracted from
+    -- six identical local copies into one resource-global. Fires the stable
+    -- qbx_k9unit:events:* contract that server/exports.lua's header
+    -- documents. Same consolidation as NotifyPlayer directly above.
+    "FireOutboundEvent",
     -- server/certifications.lua
     "HasK9Access", "IsConfiguredK9Model", "RefreshCertificationCache",
     -- server/certifications.lua READ-ONLY ACCESSORS (certification-depth

@@ -222,6 +222,20 @@ server_scripts {
     -- and entities.lua, the resource's other shared-helper files, since its
     -- consumers span nearly every server file below.
     'server/notify.lua',
+    -- Shared outbound-event helper (FireOutboundEvent). Extracted after this
+    -- exact five-line pcall(TriggerEvent, ...) wrapper was found hand-rolled
+    -- SIX separate times, byte-for-byte identical, across
+    -- certifications.lua, search.lua, partnership.lua, sarcalls.lua,
+    -- progression.lua and integrations.lua. These fire the documented
+    -- qbx_k9unit:events:* public contract, so the risk was never untidiness
+    -- -- it was someone improving one copy and not the other five, leaving a
+    -- subset of the fourteen events quietly off-contract with nothing to
+    -- catch it. Same consolidation, and same reasoning, as NotifyPlayer's
+    -- twelve copies becoming server/notify.lua above.
+    -- Not a hard load-order requirement (every call site is inside a runtime
+    -- handler, verified per site, never at file-load time), but kept in the
+    -- shared-primitive position alongside cooldowns/entities/notify.
+    'server/events.lua',
     -- PD high command (Config.Features.HighCommand). Grouped with the shared
     -- helpers above rather than with the feature files below, because it is
     -- one: it exposes IsHighCommand(), which server/admin.lua,
