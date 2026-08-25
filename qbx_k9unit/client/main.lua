@@ -177,10 +177,15 @@ end
 --- Shared denial notification for the "you cannot use K9 features right
 --- now" case. Refactor pass (dedup): this exact lib.notify() call was
 --- previously duplicated verbatim across client/radial.lua, client/search.lua,
---- and client/vehicle.lua (client/movement.lua and client/tracking.lua also
---- have their own copy, out of scope for this pass — left as-is). Declared
---- as a bare global here per this file's own established "declare once,
---- reuse everywhere" convention (see CanShowK9UI/IsOwnModelK9 above).
+--- client/vehicle.lua, client/movement.lua, and client/tracking.lua. All five
+--- have since been migrated to call this shared function directly.
+--- FOUR raw copies still remain and are NOT yet migrated, counted by
+--- reading rather than grepping: client/agility.lua:240, and
+--- client/movement.lua at 328, 1312 and 1424. An earlier revision of this
+--- comment claimed zero remained; that was wrong. Update the count here
+--- when you migrate one, rather than letting it drift again. Declared as a bare global here per this file's own
+--- established "declare once, reuse everywhere" convention (see
+--- CanShowK9UI/IsOwnModelK9 above).
 function DenyK9UIAccess()
     lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
 end

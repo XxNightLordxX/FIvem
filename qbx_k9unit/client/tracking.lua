@@ -179,11 +179,12 @@ end
 --- @param trackType 'scent'|'blood'|'gunpowder'
 local function StartTrack(trackType)
     if not CanShowK9UI() then
-        -- Reuses common.no_k9_access rather than minting a duplicate — this
-        -- exact string was flagged for reuse by locales/README.md's
-        -- "common.no_k9_access promotion" note, confirmed by grep before
-        -- this pass ever touched this file.
-        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
+        -- Migrated to the shared client/main.lua helper (REFACTOR_ROADMAP_2.md
+        -- item 1) — this was the last raw inline copy of the
+        -- common.no_k9_access lib.notify() pattern; DenyK9UIAccess()'s own
+        -- payload (title/description/type) is byte-identical to what this
+        -- call site used to build directly.
+        DenyK9UIAccess()
         return
     end
 
