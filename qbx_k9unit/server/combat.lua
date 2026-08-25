@@ -74,8 +74,8 @@
       full trust-boundary/verification writeup): sent by client/combat.lua's
       bite-hold TARGET death-detection thread, no arguments — `source` names
       the reporting (claimed-target) client. Re-verified against
-      ActiveHolds/IsEntityDead server-side before acting, never trusted
-      alone.
+      ActiveHolds/live server-side health (GetEntityHealth, see
+      PED_DEAD_HEALTH_THRESHOLD below) before acting, never trusted alone.
     - 'qbx_k9unit:server:requestTakedown' (targetNetId: number)
 
     Client events (server->client), registered by client/combat.lua:
@@ -429,6 +429,65 @@ TakedownMutex.RegisterPlayerDropped()
 -- restraint ever having happened.
 local MIN_BITE_HOLD_XP_DURATION_MS = 3000
 
+--- NATIVE-AVAILABILITY FIX (this pass, coder-backend, native-sweep
+--- follow-up): `IsEntityDead`/`IsPedDeadOrDying` have NO server
+--- implementation in FXServer at all -- confirmed against the primary
+--- source, not just the 404 on their `ext/native-decls` doc pages. Traced
+--- `citizenfx/fivem`'s own C++ native-registration list
+--- (code/components/citizen-server-impl/src/state/ServerGameState_Scripting.cpp,
+--- the exact file that implements every entity/ped-related native FXServer
+--- DOES expose server-side): it contains zero `RegisterNativeHandler` call
+--- for `IS_ENTITY_DEAD` or `IS_PED_DEAD_OR_DYING` anywhere -- while
+--- `IS_PED_RAGDOLL` and `GET_ENTITY_HEALTH` (both already relied on
+--- elsewhere in this file) ARE registered there. Confirmed a second way:
+--- a full-repo source search for the literal registration strings
+--- `"IS_ENTITY_DEAD"` / `"IS_PED_DEAD_OR_DYING"` returns zero matches
+--- anywhere in the citizenfx/fivem monorepo. FXServer does not throw on an
+--- unregistered native -- it silently no-ops and the result buffer is
+--- never written, so every prior `IsEntityDead(...)`/`IsPedDeadOrDying(...)`
+--- call in THIS file always returned `false`, forever, regardless of the
+--- target's actual state. Every server-side call site below is rewritten
+--- to use `GetEntityHealth`, which IS confirmed registered
+--- (`GET_ENTITY_HEALTH` in that same file) and already used elsewhere here.
+---
+--- THRESHOLD, CHOSEN DELIBERATELY, NOT COPIED NAIVELY:
+--- `GetEntityHealth(ped) <= 0` is NOT what the game engine means by "dead."
+--- GTA peds are conventionally declared dead once health drops to (or
+--- below) 100, not 0 -- the well-documented CPed convention behind why a
+--- ped's default max health is 200 rather than 100: the bottom 100 points
+--- are the "already dead" floor, not usable HP. Using `<= 0` here would
+--- silently make this check an near-permanent no-op again (a ped's health
+--- essentially never reaches literal 0 before the engine already considers
+--- it dead at 100), reproducing the exact fail-open bug this pass exists to
+--- fix while LOOKING fixed -- exactly the "subtler fail-closed [substitution
+--- gone wrong]" trap flagged for this pass. `<= 100` is used instead:
+---   1. It matches the actual engine death threshold `IsEntityDead`/
+---      `IsPedDeadOrDying` were themselves querying, for both NPC and
+---      player peds alike (this is an engine-wide ped mechanic, not a
+---      scripted one).
+---   2. It is INTERNALLY CORROBORATED by this exact file's own
+---      `Config.Combat.NonLethalTakedown.healthFloor = 100` (config.lua) --
+---      NonLethalTakedown's own health-floor backstop is already using 100
+---      as "the line a target must stay above to not actually die," the
+---      same convention from the other direction.
+---   3. It does NOT falsely flag a genuine laststand/downed PLAYER as dead:
+---      every laststand/EMS framework this codebase already reasons about
+---      (see IsTargetDowned's player branch and config.lua's own comments
+---      on IsPlayerDownedOverride/WantedStatusCheckOverride) deliberately
+---      keeps a downed player's REAL ped health well above the engine's
+---      death floor specifically so the engine itself never auto-kills
+---      them -- so a laststand player's raw health legitimately stays
+---      `> 100`, and this check correctly does not reject them as dead
+---      here, matching the intended (and previously, accidentally,
+---      achieved-via-no-op) behavior for that case. This is confirmed
+---      server-side data (GetEntityHealth reads the live synced ped health
+---      value, same field the client itself reads), never a client claim.
+--- This is a targeted, minimal substitution -- it restores the ORIGINAL
+--- intended behavior (reject an actually-dead ped) without narrowing it to
+--- also reject a merely-downed/laststand one, which is exactly the failure
+--- mode flagged for a naive `<= 0` (or worse, `== 0`) substitution.
+local PED_DEAD_HEALTH_THRESHOLD = 100
+
 local TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS = 60000
 TakedownTargetCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
     return (now - loggedAt) > (Config.Combat.NonLethalTakedown.targetCooldownMs * 2)
@@ -479,22 +538,28 @@ end
 
 --- PHASE3_SPEC.md §12.0 item 6 / §12.5.4 — PropDragging's "is this target
 --- actually downed" gate. NEVER reuses ValidateCombatRequest's own
---- IsEntityDead check (that check exists specifically to REJECT a dead
+--- dead-target check (that check exists specifically to REJECT a dead
 --- target for BiteAndHold/NonLethalTakedown, the exact opposite of what
 --- dragging wants) — called as a SEPARATE step, after
 --- ValidateCombatRequest({requireAlive = false}) has already succeeded.
 ---
---- NPC branch: fully native, exactly as §12.5.4 specifies
---- (`IsPedDeadOrDying(ped, true)` OR `IsPedRagdoll(ped)`) — no external
---- dependency, HIGH confidence per phase2_notes/phase3_combat_natives.md's
---- own confirmation of IsPedRagdoll and its explicit naming of this exact
---- pairing as PropDragging's "downed" approximation. IsPedDeadOrDying's own
---- server-side callability (a read-only ped-state getter, same class as
---- GetEntityHealth/IsEntityDead already called server-side elsewhere in
---- this file) was reasoned about by analogy rather than independently
---- re-verified against the primary native declarations this pass — flagged
---- honestly per this file's own established confidence-grading convention,
---- not silently asserted as confirmed.
+--- NPC branch: RESTRUCTURED (native-sweep follow-up pass, coder-backend) —
+--- §12.5.4's original prose named `IsPedDeadOrDying(ped, true) OR
+--- IsPedRagdoll(ped)`; the earlier version of this comment graded
+--- IsPedDeadOrDying's server-side callability as "reasoned about by
+--- analogy, not independently re-verified." That analogy has since been
+--- independently checked against the primary source AND FOUND WRONG:
+--- IsPedDeadOrDying, unlike GetEntityHealth/IsPedRagdoll, has NO FXServer
+--- server implementation at all (traced citizenfx/fivem's own C++
+--- native-registration list — see PED_DEAD_HEALTH_THRESHOLD's own doc
+--- comment above for the full finding) and always silently returned
+--- `false` here, degrading this OR into just `IsPedRagdoll` (a
+--- dead-but-not-yet-ragdolled NPC was never recognised as downed). Now
+--- `GetEntityHealth(ped) <= PED_DEAD_HEALTH_THRESHOLD OR IsPedRagdoll(ped)`
+--- — both halves confirmed server-callable, and the NPC-only nature of
+--- this branch means the player-branch laststand caveat below does not
+--- apply (an NPC has no scripted laststand state to false-positive
+--- against).
 ---
 --- Player branch: NEVER the native checks above (§12.0 item 6 — raw
 --- physics/AI state is a category mismatch for a server's own scripted
@@ -509,7 +574,22 @@ end
 --- @return boolean downed
 local function IsTargetDowned(targetPed, isPlayerTarget, targetSrc)
     if not isPlayerTarget then
-        return IsPedDeadOrDying(targetPed, true) or IsPedRagdoll(targetPed)
+        -- NATIVE-AVAILABILITY FIX (see PED_DEAD_HEALTH_THRESHOLD's own doc
+        -- comment above for the full finding): was `IsPedDeadOrDying(ped,
+        -- true) or IsPedRagdoll(ped)`. `IsPedDeadOrDying` has no FXServer
+        -- server implementation (confirmed against the same primary source
+        -- as the ValidateCombatRequest fix above) and always returned
+        -- false here, silently degrading this OR to just `IsPedRagdoll` --
+        -- a dead-but-not-yet-ragdolled NPC was never recognised as downed
+        -- (fails CLOSED: blocks a legitimate drag rather than allowing an
+        -- illegitimate one, lower severity than the two fail-open sites,
+        -- but still wrong). `IsPedRagdoll` is confirmed registered
+        -- server-side and untouched below. The NPC-only nature of this
+        -- branch means none of the player-branch laststand caveats above
+        -- apply -- an NPC has no scripted laststand state, so a raw
+        -- engine-death-floor health check is unambiguously the right
+        -- signal here, not merely an approximation.
+        return GetEntityHealth(targetPed) <= PED_DEAD_HEALTH_THRESHOLD or IsPedRagdoll(targetPed)
     end
 
     local override = Config.Combat.PropDragging.IsPlayerDownedOverride
@@ -623,7 +703,7 @@ end
 ---   byte-for-byte unchanged): `opts.requireAlive` (default true via
 ---   `opts.requireAlive ~= false`). PropDragging passes
 ---   `{ requireAlive = false }` because its ENTIRE premise is a DOWNED
----   target — the IsEntityDead rejection below exists specifically to
+---   target — the dead-target rejection below (GetEntityHealth-based -- see PED_DEAD_HEALTH_THRESHOLD above) exists specifically to
 ---   REJECT BiteAndHold/NonLethalTakedown's target when dead, the opposite
 ---   of what dragging wants. PropDragging's own IsTargetDowned (above) is
 ---   the real "is this specific target eligible" check for that mechanic,
@@ -736,7 +816,12 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         return false, nil, nil, nil, nil, 'self_target'
     end
 
-    if opts.requireAlive ~= false and IsEntityDead(targetPed) then
+    -- NATIVE-AVAILABILITY FIX (see PED_DEAD_HEALTH_THRESHOLD's own doc
+    -- comment above for the full finding/reasoning): was `IsEntityDead
+    -- (targetPed)`, which has no FXServer implementation and always
+    -- returned false server-side, silently never rejecting an
+    -- already-dead target here.
+    if opts.requireAlive ~= false and GetEntityHealth(targetPed) <= PED_DEAD_HEALTH_THRESHOLD then
         return false, nil, nil, nil, nil, 'target_dead'
     end
 
@@ -1306,16 +1391,22 @@ end)
 ---      every other handler in this file already applies. A source that
 ---      isn't genuinely the target of anything is a silent no-op.
 ---   2. The claim itself ("I died") is independently RE-VERIFIED against
----      this player's own live server-side ped via IsEntityDead — a
----      DELIBERATE choice to verify, not the "can't verify, so don't
----      pretend to" call this codebase makes elsewhere for tracking's
----      forged-trail risk: unlike that case, IsEntityDead(targetPed) is
----      not a new or unverified native here — it is the SAME native
----      ValidateCombatRequest above already calls, server-side, on the
----      same kind of ped, for the identical "requireAlive" fact, so a
----      real, already-trusted verification mechanism exists and costs
----      nothing extra to use here too. A stale/false claim (target not
----      actually reported dead server-side) is rejected, not honored.
+---      this player's own live server-side ped via a GetEntityHealth <=
+---      PED_DEAD_HEALTH_THRESHOLD check — a DELIBERATE choice to verify,
+---      not the "can't verify, so don't pretend to" call this codebase
+---      makes elsewhere for tracking's forged-trail risk. UPDATED, native-
+---      sweep follow-up pass: this comment previously named IsEntityDead as
+---      "the SAME native ValidateCombatRequest above already calls" and
+---      framed that as reassurance that "a real, already-trusted
+---      verification mechanism exists." That reassurance was backwards —
+---      IsEntityDead has NO FXServer server implementation (see
+---      PED_DEAD_HEALTH_THRESHOLD's own doc comment above for the primary-
+---      source finding) and always silently returned false, so THIS
+---      handler unconditionally rejected every claim, genuine or not, and
+---      the holder-side fix this handler exists to provide never actually
+---      worked. Both this site and ValidateCombatRequest now share the same
+---      GetEntityHealth-based check instead — the "same mechanism, reused"
+---      property this comment always intended is now actually true.
 --- Even a successful lie has a low ceiling regardless: the worst outcome of
 --- a false report is ending a hold `source` is already the target of —
 --- something that player could otherwise only end by genuinely dying or
@@ -1332,8 +1423,23 @@ RegisterNetEvent('qbx_k9unit:server:reportBiteHoldTargetDied', function()
     end
     if not targetNetId then return end -- src is not the target of any active bite hold -- ignore
 
+    -- NATIVE-AVAILABILITY FIX (found this pass, same native-sweep as
+    -- PED_DEAD_HEALTH_THRESHOLD's own doc comment above): this handler's
+    -- own doc comment above claims this re-verification is "not a new or
+    -- unverified native here -- it is the SAME native ValidateCombatRequest
+    -- above already calls" -- true, but that native (IsEntityDead) has NO
+    -- FXServer server implementation and always returned false, meaning
+    -- `not IsEntityDead(targetPed)` was always `true` and this handler
+    -- UNCONDITIONALLY returned early on every single call, regardless of
+    -- whether the claim was genuine. The holder-side stuck-lockout bug this
+    -- handler exists to fix (see this handler's own doc comment above) was
+    -- therefore NEVER actually fixed by this code path -- a target who
+    -- genuinely died mid-hold could never get their holder released via
+    -- this report, only ever via the maxDurationMs timeout. Rewritten to
+    -- use GetEntityHealth against the same PED_DEAD_HEALTH_THRESHOLD as
+    -- every other server-side "is this ped dead" check in this file.
     local targetPed = GetPlayerPed(src)
-    if targetPed == 0 or not IsEntityDead(targetPed) then
+    if targetPed == 0 or GetEntityHealth(targetPed) > PED_DEAD_HEALTH_THRESHOLD then
         return -- claim does not match this player's own live server-side state -- ignore, never trust the claim alone
     end
 
@@ -1566,7 +1672,7 @@ end)
     §12.0 item 6). Called as an explicit SEPARATE step after
     ValidateCombatRequest({requireAlive = false}) succeeds — see that
     function's own updated header for why this could not simply reuse its
-    built-in IsEntityDead check.
+    built-in dead-target check (GetEntityHealth-based -- see PED_DEAD_HEALTH_THRESHOLD above).
 
     NO XP AWARD for PropDragging in this pass — PHASE3_SPEC.md §12.2's own
     config sketch names no `Config.XP.awards.*` key for dragging (unlike
@@ -1581,7 +1687,7 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
     local src = source
 
     -- requireAlive = false: PropDragging's ENTIRE premise is a DOWNED
-    -- target -- ValidateCombatRequest's own IsEntityDead rejection exists
+    -- target -- ValidateCombatRequest's own dead-target rejection exists
     -- to protect BiteAndHold/NonLethalTakedown from a target that is
     -- ALREADY dead/dying, the opposite of what this mechanic wants. The
     -- REAL "is this specific target downed" check is IsTargetDowned below,

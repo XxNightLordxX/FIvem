@@ -220,6 +220,23 @@
        de-facto revive a moment after they died. Both gates fail the SAME
        direction (reject/no-op), never the opposite.
 
+       ADDENDUM (native-sweep follow-up pass, coder-backend): the
+       server-side half of this finding, as originally written, DID NOT
+       ACTUALLY WORK — `IsEntityDead` has no FXServer server implementation
+       (see PED_DEAD_HEALTH_THRESHOLD's own doc comment below for the
+       primary-source finding) and always returned `false` server-side, so
+       HandleUseK9Medkit's reject below never fired regardless of the
+       target's real state. server/combat.lua's `ValidateCombatRequest`,
+       named above as the "established, reused answer" this gate was
+       modeled on, had the identical bug at the same time. Both are now
+       fixed to use `GetEntityHealth(targetPed) <= PED_DEAD_HEALTH_THRESHOLD`
+       instead — see this file's own doc comment on `PED_DEAD_HEALTH_THRESHOLD`
+       below for the full writeup. client/medkit.lua's client-side
+       `applyMedkitHeal` guard (mentioned above) is UNAFFECTED by any of
+       this: `IsEntityDead` is confirmed client-callable (only its
+       server-side registration is missing), so that guard was, and
+       remains, real.
+
     3. MUTEX RELEASE UNDER AN UNCAUGHT ERROR (NEW, fixed below) — the
        previous shape released `MedkitMutex` only via the `finish(result)`
        wrapper, meaning every one of THIS function's own `return` statements
@@ -278,6 +295,46 @@ end)
 -- real yield point here). Released on EVERY exit path, mirroring
 -- server/search.lua's SearchMutex discipline exactly.
 local MedkitMutex = NewMutex()
+
+--- NATIVE-AVAILABILITY FIX (this pass, coder-backend, native-sweep
+--- follow-up): the dead-K9 gate below (CORRECTNESS PASS finding 2 in this
+--- file's own header) was written using `IsEntityDead`, which has NO
+--- FXServer server implementation at all -- confirmed against the primary
+--- source, not just the 404 on its `ext/native-decls` doc page. Traced
+--- `citizenfx/fivem`'s own C++ native-registration list
+--- (code/components/citizen-server-impl/src/state/ServerGameState_Scripting.cpp,
+--- the exact file that implements every entity/ped-related native FXServer
+--- DOES expose server-side): zero `RegisterNativeHandler` call for
+--- `IS_ENTITY_DEAD` anywhere in it, or anywhere else in the repo (a
+--- full-repo source search for the literal string `"IS_ENTITY_DEAD"`
+--- returns zero matches) -- while `GET_ENTITY_HEALTH` (already used
+--- elsewhere in this exact file, two lines below in
+--- RunUseK9MedkitMutation) IS registered there. FXServer does not throw on
+--- an unregistered native, it silently no-ops and never writes the result
+--- buffer, so `IsEntityDead(targetPed)` in HandleUseK9Medkit ALWAYS
+--- returned `false` -- meaning the dead-K9 gate this file's header
+--- documents as "fixed below," and the CHANGELOG entry recording it as
+--- closed, never actually worked: a dead K9's health could always be
+--- pushed back up via this item, exactly the bug that gate was written to
+--- close. Rewritten below to use `GetEntityHealth`, confirmed registered
+--- and already relied on elsewhere in this file.
+---
+--- THRESHOLD: `PED_DEAD_HEALTH_THRESHOLD = 100`, matching
+--- server/combat.lua's OWN identical fix and identical reasoning (see that
+--- file's own doc comment on its own `PED_DEAD_HEALTH_THRESHOLD` constant
+--- for the full writeup) -- restated briefly here since this file does not
+--- share a module with combat.lua: GTA peds are conventionally declared
+--- dead once health drops to (or below) 100, not 0 (the reason a ped's
+--- default max health is 200, not 100 -- the bottom 100 points are the
+--- "already dead" floor). Using `<= 0` here would make this check a
+--- near-permanent no-op again (a K9 ped's health essentially never reaches
+--- literal 0 before the engine already considers it dead at 100),
+--- reproducing this exact bug while looking fixed. `<= 100` also does NOT
+--- falsely reject a merely-badly-INJURED (alive) K9 -- a K9's real health
+--- only drops that low when genuinely dying/dead, which is precisely the
+--- case this gate exists to reject; an injured-but-alive K9 (the item's
+--- actual intended target) sits well above this floor.
+local PED_DEAD_HEALTH_THRESHOLD = 100
 
 --- Server-authoritative eligibility check for the USING player: does
 --- `source` hold a job allowed to use a K9 medkit? Deliberately NOT
@@ -434,7 +491,9 @@ end
 ---   3. Re-derive the TARGET's REAL ped model server-side and confirm it's
 ---      a configured K9 model (IsConfiguredK9Model) — never trust that the
 ---      client's target selection actually was a K9.
----   4. Reject if the TARGET is already dead (IsEntityDead) — a K9 medkit
+---   4. Reject if the TARGET is already dead (GetEntityHealth <=
+---      PED_DEAD_HEALTH_THRESHOLD, see that constant's own doc comment
+---      above) — a K9 medkit
 ---      restores an INJURED, alive K9; it is not a revive item. See this
 ---      file's header, CORRECTNESS PASS finding 2, for why this must not
 ---      fall through to a real laststand/EMS system's own revive flow.
@@ -472,12 +531,15 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
     end
 
     -- A medkit heals an INJURED, ALIVE K9 — never a dead one. See this
-    -- file's header, CORRECTNESS PASS finding 2. Mirrors
-    -- server/combat.lua's own ValidateCombatRequest
-    -- `IsEntityDead(targetPed)` reject, same reason string
-    -- ('target_dead'), same "cheap, non-mutating, checked before the mutex/
-    -- cooldown/item work below" placement.
-    if IsEntityDead(targetPed) then
+    -- file's header, CORRECTNESS PASS finding 2, AND the native-availability
+    -- fix doc comment on PED_DEAD_HEALTH_THRESHOLD above (this check was
+    -- `IsEntityDead(targetPed)`, which always silently returned false
+    -- server-side -- this gate never actually worked until this pass).
+    -- Mirrors server/combat.lua's own ValidateCombatRequest reject, same
+    -- reason string ('target_dead'), same "cheap, non-mutating, checked
+    -- before the mutex/cooldown/item work below" placement, same
+    -- GetEntityHealth-based mechanism (also fixed there this pass).
+    if GetEntityHealth(targetPed) <= PED_DEAD_HEALTH_THRESHOLD then
         return { ok = false, reason = 'target_dead' }
     end
 
