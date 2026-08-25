@@ -1042,7 +1042,7 @@ Config.Wellbeing = {
         max                     = 100,
         sprintDecayPerTick      = 2.0,  -- applied per tick while server-computed speed indicates sprinting
         idleRegenPerTick        = 1.0,  -- per tick while not sprinting
-        restRegenPerTick        = 4.0,  -- NOT WIRED THIS PASS -- see server/wellbeing.lua's open-question note; rest-source detection (PHASE4_SPEC.md §13.4.3.1 open question 1) is left unresolved, same as the spec itself leaves it, rather than inventing an unreviewed detection mechanism
+        restRegenPerTick        = 4.0,  -- WIRED. server/wellbeing.lua scans GetAllObjects()/GetAllVehicles() once per tick (shared across all K9s, not per-K9) for restSources models and applies this instead of idleRegenPerTick when a K9 is within restRadius and not sprinting. Positions are resolved server-side; a client can never claim to be resting. The "NOT WIRED THIS PASS" note that stood here was true when written.
         restRadius              = 5.0,
         restSources             = { 'water_bowl' }, -- PLACEHOLDER, not wired to any real detection this pass
         speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty
@@ -1126,7 +1126,7 @@ Config.Wellbeing = {
         calmDownCooldownMs       = 15000,
     },
     Distraction = {
-        flashbangImmune     = true, -- ASPIRATIONAL CONFIG ONLY -- NOT implemented this pass, genuinely integration-dependent (PHASE4_SPEC.md §13.4.3.4) on an unconfirmed third-party flashbang/stun resource's own event shape. Do not treat this as a shipped guarantee.
+        flashbangImmune     = true, -- HALF IMPLEMENTED, and the honest half. server/wellbeing.lua exposes IsFlashbangImmune(citizenid) as a real callable accessor. What is deliberately NOT built is the consumer side: honouring immunity means listening to some third-party stun resource's event, whose name and payload shape are unknown, and fabricating a listener for an unnamed resource would look implemented and never fire. So a companion resource has something real to check, and this is still not a shipped guarantee on its own.
         meatBaitItemName    = 'k9_meat_bait',      -- PLACEHOLDER
         meatBaitDurationMs  = 6000,
         meatBaitRadius      = 8.0,

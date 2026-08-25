@@ -26,6 +26,13 @@ about these files as stable — re-check before acting on it. `fxmanifest.lua`
 is owned by another agent per this session's rules; flagging the missing
 registration here for that owner/project-lead, not fixing it.
 
+**Update, documentation sync pass, 2026-08-25:** re-checked directly — all
+four files above, plus `client/fetch.lua`/`server/fetch.lua`, are now
+registered in `fxmanifest.lua`. This closes the missing-registration flag
+this note raised; see Part 6's corrected items for detail. Leaving this
+paragraph in place unedited, per this document's own convention, rather
+than rewriting it as if the gap were never real.
+
 ---
 
 ## Part 1 — Verifying Revision 5's claims
@@ -167,11 +174,12 @@ fixed twice*, in real time, while the fix was still being verified. This is
 the single clearest piece of evidence for this document's headline finding:
 **extracting a shared helper does not stop the pattern from recurring by
 itself — every new file's author still needs to know the helper exists.**
-Trivial one-line fix once `client/propattachment.lua` settles down (replace
-3 lines with `local entity = ResolveNetworkEntity(netId)`); not urgent by
-itself (this file isn't even wired into `fxmanifest.lua` yet), but it should
-not ship as-is, and it's worth a note to whoever is finishing
-`client/propattachment.lua` before it does.
+**Update, later pass: fixed.** `client/propattachment.lua` now calls
+`ResolveNetworkEntity(netId)` directly at this call site, and the file is
+registered in `fxmanifest.lua` — see Part 6's corrected item 2 below. Left
+here, marked resolved rather than deleted, as the concrete example this
+section's headline finding ("extracting a shared helper does not stop the
+pattern from recurring by itself") was built around.
 
 ### RESOLVED 2026-08-24: `NotifyPlayer` — was 13 copies, not the "2, closed" Revision 2 recorded
 
@@ -464,12 +472,16 @@ gating, checked directly against source (not inferred from names):
    minutes, prevents the next agent from wasting a pass re-discovering
    already-shipped code as missing, or worse, re-implementing it. Not a code
    change; flag to whichever agent owns that doc.
-2. **Fix `client/propattachment.lua:237-239`'s raw netId-resolve** to call
-   `ResolveNetworkEntity(netId)` instead — one line, in a file that's already
-   being actively written this session, so the cheapest possible time to
-   catch it is right now before it's "shipped" and needs a second pass to
-   revisit. Low urgency only because the file isn't wired into
-   `fxmanifest.lua` yet anyway.
+2. ~~**Fix `client/propattachment.lua:237-239`'s raw netId-resolve** to call
+   `ResolveNetworkEntity(netId)` instead~~ **DONE, verified this pass.**
+   `client/propattachment.lua`'s server-issued attach handler now calls
+   `ResolveNetworkEntity(netId)` directly (its own comment there cites this
+   exact roadmap item) — the raw
+   `NetworkDoesEntityExistWithNetworkId`/`NetworkGetEntityFromNetworkId`/
+   `DoesEntityExist` sequence this item originally quoted is gone. The file
+   is also registered in `fxmanifest.lua` now (see the corrected "Watch,
+   don't act yet" entry below), so both halves of this item's original
+   framing are resolved.
 3. **Extract `NotifyPlayer`** into `server/entities.lua` as a 4th shared
    primitive (`NotifyPlayer(target, description, notifyType?, titleSuffix?)`),
    migrating all 12 call sites. Cheap (each site is a 4-6 line deletion),
@@ -500,10 +512,14 @@ gating, checked directly against source (not inferred from names):
 - **`client/combat.lua`'s always-on maintenance thread with no feature-flag
   off-switch** (Part 5) — negligible idle cost today; revisit only if a
   future active-effect state changes that cost.
-- **`fxmanifest.lua` missing registration for `propattachment`/`bonetool`
-  file pairs** — not a refactor item, a completeness gap in in-progress
-  work; will presumably resolve itself as those files finish landing. Flag
-  to project-lead if it's still missing once those files stop changing.
+- ~~**`fxmanifest.lua` missing registration for `propattachment`/`bonetool`
+  file pairs**~~ **Resolved.** Both pairs (`client/propattachment.lua`+
+  `server/propattachment.lua`, `client/bonetool.lua`+`server/bonetool.lua`),
+  and `client/fetch.lua`+`server/fetch.lua`, are all present in
+  `fxmanifest.lua`'s current `client_scripts`/`server_scripts` lists,
+  verified by direct read — not presumed. Their flags still ship `false`;
+  that's the feature being off, not a completeness gap in this file's own
+  sense.
 - **Breed→scenario literal tables** (`K9_SIT_SCENARIO_BY_MODEL_HASH` etc.,
   tracked since Revision 3) — re-checked this pass, no new instance beyond
   the 3 already known, no live bug currently. Still cosmetic-severity if it
