@@ -668,6 +668,95 @@ end
 --      trust boundary already disclosed in this file's header.
 -- ======================================================================
 
+-- ======================================================================
+-- SHARED PER-TICK ASSERTION HELPERS (QA FIX — prompt suppression on grant,
+-- this pass). The shared maintenance thread below (see "SHARED MAINTENANCE
+-- THREAD") picks its own Wait() duration once per iteration, from whichever
+-- states were active AT THE TOP of that iteration. A target going from
+-- fully idle (thread asleep in its own Wait(500), the common case) to
+-- freshly bitten/dragged got, before this fix, NO enforcement native call
+-- at all until that sleep happened to elapse on its own — up to ~500ms
+-- during which the mechanic that just landed enforced nothing, long enough
+-- for an extra sprint/attack/escape input the mechanic exists to prevent.
+--
+-- Each function below is the EXACT same native-call sequence the thread's
+-- own per-tick branch for that effect already performs — extracted once,
+-- not duplicated — and is now ALSO invoked immediately, a single time,
+-- from the RegisterNetEvent handler that turns the corresponding state on
+-- (applyBiteHold / dragStarted / applyDragSpeedLimit below), in addition to
+-- the thread's own per-tick call once it next wakes. A RegisterNetEvent
+-- handler runs on receipt, on its own coroutine, independently of whatever
+-- the shared thread happens to be doing — this is not a second CreateThread
+-- and does not touch the thread's own Wait() selection at all, it just
+-- means the first assertion no longer waits on that selection.
+--
+-- WHAT THIS DOES NOT CLOSE: this closes the ONSET delay only (enforcement
+-- now begins on the very tick the grant arrives, not whenever the thread
+-- next wakes). It does not make the thread itself wake up early — a true
+-- interrupt would need a cancellable-wait primitive (promise.new() +
+-- SetTimeout(), the standard Citizen-scripting idiom for exactly this),
+-- deliberately NOT adopted here: neither `promise` nor `SetTimeout` is
+-- currently in .luacheckrc's read_globals, and this file's own ownership
+-- boundary this pass does not extend to that config file — flagged as a
+-- worthwhile follow-up for whoever owns it, not applied here. Practical
+-- residual with just this fix: a gap can still reopen on any frame between
+-- this bridge call and the thread's own next wake (same up-to-~500ms upper
+-- bound as before) — a real, disclosed narrowing of the window, not a claim
+-- that the window is now fully gapless.
+-- ======================================================================
+local function AssertBiteHoldControlsOnTarget()
+    DisableControlAction(0, INPUT_SPRINT, true)
+    DisableControlAction(0, INPUT_ATTACK, true)
+end
+
+--- Mirrors the shared thread's own ActiveDragAsHolder per-tick block
+--- (NetworkRequestControlOfEntity + AttachEntityToEntity, plus — NPC target
+--- only — the direct move-rate override). Takes the same shape
+--- ActiveDragAsHolder itself holds so both call sites (the thread's own
+--- loop and dragStarted's immediate bridge call below) stay byte-for-byte
+--- identical rather than risk drifting apart.
+--- @param dragState { targetNetId: number, isPlayerTarget: boolean }
+--- @return number? targetPed
+local function AssertDragAsHolderTick(dragState)
+    local targetPed = ResolveNetworkEntity(dragState.targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+
+    if targetPed then
+        NetworkRequestControlOfEntity(targetPed) -- best-effort, see header "NETWORK OWNERSHIP OF THE TARGET PED"
+
+        -- PHASE3_SPEC.md §12.0 item 8's own "new finding": DetachEntity is
+        -- very likely NOT ownership-gated either (citizenfx/fivem issue
+        -- #3726), so a hostile target's own client can call it on itself at
+        -- any moment. Re-asserting the attach EVERY TICK (never one-shot)
+        -- is the ONLY thing that puts it back — binding guardrail 2.
+        -- Offset/bone index are an UNREVIEWED placeholder, see header.
+        AttachEntityToEntity(targetPed, PlayerPedId(), 0, 0.0, -0.6, 0.0, 0.0, 0.0, 0.0, true, false, false, false, 2, true)
+
+        if not dragState.isPlayerTarget then
+            -- NPC target: no relay problem for the speed-limit half either
+            -- (this K9's own client already fully commands this entity) —
+            -- re-asserted every tick, same discipline as the attach above.
+            SetPedMoveRateOverride(targetPed, Config.Combat.PropDragging.dragSpeedMultiplier)
+        end
+    end
+
+    return targetPed
+end
+
+--- Mirrors the shared thread's own ActiveDragSpeedLimit per-tick block —
+--- see header "MOVE-RATE COMPOSER SCOPE" for the IsOwnModelK9() branch
+--- reasoning, unchanged here; re-checked FRESH on every call (not decided
+--- once at apply-time), since the correct branch depends on THIS client's
+--- CURRENT model.
+local function AssertDragSpeedLimitOnTarget()
+    local ped = PlayerPedId()
+    if IsOwnModelK9() and K9MoveRateModifiers then
+        K9MoveRateModifiers.dragging = Config.Combat.PropDragging.dragSpeedMultiplier
+        RecomputeK9MoveRate()
+    else
+        SetPedMoveRateOverride(ped, Config.Combat.PropDragging.dragSpeedMultiplier)
+    end
+end
+
 if Config.Features.BiteAndHold then
     -- HOLDER-SIDE receivers — server/combat.lua's own header: "Sent ONLY to
     -- the HOLDING K9's own client — starts/ends its own local cosmetic
@@ -708,6 +797,11 @@ if Config.Features.BiteAndHold then
             holderNetId = holderNetId,
             localDeadline = GetGameTimer() + Config.Combat.BiteAndHold.maxDurationMs,
         }
+        -- QA FIX (prompt suppression on grant) — see header "SHARED PER-TICK
+        -- ASSERTION HELPERS": bridge the onset gap immediately rather than
+        -- wait for the shared thread's own next wake (up to ~500ms away if
+        -- this client was fully idle beforehand).
+        AssertBiteHoldControlsOnTarget()
     end)
 
     --- @param reason string
@@ -899,6 +993,10 @@ if Config.Features.PropDragging then
             isPlayerTarget = isPlayerTarget == true,
             localDeadline = GetGameTimer() + Config.Combat.PropDragging.maxDragDurationMs,
         }
+        -- QA FIX (prompt suppression on grant) — see header "SHARED
+        -- PER-TICK ASSERTION HELPERS": bridge the onset gap immediately
+        -- rather than wait for the shared thread's own next wake.
+        AssertDragAsHolderTick(ActiveDragAsHolder)
     end)
 
     --- HOLDER-SIDE receiver — stops the re-assertion loop, calls
@@ -938,6 +1036,10 @@ if Config.Features.PropDragging then
         ActiveDragSpeedLimit = {
             localDeadline = GetGameTimer() + Config.Combat.PropDragging.maxDragDurationMs,
         }
+        -- QA FIX (prompt suppression on grant) — see header "SHARED
+        -- PER-TICK ASSERTION HELPERS": bridge the onset gap immediately
+        -- rather than wait for the shared thread's own next wake.
+        AssertDragSpeedLimitOnTarget()
     end)
 
     --- @param reason string
@@ -1037,6 +1139,20 @@ end
 -- restriction; see that block's own comment for why this cannot fully close
 -- the gap without a server-side end condition, and what server/combat.lua
 -- would need to do so.
+--
+-- FOLLOW-UP (this pass) — ActiveForcedRagdoll had the IDENTICAL exposure
+-- (SetEntityCanBeDamaged(ped, false) is a persistent flag surviving a
+-- respawn on the same ped handle, exactly like DisableControlAction's own
+-- exposure above) and was previously the ONE state here with no equivalent
+-- handling. Given the same treatment below, same rationale, same bound
+-- (ragdollDurationMs, not unbounded) — see that block's own comment. Unlike
+-- ActiveBiteHold, no speculative TriggerServerEvent report is added for this
+-- one: bite-hold's own reportBiteHoldTargetDied call is already disclosed
+-- above as inert (no server-side listener exists yet either), and inventing
+-- a second, differently-named event with the same "nothing listens yet"
+-- status would just be a second copy of the same disclosed gap, not a step
+-- toward closing it — left for whoever lands the server-side condition to
+-- decide whether one shared event or two is the right shape.
 -- ======================================================================
 CreateThread(function()
     while true do
@@ -1081,8 +1197,7 @@ CreateThread(function()
                 TriggerServerEvent('qbx_k9unit:server:reportBiteHoldTargetDied')
                 ActiveBiteHold = nil
             else
-                DisableControlAction(0, INPUT_SPRINT, true)
-                DisableControlAction(0, INPUT_ATTACK, true)
+                AssertBiteHoldControlsOnTarget() -- see header "SHARED PER-TICK ASSERTION HELPERS"
 
                 if now >= ActiveBiteHold.localDeadline then
                     -- Backstop only — see header "DEFENSE IN DEPTH". In the
@@ -1095,39 +1210,18 @@ CreateThread(function()
         end
 
         if ActiveDragAsHolder then
-            local targetPed = ResolveNetworkEntity(ActiveDragAsHolder.targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
-
-            if targetPed then
-                NetworkRequestControlOfEntity(targetPed) -- best-effort, see header "NETWORK OWNERSHIP OF THE TARGET PED"
-
-                -- PHASE3_SPEC.md §12.0 item 8's own "new finding":
-                -- DetachEntity is very likely NOT ownership-gated
-                -- either (citizenfx/fivem issue #3726), so a hostile
-                -- target's own client can call it on itself at any
-                -- moment. Re-asserting the attach EVERY TICK (never
-                -- one-shot) is the ONLY thing that puts it back —
-                -- binding guardrail 2. Offset/bone index are an
-                -- UNREVIEWED placeholder approximating a collar/scruff
-                -- drag position (same "no new architecture, mirrors
-                -- client/vehicle.lua's own AttachEntityToEntity call
-                -- shape for the vehicle-load case" precedent this
-                -- resource already established) — flagged for
-                -- coder-frontend/an in-engine pass to tune, not
-                -- asserted as final.
-                AttachEntityToEntity(targetPed, PlayerPedId(), 0, 0.0, -0.6, 0.0, 0.0, 0.0, 0.0, true, false, false, false, 2, true)
-
-                if not ActiveDragAsHolder.isPlayerTarget then
-                    -- NPC target: no relay problem for the speed-limit
-                    -- half either (this K9's own client already fully
-                    -- commands this entity, same posture as
-                    -- applyNpcBiteHold/applyNpcTakedown) — re-asserted
-                    -- every tick, same discipline as the attach above
-                    -- and phase2_notes/phase3_combat_natives.md §4's
-                    -- own "must be looped, not one-shot" requirement
-                    -- for this exact native.
-                    SetPedMoveRateOverride(targetPed, Config.Combat.PropDragging.dragSpeedMultiplier)
-                end
-            end
+            -- See header "SHARED PER-TICK ASSERTION HELPERS" — this is the
+            -- exact same NetworkRequestControlOfEntity/AttachEntityToEntity/
+            -- (NPC-target) SetPedMoveRateOverride sequence dragStarted's own
+            -- handler above already runs once, immediately, on grant; this
+            -- is the CONTINUOUS every-tick reassertion of the same thing
+            -- (PHASE3_SPEC.md §12.0 item 8's own "new finding": DetachEntity
+            -- is very likely NOT ownership-gated either, citizenfx/fivem
+            -- issue #3726, so a hostile target's own client can call it on
+            -- itself at any moment — re-asserting the attach EVERY TICK,
+            -- never one-shot, is the only thing that puts it back, binding
+            -- guardrail 2).
+            local targetPed = AssertDragAsHolderTick(ActiveDragAsHolder)
 
             if now >= ActiveDragAsHolder.localDeadline then
                 -- Backstop only — see header "DEFENSE IN DEPTH". In the
@@ -1144,23 +1238,16 @@ CreateThread(function()
         end
 
         if ActiveDragSpeedLimit then
-            local ped = PlayerPedId()
-            -- See header "MOVE-RATE COMPOSER SCOPE" for why this
-            -- branches on IsOwnModelK9() rather than unconditionally
-            -- going through client/movement.lua's shared composer —
-            -- re-checked FRESH every tick (not decided once at
-            -- apply-time) since the correct branch depends on this
-            -- client's CURRENT model.
-            if IsOwnModelK9() and K9MoveRateModifiers then
-                K9MoveRateModifiers.dragging = Config.Combat.PropDragging.dragSpeedMultiplier
-                RecomputeK9MoveRate()
-            else
-                SetPedMoveRateOverride(ped, Config.Combat.PropDragging.dragSpeedMultiplier)
-            end
+            -- See header "SHARED PER-TICK ASSERTION HELPERS" — same
+            -- IsOwnModelK9()-branched assertion applyDragSpeedLimit's own
+            -- handler above already runs once, immediately, on grant; this
+            -- is the CONTINUOUS every-tick reassertion of the same thing.
+            AssertDragSpeedLimitOnTarget()
 
             if now >= ActiveDragSpeedLimit.localDeadline then
                 -- Backstop only — see header "DEFENSE IN DEPTH".
                 ActiveDragSpeedLimit = nil
+                local ped = PlayerPedId()
                 if IsOwnModelK9() and K9MoveRateModifiers then
                     K9MoveRateModifiers.dragging = 1.0
                     RecomputeK9MoveRate()
@@ -1171,18 +1258,49 @@ CreateThread(function()
             end
         end
 
-        if ActiveForcedRagdoll and now >= ActiveForcedRagdoll.localDeadline then
-            -- Backstop only — see header "DEFENSE IN DEPTH". Restoring
-            -- damageability is the load-bearing half of this backstop
-            -- (an un-restored bracket is a target-side exploit, not
-            -- merely a UX bug), so this branch does it directly rather
-            -- than waiting on a lost network event. Checked EVERY tick,
-            -- independently of every other state above — see this
-            -- thread's own header "QA FIX (backstop starvation)" for why
-            -- this must never be conditioned on ActiveBiteHold/
-            -- ActiveDragAsHolder/ActiveDragSpeedLimit's own truthiness.
-            ActiveForcedRagdoll = nil
-            SetEntityCanBeDamaged(PlayerPedId(), true)
+        if ActiveForcedRagdoll then
+            local myPed = PlayerPedId()
+
+            -- QA FIX (target death, this pass) — same shape and rationale
+            -- as ActiveBiteHold's own IsEntityDead branch above (mirrored
+            -- deliberately rather than inventing a second one): FiveM
+            -- respawn reuses this exact ped handle, so without this,
+            -- SetEntityCanBeDamaged(ped, true) would not run until
+            -- ActiveForcedRagdoll.localDeadline, leaving the RESURRECTED
+            -- body briefly undamageable — bounded by ragdollDurationMs
+            -- already (not an unbounded trap), but the same disclosed
+            -- inconsistency class this resource has already had once (an
+            -- invincibility window nobody intended). Clearing here restores
+            -- damageability the moment death is observed (detected within a
+            -- frame or two, same as ActiveBiteHold — this thread already
+            -- runs at Wait(0) while ActiveForcedRagdoll is set).
+            --
+            -- CLIENT-SIDE HALF ONLY — see ActiveBiteHold's own IsEntityDead
+            -- branch above for the identical caveat: this cannot by itself
+            -- tell server/combat.lua the ragdoll ended early. See this
+            -- thread's own header "QA FIX (target death, this pass)"
+            -- FOLLOW-UP note for why no speculative TriggerServerEvent
+            -- report is added here, unlike ActiveBiteHold's own block.
+            if IsEntityDead(myPed) then
+                ActiveForcedRagdoll = nil
+                SetEntityCanBeDamaged(myPed, true)
+            else
+                if now >= ActiveForcedRagdoll.localDeadline then
+                    -- Backstop only — see header "DEFENSE IN DEPTH".
+                    -- Restoring damageability is the load-bearing half of
+                    -- this backstop (an un-restored bracket is a
+                    -- target-side exploit, not merely a UX bug), so this
+                    -- branch does it directly rather than waiting on a lost
+                    -- network event. Checked EVERY tick, independently of
+                    -- every other state above — see this thread's own
+                    -- header "QA FIX (backstop starvation)" for why this
+                    -- must never be conditioned on ActiveBiteHold/
+                    -- ActiveDragAsHolder/ActiveDragSpeedLimit's own
+                    -- truthiness.
+                    ActiveForcedRagdoll = nil
+                    SetEntityCanBeDamaged(myPed, true)
+                end
+            end
         end
 
         -- Same backstop reasoning as ActiveForcedRagdoll above, applied
