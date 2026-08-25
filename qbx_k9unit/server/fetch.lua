@@ -388,6 +388,40 @@ end)
 --- resting position legitimately moves before this confirm fires, and
 --- nothing server-authoritative depends on exactly where it lands
 --- (PHASE5_SPEC.md §14.4.3's own disclosed divergence, adopted verbatim).
+---
+--- ORPHANED-OBJECT FIX (coder-backend, this pass): every failure branch
+--- below now tells `src` — and ONLY `src`, never a broadcast — to reclaim
+--- the object it just created, via the same 'qbx_k9unit:client:removeFetchBall'
+--- event EndFetchCycle already uses (client/fetch.lua's own handler for it
+--- already does exactly what's needed here: clear its local
+--- myThrownBallNetId if it matches, then independently resolve + model-check
+--- + delete). Previously every branch below `return`ed with, at best, a
+--- NotifyPlayer toast — the client's own already-created, already-networked
+--- object was left with nothing to reclaim it until its own CONFIRM-FAILURE
+--- BACKSTOP thread finally acted, up to maxBallLifetimeMs + 15s later (see
+--- that thread's own header comment in client/fetch.lua for the full
+--- writeup of the gap this closes).
+---
+--- `safeToCleanup` below is deliberately re-derived FIRST, before ANY of
+--- this handler's other business-logic checks run, and reused by every
+--- failure branch — never only the branches that happen to already resolve
+--- the entity for their own unrelated reasons. It is NOT simply "did the
+--- client report something real" — it independently re-proves the netId
+--- (a) resolves to a real, currently-existing object, (b) of the configured
+--- ball model, AND (c) is not already claimed by a DIFFERENT citizenid's own
+--- FetchBalls entry (re-running the same FindOtherBallByNetId check the
+--- success path below uses). That third condition is the one that actually
+--- matters: without it, a caller could report ANOTHER citizen's real, active
+--- fetch ball's netId, deliberately land on a failure branch that does NOT
+--- itself re-check ownership (e.g. simply let its own pending throw expire,
+--- or have HasK9Access revoked in the meantime), and this handler would
+--- otherwise instruct that OTHER citizen's actual ball to be deleted via
+--- THIS caller's own client — exactly the class of bug this file's header
+--- ENTITY-THEFT/TRUST-BOUNDARY DISCIPLINE block exists to rule out. Every
+--- branch that already independently reaches the GLOBAL NETID-UNIQUENESS
+--- collision case gets `safeToCleanup == false` for free from this same
+--- check, so it never sends a cleanup instruction for an entity this
+--- citizenid does not actually own.
 --- @param netId number
 RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
     local src = source
@@ -400,21 +434,43 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
     if not pending or pending.src ~= src then return end
     PendingFetchThrows[citizenid] = nil
 
+    -- See this handler's own doc comment above for why this is derived
+    -- FIRST and reused by every failure branch below.
+    local entity = ResolveNetworkEntity(netId, 3)
+    local safeToCleanup = entity ~= nil
+        and FetchBallModelHashes[GetEntityModel(entity)]
+        and not FindOtherBallByNetId(netId, citizenid)
+
+    --- @param message string?
+    local function RejectThrow(message)
+        if message then
+            NotifyPlayer(src, message, 'error')
+        end
+        if safeToCleanup then
+            TriggerClientEvent('qbx_k9unit:client:removeFetchBall', src, netId)
+        end
+    end
+
     if GetGameTimer() > pending.expiresAt then
-        NotifyPlayer(src, 'Fetch throw timed out — try again.', 'error')
+        RejectThrow('Fetch throw timed out — try again.')
         return
     end
 
-    if not HasK9Access(src) then return end
-    if FetchBalls[citizenid] then return end -- shouldn't be reachable, but never trust an invariant alone
+    if not HasK9Access(src) then
+        RejectThrow('You are not authorized to use K9 fetch equipment.')
+        return
+    end
+    if FetchBalls[citizenid] then -- shouldn't be reachable, but never trust an invariant alone
+        RejectThrow('Fetch ball placement failed — you already have an active fetch item out.')
+        return
+    end
 
-    local entity = ResolveNetworkEntity(netId, 3)
     if not entity then
-        NotifyPlayer(src, 'Fetch ball could not be confirmed.', 'error')
+        RejectThrow('Fetch ball could not be confirmed.')
         return
     end
     if not FetchBallModelHashes[GetEntityModel(entity)] then
-        NotifyPlayer(src, 'Fetch ball placement failed — unexpected object model.', 'error')
+        RejectThrow('Fetch ball placement failed — unexpected object model.')
         return
     end
 
@@ -423,8 +479,12 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
     -- entry (e.g. someone else's real, already-thrown/carried ball).
     -- `citizenid` is confirmed above to have no entry of its own yet, so
     -- any hit here is necessarily a genuine cross-citizenid collision.
+    -- `safeToCleanup` is already `false` in exactly this case (it re-runs
+    -- this same check above), so RejectThrow correctly notifies but sends
+    -- no cleanup instruction — never delete an entity this citizenid does
+    -- not actually own.
     if FindOtherBallByNetId(netId, citizenid) then
-        NotifyPlayer(src, 'Fetch ball placement failed — that item is already tracked.', 'error')
+        RejectThrow('Fetch ball placement failed — that item is already tracked.')
         return
     end
 
@@ -556,6 +616,47 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
 end)
 
 --- 'attach'-mode pickup confirm — see requestPickupFetchBall's own comment.
+---
+--- STALE-BROADCAST-NETID FINDING, INVESTIGATED AND DELIBERATELY LEFT AS-IS
+--- (coder-backend, this pass): both failure branches below call
+--- EndFetchCycle while `ball.netId` still names the OLD, pre-pickup entity
+--- (this client already deleted it locally back in 'qbx_k9unit:client:
+--- carryFetchBall' — see requestPickupFetchBall's own comment) rather than
+--- the NEW, real, currently-attached replacement this function's own
+--- `netId` parameter names. EndFetchCycle's resulting server-side
+--- DeleteEntity attempt and its 'qbx_k9unit:client:removeFetchBall'
+--- broadcast therefore both act on an already-gone entity — a genuine
+--- no-op — while the real orphaned object (the new attach) is addressed
+--- only by EndFetchCycle's OTHER effect, the terminal
+--- 'qbx_k9unit:client:endFetchCarry' send to `ball.carrierSrc` (this same
+--- `src`), which client/fetch.lua's own endFetchCarry handler deliberately
+--- does NOT resolve by re-trusting that broadcast's netId — it deletes its
+--- own last-known `ActiveFetchCarry.netId` handle directly instead (see
+--- that handler's own "DEFENSE-IN-DEPTH, NOT REDUNDANT" comment, which
+--- documents this exact gap and why it closes it that way). That already
+--- fully closes the leak in the ordinary case, so this was audited for
+--- whether "just write `ball.netId = netId` before calling EndFetchCycle" is
+--- a safe tightening anyway — it is NOT, for two different reasons matching
+--- this handler's two failure branches:
+---   1. Entity/model-mismatch branch: `netId` has not been proven to name
+---      anything real or ball-shaped at this point (that is WHY this branch
+---      is being taken) — writing an unverified, potentially fabricated
+---      client-reported id into `ball.netId` and letting EndFetchCycle act
+---      on it would hand a malicious carrier exactly the entity-theft
+---      primitive this file's header ENTITY-THEFT/TRUST-BOUNDARY
+---      DISCIPLINE block exists to rule out (EndFetchCycle's own
+---      ResolveNetworkEntity + DeleteEntity has no model check of its own).
+---   2. GLOBAL NETID-UNIQUENESS collision branch: `FindOtherBallByNetId`
+---      matching here means this `netId` already legitimately belongs to a
+---      DIFFERENT citizenid's own active ball. Writing it into THIS
+---      citizenid's `ball.netId` and calling EndFetchCycle would delete and
+---      broadcast the removal of that OTHER player's real, currently active
+---      fetch ball — turning a same-citizenid cleanup into cross-player
+---      griefing. The current stale value is actually the SAFE choice here,
+---      not an oversight: it points at an entity this citizenid's own cycle
+---      already owns (if now deleted), never at one it doesn't.
+--- Conclusion: the staleness here is left unchanged. Flagged back rather
+--- than "fixed" into either of the two regressions above.
 --- @param netId number
 RegisterNetEvent('qbx_k9unit:server:confirmFetchBallCarried', function(netId)
     local src = source
@@ -666,6 +767,21 @@ end)
 --- 'fake'-mode drop confirm — the carrier's client recreated a plain,
 --- unattached ball object at its own current position and reports its
 --- netId so this file's registry stays in sync.
+---
+--- ORPHANED-OBJECT FIX (coder-backend, this pass): mirrors
+--- confirmFetchBallThrown's own fix above — see that handler's doc comment
+--- for the full reasoning behind `safeToCleanup` (re-derived FIRST, reused
+--- by every failure branch, and why it must independently re-check the
+--- GLOBAL NETID-UNIQUENESS INVARIANT before ever sending a cleanup
+--- instruction). Every one of this handler's failure branches used to
+--- `return` completely silently — not even a NotifyPlayer toast, unlike
+--- confirmFetchBallThrown's own equivalents — while the carrier's own
+--- client had already created a real, networked replacement ball object
+--- moments before calling this event. Deliberately still no NotifyPlayer
+--- text added on any branch here: the success path below has never
+--- notified either (matches confirmFetchBallCarried's own equally silent
+--- convention) — this fix closes the entity leak without changing that
+--- established UX choice.
 --- @param netId number
 RegisterNetEvent('qbx_k9unit:server:confirmFetchBallDropped', function(netId)
     local src = source
@@ -675,18 +791,45 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallDropped', function(netId)
     if not pending then return end
     PendingFetchDrops[src] = nil
 
-    if GetGameTimer() > pending.expiresAt then return end -- ball table entry may already be gone via recall/timeout
+    -- See confirmFetchBallThrown's own doc comment for why this is derived
+    -- FIRST and reused by every failure branch below.
+    local entity = ResolveNetworkEntity(netId, 3)
+    local safeToCleanup = entity ~= nil
+        and FetchBallModelHashes[GetEntityModel(entity)]
+        and not FindOtherBallByNetId(netId, pending.throwerCitizenId)
+
+    local function RejectDrop()
+        if safeToCleanup then
+            TriggerClientEvent('qbx_k9unit:client:removeFetchBall', src, netId)
+        end
+    end
+
+    if GetGameTimer() > pending.expiresAt then -- ball table entry may already be gone via recall/timeout
+        RejectDrop()
+        return
+    end
 
     local ball = FetchBalls[pending.throwerCitizenId]
-    if not ball or ball.state ~= 'dropped' then return end -- recalled/changed state in the meantime
+    if not ball or ball.state ~= 'dropped' then -- recalled/changed state in the meantime
+        RejectDrop()
+        return
+    end
 
-    local entity = ResolveNetworkEntity(netId, 3)
-    if not entity or not FetchBallModelHashes[GetEntityModel(entity)] then return end
+    if not entity or not FetchBallModelHashes[GetEntityModel(entity)] then
+        RejectDrop()
+        return
+    end
 
     -- GLOBAL NETID-UNIQUENESS INVARIANT (this file's header) — reject if
     -- this freshly-created "recreated ball" object's netId somehow already
-    -- matches another citizenid's live entry.
-    if FindOtherBallByNetId(netId, pending.throwerCitizenId) then return end
+    -- matches another citizenid's live entry. `safeToCleanup` is already
+    -- `false` in exactly this case, so RejectDrop correctly sends no
+    -- cleanup instruction — never delete an entity this citizenid does not
+    -- actually own.
+    if FindOtherBallByNetId(netId, pending.throwerCitizenId) then
+        RejectDrop()
+        return
+    end
 
     ball.netId = netId
 end)

@@ -190,7 +190,14 @@
       Config.BoneSweepTool.TestPropModel     : string  -- only used by the 'test' subcommand; the 'goto'/'next'/'prev' preview needs no model at all (pure position query)
       Config.BoneSweepTool.MaxBoneIndex      : integer >= 0
       Config.BoneSweepTool.TestOffsetX/Y/Z   : number
-      Config.BoneSweepTool.CommandCooldownMs : number
+      Config.BoneSweepTool.CommandCooldownMs : number > 0 (NOT >= 0 -- see the
+                                          onResourceStart assert below: this
+                                          value is read fresh at call time by
+                                          a NewCooldown() with no constructor
+                                          default, so 0/negative fails CLOSED
+                                          -- permanently on cooldown after one
+                                          use -- rather than meaning "no
+                                          cooldown")
 ]]
 
 -- NOTE: 'goto' is a reserved word in Lua 5.4, so its key must be bracketed
@@ -256,7 +263,20 @@ AddEventHandler('onResourceStart', function(resourceName)
     for _, key in ipairs({ 'TestOffsetX', 'TestOffsetY', 'TestOffsetZ' }) do
         assert(type(Config.BoneSweepTool[key]) == 'number', ('[qbx_k9unit] Config.BoneSweepTool.%s must be a number.'):format(key))
     end
-    assert(type(Config.BoneSweepTool.CommandCooldownMs) == 'number' and Config.BoneSweepTool.CommandCooldownMs >= 0, '[qbx_k9unit] Config.BoneSweepTool.CommandCooldownMs must be a number >= 0.')
+    -- MUST be strictly > 0, not >= 0: BoneToolCooldown below is a
+    -- server/cooldowns.lua NewCooldown() instance with no constructor
+    -- default, so this value is read fresh at every call-time IsOnCooldown
+    -- check (see BoneToolCooldown.Consume below). That file's own
+    -- IsValidThreshold rejects 0/negative as "no cooldown" and instead
+    -- treats it as PERMANENTLY on cooldown (fail-closed) after the very
+    -- first use — a 0 here does not mean "unthrottled," it means the tool
+    -- locks out after exactly one invocation until this resource restarts.
+    -- This mirrors cooldowns.lua's own AssertValidDefaultThreshold guard
+    -- (`value > 0`) and server/admin.lua's identical positive-floor
+    -- requirement on its own CommandCooldownMs, applied here at the
+    -- call-time-threshold call shape instead of the constructor-default
+    -- shape.
+    assert(type(Config.BoneSweepTool.CommandCooldownMs) == 'number' and Config.BoneSweepTool.CommandCooldownMs > 0, '[qbx_k9unit] Config.BoneSweepTool.CommandCooldownMs must be a number > 0 -- 0 or negative does NOT mean "no cooldown" here, it means this tool fails closed (permanently blocked) after one use. See server/cooldowns.lua\'s fail-closed threshold handling.')
 
     RegisterCommand('k9bonetool', function(src, args)
         if src == 0 then

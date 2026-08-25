@@ -331,15 +331,67 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
 
     if GetGameTimer() > pending.expiresAt then
         NotifyPlayer(src, 'K9 vest attach timed out — try again.', 'error')
+        -- ORPHANED-PROP FIX (coder-backend, this pass): this branch used to
+        -- notify but never send 'qbx_k9unit:client:rejectK9PropAttach' —
+        -- unlike every one of this handler's sibling failure branches below
+        -- (model/position checks), which correctly pair their own
+        -- NotifyPlayer with this same event. The client already created a
+        -- real, attached, networked vest object before this confirm was
+        -- even sent (client/propattachment.lua's own attachK9Prop handler)
+        -- — notifying without this event left that object permanently
+        -- untracked both server- and client-side (see that file's own
+        -- STALE-VEST GUARD comment, which documents this exact gap and the
+        -- narrower client-only mitigation it added without owning this
+        -- file). No netId-trust concern here (unlike server/fetch.lua's
+        -- equivalent fix): this event takes no argument — the client's own
+        -- handler deletes ITS OWN locally-tracked `myVestEntity`, never a
+        -- server-supplied netId, so there is no equivalent to that file's
+        -- GLOBAL NETID-UNIQUENESS collision risk to reason about here.
+        TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
         return
     end
 
     -- Re-validate — a certification revoke, a feature-flag toggle, or a
     -- second attachment landing during the round trip must all be caught
     -- again here, exactly like server/kennel.lua's confirmKennelPlaced.
-    if not Config.Features.PropAttachments then return end
-    if not HasK9Access(src) then return end
-    if PropAttachmentState[citizenid] then return end
+    --
+    -- ORPHANED-PROP FIX (coder-backend, this pass): all three re-checks
+    -- below used to `return` with nothing sent back at all — not even a
+    -- NotifyPlayer — leaving the client's just-created, just-attached vest
+    -- object both untracked here and un-signalled that anything failed. See
+    -- the TTL-expiry branch's own comment above for why sending
+    -- 'qbx_k9unit:client:rejectK9PropAttach' here carries none of
+    -- server/fetch.lua's netId-trust concerns.
+    if not Config.Features.PropAttachments then
+        -- Unreachable in current practice — nothing in this codebase ever
+        -- reassigns Config.Features.PropAttachments at runtime (config.lua
+        -- is a shared_scripts file, loaded once, synchronously, identically
+        -- on both sides before either side's own code runs; verified no
+        -- assignment to this field exists anywhere else in this resource).
+        -- Kept as genuine defense-in-depth, same "layered checks over a
+        -- single point of failure" posture this file's own REGISTRATION-
+        -- TIME FEATURE GATE header already argues for — in case a future
+        -- live-reconfiguration path ever makes this reachable.
+        TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
+        return
+    end
+    if not HasK9Access(src) then
+        NotifyPlayer(src, 'You are not authorized to use K9 equipment.', 'error')
+        TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
+        return
+    end
+    if PropAttachmentState[citizenid] then
+        -- No NotifyPlayer here deliberately: this citizenid already has a
+        -- confirmed, active attachment on record (a race between two
+        -- in-flight confirms) — that is the true, correct state, so an
+        -- "attach failed" toast would be actively misleading. The cleanup
+        -- event is still required: it targets THIS confirm's own
+        -- just-created object (client/propattachment.lua's attachK9Prop
+        -- handler sets `myVestEntity = obj` synchronously, before firing
+        -- this very confirm), not the other, already-tracked one.
+        TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
+        return
+    end
 
     local ped = GetPlayerPed(src)
     if ped == 0 then return end

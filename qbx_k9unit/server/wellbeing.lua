@@ -113,16 +113,29 @@
        `GetAllObjects()`/`GetAllVehicles()` scan runs ONCE per tick, shared
        across every online K9 (not once per K9) — see TickWellbeing's own
        comment at that call site for the exact bound. NATIVE CONFIDENCE:
-       MEDIUM-HIGH, not independently verified in-engine this pass —
-       `GetAllObjects`/`GetAllVehicles`/`GetEntityModel`/`GetEntityCoords`
-       are documented, widely-used, cross-side (client AND server) CFX
-       natives per common ecosystem knowledge (the same category of
-       confidence this codebase's own convention, e.g. client/hud.lua's
-       stamina-native note, treats as "plausible, flag for a
-       native-api-assistant pass" rather than "settled"), not re-confirmed
-       against a live server this session. Loop in native-api-assistant
-       before enabling FatigueSystem with a non-empty restSources on a live
-       server.
+       CONFIRMED this pass (coder-backend defect-sweep) — every native this
+       section depends on was checked directly against a fresh clone of
+       citizenfx/fivem's own `ext/native-decls/*.md` (200 response, not
+       assumed from ecosystem knowledge): `GetAllObjects` (apiset: server),
+       `GetAllVehicles` (apiset: server), `GetEntityModel` (apiset: server),
+       `GetEntityCoords` (apiset: server), `GetHashKey` (apiset: server),
+       `GetGameTimer` (apiset: server), `GetPlayerPed` (apiset: server) all
+       resolved with a genuine server-side declaration — none of the "silent
+       zero/nil forever" failure mode this codebase has been burned by
+       elsewhere (four unregistered-native gates on IsEntityDead/
+       IsPedDeadOrDying found and fixed in a sibling pass) applies to any
+       native this Fatigue rest-source path calls. `GetPlayers()` (used
+       throughout `TickWellbeing` and `applyK9Distraction` below) is
+       DELIBERATELY not in that list — it has no `native-decls` page at all
+       (confirmed 404) because it is not a raw native, it is the standard
+       FXServer Lua-runtime helper wrapping
+       `GetNumPlayerIndices`/`GetPlayerFromIndex`, the same idiom already
+       used elsewhere in this resource (server/certifications.lua,
+       server/tracking.lua) — its absence from native-decls is expected, not
+       a gap. The open item this confidence grading previously left for
+       native-api-assistant is CLOSED: no further native-verification pass
+       is needed before enabling FatigueSystem with a non-empty
+       restSources.
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 4, wellbeing subsystem.
@@ -563,8 +576,12 @@ local HESITATION_MAX_CONTINUOUS_MS = Config.Wellbeing.FearStress.hesitationDurat
 -- Config.K9Medkit.range.
 local MOOD_INTERACT_RANGE = 3.0
 
-local PetCooldown = NewNestedCooldown()
-PetCooldown.RegisterPlayerDropped()
+-- Shared by BOTH petK9 and feedK9 below (feedK9's own cooldown check
+-- reuses this SAME tracker instance, not a second independent one -- see
+-- that call site's own comment for why this instance identity is the whole
+-- point, not just the threshold value).
+local AffectionCooldown = NewNestedCooldown()
+AffectionCooldown.RegisterPlayerDropped()
 
 --- PHASE4_SPEC.md §13.4.3.2. Server-authoritative "Pet K9" interaction.
 lib.callback.register('qbx_k9unit:server:petK9', function(source, targetServerId)
@@ -591,10 +608,10 @@ lib.callback.register('qbx_k9unit:server:petK9', function(source, targetServerId
     local targetCitizenid = ResolveCitizenid(targetServerId)
     if not targetCitizenid then return { ok = false, reason = 'invalid_target' } end
 
-    if PetCooldown.IsOnCooldown(source, targetCitizenid, Config.Wellbeing.Mood.petCooldownMs) then
+    if AffectionCooldown.IsOnCooldown(source, targetCitizenid, Config.Wellbeing.Mood.petCooldownMs) then
         return { ok = false, reason = 'on_cooldown' }
     end
-    PetCooldown.Touch(source, targetCitizenid)
+    AffectionCooldown.Touch(source, targetCitizenid)
 
     local stats = EnsureStats(targetCitizenid)
     stats.mood = Clamp(stats.mood + Config.Wellbeing.Mood.petRegenAmount, 0, Config.Wellbeing.Mood.max)
@@ -602,13 +619,21 @@ lib.callback.register('qbx_k9unit:server:petK9', function(source, targetServerId
     return { ok = true }
 end)
 
--- Deliberately reuses petCooldownMs's threshold value for the same
--- (interactor, target) pair shape rather than introducing a dedicated
--- config field — feeding and petting are the same class of "affection"
--- interaction PHASE4_SPEC.md §13.4.3.2 groups together, and this stops a
--- player alternating pet/feed calls to bypass a single shared cooldown.
-local FeedCooldown = NewNestedCooldown()
-FeedCooldown.RegisterPlayerDropped()
+-- REWARD-FARM FIX (this pass, coder-backend): deliberately reuses
+-- petK9's AffectionCooldown TRACKER INSTANCE (not merely petCooldownMs's
+-- threshold VALUE) for the same (source, targetCitizenid) pair — feeding
+-- and petting are the same class of "affection" interaction PHASE4_SPEC.md
+-- §13.4.3.2 groups together, and only sharing the actual instance stops a
+-- player alternating pet/feed calls to double their effective mood-regen
+-- rate. This file previously declared a SECOND, independent
+-- NewNestedCooldown() here (same threshold value, separate store) while its
+-- own comment claimed the two calls "shared a single cooldown" — they did
+-- not: a player could petK9 then immediately feedK9 (or vice versa) on the
+-- same target, since each tracked its own (source, targetCitizenid) key in
+-- its own private table, getting two mood-regen ticks inside one
+-- petCooldownMs window instead of one. Fixed by having feedK9 below check/
+-- stamp the SAME `AffectionCooldown` instance petK9 uses, not a
+-- same-threshold-but-different-table lookalike.
 
 --- PHASE4_SPEC.md §13.4.3.2. Server-authoritative "Feed K9" interaction.
 --- Mirrors server/medkit.lua's item-consumption discipline exactly:
@@ -639,7 +664,7 @@ lib.callback.register('qbx_k9unit:server:feedK9', function(source, targetServerI
     local targetCitizenid = ResolveCitizenid(targetServerId)
     if not targetCitizenid then return { ok = false, reason = 'invalid_target' } end
 
-    if FeedCooldown.IsOnCooldown(source, targetCitizenid, Config.Wellbeing.Mood.petCooldownMs) then
+    if AffectionCooldown.IsOnCooldown(source, targetCitizenid, Config.Wellbeing.Mood.petCooldownMs) then
         return { ok = false, reason = 'on_cooldown' }
     end
 
@@ -648,7 +673,7 @@ lib.callback.register('qbx_k9unit:server:feedK9', function(source, targetServerI
         return { ok = false, reason = 'no_item' }
     end
 
-    FeedCooldown.Touch(source, targetCitizenid)
+    AffectionCooldown.Touch(source, targetCitizenid)
 
     local removed = exports.ox_inventory:RemoveItem(source, Config.Wellbeing.Mood.feedItemName, 1)
     if not removed then
