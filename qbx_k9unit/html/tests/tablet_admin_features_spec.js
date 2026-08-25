@@ -101,8 +101,15 @@ t.test('a globally-disabled feature renders NO controls, only a status note -- n
 
     t.isTrue(findByText(h.getRoot(), 'Camera Feed PiP').length >= 1);
     t.isTrue(findByText(h.getRoot(), 'Disabled server-wide').length >= 1, 'status note shown');
-    t.equals(findByText(h.getRoot(), 'Block').length, 0, 'no Block control for a globally-off feature');
-    t.equals(findByText(h.getRoot(), 'Grant').length, 0, 'no Grant control either, even though this table also includes the capability-grant section elsewhere -- scoped check below confirms none in the feature row itself');
+
+    // Scoped to the feature matrix's own actions cell -- the page ALSO
+    // renders a Capabilities section with its own Grant buttons for the
+    // three un-held admin capabilities, which is unrelated and must not be
+    // confused with this feature row's (lack of) controls.
+    const featureActionsCells = findAll(h.getRoot(), (n) => n.tagName === 'td' && n.classList && n.classList.contains('k9tablet-feature-actions'));
+    t.equals(featureActionsCells.length, 1);
+    t.equals(findByText(featureActionsCells[0], 'Block').length, 0, 'no Block control for a globally-off feature');
+    t.equals(findByText(featureActionsCells[0], 'Grant').length, 0, 'no Grant control either');
 });
 
 t.test('Block and Grant/Revoke are two INDEPENDENT controls on the same feature row -- Block is offered even when the feature is allowed by default (no grant needed)', async () => {
@@ -120,7 +127,6 @@ t.test('Block and Grant/Revoke are two INDEPENDENT controls on the same feature 
     await openPersonScreen(h);
 
     t.equals(findByText(h.getRoot(), 'Block').length, 1, 'Block is offered for an allowed-by-default feature -- "block this" is the correct action here, not a greyed-out Revoke');
-    t.equals(findByText(h.getRoot(), 'Grant').filter((el) => el.tagName === 'button').length, findByText(h.getRoot(), 'Grant').filter((el) => el.tagName === 'button').length, 'sanity no-op');
     // No grant/revoke control for a non-grant-gated feature's OWN row.
     const featureTableActionsCells = findAll(h.getRoot(), (n) => n.tagName === 'td' && n.classList && n.classList.contains('k9tablet-feature-actions'));
     t.equals(featureTableActionsCells.length, 1);
@@ -141,8 +147,10 @@ t.test('a grant-required feature shows BOTH Block and Grant as separate controls
     });
     await openPersonScreen(h);
 
-    t.equals(findByText(h.getRoot(), 'Block').length, 1);
-    t.equals(findByText(h.getRoot(), 'Grant').length, 1);
+    const featureActionsCells = findAll(h.getRoot(), (n) => n.tagName === 'td' && n.classList && n.classList.contains('k9tablet-feature-actions'));
+    t.equals(featureActionsCells.length, 1);
+    t.equals(findByText(featureActionsCells[0], 'Block').length, 1);
+    t.equals(findByText(featureActionsCells[0], 'Grant').length, 1);
     t.equals(findByText(h.getRoot(), 'Requires a grant (not granted)').length, 1);
 });
 
