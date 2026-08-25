@@ -150,6 +150,8 @@ client_scripts {
     'client/audio.lua', -- Phase 5 NUI audio bridge. The NUI audio bridge, and it is LIVE: client/main.lua's PlaySoundOnNetworkEntity calls PlayK9Sound() (guarded with type()), and all five sound keys this bridge can request now ship and are listed in this manifest's files{} block (see html/sounds/CREDITS.md for provenance and licensing). A key with no file degrades to a silent no-op end to end, which looks exactly like the feature being off -- so keep that list complete.
     'client/proximityaudio.lua', -- Phase 5 (ProximityAudioFX). Distance-scaled gain over client/audio.lua's NUI bridge, so it loads after it. Registers no net-event handlers at all -- a security sweep confirmed the forged-event class does not apply. Its sound, growl_ambient.ogg, now ships (Config.ProximityAudioFX.soundName -> ToAudioFileKey's lowercase fallback, not the SOUND_NAME_TO_FILE_KEY map).
     'client/recall.lua', -- Phase 3 Recall (client half). Exposes RequestRecall() and the k9recall command. Deliberately does NOT call CanShowK9UI()/DenyK9UIAccess() -- Recall is a TERMINATION path and gating one is how the unbounded trap this resource forbids gets built.
+    'client/training.lua', -- Training Mode (FEATURE_IDEAS.md Part A Tier B §6) -- the client half of server/training.lua. Rehearses the search / bite-and-hold FLOW against a scripted fake server response inside a Config.TrainingZones area; never touches a real target and never mints XP (server/training.lua's THE XP DECISION section is the authority on why -- do not "restore" an award here). No load-order dependency: reaches the server only through lib.callback.await at call time.
+    'client/equipmentshop.lua', -- K9 Supply shop walk-up (FEATURE_IDEAS.md Part B §6) -- the client half of server/equipmentshop.lua. Adds the ox_target marker ox_inventory's own RegisterShop does not create, then hands off to exports.ox_inventory:openInventory('shop', ...). Every price/permission decision stays inside ox_inventory's own server-side shop code; this file only opens the UI. No load-order dependency.
     'client/exports.lua', -- Public client-side export surface. No load-order dependency: every wrapped function is reached through a `type(fn) == 'function'` guard plus pcall, so an export over a file that early-returns under its own feature flag returns a documented nil/false rather than erroring.
 }
 
@@ -293,6 +295,38 @@ server_scripts {
     -- resource writes. Loaded after cooldowns.lua (NewCooldown at file-load
     -- time); deliberately does NOT call into certifications.lua or
     -- partnership.lua -- see its own ACCESS MODEL header.
+    -- Training Mode server half (FEATURE_IDEAS.md Part A Tier B §6). HARD
+    -- load-order requirement on server/cooldowns.lua: it calls NewCooldown()
+    -- at THIS FILE'S OWN file-load time (twice -- ToggleCooldown and
+    -- ActionCooldown), not lazily inside a handler, so cooldowns.lua being
+    -- later in this list is a nil-call at start, not a degraded feature.
+    -- HasK9Access (server/certifications.lua) is reached at runtime through a
+    -- type(fn) == 'function' guard that fails CLOSED, so that one is a soft
+    -- dependency; it is still listed after certifications.lua so the guard
+    -- never actually has to do that job. Mints ZERO XP by construction and
+    -- must stay that way -- a training dummy has less friction than any of
+    -- the four real mechanics, so any award here would be reachable faster
+    -- than the compound farm server/progression.lua's mint budget closed.
+    'server/training.lua',
+    -- /k9stats leaderboard (Config.Features.K9Leaderboard). Load-order:
+    -- after server/cooldowns.lua, a HARD requirement whenever the feature
+    -- flag is on -- it calls NewCooldown() at this file's own file-load
+    -- time, immediately past its feature gate, not lazily inside the
+    -- command handler. Also after server/certifications.lua, since
+    -- HasK9Access(source) is the only gate on the command. Reads
+    -- k9_progression through the idx_xp index added by SQL migration 0009;
+    -- without that index the query is a full table scan plus a filesort on
+    -- every engine, so do not remove it.
+    'server/leaderboard.lua',
+    -- K9 Supply shop registration (FEATURE_IDEAS.md Part B §6). Sells the
+    -- item names this codebase already invented as documented placeholders
+    -- with nowhere to buy them (k9_medkit / k9_treat / k9_meat_bait /
+    -- k9_ultrasonic_whistle) -- it finishes a half-built loop rather than
+    -- opening a new one. No load-order dependency (no NewCooldown/NewMutex at
+    -- file-load time); the whole ox_inventory RegisterShop call is wrapped in
+    -- pcall so an older/different RegisterShop shape degrades to one console
+    -- line instead of failing resource start.
+    'server/equipmentshop.lua',
     'server/admin.lua',
     -- Public server-side export surface -- this resource's first exports.
     -- Self-registers via the runtime `exports('name', fn)` call, so no

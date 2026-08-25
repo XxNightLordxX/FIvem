@@ -86,6 +86,20 @@ read_globals = {
     -- Both are client-only, which is correct: NUI focus and control state
     -- have no server-side meaning.
     "SetNuiFocus", "IsDisabledControlJustPressed",
+    --   SetPlayerModel -- ext/native-decls/SetPlayerModel.md returns HTTP
+    --   404, which as the note above establishes is NOT proof of absence:
+    --   the legacy R* natives largely have no decl page. Verified instead
+    --   against the natives.json hash database (runtime.fivem.net/doc/
+    --   natives.json, fetched 2026-08-25): namespace PLAYER, hash
+    --   0x00A1CADD00108836, name SET_PLAYER_MODEL, params (player, model),
+    --   and NO `apiset` key -- which for that database means the default,
+    --   client-only. Its one call site, client/appearance.lua:202, is
+    --   client-side, so the realm is right. This is the native that makes
+    --   "assign a K9 ped role to any player, any model" actually change
+    --   what the player looks like; get the realm wrong and it is a silent
+    --   no-op with nothing logged, which is exactly this project's most
+    --   expensive recurring bug class.
+    "SetPlayerModel",
     -- ExecuteCommand -- verified 2026-08-25, HTTP 200, ns: CFX,
     -- apiset: shared. client/tablet.lua uses it to route a tablet action
     -- through the SAME RegisterCommand handler a player typing the command
@@ -371,6 +385,29 @@ globals = {
     "NotifyPlayer",
     -- server/certifications.lua
     "HasK9Access", "IsConfiguredK9Model", "RefreshCertificationCache",
+    -- server/certifications.lua READ-ONLY ACCESSORS (certification-depth
+    -- pass). All five are reads, never writes: a tier lookup, a tier-ordinal
+    -- comparison, a specialization check, and two DB-authoritative reads the
+    -- tablet and the offline-player paths need. No natives are involved, so
+    -- none of these needed the native-decl verification step this file
+    -- applies to real natives further down -- they are this resource's own
+    -- cross-file global convention, identical in shape to the line above.
+    "GetCertificationTier", "MeetsTierRequirement", "HasSpecialization",
+    "QueryCertificationRecord", "QueryActiveSpecializations",
+    -- client/appearance.lua + server/appearance.lua -- the K9 ROLE/MODEL
+    -- DECOUPLING pass. These exist to satisfy a hard owner requirement:
+    -- "everything works with any ped". A player holding the K9 ROLE gets
+    -- every feature regardless of what model they wear -- a custom streamed
+    -- ped, a ped absent from Config.Peds entirely, or a plain human model.
+    -- That is why the role question (IsK9Role/HasK9Role) is deliberately a
+    -- DIFFERENT function from the model question (IsEntityModelK9/
+    -- IsConfiguredK9Model), which still answers "is this entity dog-shaped"
+    -- and is still the right call for animations, bone indices and prop
+    -- offsets. Do not collapse the two back into one: they answer different
+    -- questions and the model one must keep its old meaning.
+    "IsK9Role",
+    "HasK9Role", "GetAssignedK9Model", "ApplyK9PedRole",
+    "ApplyK9AppearanceOnGrant", "MaybeRevertK9Appearance",
     -- server/main.lua
     "ForceDetachLeashForSource", "ForceDetachOfficerLeashForSource",
     -- client/main.lua

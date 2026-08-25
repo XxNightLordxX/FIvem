@@ -124,6 +124,26 @@ Config.Features = {
     -- work with a custom dispatch as readily as an off-the-shelf one.
     K9DownDispatch       = true,
 
+    -- shared/compat/*.lua. AUTO-DETECT WHAT YOU ACTUALLY RUN. Turn this on
+    -- (it is on) and this resource works out the inventory, target, core
+    -- framework, dispatch and ambulance/downed system YOUR server runs, at
+    -- startup, and talks to whichever one it finds -- instead of assuming
+    -- everyone runs the same handful of scripts. Set it to `false` only if
+    -- you want to pin every system by hand in Config.Compat below.
+    -- Run /k9compat in game (see Config.Compat.diagnosticCommand) to print
+    -- exactly what it found and what it could not find.
+    ResourceAutoDetect   = true,
+
+    -- server/leaderboard.lua. The /k9stats command: a ranked list of the
+    -- top K9 handlers by XP. PRIVACY NOTE, decide this deliberately: it
+    -- shows other people's citizen ids alongside their XP. The audience is
+    -- bounded -- only someone who passes the same K9 access check as every
+    -- other feature here can run it, not the whole server -- which is why
+    -- it ships on. Set it to `false` if you would rather nobody saw anyone
+    -- else's numbers, or leave it on and let high command switch it off for
+    -- individuals from the tablet.
+    K9Leaderboard        = true,
+
     -- server/highcommand.lua. A senior-rank tier, defined per department by
     -- `highCommandGrade` in Config.Departments, that is exempt from EVERY
     -- other rank check in this resource and can mint XP directly via
@@ -1918,4 +1938,203 @@ Config.ProximityAudioFX = {
     scanIntervalMs  = 2500,  -- discovery cadence; never a per-frame loop
     triggerDistance = 25.0,  -- meters; must stay <= client/audio.lua's own 30.0 ceiling
     soundName       = 'Growl_Ambient', -- resolves to html/sounds/growl_ambient.ogg
+}
+
+
+-- ======================================================================
+-- RESOURCE AUTO-DETECTION / COMPATIBILITY (Config.Features.ResourceAutoDetect)
+-- shared/compat/*.lua
+--
+-- PLAIN ENGLISH, READ THIS FIRST:
+-- Every server runs a different mix of scripts. One runs ox_inventory,
+-- another runs qb-inventory, another wrote their own from scratch. The same
+-- goes for dispatch, for the ambulance/downed script, and for the "press E"
+-- targeting script. This block is how this resource stops guessing and
+-- starts ASKING your server what it actually runs.
+--
+-- HOW IT WORKS, IN THREE STEPS:
+--   1. When the server starts, this resource walks the `candidates` list for
+--      each system below IN ORDER and picks the FIRST one that is actually
+--      started on your server. First match wins, so put your preferred one
+--      earlier in the list.
+--   2. It then checks that the one it picked really has the functions this
+--      resource needs. A resource that is running but is an old/renamed
+--      version fails this check and is SKIPPED, and detection moves on to
+--      the next candidate rather than silently half-working.
+--   3. Whatever it settled on is printed to your server console once, at
+--      startup, and can be reprinted at any time in game with /k9compat.
+--
+-- THE THREE THINGS YOU CAN SET, per system:
+--   * `override`   -- a resource name, as a string. Skips detection entirely
+--                     and uses THIS one. Use it when you run two of
+--                     something and want to be certain which one is used.
+--   * `candidates` -- the search order. ADD YOUR OWN NAME TO THIS LIST if
+--                     you run something not listed. It is a plain list of
+--                     strings; there is nothing magic about the ones that
+--                     ship here.
+--   * `custom`     -- YOUR OWN CODE. A table of functions, written by you,
+--                     that beats everything above -- override included. This
+--                     is the escape hatch for a fully custom, in-house
+--                     script that nothing else could possibly know about.
+--                     See shared/compat/README.md for the exact function
+--                     list each system expects, with a copy-paste template.
+--
+-- WHAT HAPPENS IF NOTHING IS FOUND: the feature that needed that system
+-- degrades to a clean no-op -- one clear console line naming the system and
+-- what it disabled, then silence. It never errors in a loop, never blocks
+-- resource start, and never takes the rest of the resource down with it.
+-- Nothing here is a hard dependency EXCEPT what fxmanifest.lua's own
+-- `dependencies` block already lists.
+--
+-- SECURITY NOTE, do not undo this: detection NEVER grants permission.
+-- Every rank, certification and ownership check in this resource runs on
+-- the server and is completely independent of which external script was
+-- detected. A hostile or broken third-party inventory can make a feature
+-- stop working; it cannot make a player a K9, mint XP, or bypass a rank.
+-- ======================================================================
+Config.Compat = {
+    -- Master switch for the whole detection pass. `false` means "use only
+    -- what I set by hand in `override`/`custom` below, detect nothing."
+    autoDetect = true,
+
+    -- Print one summary block to the server console at startup listing what
+    -- was found for each system. Recommended: leave this on. It is the
+    -- single fastest way to answer "why is X not working on my server".
+    logDetectionOnStart = true,
+
+    -- In-game command that reprints that same summary on demand, to whoever
+    -- runs it, plus WHY each candidate was skipped. Gated to the same high
+    -- command rank as the rest of the admin surface (Config.Departments
+    -- `highCommandGrade`) -- it names the scripts your server runs, which is
+    -- not something to hand to every player. Set to `false` to not register
+    -- the command at all.
+    diagnosticCommand = 'k9compat',
+
+    -- Re-run detection when a resource starts or stops while the server is
+    -- already up, so `restart ox_inventory` (or swapping inventories on a
+    -- live server) is picked up without a full server restart.
+    redetectOnResourceRestart = true,
+
+    -- How long to wait, at startup, for a candidate that is still starting
+    -- before giving up on it. Resource start order is not guaranteed, so a
+    -- flat zero here would make detection a coin flip on a busy server.
+    startupGraceMs = 10000,
+
+    Systems = {
+        -- ==============================================================
+        -- INVENTORY -- items, stashes, the contraband search, the K9 supply
+        -- shop, and the tablet item. The most-used system in this list.
+        -- ==============================================================
+        inventory = {
+            override = nil,
+            candidates = {
+                'ox_inventory',      -- the one this resource was built against
+                'qs-inventory',
+                'qb-inventory',
+                'ps-inventory',
+                'origen_inventory',
+                'codem-inventory',
+                'core_inventory',
+                'tgiann-inventory',
+            },
+            custom = nil,
+        },
+
+        -- ==============================================================
+        -- TARGET -- the "look at a thing and press E" menus. Every walk-up
+        -- interaction this resource adds goes through here.
+        -- ==============================================================
+        target = {
+            override = nil,
+            candidates = {
+                'ox_target',
+                'qb-target',
+                'qtarget',
+                'interact',
+                'sleepless_interact',
+            },
+            custom = nil,
+        },
+
+        -- ==============================================================
+        -- FRAMEWORK -- who a player is: their citizen id, their job, their
+        -- rank. This is the one system this resource genuinely cannot run
+        -- without, because every permission check in it reads a job rank.
+        -- ==============================================================
+        framework = {
+            override = nil,
+            candidates = {
+                'qbx_core',
+                'qb-core',
+                'es_extended',
+            },
+            custom = nil,
+        },
+
+        -- ==============================================================
+        -- DISPATCH -- OUTBOUND ONLY. This resource ANNOUNCES things ("a K9
+        -- went down", "a search found contraband"); it never asks dispatch
+        -- a question. Even with nothing detected here, every announcement
+        -- still fires as a plain `qbx_k9unit:events:*` event that your own
+        -- dispatch can listen for with one line of code -- so a fully
+        -- custom dispatch needs NOTHING in this block. Detection here is
+        -- purely a convenience so the common ones work with no setup.
+        -- ==============================================================
+        dispatch = {
+            override = nil,
+            candidates = {
+                'ps-dispatch',
+                'cd_dispatch',
+                'qs-dispatch',
+                'rcore_dispatch',
+                'core_dispatch',
+                'linden_outlawalert',
+            },
+            custom = nil,
+        },
+
+        -- ==============================================================
+        -- AMBULANCE / DOWNED -- INBOUND. Answers one question: "is this
+        -- player dead or downed right now?" Used so a K9 cannot bite or
+        -- drag someone who is already on the floor.
+        --
+        -- NOTE: `Config.Combat.PropDragging.IsPlayerDownedOverride` still
+        -- exists and still WINS over anything detected here. That hook was
+        -- the original answer to this problem and is not being retired --
+        -- if you already wrote one, it keeps working exactly as before.
+        -- ==============================================================
+        ambulance = {
+            override = nil,
+            candidates = {
+                'qbx_medical',
+                'qb-ambulancejob',
+                'ps-ambulancejob',
+                'wasabi_ambulance',
+                'esx_ambulancejob',
+            },
+            custom = nil,
+        },
+    },
+}
+
+
+-- ======================================================================
+-- K9 LEADERBOARD (Config.Features.K9Leaderboard) -- server/leaderboard.lua.
+-- The /k9stats command. Both values below have built-in fallbacks, so a
+-- missing or nonsensical entry prints one clear console line and keeps
+-- working rather than breaking the command.
+-- ======================================================================
+Config.Leaderboard = {
+    -- How many places to show. server/leaderboard.lua enforces its own hard
+    -- ceiling on top of this, so raising it past that ceiling is capped
+    -- rather than obeyed -- the query reads exactly this many rows off an
+    -- index, so it stays cheap no matter how big the table gets.
+    MaxRows = 20,
+
+    -- Minimum gap between one player's own /k9stats runs, in milliseconds.
+    -- MUST BE POSITIVE. Zero or negative does NOT mean "no cooldown" in
+    -- this codebase -- the shared cooldown helper treats a non-positive
+    -- threshold as PERMANENTLY ON, which would lock the command out for
+    -- everyone, forever, with nothing logged to explain why.
+    CommandCooldownMs = 5000,
 }

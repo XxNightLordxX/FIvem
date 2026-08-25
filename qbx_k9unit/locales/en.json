@@ -28,6 +28,12 @@
   "agility": {
     "vault_keybind_label": "K9 Advanced Agility Vault (fence/window)"
   },
+  "appearance": {
+    "apply_success_target": "Your K9 ped assignment has been applied.",
+    "revert_success_target": "Your K9 ped assignment has been removed — you are back to your original character.",
+    "apply_success_granter": "K9 ped role applied to that player.",
+    "apply_pending_offline": "That player is offline — the K9 ped role is saved and will apply the next time they log in."
+  },
   "bonetool": {
     "bone_index_label": "Bone Index: %d",
     "bone_index_label_test_attached": "Bone Index: %d (TEST PROP ATTACHED)",
@@ -227,6 +233,12 @@
     "placement_timed_out": "Kennel placement timed out — try again.",
     "prop_load_failed": "Kennel prop failed to load."
   },
+  "leaderboard": {
+    "no_access": "You must be a certified K9 handler to view the leaderboard.",
+    "no_results": "No K9 XP data recorded yet.",
+    "title": "K9 Handler Leaderboard (Top %d)",
+    "row_format": "#%d  %s -- %d XP"
+  },
   "leash": {
     "already_leashed": "One of you is already leashed to someone else.",
     "feature_disabled": "Leash mechanics are disabled on this server.",
@@ -369,6 +381,22 @@
     "starting_in_progress": "Already starting a track — please wait.",
     "nothing_to_track": "Nothing to track right now.",
     "trail_lost_water": "The trail is lost at the water's edge."
+  },
+  "training": {
+    "usage": "Usage: /k9training — stand inside a training area and run it again to toggle Training Mode.",
+    "on": "Training Mode ON — nothing you do in here affects live duty, and it awards no XP.",
+    "off": "Training Mode OFF — %s rep(s) completed this session.",
+    "not_training": "You are not in Training Mode.",
+    "no_access": "You are not certified to use the K9 training ground.",
+    "no_zones_configured": "No training areas are set up on this server.",
+    "too_far": "You have to be inside a training area to do that.",
+    "action_denied": "That training drill isn't available right now — wait for the current one to finish.",
+    "search_result_found": "Training rep complete — the dummy flagged as a FIND.",
+    "search_result_clean": "Training rep complete — the dummy came back CLEAN.",
+    "bite_hold_complete": "Training rep complete — bite and hold released on command.",
+    "search_progress_label": "Practice searching...",
+    "bite_hold_progress_label": "Practice bite-and-hold...",
+    "banner_text": "TRAINING MODE — no XP, no live effect (reps: %s)"
   },
   "vehicle": {
     "no_vehicle_nearby": "No K9 vehicle nearby.",
