@@ -263,7 +263,7 @@ RegisterNetEvent('qbx_k9unit:client:attachK9Prop', function()
     end
 
     if not obj then
-        lib.notify({ title = 'K9 Unit', description = 'K9 vest prop failed to load.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('propattachment.vest_prop_load_failed'), type = 'error' })
         TriggerServerEvent('qbx_k9unit:server:cancelPropAttachRequest')
         return
     end

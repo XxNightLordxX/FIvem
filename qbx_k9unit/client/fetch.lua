@@ -186,7 +186,7 @@ RegisterNetEvent('qbx_k9unit:client:throwFetchBallAt', function(spawnX, spawnY, 
 
     local modelHash = LoadModelWithTimeout(Config.FetchMechanic.ballPropModel)
     if not modelHash then
-        lib.notify({ title = 'K9 Unit', description = 'Fetch ball prop failed to load.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('fetch.prop_load_failed'), type = 'error' })
         TriggerServerEvent('qbx_k9unit:server:cancelFetchThrow')
         return
     end
@@ -195,7 +195,7 @@ RegisterNetEvent('qbx_k9unit:client:throwFetchBallAt', function(spawnX, spawnY, 
     SetModelAsNoLongerNeeded(modelHash)
 
     if not DoesEntityExist(obj) then
-        lib.notify({ title = 'K9 Unit', description = 'Fetch ball throw failed.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('fetch.throw_failed'), type = 'error' })
         TriggerServerEvent('qbx_k9unit:server:cancelFetchThrow')
         return
     end
@@ -271,7 +271,7 @@ RegisterNetEvent('qbx_k9unit:client:carryFetchBall', function(netId, mode)
     )
 
     if not newEntity then
-        lib.notify({ title = 'K9 Unit', description = 'Could not carry the fetch item.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('fetch.carry_failed'), type = 'error' })
         TriggerServerEvent('qbx_k9unit:server:cancelFetchCarryAttach')
         return
     end
@@ -384,7 +384,7 @@ exports.ox_target:addModel({
     {
         name = 'qbx_k9unit:pickupFetchBall',
         icon = 'fas fa-baseball',
-        label = 'Pick Up Ball',
+        label = locale('fetch.pickup_target_label'),
         distance = Config.FetchMechanic.pickupInteractDistanceMeters,
         canInteract = function(entity, distance, coords, name)
             if ActiveFetchCarry then return false end
@@ -411,7 +411,7 @@ exports.ox_target:addGlobalPlayer({
     {
         name = 'qbx_k9unit:deliverFetchBall',
         icon = 'fas fa-hand-holding',
-        label = 'Deliver Fetch Item',
+        label = locale('fetch.deliver_target_label'),
         distance = DELIVER_TARGET_DISTANCE_FACTOR * Config.FetchMechanic.deliverProximityMeters,
         canInteract = function(entity, distance, coords, name)
             if not ActiveFetchCarry then return false end

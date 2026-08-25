@@ -62,5 +62,33 @@
         "reason_not_authorized": "You are not authorized to access that K9's gear.",
         "reason_stash_failed": "Unable to open K9 gear right now.",
         "unable_to_open_generic": "Unable to open K9 gear."
+    },
+    "partnership": {
+        "already_partnered": "You are already partnered.",
+        "partner_request_sent": "Partner request sent.",
+        "partner_request_header": "K9 Partner Request",
+        "partner_request_content": "%s wants to partner up with you. Accept?",
+        "now_partnered_as_handler": "You are now partnered with your handler.",
+        "now_partnered_as_k9": "You are now partnered with your K9.",
+        "ended_generic": "Partnership ended.",
+        "ended_with_reason": "Partnership ended (%s).",
+        "partner_up_target_label": "Partner Up"
+    },
+    "defense": {
+        "handler_under_attack": "Your handler is under attack! Press %s to respond, or use the radial menu.",
+        "no_active_alert": "No active handler-down alert.",
+        "already_engaged": "You are already engaged with another target.",
+        "no_hostile_detected": "No hostile detected -- select a target from the radial menu instead.",
+        "confirm_keybind_label": "K9 Handler-Down Defense (confirm pre-selected target)"
+    },
+    "fetch": {
+        "prop_load_failed": "Fetch ball prop failed to load.",
+        "throw_failed": "Fetch ball throw failed.",
+        "carry_failed": "Could not carry the fetch item.",
+        "pickup_target_label": "Pick Up Ball",
+        "deliver_target_label": "Deliver Fetch Item"
+    },
+    "propattachment": {
+        "vest_prop_load_failed": "K9 vest prop failed to load."
     }
 }

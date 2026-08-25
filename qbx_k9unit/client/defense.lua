@@ -240,8 +240,8 @@ RegisterNetEvent('qbx_k9unit:client:handlerDownDefenseTrigger', function(handler
     -- must go back to the keybind-only wording above (git history) rather
     -- than silently drift out of sync.
     lib.notify({
-        title = 'K9 Unit',
-        description = ('Your handler is under attack! Press %s to respond, or use the radial menu.'):format(Config.Combat.HandlerDownDefense.confirmKey),
+        title = locale('common.notify_title'),
+        description = locale('defense.handler_under_attack', Config.Combat.HandlerDownDefense.confirmKey),
         type = 'error',
         duration = Config.Combat.HandlerDownDefense.promptTtlMs,
     })
@@ -298,7 +298,7 @@ function ConfirmHandlerDownDefense(actionType)
     end
 
     if not HasFreshDefensePrompt() then
-        lib.notify({ title = 'K9 Unit', description = 'No active handler-down alert.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('defense.no_active_alert'), type = 'error' })
         return
     end
 
@@ -314,7 +314,7 @@ function ConfirmHandlerDownDefense(actionType)
     -- client/combat.lua, this codebase's established convention, even
     -- though fxmanifest.lua's own ordering is expected to load it first.
     if type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then
-        lib.notify({ title = 'K9 Unit', description = 'You are already engaged with another target.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('defense.already_engaged'), type = 'error' })
         return
     end
 
@@ -330,7 +330,7 @@ function ConfirmHandlerDownDefense(actionType)
     end
 
     if not targetNetId then
-        lib.notify({ title = 'K9 Unit', description = 'No hostile detected -- select a target from the radial menu instead.', type = 'inform' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('defense.no_hostile_detected'), type = 'inform' })
         return
     end
 
@@ -350,7 +350,7 @@ RegisterCommand('qbx_k9unit:confirmHandlerDownDefense', function()
     ConfirmHandlerDownDefense('bite')
 end, false)
 
-RegisterKeyMapping('qbx_k9unit:confirmHandlerDownDefense', 'K9 Handler-Down Defense (confirm pre-selected target)', 'keyboard', Config.Combat.HandlerDownDefense.confirmKey)
+RegisterKeyMapping('qbx_k9unit:confirmHandlerDownDefense', locale('defense.confirm_keybind_label'), 'keyboard', Config.Combat.HandlerDownDefense.confirmKey)
 
 --- Attacker-hint capture -- see this file's header ATTACKER-HINT CAPTURE
 --- section for why this is a new, independent `gameEventTriggered` handler

@@ -310,14 +310,14 @@ function RequestPartnerUp(targetServerId)
     end
 
     if IsPartnered() then
-        lib.notify({ title = 'K9 Unit', description = 'You are already partnered.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('partnership.already_partnered'), type = 'error' })
         return
     end
 
     TriggerServerEvent('qbx_k9unit:server:requestPartnerUp', targetServerId)
     -- The target's client is the one that shows the actual accept/decline
     -- prompt (see partnerUpRequest below), not this one.
-    lib.notify({ title = 'K9 Unit', description = 'Partner request sent.', type = 'inform' })
+    lib.notify({ title = locale('common.notify_title'), description = locale('partnership.partner_request_sent'), type = 'inform' })
 end
 
 --- Ends the current partnership, zero consent required from the other
@@ -351,7 +351,18 @@ RegisterNetEvent('qbx_k9unit:client:partnerUpRequest', function(fromServerId)
     if source ~= 65535 then return end
 
     local fromPlayer = GetPlayerFromServerId(fromServerId)
-    local fromName = (fromPlayer ~= -1 and GetPlayerName(fromPlayer)) or ('Officer #' .. fromServerId)
+    -- locale('movement.officer_fallback_name', ...) is a deliberate
+    -- cross-group reuse, not a typo: client/movement.lua's leash-request
+    -- handler has the byte-for-byte identical "Officer #%d" fallback (same
+    -- for accept_label/decline_label below, "Accept"/"Decline") -- reusing
+    -- those existing keys here rather than minting
+    -- partnership.officer_fallback_name/accept_label/decline_label
+    -- duplicates, per this resource's "reuse existing key, don't mint a
+    -- near-duplicate" locale convention. Left under the movement.* group
+    -- (not promoted to common.*) because promoting would require also
+    -- editing client/movement.lua to point at the new common.* key, and
+    -- that file is out of scope/owned elsewhere for this pass.
+    local fromName = (fromPlayer ~= -1 and GetPlayerName(fromPlayer)) or locale('movement.officer_fallback_name', fromServerId)
 
     -- If the local player partners/breaks/disconnects mid-prompt, or
     -- either side is no longer eligible by the time they answer, the
@@ -360,11 +371,11 @@ RegisterNetEvent('qbx_k9unit:client:partnerUpRequest', function(fromServerId)
     -- this client just needs to send the response and handle a later
     -- rejection gracefully, not assume acceptance always succeeds.
     local response = lib.alertDialog({
-        header = 'K9 Partner Request',
-        content = ('%s wants to partner up with you. Accept?'):format(fromName),
+        header = locale('partnership.partner_request_header'),
+        content = locale('partnership.partner_request_content', fromName),
         centered = true,
         cancel = true,
-        labels = { confirm = 'Accept', cancel = 'Decline' },
+        labels = { confirm = locale('movement.accept_label'), cancel = locale('movement.decline_label') },
     })
 
     TriggerServerEvent('qbx_k9unit:server:respondPartnerUp', fromServerId, response == 'confirm')
@@ -395,8 +406,8 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEstablished', function(partnerSer
 
     PartnershipState = { partnerServerId = partnerServerId, isK9 = isK9 }
     lib.notify({
-        title = 'K9 Unit',
-        description = isK9 and 'You are now partnered with your handler.' or 'You are now partnered with your K9.',
+        title = locale('common.notify_title'),
+        description = isK9 and locale('partnership.now_partnered_as_handler') or locale('partnership.now_partnered_as_k9'),
         type = 'success',
     })
 end)
@@ -428,16 +439,16 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
 
     PartnershipState = nil
 
-    local description = 'Partnership ended.'
+    local description = locale('partnership.ended_generic')
     if type(reason) == 'string' and reason ~= '' and reason ~= 'broken' then
         -- Generic fallback rather than a hardcoded exact-string table:
         -- this file doesn't own server/certifications.lua's eventual exact
         -- reason strings, and a future caller of
         -- ForceBreakPartnershipForCitizenId should not need to also edit
         -- this file just to get a readable notification.
-        description = ('Partnership ended (%s).'):format(reason)
+        description = locale('partnership.ended_with_reason', reason)
     end
-    lib.notify({ title = 'K9 Unit', description = description, type = 'inform' })
+    lib.notify({ title = locale('common.notify_title'), description = description, type = 'inform' })
 end)
 
 -- The "Partner Up" ox_target option's canInteract below calls
@@ -476,7 +487,7 @@ exports.ox_target:addGlobalPlayer({
     {
         name = 'qbx_k9unit:partnerUp',
         icon = 'fas fa-handshake',
-        label = 'Partner Up',
+        label = locale('partnership.partner_up_target_label'),
         distance = PARTNER_TARGET_DISTANCE_FACTOR * Config.Partnership.ProximityMeters,
         canInteract = function(entity, distance, coords, name)
             if IsPartnered() then return false end
