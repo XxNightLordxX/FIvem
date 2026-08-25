@@ -175,6 +175,14 @@ local function newFixture(opts)
         scalar = { await = function(_sql, _params) return nil end }, -- default: "no existing active row"
         insert = { await = function(_sql, _params) return 1 end },   -- default: insert succeeds, fake id 1
         update = { await = function(_sql, _params) return 1 end },   -- default: exactly one row affected
+        -- CERTIFICATION DEPTH (this pass): RefreshCertificationCache's tier/
+        -- expiry metadata read and RefreshSpecializationCache both go through
+        -- MySQL.single.await / MySQL.query.await respectively -- default to
+        -- "no metadata row" / "no active specializations" so every
+        -- PRE-EXISTING test (which only ever stubs scalar/insert/update) gets
+        -- a real, working default rather than an unstubbed-field crash.
+        single = { await = function(_sql, _params) return nil end },
+        query = { await = function(_sql, _params) return {} end },
     }
 
     local capturedEvents = {}
@@ -713,9 +721,14 @@ t.test('RevokeCertification: full online success path -- UPDATE fires with the g
     f.setSource(10)
     f.events['qbx_k9unit:server:revokeHandler'](20)
 
+    -- CERTIFICATION DEPTH (this pass, Part A §2): `revoke_reason` (nil,
+    -- since no reason was passed) is now bound as params[2], shifting
+    -- citizenid/job to params[3]/[4] -- see RevokeCertification's own
+    -- comment on its UPDATE statement.
     t.equals(updateParams[1], 'REVOKER')
-    t.equals(updateParams[2], 'REVOKEE')
-    t.equals(updateParams[3], 'police')
+    t.isNil(updateParams[2])
+    t.equals(updateParams[3], 'REVOKEE')
+    t.equals(updateParams[4], 'police')
     t.isFalse(f.env.HasK9Access(20), 'access must be gone immediately after an online revoke')
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.revoke_success'), 'success'))
     t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.revoked_notice_online'), 'error'))
@@ -885,9 +898,12 @@ t.test('RevokeCertificationOffline: full offline success path -- UPDATE fires, c
 
     f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
 
+    -- CERTIFICATION DEPTH (this pass, Part A §2): same positional shift as
+    -- the online path above.
     t.equals(updateParams[1], 'REVOKER')
-    t.equals(updateParams[2], 'REVOKEE')
-    t.equals(updateParams[3], 'police')
+    t.isNil(updateParams[2])
+    t.equals(updateParams[3], 'REVOKEE')
+    t.equals(updateParams[4], 'police')
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.revoke_success'), 'success'))
 
     local fired = false
@@ -1004,9 +1020,13 @@ t.test('OnJobUpdate: a REAL department change revokes the old cert, re-scopes th
 
     fireJobUpdate(f, 40, { name = 'sheriff', grade = { level = 1 } })
 
+    -- CERTIFICATION DEPTH (this pass, Part A §2): the automatic auto-revoke
+    -- path always records revoke_reason='reassigned', now bound as
+    -- params[2], shifting citizenid/job to params[3]/[4].
     t.equals(updateParams[1], 'system:job_change')
-    t.equals(updateParams[2], 'CIT40')
-    t.equals(updateParams[3], 'police')
+    t.equals(updateParams[2], 'reassigned')
+    t.equals(updateParams[3], 'CIT40')
+    t.equals(updateParams[4], 'police')
     t.isTrue(notifiedExactly(f, 40, Sandbox.locale('certifications.revoked_notice_job_change', 'Police Department'), 'error'))
     t.equals(player._metaWrites[#player._metaWrites].value, false)
     t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], 40)

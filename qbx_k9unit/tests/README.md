@@ -145,7 +145,22 @@ It's tempting to search the spec files for the text `t.test(` and count the matc
 
 ## What's NOT covered, and why
 
-- **Almost all client-side code (`client/*.lua`) is untested**, except for `client/main.lua` (see the table above). Every other client file calls real client-only game functions (moving the camera, disabling controls, reading ped positions, sending data to the UI) that have no server-side equivalent to fake convincingly, and several also depend on a live player-data cache that only exists in a real game session. This is a real gap, not an oversight — it would take a much larger effort than building the sandboxes used for server code.
+- **This is now out of date and should not be trusted as written**: a
+  prior version of this section said almost all client-side code was
+  untested except `client/main.lua`. That is no longer true — the file
+  list above includes over a dozen `client*_spec.lua` files
+  (`clientmovement`, `clientagility`, `clientvision`, `clienttracking`,
+  `clientradial`, `clientsearch`, `clientaudio`, `clienthud`,
+  `clientscreenfx`, `clientprogression`, `clientproximityaudio`,
+  `clientwellbeing`, `clientcombat`, `clienttablet`, `clientbreed`), so
+  client-side coverage is now substantial, not "almost none." This pass had
+  no shell access to open each of those files and write an accurate,
+  per-file "what's tested" description the way the table above does for
+  server files — flagged here rather than left silently wrong. Whoever
+  next touches this file should read those spec files and give client-side
+  coverage the same per-file table treatment server-side coverage already
+  has above, and correct whichever specific client files (if any) are
+  still genuinely untested.
 - **`server/tenure.lua`'s "avoid re-running a database check" cache doesn't actually avoid it.** The test file itself proves that a certain database check runs on every tick regardless of this cache, because the cache can only be checked *after* that same database call already ran once. This is a minor, ongoing cost (one extra database read per online, fully-progressed K9 partnership per tick) — not a correctness bug. The actual protection against double-granting a reward is a separate, database-level check, which the same test confirms works.
 - **Nothing here talks to a real database, `ox_inventory`, or `ox_lib`.** Every test fakes those boundaries and checks what the production code does with a fake response (what query it would run, what it does with a given answer) — never whether a real database would actually accept that query.
 - **`server/cooldowns.lua`'s background sweep** is tested for picking the right entries to remove, but not for real-world timing accuracy — waiting is faked instantly in tests, on purpose, so the test suite doesn't take real time to run.
