@@ -100,6 +100,14 @@ read_globals = {
     --   no-op with nothing logged, which is exactly this project's most
     --   expensive recurring bug class.
     "SetPlayerModel",
+    -- vector3 is NOT a native and has no decl page to check -- it is a Lua
+    -- RUNTIME TYPE that CitizenFX's Lua build adds to the language itself,
+    -- alongside vector2/vector4/quat, in both realms. Nothing declares it,
+    -- so luacheck cannot know about it; it is listed here for that reason
+    -- and not because anything was assumed about a native. config.lua uses
+    -- it for Config.K9EquipmentShop.locations, since ox_target's
+    -- addSphereZone takes a vector3 for `coords`.
+    "vector3", "vector2", "vector4", "quat",
     -- ExecuteCommand -- verified 2026-08-25, HTTP 200, ns: CFX,
     -- apiset: shared. client/tablet.lua uses it to route a tablet action
     -- through the SAME RegisterCommand handler a player typing the command
@@ -405,7 +413,13 @@ globals = {
     -- and is still the right call for animations, bone indices and prop
     -- offsets. Do not collapse the two back into one: they answer different
     -- questions and the model one must keep its old meaning.
-    "IsK9Role",
+    -- IsK9RoleForPlayer answers the OTHER-player form of the same question,
+    -- which the ten client target predicates need and which neither
+    -- IsK9Role (self, client) nor HasK9Role (self, server) could answer.
+    -- Remember what a predicate is: a CONVENIENCE gate. A stale or forged
+    -- client-side answer here may make a menu option appear; the server
+    -- re-checks on the action, so it must never make the action succeed.
+    "IsK9Role", "IsK9RoleForPlayer",
     "HasK9Role", "GetAssignedK9Model", "ApplyK9PedRole",
     "ApplyK9AppearanceOnGrant", "MaybeRevertK9Appearance",
     -- server/main.lua

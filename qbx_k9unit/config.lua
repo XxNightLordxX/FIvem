@@ -144,6 +144,27 @@ Config.Features = {
     -- individuals from the tablet.
     K9Leaderboard        = true,
 
+    -- server/training.lua + client/training.lua. A practice sandbox: a
+    -- certified handler standing inside a Config.TrainingZones area can
+    -- rehearse the search and bite-and-hold flow against a scripted dummy.
+    -- Nothing in training mode touches a real target, a real inventory, or
+    -- another player, and it deliberately awards ZERO XP -- a dummy has
+    -- less friction than any real mechanic, so paying for it would be a
+    -- faster route to the top tier than actual police work. Do not
+    -- "restore" an award there.
+    TrainingMode         = true,
+
+    -- server/equipmentshop.lua + client/equipmentshop.lua. A "K9 Supply"
+    -- shop selling the K9 items this resource uses. Without it those items
+    -- exist in the code with nowhere on the map to buy them, which is how
+    -- the wellbeing system currently ships. The shop itself, and every
+    -- price and permission decision in it, lives inside your inventory
+    -- script; this resource only registers it and puts a walk-up point on
+    -- the map. If Config.K9EquipmentShop below is missing or every item in
+    -- it is unknown to your inventory, the shop is simply not registered
+    -- and one clear console line says so.
+    K9EquipmentShop      = true,
+
     -- server/highcommand.lua. A senior-rank tier, defined per department by
     -- `highCommandGrade` in Config.Departments, that is exempt from EVERY
     -- other rank check in this resource and can mint XP directly via
@@ -275,11 +296,17 @@ Config.Features = {
 -- in the K9 Command Tablet when choosing a model. Without one the tablet
 -- shows the raw model name, which is functional but ugly for a custom ped.
 -- ======================================================================
+-- Each entry may also carry an optional `speedMultiplier`, scaling how fast
+-- that breed moves. Leave it out and the ped runs at a neutral 1.0 -- the
+-- code reads it defensively, so an entry without it is not a bug. The
+-- spread below is deliberately small: these are flavour, not a power
+-- ranking. A number far above 1.0 turns breed choice into a required pick
+-- rather than a preference, which is the opposite of what a roster is for.
 Config.Peds = {
-    { model = 'a_c_shepherd' },
-    { model = 'a_c_rottweiler' },
-    { model = 'a_c_husky' },
-    { model = 'a_c_chop' },
+    { model = 'a_c_shepherd',   speedMultiplier = 1.00 },
+    { model = 'a_c_rottweiler', speedMultiplier = 0.98 },
+    { model = 'a_c_husky',      speedMultiplier = 1.03 },
+    { model = 'a_c_chop',       speedMultiplier = 1.00 },
     -- Example custom streamed model (requires the model to exist in a
     -- streamed resource elsewhere on the server; adding this line is the
     -- *only* change needed to make it selectable):
@@ -793,8 +820,14 @@ Config.XPTiers = {
     -- closed; reapplying it against the corrected ceiling would overshoot.
     { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
     { xp = 1250, label = 'Trained K9', speedMultiplier = 1.05, scentRangeMultiplier = 1.05 },
-    { xp = 4000, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10 },
-    { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20 },
+    -- Veteran unlocks a shorter K9 medkit cooldown. A multiplier, not an
+    -- absolute: 0.75 means "three quarters of the configured wait".
+    -- Deliberately a NUMBER and never a boolean -- it is consulted only
+    -- AFTER an existing gate has already allowed the action, so reaching a
+    -- tier can shorten a wait but can never grant access to anything.
+    { xp = 4000, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10, medkitCooldownMultiplier = 0.75 },
+    -- Elite gets a cosmetic HUD badge. Display only, no mechanical effect.
+    { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20, badge = 'elite' },
 }
 
 -- ======================================================================
@@ -850,6 +883,23 @@ Config.XP = {
         -- §12.5.2) -- same stale-note correction as biteHoldSuccess above;
         -- this one is wired too.
         takedownSuccess       = 30,
+        -- server/search.lua, awarded to a partnered handler/K9 who was
+        -- ONLINE and physically within 15m of the search TARGET's own
+        -- coordinates (not the searcher's) when a contraband find landed,
+        -- with both parties at Trained tier or above. Minted through the
+        -- same AwardXP chokepoint as everything else, so it draws on the
+        -- shared 3,600 XP/hr budget rather than adding to it.
+        --
+        -- THE ARITHMETIC, because this codebase has closed eight XP farms
+        -- and every new award has to show its working: uncapped, a 60s
+        -- per-receiving-partner cooldown at 10 XP is 600 XP/hr, which
+        -- pushes the uncapped five-mechanic sum to 6,300 XP/hr -- over the
+        -- budget, which is exactly why it must route through it and does.
+        -- Simulated as a fifth competing draw over a real hour, the total
+        -- came to 3,665 XP, LOWER than the four-mechanic figure of 3,810:
+        -- more demand divides a fixed supply, it does not enlarge it.
+        -- Elite is still unreached at the two-hour mark.
+        coopSearchBonus       = 10,
 
         -- server/tenure.lua's partnership-tenure milestones. Each is a
         -- ONE-TIME award per partnership row -- never repeating, never
@@ -2137,4 +2187,88 @@ Config.Leaderboard = {
     -- threshold as PERMANENTLY ON, which would lock the command out for
     -- everyone, forever, with nothing logged to explain why.
     CommandCooldownMs = 5000,
+}
+
+-- ======================================================================
+-- TRAINING MODE (Config.Features.TrainingMode) -- server/training.lua and
+-- client/training.lua.
+--
+-- A practice yard. Stand inside one of the areas below, run /k9training,
+-- and you can rehearse the search and bite-and-hold flow against a
+-- scripted dummy. It never touches a real player, never reads anyone's
+-- real inventory, and awards NO XP at all -- so it is safe to leave on.
+--
+-- YOU ALMOST CERTAINLY NEED TO EDIT THE COORDINATES BELOW. The single
+-- entry that ships is a placeholder near Mission Row PD -- a starting
+-- point, not a surveyed spot on your map. Stand where you want the yard,
+-- note your coordinates, and replace them.
+-- ======================================================================
+Config.TrainingZones = {
+    { label = 'LSPD K9 Training Yard', x = 441.8, y = -981.7, z = 30.7, radius = 20.0 },
+    -- Add as many as you like:
+    -- { label = 'Sandy Shores Sheriff Yard', x = 1853.2, y = 3689.4, z = 34.3, radius = 25.0 },
+}
+
+Config.Training = {
+    -- Minimum gap between turning training mode on and off again, and
+    -- between one practice rep and the next, in milliseconds. BOTH MUST BE
+    -- POSITIVE. Zero or negative does NOT mean "no cooldown" in this
+    -- codebase -- the shared cooldown helper treats a non-positive
+    -- threshold as PERMANENTLY ON, which would lock the feature out for
+    -- everyone, forever, with nothing logged to explain why.
+    ToggleCooldownMs = 3000,
+    ActionCooldownMs = 4000,
+
+    -- How often a practice search comes back as a "find" rather than
+    -- "clean", from 0.0 (never) to 1.0 (always). A coin flip so trainees
+    -- see both outcomes. It decides nothing real and pays nothing.
+    ContrabandFoundChance = 0.5,
+}
+
+-- ======================================================================
+-- K9 SUPPLY SHOP (Config.Features.K9EquipmentShop) -- server/equipmentshop.lua
+-- and client/equipmentshop.lua.
+--
+-- THE ITEMS BELOW MUST ALREADY EXIST IN YOUR INVENTORY SCRIPT. This
+-- resource cannot create items -- only your inventory's own items list
+-- can. Any name here that your inventory does not know is skipped with a
+-- clear console warning naming it, and if every item is unknown the shop
+-- is not registered at all rather than appearing empty.
+--
+-- YOU ALMOST CERTAINLY NEED TO EDIT `locations`. The coordinate that ships
+-- is a placeholder near Mission Row PD, not a surveyed spot on your map.
+-- Stand where you want the counter, note your coordinates, replace it. An
+-- empty `locations` list means the shop is registered but has nowhere to
+-- be opened from, which reads as the feature being broken.
+--
+-- WHO CAN SHOP: everyone in a department listed in Config.Departments, at
+-- any grade. That is derived automatically -- there is no separate job
+-- list to keep in sync here.
+-- ======================================================================
+Config.K9EquipmentShop = {
+    -- The internal key your inventory files this shop under. Change it
+    -- only if it collides with a shop you already run.
+    shopType = 'k9supply',
+
+    -- What officers see as the shop's name.
+    label = 'K9 Supply',
+
+    -- Which ITEM is spent as money. This is an item name your inventory
+    -- already tracks -- conventionally 'money' -- NOT a banking resource.
+    -- Nothing here ever calls a bank.
+    currencyItem = 'money',
+
+    -- Where the walk-up point goes. PLACEHOLDER -- see the note above.
+    locations = {
+        vector3(452.1, -980.1, 30.7),
+    },
+
+    -- Prices are in whatever `currencyItem` is. Tune freely; these are
+    -- starting numbers, not balance guidance.
+    items = {
+        { name = 'k9_medkit',             price = 250 },
+        { name = 'k9_treat',              price = 25 },
+        { name = 'k9_meat_bait',          price = 40 },
+        { name = 'k9_ultrasonic_whistle', price = 150 },
+    },
 }
