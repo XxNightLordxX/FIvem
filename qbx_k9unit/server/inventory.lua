@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/inventory.lua
 
-    Phase 4 implementation (coder-backend), PHASE4_SPEC.md §13.4.2
+    Phase 4 implementation (coder-backend), DEVELOPER_REFERENCE.md §13.4.2
     ("K9 Inventory", `Config.Features.K9Inventory`) — read in full before this
     file was written, along with §13.2's `Config.K9Inventory` sketch, §13.3's
     file/module plan (this file + client/inventory.lua, a NEW pair, not
@@ -15,7 +15,7 @@
     stamping via server/cooldowns.lua's shared constructors — no hand-rolled
     cooldown table). `Config.Features.K9Inventory` stays `false` shipped, per
     this resource's "ship disabled until acceptance criteria are fully met"
-    convention (SPEC.md §9 item 4 / PHASE4_SPEC.md §13.6 item 8 both still
+    convention (DEVELOPER_REFERENCE.md §9 item 4 / DEVELOPER_REFERENCE.md §13.6 item 8 both still
     apply: every numeric placeholder in Config.K9Inventory needs a
     config-validator pass, and §13.6 item 7's ox_inventory export-signature
     verification pass — see the CONFIDENCE NOTEs below — has not happened
@@ -23,7 +23,7 @@
 
     ======================================================================
     RESOLVED DESIGN DECISION — Config.K9Inventory.accessScope
-    (PHASE4_SPEC.md §13.4.2 open question 1 / §13.6 item 3)
+    (DEVELOPER_REFERENCE.md §13.4.2 open question 1 / §13.6 item 3)
 
     coder-security FINDING (this pass), CONFIRMED and independently
     RE-VERIFIED against the live, current `overextended/ox_inventory` `main`
@@ -75,13 +75,13 @@
     default below, UNCHANGED — "shared field equipment," the same framing
     this resource already gives `Config.K9Vehicles`' patrol-vehicle trunk
     access, chosen because the K9 in this resource is a full,
-    independently-logged-in player character (SPEC.md §1/§4.5's
+    independently-logged-in player character (DEVELOPER_REFERENCE.md §1/§4.5's
     post-correction model): a handler restocking their partner K9's gear
     while the K9 player is offline is the ordinary case this resource is
     built around, not an edge case. The real theft-risk tradeoff
     'department' creates (any officer in the department could pilfer a K9's
     stash) is the same social/administrative-abuse category
-    `phase2_notes/RESEARCH_ARCHIVE.md#contraband-search` §6's last bullet already
+    `phase2_notes/DEVELOPER_REFERENCE.md#contraband-search` §6's last bullet already
     accepts for search-capability misuse — not a code-level exploit any
     config value here can close.
 
@@ -106,7 +106,7 @@
     CONFIDENCE NOTES — every ox_inventory export/shape this file's body
     depends on, graded honestly per this session's own verification (or lack
     of it), same discipline server/search.lua's header and
-    phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §1 already established for
+    phase2_notes/DEVELOPER_REFERENCE.md#contraband-search §1 already established for
     Phase 2's export surface:
 
     - `GetInventoryItems`/`GetContainerFromSlot` (server/search.lua's own
@@ -259,7 +259,7 @@
        to an interactor who passed every check below — the client then opens
        it via ox_inventory's own `openInventory` export (client/inventory.lua),
        whose OWN owner/groups check (set at RegisterStash time below) is the
-       REAL access-control boundary, per PHASE4_SPEC.md §13.4.2's own framing:
+       REAL access-control boundary, per DEVELOPER_REFERENCE.md §13.4.2's own framing:
        "the ox_target option's client-side visibility... is a UX convenience
        only... A modified client calling
        exports.ox_inventory:openInventory('stash', 'k9inv-<anyCitizenid>')
@@ -300,7 +300,7 @@
     Commands: none.
 
     Automatic path: none. Stash registration is lazy (on first request), NOT
-    on PlayerLoaded — PHASE4_SPEC.md §13.4.2 explicitly offers this as an
+    on PlayerLoaded — DEVELOPER_REFERENCE.md §13.4.2 explicitly offers this as an
     equally-valid alternative to PlayerLoaded-time registration ("On
     PlayerLoaded (or lazily, on first interaction attempt)"), chosen here to
     avoid adding a second PlayerLoaded consumer/dependency for a capability
@@ -315,12 +315,12 @@
     - THIS FILE exposes NO resource-global functions.
     - THIS FILE owns `K9InventoryOpenCooldown` and `K9InventoryOpenMutex`
       below as file-local state, each a server/cooldowns.lua tracker
-      instance (REFACTOR_ROADMAP.md item 1's established convention — no
+      instance (DEVELOPER_REFERENCE.md item 1's established convention — no
       hand-rolled cooldown/mutex table, per this file's own task-level
       instruction).
     - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)` and
       `ResolveConnectedPlayerFromPed(entity)`, both resource-globals from
-      server/entities.lua (REFACTOR_ROADMAP.md item 2/item 2b) — do not
+      server/entities.lua (DEVELOPER_REFERENCE.md item 2/item 2b) — do not
       re-implement either resolve/existence-guard sequence here.
       HandleOpenK9Inventory below used to define its own bare
       `if entity == 0 then` check (no `DoesEntityExist` guard at all — the
@@ -382,7 +382,7 @@ local EnsuredK9Stashes = {}
 
 -- Precomputed `table<jobName, minGrade>` for the 'department' accessScope
 -- shape, built once at file load from Config.Departments (generic over that
--- table per this codebase's existing convention — SPEC.md §3 acceptance
+-- table per this codebase's existing convention — DEVELOPER_REFERENCE.md §3 acceptance
 -- bullet 3 — no hardcoded job name). `minGrade = 0` for every configured
 -- department: this resource's own choice to mean "any grade within that
 -- job may access," not a verified ox_inventory default (see this file's
@@ -592,7 +592,7 @@ end)
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a small
 -- local copy of server/search.lua's function of the same name/purpose.
 -- Extracted to server/entities.lua as a resource-global per
--- REFACTOR_ROADMAP.md item 2b (three independent copies existed by then —
+-- DEVELOPER_REFERENCE.md item 2b (three independent copies existed by then —
 -- this file, server/search.lua, server/combat.lua) — see this file's
 -- header FILE-TO-FILE CONTRACT and server/entities.lua's own doc comment
 -- for the full "why not GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))"
@@ -632,7 +632,7 @@ end
 --- ResolveStashOwnerAndGroups above at registration time, is the actual
 --- security boundary). Mirrors CheckLeashEligibility's officer-side rule in
 --- server/main.lua: department membership only, no certification required
---- of the interactor — matches PHASE4_SPEC.md §13.2's own "any player whose
+--- of the interactor — matches DEVELOPER_REFERENCE.md §13.2's own "any player whose
 --- job ∈ Config.Departments may open it" framing for the 'department' scope.
 --- @param interactorJobName string?
 --- @param isSelf boolean
@@ -690,7 +690,7 @@ end
 ---      cross-check its REAL type is a ped in one call — never trust a
 ---      claimed type (there's no client-supplied targetType here at all,
 ---      unlike search.lua, since this feature only ever targets a K9 ped).
----      REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this
+---      DEVELOPER_REFERENCE.md item 2 (Revision 5 migration): was this
 ---      function's own bare `if entity == 0 then` check — no
 ---      `DoesEntityExist` call, no netId-type guard at all, the weakest
 ---      surviving copy of this pattern in the resource per the Revision 5
@@ -791,7 +791,7 @@ local function HandleOpenK9Inventory(source, targetNetId)
     end
 
     -- Stamp the cooldown NOW, before the possibly-yielding RegisterStash
-    -- call below (RESEARCH_ARCHIVE.md#contraband-search §3 step 13's exact
+    -- call below (DEVELOPER_REFERENCE.md#contraband-search §3 step 13's exact
     -- "stamp before the awaited work" discipline, applied here defensively
     -- even though RegisterStash is not confirmed to yield this session).
     K9InventoryOpenCooldown.Touch(source)
@@ -803,7 +803,7 @@ local function HandleOpenK9Inventory(source, targetNetId)
     return { ok = true, stashId = ('k9inv-%s'):format(targetCitizenid) }
 end
 
---- PHASE4_SPEC.md §13.4.2. THE security-critical callback of this file, per
+--- DEVELOPER_REFERENCE.md §13.4.2. THE security-critical callback of this file, per
 --- this file's own header claim of server/search.lua-level scrutiny.
 lib.callback.register('qbx_k9unit:server:openK9Inventory', function(source, targetNetId)
     if type(targetNetId) ~= 'number' then

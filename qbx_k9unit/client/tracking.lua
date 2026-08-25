@@ -4,17 +4,17 @@
     Phase 2 (coder-frontend). Owns the three self-initiated "Track <Type>"
     trail mechanics (scent, blood, gunpowder) and the water-crossing degrade
     modifier that applies to whichever trail is currently rendering —
-    SPEC.md §11.1 sub-phases 2d/2e/2f, §11.3's `client/tracking.lua` row.
+    DEVELOPER_REFERENCE.md §11.1 sub-phases 2d/2e/2f, §11.3's `client/tracking.lua` row.
     All three trail types share ONE file (not one file per type) and call
     ONE parameterized server callback, per §11.3/§11.4 item 1.
 
-    Supplementary implementation detail (non-authoritative — SPEC.md §11 is
+    Supplementary implementation detail (non-authoritative — DEVELOPER_REFERENCE.md §11 is
     the source of truth if anything here drifts from it):
-    phase2_notes/RESEARCH_ARCHIVE.md#tracking, phase2_notes/RESEARCH_ARCHIVE.md#tracking,
-    phase2_notes/RESEARCH_ARCHIVE.md#tracking, phase2_notes/RESEARCH_ARCHIVE.md#tracking.
+    phase2_notes/DEVELOPER_REFERENCE.md#tracking, phase2_notes/DEVELOPER_REFERENCE.md#tracking,
+    phase2_notes/DEVELOPER_REFERENCE.md#tracking, phase2_notes/DEVELOPER_REFERENCE.md#tracking.
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT — Phase 2, per SPEC.md §11.4 items 1, 3, 4 and
+    EVENT/CALLBACK CONTRACT — Phase 2, per DEVELOPER_REFERENCE.md §11.4 items 1, 3, 4 and
     item 7's "no dedicated result-delivery event" note. Server side lives in
     server/tracking.lua (confirmed against that file's own header as of this
     pass — same contract, no drift).
@@ -30,11 +30,11 @@
        `breaksAtWater` is documented (§11.4 item 1) as informational only
        — since config.lua is a shared_script, THIS FILE reads
        Config.WaterTrackingDecay.breaksTrail directly rather than trusting
-       this echoed field (phase2_notes/RESEARCH_ARCHIVE.md#tracking §1.2).
+       this echoed field (phase2_notes/DEVELOPER_REFERENCE.md#tracking §1.2).
        No `reason` field exists on this response (unlike searchTarget's) —
        "nothing nearby" / "on cooldown" / "no access" all collapse to the
        same `found = false` here; ship one generic message
-       (phase2_notes/RESEARCH_ARCHIVE.md#tracking §2.4).
+       (phase2_notes/DEVELOPER_REFERENCE.md#tracking §2.4).
 
     Server events (RegisterNetEvent, client->server; THIS FILE triggers,
     does not receive, these two):
@@ -80,8 +80,8 @@
         StartScentTrack()
         StartBloodTrack()
         StartGunpowderTrack()
-        StopTracking()   -- not named by SPEC.md §11 itself; fills the
-            open gap phase2_notes/RESEARCH_ARCHIVE.md#tracking §2.1/§5 item 2
+        StopTracking()   -- not named by DEVELOPER_REFERENCE.md §11 itself; fills the
+            open gap phase2_notes/DEVELOPER_REFERENCE.md#tracking §2.1/§5 item 2
             flags (no self-service "stop" affordance is specified anywhere
             in §11's acceptance criteria) — a manual-cancel item, mirroring
             Attach/Detach Leash's single context-sensitive radial item.
@@ -92,7 +92,7 @@
       same posture client/movement.lua's RequestLeashAttach() documents for
       itself.
     - THIS FILE reads Config.Tracking.Scent / .Blood / .Gunpowder and
-      Config.WaterTrackingDecay (SPEC.md §11.2's config.lua additions,
+      Config.WaterTrackingDecay (DEVELOPER_REFERENCE.md §11.2's config.lua additions,
       confirmed landed in config.lua as of this pass, including the
       relayCooldownMs amendments beyond §11.2's original text — those
       fields are server/tracking.lua's own concern, not read by this file).
@@ -170,7 +170,7 @@ function GetActiveTrackType()
 end
 
 --- Shared implementation behind StartScentTrack()/StartBloodTrack()/
---- StartGunpowderTrack() below. SPEC.md §11.5's three trail-type
+--- StartGunpowderTrack() below. DEVELOPER_REFERENCE.md §11.5's three trail-type
 --- acceptance-criteria blocks are textually identical (only the trackType
 --- string and its Config.Tracking.<Type> sub-table differ), so this is one
 --- function instead of three near-duplicate copies — mirrors e.g.
@@ -179,7 +179,7 @@ end
 --- @param trackType 'scent'|'blood'|'gunpowder'
 local function StartTrack(trackType)
     if not CanShowK9UI() then
-        -- Migrated to the shared client/main.lua helper (REFACTOR_ROADMAP.md
+        -- Migrated to the shared client/main.lua helper (DEVELOPER_REFERENCE.md
         -- Part B item 1 -- formerly REFACTOR_ROADMAP_2.md, merged 2026-08-25)
         -- — this was the last raw inline copy of the
         -- common.no_k9_access lib.notify() pattern; DenyK9UIAccess()'s own
@@ -189,7 +189,7 @@ local function StartTrack(trackType)
         return
     end
 
-    -- OPEN QUESTION, not decided by SPEC.md §11 (phase2_notes/RESEARCH_ARCHIVE.md#tracking
+    -- OPEN QUESTION, not decided by DEVELOPER_REFERENCE.md §11 (phase2_notes/DEVELOPER_REFERENCE.md#tracking
     -- §2.1/§5 item 2): should starting a NEW track type while already
     -- tracking something else silently replace the old session, or be
     -- rejected until StopTracking() is called first? This implementation
@@ -248,7 +248,7 @@ local function StartTrack(trackType)
     -- NOTE: §11.4 item 1's response shape has no `reason` field (unlike
     -- searchTarget's, §11.4 item 2), so "nothing nearby" / "on cooldown" /
     -- "no access" all collapse to the same found = false here
-    -- (phase2_notes/RESEARCH_ARCHIVE.md#tracking §2.4) — ship one generic
+    -- (phase2_notes/DEVELOPER_REFERENCE.md#tracking §2.4) — ship one generic
     -- message, don't invent a distinction the server doesn't give data for.
     if not result or not result.found then
         lib.notify({ title = locale('common.notify_title'), description = locale('tracking.nothing_to_track'), type = 'error' })
@@ -272,7 +272,7 @@ local function StartTrack(trackType)
 end
 
 --- Radial-facing entry point for scent tracking (Config.Features.ScentTracking).
---- SPEC.md §11.3's client/radial.lua row calls this by this exact name —
+--- DEVELOPER_REFERENCE.md §11.3's client/radial.lua row calls this by this exact name —
 --- do not rename without updating that row and radial.lua's eventual
 --- wiring (still unwired as of this pass).
 function StartScentTrack()
@@ -289,9 +289,9 @@ function StartGunpowderTrack()
     StartTrack('gunpowder')
 end
 
---- Manual cancel — fills the open gap phase2_notes/RESEARCH_ARCHIVE.md#tracking
+--- Manual cancel — fills the open gap phase2_notes/DEVELOPER_REFERENCE.md#tracking
 --- §2.1/§5 item 2 flags (no self-service "stop" affordance is specified
---- anywhere in SPEC.md §11 itself, only a fresh Start*Track() call after a
+--- anywhere in DEVELOPER_REFERENCE.md §11 itself, only a fresh Start*Track() call after a
 --- water-break). No-op if not currently tracking. Silent, cosmetic,
 --- low-stakes action (per §11.6's framing of tracking as "no real
 --- capability granted") — no confirmation notification needed, matching
@@ -350,7 +350,7 @@ local TRACKING_STATE_CONFIG = {
 
 -- DrawMarker type 1 = a flat cylinder/checkpoint ring — a reasonable,
 -- unremarkable choice for a ground breadcrumb (matches the "checkpoint"
--- framing phase2_notes/RESEARCH_ARCHIVE.md#tracking §3 item 4 uses).
+-- framing phase2_notes/DEVELOPER_REFERENCE.md#tracking §3 item 4 uses).
 local TRAIL_MARKER_TYPE = 1
 local TRAIL_MARKER_SCALE = 0.5
 local TRAIL_MARKER_COLOR = { r = 255, g = 220, b = 90, a = 180 }
@@ -359,7 +359,7 @@ local TRAIL_MARKER_COLOR_UNDERWATER_ALPHA = 60 -- reduced-opacity rendering for 
 --- Draws one breadcrumb marker at `coords`, at reduced alpha if `underwater`.
 --- Not independently native-verified this pass (DrawMarker is a
 --- long-standing, extremely well-established FiveM/GTA native per
---- phase2_notes/RESEARCH_ARCHIVE.md#tracking §4 — not re-verified against
+--- phase2_notes/DEVELOPER_REFERENCE.md#tracking §4 — not re-verified against
 --- current docs this session, same "high confidence, not re-confirmed"
 --- caveat that note already flags).
 --- @param coords vector3
@@ -382,7 +382,7 @@ end
 --- the distance along the line to the first water hit, or nil if none
 --- found before reaching endCoords.
 --- Uses GetWaterHeightNoWaves — NOT plain GetWaterHeight, per
---- phase2_notes/RESEARCH_ARCHIVE.md#tracking §1's explicit recommendation
+--- phase2_notes/DEVELOPER_REFERENCE.md#tracking §1's explicit recommendation
 --- (frame-stable, appropriate for a fixed-step poll like this; plain
 --- GetWaterHeight is wave-jittered and can disagree between adjacent
 --- samples on a calm shoreline). CORRECTION (final native-correctness
@@ -456,7 +456,7 @@ CreateThread(function()
 
                 -- Recomputed fresh every tick from the K9's LIVE position
                 -- toward the fixed resolved source coordinate — NOT a
-                -- one-time snapshot (phase2_notes/RESEARCH_ARCHIVE.md#tracking
+                -- one-time snapshot (phase2_notes/DEVELOPER_REFERENCE.md#tracking
                 -- §1.2: the K9's position moves every tick, the resolved
                 -- source coordinate does not, for the lifetime of one
                 -- Start*Track() call).
@@ -503,8 +503,8 @@ CreateThread(function()
                     local trackingConfig = TRACKING_STATE_CONFIG[trackingState.trackType]
                     local dir = (sourceCoords - myCoords) / totalDist
 
-                    -- OPEN QUESTION, not resolved by SPEC.md §11 either way
-                    -- (phase2_notes/RESEARCH_ARCHIVE.md#tracking §2.3, §5 item 1):
+                    -- OPEN QUESTION, not resolved by DEVELOPER_REFERENCE.md §11 either way
+                    -- (phase2_notes/DEVELOPER_REFERENCE.md#tracking §2.3, §5 item 1):
                     -- reveal the WHOLE remaining line at once, or only a
                     -- capped preview window near the player? This
                     -- implementation reveals the whole remaining line —
@@ -649,15 +649,15 @@ end)
 -- Blood-trail capture (Config.Features.BloodTracking): relays a
 -- payload-less event to the server on CEventNetworkEntityDamage where the
 -- LOCAL player is the victim. Real, documented FiveM game event per
--- SPEC.md §11.6 and independently confirmed against citizenfx/fivem source
--- in phase2_notes/RESEARCH_ARCHIVE.md#tracking §0 — victim identity is data[1],
+-- DEVELOPER_REFERENCE.md §11.6 and independently confirmed against citizenfx/fivem source
+-- in phase2_notes/DEVELOPER_REFERENCE.md#tracking §0 — victim identity is data[1],
 -- confirmed reliable across multiple independent sources; do NOT depend on
 -- any other args[] index (weapon hash, etc.) without a fresh confirmation
 -- pass, per that note's own explicit caveat (args[3], [5], [6] are NOT
 -- independently confirmed).
 AddEventHandler('gameEventTriggered', function(eventName, data)
     if eventName ~= 'CEventNetworkEntityDamage' then return end
-    -- Gate read at the point of firing (SPEC.md §3's hard requirement — a
+    -- Gate read at the point of firing (DEVELOPER_REFERENCE.md §3's hard requirement — a
     -- disabled feature must be a real no-op, not just hidden UI).
     if not Config.Features.BloodTracking then return end
 
@@ -669,14 +669,14 @@ AddEventHandler('gameEventTriggered', function(eventName, data)
     TriggerServerEvent('qbx_k9unit:server:relayDamageEvent')
 end)
 
--- Gunpowder capture thread (Config.Features.GunpowderSniffing), SPEC.md
+-- Gunpowder capture thread (Config.Features.GunpowderSniffing), DEVELOPER_REFERENCE.md
 -- §11.4 item 4/§11.6. Debounced local poll of IsPedShooting(PlayerPedId())
 -- watching for a false->true transition — NOT a nearby-ped scan (an
--- earlier, discarded hypothesis; see phase2_notes/RESEARCH_ARCHIVE.md#tracking
+-- earlier, discarded hypothesis; see phase2_notes/DEVELOPER_REFERENCE.md#tracking
 -- §0.1 item 2 for why "search a suspect for residue" isn't this feature's
 -- actual shape). Each client only ever checks its OWN single ped handle, so
 -- this is cheap regardless of how many other players are nearby
--- (phase2_notes/RESEARCH_ARCHIVE.md#tracking §2's own note on why this
+-- (phase2_notes/DEVELOPER_REFERENCE.md#tracking §2's own note on why this
 -- sidesteps the generic "scan nearby peds" perf concern it otherwise flags
 -- for a naive implementation). Gated on Config.Features.GunpowderSniffing —
 -- idles at a cheap 1000ms poll while the flag is false, mirroring
@@ -685,7 +685,7 @@ end)
 -- exists (simpler than conditionally creating it) but does real work only
 -- when the feature is enabled.
 local GUNPOWDER_POLL_MS = 200 -- debounce poll interval, per
-    -- phase2_notes/RESEARCH_ARCHIVE.md#tracking §2's perf note on the
+    -- phase2_notes/DEVELOPER_REFERENCE.md#tracking §2's perf note on the
     -- (rejected) nearby-ped-scan variant, applied here to the single-ped
     -- case too as a reasonable default (100-250ms range).
 local GUNPOWDER_IDLE_POLL_MS = 1000
@@ -697,7 +697,7 @@ CreateThread(function()
         if Config.Features.GunpowderSniffing then
             local isShooting = IsPedShooting(PlayerPedId())
 
-            -- NOTE (phase2_notes/RESEARCH_ARCHIVE.md#tracking §0.2/§2.3,
+            -- NOTE (phase2_notes/DEVELOPER_REFERENCE.md#tracking §0.2/§2.3,
             -- still unconfirmed this session): IsPedShooting's exact
             -- per-shot vs. per-burst semantics across a sustained
             -- automatic-weapon fire are NOT independently verified — the

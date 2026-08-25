@@ -2,7 +2,7 @@
     qbx_k9unit/server/exports.lua
 
     PUBLIC API SURFACE — coder-architect pass, 2026-08-24. See
-    FEATURE_IDEAS.md Part B §1 (formerly COMPLEMENTARY_FEATURES.md, merged
+    DEVELOPER_REFERENCE.md Part B §1 (formerly COMPLEMENTARY_FEATURES.md, merged
     2026-08-25; "Give this resource a real export/event
     API — prerequisite, not optional") for why this file exists: before this
     pass, fxmanifest.lua declared zero exports and README.md said so
@@ -96,7 +96,7 @@
     this task's own instruction, not defaulted either way):
     - HasK9Access / IsConfiguredK9Model: NOT gated by any Config.Features
       flag. Neither wrapped function is itself gated by a Phase-numbered
-      flag internally — HasK9Access is the core access gate SPEC.md §4.1
+      flag internally — HasK9Access is the core access gate DEVELOPER_REFERENCE.md §4.1
       describes (independent of which specific K9 mechanics are toggled
       on), and IsConfiguredK9Model is roster truth, not a feature. An
       export diverging from its own wrapped function's real behavior would
@@ -153,7 +153,7 @@
     own success points, which was always the intended design, not a
     placeholder); what changed is that those files' owners have since done
     the wiring this section originally described as still needed.
-    FEATURE_IDEAS.md Part B §1's ask (outbound events other resources can
+    DEVELOPER_REFERENCE.md Part B §1's ask (outbound events other resources can
     react to — certification granted/revoked, a partnership formed/broken,
     a contraband search completing, an XP tier crossing) is therefore now
     fully delivered, not merely specified — see the FOURTEEN-event count
@@ -260,7 +260,7 @@
        right alongside the existing `PushTierSnapshot(targetSrc, newTier)`
        call in that same branch.
 
-    7. 'qbx_k9unit:events:k9Down' (ADDED — FEATURE_IDEAS.md Part A §7, "K9
+    7. 'qbx_k9unit:events:k9Down' (ADDED — DEVELOPER_REFERENCE.md Part A §7, "K9
        down / injured critically" dispatch integration hook)
        (source: number, citizenid: string, jobName: string, coords: vector3,
         health: number)
@@ -280,7 +280,7 @@
     for its own internal purposes (a DB column just written, an existing
     TriggerClientEvent's own arguments, or — for #7 — a live, server-resolved
     read taken at the moment of firing) — wiring #1 through #6 in was
-    arithmetic-free, matching FEATURE_IDEAS.md Part B's own "Effort: small"
+    arithmetic-free, matching DEVELOPER_REFERENCE.md Part B's own "Effort: small"
     assessment for that item; #7 is genuinely new detection logic, scoped to
     its own file rather than any existing one, per server/integrations.lua's
     own header.

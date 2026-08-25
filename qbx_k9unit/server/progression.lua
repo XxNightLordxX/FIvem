@@ -5,19 +5,19 @@
     end: server-authoritative XP accumulation, the `k9_progression`
     persistence table (sql/install.sql), the `K9XP[citizenid]` in-memory
     cache mirroring `server/certifications.lua`'s `Certifications` cache
-    pattern exactly (per phase2_notes/RESEARCH_ARCHIVE.md#xp-schema §5's own
+    pattern exactly (per phase2_notes/DEVELOPER_REFERENCE.md#xp-schema §5's own
     recommendation), and the tier-lookup helper walking `Config.XPTiers` the
     same way `server/search.lua` walks `Config.ContrabandAlertTiers`.
 
     PERSISTENCE DECISION (not re-litigated here — see
-    phase2_notes/RESEARCH_ARCHIVE.md#xp-schema, db-schema's design note, and
-    PHASE4_SPEC.md §13.4.1/§13.5's own header claiming this note is
+    phase2_notes/DEVELOPER_REFERENCE.md#xp-schema, db-schema's design note, and
+    DEVELOPER_REFERENCE.md §13.4.1/§13.5's own header claiming this note is
     "adopted"): a dedicated table, `k9_progression`, ONE ROW PER CITIZENID —
     NOT a qbx_core metadata field. XP is real, mechanical, capability-
     adjacent state (a tier crossing changes a K9's actual scent range and
     movement speed, per Config.XPTiers), the same category of decision this
     resource already made once for `k9_certifications` over metadata
-    (SPEC.md §4.3), for the same three reasons: offline correction must
+    (DEVELOPER_REFERENCE.md §4.3), for the same three reasons: offline correction must
     work, atomic accumulation needs a single UPSERT (not a Lua-side
     read-modify-write race), and admin/ops queryability without scanning
     every player's JSON blob. See sql/install.sql's own `k9_progression`
@@ -25,7 +25,7 @@
 
     SCOPING: per Config.XP.scopePerCitizenidOrJob (currently only
     'citizenid' is implemented — see that config field's own comment and
-    PHASE4_SPEC.md §13.6 item 2 for the still-open 'job' alternative, a
+    DEVELOPER_REFERENCE.md §13.6 item 2 for the still-open 'job' alternative, a
     product call this file does not attempt to resolve). `k9_progression`
     has a plain `citizenid` PRIMARY KEY, no job column — XP survives a
     department change, unlike `k9_certifications`.
@@ -76,10 +76,10 @@
             'searchContrabandFound', 'trackSourceResolved',
             'biteHoldSuccess', 'takedownSuccess'). Re-checks
             Config.Features.XPProgression itself (defensive no-op if
-            disabled, per SPEC.md §3 — callers are not required to gate
+            disabled, per DEVELOPER_REFERENCE.md §3 — callers are not required to gate
             this themselves, though every current call site already does
             for clarity). Updates the in-memory K9XP cache SYNCHRONOUSLY
-            before firing a non-blocking DB UPSERT (RESEARCH_ARCHIVE.md#xp-schema
+            before firing a non-blocking DB UPSERT (DEVELOPER_REFERENCE.md#xp-schema
             §5 — correctness of the applied gameplay effect never depends on
             DB round-trip latency). Called from server/search.lua and
             server/tracking.lua this pass via a `type(AwardXP) == 'function'`
@@ -105,11 +105,11 @@
         GetXP(citizenid) -> number
             Raw accumulated total (0 if uncached). Not currently consumed
             anywhere in this resource — exposed for a future HUD/display
-            need (PHASE4_SPEC.md §13.4.1's own "additive read, not a new
+            need (DEVELOPER_REFERENCE.md §13.4.1's own "additive read, not a new
             authorization surface" framing) rather than re-deriving a
             second cache elsewhere.
 
-    XP TIER UNLOCKS ADDITION (this pass, FEATURE_IDEAS.md Part B §8) — one
+    XP TIER UNLOCKS ADDITION (this pass, DEVELOPER_REFERENCE.md Part B §8) — one
     more resource-global, documented in full at its own declaration below
     (search this file for "GetXPTierMedkitCooldownMs") rather than repeated
     here: GetXPTierMedkitCooldownMs(citizenid, baseCooldownMs) -> number. See
@@ -595,7 +595,7 @@ end)
 -- `Config.Features.XPProgression` section all already document that only
 -- `'citizenid'` is implemented — but until now nothing ever READ the value
 -- to enforce that, so a server owner who set `'job'` (a documented, but
--- explicitly NOT-YET-built, alternative — PHASE4_SPEC.md §13.6 item 2) got
+-- explicitly NOT-YET-built, alternative — DEVELOPER_REFERENCE.md §13.6 item 2) got
 -- silently citizenid-scoped behaviour with no warning at all: every award
 -- and lookup in this file goes straight through K9XP[citizenid] and the
 -- `k9_progression` table's plain `citizenid` key, never once branching on
@@ -617,7 +617,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     assert(
         Config.XP.scopePerCitizenidOrJob == 'citizenid',
         "[qbx_k9unit] Config.XP.scopePerCitizenidOrJob must be 'citizenid' -- " ..
-        "'job' is a documented-but-unimplemented alternative (PHASE4_SPEC.md §13.6 item 2), " ..
+        "'job' is a documented-but-unimplemented alternative (DEVELOPER_REFERENCE.md §13.6 item 2), " ..
         'not a selectable config choice this file can honor: the `k9_progression` table ' ..
         '(sql/install.sql) has a plain `citizenid` PRIMARY KEY and no job column at all, so ' ..
         "job-scoped XP totals cannot even be persisted under the current schema, let alone " ..
@@ -742,7 +742,7 @@ function GetXP(citizenid)
 end
 
 -- ==========================================================================
--- XP TIER UNLOCKS -- FEATURE_IDEAS.md Part B §8 (coder-backend, this pass).
+-- XP TIER UNLOCKS -- DEVELOPER_REFERENCE.md Part B §8 (coder-backend, this pass).
 -- Config.XPTiers previously only ever changed speedMultiplier/
 -- scentRangeMultiplier -- two numbers invisible to the player except as "a
 -- slightly faster dog." This section connects tiers to real, checkable
@@ -925,7 +925,7 @@ end
 --- Pushes an authoritative tier snapshot to a specific, currently-connected
 --- player's client. Gated on Config.Features.XPProgression — no client-side
 --- consequence should ever apply while the feature is disabled, per
---- SPEC.md §3's "read the flag at the point of use" rule; the K9XP cache
+--- DEVELOPER_REFERENCE.md §3's "read the flag at the point of use" rule; the K9XP cache
 --- itself is still warmed/kept in sync regardless of the flag (cheap, and
 --- avoids losing real accumulated progress data just because the feature
 --- is temporarily toggled off).
@@ -972,7 +972,7 @@ end
 --- @param citizenid string
 --- @param actionKey string -- a key in Config.XP.awards
 function AwardXP(citizenid, actionKey)
-    if not Config.Features.XPProgression then return end -- real server-side no-op regardless of caller state, per SPEC.md §3
+    if not Config.Features.XPProgression then return end -- real server-side no-op regardless of caller state, per DEVELOPER_REFERENCE.md §3
     if type(citizenid) ~= 'string' or citizenid == '' then return end -- defensive: never trust a malformed caller argument
 
     local amount = Config.XP.awards[actionKey]
@@ -1064,7 +1064,7 @@ function AwardXP(citizenid, actionKey)
 
     local newXp = oldXp + amount
     -- Update the in-memory cache SYNCHRONOUSLY, before the DB write below —
-    -- phase2_notes/RESEARCH_ARCHIVE.md#xp-schema §5: correctness of the applied
+    -- phase2_notes/DEVELOPER_REFERENCE.md#xp-schema §5: correctness of the applied
     -- gameplay effect (tier-derived scentRangeMultiplier/speedMultiplier) depends only
     -- on this line, never on DB round-trip latency.
     K9XP[citizenid] = newXp
@@ -1075,7 +1075,7 @@ function AwardXP(citizenid, actionKey)
     -- `VALUES(xp)` on the ON DUPLICATE KEY branch refers to the
     -- just-inserted delta, giving a single-statement atomic
     -- increment-or-create with no separate SELECT-then-UPDATE round trip
-    -- (phase2_notes/RESEARCH_ARCHIVE.md#xp-schema §4). CONCURRENCY: this is safe
+    -- (phase2_notes/DEVELOPER_REFERENCE.md#xp-schema §4). CONCURRENCY: this is safe
     -- against a lost update even with several of these in flight at once for
     -- the SAME citizenid (e.g. two award paths landing in the same tick) —
     -- MySQL/MariaDB serializes concurrent UPSERTs against the same unique

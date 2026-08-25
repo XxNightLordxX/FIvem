@@ -2,16 +2,16 @@
     qbx_k9unit/server/certifications.lua
 
     Phase 1 scaffold only (coder-architect). This file IS the permission
-    system (SPEC.md hard requirement 2) — grant/revoke/check, the
+    system (DEVELOPER_REFERENCE.md hard requirement 2) — grant/revoke/check, the
     server-side cert cache, and the automatic revoke-on-job-change path.
     Keep it scoped to "who is allowed to use K9 features" only; misc
     small gated K9 actions (e.g. bark relay) live in server/main.lua so
     this file doesn't balloon as later phases add more of those.
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT — Phase 1, REWRITTEN after SPEC.md's post-draft
+    EVENT/CALLBACK CONTRACT — Phase 1, REWRITTEN after DEVELOPER_REFERENCE.md's post-draft
     correction (K9 is a player's own persistent character, no spawn/despawn/
-    registry concept at all — see SPEC.md §1, §2 "Explicit non-goals").
+    registry concept at all — see DEVELOPER_REFERENCE.md §1, §2 "Explicit non-goals").
     This block is identical in every stub file it's relevant to, so
     coder-backend and coder-frontend can work in parallel without live
     coordination.
@@ -19,7 +19,7 @@
     Callbacks (ox_lib lib.callback):
     1. 'qbx_k9unit:server:hasK9Access' () -> boolean [THIS FILE]
        job.name ∈ Config.Departments AND active cert cached for that exact
-       job (OR autoAccessGrade bypass). Per SPEC.md §4.1/§4.5: this is the
+       job (OR autoAccessGrade bypass). Per DEVELOPER_REFERENCE.md §4.1/§4.5: this is the
        ONLY access check, and it does NOT consider ped model at all — model
        is checked exclusively at grant time (§4.2 condition 5, below), not
        on every access. A certified handler who later isn't K9-modeled
@@ -30,7 +30,7 @@
 
     Server events (RegisterNetEvent, client->server):
     2. 'qbx_k9unit:server:certifyHandler' (targetServerId: number) [THIS FILE]
-       Grant flow per SPEC.md §4.2/§4.3 — re-validate granter eligibility,
+       Grant flow per DEVELOPER_REFERENCE.md §4.2/§4.3 — re-validate granter eligibility,
        target eligibility (job membership, model, per §4.2), and
        Config.CertifyProximityMeters proximity via live server-side
        coordinates, never client-claimed.
@@ -47,7 +47,7 @@
     7. '/k9decertify [targetServerId]' [THIS FILE]
     7b. '/k9decertifyoffline [citizenid] [job]' [THIS FILE] — closes the
         online-only gap in event 3/command 7's numeric targetServerId
-        contract (SPEC.md §4.3 requires revocation to work on a target who
+        contract (DEVELOPER_REFERENCE.md §4.3 requires revocation to work on a target who
         is genuinely disconnected, and a disconnected player has no live
         server id at all — see RevokeCertificationOffline below). No
         client-reachable event equivalent exists, nor should one: a
@@ -73,13 +73,13 @@
     "current K9" netId registry, Config.K9DespawnGraceSeconds. All were
     artifacts of the incorrect NPC-spawn model.
 
-    Cross-cutting security rule (SPEC.md §3 + §4.3): every access point
+    Cross-cutting security rule (DEVELOPER_REFERENCE.md §3 + §4.3): every access point
     above must re-check server-side, independent of client claims. This is
     THE file coder-security should scrutinize hardest — see the explicit
-    security note quoted from SPEC.md §4.3 below.
+    security note quoted from DEVELOPER_REFERENCE.md §4.3 below.
     ======================================================================
 
-    SPEC.md §4.3 explicit security note (quoted): "every one of the
+    DEVELOPER_REFERENCE.md §4.3 explicit security note (quoted): "every one of the
     mechanisms above (grant, manual revoke, check) must re-verify on the
     server, independent of what the requesting client claims about its own
     job, rank, proximity, or ped model. The client-side ox_target option
@@ -94,7 +94,7 @@
     server-side on every access point (menu open request *and* the actual
     spawn request — not just once)" — "the actual spawn request" was
     leftover text from the pre-correction draft, since there is no spawn
-    request anymore. SPEC.md §4.1 has since been reworded ("checked
+    request anymore. DEVELOPER_REFERENCE.md §4.1 has since been reworded ("checked
     server-side on every gated action that grants a real capability ...
     not cached client-side as a one-time pass") and no longer contains the
     stale clause — nothing left to flag here.
@@ -127,7 +127,7 @@
       RevokeCertificationOffline via the ForceDetachLeashIfOnline wrapper
       below, and the QBCore:Server:OnJobUpdate auto-revoke handler) — see
       ForceDetachLeashIfOnline's own doc comment and server/main.lua's
-      header for the full rationale (SPEC.md §1/§4.4 "immediately").
+      header for the full rationale (DEVELOPER_REFERENCE.md §1/§4.4 "immediately").
     - THIS FILE also calls `ForceBreakPartnershipForCitizenId(citizenid,
       reason)`, exposed by server/partnership.lua (Phase 3, DEVELOPER_REFERENCE.md
       §12.0 item 7), alongside all FOUR existing leash-teardown call sites
@@ -153,7 +153,7 @@
       is itself already a cheap, safe no-op when `citizenid` has no active
       partnership row to tear down.
     - THIS FILE owns `Certifications` (citizenid -> { active: boolean,
-      job: string }) as a local table. STRUCTURAL NOTE: SPEC.md §4.3's
+      job: string }) as a local table. STRUCTURAL NOTE: DEVELOPER_REFERENCE.md §4.3's
       prose describes this cache as a bare `Certifications[citizenid] =
       true|false`, but §4.4's auto-revoke handler needs to know WHICH job
       that boolean was scoped to (to tell "left the department" apart from
@@ -163,7 +163,7 @@
       avoids a second parallel cache that could drift out of sync.
 
     ======================================================================
-    CERTIFICATION DEPTH (this pass) — FEATURE_IDEAS.md Part A §2 (revoke
+    CERTIFICATION DEPTH (this pass) — DEVELOPER_REFERENCE.md Part A §2 (revoke
     reason), §5 (tiered certification), §9 (expiry/recertification), and
     Part B §11 (specializations). These four are ONE coherent change: they
     all reshape "certified" from a boolean into something with a level
@@ -537,7 +537,7 @@ end
 --- Precomputed set of Config.Peds model hashes, built once at file load.
 --- Used ONLY by the grant-time model check (§4.2 condition 5) — per
 --- §4.1/§4.5, ordinary access checks (HasK9Access) never consult this.
---- Generic over Config.Peds — no hardcoded model name anywhere (SPEC.md §3
+--- Generic over Config.Peds — no hardcoded model name anywhere (DEVELOPER_REFERENCE.md §3
 --- acceptance bullet 3), including custom streamed entries.
 --
 -- CONFIG-SAFETY GUARD (coder-backend, this pass) — see the block above
@@ -548,7 +548,7 @@ end
 assert(type(Config.Peds) == 'table' and #Config.Peds > 0,
     '[qbx_k9unit] Config.Peds must be a non-empty array -- K9ModelHashes (built immediately below, at this ' ..
     'file\'s own load time) is derived entirely from it, and IsConfiguredK9Model (the grant-time model check, ' ..
-    'SPEC.md §4.2.5) could never accept ANY model if this were empty or malformed -- every certification grant ' ..
+    'DEVELOPER_REFERENCE.md §4.2.5) could never accept ANY model if this were empty or malformed -- every certification grant ' ..
     'attempt would fail with "target not K9 model" regardless of the target\'s actual ped.')
 for i, pedEntry in ipairs(Config.Peds) do
     assert(type(pedEntry) == 'table' and type(pedEntry.model) == 'string' and pedEntry.model ~= '',
@@ -560,7 +560,7 @@ end
 
 assert(type(Config.CertifyProximityMeters) == 'number' and Config.CertifyProximityMeters > 0,
     '[qbx_k9unit] Config.CertifyProximityMeters must be a positive number -- GrantCertification and ' ..
-    'RevokeCertification both compare a live, server-measured distance against it (SPEC.md §4.2.4) before ' ..
+    'RevokeCertification both compare a live, server-measured distance against it (DEVELOPER_REFERENCE.md §4.2.4) before ' ..
     'allowing an online grant/revoke. Zero or negative would make every such attempt fail as "too far" ' ..
     'regardless of actual proximity, and a non-number would throw at the very first certify/revoke attempt ' ..
     'instead of failing loudly here at resource start.')
@@ -608,7 +608,7 @@ local function RefreshSpecializationCache(citizenid, jobName)
 end
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
 -- implementation -- ox_lib's `ox_lib:notify` client event was chosen there
 -- over exports.qbx_core:Notify for the same reason this file's own original
@@ -622,7 +622,7 @@ end
 -- deleting this local copy.
 
 --- Server-authoritative check: is `source` currently allowed to use K9
---- features? SPEC.md §4.1 "Access rule": job.name in Config.Departments
+--- features? DEVELOPER_REFERENCE.md §4.1 "Access rule": job.name in Config.Departments
 --- AND (active cert cached for that job OR configured autoAccessGrade
 --- bypass OR High Command — server/highcommand.lua's IsHighCommand,
 --- project-owner-directed this pass, see that file's own header for the
@@ -839,7 +839,7 @@ local function IsCertRowConfirmedActive(citizenid, jobName)
     return activeIdOrErr ~= nil
 end
 
---- SPEC.md §4.2 certifier eligibility check (granter side only — does not
+--- DEVELOPER_REFERENCE.md §4.2 certifier eligibility check (granter side only — does not
 --- check the target or proximity, see GrantCertification/RevokeCertification).
 --- Also qualifies unconditionally for a High Command officer
 --- (server/highcommand.lua's IsHighCommand, project-owner-directed this
@@ -908,14 +908,14 @@ local function IsEligibleCertifier(source)
     -- to stop happening quietly. FAILS CLOSED — a non-number `level` makes
     -- this whole function return false (not eligible), never true; the
     -- `job.isboss` early-return above is unaffected and still grants
-    -- eligibility for a boss regardless of grade shape, matching SPEC.md's
+    -- eligibility for a boss regardless of grade shape, matching DEVELOPER_REFERENCE.md's
     -- documented "isboss always qualifies" rule.
     local dept = Config.Departments[job.name]
     return job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept.certifierGrade
 end
 
 --- QA/coder-security finding (leash subsystem gap): losing K9 certification
---- must end an already-formed leash pairing "immediately" per SPEC.md
+--- must end an already-formed leash pairing "immediately" per DEVELOPER_REFERENCE.md
 --- §1/§4.4, not just block future attach attempts — CheckLeashEligibility
 --- in server/main.lua is only consulted at attach time, so a K9-role party
 --- who gets decertified mid-session while actively leashed would otherwise
@@ -1051,7 +1051,7 @@ end
 -- target/department is named.
 local CERTIFY_ACTION_COOLDOWN_MS = 1500
 
--- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastCertifyActionAt`
+-- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled `lastCertifyActionAt`
 -- table, now a NewCooldown() instance (server/cooldowns.lua) — same
 -- threshold, same per-granter-source key, same playerDropped-based cleanup
 -- (see CertifyActionCooldown.RegisterPlayerDropped() below), behavior
@@ -1117,7 +1117,7 @@ local function ResolveGranterCitizenId(granterSrc)
     return granterCitizenid
 end
 
---- SPEC.md §4.2/§4.3 grant flow. Called by both event 2 and command 6, and
+--- DEVELOPER_REFERENCE.md §4.2/§4.3 grant flow. Called by both event 2 and command 6, and
 --- (this pass) the K9 Command Tablet's server-side aggregation layer
 --- (server/tablet.lua -- see GrantCertificationForTablet below) via its
 --- own resolved, online-only server id.
@@ -1160,7 +1160,7 @@ local function GrantCertification(granterSrc, targetServerId)
         return false, 'self_certification_disabled'
     end
 
-    -- Grant requires an online target — unlike revoke, which SPEC.md
+    -- Grant requires an online target — unlike revoke, which DEVELOPER_REFERENCE.md
     -- §4.3's flow table explicitly documents as working offline.
     local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
     if not targetPlayer or not targetPlayer.PlayerData then
@@ -1169,7 +1169,7 @@ local function GrantCertification(granterSrc, targetServerId)
     end
 
     -- §4.2.3: cross-department granting IS currently allowed (open
-    -- question §9.2 in SPEC.md, not resolved here) — this only requires
+    -- question §9.2 in DEVELOPER_REFERENCE.md, not resolved here) — this only requires
     -- the target be in *some* configured department, not the SAME one as
     -- the granter. Do not silently restrict to same-department.
     local targetJob = targetPlayer.PlayerData.job
@@ -1309,12 +1309,12 @@ local function GrantCertification(granterSrc, targetServerId)
         -- server-authoritative state to query back against (HasK9Access/
         -- GetActivePartnerCitizenId/etc.) if it wants to. Not gated on any
         -- Config.Features flag: certification is this resource's core access
-        -- gate (SPEC.md §4.1), not a phase-numbered toggle, matching this same
+        -- gate (DEVELOPER_REFERENCE.md §4.1), not a phase-numbered toggle, matching this same
         -- reasoning already applied to HasK9Access itself in server/exports.lua's
         -- header.
         FireOutboundEvent('qbx_k9unit:events:certificationGranted', targetCitizenid, jobName, granterCitizenid)
 
-        -- Read-only mirror for client HUD display ONLY (SPEC.md §4.3) — NEVER
+        -- Read-only mirror for client HUD display ONLY (DEVELOPER_REFERENCE.md §4.3) — NEVER
         -- read by any server-side authorization check. Do not add a read of
         -- this field to HasK9Access or any other gate.
         targetPlayer.Functions.SetMetaData('k9certified', true)
@@ -1401,7 +1401,7 @@ local function GrantCertificationForTablet(granterSrc, citizenid, departmentKey)
     return GrantCertification(granterSrc, onlineTargetSrc)
 end
 
---- SPEC.md §4.2/§4.3 revoke flow (manual). Called by both event 3 and
+--- DEVELOPER_REFERENCE.md §4.2/§4.3 revoke flow (manual). Called by both event 3 and
 --- command 7. Must work even when the target is offline (§4.3). Does NOT
 --- run the model check (§4.2.5 applies to grant only).
 --- CERTIFICATION DEPTH (this pass, Part A §2): `reason` is a NEW, OPTIONAL
@@ -1468,7 +1468,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
         --
         -- This function's numeric targetServerId contract still can't
         -- translate a stale/disconnected id back into a citizenid + job,
-        -- so it cannot itself serve a genuinely offline target — SPEC.md
+        -- so it cannot itself serve a genuinely offline target — DEVELOPER_REFERENCE.md
         -- §4.3 requires manual revoke to work offline regardless (it's the
         -- explicit rationale for a DB table over metadata in the first
         -- place), so that gap is closed separately by
@@ -1490,7 +1490,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
     if not granterCitizenid then return end
 
     -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
-    -- row matches (SPEC.md §4.3).
+    -- row matches (DEVELOPER_REFERENCE.md §4.3).
     --
     -- Wrapped in pcall (this file's own RefreshCertificationCache/
     -- GrantCertification precedent): a real DB error (bad connection,
@@ -1548,12 +1548,12 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
 
     if targetIsOnline then
         RefreshCertificationCache(targetCitizenid, targetJobName)
-        -- HUD display mirror only (SPEC.md §4.3) — never read for authorization.
+        -- HUD display mirror only (DEVELOPER_REFERENCE.md §4.3) — never read for authorization.
         targetPlayer.Functions.SetMetaData('k9certified', false)
         NotifyPlayer(targetServerId, locale('certifications.revoked_notice_online'), 'error')
 
         -- QA finding fix: an active leash pairing must not outlive the
-        -- K9-role party's certification (SPEC.md §1/§4.4 "immediately") —
+        -- K9-role party's certification (DEVELOPER_REFERENCE.md §1/§4.4 "immediately") —
         -- see ForceDetachLeashIfOnline's doc comment above. `targetServerId`
         -- is already a live, currently-connected server id here (we're
         -- inside the `targetIsOnline` branch), so force-detach directly
@@ -1564,7 +1564,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
         -- certification that authorised it either. This is the THIRD member
         -- of the "must not outlive certification" family, and it was the one
         -- missing: leash and partnership were both torn down here with
-        -- comments citing SPEC.md's "immediately", and the hold was not.
+        -- comments citing DEVELOPER_REFERENCE.md's "immediately", and the hold was not.
         -- Without this, an officer decertified mid-incident kept physically
         -- holding or dragging their target for the rest of that mechanic's
         -- own duration -- up to 15s for a bite-hold, 20s for a drag -- with
@@ -1616,13 +1616,13 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
     NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
 end
 
---- SPEC.md §4.3 offline-capable revoke flow (manual). Called only by the
+--- DEVELOPER_REFERENCE.md §4.3 offline-capable revoke flow (manual). Called only by the
 --- '/k9decertifyoffline [citizenid] [job]' command — see that command's
 --- registration below and this file's header (item 7b) for why there is
 --- no client-triggerable event equivalent (a disconnected target has no
 --- client to trigger anything from). Closes the gap RevokeCertification
 --- above cannot: that function's numeric targetServerId contract can only
---- ever resolve a currently-connected player, but SPEC.md §4.3 requires
+--- ever resolve a currently-connected player, but DEVELOPER_REFERENCE.md §4.3 requires
 --- manual revoke to work on a genuinely offline target (this is the
 --- explicit stated rationale for choosing a dedicated DB table as the
 --- source of truth over qbx_core metadata in the first place — an
@@ -1670,7 +1670,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
 
     -- SECURITY FIX (coder-security review): this command exists ONLY to
     -- reach a genuinely disconnected target (see this function's header
-    -- and SPEC.md §4.3) — that's the entire justification for skipping
+    -- and DEVELOPER_REFERENCE.md §4.3) — that's the entire justification for skipping
     -- §4.2 condition 4's proximity check. But nothing previously verified
     -- the target was actually offline before running the update: an
     -- eligible certifier could call `/k9decertifyoffline [citizenid] [job]`
@@ -1694,7 +1694,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     end
 
     -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
-    -- row matches (SPEC.md §4.3). Same UPDATE pattern as the online path —
+    -- row matches (DEVELOPER_REFERENCE.md §4.3). Same UPDATE pattern as the online path —
     -- including the same pcall + reconcile-on-throw discipline; see
     -- RevokeCertification's own doc comment above for the full reasoning
     -- (a thrown DB error must degrade this offline-capable command, not
@@ -1745,12 +1745,12 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     -- function with no live-source requirement, so it's safe to call
     -- unconditionally here even for a genuinely offline citizenid: it will
     -- simply cache `active = false` for whenever they next connect, rather
-    -- than leaving a drifted entry around. Matches SPEC.md §4.3's
+    -- than leaving a drifted entry around. Matches DEVELOPER_REFERENCE.md §4.3's
     -- "invalidated/updated immediately on grant/revoke events".
     RefreshCertificationCache(citizenid, job)
 
     -- Regression-test fix: keep the read-only `k9certified` HUD mirror
-    -- (SPEC.md §4.3 — never read for authorization, see GrantCertification's
+    -- (DEVELOPER_REFERENCE.md §4.3 — never read for authorization, see GrantCertification's
     -- comment on the same field) from drifting stale. The online guard
     -- above already refused this whole path if the citizenid resolved to a
     -- connected player at the time it was checked, so this is normally a
@@ -1762,7 +1762,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
         nowOnlinePlayer.Functions.SetMetaData('k9certified', false)
     end
 
-    -- QA finding fix (SPEC.md §1/§4.4): tear down an active leash pairing
+    -- QA finding fix (DEVELOPER_REFERENCE.md §1/§4.4): tear down an active leash pairing
     -- for this citizenid if one exists. In the overwhelmingly common case
     -- this is a genuine no-op — the online guard above already refused
     -- this path if the citizenid resolved to a connected player at that
@@ -2395,7 +2395,7 @@ function QueryActiveSpecializations(citizenid, jobName)
     return out
 end
 
---- SPEC.md §4.4 (NEW): automatic revoke when actually leaving the
+--- DEVELOPER_REFERENCE.md §4.4 (NEW): automatic revoke when actually leaving the
 --- department (not on a same-department grade change). Server-only path —
 --- never exposed as a client-callable event.
 --- @param source number
@@ -2408,7 +2408,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
 
     -- Regression-test fix: SECOND, INDEPENDENT check from the
     -- certification-revocation branch below — an officer/handler leashed
-    -- to a K9 never holds a K9 certification of their own (SPEC.md §9 item
+    -- to a K9 never holds a K9 certification of their own (DEVELOPER_REFERENCE.md §9 item
     -- 9: their access is pure Config.Departments membership, not a cert),
     -- so the cert-revocation branch below (gated on `cached.active`) can
     -- never observe them losing eligibility. If this citizenid's NEW job no
@@ -2428,7 +2428,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
         -- certification that authorised it (department change) either. This is the THIRD member
         -- of the "must not outlive certification" family, and it was the one
         -- missing: leash and partnership were both torn down here with
-        -- comments citing SPEC.md's "immediately", and the hold was not.
+        -- comments citing DEVELOPER_REFERENCE.md's "immediately", and the hold was not.
         -- Without this, an officer decertified mid-incident kept physically
         -- holding or dragging their target for the rest of that mechanic's
         -- own duration -- up to 15s for a bite-hold, 20s for a drag -- with
@@ -2539,11 +2539,11 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     -- Repopulate the cache scoped to the NEW job (almost certainly
     -- active = false unless they already hold a separate active cert for
     -- that new department from a prior stint — a fresh grant is required
-    -- either way per SPEC.md §9 item 3).
+    -- either way per DEVELOPER_REFERENCE.md §9 item 3).
     RefreshCertificationCache(citizenid, job.name)
 
     -- Regression-test fix: keep the read-only `k9certified` HUD mirror
-    -- (SPEC.md §4.3) in sync here too — this player is online by
+    -- (DEVELOPER_REFERENCE.md §4.3) in sync here too — this player is online by
     -- definition (OnJobUpdate fired for their live Player object), so this
     -- is a plain, unconditional write, no online-check needed.
     Player.Functions.SetMetaData('k9certified', false)
@@ -2551,7 +2551,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     local deptLabel = (Config.Departments[oldJob] and Config.Departments[oldJob].label) or oldJob
     NotifyPlayer(source, locale('certifications.revoked_notice_job_change', deptLabel), 'error')
 
-    -- QA finding fix (SPEC.md §1/§4.4 "immediately"): this player is
+    -- QA finding fix (DEVELOPER_REFERENCE.md §1/§4.4 "immediately"): this player is
     -- online by definition (OnJobUpdate fired for their live `source`), so
     -- force-detach directly rather than re-resolving by citizenid — same
     -- reasoning as the online branch of RevokeCertification above.
@@ -2561,7 +2561,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     -- certification that authorised it either. This is the THIRD member
     -- of the "must not outlive certification" family, and it was the one
     -- missing: leash and partnership were both torn down here with
-    -- comments citing SPEC.md's "immediately", and the hold was not.
+    -- comments citing DEVELOPER_REFERENCE.md's "immediately", and the hold was not.
     -- Without this, an officer decertified mid-incident kept physically
     -- holding or dragging their target for the rest of that mechanic's
     -- own duration -- up to 15s for a bite-hold, 20s for a drag -- with
@@ -2794,7 +2794,7 @@ end
 -- CONFIDENCE NOTE (not silently asserted as verified fact): no qbx_core
 -- install was reachable in this sandbox to inspect its actual
 -- exports/events against (the filesystem was searched; only this
--- resource's own files exist here). SPEC.md §4.4 already confirms
+-- resource's own files exist here). DEVELOPER_REFERENCE.md §4.4 already confirms
 -- 'QBCore:Server:OnJobUpdate' as a real, current qbx_core
 -- compatibility-bridge event. The player-load equivalent below,
 -- 'QBCore:Server:PlayerLoaded', is used here with MEDIUM-HIGH confidence
@@ -2815,7 +2815,7 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     RefreshCertificationCache(citizenid, job.name)
 
     -- Regression-test fix: resync the read-only `k9certified` HUD mirror
-    -- (SPEC.md §4.3 — never read for authorization) from whatever value
+    -- (DEVELOPER_REFERENCE.md §4.3 — never read for authorization) from whatever value
     -- RefreshCertificationCache just determined. The mirror can drift
     -- while a player is offline (e.g. RevokeCertificationOffline revoking
     -- their cert while disconnected) since it's only otherwise written by
@@ -2868,7 +2868,7 @@ AddEventHandler('playerDropped', function(_reason)
         ExpiryLapsedNotified[citizenid] = nil
     end
 
-    -- REFACTOR_ROADMAP.md item 1: CertifyActionCooldown already registered
+    -- DEVELOPER_REFERENCE.md item 1: CertifyActionCooldown already registered
     -- its OWN `playerDropped` handler via :RegisterPlayerDropped() above
     -- (same unbounded-growth reasoning as Certifications above — keyed by
     -- server id (src) rather than citizenid since CERTIFY_ACTION_COOLDOWN_MS

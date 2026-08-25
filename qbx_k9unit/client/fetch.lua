@@ -36,7 +36,7 @@
 
     `Config.FetchMechanic.mouthBoneIndex`/`mouthOffsetX/Y/Z`/`mouthCarryMode`
     mirror `Config.PropAttachments`' own flat, single-value, no-per-model-
-    table shape exactly (a deliberate departure from PHASE5_SPEC.md's
+    table shape exactly (a deliberate departure from DEVELOPER_REFERENCE.md's
     earlier, more elaborate `Config.K9BoneIndices[model]` draft, superseded
     by what the concurrently-built sibling feature actually shipped) —
     `mouthBoneIndex` defaults to `0` (root bone, always valid, never a
@@ -166,7 +166,7 @@ end
 --- internals" convention (see that file's own header for the precedent).
 --- CONFIDENCE: same as that table's own grading — HIGH that the scenario
 --- strings exist, MEDIUM on the breed-to-scenario mapping for
---- a_c_chop/a_c_husky. OPEN QUESTION, NOT assumed resolved (PHASE5_SPEC.md
+--- a_c_chop/a_c_husky. OPEN QUESTION, NOT assumed resolved (DEVELOPER_REFERENCE.md
 --- §14.4.3's own flagged item): no research pass has confirmed any
 --- WORLD_DOG_BARKING_* scenario actually reads as "carrying something in
 --- mouth" versus just "barking" — this is the best available stand-in, not
@@ -195,7 +195,7 @@ end
 
 --- Self-initiated throw trigger — a HUMAN HANDLER action (gated on
 --- HasK9Access() alone, NOT CanShowK9UI()/IsOwnModelK9() — SPEC.md's own
---- "on a handler command" wording, PHASE5_SPEC.md §14.4.3's resolved
+--- "on a handler command" wording, DEVELOPER_REFERENCE.md §14.4.3's resolved
 --- design: the thrower need not currently be riding a K9 model).
 function RequestThrowFetchBall()
     if not HasK9Access() then
@@ -216,7 +216,7 @@ end, false)
 RegisterNetEvent('qbx_k9unit:client:throwFetchBallAt', function(spawnX, spawnY, spawnZ, forceX, forceY, forceZ)
     -- SOURCE-ORIGIN GUARD (coder-security precedent — see
     -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup, not
+    -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary for the full writeup, not
     -- re-derived here). 65535 is FiveM's documented client-side sentinel
     -- for "this event genuinely came from the server" (citizenfx/fivem-docs,
     -- "Secure your events"). Confidence: MEDIUM-HIGH, the official
@@ -250,7 +250,7 @@ RegisterNetEvent('qbx_k9unit:client:throwFetchBallAt', function(spawnX, spawnY, 
     -- exact parameter shape this mirrors. Deliberately forceType 3, not the
     -- forceType 1 (continuous force) used by the one external community
     -- precedent this feature is otherwise modeled on
-    -- (phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research) — a one-shot
+    -- (phase2_notes/DEVELOPER_REFERENCE.md#phase-5-research) — a one-shot
     -- throw is semantically an impulse, and this codebase already has its
     -- own reasoned, shipped precedent for exactly that call shape, followed
     -- here instead of the external example.

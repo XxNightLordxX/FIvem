@@ -45,8 +45,8 @@
     server/certifications.lua's GrantCertificationForTablet for the full
     writeup; summarized here since it shaped this file's own design too.
     RevokeCertificationOffline already lets an officer revoke a
-    disconnected citizenid's certification (SPEC.md §4.3 requires it).
-    GrantCertification cannot get the same treatment: SPEC.md §4.2.5's
+    disconnected citizenid's certification (DEVELOPER_REFERENCE.md §4.3 requires it).
+    GrantCertification cannot get the same treatment: DEVELOPER_REFERENCE.md §4.2.5's
     model check reads a LIVE ped's model, and this resource's schema has NO
     persisted "this citizenid plays a K9 model" fact to substitute for a
     disconnected target. DECISION: no offline grant path was added.

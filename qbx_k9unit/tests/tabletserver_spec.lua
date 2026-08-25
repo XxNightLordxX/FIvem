@@ -184,6 +184,15 @@ local function newFixture(opts)
         ForceRevertK9Appearance = opts.forceRevertK9Appearance,
     })
 
+    -- K9Store migration (this pass): server/tablet.lua's QueryHasAnyActiveCertification/
+    -- QueryActivePermissionSet now read through K9Store.Cert_GetActiveIdAnyJob/
+    -- K9Store.Perm_GetActiveForCitizen (server/datastore.lua) instead of calling
+    -- MySQL.* directly -- load the real datastore.lua into this SAME env, ahead of
+    -- tablet.lua, so K9Store exists as a real global by the time tablet.lua's own
+    -- chunk runs. `mysql` above is unchanged: K9Store's DB-mode branches call the
+    -- exact same MySQL.query.await/MySQL.scalar.await this stub already dispatches
+    -- on by SQL substring, since K9Store mirrors that SQL verbatim.
+    Sandbox.loadInto('../server/datastore.lua', env)
     Sandbox.loadInto('../server/tablet.lua', env)
 
     return {

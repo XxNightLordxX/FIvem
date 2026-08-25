@@ -6,7 +6,7 @@
     logic, persistence, the tier lookup). THIS FILE has NO authority of its
     own: it only ever RECEIVES an already-resolved, server-computed tier and
     reflects it locally — it never computes XP, never claims a tier to the
-    server, and never accumulates anything (PHASE4_SPEC.md §13.0 Decision 3:
+    server, and never accumulates anything (DEVELOPER_REFERENCE.md §13.0 Decision 3:
     XP and its derived tier are server-authoritative state, full stop).
 
     ======================================================================
@@ -40,10 +40,10 @@
             before the first 'qbx_k9unit:client:xpTierChanged' arrives
             (briefly, right after connect, before PlayerLoaded's server-side
             backfill round-trips back). Exposed for a future HUD/display
-            need (PHASE4_SPEC.md §13.4.1's own "additive read, not a new
+            need (DEVELOPER_REFERENCE.md §13.4.1's own "additive read, not a new
             authorization surface" framing) — not currently consumed
             anywhere else in this resource.
-    - COORDINATION POINT WITH THE SHARED MOVE-RATE COMPOSER (PHASE4_SPEC.md
+    - COORDINATION POINT WITH THE SHARED MOVE-RATE COMPOSER (DEVELOPER_REFERENCE.md
       §13.0 Decision 2, §13.5): by the time Phase 3's PropDragging and this
       phase's wellbeing subsystem both exist, at least three independent
       systems want to call SetPedMoveRateOverride on the K9's own ped —
@@ -144,7 +144,7 @@ local function ApplyXPTierMoveRateEffect()
         K9MoveRateModifiers.xpTier = CachedXPTierSpeedMultiplier
     end
     -- else: defensive only now — the shared composer (client/movement.lua,
-    -- PHASE4_SPEC.md §13.0 Decision 2) has shipped and is confirmed to
+    -- DEVELOPER_REFERENCE.md §13.0 Decision 2) has shipped and is confirmed to
     -- define `K9MoveRateModifiers` (see this file's header, "COORDINATION
     -- POINT CLOSED"), so this branch is not expected to be taken on a
     -- normal load order. Left in place as a harmless no-op rather than an

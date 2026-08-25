@@ -18,7 +18,7 @@
     ==========================================================================
     SCOPE -- WHAT THIS FILE IS, AND, EXPLICITLY, IS NOT:
 
-    This is NOT PHASE5_SPEC.md's §14.4.1 full "hidden-suspect growl relay"
+    This is NOT DEVELOPER_REFERENCE.md's §14.4.1 full "hidden-suspect growl relay"
     design (Config.ProximityAudioFX.SuspectDistanceSource, distanceTiers,
     a new server/main.lua relayGrowl handler, cadenceMs-gated bursts). That
     document's own §14.0 Fork 2 explicitly scopes "detect a hidden suspect"
@@ -54,7 +54,7 @@
     within range"), leaving PlayK9Sound/StopK9Sound/IsK9SoundActive
     untouched either way.
 
-    WHY THE NUI/GainNode PATH (client/audio.lua), NOT PHASE5_SPEC.md
+    WHY THE NUI/GainNode PATH (client/audio.lua), NOT DEVELOPER_REFERENCE.md
     §14.4.1's PREFERRED NATIVE PlaySoundOnNetworkEntity PATH: that section
     only ever calls the native engine's own free 3D falloff "worth naming,
     not required" -- and it is moot regardless, because
@@ -66,7 +66,7 @@
     output once an operator drops in a plain html/sounds/<key>.ogg file
     (client/audio.lua's own header) -- this file was explicitly directed to
     build on that bridge for exactly that reason, a disclosed, deliberate
-    divergence from PHASE5_SPEC.md's own "worth naming" lean, not an
+    divergence from DEVELOPER_REFERENCE.md's own "worth naming" lean, not an
     oversight of it.
 
     ==========================================================================
@@ -83,7 +83,7 @@
     client/audio.lua's own header already carries the correct, honest
     confidence grading for that underlying falloff curve itself: "new,
     unverified-in-the-wild plumbing, not a copy of a proven pattern" --
-    phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §1 found that even
+    phase2_notes/DEVELOPER_REFERENCE.md#phase-5-research §1 found that even
     the ecosystem's most-used NUI audio library (plunkettscott/
     interact-sound) still has an OPEN, unresolved TODO for the SIMPLE,
     single-factor version of this. Nothing about this file changes that

@@ -222,7 +222,7 @@ local PendingFetchThrows = {}
 local PendingFetchCarries = {}
 local PendingFetchDrops = {}
 
--- REFACTOR_ROADMAP.md item 1 convention: dedicated cooldown, never a
+-- DEVELOPER_REFERENCE.md item 1 convention: dedicated cooldown, never a
 -- hand-rolled table. Per-THROWER rate limit on requesting a NEW throw only
 -- — distinct from the one-active-ball-per-citizenid limit enforced
 -- separately below.
@@ -239,7 +239,7 @@ ThrowCooldown.RegisterPlayerDropped()
 
 -- Red-team hardening: requestPickupFetchBall previously had no rate limit
 -- at all (only the initial throw did) — a dedicated NewCooldown tracker,
--- per this file's own REFACTOR_ROADMAP.md convention, never a hand-rolled
+-- per this file's own DEVELOPER_REFERENCE.md convention, never a hand-rolled
 -- table. `Config.FetchMechanic.pickupCooldownMs` is an OPTIONAL tunable not
 -- yet in every config.lua.
 --
@@ -261,7 +261,7 @@ PickupCooldown.RegisterPlayerDropped()
 
 -- NotifyPlayer used to be defined here as its own local copy (a 13th
 -- hand-rolled copy of this exact pattern, landed in this file after
--- REFACTOR_ROADMAP.md's 12-copy dedup audit was already written -- see
+-- DEVELOPER_REFERENCE.md's 12-copy dedup audit was already written -- see
 -- server/notify.lua's own header for that audit and the extraction it
 -- describes). It is now server/notify.lua's single shared resource-global
 -- implementation. Every call site below is unchanged: this file never
@@ -1226,7 +1226,7 @@ AddEventHandler('playerDropped', function(_reason)
 
     -- ThrowCooldown/PickupCooldown each already registered their own
     -- playerDropped handler via :RegisterPlayerDropped() —
-    -- REFACTOR_ROADMAP.md item 1 convention, nothing to do for them here.
+    -- DEVELOPER_REFERENCE.md item 1 convention, nothing to do for them here.
 end)
 
 -- Resource-stop cleanup (task requirement, same class of gap

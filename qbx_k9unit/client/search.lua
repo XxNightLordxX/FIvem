@@ -3,7 +3,7 @@
 
     Phase 2 (coder-frontend). Owns Search Vehicle / Search Person: the two
     ox_target options that play a sniff animation, then await the server's
-    real, server-computed contraband result — SPEC.md §11.1 sub-phases
+    real, server-computed contraband result — DEVELOPER_REFERENCE.md §11.1 sub-phases
     2b/2c, §11.3's `client/search.lua` row. Deliberately a SEPARATE file
     from client/tracking.lua even though both are "K9 sniffs, a result
     appears" in flavor — the split is by TRUST MODEL, not feature name:
@@ -15,13 +15,13 @@
     reasoning). Do not fold this file into client/tracking.lua, and do not
     let any of tracking.lua's trail-rendering logic grow into this file.
 
-    Supplementary implementation detail (non-authoritative — SPEC.md §11 is
+    Supplementary implementation detail (non-authoritative — DEVELOPER_REFERENCE.md §11 is
     the source of truth if anything here drifts from it):
-    phase2_notes/RESEARCH_ARCHIVE.md#contraband-search (the concrete ox_inventory
+    phase2_notes/DEVELOPER_REFERENCE.md#contraband-search (the concrete ox_inventory
     export surface, validation order, and container-recursion requirement).
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT — Phase 2, per SPEC.md §11.4 item 2. Server
+    EVENT/CALLBACK CONTRACT — Phase 2, per DEVELOPER_REFERENCE.md §11.4 item 2. Server
     side lives in server/search.lua (read directly as part of this pass —
     see the resolved bystander-alert note below).
 
@@ -37,7 +37,7 @@
        controls, and only ever select WHICH entity gets checked, never the
        outcome).
        `reason` values handled below, per
-       phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §3 and confirmed against
+       phase2_notes/DEVELOPER_REFERENCE.md#contraband-search §3 and confirmed against
        server/search.lua's own header as of this pass: 'invalid_target',
        'feature_disabled', 'no_access', 'search_in_progress', 'on_cooldown',
        'too_far', 'search_failed'. `search_failed` is shown to the player as
@@ -46,7 +46,7 @@
        correctness bug that note's §3 step 10 and §6 flag explicitly.
 
     RESOLVED — bystander-alert broadcast event (was an OPEN GAP in this
-    file's earlier scaffold pass; SPEC.md §11.4 item 2 does not name it,
+    file's earlier scaffold pass; DEVELOPER_REFERENCE.md §11.4 item 2 does not name it,
     only that it broadcasts "the same way server/main.lua's relayBark
     does"). Confirmed by reading server/search.lua's own header directly
     during this pass (that file names and documents this exact event,
@@ -58,7 +58,7 @@
        netId + alertTier, NEVER totalWeight/contrabandFound (those are
        private to the requester, returned solely via the callback above,
        per §11.4 item 2's "never broadcast" language and
-       RESEARCH_ARCHIVE.md#contraband-search §6's "leaking exact contraband detail
+       DEVELOPER_REFERENCE.md#contraband-search §6's "leaking exact contraband detail
        to the wrong audience" exploit note). Distance-filtered server-side
        (Config.SearchZones.alertBroadcastRadius) — NOT a global
        TriggerClientEvent(-1, ...) like relayBark, so a no-op if this
@@ -74,7 +74,7 @@
       files. Confirmed ox_target-only, mirroring how client/vehicle.lua's
       ox_target options call that file's OWN internal logic directly
       rather than exposing a cross-file global for it. client/radial.lua
-      gets no "Search Vehicle/Person" item — SPEC.md §11.5's acceptance
+      gets no "Search Vehicle/Person" item — DEVELOPER_REFERENCE.md §11.5's acceptance
       criteria only ever describe ox_target as the entry point for this
       feature.
     - THIS FILE calls client/main.lua's CanShowK9UI() inside each
@@ -107,7 +107,7 @@
 --- double-click before the sniff animation/progress bar visually disables
 --- the option). This is a UX nicety only, NOT the security boundary —
 --- server/search.lua's own in-flight mutex (per
---- phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §4A) is what actually closes
+--- phase2_notes/DEVELOPER_REFERENCE.md#contraband-search §4A) is what actually closes
 --- the exploitable race; this local flag exists purely so this client
 --- doesn't visibly fire two overlapping sniff animations/progress bars
 --- against itself.
@@ -133,7 +133,7 @@ local function PerformSearch(targetType, targetEntity)
     end
 
     -- Silent, routine double-click protection, not an error state worth a
-    -- notification (mirrors phase2_notes/RESEARCH_ARCHIVE.md#contraband-search
+    -- notification (mirrors phase2_notes/DEVELOPER_REFERENCE.md#contraband-search
     -- §4's own "Rejection UX note" recommendation for
     -- on_cooldown/search_in_progress being low-key, not error-styled).
     if searchInProgress then return end
@@ -157,12 +157,12 @@ local function PerformSearch(targetType, targetEntity)
 
     searchInProgress = true
 
-    -- Sniff animation shell. OPEN, not resolved by SPEC.md §11 or
-    -- phase2_notes/RESEARCH_ARCHIVE.md: the exact anim/scenario native for a
+    -- Sniff animation shell. OPEN, not resolved by DEVELOPER_REFERENCE.md §11 or
+    -- phase2_notes/DEVELOPER_REFERENCE.md: the exact anim/scenario native for a
     -- "sniffing/searching" pose would need the same native-api-assistant
     -- confirmation pass client/movement.lua's K9Sit() precedent already got
     -- for its WORLD_DOG_SITTING_* scenarios
-    -- (phase2_notes/RESEARCH_ARCHIVE.md#tracking §4's identical flag for a
+    -- (phase2_notes/DEVELOPER_REFERENCE.md#tracking §4's identical flag for a
     -- tracking-session sniff animation) — not guessed at here rather than
     -- risk shipping a fabricated scenario name. lib.progressBar alone still
     -- gives real UX value (pacing, a cancel/interrupt hook if the player
@@ -233,7 +233,7 @@ local function PerformSearch(targetType, targetEntity)
             })
         else
             -- Explicit, NON-SILENT "nothing found" notification beat — per
-            -- phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §5's explicit
+            -- phase2_notes/DEVELOPER_REFERENCE.md#contraband-search §5's explicit
             -- requirement ("the requester's own client must render some
             -- explicit 'nothing found' feedback... this doesn't need a server
             -- broadcast at all, since it's private feedback to the one client
@@ -286,7 +286,7 @@ local function RegisterSearchOxTargetOptions()
     -- "Search Vehicle" target option (K9Compat.Get('target').AddGlobalVehicle,
     -- mirroring client/vehicle.lua's existing AddGlobalVehicle registration
     -- shape exactly) — name 'qbx_k9unit:searchVehicle'. canInteract is a
-    -- DISPLAY optimization only per SPEC.md §3/§4.5, same "not the security
+    -- DISPLAY optimization only per DEVELOPER_REFERENCE.md §3/§4.5, same "not the security
     -- boundary" framing client/vehicle.lua's own header already documents for
     -- its enterVehicle option, since server/search.lua independently
     -- re-verifies everything (§11.4 item 2).
@@ -311,7 +311,7 @@ local function RegisterSearchOxTargetOptions()
     -- e.g. its "Attach Leash" option's shape) — name 'qbx_k9unit:searchPerson'.
     -- Self-exclusion (NetworkGetPlayerIndexFromPed(entity) ~= PlayerId()) is a
     -- low-stakes UX judgment call, not addressed one way or the other by
-    -- SPEC.md §11 — mirrors the self-exclusion already established for the
+    -- DEVELOPER_REFERENCE.md §11 — mirrors the self-exclusion already established for the
     -- leash and certify/revoke target options in client/movement.lua;
     -- server/search.lua's own proximity + entity-type checks make a
     -- self-search harmless even if attempted.
@@ -374,7 +374,7 @@ RegisterNetEvent('qbx_k9unit:client:playContrabandAlert', function(netId, alertT
     -- because this one carries real exploit severity on its own.
     if source ~= 65535 then return end
     -- Reuses the same placeholder sound-bank plumbing client/main.lua's
-    -- playBark handler already establishes (SPEC.md §7: bark/alert audio
+    -- playBark handler already establishes (DEVELOPER_REFERENCE.md §7: bark/alert audio
     -- needs bundled asset files that don't exist in this resource yet;
     -- PlaySoundFromEntity with an unrecognized sound name/set is a harmless
     -- no-op, not an error, so this is safe to ship ahead of real assets).
@@ -383,7 +383,7 @@ RegisterNetEvent('qbx_k9unit:client:playContrabandAlert', function(netId, alertT
     -- which is fine since a 'clean' result's requester-side feedback is
     -- already fully covered by PerformSearch()'s own local notify above;
     -- whether 'clean' should ALSO broadcast for bystander symmetry is a
-    -- server/search.lua decision (RESEARCH_ARCHIVE.md#contraband-search §5), not
+    -- server/search.lua decision (DEVELOPER_REFERENCE.md#contraband-search §5), not
     -- something this receiver needs to special-case either way.
     PlaySoundOnNetworkEntity(netId, alertTier)
 end)

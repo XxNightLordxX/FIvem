@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/inventory.lua
 
-    Phase 4 implementation (coder-backend), PHASE4_SPEC.md §13.4.2 ("K9
+    Phase 4 implementation (coder-backend), DEVELOPER_REFERENCE.md §13.4.2 ("K9
     Inventory", `Config.Features.K9Inventory`) — see server/inventory.lua's
     header for the full design writeup this file is the client half of
     (RESOLVED accessScope decision, CONFIDENCE NOTEs on every ox_inventory
@@ -14,7 +14,7 @@
     only client-side caller).
 
     RESOLVED (was a KNOWN GAP flagged here; closed this pass, not left
-    stale): PHASE4_SPEC.md §13.4.2 describes the ox_target option appearing
+    stale): DEVELOPER_REFERENCE.md §13.4.2 describes the ox_target option appearing
     "on the K9 player's own ped," which server/inventory.lua's contract
     supports for BOTH a nearby department officer AND the K9 player
     accessing their own stash (see IsAuthorizedForK9Inventory's `isSelf`
@@ -35,7 +35,7 @@
       header CONFIDENCE NOTE below for the latter's verification status.
     - This file's ox_target canInteract predicate below calls
       client/main.lua's resource-global `IsEntityModelK9(entity)`
-      (REFACTOR_ROADMAP.md item 3) rather than keeping its own small local
+      (DEVELOPER_REFERENCE.md item 3) rather than keeping its own small local
       copy — client/main.lua is loaded first (fxmanifest.lua's
       client_scripts order) and this call only ever happens at
       canInteract-invocation time (never at this file's own load time), so
@@ -55,7 +55,7 @@
     ======================================================================
 
     CONFIDENCE NOTE: `exports.ox_inventory:openInventory('stash', stashId)`
-    is cited directly by PHASE4_SPEC.md §13.4.2 as "the standard ox_target +
+    is cited directly by DEVELOPER_REFERENCE.md §13.4.2 as "the standard ox_target +
     ox_inventory pattern" — MEDIUM confidence, not independently
     re-verified against the real ox_inventory source or a live install this
     session (same status server/inventory.lua's header gives RegisterStash).
@@ -83,17 +83,17 @@
 -- NOTE: 'on_cooldown' and 'request_in_progress' are deliberately absent from
 -- this table — both are routine, expected traffic (a double-click, a
 -- hovering re-trigger), handled as a silent no-op below (never looked up
--- here at all), same treatment RESEARCH_ARCHIVE.md#contraband-search §4's
+-- here at all), same treatment DEVELOPER_REFERENCE.md#contraband-search §4's
 -- "Rejection UX note" already recommends for search's identical on_cooldown
 -- case.
 -- Each value below is a distinct locale() call (not a plain string) rather
 -- than a table literal, since these must be resolved through ox_lib's
 -- locale() at lookup time like every other player-facing string in this
--- resource — see locales/README.md. Kept as six SEPARATE keys (not
+-- resource — see DEVELOPER_REFERENCE.md §19. Kept as six SEPARATE keys (not
 -- collapsed into one templated message): each reason is a genuinely
 -- different failure cause (disabled feature vs. wrong target vs. no
 -- certification vs. too far vs. not authorized vs. a stash-open failure),
--- the same non-collapsing discipline locales/README.md documents for
+-- the same non-collapsing discipline DEVELOPER_REFERENCE.md §19 documents for
 -- server/kennel.lua's similarly-shaped NotifyPlayer messages.
 local K9_INVENTORY_REASON_MESSAGES = {
     feature_disabled  = locale('inventory.reason_feature_disabled'),
@@ -154,7 +154,7 @@ local function OpenK9InventoryForNetId(netId)
         local reason = result and result.reason
         -- 'on_cooldown'/'request_in_progress' are routine, expected
         -- traffic (a double-click, a hovering re-trigger) — same
-        -- silent-no-op treatment RESEARCH_ARCHIVE.md#contraband-search §4's
+        -- silent-no-op treatment DEVELOPER_REFERENCE.md#contraband-search §4's
         -- "Rejection UX note" already recommends for search's
         -- identical on_cooldown case, applied here to this file's
         -- two analogous reasons.

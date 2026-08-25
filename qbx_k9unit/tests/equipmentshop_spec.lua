@@ -198,7 +198,37 @@ local function newFixture(opts)
     -- tests/runtimecontrol_spec.lua's own boot() does for the identical
     -- reason, so this suite exercises the real cooldown behavior rather
     -- than a hand-rolled stand-in.
+    --
+    -- server/datastore.lua -- REAL, unmodified, loaded alongside (that
+    -- file's own header: "the ONLY place in this resource that may name a
+    -- `k9_*` table or call `MySQL.*` directly" -- server/equipmentshop.lua's
+    -- own boot load / AddLocation / MoveLocation / RemoveLocation now read
+    -- and write through K9Store.ShopLocation_GetAll/Insert/Update/Delete and
+    -- K9Store.ShopLocationAudit_Insert rather than a local SafeQuery/
+    -- SafeWrite/SafeInsert + raw-SQL trio). Same precedent as
+    -- tests/admin_spec.lua's own identical comment. Config.Database is
+    -- deliberately absent from this fixture's Config table above --
+    -- K9Store's own DatabaseEnabled() fails safe to `true` (real-DB mode) on
+    -- a missing Config.Database, which is exactly what makes every
+    -- K9Store.ShopLocation_*/ShopLocationAudit_Insert call below run the
+    -- SAME MySQL.query.await/insert.await calls (against this fixture's own
+    -- makeQueryAwait/makeInsertAwait world stubs) that this file's removed
+    -- SafeQuery/SafeWrite/SafeInsert helpers issued directly before this
+    -- migration -- so every existing assertion below keeps exercising the
+    -- identical SQL/params shape, unchanged.
     Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/datastore.lua', env)
+
+    -- Discard anything server/datastore.lua printed on its way up before
+    -- loading the file under test. That file legitimately prints ONE boot
+    -- line saying which backend it is using -- useful in a real server,
+    -- noise here. Several tests below assert that equipmentshop prints
+    -- EXACTLY ZERO lines when its feature flag is off, and they mean
+    -- equipmentshop's own output, not every line any file in the sandbox
+    -- happened to emit. Without this, loading the datastore made those
+    -- assertions fail against a print that was never equipmentshop's.
+    for i = #printedLines, 1, -1 do printedLines[i] = nil end
+
     Sandbox.loadInto('../server/equipmentshop.lua', env)
 
     return {
