@@ -256,6 +256,17 @@ server_scripts {
     'server/permissions.lua',
     'server/main.lua',
     'server/certifications.lua',
+    -- Owner-directed reversal of an earlier design decision. Certification
+    -- tiers were a hardcoded 3-step ordinal, argued for on the grounds that
+    -- an operator could hold the model in their head. The owner asked for
+    -- the opposite -- add tiers, rename them, edit what they grant, from
+    -- the tablet, at runtime -- so the catalogue is now data. Persists via
+    -- migration 0010. EXTENDS server/certifications.lua's existing tier
+    -- accessors rather than replacing them; the three shipped keys must
+    -- keep their names, since every certification row already in a live
+    -- database holds one of them. No hard load-order requirement -- every
+    -- function here is called at event time, never at file load.
+    'server/certtiers.lua',
     -- K9 COMMAND TABLET, server half. This is high command's actual control
     -- surface: the roster read side, plus tabletAssignK9Role and
     -- tabletRevertK9Ped -- assigning someone the K9 role and stripping it

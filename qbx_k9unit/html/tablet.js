@@ -490,7 +490,6 @@
         personFeaturesError: null,
         personFeatures: null, // { features }
         personFeatureQuery: '',
-        roleActionPending: false, // separate from pendingAction -- see buildRoleControl(); a role assign/revert in flight disables ONLY that section's own two buttons
 
         // Tablet theming -- applied for EVERY viewer (theme itself is
         // fetched once per open and again live on every
@@ -499,7 +498,8 @@
         theme: null, // { primaryColor, accentColor, backgroundColor, textColor, density, headerTitle } -- null until the first tablet:getTheme resolves; DEFAULT_THEME is used to render/apply in the meantime, see applyThemeToDocument()
         themeLoading: false,
         themeError: null,
-        themeDraft: null, // a WORKING COPY of `theme` the theme-editor screen mutates locally before Save -- never sent anywhere until the operator presses Save, and always reset from the authoritative `theme` on load/open/push so a stale edit can never silently linger across a reopen
+        themeDraft: null, // a WORKING COPY of `theme` the theme-editor screen's inputs mutate locally before Save -- never sent anywhere until the operator presses Save, and always reset from the authoritative `theme` on load/open/push so a stale edit can never silently linger across a reopen
+        themeFieldError: null, // set to e.g. 'primaryColor' when the server's last tabletSetTheme response was reason='invalid_field' -- highlights which of the six inputs it rejected; cleared on the next Save attempt
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit
         actionNotice: null, // { kind: 'ok'|'error', text: string } -- transient, cleared on next navigation/reload
@@ -759,7 +759,14 @@
 
     function buildBackdrop() {
         var backdrop = mk('div', { class: 'k9tablet-backdrop' });
-        var panel = mk('div', { class: 'k9tablet-panel', attrs: { role: 'dialog', 'aria-modal': 'true' } });
+        // Density is COSMETIC ONLY (see server/runtimecontrol.lua's own PART
+        // 2 header) -- applied here as a plain class on the panel this
+        // render() rebuilds from scratch every time, never persisted on any
+        // element across renders, exactly like every other piece of this
+        // page's state.
+        var density = (state.theme && state.theme.density) || DEFAULT_THEME.density;
+        var panelClass = 'k9tablet-panel' + (density === 'compact' ? ' k9tablet-density-compact' : '');
+        var panel = mk('div', { class: panelClass, attrs: { role: 'dialog', 'aria-modal': 'true' } });
         panel.appendChild(buildHeader());
 
         if (state.actionNotice) {
@@ -781,6 +788,8 @@
             panel.appendChild(buildConsoleScreen());
         } else if (state.screen === 'person' && canManageRoster) {
             panel.appendChild(buildPersonScreen());
+        } else if (state.screen === 'theme' && state.viewer.isHighCommand) {
+            panel.appendChild(buildThemeScreen());
         } else {
             panel.appendChild(buildMyRecordScreen());
         }
@@ -791,7 +800,9 @@
 
     function buildHeader() {
         var header = mk('div', { class: 'k9tablet-header' });
-        header.appendChild(mk('h1', { class: 'k9tablet-title', text: S('title') }));
+        var titleText = (state.theme && typeof state.theme.headerTitle === 'string' && state.theme.headerTitle.length > 0)
+            ? state.theme.headerTitle : S('title');
+        header.appendChild(mk('h1', { class: 'k9tablet-title', text: titleText }));
         header.appendChild(mkButton('×', 'k9tablet-close-btn', requestClose, { title: S('close_label') }));
         return header;
     }
@@ -839,6 +850,21 @@
         });
         tabs.appendChild(myTab);
         tabs.appendChild(consoleTab);
+
+        // High command only, matching the SAME gate the theme editor
+        // controls themselves use -- see buildThemeScreen(). GetTheme
+        // itself has no such gate (applied for every viewer regardless of
+        // which tab, or whether any tab, is even showing), so a non-high-
+        // command viewer still sees the current theme applied; they just
+        // never see a way to change it.
+        if (state.viewer.isHighCommand) {
+            var themeTab = mkButton(S('tab_theme'), 'k9tablet-tab' + (state.screen === 'theme' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'theme';
+                render();
+                loadTheme();
+            });
+            tabs.appendChild(themeTab);
+        }
         return tabs;
     }
 
@@ -958,6 +984,28 @@
         toolbar.appendChild(mkButton(S('refresh_label'), 'k9tablet-btn', function () { loadRoster(state.rosterQuery); }));
         wrap.appendChild(toolbar);
 
+        // "Open by exact citizen ID" -- see this file's header note on
+        // tablet:revertK9Ped's own NO-UNBOUNDED-TRAP contract. The roster
+        // above lists ONLY citizenids holding an ACTIVE certification
+        // (server/tablet.lua's tabletRequestRoster reads `active = 1`
+        // rows only), so a decertified or never-certified target can never
+        // appear in a search result there -- yet exactly that target must
+        // still be reachable to revert their appearance. This box calls
+        // tablet:requestPersonSummary directly by citizenid, which (per
+        // that callback's own contract) works for ANY citizenid regardless
+        // of certification state, bypassing the roster's own filter.
+        var idBar = mk('div', { class: 'k9tablet-toolbar k9tablet-id-toolbar' });
+        var idInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('open_by_id_placeholder') } });
+        idInput.value = state.openByIdValue;
+        idInput.addEventListener('input', function (e) { state.openByIdValue = e.target.value; });
+        idBar.appendChild(idInput);
+        idBar.appendChild(mkButton(S('open_by_id_label'), 'k9tablet-btn', function () {
+            var id = (idInput.value || '').trim();
+            if (id.length === 0) return;
+            openPerson(id, id);
+        }));
+        wrap.appendChild(idBar);
+
         if (state.rosterLoading && !state.roster) {
             wrap.appendChild(mk('p', { text: S('loading') }));
             return wrap;
@@ -1060,8 +1108,64 @@
 
                 wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('person_features_heading') }));
                 wrap.appendChild(buildPersonFeaturesSection());
+
+                wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: S('role_heading') }));
+                wrap.appendChild(buildRoleControl());
             }
         }
+
+        return wrap;
+    }
+
+    /**
+     * K9 role assign / revert-to-human -- owner's own words: "assign de
+     * assign give certs remove certs remove k9 ped and reverts them to a
+     * human". Reachable for ANY citizenid this screen is currently showing,
+     * including one reached via the console's "open by exact citizen ID"
+     * box specifically BECAUSE they hold no active certification at all --
+     * see this file's THE SECURITY RULE header and tablet:revertK9Ped's own
+     * NO-UNBOUNDED-TRAP contract: this button is never disabled or hidden
+     * based on anything about the TARGET's own certification/access state,
+     * only on state.pendingAction (an unrelated mutation already in
+     * flight), exactly like every other action button on this page.
+     */
+    function buildRoleControl() {
+        var wrap = mk('div', { class: 'k9tablet-role-control' });
+        var citizenid = state.person.citizenid;
+
+        if (!state.peds || state.peds.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('role_no_peds_configured') }));
+        } else {
+            var row = mk('div', { class: 'k9tablet-role-row' });
+            var select = mk('select', { class: 'k9tablet-role-select' });
+            var firstModel = null;
+            for (var i = 0; i < state.peds.length; i++) {
+                var ped = state.peds[i];
+                if (!ped || typeof ped.model !== 'string' || ped.model.length === 0) continue;
+                if (firstModel === null) firstModel = ped.model;
+                var option = mk('option', { text: (typeof ped.label === 'string' && ped.label.length > 0) ? ped.label : ped.model });
+                option.setAttribute('value', ped.model);
+                select.appendChild(option);
+            }
+            if (firstModel !== null) select.value = firstModel;
+            row.appendChild(select);
+            row.appendChild(mkButton(S('role_assign_label'), 'k9tablet-btn', function () {
+                var modelName = select.value;
+                if (!modelName) return;
+                runMutation('tablet:assignK9Role', { targetCitizenId: citizenid, modelName: modelName }, function () {
+                    loadPersonSummary(citizenid);
+                });
+            }, { disabled: state.pendingAction }));
+            wrap.appendChild(row);
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('role_assign_hint') }));
+        }
+
+        wrap.appendChild(mkConfirmButton(S('role_revert_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
+            runMutation('tablet:revertK9Ped', { targetCitizenId: citizenid }, function () {
+                loadPersonSummary(citizenid);
+            });
+        }, { disabled: state.pendingAction }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('role_revert_hint') }));
 
         return wrap;
     }
@@ -1253,6 +1357,97 @@
         return tr;
     }
 
+    // ---- Tablet theme screen (high command only) ----
+
+    /**
+     * Six inputs, one per field server/runtimecontrol.lua's own
+     * ValidateFullTheme accepts -- see this file's header THE SECURITY RULE:
+     * every constraint here (the `<input type="color">` picker's own
+     * #RRGGBB-only value space, the density `<select>`'s fixed two-option
+     * list, the header-title `maxlength`) is a UX convenience only. The
+     * server re-validates the FULL merged theme from scratch on every
+     * tabletSetTheme call regardless of what this page sends -- a modified
+     * client posting an out-of-band value gets back
+     * {ok:false, error:'invalid_field', field:...} same as a legitimate
+     * request that somehow raced a stricter config change.
+     */
+    function buildThemeScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('theme_heading') }));
+
+        if (state.themeLoading && !state.themeDraft) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.themeError && !state.themeDraft) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.themeError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadTheme));
+            return wrap;
+        }
+        if (!state.themeDraft) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        if (!state.themingEnabled) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('theme_disabled_note') }));
+        }
+
+        var draft = state.themeDraft;
+        var form = mk('div', { class: 'k9tablet-theme-form' });
+
+        form.appendChild(buildThemeColorField('primaryColor', S('theme_primary_label'), draft));
+        form.appendChild(buildThemeColorField('accentColor', S('theme_accent_label'), draft));
+        form.appendChild(buildThemeColorField('backgroundColor', S('theme_background_label'), draft));
+        form.appendChild(buildThemeColorField('textColor', S('theme_text_label'), draft));
+
+        var densityRow = mk('div', { class: 'k9tablet-theme-field' + (state.themeFieldError === 'density' ? ' k9tablet-theme-field--invalid' : '') });
+        densityRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('theme_density_label') }));
+        var densitySelect = mk('select', { class: 'k9tablet-theme-density-select' });
+        for (var i = 0; i < THEME_DENSITY_OPTIONS.length; i++) {
+            var value = THEME_DENSITY_OPTIONS[i];
+            var opt = mk('option', { text: value === 'compact' ? S('theme_density_compact') : S('theme_density_comfortable') });
+            opt.setAttribute('value', value);
+            densitySelect.appendChild(opt);
+        }
+        densitySelect.value = draft.density || DEFAULT_THEME.density;
+        densitySelect.addEventListener('input', function (e) { draft.density = e.target.value; });
+        densityRow.appendChild(densitySelect);
+        form.appendChild(densityRow);
+
+        var titleRow = mk('div', { class: 'k9tablet-theme-field' + (state.themeFieldError === 'headerTitle' ? ' k9tablet-theme-field--invalid' : '') });
+        titleRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('theme_header_title_label') }));
+        var titleInput = mk('input', { class: 'k9tablet-theme-title-input', attrs: { type: 'text', maxlength: '40' } });
+        titleInput.value = draft.headerTitle || '';
+        titleInput.addEventListener('input', function (e) { draft.headerTitle = e.target.value; });
+        titleRow.appendChild(titleInput);
+        form.appendChild(titleRow);
+
+        wrap.appendChild(form);
+
+        var actions = mk('div', { class: 'k9tablet-theme-actions' });
+        actions.appendChild(mkButton(S('theme_save_label'), 'k9tablet-btn', saveTheme, { disabled: state.pendingAction || !state.themingEnabled }));
+        actions.appendChild(mkConfirmButton(S('theme_reset_label'), 'k9tablet-btn k9tablet-btn--danger', resetThemeToDefault, { disabled: state.pendingAction || !state.themingEnabled }));
+        wrap.appendChild(actions);
+
+        return wrap;
+    }
+
+    /** One `<input type="color">` row bound to `draft[field]`, mutating the
+     * WORKING COPY directly (never `state.theme` itself, and never sent
+     * anywhere until saveTheme() below) -- see state.themeDraft's own
+     * comment.
+     * @param {string} field @param {string} label @param {object} draft */
+    function buildThemeColorField(field, label, draft) {
+        var row = mk('div', { class: 'k9tablet-theme-field' + (state.themeFieldError === field ? ' k9tablet-theme-field--invalid' : '') });
+        row.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: label }));
+        var input = mk('input', { class: 'k9tablet-theme-color-input', attrs: { type: 'color' } });
+        input.value = draft[field] || DEFAULT_THEME[field];
+        input.addEventListener('input', function (e) { draft[field] = e.target.value; });
+        row.appendChild(input);
+        return row;
+    }
+
     // ------------------------------------------------------------------
     // DATA LOADERS
     // ------------------------------------------------------------------
@@ -1358,6 +1553,74 @@
     }
 
     /**
+     * Applies the four colour slots to CSS custom properties on
+     * `document.documentElement` so tablet.css's own `var(--k9tablet-*, ...)`
+     * rules pick them up immediately, independent of render()'s own
+     * clear-and-rebuild cycle (this survives every subsequent render()
+     * automatically via normal CSS inheritance/cascade, rather than needing
+     * to be re-applied to a freshly built panel element every time -- see
+     * buildBackdrop()'s own density-class handling for the ONE piece of
+     * theming that DOES need to be re-applied per render, and why).
+     *
+     * Guarded, not assumed: `document.documentElement` does not exist in
+     * this project's own test stub (html/tests/tablet-dom-stub.js builds
+     * only the one static `#k9tablet-root` div tablet.html actually ships,
+     * matching that file's own "everything else is built by tablet.js"
+     * design) -- this silently no-ops there rather than throwing, which is
+     * correct: nothing under test ever asserts on real CSS cascade, only on
+     * the DOM nodes/text/classes this page itself builds.
+     * @param {object} theme
+     */
+    function applyThemeToDocument(theme) {
+        theme = theme || DEFAULT_THEME;
+        var docEl = (typeof document !== 'undefined') ? document.documentElement : null;
+        var styleTarget = (docEl && docEl.style && typeof docEl.style.setProperty === 'function') ? docEl.style : null;
+        if (!styleTarget) return;
+        styleTarget.setProperty('--k9tablet-primary', theme.primaryColor || DEFAULT_THEME.primaryColor);
+        styleTarget.setProperty('--k9tablet-accent', theme.accentColor || DEFAULT_THEME.accentColor);
+        styleTarget.setProperty('--k9tablet-bg', theme.backgroundColor || DEFAULT_THEME.backgroundColor);
+        styleTarget.setProperty('--k9tablet-text', theme.textColor || DEFAULT_THEME.textColor);
+    }
+
+    /** Fetched once per open (see handleOpen()) and again on the theme tab
+     * being opened directly (see buildTabs()) -- APPLIED FOR EVERY VIEWER
+     * regardless of role (tablet:getTheme itself has no authorization gate,
+     * see this file's header THE SECURITY RULE / NUI CONTRACT), even though
+     * only high command ever sees buildThemeScreen()'s own edit controls. */
+    function loadTheme() {
+        state.themeLoading = true;
+        state.themeError = null;
+        render();
+
+        fetchNui('tablet:getTheme', {}).then(function (result) {
+            state.themeLoading = false;
+            if (!result || result.ok !== true) {
+                state.themeError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.theme = result.theme || DEFAULT_THEME;
+            state.themeDraft = assignShallow({}, state.theme);
+            state.themeFieldError = null;
+            applyThemeToDocument(state.theme);
+            render();
+        });
+    }
+
+    /** IE11-free shallow-copy helper -- this file otherwise targets very
+     * old-JS syntax throughout (`var`, no arrow functions, no template
+     * literals -- see this page's existing style), so `Object.assign` is
+     * avoided here for the same reason, not because it is unavailable in
+     * CEF specifically.
+     * @param {object} target @param {object} source @returns {object} */
+    function assignShallow(target, source) {
+        for (var k in source) {
+            if (Object.prototype.hasOwnProperty.call(source, k)) target[k] = source[k];
+        }
+        return target;
+    }
+
+    /**
      * Generic mutation runner -- every grant/revoke/certify/decertify/
      * givexp/block/unblock action shares this shape. Disables further
      * actions while in flight (state.pendingAction), shows a transient
@@ -1392,6 +1655,65 @@
         });
     }
 
+    /**
+     * Saves the theme editor's current WORKING COPY (state.themeDraft) --
+     * NOT the generic runMutation() helper above, because a rejected save
+     * here carries a `field` (which of the six inputs failed) that
+     * runMutation's own `result.message`-only handling has no slot for, and
+     * because a successful save must apply the server's CANONICAL returned
+     * theme immediately (applyThemeToDocument) rather than merely re-pull
+     * an unrelated screen the way every other mutation's `onSettled` does.
+     * Shares state.pendingAction with every other action on this page
+     * regardless (same "at most one mutation in flight" invariant).
+     */
+    function saveTheme() {
+        if (state.pendingAction || !state.themeDraft) return;
+        state.pendingAction = true;
+        state.themeFieldError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:setTheme', state.themeDraft).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.theme = result.theme || state.theme;
+                state.themeDraft = assignShallow({}, state.theme || DEFAULT_THEME);
+                applyThemeToDocument(state.theme);
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                state.themeFieldError = (result && typeof result.field === 'string') ? result.field : null;
+                var failText = (result && result.error === 'invalid_field') ? S('theme_field_invalid') : S('action_failed');
+                state.actionNotice = { kind: 'error', text: failText };
+            }
+            render();
+        });
+    }
+
+    /** Restores the SERVER's own built-in default (server/runtimecontrol.lua's
+     * DEFAULT_THEME) -- a destructive action from an operator's point of
+     * view (discards every customization), hence mkConfirmButton's two-click
+     * guard at its own call site, same posture as Decertify/Revoke/Block. */
+    function resetThemeToDefault() {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.themeFieldError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:resetTheme', {}).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.theme = result.theme || DEFAULT_THEME;
+                state.themeDraft = assignShallow({}, state.theme);
+                applyThemeToDocument(state.theme);
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                state.actionNotice = { kind: 'error', text: S('action_failed') };
+            }
+            render();
+        });
+    }
+
     // ------------------------------------------------------------------
     // OPEN / CLOSE
     // ------------------------------------------------------------------
@@ -1402,6 +1724,8 @@
         state.strings = (data.strings && typeof data.strings === 'object') ? data.strings : {};
         state.capabilities = (data.capabilities && typeof data.capabilities === 'object') ? data.capabilities : {};
         state.maxXpPerGrant = typeof data.maxXpPerGrant === 'number' ? data.maxXpPerGrant : null;
+        state.peds = Array.isArray(data.peds) ? data.peds : [];
+        state.themingEnabled = data.themingEnabled === true;
 
         // Fresh baseline every open -- never show stale data from a
         // previous session (see this file's header contract note on
@@ -1415,13 +1739,24 @@
         state.roster = null;
         state.rosterError = null;
         state.rosterQuery = '';
+        state.openByIdValue = '';
         state.person = null;
         state.personSummary = null;
         state.personFeatures = null;
         state.actionNotice = null;
 
+        // Theme is DELIBERATELY NOT reset to null/defaults here, unlike
+        // everything above -- see loadTheme()'s own comment: it is applied
+        // for every viewer independent of this player's own open/close
+        // cycle (server/runtimecontrol.lua's PART 2 header: "applied for
+        // everyone... an already-open tablet updates without the viewer
+        // having to close and reopen it"), and the qbx_k9unit:client:themeUpdated
+        // push already keeps it current while this page is open OR closed.
+        // Resetting it here would only manufacture a visible flash back to
+        // DEFAULT_THEME on every single open for no correctness benefit.
         render();
         loadMyRecord();
+        loadTheme();
     }
 
     function handleClose() {
@@ -1471,6 +1806,23 @@
         fireAndForget('tablet:ready', {});
     }
 
+    /** qbx_k9unit:client:themeUpdated relayed push -- see client/tablet.lua's
+     * own NUI CONTRACT note: fires for EVERY connected client on every
+     * successful tabletSetTheme/tabletResetTheme, not only the officer who
+     * triggered it, and NOT gated on this page's own open/closed state on
+     * either side of the bridge -- applies live immediately, and updates the
+     * theme editor's own working copy so it never overwrites the fresh
+     * server value with a stale local edit the NEXT time Save is pressed.
+     * @param {object} theme */
+    function handleThemeUpdated(theme) {
+        if (!theme || typeof theme !== 'object') return;
+        state.theme = theme;
+        state.themeDraft = assignShallow({}, theme);
+        state.themeFieldError = null;
+        applyThemeToDocument(theme);
+        render();
+    }
+
     function init() {
         rootEl = document.getElementById('k9tablet-root');
 
@@ -1483,6 +1835,9 @@
                     break;
                 case 'tablet:close':
                     handleClose();
+                    break;
+                case 'tablet:themeUpdated':
+                    handleThemeUpdated(msg.data);
                     break;
                 default:
                     break;

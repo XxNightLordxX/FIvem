@@ -188,9 +188,22 @@ local function newFixture(opts)
     local libStub = { callback = { register = function(name, fn) capturedCallbacks[name] = fn end } }
 
     local Config = {
-        Features = {
+        Features = opts.features or {
             PermissionGrants = (opts.permissionGrantsEnabled ~= false), -- default true
             CommandTablet = opts.commandTablet == true,                 -- default false
+            -- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl)
+            -- -- real-shaped extra keys so IsValidPermissionKey's
+            -- 'feature.<Name>'/'block.<Name>' validation (this pass) has a
+            -- real Config.Features table to validate `<Name>` against, same
+            -- table every production feature flag lives in. BiteAndHold
+            -- mirrors an actual RequireGrant-listed feature;
+            -- SomeFeatureOff is DELIBERATELY `false` (not merely absent) --
+            -- IsValidPermissionKey must accept a real key regardless of its
+            -- current on/off value (existence, not truthiness, is what is
+            -- being checked; "is it currently on" is an entirely separate
+            -- question this file never answers).
+            BiteAndHold = true,
+            SomeFeatureOff = false,
         },
         Permissions = opts.permissions or {
             ['k9.access']  = { label = 'Use K9 abilities', description = 'x' },
@@ -580,6 +593,95 @@ do
         local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'not.real')
         t.isFalse(ok)
         t.equals(outcome, 'invalid_permission')
+    end)
+
+    -- ------------------------------------------------------------------
+    -- IsValidPermissionKey: 'feature.<Name>'/'block.<Name>' -- THE HEADLINE
+    -- FIX this pass exists to make. Before this fix, EVERY one of these
+    -- calls failed as 'invalid_permission', which is exactly why
+    -- Config.FeatureControl.RequireGrant/per-person blocks had zero real
+    -- effect regardless of what any consuming gate (server/combat.lua,
+    -- server/pursuitsprint.lua, server/admin.lua) already checked for.
+    -- Proven here against the REAL, unmodified IsValidPermissionKey via
+    -- GrantPermission/RevokePermission -- never a reimplementation.
+    -- ------------------------------------------------------------------
+
+    t.test('GrantPermission: feature.<Name> is accepted when <Name> is a real Config.Features key', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'feature.BiteAndHold')
+        t.isTrue(ok, tostring(outcome))
+        t.equals(outcome, 'ok')
+    end)
+
+    t.test('GrantPermission: block.<Name> is accepted when <Name> is a real Config.Features key', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'block.BiteAndHold')
+        t.isTrue(ok, tostring(outcome))
+        t.equals(outcome, 'ok')
+    end)
+
+    t.test('GrantPermission: feature.<Name> is accepted even when <Name>\'s CURRENT VALUE is false -- existence in Config.Features is what is checked, not truthiness', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'feature.SomeFeatureOff')
+        t.isTrue(ok, tostring(outcome))
+        t.equals(outcome, 'ok')
+    end)
+
+    t.test('GrantPermission: feature.<Name> is STILL rejected when <Name> is NOT a real Config.Features key -- validated against what actually exists, not a free-form string', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'feature.NotARealFeature')
+        t.isFalse(ok)
+        t.equals(outcome, 'invalid_permission')
+    end)
+
+    t.test('GrantPermission: block.<Name> is STILL rejected when <Name> is NOT a real Config.Features key', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'block.NotARealFeature')
+        t.isFalse(ok)
+        t.equals(outcome, 'invalid_permission')
+    end)
+
+    t.test('GrantPermission: a bare "feature." with no name suffix at all is rejected, not treated as Config.Features[""]', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'feature.')
+        t.isFalse(ok)
+        t.equals(outcome, 'invalid_permission')
+    end)
+
+    t.test('GrantPermission: an injection-shaped feature.<Name> payload is rejected exactly like any other unrecognized key -- never reaches SQL text either way (parameterized)', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', "feature.'; DROP TABLE k9_permissions;--")
+        t.isFalse(ok)
+        t.equals(outcome, 'invalid_permission')
+    end)
+
+    t.test('GrantPermission: an oversized feature.<Name> payload (> 50 chars, the k9_permissions.permission column width) is rejected', function()
+        f.advanceTime(2000)
+        local ok, outcome = f.env.GrantPermission(hcSrc, 'TARGET-A', 'feature.' .. string.rep('x', 50))
+        t.isFalse(ok)
+        t.equals(outcome, 'invalid_permission')
+    end)
+
+    t.test('END-TO-END: a granted feature.<Name> is genuinely readable back via HasPermission once the target is online (not merely accepted by the validator)', function()
+        f.advanceTime(2000)
+        local targetSrc = f.registerPlayer(103, 'TARGET-FC', { name = 'police', grade = { level = 1 } })
+        local ok = f.env.GrantPermission(hcSrc, 'TARGET-FC', 'feature.BiteAndHold')
+        t.isTrue(ok)
+        t.isTrue(f.env.HasPermission('TARGET-FC', 'feature.BiteAndHold'))
+        f.disconnectPlayer(targetSrc)
+    end)
+
+    t.test('END-TO-END: RevokePermission genuinely removes a previously granted block.<Name> row', function()
+        f.advanceTime(2000)
+        local targetSrc = f.registerPlayer(104, 'TARGET-FC2', { name = 'police', grade = { level = 1 } })
+        f.env.GrantPermission(hcSrc, 'TARGET-FC2', 'block.BiteAndHold')
+        t.isTrue(f.env.HasPermission('TARGET-FC2', 'block.BiteAndHold'))
+
+        f.advanceTime(2000)
+        local ok = f.env.RevokePermission(hcSrc, 'TARGET-FC2', 'block.BiteAndHold')
+        t.isTrue(ok)
+        t.isFalse(f.env.HasPermission('TARGET-FC2', 'block.BiteAndHold'))
+        f.disconnectPlayer(targetSrc)
     end)
 
     t.test('GrantPermission: an empty-string target citizenid is rejected', function()

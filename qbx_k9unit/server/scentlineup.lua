@@ -165,21 +165,30 @@
     ======================================================================
     SYSTEM-AGNOSTIC BY CONSTRUCTION: the one piece of durable identity this
     file needs (the CONDUCTOR's citizenid, to consult the per-person
-    grant/block above) is resolved through `K9Compat.Get('framework').
-    GetCitizenId(source)` (shared/compat/core.lua + shared/compat/
-    framework.lua), never through a direct `exports.qbx_core` call --
-    unlike several older files in this resource (server/fetch.lua,
-    server/appearance.lua, server/propattachment.lua) that still hardcode
-    qbx_core directly, this file follows the newer K9Compat seam so it
-    keeps working unchanged on whatever framework the operator's adapter
-    resolves to. NOTE: shared/compat/framework.lua does not exist on disk
-    as of this pass (only core.lua does -- confirmed by directory listing
-    before writing this file); until it lands, K9Compat.Get('framework')
-    resolves to the built-in no-op stub, whose GetCitizenId always returns
-    nil -- CanUseScentLineup() below therefore fails CLOSED (denies
-    everyone) rather than erroring, exactly the same safe direction as the
+    grant/block above) is resolved through `K9Compat.Get('framework')`
+    (shared/compat/core.lua + shared/compat/framework.lua), never through a
+    direct `exports.qbx_core` call -- unlike several older files in this
+    resource (server/fetch.lua, server/appearance.lua,
+    server/propattachment.lua) that still hardcode qbx_core directly, this
+    file follows the newer K9Compat seam so it keeps working unchanged on
+    whatever framework the operator's adapter resolves to. NOTE:
+    `GetCitizenId` is a PLAYER-OBJECT method, not a source-taking one -- its
+    contract (shared/compat/framework.lua, shared/compat/README.md) is
+    `GetCitizenId(player)`, matching every real framework's own shape (a raw
+    connection source number is not a player object and every adapter
+    returns nil for one). ResolveCitizenId() below therefore calls
+    `framework.GetPlayer(source)` FIRST to get the actual player object, then
+    passes THAT to `GetCitizenId`, exactly like server/search.lua/
+    server/highcommand.lua's own existing `GetPlayer(src)` then
+    `player.PlayerData.X` two-step convention, just through the compat seam
+    instead of a direct qbx_core call. If K9Compat is not yet loaded, if no
+    framework adapter is resolved at all (the built-in no-op stub, whose
+    GetPlayer/GetCitizenId always return nil), or if the resolved player
+    can't be found, this two-step call returns nil at either step --
+    CanUseScentLineup() below therefore fails CLOSED (denies everyone)
+    rather than erroring, exactly the same safe direction as the
     permissions gap above, and self-heals with zero code change here the
-    moment framework.lua registers a real adapter. Every OTHER identity
+    moment a working framework adapter is resolved. Every OTHER identity
     used anywhere in this file is a bare connection `source` number
     (FiveM's own, always-available, zero-dependency identity) -- lineup
     membership, invite state and the match itself are all keyed by source,
@@ -395,19 +404,30 @@ StartCooldown.RegisterPlayerDropped()
 
 --- Resolves `src`'s citizenid through the framework compat adapter, never
 --- through a direct third-party export -- see header "SYSTEM-AGNOSTIC BY
---- CONSTRUCTION". Fails closed (returns nil) if K9Compat is not yet loaded
---- for any reason, if the adapter has no framework resolved at all (the
---- built-in no-op stub, whose GetCitizenId always returns nil), or if
---- whatever it returns is not a real, non-empty string.
+--- CONSTRUCTION". `GetCitizenId` takes a PLAYER OBJECT, not a bare source
+--- number (shared/compat/framework.lua's/README.md's documented contract,
+--- matching every real framework's own shape) -- `GetPlayer(src)` is called
+--- first to obtain that object, then passed to `GetCitizenId`. Fails closed
+--- (returns nil) if K9Compat is not yet loaded for any reason, if the
+--- adapter has no framework resolved at all (the built-in no-op stub, whose
+--- GetPlayer/GetCitizenId always return nil), if `GetPlayer` can't resolve
+--- `src` to a live player object, or if whatever `GetCitizenId` returns is
+--- not a real, non-empty string.
 --- @param src number
 --- @return string? citizenid
 local function ResolveCitizenId(src)
     if type(K9Compat) ~= 'table' or type(K9Compat.Get) ~= 'function' then return nil end
 
     local framework = K9Compat.Get('framework')
-    if type(framework) ~= 'table' or type(framework.GetCitizenId) ~= 'function' then return nil end
+    if type(framework) ~= 'table' or type(framework.GetPlayer) ~= 'function'
+        or type(framework.GetCitizenId) ~= 'function' then
+        return nil
+    end
 
-    local citizenid = framework.GetCitizenId(src)
+    local player = framework.GetPlayer(src)
+    if player == nil then return nil end
+
+    local citizenid = framework.GetCitizenId(player)
     if type(citizenid) ~= 'string' or citizenid == '' then return nil end
     return citizenid
 end

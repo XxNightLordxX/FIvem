@@ -342,6 +342,30 @@ Config.Features = {
 -- spread below is deliberately small: these are flavour, not a power
 -- ranking. A number far above 1.0 turns breed choice into a required pick
 -- rather than a preference, which is the opposite of what a roster is for.
+-- ======================================================================
+-- CERTIFICATION TIERS (Config.CertificationTiers) -- server/certtiers.lua.
+--
+-- The ranks WITHIN a K9 certification: trainee, certified, senior. High
+-- command can add more, rename them, reorder them, and change what each
+-- one grants -- from inside the K9 Command Tablet, while the server is
+-- running. What is below is only the STARTING POINT. Anything high command
+-- changes in the tablet is saved to the database and wins over this list.
+--
+-- DO NOT DELETE OR RENAME THESE THREE KEYS. Every certification already in
+-- your database holds one of these three words. Changing them here would
+-- orphan those records. Add new tiers freely; leave these three alone.
+--
+-- `capabilities` is empty on purpose. Nothing in this resource currently
+-- gates a mechanic on a tier capability, so filling these in by default
+-- would invent behaviour nobody asked for. An operator who never opens the
+-- tablet sees no change at all.
+-- ======================================================================
+Config.CertificationTiers = {
+    { key = 'trainee',   label = 'Trainee',   ordinal = 1, capabilities = {} },
+    { key = 'certified', label = 'Certified', ordinal = 2, capabilities = {} },
+    { key = 'senior',    label = 'Senior',    ordinal = 3, capabilities = {} },
+}
+
 Config.Peds = {
     { model = 'a_c_shepherd',   speedMultiplier = 1.00 },
     { model = 'a_c_rottweiler', speedMultiplier = 0.98 },

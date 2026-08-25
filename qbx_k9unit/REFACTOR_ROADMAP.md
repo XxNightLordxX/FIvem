@@ -421,8 +421,39 @@ call site for an existing one), that's the trigger — not line count alone.
 
 ## Part 5 — Performance: every `CreateThread` polling loop, verified
 
-All 17 `CreateThread` loops in the tree, with their actual interval and
-gating, checked directly against source (not inferred from names):
+**COUNT CORRECTED 2026-08-25.** This table was written when the tree held
+17 `CreateThread` sites. It now holds **43** — 25 client, 17 server, 1
+shared — after roughly thirty features landed on top of it. The table below
+is still accurate for the loops it lists; it is simply no longer the whole
+set. Treat it as "the seventeen that were audited in depth", not as an
+inventory.
+
+How the 43 was measured, because a bare grep gets this wrong: block
+comments (`--[[ ]]`) and line comments were stripped from every .lua file
+in `client/`, `server/` and `shared/` before counting `CreateThread(`
+invocations. A naive `grep -c CreateThread` over the same tree returns 53,
+because this codebase's file headers discuss threading at length — ten of
+those hits are prose. If you re-derive this number, strip comments first
+and say so, or you will publish the wrong one.
+
+Three of the 43 are worth knowing about separately, because they are
+FACTORIES rather than loops: `client/audio.lua`'s `PlayK9Sound` (loop
+branch), and the fire-and-forget DB writers in `server/progression.lua`
+(`AwardXP`/`AwardXPDirect`) and `server/search.lua` (`LogSearchAttempt`).
+Each spawns a fresh short-lived thread per call, so the number of
+coroutines alive at any instant is not bounded by the static count. The two
+DB writers are deliberate and must stay — the thread is what lets a failed
+insert be caught rather than swallowed, which was a real bug once. Do not
+"optimise" the insert back onto the caller's coroutine.
+
+A 2026-08-25 audit of the full 43 found no unconditional per-frame loop
+anywhere: every `Wait(0)` branch in the tree is conditioned on there being
+something to draw or enforce that frame, with a 100-1000ms idle fallback.
+It also found no `GetGamePool` call inside a per-frame loop, no manual
+`math.sqrt` distance work, and no `SendNUIMessage` in a loop.
+
+The original seventeen, with their actual interval and gating, checked
+directly against source (not inferred from names):
 
 | File:line | Interval | Gating |
 |---|---|---|

@@ -453,4 +453,282 @@ t.test('happy path: RegisterShop receives the exact shopType/name/inventory shap
     t.isTrue(anyLineContains(f.printedLines, '2/2'))
 end)
 
+-- ============================================================================
+-- RUNTIME SHOP LOCATIONS (this pass) -- server/equipmentshop.lua's new
+-- lib.callback surface: equipmentShopGetLocations/AddLocation/MoveLocation/
+-- RemoveLocation. See that file's own header "RUNTIME SHOP LOCATIONS"
+-- section for the full contract this exercises.
+-- ============================================================================
+
+local BASE_SHOP_CONFIG = {
+    shopType = 'k9supply',
+    label = 'K9 Supply',
+    pedModel = 'a_c_shepherd',
+    pedHeading = 0.0,
+    pedScenario = 'WORLD_DOG_SITTING_SHEPHERD',
+    items = { { name = 'k9_medkit', price = 10 } },
+    locations = {
+        { x = 100.0, y = 200.0, z = 30.0 },
+    },
+}
+
+--- @param fixture table
+--- @param source number
+--- @param citizenid string
+local function registerPlayer(fixture, source, citizenid)
+    -- Rebuilds the exportsStub's own lookup indirectly isn't possible
+    -- post-construction (the stub closes over opts.playersBySource at
+    -- newFixture call time) -- callers instead pass playersBySource in
+    -- directly via newFixture's own opts, mirroring
+    -- tests/runtimecontrol_spec.lua's identical registerPlayer helper
+    -- shape. Kept here only so every test below can call
+    -- `registerPlayer(playersBySource, HC_SOURCE, HC_CITIZENID)` on the
+    -- SAME table passed into newFixture, for readability.
+    fixture[source] = { PlayerData = { citizenid = citizenid } }
+end
+
+-- ----------------------------------------------------------------------
+-- GetLocations -- open to any connected caller, no privilege check
+-- ----------------------------------------------------------------------
+
+t.test('equipmentShopGetLocations is registered even with the feature off, and refuses with feature_disabled', function()
+    local f = newFixture({ featureEnabled = false, shopConfig = BASE_SHOP_CONFIG })
+    t.isNotNil(f.callbacks['qbx_k9unit:server:equipmentShopGetLocations'])
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopGetLocations'](NON_HC_SOURCE)
+    t.equals(response.ok, false)
+    t.equals(response.reason, 'feature_disabled')
+end)
+
+t.test('equipmentShopGetLocations resolves a config-only location against the shop-wide pedModel/pedHeading/pedScenario/label defaults -- no privilege check needed', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return false end })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopGetLocations'](NON_HC_SOURCE)
+    t.isTrue(response.ok)
+    local loc = response.locations['cfg:1']
+    t.isNotNil(loc, 'the one Config.K9EquipmentShop.locations entry must be present, keyed cfg:1')
+    t.equals(loc.x, 100.0)
+    t.equals(loc.model, 'a_c_shepherd')
+    t.equals(loc.heading, 0.0)
+    t.equals(loc.scenario, 'WORLD_DOG_SITTING_SHEPHERD')
+    t.equals(loc.label, 'K9 Supply')
+end)
+
+t.test('a per-location override (model/heading/scenario/label) wins over the shop-wide default for that ONE location only', function()
+    local shopConfig = {
+        shopType = 'k9supply', label = 'K9 Supply', items = { { name = 'k9_medkit', price = 10 } },
+        pedModel = 'a_c_shepherd', pedHeading = 0.0, pedScenario = 'WORLD_DOG_SITTING_SHEPHERD',
+        locations = {
+            { x = 1.0, y = 2.0, z = 3.0 }, -- uses every shop-wide default
+            { x = 4.0, y = 5.0, z = 6.0, model = 'a_c_husky', heading = 180.0, scenario = false, label = 'K9 Supply (Vespucci)' },
+        },
+    }
+    local f = newFixture({ featureEnabled = true, shopConfig = shopConfig })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopGetLocations'](NON_HC_SOURCE)
+    t.equals(response.locations['cfg:1'].model, 'a_c_shepherd')
+    local overridden = response.locations['cfg:2']
+    t.equals(overridden.model, 'a_c_husky')
+    t.equals(overridden.heading, 180.0)
+    t.equals(overridden.scenario, '', 'scenario = false must resolve to the empty string (explicitly no scenario), not fall through to the shop default')
+    t.equals(overridden.label, 'K9 Supply (Vespucci)')
+end)
+
+-- ----------------------------------------------------------------------
+-- Boot -- persisted runtime locations are loaded at onResourceStart
+-- ----------------------------------------------------------------------
+
+t.test('a runtime location already in the database is loaded at boot and appears in GetLocations, unioned with config locations', function()
+    local world = newWorld()
+    world.locations[7] = { x = 9.0, y = 9.0, z = 9.0, heading = 45.0, model = 'a_c_husky', scenario = '', label = 'Vinewood Outpost', created_by = 'SOMEONE' }
+    world.nextId = 8
+
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, world = world })
+    f.fireResourceStart()
+
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopGetLocations'](NON_HC_SOURCE)
+    t.isNotNil(response.locations['cfg:1'], 'the config-defined location must still be present')
+    local dbLoc = response.locations['db:7']
+    t.isNotNil(dbLoc, 'the pre-existing database row must be loaded at boot')
+    t.equals(dbLoc.x, 9.0)
+    t.equals(dbLoc.model, 'a_c_husky')
+    t.equals(dbLoc.label, 'Vinewood Outpost')
+end)
+
+-- ----------------------------------------------------------------------
+-- AddLocation -- privilege, validation, happy path, broadcast
+-- ----------------------------------------------------------------------
+
+t.test('equipmentShopAddLocation is refused with feature_disabled while Config.Features.K9EquipmentShop is off', function()
+    local f = newFixture({ featureEnabled = false, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1, y = 2, z = 3 })
+    t.equals(response.ok, false)
+    t.equals(response.reason, 'feature_disabled')
+end)
+
+t.test('equipmentShopAddLocation denies a non-high-command, non-permission caller -- SERVER-SIDE, never trusting the caller', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return false end })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](NON_HC_SOURCE, { x = 1, y = 2, z = 3 })
+    t.equals(response.ok, false)
+    t.equals(response.reason, 'denied')
+    t.equals(#f.world.locations, 0)
+end)
+
+t.test('equipmentShopAddLocation rejects non-finite/missing coordinates', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1, y = 2 })
+    t.equals(response.ok, false)
+    t.equals(response.reason, 'invalid_coords')
+end)
+
+t.test('equipmentShopAddLocation rejects a non-numeric heading', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1, y = 2, z = 3, heading = 'north' })
+    t.equals(response.ok, false)
+    t.equals(response.reason, 'invalid_heading')
+end)
+
+t.test('equipmentShopAddLocation normalizes an out-of-range heading into [0, 360)', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1, y = 2, z = 3, heading = -30.0 })
+    t.isTrue(response.ok)
+    t.equals(f.world.locations[1].heading, 330.0)
+end)
+
+t.test('equipmentShopAddLocation rejects a model/scenario/label containing markup-shaped characters', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local badModel = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1, y = 2, z = 3, model = '<script>' })
+    t.equals(badModel.reason, 'invalid_model')
+
+    -- Advance the fake clock so this second call isn't itself refused by
+    -- the anti-fat-finger cooldown the first (also-refused) call already
+    -- consumed -- a REJECTED call still consumes the rate limit slot
+    -- (rejection happens inside the same handler, after Consume), same as
+    -- every other mutating callback in this file.
+    f.fakeNow.value = f.fakeNow.value + 5000
+    local badLabel = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1, y = 2, z = 3, label = 'a "shop"' })
+    t.equals(badLabel.reason, 'invalid_label')
+end)
+
+t.test('equipmentShopAddLocation happy path: creates a db:<id> row, audits it, broadcasts the updated effective list', function()
+    local playersBySource = {}
+    registerPlayer(playersBySource, HC_SOURCE, HC_CITIZENID)
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end, playersBySource = playersBySource })
+
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 10.0, y = 20.0, z = 30.0, model = 'a_c_husky', label = 'New Spot' })
+    t.isTrue(response.ok)
+    t.equals(response.locationKey, 'db:1')
+    t.isNotNil(response.locations['db:1'])
+    t.equals(response.locations['db:1'].model, 'a_c_husky')
+
+    t.equals(f.world.locations[1].created_by, HC_CITIZENID)
+    t.equals(#f.world.audit, 1)
+    t.equals(f.world.audit[1].action, 'add')
+    t.equals(f.world.audit[1].changed_by, HC_CITIZENID)
+
+    t.equals(#f.broadcasts, 1)
+    t.equals(f.broadcasts[1].eventName, 'qbx_k9unit:client:equipmentShopLocationsUpdated')
+    t.equals(f.broadcasts[1].target, -1)
+    t.isNotNil(f.broadcasts[1].payload['db:1'])
+end)
+
+t.test('equipmentShopAddLocation rate-limits a second call from the same source within the cooldown window', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local first = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1, y = 2, z = 3 })
+    t.isTrue(first.ok)
+    local second = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 4, y = 5, z = 6 })
+    t.equals(second.ok, false)
+    t.equals(second.reason, 'rate_limited')
+    t.equals(#f.world.locations, 1, 'the rate-limited second call must not have written a second row')
+end)
+
+t.test('a HasPermission grant of k9.equipmentshoplocations authorizes a non-high-command caller, independently of IsHighCommand', function()
+    local playersBySource = {}
+    registerPlayer(playersBySource, NON_HC_SOURCE, 'GRANTED01')
+    local f = newFixture({
+        featureEnabled = true, shopConfig = BASE_SHOP_CONFIG,
+        isHighCommand = function() return false end,
+        hasPermission = function(citizenid, key) return citizenid == 'GRANTED01' and key == 'k9.equipmentshoplocations' end,
+        playersBySource = playersBySource,
+    })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](NON_HC_SOURCE, { x = 1, y = 2, z = 3 })
+    t.isTrue(response.ok)
+end)
+
+-- ----------------------------------------------------------------------
+-- MoveLocation -- only ever valid on a db:<id> key, never a cfg:<n> one
+-- ----------------------------------------------------------------------
+
+t.test('equipmentShopMoveLocation refuses a cfg:<n> key outright -- config.lua stays the source of truth for its own entries', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopMoveLocation'](HC_SOURCE, 'cfg:1', { x = 999 })
+    t.equals(response.ok, false)
+    t.equals(response.reason, 'invalid_key')
+end)
+
+t.test('equipmentShopMoveLocation refuses a db:<id> key that does not exist', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopMoveLocation'](HC_SOURCE, 'db:999', { x = 1 })
+    t.equals(response.ok, false)
+    t.equals(response.reason, 'invalid_key')
+end)
+
+t.test('equipmentShopMoveLocation happy path: partial update merges onto the current row, leaves other fields untouched, re-broadcasts', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local added = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1.0, y = 2.0, z = 3.0, model = 'a_c_husky', label = 'Original' })
+    t.isTrue(added.ok)
+
+    -- Advance the fake clock so the rate limiter (already consumed by the
+    -- Add above) does not also swallow this Move.
+    f.fakeNow.value = f.fakeNow.value + 5000
+
+    local moved = f.callbacks['qbx_k9unit:server:equipmentShopMoveLocation'](HC_SOURCE, added.locationKey, { x = 100.0, y = 200.0 })
+    t.isTrue(moved.ok)
+    local loc = moved.locations[added.locationKey]
+    t.equals(loc.x, 100.0)
+    t.equals(loc.y, 200.0)
+    t.equals(loc.z, 3.0, 'z was not part of this update and must be preserved')
+    t.equals(loc.model, 'a_c_husky', 'model was not part of this update and must be preserved')
+    t.equals(loc.label, 'Original', 'label was not part of this update and must be preserved')
+
+    t.equals(#f.world.audit, 2)
+    t.equals(f.world.audit[2].action, 'move')
+end)
+
+t.test('equipmentShopMoveLocation: model = false explicitly resets that field back to the shop-wide default', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local added = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1.0, y = 2.0, z = 3.0, model = 'a_c_husky' })
+    f.fakeNow.value = f.fakeNow.value + 5000
+
+    local moved = f.callbacks['qbx_k9unit:server:equipmentShopMoveLocation'](HC_SOURCE, added.locationKey, { model = false })
+    t.isTrue(moved.ok)
+    t.equals(moved.locations[added.locationKey].model, 'a_c_shepherd', 'must fall back to Config.K9EquipmentShop.pedModel once the per-location override is cleared')
+end)
+
+-- ----------------------------------------------------------------------
+-- RemoveLocation -- only ever valid on a db:<id> key
+-- ----------------------------------------------------------------------
+
+t.test('equipmentShopRemoveLocation refuses a cfg:<n> key outright', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local response = f.callbacks['qbx_k9unit:server:equipmentShopRemoveLocation'](HC_SOURCE, 'cfg:1')
+    t.equals(response.ok, false)
+    t.equals(response.reason, 'invalid_key')
+end)
+
+t.test('equipmentShopRemoveLocation happy path: deletes the row, audits it, the location no longer appears in GetLocations, re-broadcasts', function()
+    local f = newFixture({ featureEnabled = true, shopConfig = BASE_SHOP_CONFIG, isHighCommand = function() return true end })
+    local added = f.callbacks['qbx_k9unit:server:equipmentShopAddLocation'](HC_SOURCE, { x = 1.0, y = 2.0, z = 3.0 })
+    f.fakeNow.value = f.fakeNow.value + 5000
+
+    local removed = f.callbacks['qbx_k9unit:server:equipmentShopRemoveLocation'](HC_SOURCE, added.locationKey)
+    t.isTrue(removed.ok)
+    t.isNil(removed.locations[added.locationKey])
+    t.isNil(f.world.locations[1], 'the row itself must actually be gone from the current-state table')
+
+    t.equals(#f.world.audit, 2)
+    t.equals(f.world.audit[2].action, 'remove')
+
+    local getResponse = f.callbacks['qbx_k9unit:server:equipmentShopGetLocations'](NON_HC_SOURCE)
+    t.isNil(getResponse.locations[added.locationKey], 'a removed location must never resurface via GetLocations')
+    t.isNotNil(getResponse.locations['cfg:1'], 'the config-defined location must be unaffected by removing a db: one')
+end)
+
 os.exit(t.summary())

@@ -192,13 +192,27 @@ local function newFixture(opts)
         return set ~= nil and set[key] == true
     end
 
-    -- shared/compat/framework.lua does not exist on disk as of this pass
-    -- (see server/scentlineup.lua's own header) -- this stub plays the
-    -- role it WILL play once it lands: a table exposing GetCitizenId(src).
+    -- Mirrors shared/compat/framework.lua's real, documented contract:
+    -- `GetPlayer(source)` returns a PLAYER OBJECT (or nil if unresolvable),
+    -- and `GetCitizenId(player)` takes THAT object, never a bare source
+    -- number -- see server/scentlineup.lua's own ResolveCitizenId(), which
+    -- calls GetPlayer first and only then passes the result to
+    -- GetCitizenId. `f.setCitizenId(src, nil)` (used below to simulate an
+    -- unresolvable framework adapter) therefore also makes GetPlayer(src)
+    -- resolve to nil, exactly like the real no-op stub would.
     local K9CompatStub = {
         Get = function(system)
             if system == 'framework' then
-                return { GetCitizenId = function(src) return citizenidBySource[src] end }
+                return {
+                    GetPlayer = function(src)
+                        if citizenidBySource[src] == nil then return nil end
+                        return { __src = src }
+                    end,
+                    GetCitizenId = function(player)
+                        if type(player) ~= 'table' then return nil end
+                        return citizenidBySource[player.__src]
+                    end,
+                }
             end
             return {}
         end,

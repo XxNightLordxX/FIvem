@@ -632,10 +632,41 @@ local function LegacyOrHighCommandStillQualifies(source, permissionKey)
     elseif permissionKey == 'k9.givexp' then
         return type(IsHighCommand) == 'function' and IsHighCommand(source)
     end
-    -- Unknown key: cannot happen through GrantPermission/RevokePermission
-    -- (both validate permissionKey against Config.Permissions before ever
-    -- reaching this point) -- fail closed regardless, never guess true.
+    -- Every 'feature.<Name>'/'block.<Name>' key (config.lua's Config.FeatureControl
+    -- -- IsValidPermissionKey accepts these too, this pass) falls through to
+    -- here, and CORRECTLY so, not merely as a leftover fail-closed default:
+    -- there is no "legacy rank tier" equivalent for a per-feature grant/block
+    -- the way k9.access/k9.certify/k9.audit each have one -- the ONLY way a
+    -- citizenid ever holds 'feature.<Name>' is through step 1 (an explicit
+    -- grant via this same file), so once THAT grant is revoked there is
+    -- nothing else left to "still qualify" via. Returning false here means
+    -- RevokePermission's own stillHasAccess correctly reports `nil` (fully
+    -- removed) for a feature/block revoke, never a bogus
+    -- 'rank_or_high_command' this function has no real basis to claim.
     return false
+end
+
+--- Human-readable label for a NotifyPlayer'd grant/revoke, covering BOTH
+--- permission namespaces this file accepts (IsValidPermissionKey above):
+--- Config.Permissions[key].label for the four admin capabilities (k9.access/
+--- k9.certify/k9.audit/k9.givexp -- unchanged from before this pass), and a
+--- plain fallback to the raw key itself for 'feature.<Name>'/'block.<Name>'
+--- -- config.lua's Config.FeatureControl has no per-feature human label the
+--- way Config.Permissions does (RequireGrant is a bare `{ Name = true }`
+--- table), so 'feature.BiteAndHold'/'block.BiteAndHold' is the label; still
+--- meaningfully readable by an officer, and never a crash from indexing
+--- `.label` off a Config.Permissions entry that does not exist for this
+--- namespace. Called ONLY after IsValidPermissionKey has already confirmed
+--- `permissionKey` is one of the two accepted shapes -- never on an
+--- arbitrary string.
+--- @param permissionKey string
+--- @return string
+local function PermissionLabelFor(permissionKey)
+    local def = type(Config.Permissions) == 'table' and Config.Permissions[permissionKey]
+    if def and type(def.label) == 'string' then
+        return def.label
+    end
+    return permissionKey
 end
 
 -- ======================================================================
@@ -791,7 +822,7 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     local onlineTargetPlayer = exports.qbx_core:GetPlayerByCitizenId(targetCitizenid)
     local onlineTargetSrc = onlineTargetPlayer and onlineTargetPlayer.PlayerData and onlineTargetPlayer.PlayerData.source
     if onlineTargetSrc then
-        NotifyPlayer(onlineTargetSrc, locale('permissions.grant_notify_target', Config.Permissions[permissionKey].label), 'success')
+        NotifyPlayer(onlineTargetSrc, locale('permissions.grant_notify_target', PermissionLabelFor(permissionKey)), 'success')
     end
 
     -- K9 ROLE/MODEL DECOUPLING (coder-architect, server/appearance.lua) --
@@ -912,7 +943,7 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     -- for them -- see header "NOTIFICATIONS" for why this is suppressed
     -- when stillHasAccess == 'rank_or_high_command'.
     if onlineTargetSrc and stillHasAccess == nil then
-        NotifyPlayer(onlineTargetSrc, locale('permissions.revoke_notify_target', Config.Permissions[permissionKey].label), 'error')
+        NotifyPlayer(onlineTargetSrc, locale('permissions.revoke_notify_target', PermissionLabelFor(permissionKey)), 'error')
     end
 
     -- K9 ROLE/MODEL DECOUPLING (coder-architect, server/appearance.lua) --
