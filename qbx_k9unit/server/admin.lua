@@ -494,7 +494,7 @@ end
 --- @param row table -- one k9_certifications row
 --- @return string
 local function FormatCertRow(row)
-    return ('job=%s active=%s granted_by=%s granted_at=%s revoked_by=%s revoked_at=%s'):format(
+    return locale('admin.cert_row_format',
         tostring(row.job), tostring(row.active == 1), tostring(row.granted_by), tostring(row.granted_at),
         row.revoked_by and tostring(row.revoked_by) or 'N/A',
         row.revoked_at and tostring(row.revoked_at) or 'N/A'
@@ -504,7 +504,7 @@ end
 --- @param row table -- one k9_partnerships row
 --- @return string
 local function FormatPartnershipRow(row)
-    return ('k9=%s handler=%s active=%s established_by=%s established_at=%s ended_by=%s ended_at=%s'):format(
+    return locale('admin.partnership_row_format',
         tostring(row.k9_citizenid), tostring(row.handler_citizenid), tostring(row.active == 1),
         tostring(row.established_by), tostring(row.established_at),
         row.ended_by and tostring(row.ended_by) or 'N/A',
@@ -515,10 +515,14 @@ end
 --- @param row table -- one k9_search_log row
 --- @return string
 local function FormatSearchLogRow(row)
+    -- Dynamic-value substitution via locale()'s own %s placeholder, not `..`
+    -- concatenation — same "no string-built player-facing fragments"
+    -- discipline as locales/README.md's own documented concatenation fixes
+    -- (movement.officer_fallback_name, bonetool.bone_index_label, etc.).
     local targetLabel = row.target_type == 'vehicle'
-        and ('plate=' .. tostring(row.target_plate))
-        or ('citizenid=' .. tostring(row.target_citizenid))
-    return ('[%s] searcher=%s(%s) target=%s(%s) result=%s weight=%s tier=%s'):format(
+        and locale('admin.search_log_target_plate_label', tostring(row.target_plate))
+        or locale('admin.search_log_target_citizenid_label', tostring(row.target_citizenid))
+    return locale('admin.search_log_row_format',
         tostring(row.searched_at), tostring(row.searcher_citizenid), tostring(row.searcher_job),
         tostring(row.target_type), targetLabel, tostring(row.result),
         row.total_weight and tostring(row.total_weight) or 'N/A',
@@ -531,7 +535,7 @@ end
 local function FormatProgressionRow(row)
     -- Deliberately reports the raw `xp` total only — see this file's
     -- header "COMMAND SURFACE" item 4 for why a tier is not derived here.
-    return ('xp=%s updated_at=%s'):format(tostring(row.xp), tostring(row.updated_at))
+    return locale('admin.progression_row_format', tostring(row.xp), tostring(row.updated_at))
 end
 
 --- Presents `rows` (already fetched, already bounded) to a connected
@@ -546,11 +550,11 @@ end
 --- @param formatRow fun(row: table): string
 local function PresentRows(target, label, rows, formatRow)
     if #rows == 0 then
-        NotifyPlayer(target, ('%s: no results found.'):format(label), 'inform')
+        NotifyPlayer(target, locale('admin.no_results_found', label), 'inform')
         return
     end
 
-    NotifyPlayer(target, ('%s: %d result(s).'):format(label, #rows), 'inform')
+    NotifyPlayer(target, locale('admin.result_count', label, #rows), 'inform')
 
     local lines = {}
     for i, row in ipairs(rows) do
@@ -722,7 +726,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     RegisterCommand('k9auditcert', function(source, args)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'k9auditcert', 'n/a', 'denied')
-            if source ~= 0 then NotifyPlayer(source, 'You are not authorized to run this command.', 'error') end
+            if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
             return
         end
 
@@ -734,14 +738,14 @@ AddEventHandler('onResourceStart', function(resourceName)
         local citizenid = args[1]
         if not IsValidCitizenId(citizenid) then
             LogAuditInvocation(source, 'k9auditcert', 'n/a', 'invalid_args')
-            local usage = 'Usage: /k9auditcert [citizenid] [limit]'
+            local usage = locale('admin.usage_auditcert')
             if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
             return
         end
 
         local limit = ClampLimit(args[2], Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
         local rows = QueryCertificationHistory(citizenid, limit)
-        local label = ('Certification history for %s'):format(citizenid)
+        local label = locale('admin.cert_history_label', citizenid)
 
         LogAuditInvocation(source, 'k9auditcert', citizenid, 'ok')
 
@@ -757,7 +761,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     RegisterCommand('k9auditpartner', function(source, args)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'k9auditpartner', 'n/a', 'denied')
-            if source ~= 0 then NotifyPlayer(source, 'You are not authorized to run this command.', 'error') end
+            if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
             return
         end
 
@@ -769,14 +773,14 @@ AddEventHandler('onResourceStart', function(resourceName)
         local citizenid = args[1]
         if not IsValidCitizenId(citizenid) then
             LogAuditInvocation(source, 'k9auditpartner', 'n/a', 'invalid_args')
-            local usage = 'Usage: /k9auditpartner [citizenid] [limit]'
+            local usage = locale('admin.usage_auditpartner')
             if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
             return
         end
 
         local limit = ClampLimit(args[2], Config.AdminAudit.MaxResults.Partnerships, HARD_MAX_RESULTS)
         local rows = QueryPartnershipHistory(citizenid, limit)
-        local label = ('Partnership history for %s'):format(citizenid)
+        local label = locale('admin.partnership_history_label', citizenid)
 
         LogAuditInvocation(source, 'k9auditpartner', citizenid, 'ok')
 
@@ -803,7 +807,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     RegisterCommand('k9auditsearch', function(source, args)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'denied')
-            if source ~= 0 then NotifyPlayer(source, 'You are not authorized to run this command.', 'error') end
+            if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
             return
         end
 
@@ -815,7 +819,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         local mode = args[1]
         if not VALID_SEARCH_LOG_MODES[mode] then
             LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'invalid_args')
-            local usage = 'Usage: /k9auditsearch <officer|plate|person|recent> [value] [limit]'
+            local usage = locale('admin.usage_auditsearch')
             if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
             return
         end
@@ -826,28 +830,28 @@ AddEventHandler('onResourceStart', function(resourceName)
             local citizenid = args[2]
             if not IsValidCitizenId(citizenid) then
                 LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'invalid_args')
-                local usage = ('Usage: /k9auditsearch %s [citizenid] [limit]'):format(mode)
+                local usage = locale('admin.usage_auditsearch_mode', mode)
                 if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
                 return
             end
             local limit = ClampLimit(args[3], Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
             rows = (mode == 'officer') and QuerySearchLogByOfficer(citizenid, limit) or QuerySearchLogByPerson(citizenid, limit)
-            label = ('Search log (%s = %s)'):format(mode, citizenid)
+            label = locale('admin.search_log_label_by_value', mode, citizenid)
         elseif mode == 'plate' then
             local plate = NormalizePlateArg(args[2])
             if not plate then
                 LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'invalid_args')
-                local usage = 'Usage: /k9auditsearch plate [plate] [limit]'
+                local usage = locale('admin.usage_auditsearch_plate')
                 if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
                 return
             end
             local limit = ClampLimit(args[3], Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
             rows = QuerySearchLogByPlate(plate, limit)
-            label = ('Search log (plate = %s)'):format(plate)
+            label = locale('admin.search_log_label_plate', plate)
         else -- 'recent'
             local limit = ClampLimit(args[2], Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
             rows = QuerySearchLogRecent(limit)
-            label = 'Search log (most recent)'
+            label = locale('admin.search_log_label_recent')
         end
 
         LogAuditInvocation(source, 'k9auditsearch', label, 'ok')
@@ -866,7 +870,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     RegisterCommand('k9auditxp', function(source, args)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'k9auditxp', 'n/a', 'denied')
-            if source ~= 0 then NotifyPlayer(source, 'You are not authorized to run this command.', 'error') end
+            if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
             return
         end
 
@@ -878,13 +882,13 @@ AddEventHandler('onResourceStart', function(resourceName)
         local citizenid = args[1]
         if not IsValidCitizenId(citizenid) then
             LogAuditInvocation(source, 'k9auditxp', 'n/a', 'invalid_args')
-            local usage = 'Usage: /k9auditxp [citizenid]'
+            local usage = locale('admin.usage_auditxp')
             if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
             return
         end
 
         local rows = QueryProgressionSnapshot(citizenid)
-        local label = ('XP snapshot for %s'):format(citizenid)
+        local label = locale('admin.xp_snapshot_label', citizenid)
 
         LogAuditInvocation(source, 'k9auditxp', citizenid, 'ok')
 

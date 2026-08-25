@@ -105,6 +105,134 @@ further to migrate in this file. `client/defense.lua` was already fully
 migrated as of the fourth pass (`defense.*`, above) and needed no further
 work this pass.
 
+**Update (server migration pass — first `server/` files, recounted directly
+against the tree rather than assumed from the sixth pass's client-only
+tally):** eight `server/*.lua` files now call `locale()` for real
+player-facing text — `server/main.lua`, `server/kennel.lua`,
+`server/partnership.lua`, `server/tenure.lua`, `server/certifications.lua`,
+`server/recall.lua`, `server/inventory.lua`, and `server/wellbeing.lua`.
+This section records what each added, since the sixth pass's own "What's
+left" count below (18 of ~48, all client) predates every one of these and is
+corrected below.
+
+- **`leash.*` (`server/main.lua`, 10 leaf keys) — a NEW top-level group, not
+  folded into `movement.*`:** `feature_disabled`, `invalid_target`,
+  `already_leashed`, `too_far`, `pending_request_exists`, `request_sent`,
+  `request_no_longer_valid_self`, `request_no_longer_valid_initiator`,
+  `request_declined`, `reject_fallback`. This is the SERVER's own leash
+  request/rejection vocabulary — a separate concern from `movement.*`'s
+  already-migrated CLIENT-side leash strings (the consent-prompt UI, the
+  lifecycle notifies like `leash_now_leashed`/`leash_detached`). Kept as its
+  own group rather than merged into `movement.*` because the two files own
+  genuinely different message sets for the same feature (client UI text vs.
+  server authorization/rejection text), the same "different file, different
+  concern" reasoning `bonetool.*` already established for staying separate
+  from `common.*`. Three of the ten leaf keys are direct reuses of existing
+  `common.*` keys inside the same rejection-message lookup table
+  (`common.target_no_longer_online`, `common.no_k9_party`,
+  `common.k9_not_certified`, `common.handler_not_in_department`) rather than
+  new `leash.*` duplicates — confirmed by reading the table before writing
+  this, not assumed.
+- **`kennel.*` (`server/kennel.lua`, 11 new leaf keys added to the existing
+  group):** `not_authorized_to_deploy`, `already_active_deployed`,
+  `placement_already_in_progress`, `placement_timed_out`,
+  `placement_failed_unconfirmed`, `placement_failed_wrong_model`,
+  `placement_failed_too_far`, `placement_failed_already_claimed`,
+  `deployed_success`, `not_owner`, `picked_up_success`. **This resolves the
+  exact non-duplication note this file previously carried** (see "What's
+  left" history below): the server-side placement-failure messages are
+  genuinely distinct sentences from the client's own `kennel.placement_failed`
+  ("Kennel placement failed — the object could not be confirmed." vs. the
+  client's plain "Kennel placement failed.") and were correctly given their
+  own new leaf keys under the same `kennel.*` group rather than reusing
+  `kennel.placement_failed` for a different sentence — confirmed by reading
+  `server/kennel.lua`'s actual `locale(...)` call sites, not assumed from the
+  old note's plan.
+- **`partnership.*` (`server/partnership.lua`, 13 new leaf keys added to the
+  existing group):** `feature_disabled`, `invalid_target`,
+  `reject_already_partnered`, `too_far`, `pending_request_exists`,
+  `request_no_longer_valid_self`, `request_no_longer_valid_initiator`,
+  `request_declined`, `setup_busy`, `establish_error`, `break_error`,
+  `not_partnered_with_anyone`, `reject_fallback`. **This also resolves a
+  previously-flagged note exactly as planned:** the server's own
+  `'Partner request sent.'` reuses the existing `partnership.partner_request_sent`
+  key (confirmed identical text, not duplicated), while the server's
+  DIFFERENT "one of you is already partnered with someone else" rejection got
+  its own new key, `partnership.reject_already_partnered` — NOT collapsed
+  into the client's `partnership.already_partnered` ("You are already
+  partnered."), which remains a different sentence for a different caller
+  context. Confirmed by reading the actual call sites.
+- **`tenure.*` (`server/tenure.lua`, 1 leaf key) — a NEW top-level group:**
+  `milestone_reached` ("Your partnership has reached a new tenure
+  milestone."), sent to both the handler and the K9 on a milestone grant.
+- **`certifications.*` (`server/certifications.lua`, 25 leaf keys) — a NEW
+  top-level group:** every `NotifyPlayer(...)` string in the file's
+  grant/revoke/offline-revoke/job-change-auto-revoke paths and command-usage
+  errors — e.g. `grant_success_granter`, `grant_success_target`,
+  `not_authorized_to_certify`, `target_already_certified`,
+  `target_too_far_to_certify`, `revoked_notice_job_change` (`%s`-interpolated
+  with the department), `invalid_department` (`%s`-interpolated),
+  `target_online_use_decertify_command` (`%d`-interpolated with a server id),
+  and three `usage_*` command-help strings. Not cross-checked leaf-by-leaf
+  against every other group for duplicate English text by this pass — flag
+  for a future pass if a near-duplicate turns up.
+- **`recall.*` (`server/recall.lua`, 6 leaf keys) — a NEW top-level group:**
+  `partnership_unavailable`, `not_partnered_to_recall`, `partner_not_online`,
+  `not_engaged`, `recall_issued`, `recalled_notice`.
+- **`inventory.*` (`server/inventory.lua`, 1 new leaf key added to the
+  existing group):** `stash_label` ("K9 Gear") — the `ox_inventory:RegisterStash`
+  display label, previously a hardcoded string passed straight to that
+  export call.
+- **`wellbeing.*` (`server/wellbeing.lua`, 2 new leaf keys added to the
+  existing group):** `calm_down_on_cooldown`, `calm_down_success` — the
+  `/k9calmdown`(-shaped) command's own rejection/success text.
+
+**SUPERSEDED WITHIN THE HOUR — read this before acting on the list below.**
+Four of the six files named here (`server/fetch.lua`, `server/propattachment.lua`,
+`server/medkit.lua`, `server/admin.lua`) were migrated by a concurrent pass
+immediately after this section was written, and are NO LONGER outstanding:
+fetch now has 25 `locale()` call sites, admin 25, propattachment 9, medkit 2.
+`en.json` is at 275 leaf keys, not 223, cross-checked to zero missing and
+zero unused in both directions.
+
+Only TWO of the six remain genuinely outstanding: **`server/combat.lua`**
+(0 `locale()` calls) and **`server/bonetool.lua`** (0). The `already_engaged`
+reuse note below still stands for combat.lua.
+
+The original six-file list, kept for its per-file detail on what each
+hardcodes:** `server/combat.lua`
+(the largest gap — a dozen-plus hardcoded strings across `BiteAndHold`/
+`NonLethalTakedown`/`PropDragging`'s reject-message table and success/status
+notifies, PLUS a hardcoded `'K9 Unit — Non-Compliance'` title/description
+built with `..`/`:format(...)` and sent via a raw `TriggerClientEvent('ox_lib:notify', ...)`
+table rather than `NotifyPlayer`; note its `already_engaged` rejection text
+is byte-identical to the already-migrated `defense.already_engaged` and
+should reuse that key, not mint a new `combat.*` one, when this file is
+migrated), `server/medkit.lua` (`'K9 treated.'`/`'Your K9 has been treated.'`),
+`server/fetch.lua` (about 20 hardcoded strings across throw/carry/deliver/
+recall), `server/propattachment.lua` (9 hardcoded strings across
+attach/remove), `server/admin.lua` (a handful of command-usage/authorization
+strings reached via its own local `NotifyPlayer` delegating wrapper — see
+`tests/README.md`'s coverage notes on that wrapper for why it's a deliberate
+non-recursive shadow, not a leftover), and `server/bonetool.lua` (a few
+similar command-usage/authorization strings through its own equivalent
+wrapper).
+
+**Eight more `server/*.lua` files were checked this pass and confirmed to
+have ZERO player-facing text to migrate** (grepped for `NotifyPlayer(`,
+`lib.notify`, and any `TriggerClientEvent` carrying an inline literal string,
+not just skimmed): `server/defense.lua` and `server/tracking.lua` and
+`server/search.lua` and `server/progression.lua` all send data-only
+`TriggerClientEvent`s (netIds, tier tables, alert-tier names) whose text is
+already owned and localized client-side (`defense.*`/`tracking.*`/`search.*`/
+`progression.*` in the client migration passes above); `server/entities.lua`,
+`server/exports.lua`, `server/notify.lua` (the file `server/admin.lua`'s and
+`server/bonetool.lua`'s own `NotifyPlayer` wrappers delegate into — it is
+itself pure plumbing with no literal player text of its own; the title/
+description strings it receives are the CALLER's job to localize), and
+`server/cooldowns.lua` are pure infrastructure with no `TriggerClientEvent`
+call anywhere in them.
+
 ## Format (verified against ox_lib source, not assumed)
 
 Checked directly against `overextended/ox_lib`
@@ -590,33 +718,53 @@ specific language.
    note at the bottom of this file) already covers every key added here
    going forward.
 
-## What's left (honest count)
+## What's left (honest count, recounted directly against the tree — every
+number below comes from actually reading/grepping the current `client/*.lua`
+and `server/*.lua` files, not from incrementing the prior pass's tally)
 
-As of the sixth pass, **19 of roughly 48 Lua files** in this
-resource's `client/` + `server/` trees have actually needed a `locale()`
-migration — `client/vision.lua`, `client/vehicle.lua`, `client/kennel.lua`,
-`client/main.lua`, `client/movement.lua`, `client/agility.lua`,
-`client/inventory.lua`, `client/partnership.lua`, `client/defense.lua`,
-`client/fetch.lua`, `client/propattachment.lua`, `client/radial.lua`,
-`client/search.lua`, `client/tracking.lua`, `client/wellbeing.lua`,
-`client/progression.lua`, `client/medkit.lua`, `client/bonetool.lua`, and
-now `client/combat.lua` (new `combat.*` group, one key, three call sites —
-see "Update (sixth migration pass...)" above).
-Five files (`client/screenfx.lua`, `client/audio.lua`,
-`client/proximityaudio.lua`, `client/recall.lua`, and `client/hud.lua`)
-have been checked and confirmed to have **no player-facing strings at
-all**, so they need no `locale()` calls — don't re-check them again from
-scratch, but do re-check if you add new player-facing UI to any of them
-later. That's 24 of ~48 files actually checked one way or the other.
+This resource's `client/` + `server/` trees hold **47 `.lua` files** total
+(25 under `client/`, 22 under `server/`) — close enough to the "~48" this
+document has always used as a round number that it isn't being changed.
+Every one of those 47 has now been individually checked for player-facing
+strings; **none are unchecked anymore**, which was not true as of the sixth
+pass (it left every `server/*.lua` file, plus `client/exports.lua`,
+unchecked).
 
-Every other file — `client/exports.lua` and every file under `server/` —
-is UNCHECKED by this pass and should be assumed to
-still have 100% hardcoded English for any player-facing string it contains
-(server-side strings sent to players via `lib.notify`/
-`exports.qbx_core:Notify`/similar are just as in scope as client-side ones;
-only `print()`/comments are out of scope). This file establishes the
-pattern and the shared `common.*` keys; it does not claim to have finished
-the job.
+- **27 of 47 files have needed and received a real `locale()` migration:**
+  19 client files (`client/vision.lua`, `client/vehicle.lua`,
+  `client/kennel.lua`, `client/main.lua`, `client/movement.lua`,
+  `client/agility.lua`, `client/inventory.lua`, `client/partnership.lua`,
+  `client/defense.lua`, `client/fetch.lua`, `client/propattachment.lua`,
+  `client/radial.lua`, `client/search.lua`, `client/tracking.lua`,
+  `client/wellbeing.lua`, `client/progression.lua`, `client/medkit.lua`,
+  `client/bonetool.lua`, `client/combat.lua`) plus 8 server files
+  (`server/main.lua`, `server/kennel.lua`, `server/partnership.lua`,
+  `server/tenure.lua`, `server/certifications.lua`, `server/recall.lua`,
+  `server/inventory.lua`, `server/wellbeing.lua` — see "Update (server
+  migration pass...)" above for what each added).
+- **14 of 47 files have been checked and confirmed to need NO `locale()`
+  calls at all** (zero player-facing strings found, by grep for
+  `NotifyPlayer(`/`lib.notify`/any literal-string-carrying
+  `TriggerClientEvent`, not just a skim): 6 client files
+  (`client/screenfx.lua`, `client/audio.lua`, `client/proximityaudio.lua`,
+  `client/recall.lua`, `client/hud.lua`, and — newly checked this pass —
+  `client/exports.lua`) and 8 server files (`server/defense.lua`,
+  `server/entities.lua`, `server/exports.lua`, `server/notify.lua`,
+  `server/cooldowns.lua`, `server/progression.lua`, `server/tracking.lua`,
+  `server/search.lua`). Don't re-check these again from scratch, but do
+  re-check any of them if new player-facing UI is added later.
+- **6 of 47 files are checked and confirmed to STILL have real, hardcoded
+  player-facing strings genuinely left to migrate:** `server/combat.lua`,
+  `server/medkit.lua`, `server/fetch.lua`, `server/propattachment.lua`,
+  `server/admin.lua`, `server/bonetool.lua` — see "Update (server migration
+  pass...)" above for what each one still hardcodes and which existing keys
+  they should reuse where a duplicate was found (`server/combat.lua`'s
+  `already_engaged` → `defense.already_engaged`).
+
+27 + 14 + 6 = 47. This file establishes the pattern and the shared
+`common.*` keys; it does not claim to have finished the job — 6 files with
+real work still outstanding is real work still outstanding, not "basically
+done."
 
 **Both of the fourth pass's own flagged reuse notes were resolved by THIS
 (fifth) pass, not left stale:**
@@ -628,33 +776,38 @@ the job.
   it (see "The `common.no_k9_access` promotion" above for the running
   count).
 
-**Notes for whoever migrates these specific still-unchecked files, found
-by earlier passes while grepping for duplicates (see the fourth-pass
-sections above for full detail — still open, NOT touched by this fifth
-pass, since none of them are files this pass owns):**
-- `server/partnership.lua`: hardcodes `'Partner request sent.'` verbatim
-  identical to `partnership.partner_request_sent` (reuse it), and a
-  DIFFERENT, NOT-identical `already_partnered = 'One of you is already
-  partnered with someone else.'` rejection string that must NOT be
-  collapsed into `partnership.already_partnered` ("You are already
-  partnered.") — give it its own new key.
-- `server/combat.lua`: hardcodes `already_engaged = 'You are already
-  engaged with another target.'` verbatim identical to the now-migrated
-  `defense.already_engaged` — reuse that key.
+**Both notes below were resolved by the server migration pass recorded
+above — kept here, corrected in place, rather than deleted, so a future
+reader can see the plan and confirm it was actually followed:**
+- `server/partnership.lua`: ~~hardcodes `'Partner request sent.'`~~ **DONE
+  — now calls `locale('partnership.partner_request_sent')`**, confirmed
+  byte-identical text before reuse, no duplicate minted. The DIFFERENT,
+  NOT-identical `already_partnered = 'One of you is already partnered with
+  someone else.'` rejection string ~~must NOT be collapsed into
+  `partnership.already_partnered`~~ **DONE — it got its own new key,
+  `partnership.reject_already_partnered`**, exactly as this note asked; the
+  two keys hold two different sentences for two different contexts, as
+  intended.
+- `server/combat.lua`: **STILL OPEN, NOT done.** Still hardcodes
+  `already_engaged = 'You are already engaged with another target.'`,
+  verbatim identical to the already-migrated `defense.already_engaged` —
+  reuse that key when this file is finally migrated (see "6 of 47 files...
+  still have real, hardcoded player-facing strings" above; `server/combat.lua`
+  is the largest of the six).
 
-**Note for whoever migrates `server/kennel.lua`:** that file has its own
-`NotifyPlayer(src, '...', 'error')` strings ("Kennel placement failed —
-the object could not be confirmed.", "...— unexpected object model.",
-"...— placed too far from the assigned spot.") that are SIMILAR to but NOT
-identical with this pass's new `kennel.placement_failed` ("Kennel
-placement failed.", used by `client/kennel.lua` for a different failure
-case — a client-side object-creation/grounding failure, not the server's
-own post-hoc placement validation). Do not silently collapse these into
-one key — they are different messages for different failure conditions,
-even though they share the "Kennel placement failed" phrase; give the
-server-side ones their own `kennel.*` keys (or a `server_kennel.*` group,
-your call) rather than reusing `kennel.placement_failed` for a different
-sentence.
+**Note for whoever migrates `server/kennel.lua`: RESOLVED, confirmed by
+reading the actual call sites, not assumed from this note's old plan.**
+The server-side placement-failure strings this note worried about
+(`'...the object could not be confirmed.'`, `'...unexpected object model.'`,
+`'...placed too far from the assigned spot.'`) were given their OWN new
+leaf keys inside the existing `kennel.*` group — `placement_failed_unconfirmed`,
+`placement_failed_wrong_model`, `placement_failed_too_far` — exactly the
+"give them their own keys, don't collapse into `kennel.placement_failed`"
+outcome this note asked for. No `server_kennel.*` group was needed; the
+existing `kennel.*` group was descriptive enough once each distinct failure
+got its own leaf name. `client/kennel.lua`'s own `kennel.placement_failed`
+is untouched and still means what it always meant (the client-side
+object-creation/grounding failure).
 
 ## Manifest status (`fxmanifest.lua` is out of scope for this file's own
 changes, but its state is worth recording accurately here)

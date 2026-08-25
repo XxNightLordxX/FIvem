@@ -1,4 +1,27 @@
 {
+  "admin": {
+    "cert_history_label": "Certification history for %s",
+    "cert_row_format": "job=%s active=%s granted_by=%s granted_at=%s revoked_by=%s revoked_at=%s",
+    "no_results_found": "%s: no results found.",
+    "not_authorized": "You are not authorized to run this command.",
+    "partnership_history_label": "Partnership history for %s",
+    "partnership_row_format": "k9=%s handler=%s active=%s established_by=%s established_at=%s ended_by=%s ended_at=%s",
+    "progression_row_format": "xp=%s updated_at=%s",
+    "result_count": "%s: %d result(s).",
+    "search_log_label_by_value": "Search log (%s = %s)",
+    "search_log_label_plate": "Search log (plate = %s)",
+    "search_log_label_recent": "Search log (most recent)",
+    "search_log_row_format": "[%s] searcher=%s(%s) target=%s(%s) result=%s weight=%s tier=%s",
+    "search_log_target_citizenid_label": "citizenid=%s",
+    "search_log_target_plate_label": "plate=%s",
+    "usage_auditcert": "Usage: /k9auditcert [citizenid] [limit]",
+    "usage_auditpartner": "Usage: /k9auditpartner [citizenid] [limit]",
+    "usage_auditsearch": "Usage: /k9auditsearch <officer|plate|person|recent> [value] [limit]",
+    "usage_auditsearch_mode": "Usage: /k9auditsearch %s [citizenid] [limit]",
+    "usage_auditsearch_plate": "Usage: /k9auditsearch plate [plate] [limit]",
+    "usage_auditxp": "Usage: /k9auditxp [citizenid]",
+    "xp_snapshot_label": "XP snapshot for %s"
+  },
   "agility": {
     "vault_keybind_label": "K9 Advanced Agility Vault (fence/window)"
   },
@@ -66,7 +89,29 @@
     "throw_failed": "Fetch ball throw failed.",
     "carry_failed": "Could not carry the fetch item.",
     "pickup_target_label": "Pick Up Ball",
-    "deliver_target_label": "Deliver Fetch Item"
+    "deliver_target_label": "Deliver Fetch Item",
+    "not_authorized_equipment": "You are not authorized to use K9 fetch equipment.",
+    "throw_in_progress": "A throw is already in progress.",
+    "already_active_ball": "You already have an active fetch item out — recall it, or wait for it to expire, before throwing another.",
+    "throw_timed_out": "Fetch throw timed out — try again.",
+    "placement_failed_already_active": "Fetch ball placement failed — you already have an active fetch item out.",
+    "placement_failed_unconfirmed": "Fetch ball could not be confirmed.",
+    "placement_failed_wrong_model": "Fetch ball placement failed — unexpected object model.",
+    "placement_failed_already_tracked": "Fetch ball placement failed — that item is already tracked.",
+    "thrown_success": "Fetch ball thrown.",
+    "carry_requires_k9_model": "Only a K9 may carry a fetch item.",
+    "already_carrying": "You are already carrying (or about to carry) a fetch item.",
+    "not_available_to_pickup": "That fetch item is not available to pick up.",
+    "pickup_unconfirmed": "That fetch item could not be confirmed.",
+    "too_far_to_pickup": "Get closer to the fetch item to pick it up.",
+    "picked_up_success": "Picked up the fetch item.",
+    "not_carrying": "You are not carrying a fetch item.",
+    "wrong_deliver_target": "Only the handler who threw this item can receive it.",
+    "too_far_to_deliver": "Get closer to your handler to deliver the item.",
+    "delivered_success": "Delivered the fetch item to your handler.",
+    "delivered_notice_handler": "Your K9 delivered the fetch item.",
+    "no_active_ball_to_recall": "You have no active fetch item to recall.",
+    "recalled_success": "Fetch item recalled."
   },
   "inventory": {
     "open_gear_target_label": "Open K9 Gear",
@@ -120,7 +165,8 @@
     "reason_treatment_in_progress": "This K9 is already being treated.",
     "reason_medkit_failed": "Unable to treat the K9 right now.",
     "no_nearby_k9": "No nearby K9 to treat.",
-    "treat_target_label": "Treat K9"
+    "treat_target_label": "Treat K9",
+    "target_treated_notice": "Your K9 has been treated."
   },
   "movement": {
     "camera_first_person": "First-person view.",
@@ -173,7 +219,15 @@
     "tier_up": "Your K9 has reached the %s tier!"
   },
   "propattachment": {
-    "vest_prop_load_failed": "K9 vest prop failed to load."
+    "vest_prop_load_failed": "K9 vest prop failed to load.",
+    "removed_success": "K9 vest removed.",
+    "not_authorized_equipment": "You are not authorized to use K9 equipment.",
+    "requires_k9_form": "You must be in a K9 form to wear this.",
+    "attach_timed_out": "K9 vest attach timed out — try again.",
+    "attach_failed_unconfirmed": "K9 vest attach failed — the object could not be confirmed.",
+    "attach_failed_wrong_model": "K9 vest attach failed — unexpected object model.",
+    "attach_failed_too_far": "K9 vest attach failed — reported object too far from you.",
+    "attached_success": "K9 vest attached."
   },
   "radial": {
     "sit_label": "Sit",

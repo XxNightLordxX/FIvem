@@ -469,9 +469,9 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
         end
     end
 
-    NotifyPlayer(source, 'K9 treated.', 'success')
+    NotifyPlayer(source, locale('medkit.treated_success'), 'success')
     if targetServerId ~= source then
-        NotifyPlayer(targetServerId, 'Your K9 has been treated.', 'inform')
+        NotifyPlayer(targetServerId, locale('medkit.target_treated_notice'), 'inform')
     end
 
     return { ok = true }

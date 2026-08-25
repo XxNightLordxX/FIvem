@@ -314,7 +314,7 @@ RegisterNetEvent('qbx_k9unit:server:requestThrowFetchBall', function()
     local src = source
 
     if not HasK9Access(src) then
-        NotifyPlayer(src, 'You are not authorized to use K9 fetch equipment.', 'error')
+        NotifyPlayer(src, locale('fetch.not_authorized_equipment'), 'error')
         return
     end
 
@@ -324,16 +324,16 @@ RegisterNetEvent('qbx_k9unit:server:requestThrowFetchBall', function()
 
     local citizenid = ResolveCitizenId(src)
     if not citizenid then
-        NotifyPlayer(src, 'Unable to resolve your own citizen ID.', 'error')
+        NotifyPlayer(src, locale('common.unable_to_resolve_citizenid'), 'error')
         return
     end
 
     if FetchBalls[citizenid] then
-        NotifyPlayer(src, 'You already have an active fetch item out — recall it, or wait for it to expire, before throwing another.', 'error')
+        NotifyPlayer(src, locale('fetch.already_active_ball'), 'error')
         return
     end
     if PendingFetchThrows[citizenid] then
-        NotifyPlayer(src, 'A throw is already in progress.', 'error')
+        NotifyPlayer(src, locale('fetch.throw_in_progress'), 'error')
         return
     end
 
@@ -452,25 +452,25 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
     end
 
     if GetGameTimer() > pending.expiresAt then
-        RejectThrow('Fetch throw timed out — try again.')
+        RejectThrow(locale('fetch.throw_timed_out'))
         return
     end
 
     if not HasK9Access(src) then
-        RejectThrow('You are not authorized to use K9 fetch equipment.')
+        RejectThrow(locale('fetch.not_authorized_equipment'))
         return
     end
     if FetchBalls[citizenid] then -- shouldn't be reachable, but never trust an invariant alone
-        RejectThrow('Fetch ball placement failed — you already have an active fetch item out.')
+        RejectThrow(locale('fetch.placement_failed_already_active'))
         return
     end
 
     if not entity then
-        RejectThrow('Fetch ball could not be confirmed.')
+        RejectThrow(locale('fetch.placement_failed_unconfirmed'))
         return
     end
     if not FetchBallModelHashes[GetEntityModel(entity)] then
-        RejectThrow('Fetch ball placement failed — unexpected object model.')
+        RejectThrow(locale('fetch.placement_failed_wrong_model'))
         return
     end
 
@@ -484,7 +484,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
     -- no cleanup instruction — never delete an entity this citizenid does
     -- not actually own.
     if FindOtherBallByNetId(netId, citizenid) then
-        RejectThrow('Fetch ball placement failed — that item is already tracked.')
+        RejectThrow(locale('fetch.placement_failed_already_tracked'))
         return
     end
 
@@ -500,7 +500,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
         expiresAt = now + Config.FetchMechanic.maxBallLifetimeMs,
     }
 
-    NotifyPlayer(src, 'Fetch ball thrown.', 'success')
+    NotifyPlayer(src, locale('fetch.thrown_success'), 'success')
 end)
 
 --- Client reports its own throw attempt failed (model never loaded,
@@ -526,7 +526,7 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
     if type(netId) ~= 'number' then return end
 
     if not HasK9Access(src) then
-        NotifyPlayer(src, 'You are not authorized to use K9 fetch equipment.', 'error')
+        NotifyPlayer(src, locale('fetch.not_authorized_equipment'), 'error')
         return
     end
 
@@ -537,18 +537,18 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
     local ped = GetPlayerPed(src)
     if ped == 0 then return end
     if not IsConfiguredK9Model(GetEntityModel(ped)) then
-        NotifyPlayer(src, 'Only a K9 may carry a fetch item.', 'error')
+        NotifyPlayer(src, locale('fetch.carry_requires_k9_model'), 'error')
         return
     end
 
     if CarrierIndex[src] or PendingFetchCarries[src] then
-        NotifyPlayer(src, 'You are already carrying (or about to carry) a fetch item.', 'error')
+        NotifyPlayer(src, locale('fetch.already_carrying'), 'error')
         return
     end
 
     local ownerCitizenId, ball = FindBallByNetId(netId)
     if not ball or (ball.state ~= 'thrown' and ball.state ~= 'dropped') then
-        NotifyPlayer(src, 'That fetch item is not available to pick up.', 'error')
+        NotifyPlayer(src, locale('fetch.not_available_to_pickup'), 'error')
         return
     end
 
@@ -557,7 +557,7 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
     -- equality check FindBallByNetId already gives.
     local entity = ResolveNetworkEntity(netId, 3)
     if not entity or not FetchBallModelHashes[GetEntityModel(entity)] then
-        NotifyPlayer(src, 'That fetch item could not be confirmed.', 'error')
+        NotifyPlayer(src, locale('fetch.pickup_unconfirmed'), 'error')
         return
     end
 
@@ -571,7 +571,7 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
     -- relocate) another citizen's active ball.
     local dist = #(GetEntityCoords(ped) - GetEntityCoords(entity))
     if dist > Config.FetchMechanic.pickupInteractDistanceMeters then
-        NotifyPlayer(src, 'Get closer to the fetch item to pick it up.', 'error')
+        NotifyPlayer(src, locale('fetch.too_far_to_pickup'), 'error')
         return
     end
 
@@ -612,7 +612,7 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
     end
 
     TriggerClientEvent('qbx_k9unit:client:carryFetchBall', src, netId, mode)
-    NotifyPlayer(src, 'Picked up the fetch item.', 'success')
+    NotifyPlayer(src, locale('fetch.picked_up_success'), 'success')
 end)
 
 --- 'attach'-mode pickup confirm — see requestPickupFetchBall's own comment.
@@ -851,14 +851,14 @@ RegisterNetEvent('qbx_k9unit:server:requestDeliverFetchBall', function(targetSer
 
     local ownerCitizenId = CarrierIndex[src]
     if not ownerCitizenId then
-        NotifyPlayer(src, 'You are not carrying a fetch item.', 'error')
+        NotifyPlayer(src, locale('fetch.not_carrying'), 'error')
         return
     end
     local ball = FetchBalls[ownerCitizenId]
     if not ball or ball.carrierSrc ~= src then return end
 
     if ball.throwerSrc ~= targetServerId then
-        NotifyPlayer(src, 'Only the handler who threw this item can receive it.', 'error')
+        NotifyPlayer(src, locale('fetch.wrong_deliver_target'), 'error')
         return
     end
 
@@ -868,13 +868,13 @@ RegisterNetEvent('qbx_k9unit:server:requestDeliverFetchBall', function(targetSer
 
     local dist = #(GetEntityCoords(carrierPed) - GetEntityCoords(handlerPed))
     if dist > Config.FetchMechanic.deliverProximityMeters then
-        NotifyPlayer(src, 'Get closer to your handler to deliver the item.', 'error')
+        NotifyPlayer(src, locale('fetch.too_far_to_deliver'), 'error')
         return
     end
 
     EndFetchCycle(ownerCitizenId, ball)
-    NotifyPlayer(src, 'Delivered the fetch item to your handler.', 'success')
-    NotifyPlayer(targetServerId, 'Your K9 delivered the fetch item.', 'success')
+    NotifyPlayer(src, locale('fetch.delivered_success'), 'success')
+    NotifyPlayer(targetServerId, locale('fetch.delivered_notice_handler'), 'success')
 end)
 
 --- Thrower-initiated early termination of their OWN cycle, from any state —
@@ -888,12 +888,12 @@ RegisterNetEvent('qbx_k9unit:server:requestRecallFetchBall', function()
 
     local ball = FetchBalls[citizenid]
     if not ball or ball.throwerSrc ~= src then
-        NotifyPlayer(src, 'You have no active fetch item to recall.', 'error')
+        NotifyPlayer(src, locale('fetch.no_active_ball_to_recall'), 'error')
         return
     end
 
     EndFetchCycle(citizenid, ball)
-    NotifyPlayer(src, 'Fetch item recalled.', 'success')
+    NotifyPlayer(src, locale('fetch.recalled_success'), 'success')
 end)
 
 --- Carrier's own client reports its ped died mid-carry (client/fetch.lua's

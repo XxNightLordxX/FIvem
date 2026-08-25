@@ -271,7 +271,7 @@ RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     -- needed to remove something, unlike placing it.
     if PropAttachmentState[citizenid] then
         RemovePropAttachmentForCitizenid(citizenid)
-        NotifyPlayer(src, 'K9 vest removed.', 'success')
+        NotifyPlayer(src, locale('propattachment.removed_success'), 'success')
         return
     end
 
@@ -282,7 +282,7 @@ RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     -- their own cooldown allowance for attempts that were always going to
     -- be rejected anyway.
     if not HasK9Access(src) then
-        NotifyPlayer(src, 'You are not authorized to use K9 equipment.', 'error')
+        NotifyPlayer(src, locale('propattachment.not_authorized_equipment'), 'error')
         return
     end
 
@@ -290,7 +290,7 @@ RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     if ped == 0 then return end -- defensive: src disconnected between the event firing and this line
 
     if not IsConfiguredK9Model(GetEntityModel(ped)) then
-        NotifyPlayer(src, 'You must be in a K9 form to wear this.', 'error')
+        NotifyPlayer(src, locale('propattachment.requires_k9_form'), 'error')
         return
     end
 
@@ -330,7 +330,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     PendingPropAttachConfirm[citizenid] = nil -- consumed either way, success or rejected below
 
     if GetGameTimer() > pending.expiresAt then
-        NotifyPlayer(src, 'K9 vest attach timed out — try again.', 'error')
+        NotifyPlayer(src, locale('propattachment.attach_timed_out'), 'error')
         -- ORPHANED-PROP FIX (coder-backend, this pass): this branch used to
         -- notify but never send 'qbx_k9unit:client:rejectK9PropAttach' —
         -- unlike every one of this handler's sibling failure branches below
@@ -376,7 +376,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
         return
     end
     if not HasK9Access(src) then
-        NotifyPlayer(src, 'You are not authorized to use K9 equipment.', 'error')
+        NotifyPlayer(src, locale('propattachment.not_authorized_equipment'), 'error')
         TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
         return
     end
@@ -401,7 +401,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     -- GetEntityType numbering.
     local entity = ResolveNetworkEntity(netId, 3)
     if not entity then
-        NotifyPlayer(src, 'K9 vest attach failed — the object could not be confirmed.', 'error')
+        NotifyPlayer(src, locale('propattachment.attach_failed_unconfirmed'), 'error')
         TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
         return
     end
@@ -412,7 +412,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     -- not an arbitrary pre-existing networked object a modified client
     -- could report instead of a genuinely newly-created vest.
     if not PropAttachmentModelHashes[GetEntityModel(entity)] then
-        NotifyPlayer(src, 'K9 vest attach failed — unexpected object model.', 'error')
+        NotifyPlayer(src, locale('propattachment.attach_failed_wrong_model'), 'error')
         TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
         return
     end
@@ -434,13 +434,13 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     local dz = entityCoords.z - pedCoords.z
     local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
     if dist > Config.PropAttachments.confirmDistanceTolerance then
-        NotifyPlayer(src, 'K9 vest attach failed — reported object too far from you.', 'error')
+        NotifyPlayer(src, locale('propattachment.attach_failed_too_far'), 'error')
         TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
         return
     end
 
     PropAttachmentState[citizenid] = { netId = netId, ownerSrc = src }
-    NotifyPlayer(src, 'K9 vest attached.', 'success')
+    NotifyPlayer(src, locale('propattachment.attached_success'), 'success')
 end)
 
 --- Client reports its own attach attempt failed (model never loaded) —
