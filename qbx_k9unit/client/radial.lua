@@ -23,6 +23,31 @@
         for the Bark item (the one place this file talks to the network
         itself, since there's no separate "bark module" file to delegate
         to — server/main.lua's relayBark handler is the other end).
+      - client/partnership.lua's BreakPartnership(), RequestPartnerUp(targetServerId).
+      - client/recall.lua's RequestRecall().
+      - client/defense.lua's ConfirmHandlerDownDefense(actionType).
+      - client/fetch.lua's RequestThrowFetchBall(), ReleaseFetchBall(),
+        RequestRecallFetchBall(), IsFetchCarryEngaged().
+      - client/propattachment.lua's RequestToggleK9PropAttachment().
+      - client/kennel.lua's RequestDeployKennel().
+      - client/main.lua's HasK9Access() directly (not just via CanShowK9UI())
+        for the one item — Fetch's Throw branch — whose own source file
+        documents that it is deliberately gated on HasK9Access() alone, not
+        the full CanShowK9UI() combinator (see that item's own comment for
+        why, quoting client/fetch.lua's RequestThrowFetchBall() verbatim).
+      Every cross-file global added after this file's own initial Phase 1
+      pass is called behind a `type(fn) == 'function'` runtime existence
+      guard (this codebase's established soft-dependency convention — see
+      e.g. RestoreInjury/AwardXP in server/tracking.lua) because
+      client/radial.lua loads FIRST among client_scripts (fxmanifest.lua),
+      before every file listed above that defines one of these globals —
+      the guard is never a load-order assumption, since by the time any of
+      these onSelect closures actually RUNS (a player action, always well
+      after this resource has finished loading), every one of those files
+      has already executed and defined its own globals for real; it is kept
+      anyway per this resource's own documented "runtime existence guard,
+      not a load-order assumption" convention, matching every other guarded
+      call site in this codebase.
     ======================================================================
 
     SPEC.md §6.1 / §8 step 7 Phase 1 radial item list: Bark, Sit,
@@ -147,6 +172,40 @@ local function FindNearestLeashCandidate()
             if targetPed ~= 0 and DoesEntityExist(targetPed) then
                 local dist = #(myCoords - GetEntityCoords(targetPed))
                 if dist <= Config.LeashMaxDistance and (not nearestDist or dist < nearestDist) then
+                    nearestPlayer, nearestDist = playerId, dist
+                end
+            end
+        end
+    end
+
+    if not nearestPlayer then return nil end
+    return GetPlayerServerId(nearestPlayer)
+end
+
+--- Same shape as FindNearestLeashCandidate() above, for the Partner Up
+--- radial item's self-initiated entry point: nearest OTHER player within
+--- Config.Partnership.ProximityMeters — that field is the REAL server-side
+--- range client/partnership.lua's CheckPartnershipEligibility checks a
+--- request against (both at request time and again at accept time), reused
+--- directly here as the search radius for the identical reason
+--- FindNearestLeashCandidate() reuses Config.LeashMaxDistance. No client-side
+--- model plausibility filter (unlike client/partnership.lua's own ox_target
+--- "Partner Up" predicate, which additionally requires at least one side to
+--- plausibly be a K9) — this is a display-adjacent candidate pick, not a
+--- security boundary, and CheckPartnershipEligibility re-derives the real
+--- model server-side regardless.
+--- @return number? candidateServerId
+local function FindNearestPartnerCandidate()
+    local myPed = PlayerPedId()
+    local myCoords = GetEntityCoords(myPed)
+    local nearestPlayer, nearestDist
+
+    for _, playerId in ipairs(GetActivePlayers()) do
+        if playerId ~= PlayerId() then
+            local targetPed = GetPlayerPed(playerId)
+            if targetPed ~= 0 and DoesEntityExist(targetPed) then
+                local dist = #(myCoords - GetEntityCoords(targetPed))
+                if dist <= Config.Partnership.ProximityMeters and (not nearestDist or dist < nearestDist) then
                     nearestPlayer, nearestDist = playerId, dist
                 end
             end
@@ -659,6 +718,347 @@ if Config.Features.HandlerPartnership then
             -- nothing to honor that against, say, a future load-order change.
             if type(BreakPartnership) == 'function' then
                 BreakPartnership()
+            end
+        end,
+    }
+end
+
+--- Partner Up -- PHASE3_SPEC.md §12.0 item 7. The other half of the gap
+--- Break Partnership above already closed: client/partnership.lua's own
+--- ox_target "Partner Up" option is a live entry point, but nothing in
+--- this file offered the same action from the radial (fxmanifest.lua's own
+--- comment on client/partnership.lua currently claims "the radial entry is
+--- now wired" for this feature -- that was aspirational when written, not
+--- yet true as of the start of this pass; report this drift to whoever
+--- owns fxmanifest.lua). This item is what makes that claim true.
+---
+--- A SEPARATE FLAT ITEM, NOT A DUAL-MODE TOGGLE WITH Break Partnership --
+--- same reasoning Break Partnership's own comment block above already
+--- gives IN FULL for why THIS FILE never keys a Partner-Up/Break-Partnership
+--- choice off IsPartnered() (see "KNOWN CACHE-STALENESS GAP", above).
+--- client/partnership.lua's own header does separately float
+--- RefreshPartnershipStateFromServer() as having been built "for... a
+--- dual-mode radial item that picks Partner Up vs Break Partnership" --
+--- deliberately NOT taken up here: Break Partnership's own resolution above
+--- already settled this file's position on that exact question (kept
+--- unconditional/flat even after that callback landed, specifically so the
+--- one control that always works is never hidden behind a state read that
+--- can be stale for a just-reconnected player), and introducing a SECOND,
+--- opposite-conclusion pattern for the mirror-image action in the same
+--- submenu would leave two contradictory answers to the identical design
+--- question sitting side by side. Two always-offered flat items (this one
+--- gated on CanShowK9UI() since it's an INITIATION, Break Partnership
+--- ungated since it's a TERMINATION -- see this file's header's general
+--- initiation-vs-termination gating split) give the same full coverage
+--- without that inconsistency: clicking Partner Up while already partnered
+--- just costs one harmless, already-tolerated round trip
+--- (RequestPartnerUp()'s own local IsPartnered() pre-check, or failing
+--- that server/partnership.lua's CheckPartnershipEligibility, rejects it
+--- with a clear notification either way -- the exact tolerance
+--- client/partnership.lua's own header already documents for its
+--- ox_target predicate's identical display-only imprecision).
+---
+--- Candidate selection: FindNearestPartnerCandidate() above, this file's
+--- header.
+if Config.Features.HandlerPartnership then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_partner_up',
+        label = 'Partner Up',
+        icon = 'handshake',
+        onSelect = function()
+            if not CanShowK9UI() then
+                DenyK9UIAccess()
+                return
+            end
+
+            local candidateServerId = FindNearestPartnerCandidate()
+            if not candidateServerId then
+                lib.notify({ title = 'K9 Unit', description = 'No nearby player to partner with.', type = 'error' })
+                return
+            end
+
+            if type(RequestPartnerUp) == 'function' then
+                RequestPartnerUp(candidateServerId)
+            end
+        end,
+    }
+end
+
+--- Recall -- PHASE3_SPEC.md §12.5.1. Closes a real gap: client/recall.lua
+--- exposes RequestRecall() specifically "ready for [a future
+--- client/radial.lua entry]" (that file's own header), but until this pass
+--- nothing ever called it from here -- only its own '/k9recall' chat
+--- command worked. config.lua's own Config.Recall header independently
+--- names this exact feature this resource's "PRIMARY TERMINATION" path.
+---
+--- NOT GATED ON CanShowK9UI() -- same "no unbounded trap" requirement as
+--- Detach Leash / Release Bite & Hold / Release Drag / Break Partnership
+--- above (SPEC.md §9 item 3b). client/recall.lua's own header states this
+--- by name: "TERMINATION MUST NEVER BE GATED -- RequestRecall() below
+--- calls NEITHER CanShowK9UI() NOR DenyK9UIAccess()... Recall is a
+--- TERMINATION action, not an initiation." Gating the call HERE would
+--- reintroduce exactly the trap that function exists to avoid -- e.g. a
+--- handler who has lost K9 access (decertified, department change,
+--- feature-flag flip) while their partnered K9 is still engaged in a
+--- bite/takedown/drag would hit DenyK9UIAccess() and have no radial path
+--- to call their K9 off, left with only the raw '/k9recall' command (which
+--- deliberately carries no such gate either) to reach the one control this
+--- item exists to expose in the first place. Kept FLAT, not nested inside
+--- a submenu, on purpose -- this is meant to be reachable in the fewest
+--- possible clicks, the same reasoning every other release/termination
+--- item in this file is also kept flat rather than buried a level deeper.
+---
+--- No local pre-check of any kind, before or after the type() guard --
+--- RequestRecall() itself performs none either, for the identical reason
+--- its own doc comment gives: "a stale local... read must never be able to
+--- withhold a request the server can otherwise correctly resolve."
+if Config.Features.Recall then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_recall',
+        label = 'Recall K9',
+        icon = 'circle-down',
+        onSelect = function()
+            if type(RequestRecall) == 'function' then
+                RequestRecall()
+            end
+        end,
+    }
+end
+
+--- Handler-Down Defense confirm -- PHASE3_SPEC.md §12.5.3. Fixes a live,
+--- QA-found WRONG-INSTRUCTION bug: client/defense.lua's own
+--- handlerDownDefenseTrigger notify literally tells the K9 "Press %s to
+--- respond, OR USE THE RADIAL MENU" -- and until this pass, no radial menu
+--- entry for it existed anywhere in this file, making the second half of
+--- that sentence false for every player who read it.
+---
+--- A SUBMENU OF TWO TERMINAL ACTIONS, NOT ONE ITEM -- unlike this
+--- feature's own keybind (which always confirms 'bite' by default, per
+--- ConfirmHandlerDownDefense()'s own doc comment: "Bite-and-hold is chosen
+--- as the default here... ConfirmHandlerDownDefense('takedown') remains
+--- fully available for a future radial/second-keybind entry that wants it
+--- explicitly"), the radial is exactly the surface that CAN offer the
+--- explicit choice a single keypress can't -- so both actionType values
+--- are exposed here. Nested (mirroring Bark's submenu precedent, not
+--- Track's flat one) because these are two distinct terminal actions
+--- sharing the SAME one pending prompt, not a context-sensitive toggle
+--- between two states of one ongoing thing -- clicking either one consumes
+--- the prompt outright (ConfirmHandlerDownDefense()'s own doc comment:
+--- "a second press without a fresh trigger falls through to 'no active
+--- alert'"), so there's no toggle shape to collapse them into the way
+--- Bite & Hold/Drag collapse their own start/stop pairs into one item.
+---
+--- NEITHER sub-item skips CanShowK9UI() -- this is an INITIATION action
+--- (starts a bite/takedown request against a suggested hostile), never a
+--- release/termination, so the "no unbounded trap" exemption Recall/Break
+--- Partnership/the various Release branches rely on above does not apply
+--- here. This mirrors ConfirmHandlerDownDefense()'s own internal
+--- CanShowK9UI()/DenyK9UIAccess() gate -- this file's redundant pre-check
+--- here follows the same "check here too, even though the callee already
+--- checks" posture every other gated item in this file already uses.
+if Config.Features.HandlerDownDefense then
+    lib.registerRadial({
+        id = 'k9unit_defense',
+        items = {
+            {
+                id = 'k9_defense_bite',
+                label = 'Bite & Hold Attacker',
+                icon = 'paw',
+                onSelect = function()
+                    if not CanShowK9UI() then
+                        DenyK9UIAccess()
+                        return
+                    end
+
+                    if type(ConfirmHandlerDownDefense) == 'function' then
+                        ConfirmHandlerDownDefense('bite')
+                    end
+                end,
+            },
+            {
+                id = 'k9_defense_takedown',
+                label = 'Non-Lethal Takedown Attacker',
+                icon = 'zzz',
+                onSelect = function()
+                    if not CanShowK9UI() then
+                        DenyK9UIAccess()
+                        return
+                    end
+
+                    if type(ConfirmHandlerDownDefense) == 'function' then
+                        ConfirmHandlerDownDefense('takedown')
+                    end
+                end,
+            },
+        },
+    })
+
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_defense',
+        label = 'Handler-Down Response',
+        icon = 'user-shield',
+        menu = 'k9unit_defense',
+    }
+end
+
+--- Fetch -- Phase 5 (FetchMechanic). client/fetch.lua exposes
+--- RequestThrowFetchBall()/ReleaseFetchBall()/RequestRecallFetchBall()/
+--- IsFetchCarryEngaged() specifically "for a future client/radial.lua
+--- entry to call" (that file's own header), disclosing it was left
+--- deliberately unwired only to dodge a merge conflict with a concurrent
+--- pass on this same file -- not a design rejection. This submenu is that
+--- follow-up. "Pick Up Ball" and "Deliver to Handler" stay ox_target
+--- options exactly as client/fetch.lua's own header already documents
+--- (targeted, proximity-driven actions on a specific ball/player, not a
+--- self-initiated radial verb) -- not duplicated here.
+---
+--- TWO ITEMS, NOT THREE, DESPITE THREE UNDERLYING FUNCTIONS -- Throw and
+--- Release are combined into ONE context-sensitive toggle (same shape as
+--- Attach/Detach Leash / Bite & Hold / Drag above: IsFetchCarryEngaged()
+--- plays the same role IsLeashed()/IsBiteHoldEngaged()/IsDragEngaged() do),
+--- since they are true opposites of the SAME per-client carry state, never
+--- offered simultaneously. Recall stays a SEPARATE item because it is NOT
+--- that state's opposite -- client/fetch.lua's own doc comment frames it as
+--- "the THROWER's own early-interrupt for their currently active fetch
+--- cycle (any state)," i.e. it belongs to the client who threw the ball,
+--- who is typically NOT the client currently carrying it (the normal case
+--- immediately after a throw, before any K9 has picked it up). Folding
+--- Recall into the same toggle would mean a thrower who isn't the current
+--- carrier -- the common case -- could never reach it, since
+--- IsFetchCarryEngaged() would read false on their own client and route
+--- them into "Throw" instead, silently losing the one control that lets
+--- them call off a cycle they started.
+---
+--- GATING: the Throw branch checks HasK9Access() directly (NOT
+--- CanShowK9UI()) -- matching RequestThrowFetchBall()'s own doc comment
+--- verbatim: "a HUMAN HANDLER action (gated on HasK9Access() alone, NOT
+--- CanShowK9UI()/IsOwnModelK9() ... the thrower need not currently be
+--- riding a K9 model)." Using CanShowK9UI() here instead would additionally
+--- require IsOwnModelK9(), silently blocking the exact human-handler-not-
+--- currently-a-K9 use case this feature exists for. The Release branch and
+--- Recall are NOT gated at all -- same "no unbounded trap" reasoning as
+--- every other release/termination item above; client/fetch.lua's own doc
+--- comments state this explicitly for both ("Always available while
+--- carrying -- no access gate on the way out" / "deliberately NOT gated on
+--- HasK9Access()/CanShowK9UI() ... must still be able to call it off").
+if Config.Features.FetchMechanic then
+    lib.registerRadial({
+        id = 'k9unit_fetch',
+        items = {
+            {
+                id = 'k9_fetch_throw',
+                label = 'Throw/Drop Fetch Ball',
+                icon = 'baseball',
+                onSelect = function()
+                    if type(IsFetchCarryEngaged) == 'function' and IsFetchCarryEngaged() then
+                        if type(ReleaseFetchBall) == 'function' then
+                            ReleaseFetchBall()
+                        end
+                        return
+                    end
+
+                    if not HasK9Access() then
+                        DenyK9UIAccess()
+                        return
+                    end
+
+                    if type(RequestThrowFetchBall) == 'function' then
+                        RequestThrowFetchBall()
+                    end
+                end,
+            },
+            {
+                id = 'k9_fetch_recall',
+                label = 'Recall Fetch Ball',
+                icon = 'circle-down',
+                onSelect = function()
+                    if type(RequestRecallFetchBall) == 'function' then
+                        RequestRecallFetchBall()
+                    end
+                end,
+            },
+        },
+    })
+
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_fetch',
+        label = 'Fetch',
+        icon = 'baseball',
+        menu = 'k9unit_fetch',
+    }
+end
+
+--- Toggle K9 Vest -- Phase 5 R&D (PropAttachments). Closes a real gap:
+--- client/propattachment.lua exposes RequestToggleK9PropAttachment()
+--- specifically "so a future radial entry can call this directly without
+--- this file needing to change" (that function's own doc comment), but
+--- until this pass only its own '/k9propattach' command called it.
+---
+--- A SINGLE FLAT TOGGLE ITEM, not two -- RequestToggleK9PropAttachment()
+--- is already a toggle by design (its own doc comment: "a toggle is a
+--- single request whose MEANING (add vs remove) is decided server-side by
+--- whether PropAttachmentState already has an entry"), so this item does
+--- NOT attempt to locally track "do I currently have a vest on" the way
+--- IsLeashed()/IsBiteHoldEngaged()/IsDragEngaged()/IsFetchCarryEngaged()
+--- key their own toggles -- there is no equivalent client-exposed query to
+--- read here, and the underlying function does not need one either: it
+--- always sends, and the server decides what that means.
+---
+--- GATED ON CanShowK9UI() here too, even though
+--- RequestToggleK9PropAttachment() already re-checks it (and
+--- Config.Features.PropAttachments itself) internally -- same redundant
+--- "check here too, even though the callee already checks" posture every
+--- other gated item in this file already uses.
+if Config.Features.PropAttachments then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_prop_attachment',
+        label = 'Toggle K9 Vest',
+        icon = 'vest',
+        onSelect = function()
+            if not CanShowK9UI() then
+                DenyK9UIAccess()
+                return
+            end
+
+            if type(RequestToggleK9PropAttachment) == 'function' then
+                RequestToggleK9PropAttachment()
+            end
+        end,
+    }
+end
+
+--- Deploy Kennel -- Phase 5 R&D (DeployableKennel). Closes a real gap:
+--- client/kennel.lua exposes RequestDeployKennel() specifically "so a
+--- future radial item can call it directly once client/radial.lua is
+--- available to extend again" (that function's own doc comment), but until
+--- this pass only its own '/k9deploykennel' command called it.
+---
+--- DEPLOY-ONLY, BY DESIGN, NOT A DISCLOSED OMISSION -- "Pick Up Kennel"
+--- stays client/kennel.lua's own established ox_target option on the
+--- physical prop (its own header names that as the entry point for that
+--- half); there is no location-independent "recall my kennel" global
+--- exposed anywhere in this resource to mirror here (unlike Fetch's
+--- RequestRecallFetchBall() above), so this item has no release/recall
+--- counterpart to add alongside it.
+---
+--- GATED ON CanShowK9UI() here too, even though RequestDeployKennel()
+--- already re-checks it (and Config.Features.DeployableKennel, and its own
+--- "already have one deployed" local short-circuit) internally -- same
+--- redundant "check here too, even though the callee already checks"
+--- posture every other gated item in this file already uses.
+if Config.Features.DeployableKennel then
+    k9SubmenuItems[#k9SubmenuItems + 1] = {
+        id = 'k9_deploy_kennel',
+        label = 'Deploy Kennel',
+        icon = 'house-chimney',
+        onSelect = function()
+            if not CanShowK9UI() then
+                DenyK9UIAccess()
+                return
+            end
+
+            if type(RequestDeployKennel) == 'function' then
+                RequestDeployKennel()
             end
         end,
     }

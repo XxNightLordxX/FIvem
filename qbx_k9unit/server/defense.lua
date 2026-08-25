@@ -186,7 +186,13 @@
     on the first not-down -> down transition (see `TryNotifyPartnerK9`'s own
     RETRY-WHILE-DOWN doc comment for why an edge-only design was drafted
     and rejected) -- looks up that citizenid's active partnership, subject
-    to its own cheapest-first anti-spam cooldown check.
+    to its own cheapest-first anti-spam cooldown check. QA follow-up
+    refinement, NARROWING not reverting the above: a handler confirmed dead
+    (metadata.isdead == true, not merely laststand/a health dip) gets at
+    most ONE notification per down-episode -- see `DeadHandlerAlreadyNotified`'s
+    own declaration-site comment for the full ruling on why a corpse
+    awaiting respawn should not re-alert its partner K9 every
+    `retriggerCooldownMs` for the remainder of the respawn wait.
     No native/event exists in this codebase's own verified surface for a
     server-side "health changed" push notification (the same "no native
     equivalent" conclusion server/combat.lua's own NonComplianceDetection
@@ -259,6 +265,36 @@ if not Config.Features.HandlerDownDefense then return end
 -- since this is read-many, never mutated-on-read).
 local LastHostile = {}
 
+-- CORPSE-RETRIGGER RULING (QA follow-up product judgment -- see
+-- TryNotifyPartnerK9's own RETRY-WHILE-DOWN doc comment below before
+-- reading this; this table exists to narrow that design, not undo it).
+-- DeadHandlerAlreadyNotified[handlerSrc] = true once a
+-- handlerDownDefenseTrigger has been sent for this handler while
+-- metadata.isdead read true (a CONFIRMED corpse, not merely laststand/a
+-- health-threshold dip) -- cleared the moment that handler next reads as
+-- NOT down at all (see the maintenance thread below), i.e. on respawn.
+-- RULING: repeated "your handler is under attack!" prompts every
+-- retriggerCooldownMs (default 30s) for a player who is already fully dead
+-- and simply awaiting respawn are NOT wanted -- a corpse cannot be "under
+-- attack" in any sense the K9 can act on, respawn can be minutes away, and
+-- the wording itself becomes actively misleading the longer it repeats.
+-- This does NOT reopen the missed-window bug RETRY-WHILE-DOWN was written
+-- to fix: that bug is about a K9 who was out of range/offline at the exact
+-- tick health first crossed the threshold while the handler was ALIVE and
+-- rescuable (laststand, or a health dip with no laststand system wired at
+-- all) -- retry-while-down remains fully intact for exactly that case,
+-- since this table is only ever consulted/set when metadata.isdead == true
+-- specifically. A handler whose laststand later degrades into a real death
+-- (isdead flips true mid-episode) gets at most one more notification after
+-- that flip, then silence until respawn -- the K9 has already been told
+-- once that this handler needed help; a corpse's rescue window is over.
+-- Best-effort like the rest of this file's metadata reads: on a server
+-- with no metadata.isdead field at all (e.g. IsPlayerDownedOverride
+-- configured and metadata unused), this table simply never gets consulted
+-- and the original retry-forever-while-down behavior is unchanged -- no
+-- regression for that case.
+local DeadHandlerAlreadyNotified = {}
+
 -- Per-source rate limit on the reportHandlerAttacker relay below -- same
 -- "never leave a per-source ingest path fully unbounded" posture as
 -- server/tracking.lua's DamageRelayCooldown, for the same reason (a client
@@ -277,6 +313,42 @@ AttackerReportCooldown.RegisterPlayerDropped()
 -- the same ongoing incident.
 local DefenseTriggerCooldown = NewCooldown(Config.Combat.HandlerDownDefense.retriggerCooldownMs)
 DefenseTriggerCooldown.RegisterPlayerDropped()
+
+-- RED-TEAM FINDING PARITY (QA follow-up): server/combat.lua's own
+-- `onResourceStart` prints a loud warning when `Config.Features.PropDragging`
+-- is on and `Config.Combat.PropDragging.IsPlayerDownedOverride` is nil,
+-- because the default fallback (`metadata.isdead`/`.inlaststand`) is
+-- typically CLIENT-SELF-REPORTED on QB/qbx ambulance integrations, not a
+-- server-verified state machine, and is therefore spoofable. `IsHandlerDown`
+-- above reuses that EXACT SAME override/fallback pair (see this file's
+-- header "IS THE HANDLER DOWN" section) -- the identical spoof risk exists
+-- for HandlerDownDefense, but server/combat.lua's warning is gated only on
+-- `Config.Features.PropDragging`, so an operator who enables
+-- HandlerDownDefense WITHOUT also enabling PropDragging never sees any
+-- warning at all despite carrying the identical risk. server/combat.lua is
+-- owned elsewhere and off-limits for this pass, so this file prints its own
+-- copy rather than relying on that one to cover it. WARNING, NOT ASSERT --
+-- same proportionality reasoning as server/combat.lua's own copy: this is
+-- a disclosed best-effort default, it still functions in the intended
+-- direction for the ordinary non-adversarial case, and
+-- `Config.Features.HandlerDownDefense` itself defaults to `false`, so a
+-- hard resource-start failure would be disproportionate to a risk already
+-- disclosed in comments; a loud, unmissable console print is not.
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    if Config.Features.HandlerDownDefense and Config.Combat.PropDragging.IsPlayerDownedOverride == nil then
+        print('[qbx_k9unit] WARNING: Config.Features.HandlerDownDefense is enabled but ' ..
+            'Config.Combat.PropDragging.IsPlayerDownedOverride is nil (HandlerDownDefense\'s own ' ..
+            '"is the handler down" check reuses this same override -- see server/defense.lua\'s ' ..
+            'header). The default fallback (metadata.isdead/.inlaststand) is typically a ' ..
+            'CLIENT-self-reported flag on QB/qbx ambulance integrations, not a server-verified ' ..
+            'state machine -- a player can spoof it true to trigger unwanted handler-down alerts to ' ..
+            'their partner K9, or spoof it false to suppress a genuine one. Supply a real ' ..
+            'IsPlayerDownedOverride tied to your server\'s actual laststand/EMS system if you rely ' ..
+            'on this check meaning what it says.')
+    end
+end)
 
 --- Combined "is this specific connected player currently down" signal --
 --- see this file's header for the full reasoning on reusing
@@ -366,14 +438,38 @@ local function TryNotifyPartnerK9(handlerSrc, handlerPed)
     local handlerCitizenid = handlerPlayer and handlerPlayer.PlayerData and handlerPlayer.PlayerData.citizenid
     if not handlerCitizenid then return end
 
-    local partnerCitizenid, partnerIsK9 = GetActivePartnerCitizenId(handlerCitizenid)
+    -- CORPSE-RETRIGGER RULING (see DeadHandlerAlreadyNotified's own
+    -- declaration-site comment above for the full reasoning): a CONFIRMED
+    -- corpse (metadata.isdead == true, not merely inlaststand/a health
+    -- dip) only ever gets ONE notification per down-episode, regardless of
+    -- how many retriggerCooldownMs windows elapse before respawn. This
+    -- check is intentionally independent of whatever actually made
+    -- IsHandlerDown return true this tick (override, isdead, inlaststand,
+    -- or raw health threshold) -- it only asks "does metadata say this
+    -- specific player is currently a confirmed corpse," which is available
+    -- regardless of which signal triggered this call.
+    local metadata = handlerPlayer.PlayerData.metadata
+    local isConfirmedDead = type(metadata) == 'table' and metadata.isdead == true
+    if isConfirmedDead and DeadHandlerAlreadyNotified[handlerSrc] then return end
+
+    -- NAMING FIX (QA follow-up): server/partnership.lua's own
+    -- `GetActivePartnerCitizenId(citizenid)` returns `(partnerCitizenid,
+    -- isK9)` where `isK9` describes whether the QUERIED citizenid (the
+    -- argument passed in -- `handlerCitizenid` here) is the K9-role party,
+    -- NOT whether the resolved `partnerCitizenid` is. The logic below was
+    -- always correct (verified, not a functional bug) -- `queriedIsK9Role`
+    -- replaces the old `partnerIsK9` name, which read as "is the PARTNER a
+    -- K9" (the opposite of what the value actually means) and could mislead
+    -- a future reader into "fixing" a correct check.
+    local partnerCitizenid, queriedIsK9Role = GetActivePartnerCitizenId(handlerCitizenid)
     -- Silent no-op: never partnered / partnership broken (PHASE3_SPEC.md
     -- §12.0 item 7), OR the citizenid whose health crossed the threshold
-    -- is itself the K9-role party, not the handler-role party --
-    -- HandlerDownDefense is specifically "a certified handler's health
-    -- crossing the threshold" (§12.5.3); a K9 going down defends nobody
-    -- and is out of this feature's scope entirely.
-    if not partnerCitizenid or partnerIsK9 == true then return end
+    -- (handlerCitizenid, the queried party above) is itself the K9-role
+    -- party, not the handler-role party -- HandlerDownDefense is
+    -- specifically "a certified handler's health crossing the threshold"
+    -- (§12.5.3); a K9 going down defends nobody and is out of this
+    -- feature's scope entirely.
+    if not partnerCitizenid or queriedIsK9Role == true then return end
 
     -- server/partnership.lua's own "FUTURE CONSUMERS" instruction: "the
     -- caller is still responsible for separately checking the resolved K9
@@ -408,8 +504,12 @@ local function TryNotifyPartnerK9(handlerSrc, handlerPed)
 
     -- Every real precondition has now passed -- stamp the anti-spam
     -- cooldown ONLY here, immediately before the send, per this function's
-    -- own RETRY-WHILE-DOWN doc comment above.
+    -- own RETRY-WHILE-DOWN doc comment above. Same "only stamp once we're
+    -- actually sending" timing applies to the corpse one-shot flag.
     DefenseTriggerCooldown.Touch(handlerSrc)
+    if isConfirmedDead then
+        DeadHandlerAlreadyNotified[handlerSrc] = true
+    end
 
     local handlerNetId = NetworkGetNetworkIdFromEntity(handlerPed)
     TriggerClientEvent('qbx_k9unit:client:handlerDownDefenseTrigger', k9Src, handlerNetId, suggestedTargetNetId)
@@ -431,23 +531,34 @@ CreateThread(function()
                 -- ped == 0 is a defensive no-op (src reported by GetPlayers()
                 -- but no live ped resolves yet, e.g. mid-connect) -- nothing
                 -- to sample this tick.
-                if ped ~= 0 and IsHandlerDown(src, ped) then
-                    -- Called every tick this handler reads as down -- see
-                    -- TryNotifyPartnerK9's own RETRY-WHILE-DOWN doc comment
-                    -- for why this is deliberately NOT edge-triggered-once,
-                    -- and for how that function's own cheapest-first
-                    -- DefenseTriggerCooldown.IsOnCooldown check keeps this
-                    -- cheap in the common "already notified recently" case.
-                    -- pcall-wrapped -- an uncaught error here must never kill
-                    -- this shared thread (mirrors server/combat.lua's own
-                    -- maintenance-thread pcall discipline around
-                    -- EndHold/SampleCompliance for the identical reason: a
-                    -- dead thread silently disables this feature for every
-                    -- player for the rest of this resource's uptime, not
-                    -- just the one player that errored).
-                    local ok, err = pcall(TryNotifyPartnerK9, src, ped)
-                    if not ok then
-                        print(('[qbx_k9unit] defense.lua TryNotifyPartnerK9 errored for source %s: %s'):format(src, tostring(err)))
+                if ped ~= 0 then
+                    if IsHandlerDown(src, ped) then
+                        -- Called every tick this handler reads as down -- see
+                        -- TryNotifyPartnerK9's own RETRY-WHILE-DOWN doc comment
+                        -- for why this is deliberately NOT edge-triggered-once,
+                        -- and for how that function's own cheapest-first
+                        -- DefenseTriggerCooldown.IsOnCooldown check keeps this
+                        -- cheap in the common "already notified recently" case.
+                        -- pcall-wrapped -- an uncaught error here must never kill
+                        -- this shared thread (mirrors server/combat.lua's own
+                        -- maintenance-thread pcall discipline around
+                        -- EndHold/SampleCompliance for the identical reason: a
+                        -- dead thread silently disables this feature for every
+                        -- player for the rest of this resource's uptime, not
+                        -- just the one player that errored).
+                        local ok, err = pcall(TryNotifyPartnerK9, src, ped)
+                        if not ok then
+                            print(('[qbx_k9unit] defense.lua TryNotifyPartnerK9 errored for source %s: %s'):format(src, tostring(err)))
+                        end
+                    elseif DeadHandlerAlreadyNotified[src] then
+                        -- CORPSE-RETRIGGER RULING (see DeadHandlerAlreadyNotified's
+                        -- own declaration-site comment) -- this handler no longer
+                        -- reads as down at all (health above threshold again,
+                        -- override now false, or metadata flags cleared -- most
+                        -- commonly a respawn), so the "already notified for this
+                        -- corpse" episode is over; clear the flag so a FUTURE
+                        -- down episode for this same source can notify again.
+                        DeadHandlerAlreadyNotified[src] = nil
                     end
                 end
             end
@@ -494,11 +605,13 @@ end)
 -- Cleans up this file's per-source ephemeral state on disconnect --
 -- AttackerReportCooldown/DefenseTriggerCooldown already registered their
 -- OWN playerDropped handlers via :RegisterPlayerDropped() above; this
--- covers the one plain table this file owns directly (LastHostile has no
--- per-connection hook of its own -- it is not one of server/cooldowns.lua's
--- three tracker shapes, same "plain table, manual handler" reasoning as
--- server/tracking.lua's PendingTrackArrival).
+-- covers the two plain tables this file owns directly (LastHostile and
+-- DeadHandlerAlreadyNotified have no per-connection hook of their own --
+-- neither is one of server/cooldowns.lua's three tracker shapes, same
+-- "plain table, manual handler" reasoning as server/tracking.lua's
+-- PendingTrackArrival).
 AddEventHandler('playerDropped', function()
     local src = source
     LastHostile[src] = nil
+    DeadHandlerAlreadyNotified[src] = nil
 end)

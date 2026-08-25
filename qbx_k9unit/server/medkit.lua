@@ -143,6 +143,101 @@
       each a server/cooldowns.lua tracker instance (NewCooldown/NewMutex)
       — REFACTOR_ROADMAP.md item 1's convention, no hand-rolled table.
     - Exposes NO resource-global functions of its own.
+
+    ======================================================================
+    CORRECTNESS PASS (coder-backend, this session) — three findings, all
+    fixed below. Evidence and reasoning kept here rather than only in a
+    commit message, per this file's own established documentation style.
+
+    1. MAX-HEALTH AGREEMENT BETWEEN THE SERVER'S CLAMP AND THE CLIENT'S
+       CLAMP — QA raised, this pass resolves it WITH EVIDENCE, not
+       assumption:
+       Grepped this entire resource for every native capable of changing a
+       ped's REAL max-health ceiling (`SetPedMaxHealth`/`SET_PED_MAX_HEALTH`,
+       any `SetEntityMaxHealth`-shaped call, any local assignment to a
+       `maxHealth`/`healthMax` variable that is later written back to the
+       entity rather than just read) — zero matches anywhere in this
+       resource outside the two read-only `GetEntityMaxHealth` call sites
+       already known (this file, and client/hud.lua's own read-only HUD
+       normalization). server/wellbeing.lua's Injury stat — the "injury/
+       wellbeing subsystem" the open question named — is CONFIRMED (read its
+       real implementation directly this session) to be an entirely
+       separate, virtual, per-citizenid float (`WellbeingStats[citizenid]
+       .injury`, clamped 0..Config.Wellbeing.Injury.max) that never touches
+       the ped's actual native health/max-health fields at all — `Config
+       .K9Medkit.injuryRestore` restores THAT virtual stat via
+       `RestoreInjury`, entirely independent of the `GetEntityMaxHealth`
+       read three lines above it in HandleUseK9Medkit. So: nothing in this
+       codebase ever modifies a K9 ped's real max health, meaning the
+       server's `GetEntityMaxHealth(targetPed)` read (HandleUseK9Medkit,
+       "compute" step) and the target's own client's later
+       `GetEntityMaxHealth(ped)` read (client/medkit.lua's
+       applyMedkitHeal) are two live reads of the SAME never-modified
+       native value on the SAME entity — they cannot disagree from
+       anything this resource does.
+       That said, this file does not rely on "cannot disagree" as a excuse
+       to skip a safety net for the one thing actually outside this
+       resource's control: a THIRD-PARTY resource changing max health, or
+       the target ped itself being swapped/respawned, in the network-latency
+       gap between the server's compute-time read and the client's
+       apply-time read. The client's own independent `GetEntityMaxHealth`
+       clamp (client/medkit.lua, pre-existing, kept as-is) already covers
+       this correctly by construction: it clamps the SERVER's number down to
+       whatever the client's OWN live ceiling is at apply time, so any
+       cross-owner drift can only ever produce a safe under-heal (capped to
+       the lower of the two ceilings), never an overheal above the
+       currently-live maximum. No code change was needed here — this is a
+       documented resolution, not a fix.
+
+    2. DEAD-K9 GATE (NEW, fixed below) — nothing previously stopped healing
+       a K9 whose ped is already dead. This resource already has an
+       established, reused answer for "should this interaction be usable on
+       a dead target" — server/combat.lua's `ValidateCombatRequest`
+       rejects a dead target by default via `IsEntityDead(targetPed)` with
+       reason `'target_dead'`, and its own header explains why: a scripted
+       laststand/EMS "dead" state is a DIFFERENT thing from a raw
+       `SetEntityHealth` bump, and reviving a player is the job of that
+       real laststand/EMS flow, never a side effect of an unrelated item.
+       A K9 medkit is documented everywhere in this file as restoring an
+       INJURED (alive) K9's health — it was never meant to be a revive
+       item, and letting it push a dead K9's raw health back up via the
+       exact same client-self-applied `SetEntityHealth` this file already
+       flags as cross-owner-uncertain would let a plain consumable silently
+       stand in for whatever this server's real ambulance/laststand system
+       is supposed to gate revival behind, with none of that system's own
+       rules (cooldowns, animations, item costs it may impose, etc.)
+       applying. HandleUseK9Medkit now rejects with `'target_dead'` the
+       same way ValidateCombatRequest already does, checked immediately
+       after the model re-verification (cheap, non-mutating, so it runs
+       before the mutex/cooldown/item-possession work below, same
+       "cheapest checks first" discipline this file's function doc comment
+       already establishes). client/medkit.lua's `applyMedkitHeal` also
+       gained a matching `IsEntityDead` guard for the one case the
+       server-side gate cannot see: the K9 dying from unrelated damage in
+       the network-latency window between the server's decision and the
+       client actually receiving and applying it — without that guard, a
+       heal computed while the K9 was alive could still land as a
+       de-facto revive a moment after they died. Both gates fail the SAME
+       direction (reject/no-op), never the opposite.
+
+    3. MUTEX RELEASE UNDER AN UNCAUGHT ERROR (NEW, fixed below) — the
+       previous shape released `MedkitMutex` only via the `finish(result)`
+       wrapper, meaning every one of THIS function's own `return` statements
+       released it correctly, but a hypothetical uncaught Lua error thrown
+       by any native call inside the mutex-held region (never observed, but
+       structurally possible if a future edit adds one) would propagate
+       straight past every `return finish(...)` site to the OUTER
+       `lib.callback.register` pcall without ever calling `Release` —
+       permanently locking that one citizenid out of ever being treated
+       again for the lifetime of the resource (a genuine unbounded trap: no
+       sweep/TTL touches a mutex entry, by design, per server/cooldowns.lua's
+       own NewMutex doc comment — "a mutex is acquire/release, not a
+       cooldown pretending to have no expiry"). Fixed by moving the entire
+       mutex-held mutation body into its own function and wrapping ONLY that
+       call in a `pcall` whose very next line unconditionally releases the
+       mutex, so release is no longer contingent on every internal return
+       path being enumerated correctly — see RunUseK9MedkitMutation below.
+    ======================================================================
 ]]
 
 -- Precomputed set of configured EMS job names, built once at file load —
@@ -217,91 +312,49 @@ end
 -- Every call site below is unchanged: this file never passed a custom
 -- title, which is server/notify.lua's own default.
 
---- Internal implementation for the useK9Medkit callback below. Called only
---- after the callback's own cheap checks (payload shape, feature flag,
---- IsMedkitUserAuthorized) already passed.
+--- The mutex-HELD mutation body — everything from proximity through the
+--- actual heal/Injury restore. Split out from HandleUseK9Medkit purely so
+--- that function can `pcall` this one call and unconditionally release
+--- MedkitMutex on the very next line regardless of outcome — see this
+--- file's header, CORRECTNESS PASS finding 3, for why release must not
+--- depend on every internal `return` path being enumerated correctly.
 ---
 --- Validation order — cheapest/most-defensive checks first, mutating work
 --- last, same discipline server/search.lua's HandleSearchTarget already
 --- establishes for this codebase's security-critical files:
----   1. Resolve the USING player's own live ped — reject if unavailable.
----   2. Resolve `targetServerId` to a live, currently-connected player's
----      ped via GetPlayerPed (server-reliable, per this file's header) —
----      reject if it doesn't resolve to anyone online right now.
----   3. Re-derive the TARGET's REAL ped model server-side and confirm it's
----      a configured K9 model (IsConfiguredK9Model) — never trust that the
----      client's target selection actually was a K9.
----   4. Resolve the target's citizenid — needed for the cooldown key and
----      the RestoreInjury accessor.
----   5. Acquire the per-target mutex — reject outright if already held
----      (another treat-K9 request for this exact K9 is in flight).
----   6. MANDATORY, FIRST-CLASS live proximity check between the USING
+---   1. MANDATORY, FIRST-CLASS live proximity check between the USING
 ---      player's own live position and the TARGET's own live position —
 ---      never a client-claimed distance.
----   7. Per-target cooldown check.
----   8. Item possession check via GetItemCount — reject if the using
+---   2. Per-target cooldown check.
+---   3. Item possession check via GetItemCount — reject if the using
 ---      player doesn't actually carry the configured medkit item.
----   9. Stamp the cooldown NOW, before removing the item or healing
+---   4. Stamp the cooldown NOW, before removing the item or healing
 ---      anything (TOCTOU-safe ordering discipline, mirrors
 ---      server/search.lua's "stamp before the awaited call" rule, applied
 ---      here even though neither ox_inventory call below yields today —
 ---      see this file's header).
----  10. Remove exactly one medkit item via RemoveItem — if this
----      unexpectedly fails despite step 8's check having just passed
+---   5. Remove exactly one medkit item via RemoveItem — if this
+---      unexpectedly fails despite step 3's check having just passed
 ---      (should not happen given neither call yields in between, but never
 ---      assumed), reject WITHOUT applying any health/Injury change. The
----      cooldown stamped in step 9 is not rolled back in this edge case —
+---      cooldown stamped in step 4 is not rolled back in this edge case —
 ---      an intentional, documented tradeoff, the same one
 ---      server/search.lua's own stamp-before-work ordering already accepts.
----  11. Compute the clamped new health value from a live
+---   6. Compute the clamped new health value from a live
 ---      GetEntityHealth/GetEntityMaxHealth read and push it to the
----      target's own client to self-apply (see this file's header on why).
----  12. Call RestoreInjury(citizenid, ...) if and only if server/wellbeing.lua
+---      target's own client to self-apply (see this file's header on why,
+---      and CORRECTNESS PASS finding 1 for why this read can never
+---      disagree with the target client's own later read).
+---   7. Call RestoreInjury(citizenid, ...) if and only if server/wellbeing.lua
 ---      has defined it (forward-compatible no-op otherwise).
+--- @param usingPed number
+--- @param targetPed number
 --- @param source number
 --- @param targetServerId number
+--- @param targetCitizenid string
 --- @param requestedAt number
 --- @return table result
-local function HandleUseK9Medkit(source, targetServerId, requestedAt)
-    local usingPed = GetPlayerPed(source)
-    if usingPed == 0 then
-        return { ok = false, reason = 'invalid_target' }
-    end
-
-    -- GetPlayerPed on a bogus/offline/out-of-range server id returns 0 —
-    -- the same server-reliable resolution primitive server/search.lua's
-    -- own ResolveConnectedPlayerFromPed relies on, applied here directly
-    -- since the client already supplies a server id rather than a netId
-    -- needing entity resolution (see this file's header, callback contract
-    -- item 1).
-    local targetPed = GetPlayerPed(targetServerId)
-    if targetPed == 0 or targetPed == usingPed then
-        return { ok = false, reason = 'invalid_target' }
-    end
-
-    -- Re-derive the TARGET's REAL model server-side — never trust that the
-    -- client's ox_target selection was actually a K9.
-    if not IsConfiguredK9Model(GetEntityModel(targetPed)) then
-        return { ok = false, reason = 'invalid_target' }
-    end
-
-    local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
-    local targetCitizenid = targetPlayer and targetPlayer.PlayerData and targetPlayer.PlayerData.citizenid
-    if not targetCitizenid then
-        return { ok = false, reason = 'invalid_target' }
-    end
-
-    if not MedkitMutex.TryAcquire(targetCitizenid) then
-        return { ok = false, reason = 'treatment_in_progress' }
-    end
-
-    -- Every remaining exit path below MUST release this mutex — do not add
-    -- a new early `return` beneath this point without also releasing it.
-    local function finish(result)
-        MedkitMutex.Release(targetCitizenid)
-        return result
-    end
-
+local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerId, targetCitizenid, requestedAt)
     -- MANDATORY, FIRST-CLASS live proximity check — BEFORE any
     -- ox_inventory query or state mutation, unconditionally. Without this,
     -- a modified client could supply the server id of ANY connected K9
@@ -311,11 +364,11 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
     -- here to a mutation instead of a read.
     local dist = #(GetEntityCoords(usingPed) - GetEntityCoords(targetPed))
     if dist > Config.K9Medkit.range then
-        return finish({ ok = false, reason = 'too_far' })
+        return { ok = false, reason = 'too_far' }
     end
 
     if MedkitCooldown.IsOnCooldown(targetCitizenid, Config.K9Medkit.cooldownMs, requestedAt) then
-        return finish({ ok = false, reason = 'on_cooldown' })
+        return { ok = false, reason = 'on_cooldown' }
     end
 
     -- Item possession check — cheap, non-mutating, run before the cooldown
@@ -323,11 +376,11 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
     -- cooldown window for nothing.
     local carriedCount = exports.ox_inventory:GetItemCount(source, Config.K9Medkit.itemName)
     if not carriedCount or carriedCount < 1 then
-        return finish({ ok = false, reason = 'no_item' })
+        return { ok = false, reason = 'no_item' }
     end
 
     -- Stamp the cooldown NOW, before removing the item / healing anything
-    -- below — see this function's own doc comment, step 9.
+    -- below — see this function's own doc comment, step 4.
     MedkitCooldown.Touch(targetCitizenid, requestedAt)
 
     local removed = exports.ox_inventory:RemoveItem(source, Config.K9Medkit.itemName, 1)
@@ -335,7 +388,7 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
         -- Should not happen given the possession check above (neither
         -- ox_inventory call yields, per this file's header) — never
         -- treated as "item consumed" if this ever does fail.
-        return finish({ ok = false, reason = 'no_item' })
+        return { ok = false, reason = 'no_item' }
     end
 
     -- Server-authoritative clamp: reads are not the flagged
@@ -364,7 +417,94 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
         NotifyPlayer(targetServerId, 'Your K9 has been treated.', 'inform')
     end
 
-    return finish({ ok = true })
+    return { ok = true }
+end
+
+--- Internal implementation for the useK9Medkit callback below. Called only
+--- after the callback's own cheap checks (payload shape, feature flag,
+--- IsMedkitUserAuthorized) already passed.
+---
+--- Cheap, non-mutating resolution/rejection checks live directly in this
+--- function; the mutex-held mutation is delegated to
+--- RunUseK9MedkitMutation above:
+---   1. Resolve the USING player's own live ped — reject if unavailable.
+---   2. Resolve `targetServerId` to a live, currently-connected player's
+---      ped via GetPlayerPed (server-reliable, per this file's header) —
+---      reject if it doesn't resolve to anyone online right now.
+---   3. Re-derive the TARGET's REAL ped model server-side and confirm it's
+---      a configured K9 model (IsConfiguredK9Model) — never trust that the
+---      client's target selection actually was a K9.
+---   4. Reject if the TARGET is already dead (IsEntityDead) — a K9 medkit
+---      restores an INJURED, alive K9; it is not a revive item. See this
+---      file's header, CORRECTNESS PASS finding 2, for why this must not
+---      fall through to a real laststand/EMS system's own revive flow.
+---   5. Resolve the target's citizenid — needed for the cooldown key and
+---      the RestoreInjury accessor.
+---   6. Acquire the per-target mutex — reject outright if already held
+---      (another treat-K9 request for this exact K9 is in flight) —
+---      release is GUARANTEED via the pcall below, not contingent on any
+---      return path inside RunUseK9MedkitMutation.
+--- @param source number
+--- @param targetServerId number
+--- @param requestedAt number
+--- @return table result
+local function HandleUseK9Medkit(source, targetServerId, requestedAt)
+    local usingPed = GetPlayerPed(source)
+    if usingPed == 0 then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    -- GetPlayerPed on a bogus/offline/out-of-range server id returns 0 —
+    -- the same server-reliable resolution primitive server/search.lua's
+    -- own ResolveConnectedPlayerFromPed relies on, applied here directly
+    -- since the client already supplies a server id rather than a netId
+    -- needing entity resolution (see this file's header, callback contract
+    -- item 1).
+    local targetPed = GetPlayerPed(targetServerId)
+    if targetPed == 0 or targetPed == usingPed then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    -- Re-derive the TARGET's REAL model server-side — never trust that the
+    -- client's ox_target selection was actually a K9.
+    if not IsConfiguredK9Model(GetEntityModel(targetPed)) then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    -- A medkit heals an INJURED, ALIVE K9 — never a dead one. See this
+    -- file's header, CORRECTNESS PASS finding 2. Mirrors
+    -- server/combat.lua's own ValidateCombatRequest
+    -- `IsEntityDead(targetPed)` reject, same reason string
+    -- ('target_dead'), same "cheap, non-mutating, checked before the mutex/
+    -- cooldown/item work below" placement.
+    if IsEntityDead(targetPed) then
+        return { ok = false, reason = 'target_dead' }
+    end
+
+    local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
+    local targetCitizenid = targetPlayer and targetPlayer.PlayerData and targetPlayer.PlayerData.citizenid
+    if not targetCitizenid then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    if not MedkitMutex.TryAcquire(targetCitizenid) then
+        return { ok = false, reason = 'treatment_in_progress' }
+    end
+
+    -- GUARANTEED release — see this file's header, CORRECTNESS PASS
+    -- finding 3. Release happens on the very next line after the pcall
+    -- returns, regardless of whether RunUseK9MedkitMutation returned
+    -- normally or threw, so a future edit that adds a fallible call inside
+    -- the mutation body can never leak this citizenid's mutex entry.
+    local ok, result = pcall(RunUseK9MedkitMutation, usingPed, targetPed, source, targetServerId, targetCitizenid, requestedAt)
+    MedkitMutex.Release(targetCitizenid)
+
+    if not ok then
+        print(('[qbx_k9unit] useK9Medkit mutation error for source %s targeting citizenid %s: %s'):format(source, targetCitizenid, tostring(result)))
+        return { ok = false, reason = 'medkit_failed' }
+    end
+
+    return result
 end
 
 --- PHASE4_SPEC.md §13.4.4. Server-authoritative "use a K9 medkit" callback.
@@ -383,20 +523,18 @@ lib.callback.register('qbx_k9unit:server:useK9Medkit', function(source, targetSe
 
     local requestedAt = GetGameTimer()
 
+    -- Purely a defensive outer net for anything thrown BEFORE
+    -- HandleUseK9Medkit even reaches MedkitMutex.TryAcquire (e.g. a
+    -- corrupted qbx_core player object inside GetPlayerPed/GetPlayer
+    -- itself) — no mutex was ever acquired at that point, so there is
+    -- nothing to release here. Once the mutex IS acquired,
+    -- HandleUseK9Medkit's own inner pcall around RunUseK9MedkitMutation
+    -- guarantees release unconditionally on the very next line (see this
+    -- file's header, CORRECTNESS PASS finding 3) — this outer pcall never
+    -- needs to reason about that mutex at all.
     local ok, result = pcall(HandleUseK9Medkit, source, targetServerId, requestedAt)
     if not ok then
         print(('[qbx_k9unit] useK9Medkit error for source %s: %s'):format(source, tostring(result)))
-        -- HandleUseK9Medkit's own `finish` wrapper releases MedkitMutex on
-        -- every path it reaches — but if the error was thrown BEFORE that
-        -- wrapper was even created (e.g. inside GetPlayerPed itself), no
-        -- mutex was ever acquired for this call, so there's nothing to
-        -- release here. TryAcquire's own key is the TARGET's citizenid,
-        -- resolved partway through HandleUseK9Medkit, so this outer catch
-        -- has no reliable key to release against defensively — documented
-        -- as a known, narrow edge case rather than silently assumed safe:
-        -- a genuinely thrown error that early would have to originate from
-        -- a corrupted qbx_core player object, not from anything this file
-        -- controls.
         return { ok = false, reason = 'medkit_failed' }
     end
 

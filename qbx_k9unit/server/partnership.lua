@@ -817,34 +817,41 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         -- re-validates an established partnership afterwards, by this
         -- file's own documented "role frozen at establishment, never
         -- re-derived" design (see this file's header), so a race landing
-        -- this way would otherwise stand indefinitely. Re-checking HERE,
-        -- inside the mutex, immediately before the INSERT, closes that
-        -- window -- same fix shape as server/search.lua's
-        -- HandleSearchTarget re-checking HasK9Access(source) immediately
-        -- after its own genuinely-yielding await (see that file's own doc
-        -- comment, validation step 8: "the earlier callback-registration
-        -- check only proves access at REQUEST time... re-check immediately
-        -- before computing/broadcasting anything"), applied here to an
-        -- establishment instead of a search.
-        if not HasK9Access(k9Src) then
-            return 'not_certified'
-        end
-
-        local officerPlayerNow = exports.qbx_core:GetPlayer(officerSrc)
-        local officerJobNow = officerPlayerNow and officerPlayerNow.PlayerData and officerPlayerNow.PlayerData.job
-        if not officerJobNow or not Config.Departments[officerJobNow.name] then
-            return 'officer_not_in_department'
-        end
-
-        -- Fresh, AUTHORITATIVE re-check immediately before the INSERT --
-        -- the cache-based check inside CheckPartnershipEligibility above is
-        -- a fast early-reject only, not the final word (see this file's
+        -- this way would otherwise stand indefinitely.
+        --
+        -- CORRECTNESS-PASS FIX (this re-check was previously placed BEFORE
+        -- the two already-partnered SELECTs below, which are themselves two
+        -- more `await` suspension points a concurrent revoke could complete
+        -- underneath -- the window this comment block claimed to close
+        -- ("immediately before the INSERT") did not actually match the
+        -- code order that shipped. HasK9Access/department membership are
+        -- both synchronous, in-memory, non-yielding reads (no MySQL round
+        -- trip), so re-ordered here to run as the LAST checks before the
+        -- INSERT itself, with nothing else in this coroutine yielding in
+        -- between -- the only remaining window is the INSERT's own await,
+        -- which is exactly the DB-level UNIQUE KEY / duplicate-key-error
+        -- backstop already handles below. Same fix shape as
+        -- server/search.lua's HandleSearchTarget re-checking
+        -- HasK9Access(source) immediately after its own genuinely-yielding
+        -- await (see that file's own doc comment, validation step 8: "the
+        -- earlier callback-registration check only proves access at
+        -- REQUEST time... re-check immediately before computing/
+        -- broadcasting anything"), applied here to an establishment instead
+        -- of a search.
+        --
+        -- Fresh, AUTHORITATIVE re-check of "already partnered" -- the
+        -- cache-based check inside CheckPartnershipEligibility above is a
+        -- fast early-reject only, not the final word (see this file's
         -- header "THE TWO UNIQUE CONSTRAINTS" section for exactly which
         -- race this closes that the DB's own two independent UNIQUE KEYs
         -- cannot). Checks EACH citizenid against BOTH DB columns, not just
         -- their own expected role's column, since the whole point of this
         -- check is catching a citizenid who raced into the OTHER role
-        -- somewhere else.
+        -- somewhere else. Run BEFORE the HasK9Access/department re-check
+        -- below on purpose (see the CORRECTNESS-PASS FIX note above) --
+        -- these two SELECTs are the only remaining `await` points before
+        -- the INSERT, so the synchronous eligibility re-check must come
+        -- AFTER them, not before, to sit truly adjacent to the INSERT.
         local k9AlreadyPartnered = MySQL.scalar.await(
             'SELECT id FROM k9_partnerships WHERE active = 1 AND (k9_citizenid = ? OR handler_citizenid = ?) LIMIT 1',
             { k9Citizenid, k9Citizenid }
@@ -856,6 +863,18 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
             { officerCitizenid, officerCitizenid }
         )
         if officerAlreadyPartnered then return 'already_partnered' end
+
+        -- Genuinely last checks before the INSERT -- see the
+        -- CORRECTNESS-PASS FIX note above for why these moved here.
+        if not HasK9Access(k9Src) then
+            return 'not_certified'
+        end
+
+        local officerPlayerNow = exports.qbx_core:GetPlayer(officerSrc)
+        local officerJobNow = officerPlayerNow and officerPlayerNow.PlayerData and officerPlayerNow.PlayerData.job
+        if not officerJobNow or not Config.Departments[officerJobNow.name] then
+            return 'officer_not_in_department'
+        end
 
         -- established_by = the INITIATOR's own citizenid (whoever's client
         -- sent requestPartnerUp), never the accepter's -- see this file's

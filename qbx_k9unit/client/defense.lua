@@ -227,6 +227,18 @@ RegisterNetEvent('qbx_k9unit:client:handlerDownDefenseTrigger', function(handler
         expiresAt = GetGameTimer() + Config.Combat.HandlerDownDefense.promptTtlMs,
     }
 
+    -- WRONG-INSTRUCTION FIX (QA follow-up), RECONCILED with client/radial.lua:
+    -- this notify used to say "or use the radial menu" while no radial entry
+    -- for ConfirmHandlerDownDefense existed anywhere -- FALSE at the time.
+    -- client/radial.lua (owned elsewhere, this file never edits it) has
+    -- since registered a real 'k9unit_defense' submenu ("Handler-Down
+    -- Response" -> "Bite & Hold Attacker" / "Non-Lethal Takedown Attacker")
+    -- calling this exact ConfirmHandlerDownDefense('bite'/'takedown')
+    -- contract (see the RADIAL CONTRACT block above), so the mention below
+    -- is restored as a now-true statement, not left stripped. If that
+    -- submenu is ever removed without a corresponding edit here, this line
+    -- must go back to the keybind-only wording above (git history) rather
+    -- than silently drift out of sync.
     lib.notify({
         title = 'K9 Unit',
         description = ('Your handler is under attack! Press %s to respond, or use the radial menu.'):format(Config.Combat.HandlerDownDefense.confirmKey),
@@ -235,6 +247,30 @@ RegisterNetEvent('qbx_k9unit:client:handlerDownDefenseTrigger', function(handler
     })
 end)
 
+--- ======================================================================
+--- RADIAL CONTRACT (this file is the producer; client/radial.lua -- owned
+--- elsewhere, never edited by this file -- is the consumer). Documented
+--- here as the stable signature that file's own submenu ('k9unit_defense'
+--- -- "Handler-Down Response" -> "Bite & Hold Attacker" / "Non-Lethal
+--- Takedown Attacker", confirmed wired as of this pass) is built against,
+--- so a future change to either side has a single source of truth to check
+--- against: `ConfirmHandlerDownDefense(actionType)` will not change shape
+--- without updating this comment:
+---   - `actionType`: pass the string literal `'bite'` or `'takedown'`.
+---     Any other value (including nil) silently falls back to `'bite'`
+---     (see this function's own DEFAULT ACTION TYPE comment below) -- a
+---     radial entry does not need to guard against a bad value itself.
+---   - Return value: none (fires a `lib.notify` on every rejection path
+---     itself -- a radial entry does not need its own error handling).
+---   - Side effects if called with no fresh prompt / no resolvable target /
+---     already-engaged: a `lib.notify` only, never a thrown error -- safe
+---     to call speculatively/optimistically from a radial menu at any time.
+--- The notify text above in 'qbx_k9unit:client:handlerDownDefenseTrigger'
+--- now mentions the radial menu again (reconciled with the fact that the
+--- entry is real, not aspirational) -- if that radial submenu is ever
+--- removed, that notify text must be reverted to keybind-only wording in
+--- the SAME change, not left to drift false again.
+--- ======================================================================
 --- Manual confirmation step -- PHASE3_SPEC.md §12.0 item 2's own "the K9
 --- player must still manually confirm before any bite-and-hold or takedown
 --- action actually executes" acceptance criterion, made concrete. Exposed

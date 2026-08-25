@@ -89,6 +89,11 @@ exports.ox_target:addGlobalPlayer({
                     feature_disabled      = 'K9 medkit is not enabled.',
                     no_access             = 'You are not authorized to treat a K9.',
                     invalid_target        = 'That is not a valid K9 to treat.',
+                    -- 'target_dead' — server/medkit.lua's own correctness
+                    -- pass: a medkit heals an injured, ALIVE K9, never
+                    -- revives a dead one (that's a real laststand/EMS
+                    -- system's job, not a plain consumable's).
+                    target_dead           = 'That K9 needs a real revive, not a medkit.',
                     too_far               = 'Get closer to the K9 first.',
                     on_cooldown           = 'This K9 was treated too recently.',
                     no_item               = 'You do not have a K9 medkit.',
@@ -133,16 +138,49 @@ RegisterNetEvent('qbx_k9unit:client:applyMedkitHeal', function(newHealth)
 
     if type(newHealth) ~= 'number' then return end
 
+    local ped = PlayerPedId()
+
+    -- DEAD-K9 GUARD (coder-backend, correctness pass) -- server/medkit.lua
+    -- already rejects a request targeting an already-dead K9 up front
+    -- (HandleUseK9Medkit's own IsEntityDead check, reason 'target_dead'),
+    -- but that check runs at REQUEST time, not at the moment this event is
+    -- actually applied here. In the network-latency gap between the
+    -- server computing `newHealth` (while this K9 was still alive) and
+    -- this handler running, this K9 could have died from unrelated damage
+    -- -- without this guard, a heal computed for a live K9 would still
+    -- land as a de-facto revive via SetEntityHealth a moment after death,
+    -- exactly the outcome server/medkit.lua's own header explains this
+    -- item is deliberately NOT meant to cause (a medkit heals an injured,
+    -- ALIVE K9; reviving a dead one is a real laststand/EMS system's job).
+    -- Never treated as an error -- a stale heal for a K9 that died in
+    -- transit is simply dropped, same as any other now-irrelevant queued
+    -- effect.
+    if IsEntityDead(ped) then return end
+
     -- RANGE CHECK (coder-security, this pass) -- `newHealth` was
     -- previously type-checked only, never range-checked. server/medkit.lua
     -- always computes it inside [currentHealth, GetEntityMaxHealth(ped)]
-    -- (see that file's HandleUseK9Medkit, step 11), so this clamp is a
+    -- (see that file's RunUseK9MedkitMutation), so this clamp is a
     -- true no-op for a genuine server push -- but is the ONLY thing that
     -- would have stopped a forged event carrying an arbitrary numeric
     -- newHealth (e.g. 99999) from being applied verbatim as a free,
     -- uncapped self-heal, independently of whether the origin guard above
     -- holds. Complementary, not redundant, with that guard.
-    local ped = PlayerPedId()
+    --
+    -- MAX-HEALTH AGREEMENT -- server/medkit.lua's header, CORRECTNESS PASS
+    -- finding 1: nothing in this resource ever modifies a K9 ped's real
+    -- max health (confirmed by reading server/wellbeing.lua's Injury stat
+    -- directly -- it's an entirely separate virtual per-citizenid float,
+    -- never written back to the ped's native health fields), so this live
+    -- GetEntityMaxHealth(ped) read and the server's own live
+    -- GetEntityMaxHealth(targetPed) read at compute time are two reads of
+    -- the same never-modified value and cannot disagree from anything this
+    -- resource does. This clamp still re-reads it live (rather than
+    -- trusting the server's number outright) so that if a THIRD-PARTY
+    -- resource or a ped respawn ever DOES change the live ceiling in the
+    -- gap between those two reads, the result can only be a safe
+    -- under-heal capped to the lower of the two ceilings, never an
+    -- overheal above whatever is actually live right now.
     newHealth = math.max(0, math.min(newHealth, GetEntityMaxHealth(ped)))
 
     SetEntityHealth(ped, newHealth)
