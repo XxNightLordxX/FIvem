@@ -114,6 +114,15 @@ Config.Features = {
     -- removed on 2026-08-25.
     AdminAuditCommands   = true,
 
+    -- server/highcommand.lua. A senior-rank tier, defined per department by
+    -- `highCommandGrade` in Config.Departments, that is exempt from EVERY
+    -- other rank check in this resource and can mint XP directly via
+    -- /k9givexp. See the Config.HighCommand block below for what it
+    -- deliberately does NOT do (run arbitrary server commands) and why.
+    -- This is the most powerful switch in this file: it is the only one
+    -- that grants an in-game job rank write access to the XP economy.
+    HighCommand          = true,
+
     -- server/bonetool.lua + client/bonetool.lua. A DEV-SERVER-ONLY sweep that
     -- attaches a marker prop to bone indices in sequence so a human can
     -- visually identify the right one for a quadruped skeleton -- the
@@ -211,20 +220,81 @@ Config.Departments = {
         -- certification should be able to see who holds one. job.isboss
         -- always qualifies, same as certifierGrade.
         auditGrade      = 4,
+        -- HIGH COMMAND. A caller at or above this grade -- job.isboss also
+        -- always qualifies -- BYPASSES EVERY OTHER RANK GATE IN THIS
+        -- RESOURCE: certifierGrade, auditGrade, the bone dev tool's
+        -- boss-only check, and the K9 certification requirement itself. It
+        -- is the single "senior command can do anything this resource
+        -- offers" switch, and it is what unlocks /k9givexp.
+        --
+        -- SET THIS DELIBERATELY, AND HIGHER THAN auditGrade. Unlike every
+        -- other threshold here it grants WRITE power over the economy: a
+        -- high command officer can mint XP out of nothing. Every use is
+        -- logged to the server console with who granted what to whom.
+        --
+        -- nil disables the tier entirely for this department. nil means
+        -- "no such rank exists here", NEVER "everybody qualifies" -- the
+        -- check fails closed on a nil, a non-number, or a malformed grade.
+        highCommandGrade = 6,
         autoAccessGrade = nil,  -- nil = no auto-bypass; set an integer to let that grade+ skip certification (see §4.1 assumption)
     },
     ['sheriff'] = {
         label           = 'Blaine County Sheriff',
         certifierGrade  = 3,
         auditGrade      = 3,
+        highCommandGrade = 5, -- see police.highCommandGrade above for what this unlocks
         autoAccessGrade = nil,
     },
     ['bcso'] = {
         label           = 'Blaine County Sheriff (legacy job name)',
         certifierGrade  = 3,
         auditGrade      = 3,
+        highCommandGrade = 5, -- see police.highCommandGrade above for what this unlocks
         autoAccessGrade = nil,
     },
+}
+
+-- ======================================================================
+-- HIGH COMMAND (Config.Features.HighCommand) -- server/highcommand.lua.
+--
+-- What it is: a single senior-rank tier, defined per department by
+-- `highCommandGrade` above, that is exempt from every other rank check in
+-- this resource and can additionally mint XP directly.
+--
+-- WHAT IT DELIBERATELY IS **NOT**: a way to run arbitrary server commands.
+-- "High command can run any command" was requested, and within this
+-- resource that is exactly what this delivers -- every qbx_k9unit command
+-- and every gated action becomes available. It stops at this resource's
+-- boundary on purpose. A generic passthrough that let an in-game job rank
+-- execute arbitrary server commands would turn a promotion into full
+-- server control across EVERY resource installed, including ACE and
+-- permission management -- so one social-engineered promotion, or one
+-- compromised officer account, would own the server with no way to walk
+-- it back. That is a server-admin capability (txAdmin, ACE) and it should
+-- stay one. If you want it anyway it is your server and your call -- say
+-- so and it can be added, but it should be a deliberate decision rather
+-- than a side effect of a rank number.
+-- ======================================================================
+Config.HighCommand = {
+    -- Max XP a single /k9givexp invocation may grant. This is a typo
+    -- guard, not a trust boundary -- high command is already trusted, but
+    -- an accidental extra zero should not silently mint a fortune. Raise
+    -- it if your progression curve is larger; a non-positive or
+    -- non-number value here disables the command rather than meaning
+    -- "unlimited", matching this resource's fail-closed convention.
+    maxXpPerGrant = 5000,
+
+    -- Anti-fat-finger cooldown between grants from the same officer, in ms.
+    -- Deliberately short: this is not a rate limit against abuse (high
+    -- command is trusted by definition), it is protection against a held
+    -- key or a double-submitted chat line.
+    grantCooldownMs = 1500,
+
+    -- Whether high command may grant XP to THEMSELVES. Defaults false --
+    -- not because it is exploitable (they could trivially ask a peer), but
+    -- because a self-grant is the one case with no second person in the
+    -- audit trail, and keeping it off makes the log meaningful.
+    allowSelfGrant = false,
 }
 
 Config.AllowSelfCertification = true   -- see §4.1
