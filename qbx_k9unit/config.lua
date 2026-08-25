@@ -360,6 +360,66 @@ Config.Permissions = {
 }
 
 -- ======================================================================
+-- PER-PERSON FEATURE CONTROL --
+--
+-- The four capabilities above are about ADMIN powers. This block is about
+-- the K9 abilities themselves: high command can turn an individual
+-- feature on or off for ONE specific K9 or handler, rather than only
+-- globally for the whole server.
+--
+-- HOW A FEATURE RESOLVES FOR A GIVEN PERSON. First match wins:
+--   1. Config.Features.<Name> is false      -> DENY, always, no exceptions
+--   2. an explicit BLOCK row for them       -> DENY
+--   3. <Name> is listed in RequireGrant     -> ALLOW only if they hold a grant
+--   4. otherwise                            -> ALLOW
+--
+-- Step 1 is deliberately absolute. A per-person grant can NEVER switch on
+-- something an operator turned off server-wide: if the global flag is
+-- false the code behind it may not even be registered, so "granting" it
+-- would produce a button that silently does nothing. Global off means off.
+--
+-- Step 2 exists because "disable it for this one person" is a real need
+-- (a handler under review, a K9 abusing a mechanic) and is NOT the same
+-- as revoking a grant. Revoking only removes a grant they were given;
+-- a block overrides everything below it, including step 4's default-allow.
+--
+-- Grants and blocks live in the same k9_permissions table as the
+-- capabilities above, keyed `feature.<Name>` and `block.<Name>` -- so they
+-- inherit the same audit trail, the same one-active-row-per-key
+-- guarantee, and the same revoke-never-delete rule for free.
+-- ======================================================================
+Config.FeatureControl = {
+    -- Features that need an explicit per-person grant even when their
+    -- global flag is on. Anything not listed here stays available to
+    -- everyone, which is the behaviour before this feature existed --
+    -- so an empty table changes nothing.
+    --
+    -- These four default to grant-required because they are the ones that
+    -- act ON another player rather than on the K9 itself, so "who is
+    -- allowed to do this" is a decision a server will actually want to
+    -- make per person rather than per rank.
+    RequireGrant = {
+        BiteAndHold       = true,
+        NonLethalTakedown = true,
+        PropDragging      = true,
+        AdminAuditCommands = true,
+    },
+
+    -- Whether a handler/K9 may open the tablet and see what they hold.
+    -- Everyone gets the read-only view of their own record by default --
+    -- that is the point of it. Turning this off leaves the tablet as a
+    -- high-command-only tool.
+    everyoneCanViewOwnRecord = true,
+
+    -- Whether the tablet may TRIGGER an ability, as an alternative to the
+    -- keybind or chat command. The tablet never grants permission to do
+    -- anything -- it fires exactly the same server-validated path the
+    -- command does, so a person can only trigger what they could already
+    -- trigger by typing it.
+    allowActionsFromTablet = true,
+}
+
+-- ======================================================================
 -- K9 COMMAND TABLET (Config.Features.CommandTablet) --
 -- client/tablet.lua + html/tablet.*. The in-game UI for everything
 -- above: a roster of handlers and K9s with their certifications, XP and
@@ -1625,8 +1685,12 @@ Config.FetchMechanic = {
 -- ======================================================================
 -- PROXIMITY AUDIO (Config.Features.ProximityAudioFX) -- client/proximityaudio.lua.
 -- Distance-scaled K9 audio over the NUI bridge's Web Audio gain node.
--- REMEMBER: no audio files ship with this resource. Until an operator supplies
--- html/sounds/<key>.ogg this is silent by design, not broken.
+-- UPDATED 2026-08-25: this used to say no audio ships with this resource.
+-- That is no longer true. html/sounds/growl_ambient.ogg -- the sound THIS
+-- feature plays -- ships, is listed in fxmanifest.lua's files{} block, and
+-- is credited with its licence in html/sounds/CREDITS.md. A sound key with
+-- no file still degrades to silence rather than erroring, which looks
+-- exactly like the feature being off, so keep that list complete.
 -- ======================================================================
 Config.ProximityAudioFX = {
     scanIntervalMs  = 2500,  -- discovery cadence; never a per-frame loop

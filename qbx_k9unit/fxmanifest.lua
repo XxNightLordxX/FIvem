@@ -79,7 +79,7 @@ files {
     -- ox_lib 'locale' has been declared at the top of this manifest since Phase
     -- 1, promising localisation that did not exist -- every player-facing
     -- string was hardcoded English until now. That migration is COMPLETE as of
-    -- 2026-08-25: 306 keys, every player-facing string in the resource routed
+    -- 2026-08-25: 319 keys, every player-facing string in the resource routed
     -- through locale(), cross-checked to zero missing and zero unused. The
     -- earlier note here said 2 of ~48 files were migrated; that is long stale.
     -- Listed explicitly rather than as 'locales/*.json': research into the
@@ -242,7 +242,7 @@ server_scripts {
     -- without it the milestone would re-grant on every restart, so its
     -- queries are pcall-wrapped and go inert rather than misbehaving.
     'server/tenure.lua',
-    -- Read-only, ACE-gated admin/audit surface over the three tables this
+    -- Read-only, POLICE-JOB-RANK-gated audit surface over the three tables this
     -- resource writes. Loaded after cooldowns.lua (NewCooldown at file-load
     -- time); deliberately does NOT call into certifications.lua or
     -- partnership.lua -- see its own ACCESS MODEL header.

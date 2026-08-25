@@ -397,15 +397,21 @@ combined with combat.
 
 #### Bark sounds now ship with real audio
 
-**Corrected 2026-08-25 — this section used to describe every bark as a
-silent placeholder. That's no longer true for any of them.** Every bark —
-the Phase 1 generic bark and all three `AdvancedBarkRadial` variants
-(`'Bark'`, `'Bark_Alert'`, `'Bark_Aggressive'`, `'Bark_Calm'`) — plays a
-real RAGE soundset via `PlaySoundFromEntity` **and** a real Ogg Vorbis file
-via the NUI audio bridge below. `ProximityAudioFX`'s ambient growl
-(`'Growl_Ambient'`) also has a real file behind it. **All five `.ogg` files
-this resource can play now ship with it**, under `html/sounds/`, and are
-listed in `fxmanifest.lua`'s `files{}` block.
+**Corrected 2026-08-25 — this section used to describe every bark as
+silent. That's no longer true for any of them, though the reason is worth
+getting right.** Every bark still also calls `PlaySoundFromEntity` with a
+placeholder RAGE soundset name (`'Bark'`, `'Bark_Alert'`,
+`'Bark_Aggressive'`, `'Bark_Calm'`) that resolves to nothing — no real RAGE
+audio bank exists for those names, and that half hasn't changed. **What
+changed is the second, independent path**: the NUI audio bridge below now
+has a real Ogg Vorbis file behind every one of those same four sounds, plus
+`ProximityAudioFX`'s ambient growl (`'Growl_Ambient'`) — five files total,
+audible today. The player-audible result is the same either way (a real
+sound plays), but if you're the one debugging why a *new* sound name is
+silent, know that this resource has two independent audio paths and only
+one of them (the NUI bridge, `.ogg` files) has ever had real audio behind
+it. **All five `.ogg` files this resource can play now ship with it**,
+under `html/sounds/`, and are listed in `fxmanifest.lua`'s `files{}` block.
 
 The NUI audio bridge (`client/audio.lua` + matching handlers in
 `html/app.js`) plays each file via Web Audio, with distance-based gain.
@@ -490,17 +496,28 @@ Crossing a `Config.XPTiers` threshold applies that tier's
 `speedMultiplier`/`scentRangeMultiplier` and pushes a one-time notification.
 `Config.XP.scopePerCitizenidOrJob` only supports `'citizenid'` today.
 
-### `Config.Features.HighCommand` — config-only, no code yet
+### `Config.Features.HighCommand` — live
 
-`boolean`, currently `true` in `config.lua`, alongside a fully-written
-`Config.HighCommand` table and a `highCommandGrade` field on every
-`Config.Departments` entry. **Do not treat this as a working feature.**
-As of this writing, `server/highcommand.lua` does not exist anywhere in
-this resource's file tree and is not listed in `fxmanifest.lua`, so
-`/k9givexp` is not a real command, nothing reads `highCommandGrade`, and
-flipping this flag changes nothing in-game — the same situation
-`CameraFeedPiP` is in, for a different reason (that one is impossible to
-build today; this one simply hasn't been built yet).
+`boolean`, `true` in `config.lua`, alongside the `Config.HighCommand`
+table and a `highCommandGrade` field on every `Config.Departments` entry.
+
+This IS a working feature as of 2026-08-25. `server/highcommand.lua`
+exists, is listed in `fxmanifest.lua`, and `/k9givexp` is a real command.
+(An earlier revision of this section said the opposite; it was written
+during the window between the config landing and the code landing.)
+
+A caller at or above their department's `highCommandGrade`, or holding
+`job.isboss`, bypasses every other rank gate in this resource:
+`certifierGrade`, `auditGrade`, the bone dev tool's boss check, and the
+K9 certification requirement itself. `nil` disables the tier for that
+department and means "no such rank exists here", never "everyone
+qualifies" — the check fails closed on a nil, a non-number, or a
+malformed grade.
+
+Note this is the only feature flag whose real effect is to grant an
+in-game job rank WRITE access to the XP economy, so set the grade
+deliberately. Every grant is logged with granter, target, amount and
+resulting total.
 
 `config.lua`'s own comment block for `Config.HighCommand` already
 describes the intended design in detail: a per-department senior-rank tier
