@@ -1226,4 +1226,131 @@ t.test('themeUpdated push: fires again while the tablet IS open, alongside the o
     t.equals(f.sendNuiMessageCalls[2].action, 'tablet:themeUpdated')
 end)
 
+-- ----------------------------------------------------------------------
+-- Certification tier editing -- server/certtiers.lua. Same
+-- TranslateReasonResult bridge as tablet theming (reason -> error), plus
+-- the extra fields (tiers/capabilityCatalog/warning/referenceCount) that
+-- generic bridge must forward untouched.
+-- ----------------------------------------------------------------------
+
+t.test('tablet:certTiersList: forwards tiers + capabilityCatalog verbatim on success', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:certTiersList', {
+        ok = true,
+        tiers = { { key = 'trainee', label = 'Trainee', ordinal = 1, capabilities = {} } },
+        capabilityCatalog = { specializations_eligible = { label = 'Eligible for specializations' } },
+    })
+    local result = f.callNui('tablet:certTiersList', {})
+    t.isTrue(result.ok)
+    t.equals(result.tiers[1].key, 'trainee')
+    t.equals(result.capabilityCatalog.specializations_eligible.label, 'Eligible for specializations')
+end)
+
+t.test('tablet:certTiersList: reason="denied" (non-high-command caller) is translated to error="denied"', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:certTiersList', { ok = false, reason = 'denied' })
+    local result = f.callNui('tablet:certTiersList', {})
+    t.isFalse(result.ok)
+    t.equals(result.error, 'denied')
+    t.isNil(result.reason, 'the raw `reason` key must not leak through to the JS-facing contract')
+end)
+
+t.test('tablet:certTiersList: a THROWN server callback fails closed to error="timeout"', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:certTiersList', {})
+    t.isFalse(result.ok)
+    t.equals(result.error, 'timeout')
+end)
+
+t.test('tablet:certTiersUpsert: missing/empty key is invalid_args before any server round trip', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:certTiersUpsert', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:certTiersUpsert', { key = '' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:certTiersUpsert: forwards the WHOLE {key,label,capabilities} table verbatim as ONE argument', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:certTiersUpsert', { ok = true, tiers = {}, capabilityCatalog = {} })
+    f.callNui('tablet:certTiersUpsert', { key = 'master', label = 'Master', capabilities = { 'advanced_tracking' } })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:certTiersUpsert')
+    t.equals(f.callbackCallLog[1].args[1].key, 'master')
+    t.equals(f.callbackCallLog[1].args[1].label, 'Master')
+    t.equals(f.callbackCallLog[1].args[1].capabilities[1], 'advanced_tracking')
+end)
+
+t.test('tablet:certTiersUpsert: reason="invalid_label"/"too_many_tiers"/"busy" all forward as the plain error code', function()
+    local f = newTabletFixture()
+    for _, reason in ipairs({ 'invalid_label', 'invalid_key', 'invalid_capabilities', 'too_many_tiers', 'busy', 'rate_limited' }) do
+        f.setServerCallback('qbx_k9unit:server:certTiersUpsert', { ok = false, reason = reason })
+        local result = f.callNui('tablet:certTiersUpsert', { key = 'master', label = 'Master', capabilities = {} })
+        t.isFalse(result.ok)
+        t.equals(result.error, reason)
+    end
+end)
+
+t.test('tablet:certTiersReorder: missing/non-table orderedKeys is invalid_args before any server round trip', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:certTiersReorder', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:certTiersReorder', { orderedKeys = 'not-a-table' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:certTiersReorder: forwards the bare orderedKeys array (not wrapped) as the server\'s own second argument, and surfaces the retroactive-rerank `warning` on success', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:certTiersReorder', {
+        ok = true,
+        tiers = {},
+        warning = 'Reordering tiers changes rank comparisons RETROACTIVELY.',
+    })
+    local result = f.callNui('tablet:certTiersReorder', { orderedKeys = { 'senior', 'trainee', 'certified' } })
+    t.isTrue(result.ok)
+    t.contains(result.warning, 'RETROACTIVELY')
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:certTiersReorder')
+    t.equals(f.callbackCallLog[1].args[1][1], 'senior')
+    t.equals(f.callbackCallLog[1].args[1][2], 'trainee')
+    t.equals(f.callbackCallLog[1].args[1][3], 'certified')
+end)
+
+t.test('tablet:certTiersReorder: reason="must_include_every_tier"/"invalid_key_set" forward as the plain error code', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:certTiersReorder', { ok = false, reason = 'must_include_every_tier' })
+    local result = f.callNui('tablet:certTiersReorder', { orderedKeys = { 'trainee' } })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'must_include_every_tier')
+end)
+
+t.test('tablet:certTiersDelete: missing/empty key is invalid_args before any server round trip', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:certTiersDelete', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:certTiersDelete', { key = '' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:certTiersDelete: forwards the bare key string, and a "tier_in_use" REFUSAL carries referenceCount through untouched', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:certTiersDelete', { ok = false, reason = 'tier_in_use', referenceCount = 7 })
+    local result = f.callNui('tablet:certTiersDelete', { key = 'trainee' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'tier_in_use')
+    t.equals(result.referenceCount, 7)
+    t.equals(f.callbackCallLog[1].args[1], 'trainee')
+end)
+
+t.test('tablet:certTiersDelete: "protected_tier" (the unconditional \'certified\' protection) forwards as the plain error code', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:certTiersDelete', { ok = false, reason = 'protected_tier' })
+    local result = f.callNui('tablet:certTiersDelete', { key = 'certified' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'protected_tier')
+end)
+
+t.test('tablet:certTiersDelete: a successful delete forwards the refreshed tiers list', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:certTiersDelete', { ok = true, tiers = { { key = 'certified', label = 'Certified', ordinal = 2, capabilities = {} } } })
+    local result = f.callNui('tablet:certTiersDelete', { key = 'trainee' })
+    t.isTrue(result.ok)
+    t.equals(result.tiers[1].key, 'certified')
+end)
+
 os.exit(t.summary())

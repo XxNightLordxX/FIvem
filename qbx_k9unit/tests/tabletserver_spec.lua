@@ -853,4 +853,214 @@ t.test('tabletRevertK9Ped: a high-command caller reaches the underlying primitiv
     t.equals(calls[1].citizenid, 'STILL-CERTIFIED-K9')
 end)
 
+-- ============================================================================
+-- ROUND TRIP -- REAL server/permissions.lua + REAL server/tablet.lua,
+-- sharing one real in-memory k9_permissions table. See this file's own
+-- header "ROUND TRIP SECTION" for why this is a separate, integration-level
+-- fixture rather than an extension of newFixture() above.
+-- ============================================================================
+
+--- @param opts table? -- { isHighCommand, hasK9Access, config: table (full Config override) }
+--- @return table fixture
+local function newIntegrationFixture(opts)
+    opts = opts or {}
+
+    -- Advancing fake clock -- server/permissions.lua's PermissionActionCooldown
+    -- (1500ms, shared by GrantPermission/RevokePermission) means a SECOND
+    -- grant/revoke from the SAME granter source at the SAME instant is
+    -- rate-limited; tests that issue more than one action from `hcSrc` call
+    -- `advanceTime` between them, matching tests/permissions_spec.lua's own
+    -- established convention for this exact cooldown.
+    local clockState = { now = 0 }
+    local function GetGameTimerStub() return clockState.now end
+
+    -- ---- fake k9_permissions table -- same shape/dispatch as
+    -- tests/permissions_spec.lua's own newFixture() mysql stub, since this
+    -- fixture must satisfy the REAL GrantPermission/RefreshPermissionCache
+    -- query shapes AND server/tablet.lua's own QueryActivePermissionSet
+    -- query against the exact same rows.
+    local rows = {}
+    local nextId = 0
+
+    local function findActiveRow(citizenid, permission)
+        for _, row in ipairs(rows) do
+            if row.citizenid == citizenid and row.permission == permission and row.active == 1 then
+                return row
+            end
+        end
+        return nil
+    end
+
+    local mysql = {
+        scalar = { await = function(_sql, params)
+            local row = findActiveRow(params[1], params[2])
+            return row and row.id or nil
+        end },
+        insert = { await = function(_sql, params)
+            nextId = nextId + 1
+            rows[#rows + 1] = {
+                id = nextId, citizenid = params[1], permission = params[2], granted_by = params[3], active = 1,
+            }
+            return nextId
+        end },
+        update = { await = function(_sql, params)
+            local citizenid, permission = params[2], params[3]
+            local affected = 0
+            for _, row in ipairs(rows) do
+                if row.citizenid == citizenid and row.permission == permission and row.active == 1 then
+                    row.active = 0
+                    affected = affected + 1
+                end
+            end
+            return affected
+        end },
+        query = { await = function(sql, params)
+            local out = {}
+            if sql:find('SELECT permission FROM k9_permissions', 1, true) then
+                for _, row in ipairs(rows) do
+                    if row.citizenid == params[1] and row.active == 1 then out[#out + 1] = { permission = row.permission } end
+                end
+            end
+            return out
+        end },
+    }
+
+    local playersBySource = {}
+    local playersByCitizenId = {}
+    local function registerPlayer(source, citizenid, job)
+        local p = { PlayerData = { citizenid = citizenid, job = job, source = source } }
+        playersBySource[source] = p
+        playersByCitizenId[citizenid] = p
+        return source
+    end
+
+    local exportsStub = {
+        qbx_core = {
+            GetPlayer = function(_self, source) return playersBySource[source] end,
+            GetPlayerByCitizenId = function(_self, citizenid) return playersByCitizenId[citizenid] end,
+        },
+    }
+
+    local capturedCallbacks = {}
+    local libStub = { callback = { register = function(name, fn) capturedCallbacks[name] = fn end } }
+
+    local Config = opts.config or {
+        Features = {
+            CommandTablet = true,
+            PermissionGrants = true,
+            BiteAndHold = true,
+        },
+        Departments = {
+            police = { label = 'Los Santos Police Department', certifierGrade = 4, auditGrade = 4, highCommandGrade = 6 },
+        },
+        Permissions = {
+            ['k9.access']  = { label = 'Use K9 abilities' },
+            ['k9.certify'] = { label = 'Certify and decertify others' },
+            ['k9.audit']   = { label = 'View the audit records' },
+            ['k9.givexp']  = { label = 'Grant XP' },
+        },
+        FeatureControl = {
+            RequireGrant = { BiteAndHold = true },
+            everyoneCanViewOwnRecord = true,
+        },
+        CommandTablet = { maxRosterRows = 100 },
+        HighCommand = { allowSelfGrant = false },
+    }
+
+    local env = Sandbox.newEnv({
+        Config = Config,
+        MySQL = mysql,
+        exports = exportsStub,
+        lib = libStub,
+        GetPlayerName = function(source) return 'SteamName#' .. tostring(source) end,
+        print = function() end,
+        IsHighCommand = opts.isHighCommand or function(_source) return false end,
+        HasK9Access = opts.hasK9Access or function(_source) return false end,
+        NotifyPlayer = function() end,
+        AddEventHandler = function(_name, _fn) end,
+        GetPlayers = function() return {} end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        GetGameTimer = GetGameTimerStub,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/permissions.lua', env)
+    Sandbox.loadInto('../server/tablet.lua', env)
+
+    return {
+        env = env,
+        callbacks = capturedCallbacks,
+        registerPlayer = registerPlayer,
+        advanceTime = function(ms) clockState.now = clockState.now + ms end,
+    }
+end
+
+t.test('ROUND TRIP: a feature grant made through the REAL tabletGrantPermission is visible in ResolveFeatureState via tabletRequestMyRecord afterward', function()
+    local f = newIntegrationFixture({
+        isHighCommand = function(source) return source == 1 end,
+        hasK9Access = function() return true end,
+    })
+    local hcSrc = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local targetSrc = f.registerPlayer(2, 'TARGET1', { name = 'police', grade = { level = 1 } })
+
+    -- Before the grant: RequireGrant-listed, has access, unblocked, no
+    -- grant yet -> requires_grant_missing.
+    local before = f.callbacks['qbx_k9unit:server:tabletRequestMyRecord'](targetSrc)
+    local rowBefore
+    for _, entry in ipairs(before.myFeatures) do if entry.key == 'BiteAndHold' then rowBefore = entry end end
+    t.equals(rowBefore.state, 'requires_grant_missing')
+
+    -- The REAL grant, through the REAL callback server/permissions.lua registers.
+    local grantResult = f.callbacks['qbx_k9unit:server:tabletGrantPermission'](hcSrc, 'TARGET1', 'feature.BiteAndHold')
+    t.isTrue(grantResult.ok, 'the fixed IsValidPermissionKey must accept feature.BiteAndHold end to end')
+
+    -- After the grant: server/tablet.lua's own QueryActivePermissionSet must
+    -- see the SAME row GrantPermission just wrote.
+    local after = f.callbacks['qbx_k9unit:server:tabletRequestMyRecord'](targetSrc)
+    local rowAfter
+    for _, entry in ipairs(after.myFeatures) do if entry.key == 'BiteAndHold' then rowAfter = entry end end
+    t.equals(rowAfter.state, 'available', 'a real feature.BiteAndHold grant must resolve the tablet\'s own state to available')
+end)
+
+t.test('ROUND TRIP: revoking that same feature grant through the REAL tabletRevokePermission makes ResolveFeatureState regress to requires_grant_missing', function()
+    local f = newIntegrationFixture({
+        isHighCommand = function(source) return source == 1 end,
+        hasK9Access = function() return true end,
+    })
+    local hcSrc = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local targetSrc = f.registerPlayer(2, 'TARGET1', { name = 'police', grade = { level = 1 } })
+
+    t.isTrue(f.callbacks['qbx_k9unit:server:tabletGrantPermission'](hcSrc, 'TARGET1', 'feature.BiteAndHold').ok)
+    local granted = f.callbacks['qbx_k9unit:server:tabletRequestMyRecord'](targetSrc)
+    local grantedRow
+    for _, entry in ipairs(granted.myFeatures) do if entry.key == 'BiteAndHold' then grantedRow = entry end end
+    t.equals(grantedRow.state, 'available')
+
+    local revokeResult = f.callbacks['qbx_k9unit:server:tabletRevokePermission'](hcSrc, 'TARGET1', 'feature.BiteAndHold')
+    t.isTrue(revokeResult.ok)
+
+    local revoked = f.callbacks['qbx_k9unit:server:tabletRequestMyRecord'](targetSrc)
+    local revokedRow
+    for _, entry in ipairs(revoked.myFeatures) do if entry.key == 'BiteAndHold' then revokedRow = entry end end
+    t.equals(revokedRow.state, 'requires_grant_missing', 'a real revoke must be visible immediately -- no stale cache in either direction')
+end)
+
+t.test('ROUND TRIP: a BLOCK made through the REAL tabletGrantPermission (block.<Name> namespace) is visible as blocked, even with an active feature grant', function()
+    local f = newIntegrationFixture({
+        isHighCommand = function(source) return source == 1 end,
+        hasK9Access = function() return true end,
+    })
+    local hcSrc = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local targetSrc = f.registerPlayer(2, 'TARGET1', { name = 'police', grade = { level = 1 } })
+
+    t.isTrue(f.callbacks['qbx_k9unit:server:tabletGrantPermission'](hcSrc, 'TARGET1', 'feature.BiteAndHold').ok)
+    local blockResult = f.callbacks['qbx_k9unit:server:tabletGrantPermission'](hcSrc, 'TARGET1', 'block.BiteAndHold')
+    t.isTrue(blockResult.ok, 'the fixed IsValidPermissionKey must accept block.BiteAndHold end to end')
+
+    local result = f.callbacks['qbx_k9unit:server:tabletRequestMyRecord'](targetSrc)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'BiteAndHold' then row = entry end end
+    t.equals(row.state, 'blocked', 'block must win over an active grant, matching the documented precedence order')
+end)
+
 os.exit(t.summary())

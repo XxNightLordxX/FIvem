@@ -322,16 +322,26 @@ function K9Store.Cert_GetActiveRecord(citizenid, job)
     }
 end
 
---- Mirrors MySQL.query.await. Replaces server/admin.lua's
---- QueryCertificationHistory ('/k9auditcert'). MEMORY-MODE SCOPE NOTE:
+--- Mirrors the SafeQuery contract server/admin.lua's own
+--- QueryCertificationHistory ('/k9auditcert') used (fixed here to actually
+--- match it -- this function used to call MySQL.query.await un-pcalled,
+--- which would have thrown a raw Lua error out of a migrated call site
+--- where the original always degraded to zero rows; see this file's own
+--- header "CONTRACT DISCIPLINE" for why a caller must never have to change
+--- its error handling to adopt this accessor). MEMORY-MODE SCOPE NOTE:
 --- only rows created THIS SESSION exist to return -- a restart already
 --- erased anything older, per this file's header. Not a bug to fix here;
 --- it is the documented cost of Config.Database.enabled = false.
---- @return table rows -- newest first
+--- @return table rows -- newest first, always a table, empty on failure
 function K9Store.Cert_GetHistory(citizenid, limit)
     if DatabaseEnabled() then
         local sql = ('SELECT job, granted_by, granted_at, revoked_by, revoked_at, active FROM k9_certifications WHERE citizenid = ? ORDER BY granted_at DESC LIMIT %d'):format(limit)
-        return MySQL.query.await(sql, { citizenid })
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Cert_GetHistory query failed for %s: %s'):format(citizenid, tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
     end
     local out = {}
     for i = #CertRows, 1, -1 do
@@ -344,12 +354,20 @@ function K9Store.Cert_GetHistory(citizenid, limit)
     return out
 end
 
---- Mirrors MySQL.query.await. Replaces server/admin.lua's
---- QueryDepartmentRoster ('/k9auditdept') -- CURRENT roster only.
+--- Mirrors the SafeQuery contract server/admin.lua's own
+--- QueryDepartmentRoster ('/k9auditdept') used -- CURRENT roster only. See
+--- Cert_GetHistory's own doc comment immediately above for why this needs
+--- the pcall wrap (same fix, same reasoning).
+--- @return table rows -- always a table, empty on failure
 function K9Store.Cert_GetActiveRosterByJob(job, limit)
     if DatabaseEnabled() then
         local sql = ('SELECT citizenid, granted_by, granted_at FROM k9_certifications WHERE job = ? AND active = 1 ORDER BY granted_at DESC LIMIT %d'):format(limit)
-        return MySQL.query.await(sql, { job })
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, { job })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Cert_GetActiveRosterByJob query failed for job=%s: %s'):format(tostring(job), tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
     end
     local out = {}
     for i = #CertRows, 1, -1 do
@@ -571,13 +589,26 @@ local function PartnerHistoryColumns(row)
     }
 end
 
---- Mirrors MySQL.query.await. Replaces server/admin.lua's
---- QueryPartnershipHistory K9-side sub-query.
+--- Mirrors the SafeQuery contract server/admin.lua's own
+--- QueryPartnershipHistory K9-side sub-query used -- fixed here to actually
+--- match it (see Cert_GetHistory's own doc comment above for why an
+--- un-pcalled MySQL.query.await would have broken a migrated call site
+--- that feeds this straight into MergeSortedByIdDesc, which never expects
+--- a thrown error). MergeSortedByIdDesc's own two-way merge additionally
+--- REQUIRES both sub-queries to independently return a table, never nil,
+--- on a failure of just one of the two -- this fail-closed contract is
+--- what guarantees that.
+--- @return table rows -- always a table, empty on failure
 function K9Store.Partner_GetHistoryByK9(citizenid, limit)
     if DatabaseEnabled() then
         local columns = 'id, k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active'
         local sql = ('SELECT %s FROM k9_partnerships WHERE k9_citizenid = ? ORDER BY id DESC LIMIT %d'):format(columns, limit)
-        return MySQL.query.await(sql, { citizenid })
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Partner_GetHistoryByK9 query failed for %s: %s'):format(citizenid, tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
     end
     local out = {}
     for i = #PartnerRows, 1, -1 do
@@ -589,13 +620,21 @@ function K9Store.Partner_GetHistoryByK9(citizenid, limit)
     return out
 end
 
---- Mirrors MySQL.query.await. Replaces server/admin.lua's
---- QueryPartnershipHistory handler-side sub-query.
+--- Mirrors the SafeQuery contract server/admin.lua's own
+--- QueryPartnershipHistory handler-side sub-query used. See
+--- Partner_GetHistoryByK9's own doc comment immediately above for why this
+--- needs the pcall wrap (same fix, same reasoning).
+--- @return table rows -- always a table, empty on failure
 function K9Store.Partner_GetHistoryByHandler(citizenid, limit)
     if DatabaseEnabled() then
         local columns = 'id, k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active'
         local sql = ('SELECT %s FROM k9_partnerships WHERE handler_citizenid = ? ORDER BY id DESC LIMIT %d'):format(columns, limit)
-        return MySQL.query.await(sql, { citizenid })
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Partner_GetHistoryByHandler query failed for %s: %s'):format(citizenid, tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
     end
     local out = {}
     for i = #PartnerRows, 1, -1 do

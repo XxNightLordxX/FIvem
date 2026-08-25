@@ -773,6 +773,29 @@ local function LogAuditInvocation(source, commandName, detail, outcome)
     print(('[qbx_k9unit] AUDIT: %s ran %s(%s) -> %s'):format(whoLabel, commandName, detail, outcome))
 end
 
+--- Fail-closed SELECT wrapper — pcall around MySQL.query.await, matching
+--- RefreshCertificationCache/RefreshPartnershipCache's own "an unreadable
+--- row must never be treated as [something it isn't]" discipline, applied
+--- here as "a failed audit query returns zero rows to the caller, never a
+--- raw Lua error/stack trace." CONFIDENCE NOTE: MySQL.query.await is
+--- oxmysql's documented all-matching-rows method, the natural counterpart
+--- to MySQL.scalar/.single/.update/.insert — all four already called
+--- successfully elsewhere in this codebase (server/certifications.lua,
+--- server/search.lua, server/partnership.lua) — but MySQL.query
+--- specifically was not independently exercised against a live oxmysql
+--- install in this sandbox.
+--- @param sql string -- already fully hardcoded per call site below, never a caller-controlled fragment
+--- @param params table
+--- @return table rows -- always a table, empty on failure
+local function SafeQuery(sql, params)
+    local ok, rowsOrErr = pcall(MySQL.query.await, sql, params)
+    if not ok then
+        print(('[qbx_k9unit] admin.lua query failed: %s'):format(tostring(rowsOrErr)))
+        return {}
+    end
+    return rowsOrErr or {}
+end
+
 --- Merges two already-LIMITed row sets (one per unique index — see
 --- QueryPartnershipHistory below) into one list, sorts by `id` DESC (see
 --- this file's header "SQL SAFETY" section for why `id`, never a DATETIME
@@ -907,8 +930,7 @@ end
 --- @param limit number -- already clamped by ClampLimit
 --- @return table rows
 local function QueryCertificationHistory(citizenid, limit)
-    local sql = ('SELECT job, granted_by, granted_at, revoked_by, revoked_at, active FROM k9_certifications WHERE citizenid = ? ORDER BY granted_at DESC LIMIT %d'):format(limit)
-    return SafeQuery(sql, { citizenid })
+    return K9Store.Cert_GetHistory(citizenid, limit)
 end
 
 --- '/k9auditpartner' query. Two separate equality queries — one per unique
