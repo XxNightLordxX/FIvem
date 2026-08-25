@@ -67,19 +67,31 @@ local function newFixture(opts)
 
     local state = { now = 1000000 }
     local function GetGameTimer() return state.now end
-    local function Wait(_ms) end -- server-side blocking Wait, only used by PlayerLoaded's short retry loop below -- a no-op keeps every test synchronous
 
-    -- appearance.lua's own file-load-time CreateThread(...) (the forced-
-    -- timeout sweep -- see that file's own header on the confirmK9PedSwap
-    -- section) must not actually run a real `while true do Wait(...) end`
-    -- loop synchronously at load time. Sandbox.newThreadRunner() creates a
-    -- coroutine and leaves it dormant until explicitly stepped -- no test
-    -- below calls .step() on it (none of them test the sweep's OWN timing
-    -- directly; MaybeRevertK9Appearance/ForceRevertK9Appearance are called
-    -- directly instead), so it simply never runs, exactly like never
-    -- reaching Config.Features.CertificationExpiry's sweep in
-    -- certifications_spec.lua's own fixture when that flag is off.
+    -- appearance.lua's own file-load-time CreateThread(...) (the
+    -- forced-timeout sweep -- see that file's own header on the
+    -- confirmK9PedSwap section) creates a coroutine via
+    -- Sandbox.newThreadRunner(), left dormant until a test explicitly
+    -- calls f.stepSweepThread().
     local threadRunner = Sandbox.newThreadRunner()
+
+    -- ONE Wait global has to correctly serve TWO call sites with opposite
+    -- needs: the sweep thread's `while true do Wait(...) ... end` body
+    -- (runs INSIDE the coroutine above -- must genuinely yield, or
+    -- .step()ping it would free-spin forever the first time it's resumed,
+    -- exactly the hang this comment's own test run once produced before
+    -- this fix) and PlayerLoaded's short original-model-capture retry loop
+    -- (called directly, synchronously, from a plain top-level test
+    -- assertion -- NOT inside any coroutine, where `coroutine.yield()`
+    -- would error outright with "attempt to yield from outside a
+    -- coroutine"). `coroutine.isyieldable()` tells the two apart at
+    -- runtime: yield (via the thread runner) only when actually running
+    -- inside a resumable coroutine, no-op otherwise.
+    local function Wait(ms)
+        if coroutine.isyieldable() then
+            threadRunner.Wait(ms)
+        end
+    end
 
     -- ---- exports.qbx_core -------------------------------------------------
     local playersBySource = {}
@@ -758,7 +770,7 @@ t.test('RevokePermission: revoking k9.access while a SEPARATE certification stil
     f.clearClientEvents()
     f.advanceTime(2000) -- see the previous test's identical comment on PermissionActionCooldown
 
-    local ok, _outcome, stillHasAccess = f.env.RevokePermission(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'k9.access')
+    local ok, _, stillHasAccess = f.env.RevokePermission(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'k9.access')
     t.isTrue(ok)
     t.equals(stillHasAccess, 'rank_or_high_command')
     t.equals(#f.clientEvents, 0, 'still genuinely a K9 by certification -- must not be reverted')
@@ -844,10 +856,16 @@ t.test('SECURITY: disconnecting mid-revert COMMITS the revert immediately -- doe
     f.env.ForceRevertK9Appearance(HIGH_COMMAND_SRC, 'CITIZEN_TARGET') -- sends the revert; NEVER confirmed below
     t.isTrue(f.fakeAssignments['CITIZEN_TARGET'].active, 'not yet committed -- still awaiting the client\'s own confirm, exactly as an APPLY would be')
 
-    -- The target disconnects before ever replying.
+    -- The target disconnects before ever replying. Real FXServer's own
+    -- 'playerDropped' fires BEFORE the framework fully tears down the
+    -- player object (server/certifications.lua's own playerDropped
+    -- handler comment already establishes this for this exact fixture
+    -- shape) -- so the handler runs FIRST, exports.qbx_core:GetPlayer(src)
+    -- still resolves, and ONLY THEN is the player actually removed from
+    -- this fixture's own registry.
     f.env.source = TARGET_SRC
-    f.disconnectPlayer(TARGET_SRC)
     for _, handler in ipairs(f.eventHandlers['playerDropped'] or {}) do handler('testing') end
+    f.disconnectPlayer(TARGET_SRC)
 
     t.isFalse(f.fakeAssignments['CITIZEN_TARGET'].active, 'committed on disconnect -- the decision was already made server-side; only the visual confirm was missing')
 end)
@@ -859,8 +877,8 @@ t.test('SECURITY: disconnecting mid-APPLY does NOT write anything -- the apply/r
     t.isNil(f.fakeAssignments['CITIZEN_TARGET'], 'not yet confirmed by the client at all')
 
     f.env.source = TARGET_SRC
-    f.disconnectPlayer(TARGET_SRC)
     for _, handler in ipairs(f.eventHandlers['playerDropped'] or {}) do handler('testing') end
+    f.disconnectPlayer(TARGET_SRC)
 
     t.isNil(f.fakeAssignments['CITIZEN_TARGET'], 'still nothing written -- a dropped pending APPLY is a genuine no-op, unlike a dropped REVERT')
 end)
@@ -880,7 +898,7 @@ t.test('SECURITY: a hostile client that never confirms a revert cannot hold it o
     f.stepSweepThread() -- primes the coroutine (its first statement is Wait(...)) -- no pass yet, per Sandbox.newThreadRunner's own documented stepping semantics
     t.isTrue(f.fakeAssignments['CITIZEN_TARGET'].active, 'still nothing -- this step only reached the sweep loop\'s own Wait()')
 
-    f.advanceTime(10000) -- past ApplyRequestTtlMs (modelLoadTimeoutMs 8000 default + 5000ms margin)
+    f.advanceTime(14000) -- past ApplyRequestTtlMs (modelLoadTimeoutMs 8000 default + 5000ms margin = 13000)
     f.stepSweepThread() -- NOW runs one real sweep pass
     t.isFalse(f.fakeAssignments['CITIZEN_TARGET'].active, 'forced through -- a hostile or unresponsive client cannot veto a revert past its own grace period')
 end)

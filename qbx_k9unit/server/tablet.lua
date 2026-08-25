@@ -293,12 +293,14 @@
       ListPermissionRoster already establish for an identical need.
     ======================================================================
 
-    LOCALE KEYS THIS FILE NEEDS (requested this pass, NOT invented inline;
-    every locale() call below already resolves via an EXISTING key except
-    these two, both used only as an OPTIONAL `message` alongside an
-    `error` code the tablet can already render generically without it):
+    LOCALE KEYS THIS FILE NEEDS (requested this pass, NOT invented inline).
+    `tablet.roster_truncated_notice` has LANDED (locales/en.json, worded by
+    the locale owner as "Showing the first %d entries -- narrow your search
+    to see the rest.") and is wired into tabletRequestRoster's
+    `truncatedMessage` below. Still outstanding, used only as an OPTIONAL
+    `message` alongside an `error` code the tablet can already render
+    generically without it:
       tablet.console_not_authorized = "You don't have access to the Command Console."
-      tablet.roster_truncated_notice = "Showing the first %d result(s) -- refine your search to see more."
 
     FXMANIFEST.LUA PLACEMENT REQUESTED (server_scripts, not edited here):
     insert `'server/tablet.lua',` immediately after `'server/progression.lua',`
@@ -833,15 +835,16 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
         for i = 1, maxRows do rows[i] = filtered[i] end
     end
 
-    -- `truncatedMessage` OMITTED on purpose: 'tablet.roster_truncated_notice'
-    -- is REQUESTED (see this file's header) but not yet landed. html/tablet.js's
-    -- own contract documents `truncatedMessage` as optional and PREFERRED
-    -- OVER a client-built count text "when present" -- its absence, with
-    -- `truncated = true` still set, is an anticipated, safe fallback path,
-    -- not a broken one. Once the key lands: `result.truncatedMessage =
-    -- locale('tablet.roster_truncated_notice', #rows)` inside the `if
-    -- truncated then` branch below -- no other change needed.
-    return { ok = true, rows = rows, truncated = truncated }
+    -- 'tablet.roster_truncated_notice' has now landed in locales/en.json, so
+    -- this sets `truncatedMessage` as this file's own header always intended.
+    -- html/tablet.js's contract documents it as optional and PREFERRED over a
+    -- client-built count text when present; its absence with `truncated = true`
+    -- remains a safe fallback, so nothing breaks if the key is ever removed.
+    local result = { ok = true, rows = rows, truncated = truncated }
+    if truncated then
+        result.truncatedMessage = locale('tablet.roster_truncated_notice', #rows)
+    end
+    return result
 end)
 
 -- ======================================================================

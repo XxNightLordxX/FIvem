@@ -575,11 +575,9 @@ t.test('ROSTER CLAMP: more active certifications than maxRosterRows truncates an
     t.isTrue(result.ok)
     t.equals(#result.rows, 5)
     t.isTrue(result.truncated)
-    -- truncatedMessage is deliberately OMITTED until 'tablet.roster_truncated_notice'
-    -- lands (see server/tablet.lua's own header) -- `truncated` alone is
-    -- the load-bearing signal; a client-built fallback text is the
-    -- documented, anticipated path for its absence.
-    t.isNil(result.truncatedMessage)
+    -- 'tablet.roster_truncated_notice' has landed -- truncatedMessage is a
+    -- real, locale-resolved string whenever truncated == true.
+    t.isNotNil(result.truncatedMessage)
 end)
 
 t.test('ROSTER CLAMP: exactly maxRosterRows candidates is NOT reported as truncated', function()

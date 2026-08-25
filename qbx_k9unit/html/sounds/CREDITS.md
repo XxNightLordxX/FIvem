@@ -27,7 +27,7 @@ assuming this was unfinished work someone forgot to do. **This has since
 changed — see "AUDIO SHIP PASS — 2026-08-25" further down: `bark.ogg` is
 now sourced, shipped, and credited.**
 
-**Confidence convention** (same standard `phase2_notes/dependency_and_audio_status.md`
+**Confidence convention** (same standard `phase2_notes/RESEARCH_ARCHIVE.md#dependencies-and-audio`
 already uses in this resource): a claim below is marked CONFIRMED only when
 independently corroborated; anything resting on a single, unverifiable
 source is marked UNCONFIRMED/PLAUSIBLE and flagged as such.

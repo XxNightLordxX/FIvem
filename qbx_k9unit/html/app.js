@@ -22,10 +22,10 @@
          flip Config.Features.HealthStaminaHUD to actually activate it.
 
     This page and client/hud.lua were built directly off
-    phase2_notes/phase4_hud_bridge_design.md (naming/payload/focus/cadence
-    — authoritative) and phase2_notes/phase4_hud_early_design.md (earlier
+    phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge (naming/payload/focus/cadence
+    — authoritative) and phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge (earlier
     exploratory pass, superseded on those points). See
-    phase4_hud_bridge_design.md §6 for the resolved visibility-gate
+    phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §6 for the resolved visibility-gate
     predicate (`CanShowK9UI()`) client/hud.lua now actually implements.
     ======================================================================
 
@@ -76,7 +76,7 @@
           }
         }
 
-    Naming note (see phase4_hud_bridge_design.md §1): these do NOT use the
+    Naming note (see phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §1): these do NOT use the
     `qbx_k9unit:client:`/`qbx_k9unit:server:` prefix convention the rest
     of this codebase's RegisterNetEvent/TriggerServerEvent names use.
     That prefix exists to avoid colliding in FiveM's GLOBAL net-event
@@ -90,7 +90,7 @@
     redundant, not a bug fix.
 
     NO SetNuiFocus, ANYWHERE, EVER, for this surface (see
-    phase4_hud_bridge_design.md §4 / phase4_hud_early_design.md §3): this
+    phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §4 / phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §3): this
     is a passive, always-visible-while-relevant overlay with zero
     player-driven interaction — no buttons, no dismiss, nothing to click
     or type into. There is therefore no escape/close-path handling here
@@ -115,8 +115,8 @@
     exactly, byte-for-byte, same "a name that doesn't match on both sides
     just hangs or drops silently" risk as the HUD contract above). See
     client/audio.lua's own header for the full authoritative background
-    (phase2_notes/dependency_and_audio_status.md,
-    phase2_notes/phase5_remaining_features_research.md §1) — short version:
+    (phase2_notes/RESEARCH_ARCHIVE.md#dependencies-and-audio,
+    phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §1) — short version:
     this resource's bark audio has always been a placeholder RAGE soundset
     name that resolves to a harmless no-op; this bridge is the plumbing
     that plays a REAL sound once a server operator drops one in, using
@@ -190,8 +190,8 @@
     multiple independent, real, in-use FiveM NUI-audio resources
     (plunkettscott/interact-sound, Xogy/xsound, QBus-xyz/xyz-3dsound,
     Virgildev/v-k9's own use of interact-sound for bark playback — see
-    phase2_notes/dependency_and_audio_status.md and
-    phase2_notes/phase5_remaining_features_research.md §1 for the direct
+    phase2_notes/RESEARCH_ARCHIVE.md#dependencies-and-audio and
+    phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §1 for the direct
     reads backing each of these) freely playing audio from NUI pages with
     no documented unlock/gesture workaround anywhere in any of them — but
     no FiveM client was available in this environment to actually load
@@ -252,7 +252,7 @@
      * assuming the Lua side always sends well-formed numbers. UI-side
      * defensiveness only (this page never sends these values anywhere,
      * so there is no security concern here to defer to coder-security
-     * about — see phase4_hud_bridge_design.md §3's "no server-authoritative
+     * about — see phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §3's "no server-authoritative
      * check anywhere in this specific bridge" note).
      * @param {*} raw
      * @returns {number}
@@ -348,7 +348,7 @@
 
     /**
      * Handles one `hud:updateVitals` payload. Per
-     * phase4_hud_bridge_design.md §3: `visible` and the four numeric
+     * phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §3: `visible` and the four numeric
      * fields always arrive together in one message (never split), and
      * when `visible === false` the four numbers are ignored for
      * rendering (Lua still sends the last real known values alongside
@@ -872,7 +872,7 @@
                     // Unknown action: ignore rather than throw. Every NUI
                     // surface this page listens for uses its own
                     // `<surface>:<verbNoun>` prefix per
-                    // phase4_hud_bridge_design.md §1 ('hud:'/'audio:' so
+                    // phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §1 ('hud:'/'audio:' so
                     // far) — this default branch is what a THIRD, not-yet-
                     // built surface's messages would silently fall into
                     // until it adds its own case here.

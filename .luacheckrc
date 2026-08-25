@@ -100,6 +100,19 @@ read_globals = {
     --   no-op with nothing logged, which is exactly this project's most
     --   expensive recurring bug class.
     "SetPlayerModel",
+    --   CreatePed -- client/sarcalls.lua, for the cosmetic "you found them"
+    --   reveal, drawn on the finder's own screen after the call has already
+    --   resolved server-side. Verified the same way SetPlayerModel above
+    --   was: its decl page 404s (a legacy R* native with no CFX page, which
+    --   is never grounds to reject a native on its own), so checked against
+    --   the natives.json hash database instead (fetched 2026-08-25):
+    --   namespace PED, hash 0xD49F9B0955C367DE, name CREATE_PED, and NO
+    --   `apiset` key -- which in that database means the default,
+    --   client-only. client/sarcalls.lua is the only call site and is a
+    --   client file, so the realm is right. The server half deliberately
+    --   never creates a ped at all: the hidden target is a coordinate, not
+    --   an entity, which is why nothing here can leak one.
+    "CreatePed",
     -- vector3 is NOT a native and has no decl page to check -- it is a Lua
     -- RUNTIME TYPE that CitizenFX's Lua build adds to the language itself,
     -- alongside vector2/vector4/quat, in both realms. Nothing declares it,
@@ -430,6 +443,11 @@ globals = {
     -- the radial and a chat command can both reach it" convention as
     -- RequestRecall above.
     "RequestPursuitSprint",
+    -- client/sarcalls.lua (K9_IDEAS.md §3). RequestAbandonSarCall is
+    -- UNCONDITIONAL by design -- never gated on access or certification --
+    -- because abandoning a call is a termination path, and gating one is
+    -- how the unbounded trap this resource forbids gets built.
+    "RequestStartSarCall", "RequestAbandonSarCall",
     -- shared/compat/core.lua -- the resource auto-detection registry.
     -- Assigned in core.lua, read by the five sibling adapter files and by
     -- any future consumer. Same "global helper, per-file private state"

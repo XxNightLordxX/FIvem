@@ -233,8 +233,16 @@ end
 --- @return boolean callOk, any ... -- callOk is `false` (no further values) if the call itself threw
 local function SafeExportCall(resourceName, exportName, ...)
     local args = table.pack(...)
-    local proxy = exports[resourceName]
+    -- `exports[resourceName]` is indexed INSIDE this same pcall, not before
+    -- it: IsResourceExportCapable already confirmed capability at some
+    -- earlier point, but that is not a guarantee the resource is STILL
+    -- started by the time this specific call happens (an operator can
+    -- restart the target resource in the gap between the two, and merely
+    -- indexing `exports.<name>` on a non-started resource can itself throw
+    -- -- see this file's header). Both the index and the call must fail
+    -- into the same pcall.
     return pcall(function()
+        local proxy = exports[resourceName]
         return proxy[exportName](proxy, table.unpack(args, 1, args.n))
     end)
 end

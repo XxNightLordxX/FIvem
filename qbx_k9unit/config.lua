@@ -54,6 +54,28 @@ Config.Features = {
     -- never sent to the player's game at all, only a distance. Nobody can
     -- read the answer out of their own client. Awards no XP.
     ScentTrailHunt       = true,
+
+    -- client/pursuitsprint.lua + server/pursuitsprint.lua (K9_IDEAS.md §5).
+    -- A short burst where the dog is genuinely faster than the person it is
+    -- chasing. Only usable against a WANTED target, only in short bursts,
+    -- and on a cooldown -- it ends a foot chase, it does not remove them.
+    PursuitSprint        = true,
+
+    -- client/scentlineup.lua + server/scentlineup.lua (K9_IDEAS.md §4).
+    -- "Sniff the row and pick the match": several players stand in a line,
+    -- the server secretly picks one, and the K9 gets ONE guess. Nobody --
+    -- not even the K9 running it -- is told the answer until that guess is
+    -- committed, so it cannot be read out of anyone's game. Awards no XP.
+    ScentLineup          = true,
+
+    -- client/sarcalls.lua + server/sarcalls.lua (K9_IDEAS.md §3).
+    -- Missing-person and search-and-rescue calls: the same hunting feel as
+    -- the scent trail, pointed at a lost hiker or a piece of property
+    -- instead of contraband. Nobody is arrested and nothing bad happens --
+    -- it resolves as a rescue. The "missing person" is always a scenery
+    -- NPC that appears only after the call is already solved, never a real
+    -- player, so nobody can be dragged into one without agreeing.
+    SARCalls             = true,
     ThermalVision        = true,
     NightVision          = true,
     DoorInteraction      = true, -- nudge-open / scratch-to-alert
@@ -612,6 +634,12 @@ Config.FeatureControl = {
         -- finished search training, or stage a rollout -- instead of only
         -- being able to flip it for the whole server at once.
         ScentTrailHunt    = true,
+        PursuitSprint     = true,
+        -- Fits the original "acts on another player" rationale squarely:
+        -- a lineup summons named players and then publicly names one of
+        -- them as the match.
+        ScentLineup       = true,
+        SARCalls          = true,
     },
 
     -- Whether a handler/K9 may open the tablet and see what they hold.
@@ -915,6 +943,14 @@ Config.XP = {
         -- §12.5.2) -- same stale-note correction as biteHoldSuccess above;
         -- this one is wired too.
         takedownSuccess       = 30,
+        -- server/sarcalls.lua, on a genuine find only -- never on a timeout
+        -- or an abandon. THE ARITHMETIC: the 10-minute per-person cooldown
+        -- on REQUESTING a call caps this at six completions an hour, so
+        -- 6 x 30 = 180 XP/hr is the most this feature can add, well under
+        -- the shared 3,600 XP/hr budget it still draws from. The 40-metre
+        -- minimum placement distance is the other half of the defence:
+        -- it guarantees real travel no matter how fast calls are repeated.
+        sarCallCompleted      = 30,
         -- server/search.lua, awarded to a partnered handler/K9 who was
         -- ONLINE and physically within 15m of the search TARGET's own
         -- coordinates (not the searcher's) when a contraband find landed,
@@ -948,7 +984,7 @@ Config.XP = {
     },
 
     -- 'citizenid' (default, per PHASE4_SPEC.md §13.2's own default and
-    -- phase2_notes/phase4_xp_schema_notes.md §4's schema sketch, which
+    -- phase2_notes/RESEARCH_ARCHIVE.md#xp-schema §4's schema sketch, which
     -- assumes this): XP belongs to the K9 character itself and is portable
     -- across a department change (k9_progression is keyed by citizenid
     -- alone, no job column). 'job' would need a composite (citizenid, job)
@@ -1035,7 +1071,7 @@ Config.FindAlerts = {
 Config.Tracking = {
     Scent = {
         maxRange         = 40.0,  -- max distance from the K9's current position to a valid scent source at search time
-        maxAgeSeconds    = 900,   -- how long a dropped item stays trackable as a scent source (§9 item 17 close-out, 2026-08-23). Deliberately longer than Blood/Gunpowder's 300s/120s -- a physical dropped item sitting on the ground doesn't decay the way a damage/gunfire event does. Judgment call, not independently confirmed against real gameplay balance -- phase2_notes/scent_source_resolution.md §4 flags this as worth a product-manager/config-validator/economy-balance-agent pass; revisit if playtesting says otherwise.
+        maxAgeSeconds    = 900,   -- how long a dropped item stays trackable as a scent source (§9 item 17 close-out, 2026-08-23). Deliberately longer than Blood/Gunpowder's 300s/120s -- a physical dropped item sitting on the ground doesn't decay the way a damage/gunfire event does. Judgment call, not independently confirmed against real gameplay balance -- phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution §4 flags this as worth a product-manager/config-validator/economy-balance-agent pass; revisit if playtesting says otherwise.
         markerSpacing    = 3.0,   -- meters between rendered trail markers/checkpoints
         searchCooldownMs = 5000,  -- per-player cooldown on re-issuing a "search" command of this type
         relayCooldownMs  = 1000,  -- per-dropping-player cap on how often the ox_inventory 'swapItems' hook (server/tracking.lua) logs a new scent-source entry. UNLIKE Blood/Gunpowder's field of the same name, this is NOT closing an anti-forgery gap -- the hook is server-to-server, so `payload.source` cannot be spoofed to claim a drop that didn't happen. It's defense-in-depth against a rapid drop/pickup/drop loop growing the server-side scent log unbounded between prune passes. Placeholder pending tuning.
@@ -1517,14 +1553,14 @@ Config.AdminAudit = {
 -- ======================================================================
 -- PHASE 5 (R&D) — DEPLOYABLE KENNEL (Config.Features.DeployableKennel,
 -- still `false` by default — see this block's own note on that below).
--- phase2_notes/phase5_features_research.md §5: "handler places a world...
+-- phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §5: "handler places a world...
 -- kennel object... server-authoritative validation (proximity,
 -- certification, one-per-handler limit), with cleanup on resource stop/
 -- handler disconnect." See client/kennel.lua and server/kennel.lua for the
 -- full implementation and their own file-header contracts.
 --
 -- PROP MODEL CONFIDENCE — read before changing `propModel` below:
--- `phase5_features_research.md` §5 found exactly ONE lead for a real
+-- `RESEARCH_ARCHIVE.md#phase-5-research` §5 found exactly ONE lead for a real
 -- vanilla GTA doghouse/kennel prop name (`prop_doghouse_01`, sourced from
 -- a DIFFERENT, unrelated FiveM resource's config default —
 -- `fruitmob/murderface-pets`), and explicitly could NOT cross-verify it
@@ -1617,13 +1653,13 @@ Config.DeployableKennel = {
 -- SPEC.md §6.7 names the variant set explicitly: "Radial bark options
 -- (aggressive/alert/calm) each play a distinct sound asset attached to the
 -- K9 entity" — that's the exact set shipped here, not an arbitrary pick
--- (phase2_notes/phase5_features_research.md §1 confirms no other count is
+-- (phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §1 confirms no other count is
 -- named anywhere in the spec).
 --
 -- `sound` is still the SAME placeholder posture as client/main.lua's
 -- BARK_SOUND_NAME/K9_SOUND_SET (see that file's header comment in full) —
 -- none of these resolve to real, distinct authored audio yet.
--- phase5_features_research.md §1 confirms a real per-variant soundset needs
+-- RESEARCH_ARCHIVE.md#phase-5-research §1 confirms a real per-variant soundset needs
 -- authored `.awc`/`dat151`/`dat54` RAGE-audio-bank assets, not just a
 -- different string here — this table only carries the plumbing (which
 -- placeholder name maps to which radial item/barkType), not the asset
@@ -1663,7 +1699,7 @@ Config.AdvancedBarkRadial = {
 -- ======================================================================
 Config.K9Inventory = {
     slots         = 5,
-    maxWeight     = 8000,  -- grams-equivalent, same units ox_inventory's own item .weight fields use (unit convention confirmed: phase2_notes/contraband_search_contract.md §1)
+    maxWeight     = 8000,  -- grams-equivalent, same units ox_inventory's own item .weight fields use (unit convention confirmed: phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §1)
     interactRange = 2.0,
 
     -- 'department' is the ONLY supported value (coder-security finding,
@@ -2319,7 +2355,8 @@ Config.K9EquipmentShop = {
     -- only if it collides with a shop you already run.
     shopType = 'k9supply',
 
-    -- What officers see as the shop's name.
+    -- What officers see as the shop's name. Also the default prompt label
+    -- for every location below that does not set its own.
     label = 'K9 Supply',
 
     -- Which ITEM is spent as money. This is an item name your inventory
@@ -2327,12 +2364,38 @@ Config.K9EquipmentShop = {
     -- Nothing here ever calls a bank.
     currencyItem = 'money',
 
-    -- Where the walk-up point goes. PLACEHOLDER -- see the note above.
-    -- Plain x/y/z tables, exactly like Config.TrainingZones above, so this
-    -- file stays readable as data and loadable outside the game. The game
-    -- side turns these into real coordinates where they are used.
+    -- ==================================================================
+    -- THE SHOP DOG. The walk-up point is a real, visible ped you approach,
+    -- not an invisible patch of ground. The four fields below are the
+    -- defaults for every location; any single location can override them.
+    -- This is a shop attendant, not a K9 -- ANY streamed model works,
+    -- including one that never appears in Config.Peds.
+    -- ==================================================================
+
+    -- Default model for the shop ped.
+    pedModel = 'a_c_shepherd',
+
+    -- Default direction it faces, in degrees.
+    pedHeading = 0.0,
+
+    -- What it does while standing there. Set to false and it just stands.
+    -- The default is a verified sitting-dog animation; if you change
+    -- pedModel to something that is not a dog, change this too.
+    pedScenario = 'WORLD_DOG_SITTING_SHEPHERD',
+
+    -- How long to wait for a shop ped's model to load before giving up, in
+    -- milliseconds. On timeout that ONE location is skipped with a console
+    -- warning -- the shop does not hang and the other locations still work.
+    pedModelLoadTimeoutMs = 10000,
+
+    -- Where the shop dogs stand. PLACEHOLDER -- see the note above. Add,
+    -- remove or reorder entries freely; no code change is needed, and high
+    -- command can also do it live from the tablet. Any entry may set its
+    -- own `model`, `heading`, `scenario` or `label` to override the
+    -- defaults above for that one spot only.
     locations = {
         { x = 452.1, y = -980.1, z = 30.7 },
+        -- { x = ..., y = ..., z = ..., model = 'a_c_husky', heading = 180.0, label = 'K9 Supply (Vespucci)' },
     },
 
     -- Prices are in whatever `currencyItem` is. Tune freely; these are
@@ -2428,4 +2491,135 @@ Config.Database = {
     -- ever read from or written to a database -- it lives in memory for
     -- this server session only. See the block above for what that costs.
     enabled = true,
+}
+
+-- ======================================================================
+-- PURSUIT SPRINT (Config.Features.PursuitSprint) -- K9_IDEAS.md §5.
+-- client/pursuitsprint.lua + server/pursuitsprint.lua.
+--
+-- A short burst where the dog is genuinely faster than the person running
+-- from it. This is the most PvP-affecting thing in this resource, so it is
+-- deliberately narrow: a wanted target only, a few seconds only, and a
+-- cooldown between bursts. It is meant to END a foot chase that was
+-- already going the K9's way, not to make escape impossible.
+--
+-- ON THE SPEED NUMBER: the game clamps the COMBINED effect of every speed
+-- influence -- breed, XP tier, tiredness, and this burst -- to at most
+-- twice normal. So even a wildly mis-set number here cannot produce
+-- something faster than that ceiling. Raise it if you like; you will hit
+-- the ceiling before you break anything. At the numbers below a K9 is
+-- sprinting roughly 11% of the time -- a burst that finishes a chase
+-- already going their way, not a standing speed advantage.
+-- ======================================================================
+Config.PursuitSprint = {
+    -- How much faster than normal, during the burst. 1.0 is no change.
+    speedMultiplier = 1.4,
+
+    -- How long a burst lasts, in milliseconds.
+    durationMs = 5000,
+
+    -- Minimum gap between one burst and the next, per player, in
+    -- milliseconds. MUST BE POSITIVE -- a non-positive value does NOT mean
+    -- "no cooldown" here; the shared cooldown helper treats it as
+    -- PERMANENTLY ON and the ability locks out for everyone, forever.
+    cooldownMs = 45000,
+
+    -- How close the K9 must be to the target to start a burst, in meters.
+    requestRangeMeters = 20.0,
+}
+
+-- ======================================================================
+-- SCENT LINEUP (Config.Features.ScentLineup) -- K9_IDEAS.md §4.
+-- server/scentlineup.lua + client/scentlineup.lua.
+--
+-- "Sniff the row and pick the match." A K9 invites several online players
+-- to stand in a line. Every one of them has to accept -- nobody is pulled
+-- into this without agreeing. The moment the last invite is accepted the
+-- SERVER secretly picks one of them at random, and tells NOBODY, not even
+-- the K9 running the drill, until a single final guess is committed. So
+-- there is nothing in anyone's game to read the answer out of.
+--
+-- It awards no XP, on purpose: the outcome is random and you could run it
+-- all day with a group of willing friends, which is exactly the shape of
+-- XP farm this resource has already had to close eight times.
+-- ======================================================================
+Config.ScentLineup = {
+    -- Fewest OTHER players a lineup may contain, not counting the K9
+    -- running it. Below this there is no real guess to make.
+    minParticipants = 2,
+
+    -- Most other players in one lineup, so a single K9 cannot tie up a
+    -- large share of everyone online.
+    maxParticipants = 6,
+
+    -- How long the invited group has to ALL accept before the whole thing
+    -- cancels and everyone is freed, in milliseconds.
+    inviteWindowMs = 30000,
+
+    -- Once everyone has accepted, how long the K9 has to commit their one
+    -- guess before it cancels, in milliseconds.
+    pickWindowMs = 240000,
+
+    -- Minimum gap between one K9 starting a lineup and starting another,
+    -- in milliseconds.
+    startCooldownMs = 60000,
+}
+
+-- ======================================================================
+-- SEARCH AND RESCUE CALLS (Config.Features.SARCalls) -- K9_IDEAS.md §3.
+-- client/sarcalls.lua + server/sarcalls.lua.
+--
+-- Dispatch hands the K9 a missing-person or lost-property call. Somewhere
+-- nearby, the server hides a target and tells nobody where -- the officer
+-- only gets their dog reacting more strongly as they get closer. Find it
+-- and the call resolves as a rescue: nobody is arrested, nothing bad
+-- happens to anyone.
+--
+-- The "missing person" is always scenery -- an NPC that appears only once
+-- the call is already solved, on the finder's own screen. It is never a
+-- real player, so nobody can be volunteered into one without agreeing.
+-- ======================================================================
+Config.SARCalls = {
+    -- How far from the officer the hidden target may be placed, in meters.
+    -- The minimum is doing real work here: it guarantees a genuine walk no
+    -- matter how often calls are taken, which is what stops this becoming
+    -- an XP treadmill.
+    minRadius = 40.0,
+    maxRadius = 90.0,
+
+    -- How close counts as finding it, in meters. Measured on the server
+    -- from the officer's real position, never from anything their game
+    -- claims.
+    arrivalRadius = 6.0,
+
+    -- How strongly the dog reacts, by distance in meters. A new reaction
+    -- only fires when the officer crosses one of these lines, not
+    -- continuously.
+    burningDistance = 8.0,
+    hotDistance     = 20.0,
+    warmDistance    = 45.0,
+
+    -- How often the server re-checks distance, in milliseconds.
+    pollIntervalMs = 2000,
+
+    -- How long an unsolved call lasts before it gives up, in milliseconds
+    -- (eight minutes). A call that times out costs nothing and grants
+    -- nothing -- an honest "came up empty", exactly like a real search
+    -- that finds nothing.
+    maxCallDurationMs = 480000,
+
+    -- Minimum gap between one officer taking a call and taking another, in
+    -- milliseconds (ten minutes). This is on REQUESTING a call, not on
+    -- finishing one.
+    startCooldownMs = 600000,
+
+    -- What the "we found them" moment looks like. Scenery only, drawn on
+    -- the finder's own screen after the call has already resolved, then
+    -- cleaned up by that same screen. The person model is the standard
+    -- multiplayer character, which every player already has loaded --
+    -- deliberately not a themed model this resource cannot guarantee your
+    -- server streams.
+    missingPersonPedModel = 'mp_m_freemode_01',
+    lostPropertyPropModel = 'prop_tennis_ball',
+    revealDurationMs = 15000,
 }

@@ -121,7 +121,16 @@ local START_COOLDOWN_MS = 60000
 --- @return integer index
 --- @return string name
 local function lastRosterEntry(roster)
-    local idx, name = roster:match('(%d+)%) (%a+)$')
+    local idx, name
+    -- BuildRosterLabel's own output ("1) Alice  2) Bob") is embedded inside
+    -- the larger lineup_ready_conductor sentence, followed by more text
+    -- ("... Commit your read with /k9lineuppick <1-2>.") -- so this scans
+    -- every "N) Name" occurrence and keeps the LAST one, rather than
+    -- anchoring to end-of-string (which would never match once real
+    -- trailing text follows the roster).
+    for i, n in roster:gmatch('(%d+)%) (%a+)') do
+        idx, name = i, n
+    end
     assert(idx, 'could not parse a roster entry out of: ' .. tostring(roster))
     return tonumber(idx), name
 end
@@ -360,11 +369,12 @@ end
 -- GATES on /k9lineup
 -- ----------------------------------------------------------------------
 
-t.test('feature disabled: /k9lineup is rejected and no invite is ever sent', function()
+t.test('feature disabled: the whole file is inert -- gate at registration, not just inside each handler (mirrors this resource\'s established convention, e.g. tests/wellbeing_spec.lua\'s own "no thread even registered" case)', function()
     local f = newFixture({ featureEnabled = false })
-    local conductorSrc, aliceSrc, bobSrc = wireBasicTrio(f)
-    startLineup(f, conductorSrc, { aliceSrc, bobSrc })
-    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.feature_disabled'))
+    t.isNil(f.commands['k9lineup'], 'k9lineup must never be registered while the feature is off')
+    t.isNil(f.commands['k9lineuppick'])
+    t.isNil(f.commands['k9lineupcancel'])
+    t.isNil(f.netEvents['qbx_k9unit:server:respondScentLineupInvite'])
     t.equals(#f.clientEvents, 0)
 end)
 

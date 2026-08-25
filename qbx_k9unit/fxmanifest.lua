@@ -78,7 +78,7 @@ shared_scripts {
 -- alive for the entire client session (not opened/closed like a modal —
 -- html/index.html starts hidden and stays that way client-side until
 -- client/hud.lua's poll thread says otherwise), per
--- phase2_notes/phase4_hud_bridge_design.md §7.
+-- phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §7.
 ui_page 'html/index.html'
 
 files {
@@ -157,12 +157,15 @@ client_scripts {
     'client/vehicle.lua',
     'client/tracking.lua', -- Phase 2
     'client/scenttrail.lua', -- K9_IDEAS.md §2 "follow your nose" (ScentTrailHunt), client half. No load-order dependency: CanShowK9UI/DenyK9UIAccess/K9Sit/PlayK9Sound are all reached behind type() guards.
+    'client/pursuitsprint.lua', -- K9_IDEAS.md §5 (PursuitSprint), client half. No load-order dependency.
+    'client/scentlineup.lua', -- K9_IDEAS.md §4 (ScentLineup), client half -- the invite consent dialog only. Calls no other client file's globals, so no load-order dependency at all.
+    'client/sarcalls.lua', -- K9_IDEAS.md §3 (SARCalls), client half. No load-order dependency: CanShowK9UI/DenyK9UIAccess/K9Sit/PlayK9Sound all go through runtime existence guards. Owns the cosmetic 'found them' reveal, which is non-networked and cleaned up by the same client that made it.
     'client/search.lua',   -- Phase 2
     'client/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), client half. Reuses client/main.lua's PlaySoundOnNetworkEntity at runtime only, so no load-order requirement beyond that file existing.
     'client/vision.lua',   -- Phase 2
     'client/hud.lua',      -- Phase 4
     'client/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
-    'client/kennel.lua',   -- Phase 5 R&D (DeployableKennel, phase2_notes/phase5_features_research.md §5)
+    'client/kennel.lua',   -- Phase 5 R&D (DeployableKennel, phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §5)
     'client/medkit.lua',   -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4)
     'client/wellbeing.lua', -- Phase 4 (unified Fatigue/Mood/FearStress/Distraction/Injury subsystem, PHASE4_SPEC.md §13.0 Decision 1)
     'client/progression.lua', -- Phase 4 (XPProgression, PHASE4_SPEC.md §13.4.1)
@@ -280,10 +283,13 @@ server_scripts {
     'server/defense.lua',
     'server/tracking.lua', -- Phase 2
     'server/scenttrail.lua', -- K9_IDEAS.md §2 "follow your nose" (ScentTrailHunt), server half. HARD load-order dependency on server/cooldowns.lua -- NewCooldown at this file's own file-load time -- already satisfied here. Holds the hidden coordinate and never sends it to a client; only a distance goes over the wire.
+    'server/pursuitsprint.lua', -- K9_IDEAS.md §5 (PursuitSprint), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time). Also holds the only correct implementation of the four-step per-person FeatureControl resolution -- read it before writing a second one anywhere else.
+    'server/scentlineup.lua', -- K9_IDEAS.md §4 (ScentLineup), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time); NotifyPlayer/HasK9Access/HasPermission/K9Compat.Get are runtime-only. Holds the secret match and never sends it to any client until a pick is committed.
+    'server/sarcalls.lua', -- K9_IDEAS.md §3 (SARCalls), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time) and after server/certifications.lua for HasK9Access. AwardXP is behind a runtime guard, so no ordering against progression.lua. Holds the hidden target coordinate and never sends it to a client.
     'server/search.lua',   -- Phase 2
     'server/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), server half. An ADDITIONAL consumer of server/search.lua's searchCompleted and client/tracking.lua's reportTrackSourceArrival events -- it adds no detection logic of its own, which is why it needs no ordering against either. It DOES call NewCooldown at its own file-load time, so server/cooldowns.lua before it is a hard requirement; HasK9Access is runtime-only.
     'server/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
-    'server/kennel.lua',    -- Phase 5 R&D (DeployableKennel, phase2_notes/phase5_features_research.md §5) -- loaded after cooldowns.lua (NewCooldown at file-load time) and certifications.lua (HasK9Access)
+    'server/kennel.lua',    -- Phase 5 R&D (DeployableKennel, phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §5) -- loaded after cooldowns.lua (NewCooldown at file-load time) and certifications.lua (HasK9Access)
     'server/medkit.lua',    -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4) -- loaded after cooldowns.lua (NewCooldown/NewMutex at file-load time) and certifications.lua (IsConfiguredK9Model); no ordering dependency on server/wellbeing.lua since RestoreInjury is called through a runtime existence guard, not a load-order assumption
     -- Phase 4 (unified wellbeing subsystem, PHASE4_SPEC.md §13.0 Decision 1) --
     -- loaded after cooldowns.lua (NewCooldown at file-load time) and

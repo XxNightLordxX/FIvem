@@ -9,7 +9,7 @@
     ======================================================================
 
     THE ONE RULE THAT MATTERS MORE THAN ANYTHING ELSE IN THIS FILE, per
-    phase2_notes/phase4_hud_bridge_design.md §4's explicitly flagged
+    phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §4's explicitly flagged
     gotcha: this HUD never calls SetNuiFocus (it is a passive overlay with
     zero interactive elements — see app.js). SetNuiFocus(false, false)
     being the PERMANENT state means mouse clicks are expected to pass
@@ -42,7 +42,7 @@ body {
        has no interactive children today (per app.js/design note §2/§3),
        and none should ever be added to this HUD surface without
        re-deciding the whole focus question (see
-       phase2_notes/phase4_hud_bridge_design.md §2's warning about a
+       phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §2's warning about a
        future clickable element piggybacking on this focus-free
        lifecycle). */
     pointer-events: none;
@@ -64,7 +64,7 @@ body {
     /* TODO(coder-ui): placement (bottom-left), background, and exact
        sizing are provisional defaults, not a signed-off design — revisit
        once coder-ui's own layout/UX pass lands. Also flagged in
-       phase4_hud_bridge_design.md §6: a K9-model character may show this
+       phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §6: a K9-model character may show this
        alongside the server's existing core-HUD hunger/thirst readout;
        differentiate styling/placement if that turns out to double up. */
 }
@@ -139,7 +139,7 @@ body {
     width: 0%; /* set inline via JS on every hud:updateVitals push */
     border-radius: 4px;
     /* Smooth bar animation between pushes rather than a snap-to-value
-       jump, per phase2_notes/phase4_hud_early_design.md §2. */
+       jump, per phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §2. */
     transition: width 200ms ease-out, background-color 200ms ease-out;
     background: #7fd17f;
 }
