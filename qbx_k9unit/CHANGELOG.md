@@ -7,6 +7,543 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Addendum — landed after this entry was written
+
+This entry was compiled against HEAD `6391e54`. Four further commits
+landed while it was being written, and are part of the same session:
+
+- `10b380e` — `server/certifications.lua`, the authorization root, gained
+  config-shape asserts at load. It previously had none where five sibling
+  server files all validated theirs. Also records a finding not fixed
+  there: a malformed `certifierGrade` does not silently no-op as long
+  assumed — `IsEligibleCertifier` compares against it, so a nil or
+  non-number raises an uncaught Lua comparison error, and that call is not
+  pcall-wrapped in the grant or revoke path.
+- `7ddf555` — first client-side test coverage, 25 cases on
+  `client/main.lua`. Establishes that `HasK9Access` fails CLOSED on a
+  failed server round trip, and that the failure is cached for the full
+  TTL.
+- `34e0dab` — 54 specs on `server/defense.lua`, the last uncovered server
+  file. Pins a discrepancy: `AttackerReportCooldown.Consume` runs ahead of
+  both the resolve and self-attack checks, so a self-report burns the
+  reporter's own rate-limit slot while storing nothing.
+- `d8dac12` — four more server files migrated to `locale()`, taking
+  `en.json` from 223 to 275 keys. Only `server/combat.lua` and
+  `server/bonetool.lua` still have zero `locale()` calls.
+
+Test suite at time of writing: 12 spec files, 434 cases, all passing.
+
+**Economy, native-registration, and reliability pass — 2026-08-25 (later
+same day, HEAD `6391e54`)** — this file had not been updated since
+`e57b09e`; the 42 commits landed on top of that (`8dba753` through
+`6391e54`) were verified against their actual diffs, not their commit
+subjects, and are recorded below. Four more XP-economy exploits were
+closed (bringing this resource's total to six found and closed this
+session), a family of six natives with no FXServer server-side
+registration were found silently no-oping, seventeen client-confirm
+failure branches across three features were leaving real networked
+objects orphaned on clients, and a certification-grant race was closed —
+graded honestly below as a data-integrity defect, not an access-control
+bypass. Every item was cross-checked against the diff that produced it;
+where a commit's own message overstated or undercounted something, that
+is called out explicitly rather than repeated.
+
+### Security
+
+- **Closed the third, fourth, fifth and sixth XP farms found in this
+  resource's economy this session** (two earlier ones — contraband's
+  first-find gate and track-source's reuse/travel-time gate — were
+  already closed and documented above/in `0.2.0`):
+  - **Third — scent-tracking source forgery** (`server/tracking.lua`).
+    The reuse/travel-time gate closed earlier only rationed re-use of an
+    *existing* logged track entry; it never limited how fast a *fresh*
+    one could be minted. A dropped-item scent source needs no client
+    modification to forge: drop, walk 15m out, walk back, pick up —
+    ordinary `ox_inventory` actions producing a fresh, never-ticketed
+    entry every cycle, bounded only by the 5s search cooldown, for a
+    sustainable ~7,200 XP/hr open to any player. Closed with a
+    per-source cooldown (30s, a disclosed judgment call) consumed at the
+    exact ticket-mint point, leaving the cosmetic trail reveal untouched.
+    Ships behind `Config.Features.ScentTracking`, still `false`.
+  - **Fourth — Bite & Hold re-take** (`Config.Combat.BiteAndHold.targetCooldownMs`,
+    `server/combat.lua`). `BiteAndHold` had a per-K9 cooldown where its
+    sibling `NonLethalTakedown` has both per-K9 *and* per-target; nothing
+    stopped the same K9 re-taking the *same* target the instant its own
+    20s cooldown cleared. Hold for the 3s XP minimum, release, wait 20s,
+    repeat — roughly 60 XP/min against one stationary or AFK target with
+    zero travel. Closed with a target-keyed cooldown (35000ms, checked
+    before either cooldown is stamped so a rejected request burns
+    neither) that gates *starting* a hold only — release, timeout and the
+    death report are unaffected. `BiteAndHold` still ships `false`.
+  - **Fifth — contraband self-serve weight toggle**
+    (`server/search.lua`). `searchContrabandFound` paid once per target
+    per contraband weight, but pruned that memory after 30 minutes with
+    the timestamp refreshed only by an actual award — so a farmer could
+    plant a stash, get paid, sit idle for 30 minutes, and get paid again
+    indefinitely on a fixed cadence. The time-based eviction is removed
+    outright; growth is now bounded only by genuine distinct catches,
+    each already behind its own access/proximity/inventory-read checks.
+    Ships behind `Config.Features.SearchZones`/`ContrabandAlerts`, both
+    still `false`.
+  - **Sixth — contraband re-search after the fifth farm's fix**
+    (`server/search.lua`). Removing the time-based eviction above left a
+    second gap in the same code: the remaining gate asks only whether a
+    target's contraband *weight* changed, not whether anyone else's
+    police work changed it — an officer who controls the trunk/stash
+    being searched can move one item in and out between searches to make
+    the weight differ every cycle, and the only other throttle
+    (`TargetSearchCooldown`, 10s) is keyed to the *target* and shared
+    across every searcher, not to the officer doing the toggling. Worked
+    out to 25 XP × 6 searches/min = 9,000 XP/hr, solo and risk-free —
+    about 7.5× the (correctly capped) tracking rate. Closed with a
+    per-searcher mint-floor cooldown (60s, a file-local constant, not an
+    operator-tunable config key, matching `tracking.lua`'s same pattern),
+    checked after the weight-changed gate so an unchanged-weight
+    re-search never spends the budget, and with the "already paid at
+    this weight" stamp moved inside the gate so a budget-blocked attempt
+    is never recorded as paid. The search itself, the weight result, the
+    audit-log row, and the bystander contraband alert are all unaffected
+    when the mint is on cooldown — only the XP is withheld. The file's
+    own comment claiming a farmer "cannot re-earn from it no matter how
+    tight the request cadence is" was only ever true of a farmer who
+    never touched their own stash; corrected in place.
+- **Six natives confirmed to have no FXServer server-side registration
+  and to have been silently no-oping there** (all are genuine, correct
+  natives client-side — this is a server-only defect in each case). An
+  unregistered native does not throw on the server: the zero-initialised
+  result buffer is simply never written, so every call site kept running
+  as if it had succeeded.
+  - `GetEntityForwardVector`, two independent server-side call sites,
+    each fixed separately: `server/kennel.lua`'s deploy spawn-offset
+    (`a65dd5d`) and `server/fetch.lua`'s throw spawn-offset/force
+    (`bd745f5`). Every kennel spawned exactly on the handler's feet, and
+    every fetch ball spawned with zero horizontal force and dropped
+    straight down — in both cases silently, for as long as the feature
+    existed, with nothing logged and nothing that looked like a broken
+    native rather than bad physics tuning. Both replaced with
+    `GetEntityHeading` plus trig, which already yields a unit vector.
+  - `IsEntityDead` and `IsPedDeadOrDying`, four server-side call sites
+    across `server/combat.lua` and `server/medkit.lua` (`da474e0`):
+    `ValidateCombatRequest`'s `requireAlive` check, `IsTargetDowned`'s
+    NPC branch, and `HandleUseK9Medkit`'s dead-K9 reject had never
+    actually fired (all silently evaluated `false`), and
+    `reportBiteHoldTargetDied`'s `not IsEntityDead(x)` guard was
+    inverted the other way — always `true`, so it rejected every death
+    report and never freed a stuck holder. All four now compare
+    `GetEntityHealth` (confirmed `apiset: server`) against the same
+    100-point death floor `NonLethalTakedown.healthFloor` already uses,
+    not `0` — a `<= 0` substitution would have reproduced the same
+    near-permanent no-op while looking fixed.
+  - `SetEntityHealth`, the Bite & Hold NPC health-floor backstop in
+    `server/combat.lua` (`fb797e2`, this session's sixth confirmed
+    no-op native). It had been called server-side on a comment asserting
+    its server validity was "not in question"; it has no
+    `ext/native-decls` entry at all (unlike `GetEntityHealth`/
+    `GetEntityMaxHealth`, which both declare `apiset: server`), and
+    health is a client-owned sync-tree field with no server write path.
+    Removed rather than left as reassuring dead code — the health-floor
+    top-up is now applied client-side instead (`d2af702`, relayed to the
+    K9's own client, matching the equivalent bite-hold suppression
+    natives whose server-side validity was already unconfirmed).
+- **Closed a certification-grant race** (`server/certifications.lua`'s
+  `GrantCertification`, `94bdd79`). `GrantCertification` does a
+  check-then-insert across two `MySQL` awaits, each a real yield point;
+  migration 0004's DB-level unique constraint catches the resulting race
+  on a database that has it, but an operator who skipped that migration
+  had neither the constraint nor the backing column, and nothing else
+  stopped two certifiers concurrently granting the same citizenid/job
+  pair. Closed with an in-flight lock keyed on `citizenid:job`, held
+  across both awaits and released on every path including a thrown
+  error. **Graded honestly, per this file's own standard: `HasK9Access`
+  was never bypassable by this race** — a revoke flips every duplicate
+  row and the access check only tests row existence — so this is a
+  violated invariant and a dirty audit trail (a citizenid could end up
+  with more than one active-certification row than the schema intends),
+  not an access-control hole.
+- **Closed seventeen silent confirm-rejection branches across three
+  client-proposes/server-confirms features**, each one previously
+  `return`ing after the client had already created a real, networked
+  object, leaving it orphaned with nothing to reclaim it:
+  - `server/fetch.lua` (`afef898`) — nine branches: five in
+    `confirmFetchBallThrown` (one previously notified with no cleanup,
+    two returned fully silently with no notify at all, and two others
+    likewise notified-only), and all four in `confirmFetchBallDropped`,
+    which previously sent nothing at all, not even a toast. Fixed via a
+    shared per-handler rejection helper that also independently
+    re-verifies the reported netId resolves to a real object of the
+    right model *not already claimed by a different citizenid* before
+    ever sending a cleanup instruction — closing the reachable path
+    where a caller could report another citizen's real ball's netId and
+    have this handler order it deleted via the reporting caller's own
+    client. One further stale-netId path in `confirmFetchBallCarried`
+    was investigated and deliberately left as-is, since fixing it the
+    same way would itself open an entity-theft primitive; the existing
+    client-side backstop for that specific path (`1ba84b0`, below) is
+    judged the safer mitigation.
+  - `server/propattachment.lua` (`afef898`) — four branches in
+    `confirmPropAttached`, including its TTL-expiry path, all now paired
+    with `qbx_k9unit:client:rejectK9PropAttach`.
+  - `server/kennel.lua` (`d2af702`) — four branches in
+    `confirmKennelPlaced` (TTL expiry, a mid-flight feature-flag toggle,
+    a mid-flight certification revoke, and a same-slot race), now
+    reclaimed through a resolve-then-model-verify-before-delete helper
+    so an unverified client-reported netId is never itself a delete
+    primitive. The pre-existing wrong-model rejection deliberately still
+    does not clean up — at that point the reported entity might not be
+    the kennel at all.
+  - All three affected features (`FetchMechanic`, `PropAttachments`,
+    `DeployableKennel`) still ship `false` by default.
+  - A narrower, interim client-side mitigation for two of these same gaps
+    landed first and independently (`1ba84b0`): a deadline-based backstop
+    on `client/fetch.lua`'s throw/drop confirms, and de-duplicated
+    vest cleanup in `client/propattachment.lua` — both still present as
+    defense in depth even though the server-side fixes above now handle
+    the same failures more precisely.
+- **Closed an `ox_target` re-registration gap that a routine
+  `restart ox_target` would trip silently, with nothing logged**
+  (`5ece0f5`). Every one of this resource's `ox_target` option
+  registrations ran once, at file load; `ox_target`'s own registries are
+  file-locals that only clear on *this* resource's own stop, so a bare
+  `restart ox_target` while `qbx_k9unit` kept running silently removed
+  every K9 `ox_target` interaction for the rest of this resource's
+  uptime. This is operator-relevant today, not only for still-`false`
+  features: the leash pull-back/request option and the vehicle-entry
+  option (`Config.Features.LeashMechanics`/`VehicleEntryExit`, both ship
+  `true`) and the certify/revoke options (unconditional, not
+  flag-gated — certification is this resource's core access gate) were
+  all exposed to this gap on a default install. Each registration is now
+  a named function re-invoked from an `onResourceStart` handler matching
+  this resource's own name or `'ox_target'`; verified against
+  `ox_target`'s own source that `addTarget` calls `removeTarget` first
+  for any named option, so re-registration cannot duplicate an entry.
+- **Closed a hold that outlived its holder's death** (`6391e54`). Holder
+  disconnect already ended a `BiteAndHold`/`NonLethalTakedown`/
+  `PropDragging` hold; holder *death* while still connected did not, so
+  a target stayed flee-suppressed, damage-immune, move-rate-limited, or
+  physically attached to a dead K9's corpse until that hold's own
+  timeout separately expired. Closed on both sides: the client
+  self-reports its own death for the drag/NPC-effect cases (server
+  re-verifies rather than trusting the report), and the server's
+  maintenance loop independently polls holder health directly — the only
+  possible check for a bite-hold/takedown against a *player* target,
+  which leaves no holder-side client state to report from at all. Uses
+  `GetEntityHealth` against the existing death threshold, never
+  `IsEntityDead` (see above). The new termination path is unconditional —
+  no flag, no cooldown, no access check, matching this resource's
+  standing "an escape hatch must never be gated on something that can
+  fail" rule — and `'holder_died'` is excluded from the XP-award branch,
+  so it cannot become a let-die-and-retry farm. Still behind
+  `BiteAndHold`/`NonLethalTakedown`/`PropDragging`, all `false`.
+- **Closed a mood double-dip** (`server/wellbeing.lua`, `afef898`).
+  `petK9`/`feedK9` were documented as sharing one affection rate limit
+  per (source, target) so alternating the two calls couldn't bypass it —
+  but they were two separate cooldown instances that merely read the
+  same config value, so alternating granted two mood ticks per window
+  instead of one. Collapsed into a single shared cooldown. Ships behind
+  `Config.Features.MoodSystem`, still `false`.
+- **Cooldown-construction hardening** (`server/cooldowns.lua`,
+  `b4123d5`/`4b5bc08`, plus per-file follow-ups). `NewCooldown` already
+  failed closed on a missing or non-positive threshold, but did so
+  silently — `Config.X.cooldownMs or 500` evaluates its default even
+  when `cooldownMs` is `0`, since `0` is truthy in Lua, building a
+  cooldown that permanently locks after first use with nothing printed
+  anywhere. Now: a non-nil, non-positive **construction-time** default
+  errors at resource start naming the constructor (verified against
+  every current call site's config default — all positive today, so
+  nothing deployed changes behavior); a threshold read fresh from config
+  on each **call** instead prints a warning once per tracker rather than
+  failing invisibly forever. A NaN hole is also closed — every
+  comparison against NaN is `false`, so the old `threshold <= 0` check
+  didn't catch it and the cooldown check itself then also evaluated
+  `false`, giving *unlimited* spam rather than a lock; the validity
+  check now requires a number equal to itself and greater than zero.
+  Two remaining hand-rolled `>= 0` asserts that should have been `> 0`
+  were found and corrected to match: `server/bonetool.lua`'s
+  `CommandCooldownMs` (`afef898` — a `0` would have bricked the dev-only
+  bone-sweep tool after one use) and `server/propattachment.lua`'s
+  `toggleCooldownMs` (`d78d2c7` — a `0` meant to disable throttling would
+  instead have locked every player out of re-toggling their vest for the
+  rest of the resource's uptime; shipped value is 2000, so nothing
+  changes today).
+- **Closed a config footgun that could permanently disable Recall**
+  (`server/recall.lua`, `ffaa8f9`). Setting
+  `Config.Recall.RequestCooldownMs = 0` — a plausible operator reading of
+  "no cooldown" — silently and permanently disabled Recall for every
+  player, forever: `NewCooldown` treats a non-positive threshold as
+  fail-closed (correct for every one of its other consumers, where
+  failing closed means "stay throttled"), which is exactly backwards for
+  Recall, whose entire contract is "must always succeed" — it is the
+  escape hatch a player uses when pinned in a bite/takedown/drag. Any
+  non-positive or non-numeric value now falls back to the 2000ms default
+  and says why, out loud, instead of silently substituting a number.
+  Ships behind `Config.Features.Recall`, still `false`.
+- **Dropped `Config.FetchMechanic.releaseCooldownMs` entirely** rather
+  than fix it (`7ec5ed4`). `releaseFetchBall` opened with a cooldown gate
+  directly contradicting its own documented contract — "a K9 that loses
+  access mid-carry must still be able to end it" — and the precedent it
+  cited for having one (`server/combat.lua`'s `releaseBiteHold`) does not
+  actually gate release either. The same Recall-footgun shape applied
+  here too: an operator setting `releaseCooldownMs = 0` meaning "no
+  throttle" would instead have permanently blocked voluntary release for
+  any source that had released once. Removing it does not open a new
+  spam path — the carrier-index lookup already returns early for anyone
+  not currently carrying.
+- **Validated `server/defense.lua`'s `pollIntervalMs` at load instead of
+  reading it raw every tick** (`4172a55`). It fed a bare `Wait()` with no
+  path through `NewCooldown`, so the construction-time validation above
+  couldn't see it; a `nil`, `0`, negative, or NaN value would have
+  busy-looped or thrown outside the pcall wrapping the notify —
+  disabling `HandlerDownDefense`'s maintenance thread for every player
+  until a restart, with only a generic traceback logged. Now asserted
+  once at load and cached. Ships behind `Config.Features.HandlerDownDefense`,
+  still `false`.
+- **Closed two `client/combat.lua` timing/lifecycle gaps in the
+  still-`false` combat mechanics** (`31de6f0`, `e2b588f`): a
+  forced-ragdoll's `SetEntityCanBeDamaged(false)` used to survive a
+  target's death-then-respawn (FiveM reuses the ped handle), leaving a
+  brief unintended invincibility window bounded only by the existing 4s
+  backstop; and the shared maintenance thread's own `Wait()` meant a
+  target going from idle to bitten could wait up to half a second before
+  suppression actually reasserted, replaced with a self-continuing
+  promise/`SetTimeout`-driven wait that resumes immediately when new
+  state lands (`Citizen.Await` was not usable — it is never rebound onto
+  `_G` the way `promise`/`SetTimeout` are, so it could not be
+  allowlisted on the same evidence; both are now allowlisted, verified
+  directly against the Lua runtime source rather than assumed —
+  `fe339f8`). A drag's speed-limit effect gained the same on-death
+  release the other two mechanics already had.
+
+### Fixed
+
+- **Made the K9 medkit's heal monotonic** (`client/medkit.lua`,
+  `c204ec7`). The client clamped the server-computed heal value at a
+  flat `0` rather than at the live current health; across the
+  compute-to-apply latency window the file's own header already
+  disclosed, a reordered or delayed heal event could land after a newer
+  one had already raised health past it, producing a "heal" that
+  lowered health. Flooring at the live `GetEntityHealth` read instead
+  makes the apply structurally no-op-or-increase regardless of event
+  ordering.
+- **Fixed the officer-initiated half of two mutual-consent handshakes**
+  that had never actually reached the server, both the same bug shape:
+  `client/movement.lua`'s `RequestLeashAttach` (`94bdd79`) and
+  `client/partnership.lua`'s `RequestPartnerUp` (`787edc4`) both gated
+  unconditionally on `CanShowK9UI()` (K9 model + K9 access), even though
+  each also serves an officer-initiated `ox_target` option whose own
+  `canInteract` explicitly admits non-K9-modeled officers. Every
+  officer-initiated leash/partner-up request was silently discarded
+  client-side before it ever reached the server, which was always
+  correct — both server-side handlers already derive roles from live
+  ped models, not from who asked. The K9-shaped pre-check now applies
+  only when the local player would actually be filling the K9 role.
+  **`LeashMechanics` ships `true` by default**, so the leash half of
+  this was a live, player-facing bug on a default install;
+  `HandlerPartnership` still ships `false`.
+- **Removed a duplicate/incorrect leash notification** (`client/movement.lua`,
+  `787edc4`). The client fired its own optimistic "Leash request sent."
+  immediately after `TriggerServerEvent`, while `server/main.lua` sends
+  the real, authoritative text only once the request actually clears
+  eligibility/pending/rate-limit checks — producing a double
+  notification on success and a flatly wrong one on every rejection.
+  The client-side optimistic notify (and its now-orphaned locale key)
+  is removed.
+- **Fixed a scent trail that only rendered one frame in fifteen**
+  (`client/tracking.lua`, `551b41a`). `DrawMarker` is immediate-mode —
+  it draws only for the frame it's called on — but the trail thread
+  called it once per 250ms compute tick, at 60fps a hard strobe rather
+  than a visible trail, for as long as the three tracking features have
+  existed. Split into two threads: the existing 250ms thread still does
+  all the real work and now caches a marker list, and a new lightweight
+  thread redraws that cache every frame only while there is something to
+  draw. A bug the split itself introduced (a frozen trail surviving a
+  water-crossing break, since the old code's water fix relied on
+  `DrawMarker` simply no longer being called) was caught and fixed in
+  the same pass, and a missing own-death exit was added to match
+  `client/vision.lua`'s precedent. Ships behind the three tracking
+  feature flags, all still `false`.
+- **Bounded `client/agility.lua`'s vault shape-test poll and added a
+  missing leash-detach on resource stop** (`310ec51`). `TryVault` polled
+  `GetShapeTestResult` with no iteration cap; a handle that never
+  resolved (result code 1, "still processing") could park that
+  coroutine permanently, once per height band — now capped at 60 polls,
+  treated the same as a genuine miss. `client/movement.lua` had no
+  `onResourceStop` handler for the leash at all, unlike its two sibling
+  handlers (camera view mode, move-rate override); stopping the
+  resource mid-leash left the attachment behind — now cleaned up
+  alongside them.
+- **Guarded `NotifyPlayer`'s target and fixed two model-reference
+  leaks on a load timeout** (`5d920a3`). `server/notify.lua`'s shared
+  helper never validated its `target` before handing it to
+  `TriggerClientEvent`, in any of the twelve call sites it originally
+  replaced; a `nil`/`0`/negative target now refuses and prints instead
+  of risking a native error typed for a string target (no current call
+  site is actually affected). `client/kennel.lua`'s `LoadModelWithTimeout`
+  called `RequestModel` but skipped `SetModelAsNoLongerNeeded` on a
+  timeout, leaking a streaming reference each time — concretely
+  reachable since `deployKennelAt` calls it twice (primary, then
+  fallback) but only ever releases whichever hash it actually built
+  with. Now released at the point a request is abandoned.
+- **Guarded the client-side `ox_inventory` open export**
+  (`client/inventory.lua`, `aff0f65`). The only naked third-party export
+  call left in this file now matches `server/inventory.lua`'s existing
+  guard shape for the same dependency: resource-state check, pcall'd
+  property read, type check, and a pcall around the call itself — a hard
+  `fxmanifest` dependency only guarantees `ox_inventory` was running at
+  *this resource's* start, not that it still is or that the exact export
+  exists in whatever fork/build an operator runs.
+- **Fixed two spinning-at-`Wait(0)` idle paths** (`4b18dcd`):
+  `client/tracking.lua`'s render thread treated an empty-but-present
+  marker table (a valid hand-off shape after a hard water-break at zero
+  distance travelled) as truthy and kept redrawing nothing every frame
+  for up to one 250ms tick; `client/wellbeing.lua`'s `InjuryLimping`
+  thread guarded only on the K9 model, so it kept re-issuing
+  `DisableControlAction` every frame against a ped that was already
+  dead. Both now idle properly, matching the own-death pattern already
+  used elsewhere in this codebase.
+- **Seven further client-side fixes landed in the same pass** (`787edc4`):
+  `client/hud.lua`'s empty wellbeing/XP-tier sub-tables encoded as JSON
+  `[]` instead of `{}` (dkjson's `isarray()` returns true for an empty
+  table), against both this file's and `html/app.js`'s documented
+  contract — closed with a `__jsontype = 'object'` metatable rather than
+  left tolerant-by-accident; `client/vehicle.lua` gained an
+  `IsPedInAnyVehicle` guard against stacking the attach-based tuck-away
+  on a vanilla vehicle entry, plus a debounced watchdog that releases the
+  ped if the backing vehicle disappears out from under it;
+  `client/proximityaudio.lua`'s trigger distance is now clamped to (and,
+  via a new `client/audio.lua` export, can read live from)
+  `client/audio.lua`'s own 30.0 falloff ceiling — above it, every loop
+  was already playing at gain `0.0` in total silence with nothing
+  logged.
+- **Fixed a config-comment self-contradiction on `Config.Wellbeing.restSources`**
+  and corrected two other stale claims found in the same doc pass
+  (`68a5c57`, `d78d2c7`): `restSources`' own comment flatly contradicted
+  `restRegenPerTick`'s two lines above it (one said the rest-source scan
+  was wired, the other said it wasn't) — the scan *is* wired; what
+  remains unverified is only the `'water_bowl'` model name itself, and
+  the comment now says so, including that a non-matching model fails
+  silently and indistinguishably from "no rest source nearby." Also
+  recorded, rather than left implied: `BiteAndHold.targetCooldownMs`
+  (35000ms) caps a single-target farming loop at ~2,057 XP/hr, but with
+  two or more targets the per-K9 cooldown binds instead and the real
+  ceiling is closer to ~3,600 XP/hr — the per-target gate closes the
+  degenerate single-target case, it is not an overall cap on the
+  mechanic, and the comment is corrected to say that rather than imply
+  otherwise.
+- **README's "Known issues — code that exists but does not run" section
+  and `PROJECT_STATUS.md`'s feature-flag count were both stale**
+  (`68a5c57`). The former's entire premise no longer held (every `.lua`
+  file on disk has been registered in the manifest since `933eb9e`) and
+  was rewritten as historical-and-resolved rather than deleted, per this
+  file's own layer-don't-erase convention. The latter's flag count
+  (39, not the previously-reported 40) was wrong because of a regex
+  character class that silently drops names containing digits —
+  `K9Inventory`/`K9Medkit` were vanishing from the count — the fifth
+  time a count in this project's docs came from an under-tested regex
+  and was wrong.
+
+### Changed
+
+- **Locale migration reached the server side this pass and now covers
+  223 keys**, up from the 3-client-files/2-key-groups state recorded
+  above: a fourth client-only pass (`5af9dc4`) added 4 more files and 70
+  keys (16 of ~48 files checked one way or another), catching the exact
+  same untranslatable string-concatenation pattern (`'Officer #' ..
+  fromServerId`) for a second time in a second file and reusing the
+  existing key rather than minting a duplicate; then a combined pass
+  (`8f291a6`) migrated the seven remaining client files *and* the first
+  eight server files in one cross-checked sweep — 220 keys, verified
+  1:1 against every `locale()` call site in `client/`, `server/`, and
+  `html/` with zero missing and zero unused. That cross-check mattered:
+  it caught the server half mid-flight referencing ~70 keys that didn't
+  exist yet, including the leash consent handshake in `server/main.lua`
+  — and `LeashMechanics` ships `true` by default, so an un-caught version
+  of this would have shown players the literal string
+  `"leash.request_sent"`. `locale()` is now confirmed to work
+  server-side (traced through `ox_lib` 3.39.0's own bootstrap; there is
+  no server-side override). A further pass (`e2b588f`) added 3 more
+  keys, bringing the total to **223**, and the test sandbox's own
+  `locale()` stub now parses the real `en.json` and raises on a missing
+  key rather than echoing it back, so any spec exercising a `locale()`
+  call site is also a live key-existence check for that path.
+- **Migration `sql/migrations/0004_add_k9_certifications_active_cert_key.sql`'s
+  step order was corrected — operators applying this migration to an
+  existing install should re-pull the current file rather than one
+  fetched earlier today** (`4172a55`, following a gap found in
+  `95f058c`). The original ordering ran the fallible `ADD UNIQUE KEY`
+  step *before* the two harmless, purely-additive index steps. That
+  unique-key step is designed to fail loudly on a database that already
+  holds duplicate active-certification rows — correct, since deciding
+  which duplicate to keep is an operator judgment call this migration
+  should never make silently — but most SQL import tools abort the rest
+  of the script on its first error, meaning exactly the dirty installs
+  that most needed attention would stop before `idx_citizen_job_active`
+  (the index `HasK9Access` reads on) was ever created. The two
+  unconditionally-safe index steps now run first; the fallible unique-key
+  step runs last. No individual statement's logic changed, and all four
+  steps remain independently `INFORMATION_SCHEMA`-guarded and idempotent
+  — re-running the corrected file against a database that already
+  applied the old ordering is a no-op. Without this migration at all
+  (regardless of ordering), an upgraded install has neither the DB-level
+  constraint nor the backing column the in-flight lock above depends on
+  as its second layer of defense.
+- **Test suite grew from 7 spec files / 118 cases to 11 spec files**:
+  `exports_spec.lua` (`94bdd79`, 135 cases over all 27 public exports,
+  including a specific check that a returned XP-tier table can be
+  mutated by a caller without corrupting `Config.XPTiers`),
+  `certifications_spec.lua` (`37b0e5b`, 47 cases over the authorization
+  root every feature gates through — including proving the new
+  `GrantInFlight` lock actually serializes two concurrent grants via a
+  MySQL stub that genuinely yields, not merely that the lock object
+  exists, and that a throwing pre-check still releases it),
+  `kennel_spec.lua` (`7876396`, 39 cases over the full
+  client-proposes/server-confirms handshake, including the
+  already-claimed race and a mismatched-source impersonation attempt),
+  and `search_spec.lua` grown from 6 to 12 cases (`bd95372`) to actually
+  drive `HandleSearchTarget` end-to-end — previously it only exercised
+  the pure alert-tier calculation seam, so the sixth XP farm above was
+  untested as well as unfixed before this pass.
+- **`OPERATOR_RUNBOOK.md` added** (`f37a785`), documenting all 16
+  player-facing commands (9 — the four audit commands, `/k9bonetool`,
+  `/k9recall`, `/k9propattach`, and the three fetch-ball commands — were
+  previously undocumented in `README.md`), the ACE permissions the audit
+  and bone-sweep commands need, and why migration 0004's step order
+  matters on an upgrade.
+- **`REFACTOR_ROADMAP_2.md` added** (`c623401`), a second, independent
+  technical-debt audit run alongside the existing `REFACTOR_ROADMAP.md`
+  (left untouched). Its headline: the three previously-flagged
+  duplicated-helper clusters (notify, cooldowns, entity resolvers) have
+  stayed genuinely consolidated under heavy parallel editing, and the
+  now-40-plus-flag feature surface enforces its real interdependencies
+  in code rather than leaving them to operator memory.
+
+### Known Limitations (addendum)
+
+- **`client/combat.lua`'s `source == 65535` self-trigger origin guard may
+  fail *open* rather than closed, and this pass only sharpened the
+  assessment — it did not change the guard's code** (`95f058c`). If
+  FiveM's client runtime treats `source` as an ordinary global that is
+  set once by any genuine `TriggerClientEvent` and never cleared
+  afterward, a client that has ever received *any* real server event —
+  effectively every client, within seconds of connecting — would carry a
+  stale `source == 65535` that a later local self-trigger inherits,
+  passing the guard the exploit exists to close. This is unconfirmed
+  either way; the per-mechanic feature-flag gating closed the original
+  "flags off, still reachable" exploit independently of this guard, so
+  it is not a single point of failure, but this specific guard has not
+  been proven to fail closed. See `DECISIONS_NEEDED.md` for the exact,
+  sequenced experiment needed to settle it (fire one genuine event, then
+  self-trigger on the *same* client, and check whether `source` still
+  reads `65535`).
+- **A checkpoint commit (`0947691`) landed mid-session, uncommitted work
+  from several concurrently-running agents, and was explicitly labelled
+  by its own author as unreviewed** — it is not separately described
+  above because every substantive change it introduced was subsequently
+  reviewed and either fixed or superseded by a later commit already
+  covered in this entry (`client/combat.lua` by `31de6f0`/`e2b588f`,
+  `server/medkit.lua`/`client/medkit.lua` by `da474e0`/`c204ec7`,
+  `server/search.lua`'s testability seam already declared prior to this
+  entry's scope, and `sql/migrations/0004` by `95f058c`/`4172a55`).
+
 **Documentation sync pass, 2026-08-25** — reconciling this file (and
 `README.md`/`SPEC.md`/`PROJECT_STATUS.md`/`REFACTOR_ROADMAP.md`) against
 roughly a dozen commits that landed after the `0.2.0` narrative below was
