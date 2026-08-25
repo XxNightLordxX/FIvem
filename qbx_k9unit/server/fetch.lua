@@ -342,7 +342,28 @@ RegisterNetEvent('qbx_k9unit:server:requestThrowFetchBall', function()
     if ped == 0 then return end -- defensive: src disconnected between the event firing and this line
 
     local coords = GetEntityCoords(ped)
-    local forward = GetEntityForwardVector(ped)
+
+    -- NOT GetEntityForwardVector(ped) — CONFIRMED BROKEN SERVER-SIDE. See
+    -- server/kennel.lua's requestDeployKennel handler for the full FXServer-
+    -- source-level writeup (GET_ENTITY_FORWARD_VECTOR has no registered
+    -- server-side native handler and silently resolves to vector3(0,0,0)
+    -- forever, never erroring) — not re-derived here, same root cause, same
+    -- fix. That comment flagged this exact call site (server/fetch.lua:345)
+    -- as sharing the identical bug, worse here since the dead vector fed
+    -- BOTH the spawn offset and the throw force: every ball has always
+    -- spawned exactly on the thrower's own feet with zero horizontal
+    -- impulse, dropping straight down.
+    --
+    -- Substitute: GetEntityHeading(ped) + the same heading->direction trig
+    -- kennel.lua uses, not a second hand-rolled approach. `forward` here is
+    -- already a unit vector (x = -sin(heading), y = cos(heading), so
+    -- x^2+y^2 == 1) — exactly what ApplyForceToEntity (client/fetch.lua)
+    -- expects to be scaled by a separate magnitude, mirroring how
+    -- throwForwardOffsetMeters below scales the same unit vector for the
+    -- spawn-position offset.
+    local heading = GetEntityHeading(ped)
+    local headingRad = math.rad(heading)
+    local forward = { x = -math.sin(headingRad), y = math.cos(headingRad) }
     local cfg = Config.FetchMechanic
 
     local spawnX = coords.x + forward.x * cfg.throwForwardOffsetMeters
