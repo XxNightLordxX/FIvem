@@ -96,6 +96,13 @@ left besides it is the licence, the changelog, this file, the ideas list,
 the audio credits, and the three you actually read — README, player guide,
 operator runbook.
 
+**Works with any ped is now FINISHED.** Verified, not assumed: a certified
+handler on a human body — or any custom ped — can leash, partner, carry,
+be treated and be attached to. 343 tests across the five affected files,
+including one that pins the half that matters more: widening the role check
+did NOT weaken the access check. A role-holder still has to be certified.
+Jump and crouch are deliberately kept, per your decision above.
+
 **Running without a database is now FINISHED.** `Config.Database = false`
 genuinely stops all SQL — verified, zero direct database calls remain
 outside the one accessor layer, and exactly one place in the entire
@@ -108,10 +115,6 @@ happens before your config is ever read. "No SQL" means you never import
 our tables — not that you can remove oxmysql.*
 
 
-- **Works with any ped.** Done, apart from final verification. A certified
-  handler on a human body can leash, partner, carry, be treated and be
-  attached to. Jump and crouch are deliberately kept — see the decision
-  above.
 
 - **Connecting the compat adapters.** The translation layer for other
   targeting and inventory scripts is written but not yet called, so today
