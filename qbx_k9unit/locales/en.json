@@ -1,0 +1,21 @@
+{
+    "common": {
+        "notify_title": "K9 Unit",
+        "not_k9_model": "This only works while playing a K9 character."
+    },
+    "vision": {
+        "thermal_on": "Thermal vision on.",
+        "thermal_off": "Thermal vision off.",
+        "night_on": "Night vision on.",
+        "night_off": "Night vision off.",
+        "thermal_keybind_label": "Toggle K9 Thermal Vision",
+        "night_keybind_label": "Toggle K9 Night Vision"
+    },
+    "vehicle": {
+        "no_vehicle_nearby": "No K9 vehicle nearby.",
+        "loaded": "Loaded into the vehicle.",
+        "released": "Released from the vehicle.",
+        "target_enter_label": "Load K9 Into Vehicle",
+        "target_exit_label": "Release K9 From Vehicle"
+    }
+}

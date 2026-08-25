@@ -139,7 +139,7 @@ function EnterNearestK9Vehicle()
 
     local vehicle = FindNearestK9Vehicle(Config.VehicleInteractMeters)
     if not vehicle then
-        lib.notify({ title = 'K9 Unit', description = 'No K9 vehicle nearby.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.no_vehicle_nearby'), type = 'error' })
         return
     end
 
@@ -161,7 +161,7 @@ function EnterNearestK9Vehicle()
     -- ResolveVehicleFromState()'s doc comment for why the handle itself
     -- isn't trusted to stay valid for the whole ride.
     vehicleState = { vehicleNetId = NetworkGetNetworkIdFromEntity(vehicle) }
-    lib.notify({ title = 'K9 Unit', description = 'Loaded into the vehicle.', type = 'success' })
+    lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.loaded'), type = 'success' })
 end
 
 --- Restores the K9's ped at the vehicle's door and clears vehicleState.
@@ -180,7 +180,7 @@ function ExitK9Vehicle()
     ReleasePedFromVehicleState(ped, ResolveVehicleFromState())
 
     vehicleState = nil
-    lib.notify({ title = 'K9 Unit', description = 'Released from the vehicle.', type = 'success' })
+    lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.released'), type = 'success' })
 end
 
 -- Resource-restart safety net (ship-blocking QA finding): vehicleState is
@@ -224,7 +224,7 @@ exports.ox_target:addGlobalVehicle({
     {
         name = 'qbx_k9unit:enterVehicle',
         icon = 'fas fa-dog',
-        label = 'Load K9 Into Vehicle',
+        label = locale('vehicle.target_enter_label'),
         distance = Config.VehicleInteractMeters,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.VehicleEntryExit then return false end
@@ -239,7 +239,7 @@ exports.ox_target:addGlobalVehicle({
     {
         name = 'qbx_k9unit:exitVehicle',
         icon = 'fas fa-dog',
-        label = 'Release K9 From Vehicle',
+        label = locale('vehicle.target_exit_label'),
         distance = Config.VehicleInteractMeters,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.VehicleEntryExit then return false end

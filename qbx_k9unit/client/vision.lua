@@ -213,7 +213,7 @@ end
 --- only, NOT CanShowK9UI().
 function ToggleThermalVision()
     if not IsOwnModelK9() then
-        lib.notify({ title = 'K9 Unit', description = 'This only works while playing a K9 character.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('common.not_k9_model'), type = 'error' })
         return
     end
 
@@ -226,8 +226,8 @@ function ToggleThermalVision()
 
     SetSeethrough(turningOn)
     lib.notify({
-        title = 'K9 Unit',
-        description = turningOn and 'Thermal vision on.' or 'Thermal vision off.',
+        title = locale('common.notify_title'),
+        description = turningOn and locale('vision.thermal_on') or locale('vision.thermal_off'),
         type = 'inform',
     })
 
@@ -243,7 +243,7 @@ end
 --- EnsureOnlyOneVisionEffectActive('night').
 function ToggleNightVision()
     if not IsOwnModelK9() then
-        lib.notify({ title = 'K9 Unit', description = 'This only works while playing a K9 character.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('common.not_k9_model'), type = 'error' })
         return
     end
 
@@ -254,8 +254,8 @@ function ToggleNightVision()
 
     SetNightvision(turningOn)
     lib.notify({
-        title = 'K9 Unit',
-        description = turningOn and 'Night vision on.' or 'Night vision off.',
+        title = locale('common.notify_title'),
+        description = turningOn and locale('vision.night_on') or locale('vision.night_off'),
         type = 'inform',
     })
 
@@ -287,11 +287,11 @@ end
 -- registration together.
 if Config.Features.ThermalVision then
     RegisterCommand('qbx_k9unit:toggleThermalVision', function() ToggleThermalVision() end, false)
-    RegisterKeyMapping('qbx_k9unit:toggleThermalVision', 'Toggle K9 Thermal Vision', 'keyboard', Config.Vision.Thermal.toggleKey)
+    RegisterKeyMapping('qbx_k9unit:toggleThermalVision', locale('vision.thermal_keybind_label'), 'keyboard', Config.Vision.Thermal.toggleKey)
 end
 if Config.Features.NightVision then
     RegisterCommand('qbx_k9unit:toggleNightVision', function() ToggleNightVision() end, false)
-    RegisterKeyMapping('qbx_k9unit:toggleNightVision', 'Toggle K9 Night Vision', 'keyboard', Config.Vision.Night.toggleKey)
+    RegisterKeyMapping('qbx_k9unit:toggleNightVision', locale('vision.night_keybind_label'), 'keyboard', Config.Vision.Night.toggleKey)
 end
 -- NOT added to client/radial.lua at all — per §11.3's file-plan row,
 -- "Vision toggles and door interaction are not added to the radial...

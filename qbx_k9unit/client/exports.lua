@@ -57,10 +57,27 @@
     underlying vision-effect natives are simply never toggled on in that
     case — this file adds no separate gate on top of that).
 
-    VERSIONING: GetAPIVersion() mirrors server/exports.lua's literal value
-    (1.0.0) — kept in sync manually since client and server are separate
-    Lua VMs with no shared module system in this resource's own convention
-    (see server/exports.lua's header for the full semver posture).
+    VERSIONING: GetAPIVersion() started as a literal mirror of
+    server/exports.lua's value (both 1.0.0) — CORRECTION, this pass
+    (2026-08-25): the original wording here said that mirror was "kept in
+    sync manually," implying the two files' version numbers were meant to
+    move together. That framing was wrong from the start and is discarded
+    now rather than carried forward: this file's exports and
+    server/exports.lua's exports are two independent contracts (a consumer
+    resource may use only one, or use them at different points in its own
+    lifecycle), each describing a different set of reads over a different
+    realm's state. This pass adds two genuinely new client-side reads
+    (`IsFetchCarryEngaged`, `HasFreshDefensePrompt` +
+    `GetDefenseSuggestedTargetNetId` — see FETCH ENGAGEMENT STATE /
+    HANDLER-DOWN DEFENSE STATE below) with NOTHING new landing in
+    server/exports.lua this same pass (see that file's own "SIX-FEATURE
+    COVERAGE AUDIT" section for why) — so THIS file's API_VERSION bumps to
+    1.1.0 while server/exports.lua's stays at 1.0.0. A consumer that reads
+    both must not assume they are ever numerically equal; each should be
+    checked independently via its own GetAPIVersion() call, exactly as
+    server/exports.lua's own semver posture already instructs for a single
+    surface (see that file's VERSIONING paragraph — same posture, applied
+    here per-file rather than per-resource).
 
     NOT IN THIS FILE: RequestPartnerUp/BreakPartnership/RequestLeashAttach/
     DetachLeash/RequestBiteHold/ReleaseBiteHold/RequestTakedown/RequestDrag/
@@ -71,6 +88,40 @@
     them already has its own consent/proximity/cooldown context tied to
     THIS resource's own UI flow (radial menu selection, ox_target option,
     etc.) that an external resource driving them directly would bypass.
+    EXTENDED, this pass, to name the self-initiated actions added by the
+    six features audited below (same exclusion, not a new category):
+    `RequestRecall` (client/recall.lua — a termination action deliberately
+    ungated on CanShowK9UI, but still self-initiated by the calling player
+    for their own partner K9; excluding it here does not reopen the "must
+    never gate the termination path" question that file's own header
+    settles, since that question is about THIS resource's OWN UI, not
+    about whether an unrelated external resource should be able to trigger
+    it on a player's behalf), `RequestThrowFetchBall`/`ReleaseFetchBall`/
+    `RequestRecallFetchBall` (client/fetch.lua), `ConfirmHandlerDownDefense`
+    (client/defense.lua — the manual confirm step; note its own read-only
+    preconditions, `HasFreshDefensePrompt`/`GetDefenseSuggestedTargetNetId`,
+    ARE exported below, only the action that consumes them is not), and
+    `RequestToggleK9PropAttachment` (client/propattachment.lua). None of
+    these gained a read-only counterpart worth exporting beyond the two
+    named above — see PROPATTACHMENT / PROXIMITY AUDIO note below for why
+    those two features contribute no exports here at all.
+
+    PropAttachments (client/propattachment.lua) and ProximityAudioFX
+    (client/proximityaudio.lua) contribute NOTHING to this file, audited
+    this pass alongside the other four features (full reasoning in
+    server/exports.lua's "SIX-FEATURE COVERAGE AUDIT" section, which covers
+    both realms even though it lives in the server file): neither exposes
+    a resource-global READ accessor at all — client/propattachment.lua's
+    only resource-globals are `AttachPropToOwnPed`/`DetachAndDeleteProp`
+    (internal plumbing shared with FetchMechanic, not domain state — same
+    exclusion class server/exports.lua's header already applies to
+    `ResolveNetworkEntity`/`NewCooldown`) and the excluded action above;
+    client/audio.lua's `IsK9SoundActive(id)` (added alongside
+    ProximityAudioFX) takes an opaque `id` minted only by `PlayK9Sound`,
+    which is itself correctly not exported (an unbounded external
+    NUI-message trigger with no proximity/cost context, the same category
+    of concern as a mutation) — an external caller could never obtain a
+    valid `id` to pass it, making it unexportable on its own.
     ======================================================================
 ]]
 
@@ -107,7 +158,7 @@ end
 -- VERSIONING
 -- ======================================================================
 
-local API_VERSION = { major = 1, minor = 0, patch = 0, string = '1.0.0' }
+local API_VERSION = { major = 1, minor = 1, patch = 0, string = '1.1.0' }
 
 --- @return table { major: number, minor: number, patch: number, string: string }
 exports('GetAPIVersion', function()
@@ -284,6 +335,78 @@ exports('IsDragEngaged', function()
     if type(IsDragEngaged) ~= 'function' then return false end
 
     local ok, result = pcall(IsDragEngaged)
+    if not ok then return false end
+    return result == true
+end)
+
+-- ======================================================================
+-- HANDLER-DOWN DEFENSE STATE (wraps client/defense.lua) — ADDED THIS PASS
+-- (Config.Features.HandlerDownDefense, still `false` by default). Both
+-- exports below are zero-argument reads of PendingDefensePrompt, a plain
+-- in-memory Lua table local to client/defense.lua with no game-state
+-- counterpart (see that file's own header: "no onResourceStop handler...
+-- this file applies NO native side effect to any entity, ever") — exactly
+-- the same "read this file's own already-computed local state" shape as
+-- IsBiteHoldEngaged/IsDragEngaged above, fitting this file's header
+-- justification directly: a HUD/phone resource may want to avoid stacking
+-- its own alert UI on top of an already-active handler-down prompt, the
+-- same way it already reasonably would for CanShowK9UI(). Neither export
+-- gates on Config.Features.HandlerDownDefense beyond what the wrapped
+-- global itself already does — client/defense.lua returns entirely,
+-- defining neither global, when that flag is off, so the `type(...) ==
+-- 'function'` guard below already degrades correctly on its own.
+-- Deliberately NOT exported: ConfirmHandlerDownDefense(actionType) — the
+-- manual confirm step is a self-initiated ACTION, same exclusion class as
+-- every other action named in this file's header "NOT IN THIS FILE" list.
+-- ======================================================================
+
+--- Is there a still-fresh (not yet expired) handler-down prompt pending
+--- for the local player's own K9 right now? Wraps HasFreshDefensePrompt()
+--- 1:1 — see this file's header TRUST MODEL NOTE: this is local UI state,
+--- not a security check, exactly like CanShowK9UI() above.
+--- @return boolean
+exports('HasFreshDefensePrompt', function()
+    if type(HasFreshDefensePrompt) ~= 'function' then return false end
+
+    local ok, result = pcall(HasFreshDefensePrompt)
+    if not ok then return false end
+    return result == true
+end)
+
+--- The server-suggested hostile netId attached to the current fresh
+--- defense prompt, if any. Wraps GetDefenseSuggestedTargetNetId() 1:1 — a
+--- plain number (or nil), never a table, so no CopyTier-style copy is
+--- needed here (see this file's header DESIGN PRINCIPLES item 3: the copy
+--- requirement is about table references, not scalars).
+--- @return number? suggestedTargetNetId
+exports('GetDefenseSuggestedTargetNetId', function()
+    if type(GetDefenseSuggestedTargetNetId) ~= 'function' then return nil end
+
+    local ok, result = pcall(GetDefenseSuggestedTargetNetId)
+    if not ok or type(result) ~= 'number' then return nil end
+    return result
+end)
+
+-- ======================================================================
+-- FETCH ENGAGEMENT STATE (wraps client/fetch.lua) — ADDED THIS PASS
+-- (Config.Features.FetchMechanic, still `false` by default). Same shape
+-- and justification as IsBiteHoldEngaged/IsDragEngaged above (an
+-- animation/ragdoll-management resource may want to know a K9 is
+-- currently mid-fetch-carry before doing something that would visibly
+-- conflict with it on the same ped) — extended here to the fourth
+-- engagement type this resource now has. Not gated beyond what the
+-- wrapped global itself already does, same reasoning as the defense
+-- exports above. Deliberately NOT exported:
+-- RequestThrowFetchBall/ReleaseFetchBall/RequestRecallFetchBall — all
+-- three are self-initiated actions, same exclusion class as this file's
+-- header "NOT IN THIS FILE" list.
+-- ======================================================================
+
+--- @return boolean
+exports('IsFetchCarryEngaged', function()
+    if type(IsFetchCarryEngaged) ~= 'function' then return false end
+
+    local ok, result = pcall(IsFetchCarryEngaged)
     if not ok then return false end
     return result == true
 end)

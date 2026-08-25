@@ -55,6 +55,16 @@ files {
     'html/index.html',
     'html/style.css',
     'html/app.js',
+    -- ox_lib 'locale' has been declared at the top of this manifest since Phase
+    -- 1, promising localisation that did not exist -- every player-facing
+    -- string was hardcoded English until now. locales/en.json is the first
+    -- real locale file; 2 of ~48 files are migrated, so this is a reference
+    -- pattern, not a finished migration (see locales/README.md).
+    -- Listed explicitly rather than as 'locales/*.json': research into the
+    -- files{} glob found `*` currently behaves recursively and is itself the
+    -- subject of an open upstream replacement proposal, and every other entry
+    -- in this manifest is explicit. Add each new locale file by name.
+    'locales/en.json',
 }
 
 client_scripts {

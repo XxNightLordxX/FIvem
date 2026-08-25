@@ -142,6 +142,15 @@
     partnership formed/broken, a contraband search completing, an XP tier
     crossing) is therefore now fully delivered, not merely specified.
 
+    RE-VERIFIED, THIS PASS (2026-08-25 coder-architect six-feature audit,
+    see "SIX-FEATURE COVERAGE AUDIT" below): re-grepped every
+    `FireOutboundEvent(` call site and every `qbx_k9unit:events:*` string
+    literal in the tree again before touching this file. Still exactly the
+    six calls, still the four owning files named above, still no seventh.
+    This correction was NOT stale a second time — recorded here only so a
+    future editor doesn't have to re-derive that this was actually checked
+    twice, by two independent passes, rather than copy-pasted forward.
+
     Naming: a new `qbx_k9unit:events:<name>` namespace, distinct from the
     existing `qbx_k9unit:server:`/`qbx_k9unit:client:` namespaces (which
     README.md already documents as internal and "may change between
@@ -214,6 +223,124 @@
     TriggerClientEvent's own arguments) — wiring this in is arithmetic-free,
     matching COMPLEMENTARY_FEATURES.md's own "Effort: small" assessment for
     this item.
+    ======================================================================
+
+    ======================================================================
+    SIX-FEATURE COVERAGE AUDIT (2026-08-25 coder-architect pass) — six
+    features have landed in this resource since this file was first
+    written: Recall (server/recall.lua, client/recall.lua),
+    HandlerDownDefense (server/defense.lua, client/defense.lua),
+    PropAttachments (server/propattachment.lua, client/propattachment.lua),
+    FetchMechanic (server/fetch.lua, client/fetch.lua), ProximityAudioFX
+    (client/proximityaudio.lua only — no server-side file exists for it),
+    and two more that don't map to a single feature file: partnership
+    tenure (server/tenure.lua) and the admin/audit surface
+    (server/admin.lua). Each was read in full this pass and evaluated
+    against this file's own DESIGN PRINCIPLES above (wrap an EXISTING
+    resource-global read accessor, never invent one; never add SQL; never
+    weaken the "no new mutations" stance). Result for THIS file
+    (server/exports.lua): **zero new exports.** Every one of the six either
+    exposes no resource-global function this file could wrap at all, or its
+    only resource-global surface is a self-initiated mutation already
+    excluded by this file's existing "no new mutations" principle. Decided
+    per feature, not defaulted:
+
+    - Recall (server/recall.lua): NOTHING. The file registers exactly one
+      RegisterNetEvent and defines no resource-global (non-`local`)
+      function of its own — verified by direct read, not grep alone,
+      since a false negative here would be the exact "silently stops
+      protecting" failure class this file's CopyTier comment warns about
+      elsewhere. There is no per-citizenid or per-source cached state this
+      file could read (no "is a recall on cooldown" accessor exists, nor
+      would one be safe to add: RecallCooldown is `local` to
+      server/recall.lua and adding a resource-global reader for it is that
+      file's call, not this one's, per DESIGN PRINCIPLE 4). The
+      client-initiated action (`RequestRecall()`) is evaluated in
+      client/exports.lua instead, where it is also excluded — see that
+      file's own reasoning; there is no server-exportable half of Recall
+      period.
+    - HandlerDownDefense (server/defense.lua): NOTHING. Confirmed by direct
+      read: this file exposes NO resource-global function — `LastHostile`,
+      `AttackerReportCooldown`, and `DefenseTriggerCooldown` are all
+      `local`, and `IsHandlerDown`/`TryNotifyPartnerK9` are both `local`
+      too. The only state genuinely worth reading externally (does the
+      local K9 currently have a fresh handler-down prompt, and what target
+      did the server suggest) is CLIENT-side ephemeral UI state
+      (`HasFreshDefensePrompt()`/`GetDefenseSuggestedTargetNetId()`,
+      client/defense.lua) — added to client/exports.lua instead, not here.
+      Also note for whoever next touches server/defense.lua: its own
+      client-facing relay event (`qbx_k9unit:client:handlerDownDefenseTrigger`)
+      uses this resource's `qbx_k9unit:client:`/`qbx_k9unit:server:`
+      namespace, which README.md documents as internal and subject to
+      change — NOT the `qbx_k9unit:events:*` stable-contract namespace
+      the EVENT CONTRACT section above documents. A dispatch/MDT-style
+      resource wanting to know "a handler just went down and their K9 was
+      notified" would be a reasonable FUTURE addition to that stable
+      namespace, but adding it means calling `FireOutboundEvent` from
+      inside server/defense.lua itself — off limits to this pass (this
+      file wraps, it does not add firing points to files it doesn't own).
+      Flagged as a genuine gap, not silently dropped.
+    - PropAttachments (server/propattachment.lua): NOTHING. That file's own
+      header says so explicitly and this pass re-confirmed it by direct
+      read: "THIS FILE exposes NO resource-global functions... no other
+      file in this resource... needs to call into prop-attachment state
+      directly." `PropAttachmentState`/`PendingPropAttachConfirm` are both
+      `local`. There is no "is citizenid X currently wearing a prop"
+      accessor to wrap because none exists, and adding one would mean
+      writing new code inside a file this pass does not own.
+    - FetchMechanic (server/fetch.lua): NOTHING on the server side, by the
+      identical reasoning — `FetchBalls`/`CarrierIndex`/
+      `PendingFetchThrows`/`PendingFetchCarries`/`PendingFetchDrops` are
+      all `local`, and every server-side function in that file is `local`
+      too (confirmed: zero `function <Name>(` — non-`local` — declarations
+      anywhere in server/fetch.lua). The one genuinely useful read this
+      feature produces — is the LOCAL K9 currently carrying a fetch ball
+      right now — is client-side (`IsFetchCarryEngaged()`,
+      client/fetch.lua), added to client/exports.lua instead.
+    - ProximityAudioFX (client/proximityaudio.lua): NOTHING, and there is
+      no server-side file for this feature to begin with — it is a
+      purely client-local cosmetic ambient-audio effect (see that file's
+      own header). Not applicable to this file at all.
+    - Partnership tenure (server/tenure.lua): NOTHING. That file's own
+      header says so explicitly ("THIS FILE owns no resource-global
+      (non-`local`) function of its own"), re-confirmed by direct read.
+      Beyond that: the tenure VALUE itself is never cached in memory at
+      all — `CheckTenureMilestonesForK9` computes it fresh via a
+      `TIMESTAMPDIFF(SECOND, established_at, NOW())` SELECT every time it
+      is checked (that file's own header, design question 1); the only
+      in-memory table this file keeps, `TenureFullyCollected`, is a
+      per-row boolean skip-cache with no tenure DURATION in it, and is
+      `local` regardless. Exporting a genuine "current tenure for this
+      pair" read would require either (a) a brand-new SQL query this file
+      would have to own itself (forbidden by DESIGN PRINCIPLE 4 — "no
+      unbounded DB work," and a caller-invoked export is exactly the "in a
+      loop" case that principle exists to prevent), or (b) adding a new
+      resource-global accessor inside server/tenure.lua itself, which is
+      not this file's own file to edit this pass. Both routes are closed;
+      nothing is exported.
+    - Admin/audit surface (server/admin.lua): NOTHING — already covered by
+      the existing "k9_search_log READ-BACK" entry in "NOT IN THIS FILE"
+      below, re-verified accurate this pass by direct read of
+      server/admin.lua: every query function in that file
+      (QueryCertificationHistory/QueryPartnershipHistory/
+      QuerySearchLogByOfficer/QuerySearchLogByPlate/QuerySearchLogByPerson/
+      QuerySearchLogRecent, etc.) is `local`, ACE-gated, and command-driven
+      — no resource-global accessor exists to wrap, and building one here
+      would mean inventing a new any-caller-resource authorization model
+      for tables this file doesn't own, exactly the objection that
+      existing entry already raises. No change needed there.
+
+    NET EFFECT ON VERSIONING: because none of the six produced a wrappable
+    resource-global on the SERVER side, this file's own API_VERSION stays
+    at 1.0.0 — there is nothing additive to bump for. See VERSIONING above
+    and client/exports.lua's own header for why that file's version DID
+    move to 1.1.0 this same pass (it gained two genuinely new reads:
+    `IsFetchCarryEngaged`, `HasFreshDefensePrompt` +
+    `GetDefenseSuggestedTargetNetId`) — the two files' API_VERSION numbers
+    are independent contracts, tracked separately, and are not expected to
+    stay numerically identical going forward; see client/exports.lua's own
+    corrected VERSIONING note for the full reasoning on why "kept in sync"
+    was the wrong framing from the start.
     ======================================================================
 
     NOT IN THIS FILE — deliberate, with reasons:

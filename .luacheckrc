@@ -162,7 +162,7 @@ read_globals = {
     -- Server-side implicit global inside event handlers
     "source",
     -- ox_lib / oxmysql / export surface
-    "lib", "exports", "MySQL",
+    "lib", "locale", "exports", "MySQL",
     -- qbx_core's client-side player-data cache (client/hud.lua)
     "QBX",
 }

@@ -930,14 +930,24 @@ AddEventHandler('playerDropped', function(reason)
         end
     end
 
-    local pairing = LeashPairs[src]
-    if not pairing then return end
-    local partner = pairing.partner
-
-    LeashPairs[src] = nil
-    LeashPairs[partner] = nil
-
-    TriggerClientEvent('qbx_k9unit:client:leashDetached', partner, 'partner_disconnected')
+    -- CORRECTNESS FIX (dedicated K9 pass, 2026-08-25): this used to
+    -- reimplement doDetachLeash's own LeashPairs[src]/LeashPairs[partner]
+    -- clear-and-broadcast sequence inline, by hand, instead of calling it —
+    -- directly contradicting doDetachLeash's own doc comment above ("there
+    -- is exactly one place that mutates LeashPairs on detach") and this
+    -- file's FILE-TO-FILE CONTRACT header ("do not duplicate the LeashPairs
+    -- mutation/broadcast logic"). Not a live behavioral bug today (both
+    -- code paths clear the same two keys), but it is exactly the kind of
+    -- silent fork that could reintroduce the leash-trap class of bug this
+    -- subsystem's header warns about: a future change to doDetachLeash
+    -- (e.g. additional cleanup, a changed broadcast payload) would silently
+    -- fail to apply here, on the disconnect exit path, while every other
+    -- exit path (voluntary detach, cert-revoke force-detach) picked it up.
+    -- doDetachLeash also broadcasts leashDetached to `src` itself, which is
+    -- a harmless no-op here (TriggerClientEvent to an already-disconnected
+    -- id sends nowhere) — the original hand-written version omitted that
+    -- send as a micro-optimization, not a correctness requirement.
+    doDetachLeash(src, 'partner_disconnected')
 end)
 
 -- Reserved for future Phase 2+ small, access-gated K9 actions that need
