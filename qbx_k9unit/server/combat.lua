@@ -77,6 +77,20 @@
       ActiveHolds/live server-side health (GetEntityHealth, see
       PED_DEAD_HEALTH_THRESHOLD below) before acting, never trusted alone.
     - 'qbx_k9unit:server:requestTakedown' (targetNetId: number)
+    - 'qbx_k9unit:server:reportHolderDied' ()
+      LIFECYCLE QA FIX (this pass — see this event's own handler doc comment,
+      near EndActiveEffectForHolder, for the full trust-boundary/
+      verification writeup): mirrors reportBiteHoldTargetDied immediately
+      above, for the HOLDING K9's own death instead of a target's. Sent by
+      client/combat.lua's ActiveDragAsHolder/ActiveNpcEffects per-tick
+      blocks, no arguments — `source` names the reporting (claimed-holder)
+      client. Re-verified against K9ActiveEffect/live server-side health
+      (GetEntityHealth, PED_DEAD_HEALTH_THRESHOLD below) before acting,
+      never trusted alone — this is a FASTER-PATH optimization only; the
+      shared maintenance thread's own HolderPedIsDead check (also this pass)
+      is the always-on backstop that does not depend on this event ever
+      arriving (a bite-hold/takedown on a PLAYER target has no client-side
+      holder state to self-report from at all).
 
     Client events (server->client), registered by client/combat.lua:
     - 'qbx_k9unit:client:applyBiteHold' (holderNetId: number, expiresAt: number)
@@ -220,18 +234,23 @@
       `applyNpcTakedown` since `Config.Combat.NonLethalTakedown.healthFloor`
       is already a `shared_scripts`-loaded config value client/combat.lua
       can read directly. THIS FILE'S OWN HALF of that fix (stop calling the
-      suspect native server-side) is complete below; the CLIENT half (add
-      the actual `SetEntityHealth(npcPed, Config.Combat.NonLethalTakedown.healthFloor)`
-      call inside client/combat.lua's existing `applyNpcTakedown` handler,
-      guarded the same `< healthFloor` way) is OUT OF SCOPE for this file
-      and is flagged in this pass's own report for whoever owns
-      client/combat.lua — until that lands, the disclosed gap this file's
-      own comment already named ("NOT a sufficient substitute on its own...
-      cannot honestly cover sustained damage") widens slightly further (the
-      one-time top-up itself, not just its continuity, is currently
-      unapplied) — the damage-bracket/ragdoll relay (both independently
-      confirmed working, see above) remain the real protection during the
-      window.
+      suspect native server-side) is complete below. STALE-COMMENT FIX
+      (this pass, cross-change regression review — re-verified against the
+      actual current client/combat.lua before rewriting this paragraph, not
+      taken on the report alone): the CLIENT half has SINCE LANDED —
+      client/combat.lua's `applyNpcTakedown` handler now calls
+      `SetEntityHealth(npcPed, Config.Combat.NonLethalTakedown.healthFloor)`,
+      guarded the same `< healthFloor` way, ordered between the
+      damage-bracket and the ragdoll task, exactly matching what this
+      paragraph originally asked for. This comment used to say that call
+      was "OUT OF SCOPE for this file... until that lands, [the gap] widens
+      slightly further" as though still pending — that framing is what went
+      stale, not the underlying fix. The one-time top-up is therefore no
+      longer unapplied; the damage-bracket/ragdoll relay (both independently
+      confirmed working, see above) remain the primary, continuous
+      protection during the window regardless — the health-floor call was
+      always disclosed as a one-time supplement on top of them, never a
+      replacement for either.
     Rather than assert an unresolved server-side legitimacy for these
     natives just to keep one code shape, or leave one bug fixed and the
     rest standing on an unverified assumption, ALL FIVE are relayed to
@@ -1087,6 +1106,72 @@ function EndActiveEffectForHolder(holderSrc)
     return true
 end
 
+--- LIFECYCLE QA FIX (this pass) — closes the gap a lifecycle QA pass found:
+--- when the K9 HOLDER dies mid-hold or mid-drag while remaining connected
+--- (the DISCONNECT case is already handled correctly by playerDropped
+--- below, via 'holder_disconnected'), nothing previously noticed. Before
+--- this pass, the shared maintenance thread below checked hold.expiresAt,
+--- target resolvability, and (for drags) DragExceedsMaxDistance — never the
+--- HOLDER's own health — so a target stayed flee-suppressed/damage-immune/
+--- move-rate-limited (or, for a drag, physically attached to a corpse)
+--- until that hold's own hard timeout. Mirrors
+--- 'qbx_k9unit:server:reportBiteHoldTargetDied' above EXACTLY, just for the
+--- HOLDER's own death instead of a (player) TARGET's — client/combat.lua's
+--- ActiveDragAsHolder/ActiveNpcEffects per-tick blocks self-report here the
+--- instant THAT client observes its own ped has died. This report is a
+--- FASTER-PATH optimization only, not the only closer of the gap — see
+--- HolderPedIsDead's own doc comment (near DragExceedsMaxDistance above)
+--- for the ALWAYS-ON backstop half that does not depend on this event ever
+--- arriving at all (a bite-hold/takedown on a PLAYER target has no
+--- client-side holder state to self-report from in the first place).
+---
+--- TRUST BOUNDARY, not a convenience event — same two-part discipline as
+--- reportBiteHoldTargetDied above, mirrored exactly rather than
+--- reinvented:
+---   1. `source` must currently be the HOLDER of an active hold of ANY
+---      effectType — resolved via K9ActiveEffect[src], the SAME O(1)
+---      lookup releaseBiteHold/releaseDrag already use to resolve their own
+---      caller's target, never a client-supplied targetNetId. A source that
+---      is not genuinely the holder of anything is a silent no-op.
+---   2. The claim itself ("I died") is independently RE-VERIFIED against
+---      this player's own live server-side ped via the same
+---      GetEntityHealth <= PED_DEAD_HEALTH_THRESHOLD check
+---      reportBiteHoldTargetDied and ValidateCombatRequest already use —
+---      never trusted alone.
+--- THIS IS A TERMINATION PATH (PHASE3_SPEC.md §12.0 item 4's "no unbounded
+--- trap" guarantee, restated for EndActiveEffectForHolder immediately
+--- above): it must never be gated on HasK9Access/Config.Features.*/a
+--- cooldown/mutex/any check that can fail closed, same discipline
+--- EndActiveEffectForHolder's own doc comment already establishes for
+--- Recall. The two checks above are read-only facts about server-held
+--- state, neither of which can ever "deny" a genuine claim the way an
+--- access/cooldown check could strand one — a holder who is not actually
+--- dead simply gets a no-op, never a rejection.
+--- Even a successful lie has a low ceiling regardless: the worst outcome of
+--- a false report is ending a hold `source` is already the HOLDER of —
+--- something releaseBiteHold/releaseDrag/EndActiveEffectForHolder already
+--- let this same holder do unconditionally (or near-unconditionally)
+--- anyway, not a capability escalation against anyone else.
+---
+--- AWARD-FARM CHECK (explicitly verified, not assumed): EndHold's own
+--- BiteAndHold XP-award branch only pays out for reason == 'released' or
+--- 'timeout' — 'holder_died' (used below) is neither, so this termination
+--- path can never mint biteHoldSuccess XP, the same exclusion
+--- 'target_died' already relies on for the sibling report above.
+RegisterNetEvent('qbx_k9unit:server:reportHolderDied', function()
+    local src = source
+
+    local targetNetId = K9ActiveEffect[src]
+    if not targetNetId then return end -- src is not currently the holder of anything -- ignore
+
+    local holderPed = GetPlayerPed(src)
+    if holderPed == 0 or GetEntityHealth(holderPed) > PED_DEAD_HEALTH_THRESHOLD then
+        return -- claim does not match this player's own live server-side state -- ignore, never trust the claim alone
+    end
+
+    EndHold(targetNetId, 'holder_died')
+end)
+
 --[[ ================= NON-COMPLIANCE DETECTION ================= ]]
 
 --- @param hold table -- an ActiveHolds entry
@@ -1233,6 +1318,48 @@ local function DragExceedsMaxDistance(hold, targetNetId)
     return dist > Config.Combat.PropDragging.maxDragDistance
 end
 
+--- LIFECYCLE QA FIX (this pass): the shared maintenance thread below used to
+--- check hold.expiresAt, target resolvability, and (for drags)
+--- DragExceedsMaxDistance above -- but never the HOLDER's own health. If the
+--- HOLDING K9 died mid-hold/mid-drag while remaining connected (never
+--- disconnecting -- the DISCONNECT case is already handled correctly, see
+--- playerDropped below), nothing noticed: the target stayed
+--- flee-suppressed/damage-immune/move-rate-limited (or, for a drag,
+--- physically attached to a corpse) until that hold's own hard timeout, up
+--- to Config.Combat.BiteAndHold.maxDurationMs/
+--- Config.Combat.NonLethalTakedown.ragdollDurationMs/
+--- Config.Combat.PropDragging.maxDragDurationMs later -- bounded (never an
+--- unbounded trap), but the effect visibly outlived its cause. This
+--- function is the ALWAYS-ON backstop half of the fix (see the maintenance
+--- thread's own call site below); 'qbx_k9unit:server:reportHolderDied'
+--- above (near EndActiveEffectForHolder) is the faster, client-reported
+--- half for the two cases (drag-as-holder, NPC-effect-as-holder) where the
+--- holder's own client already tracks enough state to self-detect its own
+--- death within a frame -- this function is what closes the gap
+--- UNCONDITIONALLY even if that report is lost, never sent (a
+--- bite-hold/takedown on a PLAYER target has no client-side holder state to
+--- self-report from at all -- see reportHolderDied's own doc comment), or
+--- sent by a hostile/frozen/crashed client that never runs its own
+--- self-check.
+---
+--- Deliberately narrow, mirroring HolderPedIsDead's sibling
+--- DragExceedsMaxDistance's own "holder already disconnected" early-return
+--- immediately above: only reports a HOLDER who is genuinely still
+--- connected (GetPlayerPed ~= 0) AND whose own live health has crossed
+--- PED_DEAD_HEALTH_THRESHOLD. A DISCONNECTED holder is a different,
+--- already-handled case (the playerDropped handler below ends the hold
+--- immediately with 'holder_disconnected') -- this function deliberately
+--- does not re-label that same, already-correct case with a different
+--- reason string for what would otherwise only ever be a benign, momentary
+--- race between the two (this thread's own tick landing in the brief
+--- window before playerDropped fires for the same disconnect).
+--- @param hold table -- an ActiveHolds entry
+--- @return boolean dead
+local function HolderPedIsDead(hold)
+    local holderPed = GetPlayerPed(hold.holderSrc)
+    return holderPed ~= 0 and GetEntityHealth(holderPed) <= PED_DEAD_HEALTH_THRESHOLD
+end
+
 -- Shared EXPIRY maintenance thread — see this file's header for why this
 -- is ALWAYS running (expiry enforcement, job (a)) regardless of whether
 -- detection sampling (job (b), its own separate thread below) is enabled.
@@ -1289,6 +1416,27 @@ if Config.Features.BiteAndHold or Config.Features.NonLethalTakedown or Config.Fe
                     local ok, err = pcall(EndHold, targetNetId, 'timeout')
                     if not ok then
                         print(('[qbx_k9unit] combat EndHold(timeout) errored for netId %s: %s'):format(targetNetId, tostring(err)))
+                    end
+                elseif HolderPedIsDead(hold) then
+                    -- LIFECYCLE QA FIX (this pass) — see HolderPedIsDead's
+                    -- own doc comment above for the full writeup: this is
+                    -- the ALWAYS-ON backstop half of the holder-death fix,
+                    -- never gated behind NonComplianceDetection.enabled or
+                    -- any other feature flag/access/cooldown check — this is
+                    -- a TERMINATION path (PHASE3_SPEC.md §12.0 item 4's own
+                    -- "no unbounded trap" guarantee, same discipline
+                    -- EndActiveEffectForHolder's own doc comment above
+                    -- already establishes for Recall) and must never be
+                    -- blockable. Catches the case within one
+                    -- MAINTENANCE_INTERVAL_MS tick (500ms) even if the
+                    -- client-reported 'qbx_k9unit:server:reportHolderDied'
+                    -- event is lost, never sent (a bite-hold/takedown on a
+                    -- PLAYER target has no client-side holder state to
+                    -- self-report from at all), or sent by a client that
+                    -- never runs its own self-check.
+                    local ok, err = pcall(EndHold, targetNetId, 'holder_died')
+                    if not ok then
+                        print(('[qbx_k9unit] combat EndHold(holder_died) errored for netId %s: %s'):format(targetNetId, tostring(err)))
                     end
                 elseif not ResolveNetworkEntity(targetNetId, 1) then
                     -- RED-TEAM FINDING (PropDragging), generalized to every
@@ -1706,14 +1854,22 @@ local function HandleTakedownRequest(src, targetNetId)
         -- server/medkit.lua's applyMedkitHeal relay already does for a
         -- player target. THIS FILE'S HALF of the fix is complete (no
         -- longer calling a suspect native, no longer documenting it as
-        -- trustworthy); the CLIENT HALF (client/combat.lua actually adding
-        -- that self-apply call) is out of scope for this file -- flagged in
-        -- this pass's own report. Until that lands, the one-time top-up
-        -- itself is unapplied for an NPC target whose health was already
-        -- below the floor at ragdoll-open time -- the damage-bracket
+        -- trustworthy). STALE-COMMENT FIX (this pass, cross-change
+        -- regression review, re-verified against the actual current
+        -- client/combat.lua before rewriting this paragraph, not taken on
+        -- the report alone): the CLIENT HALF has SINCE LANDED --
+        -- client/combat.lua's `applyNpcTakedown` handler now calls
+        -- `SetEntityHealth(npcPed, Config.Combat.NonLethalTakedown.healthFloor)`
+        -- guarded the same `< healthFloor` way, ordered between the
+        -- damage-bracket and the ragdoll task below, exactly matching this
+        -- paragraph's own original ask. The one-time top-up is therefore no
+        -- longer unapplied for an NPC target whose health was already below
+        -- the floor at ragdoll-open time -- the damage-bracket
         -- (SetEntityCanBeDamaged) and the ragdoll itself, both relayed
-        -- below and both independently client-confirmed, remain the real
-        -- protection during the window regardless.
+        -- below, remain the primary, continuous protection during the
+        -- window regardless; the health-floor call was always disclosed as
+        -- a one-time supplement on top of them, not a replacement for
+        -- either.
         TriggerClientEvent('qbx_k9unit:client:applyNpcTakedown', src, targetNetId, expiresAt)
     end
 

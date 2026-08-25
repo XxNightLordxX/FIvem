@@ -260,6 +260,51 @@
     exactly as documented, for the K9-target branch.
     ======================================================================
 
+    ======================================================================
+    HOLDER-DEATH LIFECYCLE FIX (this pass) — a lifecycle QA pass found that
+    when the K9 HOLDER dies mid-hold/mid-drag while remaining connected
+    (disconnect was already handled correctly, server/combat.lua's
+    playerDropped), nothing noticed: server/combat.lua's shared maintenance
+    thread checked hold.expiresAt, target resolvability, and (for drags) the
+    max-distance safety valve, but never the holder's own health, and this
+    file's own holder-side per-tick blocks — the ActiveDragAsHolder branch
+    and the ActiveNpcEffects loop, both in the shared maintenance thread
+    below — kept re-asserting AttachEntityToEntity/SetPedMoveRateOverride/
+    SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes every frame with no
+    own-death guard, unlike every TARGET-side block in this same thread
+    (ActiveBiteHold, ActiveDragSpeedLimit, ActiveForcedRagdoll), which
+    already stop and self-report the instant IsEntityDead(PlayerPedId())
+    goes true. Fixed by mirroring that exact TARGET-side pattern onto both
+    holder-side blocks: on detecting its own death, this client immediately
+    stops re-asserting, runs the same restore (DetachEntity / reset move
+    rate / clear flee-suppression or damage-bracket) its own
+    localDeadline/dragEnded/endNpcBiteHold/endNpcTakedown backstops already
+    perform, and reports via the new
+    'qbx_k9unit:server:reportHolderDied' event — server/combat.lua's
+    handler for that event re-verifies the claim via GetEntityHealth before
+    acting (same trust-boundary discipline as reportBiteHoldTargetDied), the
+    same "verify, never trust alone" posture this file's header already
+    establishes throughout.
+    THIS IS A FASTER-PATH OPTIMIZATION ONLY, not the only closer of the gap:
+    a bite-hold or takedown on a PLAYER target leaves NO holder-side client
+    state at all (MyEngagedTargetNetId is cosmetic-only and carries no
+    persistent native flag needing urgent local cleanup; a player-target
+    takedown has no holder-side state whatsoever), so this file has nothing
+    to self-report from in either of those two cases. server/combat.lua's
+    own always-on HolderPedIsDead backstop (its shared maintenance thread,
+    checked every MAINTENANCE_INTERVAL_MS/500ms tick, unconditionally, never
+    gated behind any feature flag/access/cooldown check since ending a hold
+    for a dead holder is a TERMINATION path) is what closes those two cases,
+    and is what closes ALL cases if this client's own report is ever lost,
+    never sent, or this client is hostile/frozen/crashed. MyEngagedTargetNetId
+    itself needs no matching self-clear here: server/combat.lua's EndHold
+    always sends 'qbx_k9unit:client:biteHoldEnded' to the holder regardless
+    of end reason, and that handler (above) already clears
+    MyEngagedTargetNetId unconditionally — the moment either this file's own
+    report or the server's independent backstop ends the hold, that toggle
+    clears itself through the existing relay, no separate fix needed.
+    ======================================================================
+
     FILE-TO-FILE CONTRACT:
     - Calls CanShowK9UI()/DenyK9UIAccess() (client/main.lua) before any
       self-initiated trigger acts — same "display gate only, server is the
@@ -1397,22 +1442,35 @@ CreateThread(function()
                 -- DisableControlAction call ever lands on the resurrected
                 -- ped.
                 --
-                -- CLIENT-SIDE HALF ONLY — this does not, and cannot, tell
-                -- server/combat.lua the hold ended early: this file has no
-                -- access-gate/authority to unilaterally end the server's own
-                -- K9ActiveEffect bookkeeping, and the HOLDING K9's own
-                -- client (MyEngagedTargetNetId / IsBiteHoldEngaged) is a
-                -- completely different client that receives no signal from
-                -- this block at all. Reporting the death is the best this
-                -- half can do; it does NOT by itself free the holder's
-                -- "Release" toggle or let the server stop counting this as
-                -- an active hold — that still needs a server-side
-                -- 'target_died' end condition (see below) to be complete.
-                -- Best-effort notify so server/combat.lua CAN act on it once
-                -- that handler exists — inert (no registered listener) until
-                -- it does, same "client fires ahead of the server catching
-                -- up" pattern already used elsewhere in this resource for a
-                -- not-yet-landed contract.
+                -- CLIENT-SIDE HALF — this block has no access-gate/authority
+                -- of its own to unilaterally end the server's own
+                -- K9ActiveEffect bookkeeping, or to reach into a different
+                -- client's own MyEngagedTargetNetId / IsBiteHoldEngaged
+                -- state directly; reporting the death is what this half
+                -- does, server/combat.lua's own
+                -- 'qbx_k9unit:server:reportBiteHoldTargetDied' handler is
+                -- what actually acts on it. STALE-COMMENT FIX (this pass,
+                -- cross-change regression review — re-verified against the
+                -- current server/combat.lua before rewriting this
+                -- paragraph, not taken on the report alone): this comment
+                -- previously said that handler was "inert — no registered
+                -- listener until it does" and that this report "does NOT by
+                -- itself free the holder's Release toggle" — both true when
+                -- originally written, both stopped being true minutes later
+                -- once server/combat.lua's own handler was fixed to verify
+                -- via GetEntityHealth instead of the never-server-registered
+                -- IsEntityDead it was originally built on (see that
+                -- handler's own doc comment). It now genuinely re-verifies
+                -- this claim against this player's own live server-side
+                -- health and calls EndHold(targetNetId, 'target_died'),
+                -- which sends 'qbx_k9unit:client:biteHoldEnded' to the
+                -- HOLDING K9's own client regardless of reason — that is
+                -- what actually clears the holder's own
+                -- MyEngagedTargetNetId / IsBiteHoldEngaged() state (see the
+                -- biteHoldEnded handler above). This report DOES now free
+                -- the holder's "Release" toggle — indirectly, via the
+                -- server, since this block still has no authority of its
+                -- own to touch a different client's state directly.
                 TriggerServerEvent('qbx_k9unit:server:reportBiteHoldTargetDied')
                 ActiveBiteHold = nil
             else
@@ -1429,23 +1487,35 @@ CreateThread(function()
         end
 
         if ActiveDragAsHolder then
-            -- See header "SHARED PER-TICK ASSERTION HELPERS" — this is the
-            -- exact same NetworkRequestControlOfEntity/AttachEntityToEntity/
-            -- (NPC-target) SetPedMoveRateOverride sequence dragStarted's own
-            -- handler above already runs once, immediately, on grant; this
-            -- is the CONTINUOUS every-tick reassertion of the same thing
-            -- (PHASE3_SPEC.md §12.0 item 8's own "new finding": DetachEntity
-            -- is very likely NOT ownership-gated either, citizenfx/fivem
-            -- issue #3726, so a hostile target's own client can call it on
-            -- itself at any moment — re-asserting the attach EVERY TICK,
-            -- never one-shot, is the only thing that puts it back, binding
-            -- guardrail 2).
-            local targetPed = AssertDragAsHolderTick(ActiveDragAsHolder)
+            -- QA-FIX (holder death, lifecycle QA pass, this pass) — mirrors
+            -- ActiveBiteHold's/ActiveForcedRagdoll's/ActiveDragSpeedLimit's
+            -- own IsEntityDead branches above, applied here for the first
+            -- time to a HOLDER-side (not target-side) per-tick block. This
+            -- block previously kept calling AssertDragAsHolderTick
+            -- (AttachEntityToEntity + NPC move-rate override, every frame)
+            -- even after THIS client's own ped died mid-drag, keeping the
+            -- target physically attached to (and, for an NPC,
+            -- move-rate-limited by) a corpse until server/combat.lua's own
+            -- expiresAt timeout or the new server-side holder-health
+            -- backstop caught up. Detected within a frame or two (this
+            -- thread runs at Wait(0) while ActiveDragAsHolder is set), same
+            -- cadence as the target-side death checks above.
+            --
+            -- TRUST BOUNDARY, not a convenience event — same posture as
+            -- ActiveBiteHold's own reportBiteHoldTargetDied call above:
+            -- this self-report does not by itself end the drag;
+            -- server/combat.lua's 'qbx_k9unit:server:reportHolderDied'
+            -- handler independently re-verifies this claim against this
+            -- player's own live server-side health before acting. Even a
+            -- successful lie has a low ceiling regardless: the worst
+            -- outcome is ending a drag THIS player is already the HOLDER
+            -- of, something ReleaseDrag already lets this same player do
+            -- unconditionally anyway.
+            local myPed = PlayerPedId()
+            if IsEntityDead(myPed) then
+                TriggerServerEvent('qbx_k9unit:server:reportHolderDied')
 
-            if now >= ActiveDragAsHolder.localDeadline then
-                -- Backstop only — see header "DEFENSE IN DEPTH". In the
-                -- normal case server/combat.lua's own maintenance
-                -- thread already sent dragEnded before this ever fires.
+                local targetPed = ResolveNetworkEntity(ActiveDragAsHolder.targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
                 if targetPed then
                     DetachEntity(targetPed, true, false)
                     if not ActiveDragAsHolder.isPlayerTarget then
@@ -1453,6 +1523,32 @@ CreateThread(function()
                     end
                 end
                 ActiveDragAsHolder = nil
+            else
+                -- See header "SHARED PER-TICK ASSERTION HELPERS" — this is the
+                -- exact same NetworkRequestControlOfEntity/AttachEntityToEntity/
+                -- (NPC-target) SetPedMoveRateOverride sequence dragStarted's own
+                -- handler above already runs once, immediately, on grant; this
+                -- is the CONTINUOUS every-tick reassertion of the same thing
+                -- (PHASE3_SPEC.md §12.0 item 8's own "new finding": DetachEntity
+                -- is very likely NOT ownership-gated either, citizenfx/fivem
+                -- issue #3726, so a hostile target's own client can call it on
+                -- itself at any moment — re-asserting the attach EVERY TICK,
+                -- never one-shot, is the only thing that puts it back, binding
+                -- guardrail 2).
+                local targetPed = AssertDragAsHolderTick(ActiveDragAsHolder)
+
+                if now >= ActiveDragAsHolder.localDeadline then
+                    -- Backstop only — see header "DEFENSE IN DEPTH". In the
+                    -- normal case server/combat.lua's own maintenance
+                    -- thread already sent dragEnded before this ever fires.
+                    if targetPed then
+                        DetachEntity(targetPed, true, false)
+                        if not ActiveDragAsHolder.isPlayerTarget then
+                            SetPedMoveRateOverride(targetPed, 1.0)
+                        end
+                    end
+                    ActiveDragAsHolder = nil
+                end
             end
         end
 
@@ -1547,6 +1643,44 @@ CreateThread(function()
                     -- truthiness.
                     ActiveForcedRagdoll = nil
                     SetEntityCanBeDamaged(myPed, true)
+                end
+            end
+        end
+
+        -- QA-FIX (holder death, lifecycle QA pass, this pass) — unlike
+        -- every OTHER per-tick block in this thread, ActiveNpcEffects
+        -- previously had NO own-death guard at all: the backstop loop below
+        -- only ever checked effect.localDeadline, so this client's own
+        -- death mid-bite-hold/mid-takedown of an NPC target went unnoticed
+        -- here until that deadline or server/combat.lua's own expiresAt
+        -- timeout caught up, keeping the NPC flee-suppressed/undamageable
+        -- against a dead K9 in the meantime. Checked ONCE, outside the
+        -- per-effect loop (this client can only ever be the HOLDER of one
+        -- such effect at a time per server/combat.lua's own K9ActiveEffect
+        -- rule, but this stays correct even if that invariant ever
+        -- changes) — IsEntityDead is a single native call, cheap enough to
+        -- run unconditionally alongside the loop below rather than gate
+        -- behind `next(ActiveNpcEffects)` first, mirroring
+        -- ActiveDragAsHolder's own identical IsEntityDead check above.
+        --
+        -- TRUST BOUNDARY — see ActiveDragAsHolder's own identical note
+        -- above: this is the client half only; server/combat.lua's
+        -- 'qbx_k9unit:server:reportHolderDied' handler independently
+        -- re-verifies this claim against this player's own live
+        -- server-side health before acting.
+        if next(ActiveNpcEffects) and IsEntityDead(PlayerPedId()) then
+            TriggerServerEvent('qbx_k9unit:server:reportHolderDied')
+
+            for npcNetId, effect in pairs(ActiveNpcEffects) do
+                ActiveNpcEffects[npcNetId] = nil
+                local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+                if npcPed then
+                    NetworkRequestControlOfEntity(npcPed)
+                    if effect.kind == 'bite' then
+                        SetBlockingOfNonTemporaryEvents(npcPed, false)
+                    else
+                        SetEntityCanBeDamaged(npcPed, true)
+                    end
                 end
             end
         end
