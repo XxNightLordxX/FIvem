@@ -680,8 +680,19 @@ t.test('confirmPropAttached: a disconnected ped (GetPlayerPed == 0) after all th
     local before = #f.notifyCalls
     f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 1, freshNetId())
 
-    t.equals(#f.notifyCalls, before, 'FINDING: still silent -- no NotifyPlayer')
-    t.isNil(lastClientEvent(f, 'qbx_k9unit:client:rejectK9PropAttach'), 'FINDING: still silent -- no rejectK9PropAttach either, unlike every OTHER failure branch in this same handler')
+    -- FIXED since this case was written. The branch used to return
+    -- completely silently, stranding the client's just-created object with
+    -- no instruction to reclaim it. It now sends rejectK9PropAttach like
+    -- every other failure branch in this handler.
+    --
+    -- It deliberately does NOT also notify: the player has disconnected, so
+    -- a notification has nobody to reach. The reject is still worth sending
+    -- because it is addressed to a client that may still be processing, and
+    -- costs nothing if it is not.
+    t.equals(#f.notifyCalls, before, 'no NotifyPlayer -- the player is gone, there is nobody to tell')
+    local reject = lastClientEvent(f, 'qbx_k9unit:client:rejectK9PropAttach')
+    t.isNotNil(reject, 'the disconnect race now rejects rather than returning silently')
+    t.equals(reject.target, 1)
 end)
 
 t.test('confirmPropAttached: an entity that never resolves notifies "unconfirmed" AND sends rejectK9PropAttach', function()
@@ -778,7 +789,7 @@ end)
 -- check. Reproduced directly, not assumed.
 -- ----------------------------------------------------------------------
 
-t.test('FINDING: confirmPropAttached accepts a netId that ALREADY belongs to a DIFFERENT citizenid\'s own active attachment, if the caller is standing close enough to it -- no cross-citizenid collision guard exists here, unlike server/fetch.lua', function()
+t.test('confirmPropAttached REJECTS a netId that already belongs to a DIFFERENT citizenid, even when the caller is standing close enough for every other check to pass', function()
     local f = newFixture()
     local netId1 = attachSuccessfully(f, 1, 'AAA111', 5001, { x = 0, y = 0, z = 0 })
 
@@ -790,24 +801,26 @@ t.test('FINDING: confirmPropAttached accepts a netId that ALREADY belongs to a D
     f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 2)
 
     -- Citizen 2's client reports CITIZEN 1's own real, already-tracked
-    -- netId instead of a genuinely new object.
+    -- netId instead of a genuinely new object. Every OTHER check passes:
+    -- the model is right, and the entity is genuinely close to citizen 2's
+    -- own ped. Only the ownership guard stands between this and a
+    -- cross-citizen registry collision.
     f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 2, netId1)
 
-    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.attached_success'), 'FINDING: this succeeds -- the model check and the distance-to-OWN-ped check both pass, and nothing here re-checks netId ownership uniqueness')
+    t.equals(f.notifyCalls[#f.notifyCalls].description,
+        locale('propattachment.attach_failed_already_tracked'),
+        'a netId another citizen already owns is refused, not adopted')
+    local reject = lastClientEvent(f, 'qbx_k9unit:client:rejectK9PropAttach')
+    t.isNotNil(reject, 'and the caller is told to reclaim their own object')
+    t.equals(reject.target, 2)
 
-    -- Both citizens now independently believe they own the SAME netId.
-    -- Toggling EITHER one off deletes the one shared physical entity.
+    -- The guard's whole point: citizen 1 still solely owns the entity, so
+    -- toggling it off is still a clean single-owner operation rather than
+    -- one half of a shared-entity desync.
     f.advance(TOGGLE_COOLDOWN_MS + 1)
-    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1) -- citizen 1 toggles their vest off
-    t.isTrue(f.deletedEntities[netId1 + 500000], 'the shared entity is now gone')
-
-    -- Citizen 2's own registry entry is now STALE -- still believes it owns
-    -- a netId that no longer resolves to anything. This is a real, disclosed
-    -- desync, not fixed here (server/propattachment.lua is not this task's
-    -- file to edit).
-    f.advance(TOGGLE_COOLDOWN_MS + 1)
-    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 2) -- citizen 2 tries to toggle off their (already-gone) vest
-    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.removed_success'), 'FINDING: this still reports success even though ResolveNetworkEntity for the now-deleted netId returns nil and DeleteEntity is never actually called a second time -- see RemovePropAttachmentForCitizenid\'s own unconditional notify, mirroring kennel_spec.lua\'s own disclosed "stale registry entry" finding for requestPickupKennel')
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+    t.isTrue(f.deletedEntities[netId1 + 500000], 'citizen 1 still owns and can remove it')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.removed_success'))
 end)
 
 -- ----------------------------------------------------------------------

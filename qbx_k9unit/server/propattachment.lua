@@ -195,6 +195,36 @@ end
 --- has one of these two exact models.
 local PropAttachmentModelHashes
 
+--- GLOBAL NETID-UNIQUENESS GUARD (coder-security, this pass) — mirrors
+--- server/fetch.lua's own FindOtherBallByNetId/GLOBAL NETID-UNIQUENESS
+--- INVARIANT exactly, ported to this file's own single-table registry
+--- shape. At most one `PropAttachmentState[citizenid]` entry may ever have
+--- `.netId == N` for any given N at any moment. Without this, a second
+--- citizen standing near a first citizen's already-tracked, real vest
+--- object could report THAT netId as their own confirm — the model check
+--- passes (it really is a configured prop model) and the distance check
+--- passes (it really is close to the caller's own live ped, because the
+--- caller placed themselves next to it) — leaving two PropAttachmentState
+--- entries pointing at one physical entity, and a stale-registry desync
+--- when either citizen later removes it (RemovePropAttachmentForCitizenid
+--- deletes the shared entity out from under the other's still-believed-
+--- valid entry). `excludeCitizenId` lets HandleConfirmPropAttached's own
+--- caller not treat its OWN prior entry (there should never be one here —
+--- the already-active check above already rejects that race — but this
+--- keeps the shape identical to fetch.lua's own reusable helper rather
+--- than hand-rolling a narrower one-off).
+--- @param netId number
+--- @param excludeCitizenId string?
+--- @return string? otherCitizenId
+local function FindOtherPropAttachmentByNetId(netId, excludeCitizenId)
+    for citizenid, attachment in pairs(PropAttachmentState) do
+        if citizenid ~= excludeCitizenId and attachment.netId == netId then
+            return citizenid
+        end
+    end
+    return nil
+end
+
 --- Builds/rebuilds PropAttachmentModelHashes from live config. Deferred
 --- into a function (rather than a bare file-load-time block like
 --- server/kennel.lua's KennelModelHashes) purely so the onResourceStart
@@ -394,7 +424,34 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     end
 
     local ped = GetPlayerPed(src)
-    if ped == 0 then return end
+    if ped == 0 then
+        -- DISCONNECT-MID-FLIGHT FIX (coder-security, this pass): this branch
+        -- used to `return` completely silently — the one remaining branch in
+        -- this handler that did not, unlike every sibling failure branch
+        -- above and below it. GetPlayerPed(src) == 0 does not necessarily
+        -- mean `src` has fully disconnected — see the identical "defensive:
+        -- src disconnected between the event firing and this line" comment
+        -- on requestToggleK9PropAttachment's own ped==0 check earlier in
+        -- this file — it can also mean src's ped is momentarily unresolvable
+        -- (a respawn race) while src's own network connection is still
+        -- live. Deciding whether a rejection is even deliverable: if `src`
+        -- genuinely has disconnected, TriggerClientEvent to it is a safe,
+        -- silent no-op (FiveM has nowhere to route it and does not error) —
+        -- so sending it here is never wrong, and it is the only way to close
+        -- the exact same orphaned-object gap the ORPHANED-PROP FIX closed on
+        -- every other branch in this handler: the client already created
+        -- and attached a real, networked object in response to this file's
+        -- own instruction before this line ever runs. No NotifyPlayer is
+        -- sent, matching this file's own established "ped==0 mid-flight"
+        -- convention elsewhere (silent — a genuinely disconnected target
+        -- could never see a toast anyway, and there is no better message for
+        -- "your character disappeared"). Nothing further to do on the
+        -- registry side: PendingPropAttachConfirm[citizenid] was already
+        -- consumed above, and this netId was never written into
+        -- PropAttachmentState, so there is no stale entry to clean up here.
+        TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
+        return
+    end
 
     -- GetEntityType expectedEntityType = 3 (object) — see
     -- server/entities.lua's own ResolveNetworkEntity doc comment for the
@@ -435,6 +492,25 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
     if dist > Config.PropAttachments.confirmDistanceTolerance then
         NotifyPlayer(src, locale('propattachment.attach_failed_too_far'), 'error')
+        TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
+        return
+    end
+
+    -- GLOBAL NETID-UNIQUENESS GUARD (coder-security, this pass) — mirrors
+    -- server/fetch.lua's own FindOtherBallByNetId check verbatim: reject a
+    -- confirm that names a netId ALREADY claimed by a DIFFERENT citizenid's
+    -- own active PropAttachmentState entry (e.g. a second citizen standing
+    -- next to the first and reporting the first's own real, already-tracked
+    -- vest's netId as their own). `citizenid` is confirmed above (the
+    -- already-active re-check) to have no entry of its own yet, so any hit
+    -- here is necessarily a genuine cross-citizenid collision, never this
+    -- same citizenid's own prior value. Without this, a client-supplied
+    -- netId could let one player bind another player's already-tracked
+    -- entity into their own registry — exactly the property this file's own
+    -- header "WHY THIS NEVER ACCEPTS A CLIENT-CLAIMED TARGET" section
+    -- argues this file does not allow.
+    if FindOtherPropAttachmentByNetId(netId, citizenid) then
+        NotifyPlayer(src, locale('propattachment.attach_failed_already_tracked'), 'error')
         TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
         return
     end

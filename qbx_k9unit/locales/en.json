@@ -249,15 +249,16 @@
     "tier_up": "Your K9 has reached the %s tier!"
   },
   "propattachment": {
-    "vest_prop_load_failed": "K9 vest prop failed to load.",
-    "removed_success": "K9 vest removed.",
-    "not_authorized_equipment": "You are not authorized to use K9 equipment.",
-    "requires_k9_form": "You must be in a K9 form to wear this.",
-    "attach_timed_out": "K9 vest attach timed out — try again.",
+    "attach_failed_already_tracked": "Vest attach failed — that item is already tracked.",
+    "attach_failed_too_far": "K9 vest attach failed — reported object too far from you.",
     "attach_failed_unconfirmed": "K9 vest attach failed — the object could not be confirmed.",
     "attach_failed_wrong_model": "K9 vest attach failed — unexpected object model.",
-    "attach_failed_too_far": "K9 vest attach failed — reported object too far from you.",
-    "attached_success": "K9 vest attached."
+    "attach_timed_out": "K9 vest attach timed out — try again.",
+    "attached_success": "K9 vest attached.",
+    "not_authorized_equipment": "You are not authorized to use K9 equipment.",
+    "removed_success": "K9 vest removed.",
+    "requires_k9_form": "You must be in a K9 form to wear this.",
+    "vest_prop_load_failed": "K9 vest prop failed to load."
   },
   "radial": {
     "sit_label": "Sit",
