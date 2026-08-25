@@ -21,6 +21,99 @@ Config = {}
 -- The code must gate on these at the point of activation, not just declare
 -- them (see §3 acceptance criteria).
 -- ======================================================================
+-- WHAT IS IN THIS FILE  --  a map, so you can stop scrolling.
+--
+-- This file is long. It is deliberately ONE file rather than several,
+-- because hunting through five config files is worse than scrolling
+-- through one. What it was missing is an index. This is it.
+--
+-- HOW TO USE IT: find the thing you want below, then search this file for
+-- the name in `backticks`. No line numbers here on purpose -- they go stale
+-- the moment anything is added, and a wrong line number is worse than none.
+--
+-- THE ONE TO KNOW ABOUT: `Config.Features` is the master list of on/off
+-- switches, right below this. Almost every entry there has its own settings
+-- table further down with the same name -- turn something on there, then
+-- search for its name to tune it.
+--
+-- WHO CAN DO WHAT
+--   Config.Departments .............. which jobs count as police, and the
+--                                     rank numbers that unlock things
+--   Config.HighCommand .............. the senior rank that outranks every
+--                                     other check here
+--   Config.Permissions .............. the four things high command can hand
+--                                     to one person
+--   Config.FeatureControl ........... which features need a personal grant
+--                                     before someone can use them
+--   Config.CommandTablet ............ the K9 tablet: item, command, or both
+--
+-- BECOMING AND BEING A K9
+--   Config.Peds ..................... which models can be a K9. ANY model
+--                                     works -- it does not have to be a dog
+--   Config.K9Appearance ............. what happens to someone's character
+--                                     when they are made a K9
+--   Config.CertificationTiers ....... trainee / certified / senior, and how
+--                                     to add more
+--   Config.K9Specializations ........ narcotics, explosives, patrol
+--   Config.AllowSelfCertification ... whether an officer may certify
+--                                     themselves
+--   Config.CertifyProximityMeters ... how close you must stand to certify
+--   Config.CertificationExpiry* ..... whether certifications lapse, and the
+--                                     warning before they do
+--
+-- EARNING AND RANKING UP
+--   Config.XP ....................... what each action pays
+--   Config.XPTiers .................. the four ranks and what they unlock
+--   Config.Leaderboard .............. the /k9stats table
+--
+-- THE JOB ITSELF
+--   Config.Tracking ................. scent, blood and gunpowder trails
+--   Config.WaterTrackingDecay ....... trails going cold in water
+--   Config.SearchZones .............. searching vehicles and people
+--   Config.SearchContrabandItems .... what counts as a find
+--   Config.ContrabandAlertTiers ..... how big a find has to be to matter
+--   Config.FindAlerts ............... the dog sitting and barking on a find
+--   Config.Combat ................... bite and hold, takedowns, dragging
+--   Config.PursuitSprint ............ the short burst of real speed
+--   Config.Recall ................... calling the dog off
+--   Config.Partnership .............. handler and K9 pairing
+--   Config.DoorInteraction .......... scratching at doors
+--   Config.Vision ................... thermal and night vision
+--
+-- KIT AND PLACES
+--   Config.K9Vehicles ............... which vehicles a K9 can ride in
+--   Config.VehicleInteractMeters .... how close to stand to load up
+--   Config.LeashMaxDistance ......... how far the leash stretches
+--   Config.K9Inventory .............. the dog's own storage
+--   Config.K9Medkit ................. patching the dog up
+--   Config.K9EquipmentShop .......... the supply shop and its shop dogs
+--   Config.DeployableKennel ......... putting down a portable kennel
+--   Config.PropAttachments .......... vests and gear on the dog
+--   Config.FetchMechanic ............ fetch
+--
+-- TRAINING AND PLAY
+--   Config.TrainingZones ............ where the practice yards are
+--   Config.Training ................. how the practice drills behave
+--   Config.ScentTrailHunt ........... follow-your-nose hunts
+--   Config.ScentLineup .............. sniff the row and pick the match
+--   Config.SARCalls ................. missing-person and rescue calls
+--
+-- LOOK, SOUND AND FEEL
+--   Config.Wellbeing ................ tiredness, mood, fear, injury
+--   Config.AdvancedBarkRadial ....... the bark menu
+--   Config.ProximityAudioFX ......... hearing the dog from a distance
+--   Config.ContrabandScreenFX ....... the screen effect on a find
+--
+-- PLUMBING AND SAFETY
+--   Config.Compat ................... auto-detecting which other scripts
+--                                     your server runs
+--   Config.Database ................. running with or without a database
+--   Config.K9DownDispatch ........... announcing a K9 going down
+--   Config.AdminAudit ............... the read-only audit commands
+--   Config.BoneSweepTool ............ a developer-only tool, off by default
+-- ======================================================================
+
+-- ======================================================================
 Config.Features = {
     -- Phase 1 (vertical slice)
     LeashMechanics       = true,

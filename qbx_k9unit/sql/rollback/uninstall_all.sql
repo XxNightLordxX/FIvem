@@ -118,17 +118,50 @@ BEGIN
     -- =================================================================
     DECLARE fk_blockers INT DEFAULT 0;
 
+    -- OWNED TABLE LIST -- this is the ONE thing every query below (this
+    -- COUNT, the dependency report, and the DROP list at the bottom of this
+    -- procedure) must all agree on, and it is deliberately NOT swept from
+    -- INFORMATION_SCHEMA by a `k9\_%` LIKE/REGEXP pattern instead of typed
+    -- out here. Two real constraints make a blind pattern sweep unsafe for
+    -- THIS specific list, unlike the stored-procedure sweep further down
+    -- this same file:
+    --   1. DROP ORDER: if a future table in this list ever gains a real FK
+    --      to another table in this same list, the DROP statements below
+    --      would need to run in dependency order -- a sweep has no way to
+    --      know that order, a hand-maintained list can be written in it.
+    --   2. OTHER RESOURCES SHARE THE `k9_` PREFIX: this database can
+    --      legitimately contain another K9 resource's own tables (the
+    --      "STILL PRESENT" report below and backup_k9_tables.sh's own NOTE
+    --      both call out `k9_units`-style tables as a real, expected case)
+    --      -- a bare `k9\_%` sweep in the FK-blocker check below would treat
+    --      an FK into THAT resource's table as a reason to refuse OUR
+    --      uninstall, which is wrong: we are not dropping that table, so a
+    --      constraint pointing at it is none of our business.
+    -- Because this list must stay hand-maintained, migration 0010's own
+    -- three brand-new tables being absent from it for a time (fixed in this
+    -- same change) is exactly the failure mode this comment exists to keep
+    -- from recurring a third time -- see the DRIFT CHECK further down this
+    -- procedure for the loud, unconditional, every-single-run announcement
+    -- that now exists for the next time a migration is missed here.
+    SET @qbx_k9unit_owned_tables = 'k9_certifications,k9_search_log,k9_partnerships,
+k9_progression,k9_permissions,k9_certification_specializations,
+k9_runtime_feature_overrides,k9_runtime_override_audit,
+k9_tablet_theme,k9_tablet_theme_audit,k9_ped_assignments,
+k9_certification_tiers,k9_certification_tier_capabilities,k9_certification_tier_audit';
+
     SELECT COUNT(*) INTO fk_blockers
     FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
     WHERE CONSTRAINT_SCHEMA = DATABASE()
       AND REFERENCED_TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships',
                                     'k9_progression','k9_permissions','k9_certification_specializations',
                                     'k9_runtime_feature_overrides','k9_runtime_override_audit',
-                                    'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments')
+                                    'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments',
+                                    'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit')
       AND TABLE_NAME NOT IN ('k9_certifications','k9_search_log','k9_partnerships',
                              'k9_progression','k9_permissions','k9_certification_specializations',
                              'k9_runtime_feature_overrides','k9_runtime_override_audit',
-                             'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments');
+                             'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments',
+                             'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit');
 
     -- -----------------------------------------------------------------
     -- DEPENDENCY REPORT -- always printed, whether or not this file is

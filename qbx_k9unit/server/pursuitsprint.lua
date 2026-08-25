@@ -228,16 +228,14 @@ assert(type(Config.PursuitSprint.durationMs) == 'number' and Config.PursuitSprin
 assert(type(Config.PursuitSprint.requestRangeMeters) == 'number' and Config.PursuitSprint.requestRangeMeters > 0,
     "qbx_k9unit: Config.PursuitSprint.requestRangeMeters must be a positive number of meters.")
 
--- See this file's own header "COOLDOWN FOOTGUN" -- this is a clearer,
--- qbx_k9unit-specific backstop layered in front of NewCooldown's own
--- generic AssertValidDefaultThreshold guard (server/cooldowns.lua), which
--- would also catch a literal 0/negative value here, just with a less
--- specific error message.
-assert(type(Config.PursuitSprint.cooldownMs) == 'number' and Config.PursuitSprint.cooldownMs > 0,
-    "qbx_k9unit: Config.PursuitSprint.cooldownMs must be a positive number of milliseconds. " ..
-    "0 does NOT mean \"no cooldown\" in this resource's cooldown API (server/cooldowns.lua's own " ..
-    "documented FOOTGUN) -- it would instead permanently deny every pursuit sprint request. " ..
-    "Set a real positive cooldown.")
+-- See this file's own header "COOLDOWN FOOTGUN" -- REPLACED this pass (QA
+-- sandbox repro): this used to be its own `assert`, hard-erroring on a
+-- non-positive Config.PursuitSprint.cooldownMs with a field-specific
+-- message. ResolveConfiguredThresholdMs (server/cooldowns.lua) below gives
+-- the same exact-field-naming diagnostic without erroring -- see
+-- cooldowns.lua's header ADDENDUM and this file's own header for the full
+-- reasoning on why clamp-and-warn is preferred to error-and-abort here too,
+-- not just at the call sites that risk stranding a termination path.
 
 -- Per-K9 (keyed by src) cooldown -- hard file-load-time dependency on
 -- server/cooldowns.lua (NewCooldown), same requirement every other
@@ -249,7 +247,8 @@ assert(type(Config.PursuitSprint.cooldownMs) == 'number' and Config.PursuitSprin
 -- server_scripts file has already loaded -- same convention
 -- server/combat.lua's own fxmanifest.lua comment documents for its own
 -- soft dependencies).
-local PursuitSprintCooldown = NewCooldown(Config.PursuitSprint.cooldownMs)
+local PursuitSprintCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.PursuitSprint.cooldownMs, 45000, 'Config.PursuitSprint.cooldownMs'))
 PursuitSprintCooldown.RegisterPlayerDropped()
 
 -- ======================================================================

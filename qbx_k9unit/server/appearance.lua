@@ -234,9 +234,7 @@ local function IsCertifiedK9ForJob(citizenid, jobName)
     if type(citizenid) ~= 'string' or citizenid == '' or type(jobName) ~= 'string' or jobName == '' then
         return false
     end
-    local ok, idOrErr = pcall(MySQL.scalar.await,
-        'SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1',
-        { citizenid, jobName })
+    local ok, idOrErr = pcall(K9Store.Cert_GetActiveId, citizenid, jobName)
     if not ok then
         print(('[qbx_k9unit] appearance.lua IsCertifiedK9ForJob query failed for %s/%s: %s'):format(citizenid, jobName, tostring(idOrErr)))
         return false

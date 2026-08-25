@@ -14,6 +14,27 @@
     (see that file's TODO(coder-ui) note).
 */
 
+/*
+    TABLET THEMING (Config.Features.TabletTheming) -- four CSS custom
+    properties, applied on `document.documentElement` by html/tablet.js's
+    own applyThemeToDocument() whenever a theme loads or a
+    qbx_k9unit:client:themeUpdated push arrives. The literal values below
+    are DEFAULT_THEME's own defaults (server/runtimecontrol.lua's own
+    DEFAULT_THEME, kept byte-identical) used both as the `:root` starting
+    point (so this page looks correct even before the first tablet:getTheme
+    response lands) and as every `var(--k9tablet-*, fallback)` call's own
+    inline fallback below, so a stub/test DOM that never sets these
+    properties at all (html/tests/tablet-dom-stub.js has no CSS engine)
+    still resolves to the exact same colours a real browser would show
+    pre-theme-load.
+*/
+:root {
+    --k9tablet-primary: #2563eb;
+    --k9tablet-accent: #f59e0b;
+    --k9tablet-bg: #111827;
+    --k9tablet-text: #f9fafb;
+}
+
 html,
 body {
     margin: 0;
@@ -23,7 +44,7 @@ body {
     background: transparent;
     overflow: hidden;
     font-family: 'Segoe UI', Roboto, Arial, sans-serif;
-    color: #f2f2f2;
+    color: var(--k9tablet-text, #f2f2f2);
 }
 
 .k9tablet-root {
@@ -45,11 +66,39 @@ body {
     height: min(640px, 88vh);
     display: flex;
     flex-direction: column;
-    background: #14161a;
+    background: var(--k9tablet-bg, #14161a);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 10px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
     overflow: hidden;
+}
+
+/*
+    Density (Config.Features.TabletTheming's `comfortable`|`compact` enum)
+    -- applied as a plain modifier class on the SAME .k9tablet-panel
+    html/tablet.js's buildBackdrop() rebuilds every render() (see that
+    function's own comment: this is why density, unlike the four colour
+    CSS variables above, is re-applied per render rather than once via
+    applyThemeToDocument()). `comfortable` is every rule's own un-modified
+    default -- this block only ever TIGHTENS spacing, never loosens it.
+*/
+.k9tablet-panel.k9tablet-density-compact .k9tablet-header {
+    padding: 8px 14px;
+}
+
+.k9tablet-panel.k9tablet-density-compact .k9tablet-screen {
+    padding: 8px 12px;
+}
+
+.k9tablet-panel.k9tablet-density-compact .k9tablet-cert-row,
+.k9tablet-panel.k9tablet-density-compact .k9tablet-feature-row,
+.k9tablet-panel.k9tablet-density-compact .k9tablet-capability-row {
+    padding: 4px 8px;
+}
+
+.k9tablet-panel.k9tablet-density-compact .k9tablet-table th,
+.k9tablet-panel.k9tablet-density-compact .k9tablet-table td {
+    padding: 4px 6px;
 }
 
 .k9tablet-header {
@@ -57,7 +106,7 @@ body {
     align-items: center;
     justify-content: space-between;
     padding: 14px 18px;
-    background: #1c1f26;
+    background: var(--k9tablet-bg, #1c1f26);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -115,9 +164,24 @@ body {
 }
 
 .k9tablet-tab--active {
-    background: #14161a;
-    color: #f2f2f2;
+    background: var(--k9tablet-bg, #14161a);
+    color: var(--k9tablet-text, #f2f2f2);
     font-weight: 600;
+    box-shadow: inset 0 -2px 0 var(--k9tablet-primary, #2563eb);
+}
+
+.k9tablet-id-toolbar {
+    margin-top: -4px;
+}
+
+.k9tablet-warning-note {
+    margin: 0 0 12px 0;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--k9tablet-accent, #f59e0b);
+    border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
 .k9tablet-screen {
@@ -173,7 +237,7 @@ body {
 }
 
 .k9tablet-btn {
-    background: #2a3f56;
+    background: var(--k9tablet-primary, #2a3f56);
     border: 1px solid rgba(255, 255, 255, 0.12);
     color: #f2f2f2;
     border-radius: 6px;
@@ -183,7 +247,7 @@ body {
 }
 
 .k9tablet-btn:hover {
-    background: #35506e;
+    filter: brightness(1.15);
 }
 
 .k9tablet-btn[disabled] {

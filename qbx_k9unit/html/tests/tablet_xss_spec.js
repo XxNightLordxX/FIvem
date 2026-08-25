@@ -73,10 +73,11 @@ for (const malicious of MALICIOUS_STRINGS) {
         t.equals(everyElementInnerHTMLWriteCount(h), 0, 'innerHTML must never be written anywhere on this page for this payload');
     });
 
-    t.test(`admin roster/person: name/citizenid/department/message containing ${shortLabel} reach the DOM verbatim via textContent, never innerHTML`, async () => {
+    t.test(`admin roster/person: name/citizenid/department/message/ped-label containing ${shortLabel} reach the DOM verbatim via textContent, never innerHTML`, async () => {
         const h = createHarness({
             fetchImpl: routeFetch({
                 'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+                'tablet:getTheme': () => ({ ok: true, theme: { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: 'K9 Command Tablet' } }),
                 'tablet:requestRoster': () => ({ ok: true, rows: [{ citizenid: malicious, name: malicious, departmentLabel: malicious, certified: true, xp: 1, tierLabel: malicious }], truncated: true, truncatedMessage: malicious }),
                 'tablet:requestPersonSummary': () => ({ ok: true, target: { citizenid: malicious, name: malicious }, certifications: [{ departmentKey: 'x', departmentLabel: malicious, active: true, grantedBy: malicious }], xp: 1, tierLabel: malicious, permissions: [] }),
                 'tablet:requestPersonFeatures': () => ({ ok: true, target: { citizenid: malicious, name: malicious }, features: [{ key: 'X', label: malicious, category: malicious, globallyEnabled: true, requiresGrant: false, granted: false, blocked: false, state: 'available' }] }),
@@ -84,7 +85,13 @@ for (const malicious of MALICIOUS_STRINGS) {
             }),
         });
 
-        h.postMessage('tablet:open', {});
+        // `peds` (K9 role control's model picker, see html/tablet.js's own
+        // header on tablet:assignK9Role) is sent verbatim from the
+        // tablet:open payload -- a malicious `label` here is config-authored
+        // in a real deployment, not directly player-controlled, but this
+        // suite's own header treats every string as attacker-controlled
+        // "regardless of which side of the contract nominally authors it".
+        h.postMessage('tablet:open', { peds: [{ model: 'a_c_shepherd', label: malicious }] });
         await settle();
         const { findByText } = require('./tablet-dom-stub');
         findByText(h.getRoot(), 'Command Console')[0].click();
@@ -97,7 +104,7 @@ for (const malicious of MALICIOUS_STRINGS) {
         findByText(h.getRoot(), 'Manage')[0].click();
         await settle(4);
 
-        t.isTrue(findAll(h.getRoot(), (n) => n._textContent === malicious).length > 0, 'malicious person-summary/feature text present verbatim');
+        t.isTrue(findAll(h.getRoot(), (n) => n._textContent === malicious).length > 0, 'malicious person-summary/feature/ped-label text present verbatim (K9 Role section\'s own model picker option is included in this count)');
         t.equals(everyElementInnerHTMLWriteCount(h), 0);
 
         // An action-failure `message` field is also attacker/server-adjacent
@@ -109,6 +116,49 @@ for (const malicious of MALICIOUS_STRINGS) {
             t.isTrue(findAll(h.getRoot(), (n) => n._textContent === malicious).length > 0, 'mutation failure message rendered verbatim');
             t.equals(everyElementInnerHTMLWriteCount(h), 0);
         }
+    });
+
+    t.test(`tablet theming + cert tier editing: header title / tier label / capability label / reorder warning containing ${shortLabel} reach the DOM verbatim via textContent, never innerHTML`, async () => {
+        const h = createHarness({
+            fetchImpl: routeFetch({
+                'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+                'tablet:getTheme': () => ({ ok: true, theme: { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: malicious } }),
+                'tablet:certTiersList': () => ({
+                    ok: true,
+                    tiers: [
+                        { key: 'x', label: malicious, ordinal: 1, capabilities: { cap1: true } },
+                        { key: 'certified', label: 'Certified', ordinal: 2, capabilities: {} },
+                    ],
+                    capabilityCatalog: { cap1: { label: malicious } },
+                }),
+                'tablet:certTiersReorder': () => ({ ok: true, tiers: [], warning: malicious }),
+            }),
+        });
+
+        h.postMessage('tablet:open', {});
+        await settle();
+
+        // Theme headerTitle -- rendered directly into the panel's <h1>.
+        t.isTrue(findAll(h.getRoot(), (n) => n._textContent === malicious).length >= 1, 'malicious theme headerTitle rendered verbatim in the header');
+        t.equals(everyElementInnerHTMLWriteCount(h), 0);
+
+        const { findByText } = require('./tablet-dom-stub');
+        findByText(h.getRoot(), 'Certification Tiers')[0].click();
+        await settle();
+
+        t.isTrue(findAll(h.getRoot(), (n) => n._textContent === malicious).length >= 1, 'malicious cert-tier label AND capability label both rendered verbatim');
+        t.equals(everyElementInnerHTMLWriteCount(h), 0);
+
+        // Trigger a reorder (move the second row, "certified", up) to reach
+        // the server-supplied `warning` banner.
+        const moveUpButtons = findAll(h.getRoot(), (n) => n.tagName === 'button' && n._textContent === '↑');
+        const enabledMoveUp = moveUpButtons.filter((b) => b.getAttribute('disabled') !== 'disabled')[0];
+        t.isDefined(enabledMoveUp, 'at least one enabled Move Up control exists with two tiers present');
+        enabledMoveUp.click();
+        await new Promise((r) => setTimeout(r, 30));
+
+        t.isTrue(findAll(h.getRoot(), (n) => n._textContent === malicious).length >= 1, 'malicious reorder warning text rendered verbatim');
+        t.equals(everyElementInnerHTMLWriteCount(h), 0);
     });
 }
 
