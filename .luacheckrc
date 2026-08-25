@@ -53,6 +53,20 @@ read_globals = {
     -- audit established, and the same one that falsified the earlier
     -- "no apiset in frontmatter means client-only" method.
     "GetAllObjects", "GetAllVehicles",
+    -- client/bonetool.lua's on-screen bone-index label (dev tool only).
+    -- All VERIFIED present in citizenfx/natives at the namespaces named:
+    -- PED/GetPedBoneIndex, HUD/SetText*, HUD/*TextCommandDisplayText,
+    -- HUD/AddTextComponentSubstringPlayerName, GRAPHICS/SetDrawOrigin,
+    -- GRAPHICS/ClearDrawOrigin. Client-side only, and only called from a
+    -- client file. GetPedBoneIndex is used ONLY as a lookup shortcut in the
+    -- sweep tool, never as a live conversion in the shipped feature -- its own
+    -- doc page has an empty Return value section, so its not-found convention
+    -- is unconfirmed and the tool reports raw values unfiltered rather than
+    -- guessing which are hits.
+    "GetPedBoneIndex",
+    "SetTextScale", "SetTextFont", "SetTextColour", "SetTextCentre",
+    "BeginTextCommandDisplayText", "AddTextComponentSubstringPlayerName",
+    "SetDrawOrigin", "EndTextCommandDisplayText", "ClearDrawOrigin",
     -- Timecycle modifiers, client/screenfx.lua. VERIFIED client-only against
     -- primary source: both are declared in citizenfx/natives GRAPHICS with no
     -- ext/native-decls server override, and FXServer has no renderer at all.

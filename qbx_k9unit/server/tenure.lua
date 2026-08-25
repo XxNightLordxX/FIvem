@@ -12,6 +12,34 @@
     subsystem required.
 
     ======================================================================
+    STATUS UPDATE (follow-up pass, verified directly against each file
+    named below, not assumed): every schema/config/manifest item this
+    file's original header below describes as "PROPOSED" / "NOT applied by
+    this file" HAS SINCE LANDED, exactly as specified:
+      - sql/install.sql's `k9_partnerships` CREATE TABLE, and
+        sql/migrations/0003_add_k9_partnerships_tenure_bonus_tier_granted.sql,
+        both carry `tenure_bonus_tier_granted TINYINT UNSIGNED NOT NULL
+        DEFAULT 0` matching this file's SELECT/UPDATE text exactly.
+      - config.lua carries `Config.Features.PartnershipTenureBonus = false`
+        (still off by default, per this file's own design question 2/3
+        reasoning -- landing the schema/config did not flip it on),
+        `Config.XP.awards.partnershipTenure{1,7,30}Day = 15/40/100`, and
+        `Config.Partnership.TenureBonus` (checkIntervalMs + the same
+        three-milestone table) -- all matching the values this file's own
+        closing comment block proposed.
+      - fxmanifest.lua's server_scripts loads `server/tenure.lua` after
+        `server/cooldowns.lua`/`server/notify.lua`, per this file's own
+        requirement.
+    The remaining "proposed"/"not applied" language throughout this file's
+    header is left in place below where it still records real DESIGN
+    reasoning (why this shape, not a different one) -- only the STATUS
+    claim was stale, not the reasoning behind it. This file's own runtime
+    behaviour needed no change for any of this: every query was already
+    pcall-wrapped against exactly this possibility (see "WHY ONE NEW COLUMN
+    IS UNAVOIDABLE" below), so it was never broken by the dependency being
+    unmet, and requires no change now that the dependency is met either.
+
+    ======================================================================
     SCOPE BOUNDARY THAT SHAPED EVERY DESIGN CHOICE BELOW: this file was
     written under a hard constraint -- every OTHER existing `.lua` file in
     this resource (server/partnership.lua, server/progression.lua,
@@ -259,12 +287,19 @@
        independently re-verified against a live install this session (no
        live server available), but it is a basic, extremely common function,
        not an exotic one this resource has any history of getting wrong.
-    4. DISCLOSED, NOT RESOLVED -- the "one column" schema dependency this
-       file requires is PROPOSED (closing comment block), not applied.
-       This file's own queries are pcall-wrapped specifically because that
-       is expected to be true for some period after this file lands (same
-       precedented gap sql/install.sql's own `k9_progression` header
-       already normalizes for this exact resource).
+    4. RESOLVED (follow-up pass -- see this file's own "STATUS UPDATE"
+       section near the top) -- the "one column" schema dependency this
+       file requires has LANDED: sql/install.sql's `k9_partnerships` CREATE
+       TABLE and sql/migrations/0003_*.sql both carry
+       `tenure_bonus_tier_granted`, verified directly against those files
+       this pass, not assumed. This file's own queries remain
+       pcall-wrapped regardless -- not because the column is expected to be
+       missing anymore on a current install, but because an OLDER,
+       not-yet-migrated database is still a real, ordinary case this file
+       must degrade safely against (same precedented gap sql/install.sql's
+       own `k9_progression` header already normalizes for this exact
+       resource) -- belt-and-suspenders, not a sign the dependency is still
+       unmet.
     ======================================================================
 
     EVENT/CALLBACK CONTRACT: none (see "NO NETWORK-FACING SURFACE" above).
@@ -509,12 +544,16 @@ end
 
 --[[
     ======================================================================
-    PROPOSED CONFIG/SCHEMA/MANIFEST ADDITIONS -- NOT APPLIED BY THIS FILE.
-    config.lua, fxmanifest.lua, and sql/install.sql are each owned by
-    another agent this pass; this block is the complete, exact list of what
-    this file needs from each, for that owner to apply (or reject/revise).
-    This file degrades to a total, silent no-op if none of it lands (every
-    query is pcall-wrapped, both new-config reads are type-checked, and the
+    CONFIG/SCHEMA/MANIFEST ADDITIONS THIS FILE REQUIRES -- LANDED (follow-up
+    pass: verified directly against config.lua, fxmanifest.lua, and
+    sql/install.sql/sql/migrations this session; see this file's own
+    "STATUS UPDATE" section near the top). Originally written as a
+    PROPOSAL, since config.lua, fxmanifest.lua, and sql/install.sql were
+    each owned by another agent at the time this file was authored; kept
+    below verbatim as the exact reference shape those files now match, not
+    rewritten as a changelog entry. This file still degrades to a total,
+    silent no-op if any of it were ever missing again (every query is
+    pcall-wrapped, both new-config reads are type-checked, and the
     Config.Features flag this file gates on defaults to false in the
     proposal below) -- nothing here is load-bearing for the REST of this
     resource either way.

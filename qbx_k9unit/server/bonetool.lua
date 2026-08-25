@@ -47,6 +47,20 @@
     accidentally leaves the flag on must still have never granted the ACE
     to anyone for this to do anything, and vice versa.
 
+    OPERATIONAL CAVEAT (task requirement — also stated in config.lua's own
+    Config.Features.BoneSweepDevTool comment; restated here because THIS
+    file is the one that actually acts on it): the flag above is read ONCE,
+    in the onResourceStart block below, to decide whether to
+    RegisterCommand '/k9bonetool' at all. Flipping
+    Config.Features.BoneSweepDevTool from true back to false WITHOUT a
+    resource restart does NOT unregister the command — it stays reachable
+    (still gated by the ACE check inside the handler, re-checked on every
+    invocation) until the next restart. client/bonetool.lua's own
+    registration gate has the identical property for its event
+    handler/draw thread. Never treat "I turned the flag off" as sufficient
+    by itself to consider this tool inert on a server where it was ever
+    turned on, without also restarting the resource.
+
     CONSOLE (source == 0) IS DELIBERATELY NOT SUPPORTED, UNLIKE
     server/admin.lua's own console carve-out: every subcommand this tool
     exposes acts on "your own current ped" (see EVENT CONTRACT below) —
@@ -55,6 +69,29 @@
     read-only-query carve-out needed, not an oversight; flagged explicitly
     per this resource's own "disclose access-model judgment calls, don't
     decide them silently" convention.
+
+    GETPEDBONEINDEX — CONFIRMED AGAINST PRIMARY SOURCE THIS PASS, AND THE
+    CONCLUSION ON WHETHER THIS TOOL SHOULD CONVERT THROUGH IT (task item 3
+    — full writeup in client/bonetool.lua's own header, since the actual
+    native call happens there; summarized here for anyone who only reads
+    this file): `GET_PED_BONE_INDEX(Ped ped, int boneId)`
+    (0x3F428D08BE5AAE31, read directly off a fresh clone of
+    citizenfx/natives, not carried over from an earlier pass) converts a
+    semantic `ePedBoneId` value into the raw index AttachEntityToEntity
+    wants — the exact conversion AttachEntityToEntity's own doc points at
+    ("This is different to boneID, use GET_PED_BONE_INDEX..."). That same
+    enum lists animal-only entries (SKEL_Tail_01..05, SKEL_SADDLE), which is
+    corroborating evidence — not proof — that some of these ids resolve to
+    something real on an `a_c_*` skeleton. CONCLUSION: yes, worth exposing
+    as a FAST-PATH shortcut (the new 'known' subcommand below), but never as
+    a replacement for the raw sweep, because (1) that native's own doc page
+    has an EMPTY "Return value" section — this pass could not confirm its
+    not-found convention, so 'known' reports every raw value unfiltered
+    rather than silently filtering "hits", and (2) even a real resolved
+    index isn't guaranteed to be anatomically where the human-skeleton name
+    suggests on a differently-rigged model — every 'known' result is still
+    just a candidate for the human to 'goto' and confirm with their own
+    eyes, never a trusted answer by itself.
 
     THIS TOOL NEVER TOUCHES NETWORKED STATE: every subcommand below is
     forwarded, unchanged, to the ONE calling client's own client-side
@@ -77,26 +114,48 @@
     EVENT CONTRACT:
     Client events (RegisterNetEvent, server->client), sent ONLY to the one
     calling client, never broadcast:
-    - 'qbx_k9unit:client:boneToolCommand' (subcommand: string, index: number?)
-      [client/bonetool.lua] subcommand ∈ {'goto', 'next', 'prev', 'test', 'stop'}.
-      'goto' carries a validated, clamped integer index in [0, MaxBoneIndex];
-      every other subcommand carries no index at all — the CLIENT owns its
-      own current-index state (this file deliberately does not track it
+    - 'qbx_k9unit:client:boneToolCommand' (subcommand: string, arg: number?)
+      [client/bonetool.lua] subcommand ∈ {'goto', 'next', 'prev', 'test',
+      'known', 'stop'} ('help' never reaches the client at all — see below).
+      'goto' carries a validated, clamped integer index in [0, MaxBoneIndex].
+      'next'/'prev' now carry an optional positive integer STEP (NOT an
+      index — how many indices to move, defaulting to 1, validated/clamped
+      here before ever being sent, and re-validated client-side too). Every
+      other subcommand carries no argument at all — the CLIENT owns its own
+      current-index state (this file deliberately does not track it
       server-side; there is nothing security-relevant about which integer a
       dev-tool marker currently sits at).
 
     Commands (server-registered):
-    - '/k9bonetool <goto|next|prev|test|stop> [index]'
+    - '/k9bonetool <goto|next|prev|test|stop|known|help> [arg]'
         goto <index>  — preview this exact bone index (a live debug marker
-                        at its GetWorldPositionOfEntityBone position; replaces
+                        AND an on-screen index-number label at its
+                        GetWorldPositionOfEntityBone position; replaces
                         whatever index was previously previewed).
-        next / prev   — step the CLIENT's own current preview index by +/-1
-                        (clamped to [0, MaxBoneIndex] client-side).
+        next [step]   — step the CLIENT's own current preview index forward
+                        by [step] (default 1, must be a positive integer;
+                        clamped to [0, MaxBoneIndex] client-side). A human
+                        sweeping up to MaxBoneIndex (200 by default)
+                        benefits from being able to skip ahead rather than
+                        stepping one at a time the whole way.
+        prev [step]   — same, stepping backward.
         test          — real CreateObject + AttachEntityToEntity at the
                         CLIENT's own current preview index, for a final
                         visual confirmation of the actual attach call
                         (replaces any previous test object).
         stop          — stops the preview marker and removes any test object.
+        known         — CLIENT-LOCAL ONLY (task item 3's GetPedBoneIndex
+                        fast-path — see the GETPEDBONEINDEX section above):
+                        resolves a curated list of documented ePedBoneId
+                        semantic names against the caller's own live ped and
+                        reports every raw result via chat + console. Never
+                        changes the current preview index — purely a
+                        candidate shortlist to 'goto' into and confirm.
+        help          — handled ENTIRELY here, server-side: no client
+                        dispatch at all, just the full goto/next/prev/known/
+                        test/stop/record-your-result workflow via
+                        NotifyPlayer, so a human can read it before
+                        confirming anything client-side is even working.
 
     ======================================================================
     EXPOSED SURFACE FOR FetchMechanic (built concurrently, per this pass's
@@ -137,7 +196,25 @@
 -- NOTE: 'goto' is a reserved word in Lua 5.4, so its key must be bracketed
 -- (['goto'] = true) rather than the bare `goto = true` shorthand every
 -- other key here uses.
-local VALID_SUBCOMMAND_SET = { ['goto'] = true, next = true, prev = true, test = true, stop = true }
+local VALID_SUBCOMMAND_SET = { ['goto'] = true, next = true, prev = true, test = true, stop = true, known = true, help = true }
+
+-- Full workflow reference — shown both on an invalid/missing subcommand and
+-- via the explicit 'help' subcommand (task requirement: the tool must tell
+-- a human how to record what they find, not just show a marker). Built
+-- once via table.concat, same multi-line-notify pattern server/admin.lua's
+-- own NotifyPlayer call sites already establish as safe for ox_lib's
+-- notify (embedded '\n' renders as real line breaks there).
+local BONE_TOOL_USAGE = table.concat({
+    'K9 Bone Sweep Tool -- DEV SERVER ONLY.',
+    '/k9bonetool goto <index>  -- preview one exact index (marker + on-screen label)',
+    '/k9bonetool next [step]   -- step the preview forward (default 1)',
+    '/k9bonetool prev [step]   -- step the preview backward (default 1)',
+    '/k9bonetool known         -- list candidate indices from known bone names (still verify with goto)',
+    '/k9bonetool test          -- really attach a marker prop at the current preview index',
+    '/k9bonetool stop          -- stop the preview and remove any test prop',
+    'Found the right index? Record it in config.lua:',
+    '  Config.PropAttachments.boneIndex (vest) or Config.FetchMechanic.mouthBoneIndex (fetch mouth carry).',
+}, '\n')
 
 --- Sends an ox_lib notification to a specific player, using this file's own
 --- 'K9 Unit — Bone Tool' title. Deliberately kept as a thin LOCAL wrapper
@@ -200,7 +277,15 @@ AddEventHandler('onResourceStart', function(resourceName)
 
         local sub = args[1]
         if not VALID_SUBCOMMAND_SET[sub] then
-            NotifyPlayer(src, 'Usage: /k9bonetool <goto|next|prev|test|stop> [index]', 'error')
+            NotifyPlayer(src, BONE_TOOL_USAGE, 'error')
+            return
+        end
+
+        if sub == 'help' then
+            -- Handled ENTIRELY here — no client dispatch needed for plain
+            -- text, and a human should be able to read the full workflow
+            -- even before confirming anything client-side is working.
+            NotifyPlayer(src, BONE_TOOL_USAGE, 'inform')
             return
         end
 
@@ -214,7 +299,20 @@ AddEventHandler('onResourceStart', function(resourceName)
             if index < 0 then index = 0 end
             if index > Config.BoneSweepTool.MaxBoneIndex then index = Config.BoneSweepTool.MaxBoneIndex end
             TriggerClientEvent('qbx_k9unit:client:boneToolCommand', src, 'goto', index)
+        elseif sub == 'next' or sub == 'prev' then
+            -- args[2], if present, is a STEP size (how many indices to
+            -- move), never an absolute index — see this file's header
+            -- EVENT CONTRACT. Defaults to 1, matching the tool's original
+            -- one-at-a-time behavior; a human sweeping up to MaxBoneIndex
+            -- (200 by default) benefits from being able to skip ahead.
+            local step = 1
+            local parsed = tonumber(args[2])
+            if parsed then
+                step = math.max(1, math.floor(parsed))
+            end
+            TriggerClientEvent('qbx_k9unit:client:boneToolCommand', src, sub, step)
         else
+            -- 'test' / 'stop' / 'known' — no argument of any kind.
             TriggerClientEvent('qbx_k9unit:client:boneToolCommand', src, sub, nil)
         end
     end, false)

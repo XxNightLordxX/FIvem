@@ -1,15 +1,56 @@
 --[[
     qbx_k9unit/server/admin.lua
 
-    In-game admin/audit surface over the three tables this resource already
+    In-game admin/audit surface over the tables this resource already
     writes but, until now, only ever exposed as a raw SQL query an admin ran
     by hand (README.md's own documented "admin listing" queries;
     COMPLEMENTARY_FEATURES.md top-3 item 2 / §9): `k9_certifications`
     (server/certifications.lua), `k9_partnerships` (server/partnership.lua),
-    `k9_search_log` (server/search.lua). THIS FILE COMPUTES NOTHING NEW — it
-    is a read-only, server-authoritative wrapper over query shapes
-    sql/install.sql already documents and already indexes for. It never
-    INSERTs/UPDATEs/DELETEs anything.
+    `k9_search_log` (server/search.lua), `k9_progression`
+    (server/progression.lua). THIS FILE COMPUTES NOTHING NEW — it is a
+    read-only, server-authoritative wrapper over query shapes sql/install.sql
+    already documents and already indexes for. It never INSERTs/UPDATEs/
+    DELETEs anything.
+
+    COVERAGE RE-CHECK (this pass): three things landed under this file
+    since its own last review — K9Inventory.allowedItems enforcement
+    (server/inventory.lua), new wellbeing state (server/wellbeing.lua), and
+    six outbound `qbx_k9unit:events:*` dispatch events — plus
+    `k9_partnerships` grew the `tenure_bonus_tier_granted` column
+    (server/tenure.lua). Checked each against this file's own "read-only
+    wrapper over a real table" scope:
+      - `k9_progression` (server/progression.lua's XP/tier persistence) was
+        a genuine, undocumented GAP: a real table this resource has
+        written to since Phase 4, with no query surface here at all — the
+        same class of gap this file's own brief warns is "worse than one
+        that admits its scope." CLOSED this pass: `/k9auditxp` below.
+      - `tenure_bonus_tier_granted` needs no new command: it is a column on
+        `k9_partnerships`, already fully returned by `/k9auditpartner`
+        (QueryPartnershipHistory selects every column via its own `columns`
+        local, which already includes it) — an admin auditing a
+        partnership's history sees its current tenure-tier progress for
+        free, no code change required.
+      - The six `qbx_k9unit:events:*` events are fire-and-forget
+        `TriggerEvent` dispatches, not a persisted store — there is no
+        table row to query that isn't already one of `k9_certifications`
+        (certificationGranted/Revoked), `k9_partnerships`
+        (partnershipEstablished/Ended), `k9_search_log`
+        (searchCompleted), or, as of this pass, `k9_progression`
+        (xpTierReached). Nothing further to add here; the underlying data
+        each event reports on is fully covered once `/k9auditxp` lands.
+      - K9Inventory.allowedItems enforcement (server/inventory.lua) rejects
+        a mutation against ox_inventory's own stash contents — it writes
+        no row to any `k9_*` table this file (or this resource) owns.
+        ox_inventory's own stash/logging is that system's audit surface,
+        not this resource's; out of this file's scope by the same
+        "wraps this resource's own tables only" boundary that already
+        excludes qbx_core/ox_inventory's own schemas entirely. Documented
+        here, not silently skipped.
+      - Wellbeing (server/wellbeing.lua) state is in-memory only (that
+        file's own header — no `k9_wellbeing`/similar table exists in
+        sql/install.sql) — there is no durable row for a read-only audit
+        surface to wrap. Nothing to add unless/until that state is ever
+        persisted.
 
     ======================================================================
     ACCESS MODEL — THE FIRST ACE-GATED SURFACE IN THIS RESOURCE, disclosed
@@ -53,11 +94,12 @@
     ======================================================================
 
     SQL SAFETY — read before touching any query function below:
-      - This file constructs 7 distinct hardcoded SQL string templates in
-        total (CODER-SECURITY CORRECTION: an earlier draft of this header
-        said 6 — QueryCertificationHistory:1, QueryPartnershipHistory:2,
-        and QuerySearchLogBy{Officer,Plate,Person}/QuerySearchLogRecent:4 —
-        verified by re-reading every `:format(` call site below, not
+      - This file constructs 8 distinct hardcoded SQL string templates in
+        total (COVERAGE RE-CHECK, this pass: was 7 —
+        QueryCertificationHistory:1, QueryPartnershipHistory:2,
+        QuerySearchLogBy{Officer,Plate,Person}/QuerySearchLogRecent:4,
+        QueryProgressionSnapshot:1 (new, `/k9auditxp`) — verified by
+        re-reading every `:format(`/literal-string call site below, not
         re-counted from memory). The security property that matters (every
         one of them is 100% hardcoded text, never built from a
         caller-controlled fragment) holds regardless of the exact count,
@@ -106,7 +148,7 @@
         task's brief names directly.
 
     ======================================================================
-    COMMAND SURFACE (all three commands gated on
+    COMMAND SURFACE (all four commands gated on
     Config.Features.AdminAuditCommands AT REGISTRATION TIME — if that flag
     is not `true`, none of these commands exist at all, not merely a
     runtime no-op; see the onResourceStart block at the bottom of this
@@ -147,11 +189,26 @@
            instruction to use the three existing purpose-built indexes
            rather than add a new one for a "recent window" query
            sql/install.sql's own header never anticipated.
+
+    4. '/k9auditxp <citizenid>'
+       Current persisted XP total for one citizenid, from `k9_progression`
+       (server/progression.lua) — added this pass, see this file's own
+       header "COVERAGE RE-CHECK" section for why. `citizenid` is that
+       table's own PRIMARY KEY (sql/install.sql), so this is a single-row
+       point lookup: no `[limit]` argument, no ORDER BY, and no
+       Config.AdminAudit.MaxResults.* entry needed for it (there is never
+       more than one row to bound). Deliberately reports the raw `xp`
+       integer only, NOT a derived tier — this file's own "COMPUTES
+       NOTHING NEW" rule (see this header's opening paragraph) means it
+       does not re-implement server/progression.lua's `ResolveTier`
+       threshold walk (a `local` function, not exposed as a
+       resource-global) here as a second, driftable copy; an admin can
+       compare the reported total against Config.XPTiers directly.
     ======================================================================
 
     RATE LIMITING: one shared NewCooldown() instance (server/cooldowns.lua
     — per this task's explicit "use the shared constructors" convention)
-    across all three commands, keyed by the CALLER's own source, mirroring
+    across all four commands, keyed by the CALLER's own source, mirroring
     server/certifications.lua's CertifyActionCooldown shape (one cooldown
     covering several related actions, not one per command). This is a
     DB-load/spam guard, not an authorization boundary — nothing here
@@ -185,9 +242,9 @@
     - THIS FILE exposes no resource-global functions of its own — nothing
       else in this resource needs to call into an admin/audit query.
     - THIS FILE performs SELECT-only queries against k9_certifications,
-      k9_partnerships, and k9_search_log — read sql/install.sql's header
-      comments on all three tables (index rationale, exact column shapes)
-      before changing any query below.
+      k9_partnerships, k9_search_log, and (this pass) k9_progression —
+      read sql/install.sql's header comments on all four tables (index
+      rationale, exact column shapes) before changing any query below.
     ======================================================================
 
     CONFIG THIS FILE ASSUMES EXISTS — NOT owned by this file for this task
@@ -469,6 +526,14 @@ local function FormatSearchLogRow(row)
     )
 end
 
+--- @param row table -- one k9_progression row
+--- @return string
+local function FormatProgressionRow(row)
+    -- Deliberately reports the raw `xp` total only — see this file's
+    -- header "COMMAND SURFACE" item 4 for why a tier is not derived here.
+    return ('xp=%s updated_at=%s'):format(tostring(row.xp), tostring(row.updated_at))
+end
+
 --- Presents `rows` (already fetched, already bounded) to a connected
 --- caller as a small number of batched ox_lib toasts — a deliberately
 --- minimal in-game presentation. This file's scope is the command/query/
@@ -588,10 +653,23 @@ local function QuerySearchLogRecent(limit)
     return SafeQuery(sql, {})
 end
 
+--- '/k9auditxp' query — see this file's header "COMMAND SURFACE" item 4
+--- and "COVERAGE RE-CHECK" for the full reasoning. `citizenid` is
+--- k9_progression's own PRIMARY KEY (sql/install.sql) — a plain,
+--- unclamped `LIMIT 1` literal is correct here, NOT a caller-influenced
+--- ClampLimit value, because there is structurally never more than one
+--- matching row regardless of what any argument says.
+--- @param citizenid string
+--- @return table rows -- 0 or 1 rows
+local function QueryProgressionSnapshot(citizenid)
+    local sql = 'SELECT xp, updated_at FROM k9_progression WHERE citizenid = ? LIMIT 1'
+    return SafeQuery(sql, { citizenid })
+end
+
 -- ======================================================================
 -- COMMAND REGISTRATION — gated on Config.Features.AdminAuditCommands AT
 -- REGISTRATION TIME (this task's explicit convention): if the flag is not
--- `true`, none of the three commands below are ever registered at all, not
+-- `true`, none of the four commands below are ever registered at all, not
 -- merely a runtime no-op. A missing/nil flag is treated identically to
 -- `false` (feature disabled, no crash) — this resource must not fail to
 -- start for an unrelated server that hasn't touched config.lua's new
@@ -781,5 +859,41 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
     end, false)
 
-    print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch).')
+    --- '/k9auditxp [citizenid]' — see this file's header "COMMAND SURFACE"
+    --- item 4 and "COVERAGE RE-CHECK" for the full reasoning. No `[limit]`
+    --- argument — `citizenid` is k9_progression's own PRIMARY KEY, so
+    --- there is never more than one row to bound.
+    RegisterCommand('k9auditxp', function(source, args)
+        if not IsAuthorizedAdmin(source) then
+            LogAuditInvocation(source, 'k9auditxp', 'n/a', 'denied')
+            if source ~= 0 then NotifyPlayer(source, 'You are not authorized to run this command.', 'error') end
+            return
+        end
+
+        if not AuditCooldown.Consume(source, Config.AdminAudit.CommandCooldownMs) then
+            LogAuditInvocation(source, 'k9auditxp', 'n/a', 'rate_limited')
+            return
+        end
+
+        local citizenid = args[1]
+        if not IsValidCitizenId(citizenid) then
+            LogAuditInvocation(source, 'k9auditxp', 'n/a', 'invalid_args')
+            local usage = 'Usage: /k9auditxp [citizenid]'
+            if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
+            return
+        end
+
+        local rows = QueryProgressionSnapshot(citizenid)
+        local label = ('XP snapshot for %s'):format(citizenid)
+
+        LogAuditInvocation(source, 'k9auditxp', citizenid, 'ok')
+
+        if source == 0 then
+            PrintRowsToConsole(label, rows, FormatProgressionRow)
+        else
+            PresentRows(source, label, rows, FormatProgressionRow)
+        end
+    end, false)
+
+    print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch, k9auditxp).')
 end)
