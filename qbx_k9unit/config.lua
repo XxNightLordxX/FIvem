@@ -141,7 +141,26 @@ Config.Features = {
     PropAttachments      = false,
     FetchMechanic        = false,
     DeployableKennel     = false,
-    CameraFeedPiP        = false, -- experimental; native-only approximation, see §7
+    -- NOT EXPERIMENTAL -- IMPOSSIBLE, and re-confirmed 2026-08-25 rather than
+    -- carried forward on an old note. This is the only flag in this table with
+    -- no implementing code, and it should stay that way until the specific
+    -- things below change.
+    --   * citizenfx/fivem#3835 is OPEN, labelled documentation+triage, no PR,
+    --     no maintainer response. It ASKS for a camera-to-texture API; it does
+    --     not report an undocumented one.
+    --   * No native exists. CreateRuntimeTextureFromDuiHandle goes the OPPOSITE
+    --     direction (an HTML page onto a world texture). The entire CAM
+    --     namespace is camera STATE -- position, FOV, shake, interpolation --
+    --     with nothing touching a render target or pixel buffer. Candidate
+    --     render-target names 404. No open natives PR mentions camera or
+    --     texture work.
+    --   * Nobody in the ecosystem has solved it either. Published bodycam
+    --     resources are either cosmetic overlays on the player's OWN view, or
+    --     a full camera switch with a decoy ped -- never two feeds at once.
+    -- CONCRETE RE-CHECK, so the next pass diffs rather than re-researches:
+    -- has #3835 closed, or has a file matching ext/native-decls/*RenderTarget*
+    -- appeared? If neither, nothing has changed.
+    CameraFeedPiP        = false,
 }
 
 -- ======================================================================
@@ -1126,7 +1145,24 @@ Config.Wellbeing = {
         calmDownCooldownMs       = 15000,
     },
     Distraction = {
-        flashbangImmune     = true, -- HALF IMPLEMENTED, and the honest half. server/wellbeing.lua exposes IsFlashbangImmune(citizenid) as a real callable accessor. What is deliberately NOT built is the consumer side: honouring immunity means listening to some third-party stun resource's event, whose name and payload shape are unknown, and fabricating a listener for an unnamed resource would look implemented and never fire. So a companion resource has something real to check, and this is still not a shipped guarantee on its own.
+        flashbangImmune     = true, -- HALF IMPLEMENTED DELIBERATELY, AND SETTLED 2026-08-25 -- the missing half should stay missing; see the note below. server/wellbeing.lua exposes IsFlashbangImmune(citizenid) as a real callable accessor. What is deliberately NOT built is the consumer side: honouring immunity means listening to some third-party stun resource's event, whose name and payload shape are unknown, and fabricating a listener for an unnamed resource would look implemented and never fire. So a companion resource has something real to check, and this is still not a
+        -- shipped guarantee on its own.
+        -- RESEARCHED AND CLOSED, so this stops being reopened: the ecosystem has
+        -- no dominant flashbang or stun resource to target. The popular ones are
+        -- closed-source paid scripts -- unverifiable in principle, not merely
+        -- unresearched -- and Qbox's own qbx_police ships no flashbang or taser
+        -- at all, so there is no house implementation to piggyback on either.
+        -- Of the two open-source candidates whose source was actually read, one
+        -- reacts to a native game event AFTER the stun has landed (useless for
+        -- prevention), and the other has a pre-effect gate that is an internal
+        -- stub, not an export -- and FiveM resources do not share Lua global
+        -- scope, so it cannot be overridden from outside regardless. Neither
+        -- offers anything like ox_inventory's registerHook veto.
+        -- Building a listener now would either never fire on a server not
+        -- running that exact resource, or require maintaining a patch on
+        -- someone else's niche script. Revisit only if a specific operator
+        -- names the resource they actually run -- verifying one real contract
+        -- is small and concrete; guessing generically is not.
         meatBaitItemName    = 'k9_meat_bait',      -- PLACEHOLDER
         meatBaitDurationMs  = 6000,
         meatBaitRadius      = 8.0,
