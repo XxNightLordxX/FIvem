@@ -72,7 +72,7 @@
     that exact key did not yet exist anywhere in locales/en.json (confirmed
     at the time: a plain grep found nothing, and locales/en.json had no
     uncommitted changes, so this was not the ordinary "en.json mid-edit"
-    false alarm tests/README.md warns about -- it was a real gap, reported
+    false alarm DEVELOPER_REFERENCE.md warns about -- it was a real gap, reported
     to the coordinator with a suggested string rather than silently worked
     around here). The key was added shortly after being reported (see
     locales/en.json's real "combat.blocked_by_vehicle" entry) -- the

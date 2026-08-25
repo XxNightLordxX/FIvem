@@ -17,7 +17,7 @@
 
     THREAD STEPPING NOTE: the maintenance thread's FIRST statement is the
     `while` loop's own condition check, and `Wait(SCREENFX_POLL_MS)` is the
-    FIRST statement INSIDE that loop -- matching tests/README.md's own
+    FIRST statement INSIDE that loop -- matching DEVELOPER_REFERENCE.md's own
     generic stepping note exactly (same shape as
     tests/clientproximityaudio_spec.lua's thread, unlike
     tests/clientvision_spec.lua's/tests/clienthud_spec.lua's/

@@ -63,7 +63,7 @@
     items call ~30 more cross-file globals, none of them real client
     natives at all -- they are this resource's OWN globals, defined in
     other files this spec never loads). None of that required
-    "disproportionate" stubbing in the sense tests/README.md's stale
+    "disproportionate" stubbing in the sense DEVELOPER_REFERENCE.md's stale
     pre-main_spec.lua audit worried about: every one of those ~30 globals
     is a simple call-recording stand-in (record a call, optionally return a
     canned value), the same shape already used throughout this suite's

@@ -324,7 +324,7 @@ CreateThread(function()
                 -- LOCALIZATION FIX (this pass): was `labelText .. ' (TEST
                 -- PROP ATTACHED)'` -- exactly the untranslatable
                 -- Lua-concatenation pattern this whole migration exists to
-                -- close (see locales/README.md's "Format" section and its
+                -- close (see DEVELOPER_REFERENCE.md's "Format" section and its
                 -- running "expect a third instance" note). Two full-sentence
                 -- keys instead, same "on/off-shaped state words don't
                 -- translate uniformly via concatenation/templating" reasoning

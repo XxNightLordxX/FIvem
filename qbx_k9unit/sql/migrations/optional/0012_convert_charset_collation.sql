@@ -70,7 +70,7 @@
 -- structurally impossible for the default install/upgrade path to run this
 -- file by accident. You run it only by naming it directly:
 --     mysql -u YOUR_USER -p YOUR_DATABASE < sql/migrations/optional/0012_convert_charset_collation.sql
--- See `sql/rollback/README.md` for the plain-language version of this
+-- See OPERATOR_RUNBOOK.md §7 for the plain-language version of this
 -- whole file, and this repository's operator runbook for where this sits
 -- in the overall install story.
 --

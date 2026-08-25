@@ -4,7 +4,7 @@
 # Runs every *_spec.js file in this directory under plain Node.js -- no
 # npm dependency, no install step, no framework (jest/mocha/vitest) --
 # mirroring tests/run.sh's own posture one directory up in this same repo
-# (see that file's own header, and tests/README.md, for the "why not
+# (see that file's own header, and DEVELOPER_REFERENCE.md, for the "why not
 # busted" reasoning this applies in reverse for the JS side: no
 # node_modules to install, runs on whatever Node the box already has).
 #

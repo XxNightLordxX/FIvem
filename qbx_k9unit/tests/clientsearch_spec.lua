@@ -9,7 +9,7 @@
     exports.ox_target:addGlobalVehicle/addGlobalPlayer) and its one
     RegisterNetEvent handler -- never a reimplementation of PerformSearch's
     logic, which is a `local` this spec has no other way to reach (exactly
-    the ox_target-onSelect-closure pattern tests/README.md's own sandbox
+    the ox_target-onSelect-closure pattern DEVELOPER_REFERENCE.md's own sandbox
     doc describes as the correct way in).
 
     LIFECYCLE NOTE: client/search.lua's own "LIFECYCLE FIX" comment means

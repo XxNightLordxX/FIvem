@@ -5,7 +5,7 @@
     ResolveConnectedPlayerFromPed against the REAL, unmodified production
     file. Both are resource-globals (no `local`) per that file's own
     FILE-TO-FILE CONTRACT, so unlike server/search.lua's local
-    ResolveAlertTier (see tests/README.md's "not covered" section), no
+    ResolveAlertTier (see DEVELOPER_REFERENCE.md's "not covered" section), no
     RegisterCommand/callback indirection is needed to reach them -- they're
     called directly, exactly as server/main.lua/server/search.lua/
     server/kennel.lua/server/inventory.lua already do.

@@ -26,7 +26,7 @@
 
     THREAD STEPPING NOTE: the discovery thread's FIRST statement is
     `Wait(PROXIMITY_SCAN_INTERVAL_MS)` directly -- no assignment before it,
-    matching tests/README.md's own generic stepping note exactly (unlike
+    matching DEVELOPER_REFERENCE.md's own generic stepping note exactly (unlike
     tests/clientvision_spec.lua/tests/clientaudio_spec.lua's threads, which
     both deviate from it). So step() #1 is a pure prime (yields at the very
     first Wait, no scan pass yet); step() #2 onward is exactly one scan pass

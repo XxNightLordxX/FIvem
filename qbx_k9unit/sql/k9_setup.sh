@@ -123,7 +123,7 @@ translate_error() {
         echo "  PLAIN ENGLISH: your database already has two rows that this schema"
         echo "  change says should never both exist at once (most commonly: the"
         echo "  same officer certified twice for the same job, at the same time)."
-        echo "  See sql/rollback/README.md STEP 5 for the exact fix, then run this"
+        echo "  See OPERATOR_RUNBOOK.md §7 STEP 5 for the exact fix, then run this"
         echo "  script again -- it will pick up from here safely."
     elif echo "$blob" | grep -qi "command denied to user\|alter routine command denied"; then
         echo "  PLAIN ENGLISH: your database user is missing the CREATE ROUTINE"

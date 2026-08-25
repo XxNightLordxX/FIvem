@@ -51,10 +51,10 @@
     here): `vehicle.blocked_by_drag`, `vehicle.blocked_by_bite_hold`,
     `combat.blocked_by_vehicle`. Every test below that exercises a BLOCKED
     path calls the real `locale()` against the real `locales/en.json`
-    (tests/README.md's own documented behavior) and will fail loudly with
+    (DEVELOPER_REFERENCE.md's own documented behavior) and will fail loudly with
     "locale key missing from locales/en.json: ..." until those three keys
     are added — this is the correctly-working, documented "Cause B" signal
-    tests/README.md describes, not a bug in this spec or in the two
+    DEVELOPER_REFERENCE.md describes, not a bug in this spec or in the two
     production files, and every such failure is expected to clear the
     moment those keys land with no code change needed here.
 

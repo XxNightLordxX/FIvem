@@ -825,7 +825,7 @@ end
 local function FormatSearchLogRow(row)
     -- Dynamic-value substitution via locale()'s own %s placeholder, not `..`
     -- concatenation — same "no string-built player-facing fragments"
-    -- discipline as locales/README.md's own documented concatenation fixes
+    -- discipline as DEVELOPER_REFERENCE.md's own documented concatenation fixes
     -- (movement.officer_fallback_name, bonetool.bone_index_label, etc.).
     local targetLabel = row.target_type == 'vehicle'
         and locale('admin.search_log_target_plate_label', tostring(row.target_plate))

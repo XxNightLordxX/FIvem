@@ -25,7 +25,7 @@
          propagates, never leaves a UseItem caller's callback un-invoked),
          and RegisterHook as a PURE, GENERIC pass-through onto ox_inventory's
          own real `registerHook(eventName, callback)` -- per
-         shared/compat/README.md's "match the reference resource's calling
+         DEVELOPER_REFERENCE.md §21's "match the reference resource's calling
          convention" rule, no fixed event list, no payload translation, the
          caller's own `false` return forwarded as ox_inventory's real veto
          signal, and a throwing caller callback never propagates into
@@ -436,7 +436,7 @@ t.test('ox_inventory SERVER RegisterShop: a malformed shopDetails (no items tabl
 end)
 
 -- ---- ox_inventory SERVER RegisterHook -- PURE, GENERIC PASS-THROUGH ----
--- (per shared/compat/README.md's "match the reference resource's calling
+-- (per DEVELOPER_REFERENCE.md §21's "match the reference resource's calling
 -- convention" rule -- eventName and payload are exactly ox_inventory's own)
 
 t.test("ox_inventory SERVER RegisterHook: an invalid eventName (empty/non-string) or a non-function callback returns false immediately, without ever calling registerHook", function()
@@ -638,7 +638,7 @@ t.test('qb-inventory SERVER RegisterShop: a malformed shopDetails (no items tabl
 end)
 
 -- ---- qb-inventory SERVER RegisterHook -- ONLY 'swapItems' has a confirmed
--- translation on this backend (per shared/compat/README.md's "match the
+-- translation on this backend (per DEVELOPER_REFERENCE.md §21's "match the
 -- reference resource's calling convention" rule); the payload is translated
 -- onto ox_inventory's OWN real field names (fromInventory/fromSlot/
 -- toInventory/toType/source), never this backend's own hookData names. ----

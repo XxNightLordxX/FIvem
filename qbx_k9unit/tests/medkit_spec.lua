@@ -68,7 +68,7 @@
        the SERVER's own clamp only -- client/medkit.lua's own, separate
        monotonic-floor fix (flooring at the ped's live health rather than a
        flat 0) is CLIENT-side logic, out of this suite's scope entirely per
-       tests/README.md's blanket "client/*.lua is untested here" exclusion
+       DEVELOPER_REFERENCE.md's blanket "client/*.lua is untested here" exclusion
        (no server-side natives to sandbox a client file against). See the
        "MUST-MATTER #2" section below.
 
@@ -107,7 +107,7 @@
     WHAT THIS FILE DOES NOT COVER, AND WHY:
       - client/medkit.lua is entirely untested here -- client-only natives
         (SetEntityHealth, IsEntityDead client-side, PlayerPedId), same
-        blanket exclusion tests/README.md already states for every
+        blanket exclusion DEVELOPER_REFERENCE.md already states for every
         client/*.lua file. This includes client/medkit.lua's OWN
         monotonic-heal floor and its own SOURCE-ORIGIN GUARD / dead-K9
         guard / range-clamp on `applyMedkitHeal` -- real, important

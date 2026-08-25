@@ -2,7 +2,7 @@
     html/tests/dom-stub.js
 
     A minimal, hand-rolled DOM stand-in -- deliberately NOT a general
-    DOM/CSS engine (no jsdom dependency; see tests/README.md's own "why not
+    DOM/CSS engine (no jsdom dependency; see DEVELOPER_REFERENCE.md's own "why not
     busted" reasoning on the Lua side for the same anti-dependency posture
     applied here). html/app.js's ENTIRE DOM surface is narrow enough to
     hand-implement exactly:

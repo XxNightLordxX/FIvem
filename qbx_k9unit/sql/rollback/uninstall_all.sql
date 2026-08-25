@@ -99,7 +99,7 @@
 --
 -- ==> THE ONLY WAY BACK IS A BACKUP YOU TOOK BEFORE RUNNING THIS.
 --     Run sql/rollback/backup_k9_tables.sh first. It takes seconds.
---     See sql/rollback/README.md step 1. If you have not run it, stop
+--     See OPERATOR_RUNBOOK.md §7 step 1. If you have not run it, stop
 --     now and go run it.
 --
 -- YOU PROBABLY DO NOT NEED THIS FILE. Almost every real "I need to undo

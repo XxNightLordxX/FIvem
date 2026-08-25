@@ -58,7 +58,7 @@
     not appear anywhere in server/recall.lua at all, so there is no
     server-side call site for a test to intercept in the first place, and
     (b) out of scope for this server-only suite for the exact same reason
-    every other client/*.lua file is per tests/README.md's blanket
+    every other client/*.lua file is per DEVELOPER_REFERENCE.md's blanket
     exclusion -- not a coverage hole this suite could close by stubbing
     harder, since the check that must not exist has no server-side
     presence to stub.

@@ -73,7 +73,7 @@
     THE `RegisterHook` VOCABULARY -- READ THIS BEFORE ADDING A THIRD EVENT
     OR WIRING A NEW CALLER.
 
-    shared/compat/README.md (the cross-adapter contract doc, owned by
+    DEVELOPER_REFERENCE.md §21 (the cross-adapter contract doc, owned by
     shared/compat/core.lua's author) is explicit that parameter/payload
     shapes are NOT defined by core.lua -- "match the calling convention of
     the reference resource this pack was built against for that system
@@ -692,7 +692,7 @@ local function BuildQbInventoryServer()
         end,
 
         --- See this file's header "THE RegisterHook VOCABULARY" section.
-        --- Per shared/compat/README.md's "match the reference resource's
+        --- Per DEVELOPER_REFERENCE.md §21's "match the reference resource's
         --- calling convention" rule, `eventName` is ox_inventory's OWN real
         --- vocabulary -- but qb-inventory only has a confirmed translation
         --- for ONE of those names: `'swapItems'`, and only the

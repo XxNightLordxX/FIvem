@@ -201,7 +201,7 @@ SELECT
             IF(base.uq_exists = 0,
                IF(@k9ms_dupe_pairs > 0,
                   CONCAT('ADD UNIQUE KEY uq_one_active_cert_per_job -- WILL FAIL: ', @k9ms_dupe_pairs,
-                         ' (citizenid, job) pair(s) already have more than one active row. See sql/rollback/README.md STEP 5 BEFORE running this migration.'),
+                         ' (citizenid, job) pair(s) already have more than one active row. See OPERATOR_RUNBOOK.md §7 STEP 5 BEFORE running this migration.'),
                   'ADD UNIQUE KEY uq_one_active_cert_per_job'),
                '')
         )

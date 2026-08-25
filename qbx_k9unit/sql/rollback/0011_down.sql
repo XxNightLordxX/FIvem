@@ -47,7 +47,7 @@
 --     stays intact, ready to resume working the moment editing is
 --     re-enabled.
 --   * Genuinely want one or both of these two tables gone? Run
---     sql/rollback/backup_k9_tables.sh FIRST (sql/rollback/README.md step
+--     sql/rollback/backup_k9_tables.sh FIRST (OPERATOR_RUNBOOK.md §7 step
 --     1 -- report to the sql/** owner that these two table names need
 --     adding to that script's own table list and to
 --     sql/rollback/uninstall_all.sql, neither of which this file edits),

@@ -2,7 +2,7 @@
     qbx_k9unit/shared/compat/ambulance.lua
 
     K9Compat 'ambulance' adapters. Read shared/compat/core.lua's header AND
-    shared/compat/README.md FIRST -- this file only implements the
+    DEVELOPER_REFERENCE.md §21 FIRST -- this file only implements the
     per-resource `factory(realm) -> table | nil` bodies core.lua's generic
     engine calls; it invents no new contract of its own.
 

@@ -173,7 +173,7 @@
     file follows the newer K9Compat seam so it keeps working unchanged on
     whatever framework the operator's adapter resolves to. NOTE:
     `GetCitizenId` is a PLAYER-OBJECT method, not a source-taking one -- its
-    contract (shared/compat/framework.lua, shared/compat/README.md) is
+    contract (shared/compat/framework.lua, DEVELOPER_REFERENCE.md §21) is
     `GetCitizenId(player)`, matching every real framework's own shape (a raw
     connection source number is not a player object and every adapter
     returns nil for one). ResolveCitizenId() below therefore calls

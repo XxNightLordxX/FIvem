@@ -3,7 +3,7 @@
 
     Tests for shared/compat/dispatch.lua AND shared/compat/ambulance.lua,
     both loaded here despite the "one spec file per production file"
-    convention every other spec in this folder follows (see tests/README.md
+    convention every other spec in this folder follows (see DEVELOPER_REFERENCE.md
     "Adding a new spec") -- deliberate, not an oversight: the task this pair
     of production files was built under grants exactly one new spec
     filename (`tests/compatdispatch_spec.lua`) alongside the two production

@@ -43,7 +43,7 @@
       8. The K9Compat-not-yet-loaded guard: loading this file with no
          `K9Compat` global present never throws, and registers nothing.
 
-    Per this suite's own convention (tests/README.md), production code is
+    Per this suite's own convention (DEVELOPER_REFERENCE.md), production code is
     never re-implemented here -- every assertion drives the real
     shared/compat/target.lua through the real per-adapter factory function
     it registers.

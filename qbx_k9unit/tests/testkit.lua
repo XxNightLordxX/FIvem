@@ -2,7 +2,7 @@
     tests/testkit.lua
 
     Zero-dependency assertion + test-runner for plain lua5.4. See
-    tests/README.md for why this exists instead of busted (not installed
+    DEVELOPER_REFERENCE.md for why this exists instead of busted (not installed
     for Lua 5.4 in this environment -- only for Lua 5.1 via luarocks).
 
     USAGE (see any *_spec.lua for a full example):

@@ -13,8 +13,25 @@
         factory(realm) -> table | nil    -- nil = present but unusable, skip me
         Required client methods (checked by core -- a miss means SKIPPED):
             AddGlobalPlayer, AddGlobalVehicle, AddGlobalObject, AddModel,
-            AddSphereZone, Remove
+            AddSphereZone, Remove, AddLocalEntity, RemoveLocalEntity
         Required server methods: {} (none)
+
+    ADDLOCALENTITY/REMOVELOCALENTITY -- ADDED THIS PASS, THE CONTRACT GAP
+    THIS TASK EXISTS TO CLOSE. client/equipmentshop.lua's shop-attendant ped
+    feature (added AFTER this adapter contract was first written) called
+    `exports.ox_target:addLocalEntity`/`removeLocalEntity` directly, bypassing
+    this whole compat layer, because those two methods were never added to
+    `K9Compat.RequiredMethods.target.client` in the first place -- a feature
+    built after an abstraction exists does not announce itself to that
+    abstraction; only checking explicitly catches it. This is the third
+    instance of exactly this shape in this project (see migration 0010's
+    tables missed by the safety scripts, migration 0011's table missed by the
+    database layer). Same opaque-handle convention as every other Add*/Remove
+    pair in this file: `AddLocalEntity(entity, options)` returns a handle
+    private to the adapter that produced it; `RemoveLocalEntity(handle)`
+    accepts exactly that value back, untouched, and removes every option this
+    resource itself registered for that entity (never a partial removal --
+    no real call site in this resource needs one, so none is exposed).
 
     REMOVE()'S ARGUMENT SHAPE IS NOT PART OF THE CONTRACT AS GIVEN -- only
     the method NAME is specified. This file assumes, and documents here so
@@ -125,7 +142,7 @@ end
 --- logic WITHOUT depending on `table.type` (a CitizenFX Lua54 runtime
 --- extension, not part of plain Lua 5.4 -- using it here would make this
 --- file untestable under tests/run.sh's plain `lua5.4` interpreter, see
---- tests/README.md).
+--- DEVELOPER_REFERENCE.md).
 --- @param options table
 --- @return table[]
 local function NormalizeOptions(options)
@@ -210,6 +227,7 @@ local function OxTargetFactory(realm)
     local REQUIRED_EXPORTS = {
         'addGlobalPlayer', 'addGlobalVehicle', 'addGlobalObject', 'addModel', 'addSphereZone',
         'removeGlobalPlayer', 'removeGlobalVehicle', 'removeGlobalObject', 'removeModel', 'removeZone',
+        'addLocalEntity', 'removeLocalEntity',
     }
     for i = 1, #REQUIRED_EXPORTS do
         if not IsExportCapable(RESOURCE, REQUIRED_EXPORTS[i]) then return nil end
@@ -254,6 +272,36 @@ local function OxTargetFactory(realm)
             elseif handle.kind == 'zone' then
                 SafeCall(RESOURCE, 'removeZone', handle.id, true)
             end
+        end,
+
+        --- CONFIRMED against overextended/ox_target's live `main` branch,
+        --- `client/api.lua` (`api.addLocalEntity(arr, options)`, this
+        --- session's fetch): takes a raw, non-networked entity handle (or
+        --- array of them) plus the same option shape every other Add* here
+        --- already uses -- no translation needed, same as this factory's
+        --- other methods.
+        --- @param entity number
+        --- @param options table
+        --- @return table|nil handle
+        AddLocalEntity = function(entity, options)
+            local ok = SafeCall(RESOURCE, 'addLocalEntity', entity, options)
+            if not ok then return nil end
+            return { kind = 'localEntity', entity = entity }
+        end,
+
+        --- CONFIRMED (`api.removeLocalEntity(arr, options)`): called here
+        --- with NO `options` argument, which its own source
+        --- (`if options then removeTarget(...) end; if not options or
+        --- #localEntities[entity] == 0 then localEntities[entity] = nil
+        --- end`) confirms clears EVERY option this resource registered for
+        --- that entity, not just one -- the right choice for this
+        --- adapter's one real caller (client/equipmentshop.lua), which owns
+        --- the entity outright and always tears it down completely, never
+        --- partially.
+        --- @param handle table -- exactly what AddLocalEntity returned
+        RemoveLocalEntity = function(handle)
+            if type(handle) ~= 'table' then return end
+            SafeCall(RESOURCE, 'removeLocalEntity', handle.entity)
         end,
     }
 end
@@ -324,6 +372,7 @@ local function QbTargetFactory(realm)
     local REQUIRED_EXPORTS = {
         'AddGlobalPlayer', 'AddGlobalVehicle', 'AddGlobalObject', 'AddTargetModel', 'AddCircleZone',
         'RemoveGlobalPlayer', 'RemoveGlobalVehicle', 'RemoveGlobalObject', 'RemoveTargetModel', 'RemoveZone',
+        'AddTargetEntity', 'RemoveTargetEntity',
     }
     for i = 1, #REQUIRED_EXPORTS do
         if not IsExportCapable(RESOURCE, REQUIRED_EXPORTS[i]) then return nil end
@@ -435,6 +484,45 @@ local function QbTargetFactory(realm)
             elseif handle.kind == 'zone' then
                 SafeCall(RESOURCE, 'RemoveZone', handle.id)
             end
+        end,
+
+        --- CONFIRMED against qbcore-framework/qb-target's live `main`
+        --- branch, `registration.lua` (`AddTargetEntity(entities,
+        --- parameters)`, this session's fetch). For a NON-networked entity
+        --- (`NetworkGetEntityIsNetworked(entity) == false` -- true for
+        --- every ped this resource's own client/equipmentshop.lua spawns,
+        --- see `CreatePed(..., false, false)`), qb-target keys its options
+        --- table by the RAW entity handle itself -- the exact real
+        --- equivalent of ox_target's addLocalEntity for this resource's one
+        --- actual use case. Same `{ distance, options }` shape and the same
+        --- label-keyed, distance-clamping `SetOptions` helper as
+        --- AddGlobalPlayer/AddCircleZone above, so this reuses the same
+        --- `TranslateOptions`/`MaxDistance` helpers unchanged.
+        --- @param entity number
+        --- @param options table
+        --- @return table|nil handle
+        AddLocalEntity = function(entity, options)
+            local normalized = NormalizeOptions(options)
+            local ok = SafeCall(RESOURCE, 'AddTargetEntity', entity,
+                { distance = MaxDistance(normalized), options = TranslateOptions(normalized) })
+            if not ok then return nil end
+            return { kind = 'entity', entity = entity, labels = ExtractLabels(normalized) }
+        end,
+
+        --- CONFIRMED (`RemoveTargetEntity(entities, labels)`): `labels` is
+        --- OPTIONAL -- passing it removes only those named options; omitting
+        --- it clears the entity's entire options entry. DELIBERATE CHOICE,
+        --- not an oversight: called here with NO labels, because this
+        --- adapter's one real caller (client/equipmentshop.lua) created and
+        --- owns this entity outright and always tears it down completely on
+        --- despawn -- never a partial removal shared with some other
+        --- resource's own targeting of the same entity. A future caller
+        --- that DOES need scoped removal on a shared entity would need a
+        --- different method, not a change to this one.
+        --- @param handle table -- exactly what AddLocalEntity returned
+        RemoveLocalEntity = function(handle)
+            if type(handle) ~= 'table' then return end
+            SafeCall(RESOURCE, 'RemoveTargetEntity', handle.entity)
         end,
     }
 end

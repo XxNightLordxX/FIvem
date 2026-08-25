@@ -25,7 +25,7 @@
     function into, and asserting on the observable result. Where a local is
     not reachable that way at all without disproportionate native stubbing,
     the corresponding spec file says so in a comment rather than silently
-    skipping it -- see tests/README.md's coverage table.
+    skipping it -- see DEVELOPER_REFERENCE.md's coverage table.
 ]]
 
 local Sandbox = {}

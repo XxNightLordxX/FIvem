@@ -64,7 +64,7 @@
     WHAT THIS FILE DOES NOT COVER, AND WHY:
       - client/combat.lua is untested here -- client-only natives, no
         server-side equivalent to sandbox against, same blanket exclusion
-        tests/README.md already states for every client/*.lua file.
+        DEVELOPER_REFERENCE.md already states for every client/*.lua file.
       - NonComplianceDetection's own movement-sampling HEURISTICS (bite-hold
         idle/speed tolerance, takedown net displacement, drag gap) are left
         disabled (Config.Combat.NonComplianceDetection.enabled = false, the

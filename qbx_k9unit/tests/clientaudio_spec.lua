@@ -19,7 +19,7 @@
     THREAD STEPPING NOTE FOR THIS FILE'S ONE THREAD BODY (PlayK9Sound's
     loop=true branch): its FIRST statement is `local elapsed = 0`, a plain
     assignment, BEFORE the `while` loop even starts -- NOT a `Wait(...)` the
-    way tests/README.md's own generic stepping note assumes (see
+    way DEVELOPER_REFERENCE.md's own generic stepping note assumes (see
     tests/clientvision_spec.lua's own header for the identical situation and
     the same reasoning). So:
       step() #1 (prime) -- resumes from the very start: runs `elapsed = 0`,

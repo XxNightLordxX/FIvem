@@ -2299,7 +2299,7 @@ Config.ProximityAudioFX = {
 --                     that beats everything above -- override included. This
 --                     is the escape hatch for a fully custom, in-house
 --                     script that nothing else could possibly know about.
---                     See shared/compat/README.md for the exact function
+--                     See DEVELOPER_REFERENCE.md §21 for the exact function
 --                     list each system expects, with a copy-paste template.
 --
 -- WHAT HAPPENS IF NOTHING IS FOUND: the feature that needed that system

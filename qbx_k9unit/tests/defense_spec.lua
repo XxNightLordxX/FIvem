@@ -19,7 +19,7 @@
     TryNotifyPartnerK9) or reached only via one of the three entry points
     above (the net event, GetGameTimer-driven poll thread, playerDropped) --
     exactly the "no local is ever reached by copying its logic into the
-    test" discipline tests/README.md requires. Nothing here reimplements
+    test" discipline DEVELOPER_REFERENCE.md requires. Nothing here reimplements
     defense.lua's own decision logic; every assertion is against an
     OBSERVABLE side effect (a captured TriggerClientEvent call, a printed
     warning line, whether a query/resolve stub was even invoked) of the
@@ -28,7 +28,7 @@
     WHAT THIS FILE DOES NOT COVER, AND WHY:
       - client/defense.lua is untested here (out of scope for this file --
         client-only natives, no server-side equivalent to sandbox against;
-        same blanket exclusion tests/README.md already states for every
+        same blanket exclusion DEVELOPER_REFERENCE.md already states for every
         client/*.lua file).
       - server/combat.lua's requestBiteHold/requestTakedown validation path
         that a real handlerDownDefenseTrigger notification eventually feeds

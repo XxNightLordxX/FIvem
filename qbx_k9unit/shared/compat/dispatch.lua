@@ -2,7 +2,7 @@
     qbx_k9unit/shared/compat/dispatch.lua
 
     K9Compat 'dispatch' adapters. Read shared/compat/core.lua's header AND
-    shared/compat/README.md FIRST -- this file only implements the
+    DEVELOPER_REFERENCE.md §21 FIRST -- this file only implements the
     per-resource `factory(realm) -> table | nil` bodies core.lua's generic
     engine calls; it invents no new contract of its own.
 
@@ -48,7 +48,7 @@
 
     ======================================================================
     THE NORMALISED `Alert(payload)` CONTRACT (this file's own design --
-    core.lua and shared/compat/README.md deliberately leave "parameter
+    core.lua and DEVELOPER_REFERENCE.md §21 deliberately leave "parameter
     shapes and return values for each method" to the adapter file that owns
     that system, see README.md's own "Parameter shapes..." paragraph).
 

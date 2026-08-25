@@ -55,7 +55,7 @@
     an already-known single thread). See newVisionFixture()'s own comment
     on the exact step-by-step semantics of THIS specific thread body --
     its first statement is a plain assignment before the `while` loop even
-    starts, not a `Wait(...)` the way tests/README.md's own generic
+    starts, not a `Wait(...)` the way DEVELOPER_REFERENCE.md's own generic
     stepping note assumes, so this file works out the precise resume
     boundaries for itself rather than leaning on that note uncritically.
 
@@ -207,7 +207,7 @@ local function newVisionFixture(opts)
         --- thread once. See this file's header + inline comments at each
         --- call site below for exactly what a given step number reaches --
         --- this thread's FIRST statement is a plain assignment before its
-        --- `while` loop, not a `Wait(...)` the way tests/README.md's own
+        --- `while` loop, not a `Wait(...)` the way DEVELOPER_REFERENCE.md's own
         --- generic note assumes, so step-by-step semantics here are worked
         --- out per-call rather than quoted wholesale from that note.
         step = function() runner.step() end,

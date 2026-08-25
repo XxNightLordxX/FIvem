@@ -3,7 +3,7 @@
 #
 # Runs every *_spec.lua file in this directory under plain lua5.4 (no
 # framework/dependency beyond the Lua 5.4 interpreter itself -- see
-# tests/README.md for why busted was not used). Each spec file is a
+# DEVELOPER_REFERENCE.md for why busted was not used). Each spec file is a
 # self-contained process: it loads tests/testkit.lua, runs its own test
 # cases, and os.exit()s 0 (all passed) or 1 (at least one failure). This
 # script aggregates those exit codes into one overall pass/fail and prints a
