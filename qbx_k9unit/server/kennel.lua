@@ -2,7 +2,7 @@
     qbx_k9unit/server/kennel.lua
 
     Phase 5 R&D scaffold (coder-architect structural pass).
-    Config.Features.DeployableKennel (phase2_notes/phase5_features_research.md
+    Config.Features.DeployableKennel (phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research
     §5): "a certified handler can place a world object (the kennel prop)
     near themselves... server-authoritative validation (proximity,
     certification, one-per-handler limit), with cleanup on resource stop/
@@ -49,7 +49,7 @@
        instructs the SAME client to actually create the object (event 5).
        CreateObject/PlaceObjectOnGroundProperly/FreezeEntityPosition are
        native-only, client-side operations per
-       phase2_notes/phase5_features_research.md §5's confirmed natives —
+       phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §5's confirmed natives —
        this file never attempts to create the object itself.
     2. 'qbx_k9unit:server:confirmKennelPlaced' (netId: number) [THIS FILE]
        Client reports the network id of the object it actually created, in
@@ -237,8 +237,8 @@
     medium-high confidence per that convention, but NOT independently
     re-verified against this exact FXServer version's native behavior this
     session (no live server was reachable to test against, same sandbox
-    limitation phase2_notes/*_natives.md files already document
-    elsewhere). The broadcast to 'qbx_k9unit:client:removeKennel' (-1)
+    limitation phase2_notes/RESEARCH_ARCHIVE.md's native-reference tables
+    already document elsewhere). The broadcast to 'qbx_k9unit:client:removeKennel' (-1)
     immediately below it is a deliberate backstop, not redundant
     belt-and-suspenders for its own sake: if server-side DeleteEntity turns
     out to be a no-op in a given FXServer build, whichever CONNECTED client

@@ -81,7 +81,7 @@
     built around, not an edge case. The real theft-risk tradeoff
     'department' creates (any officer in the department could pilfer a K9's
     stash) is the same social/administrative-abuse category
-    `phase2_notes/contraband_search_contract.md` §6's last bullet already
+    `phase2_notes/RESEARCH_ARCHIVE.md#contraband-search` §6's last bullet already
     accepts for search-capability misuse — not a code-level exploit any
     config value here can close.
 
@@ -106,7 +106,7 @@
     CONFIDENCE NOTES — every ox_inventory export/shape this file's body
     depends on, graded honestly per this session's own verification (or lack
     of it), same discipline server/search.lua's header and
-    phase2_notes/contraband_search_contract.md §1 already established for
+    phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §1 already established for
     Phase 2's export surface:
 
     - `GetInventoryItems`/`GetContainerFromSlot` (server/search.lua's own

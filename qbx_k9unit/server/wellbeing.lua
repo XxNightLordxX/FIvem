@@ -196,7 +196,7 @@
     8. 'qbx_k9unit:client:wellbeingUpdate' (stats: table) [server->client,
        requester only, client/wellbeing.lua] — one combined push per tick
        carrying all five wellbeing values together (mirrors
-       phase2_notes/phase4_hud_bridge_design.md's own "one combined message
+       phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge's own "one combined message
        beats a split one" reasoning, PHASE4_SPEC.md §13.4.3.1).
 
     Resource-globals (no `local` — other files call these directly):

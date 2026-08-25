@@ -241,7 +241,7 @@ end, false)
 RegisterNetEvent('qbx_k9unit:client:attachK9Prop', function()
     -- SOURCE-ORIGIN GUARD (coder-security precedent — see
     -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/client_event_trust_boundary.md for the full writeup, not
+    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup, not
     -- re-derived here). 65535 is FiveM's documented client-side sentinel
     -- for "this event genuinely came from the server" (citizenfx/fivem-docs,
     -- "Secure your events"). Confidence: MEDIUM-HIGH, the official

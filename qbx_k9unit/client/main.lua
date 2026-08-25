@@ -244,7 +244,7 @@ local K9_SOUND_SET = 'qbx_k9unit_sounds'
 --- SPEC.md §6.7's "aggressive/alert/calm") to its own placeholder sound
 --- name, built once at file load. Still all placeholder audio, same
 --- K9_SOUND_SET convention as BARK_SOUND_NAME above — phase2_notes/
---- phase5_features_research.md §1 confirms a real per-variant soundset
+--- RESEARCH_ARCHIVE.md#phase-5-research confirms a real per-variant soundset
 --- needs authored `.awc`/REL audio-bank assets, not just a different string
 --- here; this table only carries the plumbing. Built defensively against
 --- Config.AdvancedBarkRadial not existing (older configs, or the feature
@@ -366,7 +366,7 @@ end
 RegisterNetEvent('qbx_k9unit:client:playBark', function(netId, barkType)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup;
     -- not re-derived here). Confidence: MEDIUM-HIGH, the official
     -- documented pattern for distinguishing a genuine server-sent event
     -- from a local self-trigger, not independently verified in-engine

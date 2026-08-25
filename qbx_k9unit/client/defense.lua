@@ -74,7 +74,7 @@
     "additional consumer, not a replacement" pattern server/wellbeing.lua's
     own header already documents for the identical relayDamageEvent/
     relayWeaponFire events) rather than touch that file at all.
-    CONFIDENCE, restated from phase2_notes/scent_blood_natives.md rather
+    CONFIDENCE, restated from phase2_notes/RESEARCH_ARCHIVE.md#tracking rather
     than re-derived: `data[1]` (victim) and `data[2]` (attacker, or -1/same-
     as-victim for a non-ped damage source) are the two `CEventNetworkEntityDamage`
     argument indices that note found corroborated across MULTIPLE

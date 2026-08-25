@@ -5,7 +5,7 @@
     FILE OF PHASE 2, per SPEC.md §11.1 sub-phase 2b ("this is also the
     piece coder-security should review first, per the task's explicit
     direction to confirm search results can't be client-claimed") and per
-    phase2_notes/contraband_search_contract.md's own framing ("designing
+    phase2_notes/RESEARCH_ARCHIVE.md#contraband-search's own framing ("designing
     early because the trust boundary doesn't move even if config field
     names do"). Get an explicit coder-security sign-off on this
     implementation before it ships, the same standard
@@ -30,14 +30,14 @@
     1. SPEC.md §11.4 item 2 (event/callback contract) and §11.5's
        "Search vehicle/person + contraband alert tiers" acceptance
        criteria — the base contract this file satisfies.
-    2. phase2_notes/contraband_search_contract.md — supplements §11.4/
+    2. phase2_notes/RESEARCH_ARCHIVE.md#contraband-search — supplements §11.4/
        §11.5 with the exact server-authoritative validation order (§3), the
        REAL confirmed ox_inventory export surface (§1 —
        `GetInventoryItems`, `GetContainerFromSlot`, read against the actual
        overextended/ox_inventory source, not guessed), the mandatory
        container-recursion requirement (§2), and the race-safe
        rate-limiting/mutex design (§4).
-    3. phase2_notes/contraband_search_security_review.md — every BLOCKING
+    3. phase2_notes/RESEARCH_ARCHIVE.md#contraband-search — every BLOCKING
        finding in its §8 summary is implemented below as a hard
        requirement, not optional hardening:
          - Blocking: contraband alert broadcast is DISTANCE-FILTERED (see

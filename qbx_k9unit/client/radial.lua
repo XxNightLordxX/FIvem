@@ -436,6 +436,25 @@ local function RegisterK9RadialMenu()
                 items = barkSubmenuItems,
             })
 
+    -- K9 Command Tablet. Deliberately FIRST in the submenu: for a handler
+    -- who does not want to learn keybinds, this one entry reaches every
+    -- other ability, so burying it under them would be backwards.
+    -- Guarded with type() because client/tablet.lua returns early when
+    -- Config.Features.CommandTablet is off, in which case OpenTablet is
+    -- never defined. The tablet itself re-checks authorization; opening it
+    -- is not a privileged act, and a handler who is not certified still
+    -- opens it and is shown WHY rather than finding a dead menu entry.
+    if Config.Features.CommandTablet then
+        k9SubmenuItems[#k9SubmenuItems + 1] = {
+            id = 'k9_open_tablet',
+            label = locale('radial.tablet_label'),
+            icon = 'tablet',
+            onSelect = function()
+                if type(OpenTablet) == 'function' then OpenTablet() end
+            end,
+        }
+    end
+
             -- Opener item inside the "K9 Unit" submenu: selecting THIS navigates
             -- into 'k9unit_bark' (registered just above), same `menu`-field
             -- navigation mechanic this file's header already documents for the

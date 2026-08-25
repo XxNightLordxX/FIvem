@@ -26,7 +26,7 @@
     OX_INVENTORY EXPORT SIGNATURES — CONFIRMED AGAINST THE REAL SOURCE THIS
     SESSION (github.com/overextended/ox_inventory @ main, fetched and read
     directly, not remembered/guessed — same methodology
-    phase2_notes/contraband_search_contract.md already used to confirm
+    phase2_notes/RESEARCH_ARCHIVE.md#contraband-search already used to confirm
     GetInventoryItems/GetContainerFromSlot for server/search.lua):
         exports.ox_inventory:GetItemCount(inv, itemName, metadata?, strict?) -> number
             (modules/inventory/server.lua, Inventory.GetItemCount, exported

@@ -291,6 +291,14 @@ globals = {
     -- and checked it in the same call, silently dropping the first XP award
     -- of every session for every player.
     "IsValidXpMintBudgetParam",
+    -- server/progression.lua -- an XP TIER UNLOCK. Tiers used to apply only
+    -- multipliers; this is one of the first that returns real capability.
+    -- Anything gated behind a tier is gated behind roughly 2h27m of
+    -- deliberate grinding at the current capped ceiling, so only put things
+    -- here that are harmless in the hands of someone who simply ground for
+    -- them -- and never something that would override a high-command block,
+    -- which resolves separately and must win.
+    "GetXPTierMedkitCooldownMs",
     -- server/highcommand.lua -- the PD high-command tier. IsHighCommand is
     -- consulted by server/admin.lua, server/certifications.lua and
     -- server/bonetool.lua to let high command bypass their own rank gates;

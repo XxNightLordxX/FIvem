@@ -195,7 +195,7 @@
     client doesn't necessarily own network control of) and, on the holder
     side, to the attach itself. Every native call against a target/NPC
     entity below is preceded by a best-effort NetworkRequestControlOfEntity
-    call (phase2_notes/phase3_combat_natives.md's own §1/§4 confirm this
+    call (phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat's own §1/§4 confirm this
     native and explicitly name it as "needed before an NPC-target client can
     reliably drive SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes/
     AttachEntityToEntity on an entity it doesn't already own network control
@@ -368,7 +368,7 @@
 -- invocation of it, once registered, genuinely came from the server. See
 -- "SOURCE-ORIGIN GUARD" immediately below the per-mechanic gating section
 -- for the dedicated fix for that half, landed separately (coder-security,
--- phase2_notes/client_event_trust_boundary.md). Do not read this comment
+-- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary). Do not read this comment
 -- block's presence alone as "solved" — only "off is inert again"; the
 -- origin guard below is what actually closes the self-triggering gap for
 -- the "on" case.
@@ -745,7 +745,7 @@ end
 
 -- ======================================================================
 -- SOURCE-ORIGIN GUARD (coder-security, this pass, per design assessment
--- phase2_notes/client_event_trust_boundary.md — read that document in full
+-- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary — read that document in full
 -- before touching this block; this comment is a summary of it, not a
 -- replacement for it). Fixes the specific gap the per-mechanic gate above
 -- explicitly disclaimed: once a mechanic's flag is on, its handlers are
@@ -1103,7 +1103,7 @@ if Config.Features.BiteAndHold then
     -- previously called NetworkRequestControlOfEntity before driving
     -- SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes on the NPC —
     -- this resource's OWN research note
-    -- (phase2_notes/phase3_combat_natives.md §1/§4) explicitly names that
+    -- (phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §1/§4) explicitly names that
     -- native as the correct prerequisite for exactly this situation ("needed
     -- before an NPC-target client can reliably drive
     -- SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes/
@@ -1166,7 +1166,7 @@ if Config.Features.NonLethalTakedown then
     -- identical here.
     --- PHASE3_SPEC.md §12.0 item 8 / server/combat.lua's own header: applies
     --- the ragdoll + damage-bracket locally, bracket-before-ragdoll ordering,
-    --- per phase2_notes/phase3_combat_natives.md §2 ("damage-bracket + health
+    --- per phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §2 ("damage-bracket + health
     --- floor BEFORE the ragdoll task, never after") — same ordering
     --- applyNpcTakedown below uses for the NPC-target path. See this file's
     --- header "RAGDOLL FALL-DIRECTION" note for why this uses the TARGET's
@@ -1182,7 +1182,7 @@ if Config.Features.NonLethalTakedown then
         local forward = GetEntityForwardVector(ped)
         -- SET_PED_TO_RAGDOLL_WITH_FALL(ped, minTime, maxTime, nFallType, dirX,
         -- dirY, dirZ, fGroundHeight, grab1[xyz], grab2[xyz]) — grab params
-        -- documented unused, per phase2_notes/phase3_combat_natives.md §2.
+        -- documented unused, per phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §2.
         -- minTime/maxTime (1000, 1500) match applyNpcTakedown below exactly,
         -- for parity between the two paths — both are UNTUNED placeholders,
         -- not previously specified anywhere in this codebase's own config/spec.
@@ -1208,7 +1208,7 @@ if Config.Features.NonLethalTakedown then
     -- native-api-assistant pass named SetEntityCanBeDamaged specifically
     -- (confirmed CLIENT-ONLY) but did NOT independently re-confirm
     -- NETWORK_REQUEST_CONTROL_OF_ENTITY's necessity for THIS specific
-    -- native pairing the way phase2_notes/phase3_combat_natives.md's §1
+    -- native pairing the way phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat's §1
     -- table does for SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes/
     -- AttachEntityToEntity by name — applying the SAME fix here on the
     -- strength of "any client-side ped-behavior/physics native aimed at an

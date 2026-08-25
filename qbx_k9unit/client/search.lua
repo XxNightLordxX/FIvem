@@ -17,7 +17,7 @@
 
     Supplementary implementation detail (non-authoritative — SPEC.md §11 is
     the source of truth if anything here drifts from it):
-    phase2_notes/contraband_search_contract.md (the concrete ox_inventory
+    phase2_notes/RESEARCH_ARCHIVE.md#contraband-search (the concrete ox_inventory
     export surface, validation order, and container-recursion requirement).
 
     ======================================================================
@@ -37,7 +37,7 @@
        controls, and only ever select WHICH entity gets checked, never the
        outcome).
        `reason` values handled below, per
-       phase2_notes/contraband_search_contract.md §3 and confirmed against
+       phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §3 and confirmed against
        server/search.lua's own header as of this pass: 'invalid_target',
        'feature_disabled', 'no_access', 'search_in_progress', 'on_cooldown',
        'too_far', 'search_failed'. `search_failed` is shown to the player as
@@ -107,7 +107,7 @@
 --- double-click before the sniff animation/progress bar visually disables
 --- the option). This is a UX nicety only, NOT the security boundary —
 --- server/search.lua's own in-flight mutex (per
---- phase2_notes/contraband_search_contract.md §4A) is what actually closes
+--- phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §4A) is what actually closes
 --- the exploitable race; this local flag exists purely so this client
 --- doesn't visibly fire two overlapping sniff animations/progress bars
 --- against itself.
@@ -133,7 +133,7 @@ local function PerformSearch(targetType, targetEntity)
     end
 
     -- Silent, routine double-click protection, not an error state worth a
-    -- notification (mirrors phase2_notes/contraband_search_contract.md
+    -- notification (mirrors phase2_notes/RESEARCH_ARCHIVE.md#contraband-search
     -- §4's own "Rejection UX note" recommendation for
     -- on_cooldown/search_in_progress being low-key, not error-styled).
     if searchInProgress then return end
@@ -157,12 +157,12 @@ local function PerformSearch(targetType, targetEntity)
 
     searchInProgress = true
 
-    -- Sniff animation shell. OPEN, not resolved by SPEC.md §11 or any
-    -- phase2_notes file: the exact anim/scenario native for a
+    -- Sniff animation shell. OPEN, not resolved by SPEC.md §11 or
+    -- phase2_notes/RESEARCH_ARCHIVE.md: the exact anim/scenario native for a
     -- "sniffing/searching" pose would need the same native-api-assistant
     -- confirmation pass client/movement.lua's K9Sit() precedent already got
     -- for its WORLD_DOG_SITTING_* scenarios
-    -- (phase2_notes/scent_blood_tracking.md §4's identical flag for a
+    -- (phase2_notes/RESEARCH_ARCHIVE.md#tracking §4's identical flag for a
     -- tracking-session sniff animation) — not guessed at here rather than
     -- risk shipping a fabricated scenario name. lib.progressBar alone still
     -- gives real UX value (pacing, a cancel/interrupt hook if the player
@@ -233,7 +233,7 @@ local function PerformSearch(targetType, targetEntity)
             })
         else
             -- Explicit, NON-SILENT "nothing found" notification beat — per
-            -- phase2_notes/contraband_search_contract.md §5's explicit
+            -- phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §5's explicit
             -- requirement ("the requester's own client must render some
             -- explicit 'nothing found' feedback... this doesn't need a server
             -- broadcast at all, since it's private feedback to the one client

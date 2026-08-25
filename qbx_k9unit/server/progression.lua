@@ -5,12 +5,12 @@
     end: server-authoritative XP accumulation, the `k9_progression`
     persistence table (sql/install.sql), the `K9XP[citizenid]` in-memory
     cache mirroring `server/certifications.lua`'s `Certifications` cache
-    pattern exactly (per phase2_notes/phase4_xp_schema_notes.md §5's own
+    pattern exactly (per phase2_notes/RESEARCH_ARCHIVE.md#xp-schema §5's own
     recommendation), and the tier-lookup helper walking `Config.XPTiers` the
     same way `server/search.lua` walks `Config.ContrabandAlertTiers`.
 
     PERSISTENCE DECISION (not re-litigated here — see
-    phase2_notes/phase4_xp_schema_notes.md, db-schema's design note, and
+    phase2_notes/RESEARCH_ARCHIVE.md#xp-schema, db-schema's design note, and
     PHASE4_SPEC.md §13.4.1/§13.5's own header claiming this note is
     "adopted"): a dedicated table, `k9_progression`, ONE ROW PER CITIZENID —
     NOT a qbx_core metadata field. XP is real, mechanical, capability-
@@ -1080,7 +1080,7 @@ function AwardXP(citizenid, actionKey)
 
     local newXp = oldXp + amount
     -- Update the in-memory cache SYNCHRONOUSLY, before the DB write below —
-    -- phase2_notes/phase4_xp_schema_notes.md §5: correctness of the applied
+    -- phase2_notes/RESEARCH_ARCHIVE.md#xp-schema §5: correctness of the applied
     -- gameplay effect (tier-derived scentRangeMultiplier/speedMultiplier) depends only
     -- on this line, never on DB round-trip latency.
     K9XP[citizenid] = newXp
@@ -1091,7 +1091,7 @@ function AwardXP(citizenid, actionKey)
     -- `VALUES(xp)` on the ON DUPLICATE KEY branch refers to the
     -- just-inserted delta, giving a single-statement atomic
     -- increment-or-create with no separate SELECT-then-UPDATE round trip
-    -- (phase2_notes/phase4_xp_schema_notes.md §4). CONCURRENCY: this is safe
+    -- (phase2_notes/RESEARCH_ARCHIVE.md#xp-schema §4). CONCURRENCY: this is safe
     -- against a lost update even with several of these in flight at once for
     -- the SAME citizenid (e.g. two award paths landing in the same tick) —
     -- MySQL/MariaDB serializes concurrent UPSERTs against the same unique

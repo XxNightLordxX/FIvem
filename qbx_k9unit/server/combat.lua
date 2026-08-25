@@ -284,7 +284,7 @@
     ======================================================================
 
     No anim-dictionary/TASK_PLAY_ANIM asset is used for BiteAndHold in this
-    pass — phase2_notes/phase3_combat_natives.md's own §1 write-up flags
+    pass — phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat's own §1 write-up flags
     the one candidate clip (`creatures@rottweiler@melee@streamed_core@` /
     `takedown_from_back`) as MEDIUM confidence, one-shot (not a sustained
     hold loop), model-specific to the Rottweiler only, and explicitly
@@ -368,7 +368,7 @@
     currently-connected player?"), for the SAME reason that file's own
     header gives: `IsPedAPlayer`/`NetworkGetPlayerIndexFromPed` combos were
     never independently confirmed reliable SERVER-side in this codebase's
-    own native-verification passes (phase2_notes/phase3_combat_natives.md
+    own native-verification passes (phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat
     does not list `IS_PED_A_PLAYER` in its confirmed-natives table for
     either feature at all), whereas the `GetPlayers()`/`GetPlayerPed(id)`
     scan is already proven reliable server-side elsewhere in this exact

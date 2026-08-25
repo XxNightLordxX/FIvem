@@ -237,7 +237,7 @@ end
 --- from server/search.lua's original doc comment — this reasoning applies
 --- equally to every caller, not just the one that first wrote it): the
 --- design notes server/search.lua was built from
---- (phase2_notes/contraband_search_contract.md §3 step 9, and that file's
+--- (phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §3 step 9, and that file's
 --- own prior scaffold) suggested
 --- `GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))` for this
 --- resolution. That combination was never independently re-verified as

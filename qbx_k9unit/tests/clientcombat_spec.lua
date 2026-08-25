@@ -87,7 +87,7 @@
 
     Every `qbx_k9unit:client:*` handler in this file opens with
     `if source ~= 65535 then return end` (coder-security pass, per
-    phase2_notes/client_event_trust_boundary.md). This spec's sandbox models
+    phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary). This spec's sandbox models
     `source` as an ordinary Lua global the handler reads via `_ENV` --
     exactly like every other stubbed native here -- and each test below
     sets it explicitly before invoking the captured handler. That is

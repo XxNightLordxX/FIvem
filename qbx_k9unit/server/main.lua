@@ -55,7 +55,7 @@
       the requester's confirmation — no mechanic may trap someone leashed
       with no self-service exit).
     - 'qbx_k9unit:server:relayDoorScratch' (doorNetId: number)
-      Phase 2 (SPEC.md §11.4 item 5, phase2_notes/door_interaction.md §4.2).
+      Phase 2 (SPEC.md §11.4 item 5, phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2).
       Structurally mirrors relayBark above, EXCEPT `doorNetId` names a
       DIFFERENT entity than the sender's own ped, so (unlike relayBark) this
       handler also resolves it (NetworkGetEntityFromNetworkId), confirms it
@@ -425,7 +425,7 @@ end)
 -- ever resolves and broadcasts the SENDER's own already-access-checked ped),
 -- relayDoorScratch's `doorNetId` names a DIFFERENT entity the caller merely
 -- claims to be near — neither the original §11.4 item 5 contract nor
--- phase2_notes/door_interaction.md §4.2's handler sketch called for
+-- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2's handler sketch called for
 -- resolving/existence-checking/proximity-checking that id before
 -- broadcasting. Left unchecked, a modified client could pass any entity's
 -- netId (any vehicle, any other player's ped, even 0) and have the server
@@ -439,7 +439,7 @@ local DOOR_SCRATCH_DISTANCE_TOLERANCE = 1.0 -- meters of slack over Config.DoorI
 
 -- Sibling, INDEPENDENT per-source cooldown table — deliberately not shared
 -- with lastBarkAt above. Bark and door-scratch are two independently
--- cooldowned actions per §11.4/phase2_notes/door_interaction.md §4.2; a
+-- cooldowned actions per §11.4/phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2; a
 -- player who just barked should not have that consumed against their
 -- separate door-scratch allowance, or vice versa.
 --

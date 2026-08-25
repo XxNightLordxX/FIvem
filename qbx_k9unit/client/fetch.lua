@@ -216,7 +216,7 @@ end, false)
 RegisterNetEvent('qbx_k9unit:client:throwFetchBallAt', function(spawnX, spawnY, spawnZ, forceX, forceY, forceZ)
     -- SOURCE-ORIGIN GUARD (coder-security precedent — see
     -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/client_event_trust_boundary.md for the full writeup, not
+    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup, not
     -- re-derived here). 65535 is FiveM's documented client-side sentinel
     -- for "this event genuinely came from the server" (citizenfx/fivem-docs,
     -- "Secure your events"). Confidence: MEDIUM-HIGH, the official
@@ -250,7 +250,7 @@ RegisterNetEvent('qbx_k9unit:client:throwFetchBallAt', function(spawnX, spawnY, 
     -- exact parameter shape this mirrors. Deliberately forceType 3, not the
     -- forceType 1 (continuous force) used by the one external community
     -- precedent this feature is otherwise modeled on
-    -- (phase2_notes/phase5_remaining_features_research.md) — a one-shot
+    -- (phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research) — a one-shot
     -- throw is semantically an impulse, and this codebase already has its
     -- own reasoned, shipped precedent for exactly that call shape, followed
     -- here instead of the external example.

@@ -126,7 +126,7 @@ if Config.Features.AgilityAdvanced then
     -- argument (bit 1 = IntersectMap), but unlike StartShapeTestCapsule/
     -- GetShapeTestResult's own hash/signature (HIGH confidence, verified
     -- directly against raw.githubusercontent.com/citizenfx/natives per
-    -- phase2_notes/phase3_combat_natives.md §5), the exact flag-bit
+    -- phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §5), the exact flag-bit
     -- MEANINGS were not independently re-verified against that same
     -- canonical source this session -- if the sweep reports hits against
     -- unexpected entity types (or misses static fences/walls) in testing,
@@ -199,7 +199,7 @@ if Config.Features.AgilityAdvanced then
             )
 
             -- GET_SHAPE_TEST_RESULT's own documented contract (confirmed,
-            -- phase2_notes/phase3_combat_natives.md §5): poll until it
+            -- phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §5): poll until it
             -- returns 0 (invalid handle) or 2 (complete) -- 1 means "still
             -- processing," NOT a single guaranteed-synchronous call. A
             -- capsule sweep this short against static world geometry
@@ -286,7 +286,7 @@ if Config.Features.AgilityAdvanced then
         -- Scripted arc over the detected obstacle. PHASE3_SPEC.md
         -- §12.5.5's own wording correction applies here: there is no
         -- dedicated ped "jump" TASK native (confirmed absent,
-        -- phase2_notes/phase3_combat_natives.md §5) -- this arc is driven
+        -- phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §5) -- this arc is driven
         -- directly via SET_ENTITY_VELOCITY (confirmed real,
         -- 0x1C99BB7B6E96D16F, HIGH confidence), an upward+forward impulse
         -- scaled by the detected obstacle's height, not a task/input

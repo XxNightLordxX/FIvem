@@ -26,12 +26,12 @@
     directly; nothing left to flag here.)
 
     AUTHORITATIVE BACKGROUND — read before touching this file:
-      - phase2_notes/dependency_and_audio_status.md, "Question 2" (the pass
+      - phase2_notes/RESEARCH_ARCHIVE.md#dependencies-and-audio (the pass
         that concluded extending this resource's already-live NUI bridge
         is cheaper than authoring a real .awc/dat151/dat54 RAGE audio bank
         — this file, plus html/app.js's matching additions, IS that
         extension, built for real this pass, not just proposed).
-      - phase2_notes/phase5_remaining_features_research.md §1 (confirms a
+      - phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research (confirms a
         Web Audio GainNode does continuous volume scripting natively, with
         zero dependency on any FiveM native, RAGE metadata, or authored
         RTPC variable — the reason this path can do distance-based gain at
@@ -281,7 +281,7 @@ end
 --- This client's own gain toward a given source entity, computed from THIS
 --- client's own ped position — matching the "each listening client
 --- computes its own per-listener falloff" shape
---- phase2_notes/dependency_and_audio_status.md already sketched for
+--- phase2_notes/RESEARCH_ARCHIVE.md#dependencies-and-audio already sketched for
 --- ordinary bark playback, and the same vector-subtraction-length idiom
 --- (`#(a - b)`) already used for every other distance check in this
 --- resource (client/combat.lua, client/vehicle.lua, client/radial.lua,

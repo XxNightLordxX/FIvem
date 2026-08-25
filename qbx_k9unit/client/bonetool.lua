@@ -4,7 +4,7 @@
     Client half of the dev-only bone-index sweep tool — see
     server/bonetool.lua's header for the full access-model/purpose writeup
     (read that file first). Built directly against this resource's own
-    prior research (phase2_notes/phase5_remaining_features_research.md §2/§3,
+    prior research (phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research,
     read in full before writing this file): no documented bone NAME exists
     for an `a_c_*` quadruped skeleton anywhere this codebase's research could
     reach, but `AttachEntityToEntity` only ever needed a raw INDEX, and
@@ -443,7 +443,7 @@ end
 RegisterNetEvent('qbx_k9unit:client:boneToolCommand', function(subcommand, arg)
     -- SOURCE-ORIGIN GUARD (coder-security precedent — see
     -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/client_event_trust_boundary.md for the full writeup, not
+    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup, not
     -- re-derived here). Confidence: MEDIUM-HIGH, the official documented
     -- pattern, not independently verified in-engine this pass.
     if source ~= 65535 then return end

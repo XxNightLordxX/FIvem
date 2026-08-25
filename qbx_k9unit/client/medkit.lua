@@ -267,7 +267,7 @@ end
 RegisterNetEvent('qbx_k9unit:client:applyMedkitHeal', function(newHealth)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup;
     -- not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:applyMedkitHeal', <anything>)`
     -- would reach the exact same SetEntityHealth call a genuine server

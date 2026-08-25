@@ -163,7 +163,7 @@ end, false)
 RegisterNetEvent('qbx_k9unit:client:deployKennelAt', function(x, y, z)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup;
     -- not re-derived here). 65535 is FiveM's documented client-side
     -- sentinel for "this event genuinely came from the server"
     -- (citizenfx/fivem-docs, "Secure your events"). Without this, a
@@ -241,7 +241,7 @@ end)
 RegisterNetEvent('qbx_k9unit:client:removeKennel', function(netId)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/client_event_trust_boundary.md for the full writeup;
+    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup;
     -- not re-derived here). THIS is the highest-severity handler in this
     -- file to guard: without this check, and before the feature gate and
     -- model check below existed, a forged local

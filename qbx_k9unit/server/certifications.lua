@@ -514,6 +514,37 @@ function IsConfiguredK9Model(modelHash)
     return K9ModelHashes[modelHash] == true
 end
 
+--- Re-queries every ACTIVE specialization row for (citizenid, jobName) and
+--- replaces that job's slice of `Specializations[citizenid]` wholesale.
+--- Fails CLOSED on a thrown read (an unreadable citizenid/job's
+--- specialization set is treated as empty, never as "whatever it was
+--- before") — same posture as RefreshCertificationCache. Declared BEFORE
+--- RefreshCertificationCache (which calls it) since both are in this same
+--- file/chunk and this is a `local` — Lua resolves a `local` reference
+--- lexically, by textual position, not by call order at runtime. Called
+--- from RefreshCertificationCache itself (every point that already
+--- refreshes the base cert cache also keeps this in sync) — never called
+--- standalone from outside this file.
+--- @param citizenid string
+--- @param jobName string
+local function RefreshSpecializationCache(citizenid, jobName)
+    local ok, rowsOrErr = pcall(MySQL.query.await,
+        'SELECT specialization FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND active = 1', {
+            citizenid, jobName,
+        })
+    Specializations[citizenid] = Specializations[citizenid] or {}
+    if not ok then
+        print(('[qbx_k9unit] RefreshSpecializationCache query failed for %s/%s: %s'):format(citizenid, jobName, tostring(rowsOrErr)))
+        Specializations[citizenid][jobName] = {}
+        return
+    end
+    local set = {}
+    for _, row in ipairs(rowsOrErr or {}) do
+        set[row.specialization] = true
+    end
+    Specializations[citizenid][jobName] = set
+end
+
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
 -- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
@@ -711,34 +742,6 @@ function RefreshCertificationCache(citizenid, jobName)
     return true
 end
 
---- Re-queries every ACTIVE specialization row for (citizenid, jobName) and
---- replaces that job's slice of `Specializations[citizenid]` wholesale.
---- Fails CLOSED on a thrown read (an unreadable citizenid/job's
---- specialization set is treated as empty, never as "whatever it was
---- before") — same posture as RefreshCertificationCache. Called from
---- RefreshCertificationCache itself (every point that already refreshes
---- the base cert cache also keeps this in sync) — never called standalone
---- from outside this file.
---- @param citizenid string
---- @param jobName string
-local function RefreshSpecializationCache(citizenid, jobName)
-    local ok, rowsOrErr = pcall(MySQL.query.await,
-        'SELECT specialization FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND active = 1', {
-            citizenid, jobName,
-        })
-    Specializations[citizenid] = Specializations[citizenid] or {}
-    if not ok then
-        print(('[qbx_k9unit] RefreshSpecializationCache query failed for %s/%s: %s'):format(citizenid, jobName, tostring(rowsOrErr)))
-        Specializations[citizenid][jobName] = {}
-        return
-    end
-    local set = {}
-    for _, row in ipairs(rowsOrErr or {}) do
-        set[row.specialization] = true
-    end
-    Specializations[citizenid][jobName] = set
-end
-
 --- Re-checks a SPECIFIC (citizenid, job) row's `active` column directly
 --- against the DB, independent of and deliberately NOT via
 --- RefreshCertificationCache's own return value -- see the three call
@@ -919,6 +922,63 @@ local function FireOutboundEvent(eventName, ...)
     local ok, err = pcall(TriggerEvent, eventName, ...)
     if not ok then
         print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
+    end
+end
+
+--- CERTIFICATION DEPTH (this pass, Part B §11): a specialization cannot
+--- outlive the base certification it requires. Bulk-revokes EVERY active
+--- specialization row for (citizenid, job) in one UPDATE (no need to
+--- enumerate individual specialization keys first) and refreshes the
+--- specialization cache so a still-online target's cache reflects the
+--- loss immediately. Called from all THREE existing base-revoke call
+--- sites (RevokeCertification's online branch, RevokeCertificationOffline,
+--- and the QBCore:Server:OnJobUpdate auto-revoke handler's own
+--- cert-revocation branch) — mirrors the leash/partnership teardown call
+--- sites already at each of those exact three places.
+---
+--- BEST-EFFORT, DELIBERATELY: pcall-wrapped and logged on failure, never
+--- allowed to turn an already-confirmed, already-committed base
+--- certification revoke into a reported failure — the base revoke is the
+--- security-critical action; this cascade is a consistency cleanup on top
+--- of it. A failure here leaves a specialization row stranded active
+--- under a now-inactive base certification, which HasSpecialization below
+--- already treats as inert regardless (it re-checks the base cert cache
+--- on every read, not just at revoke time) — see that function's own doc
+--- comment.
+--- @param citizenid string
+--- @param jobName string
+--- @param revokedByCitizenidOrSentinel string -- citizenid, or 'system:job_change'
+--- @param reason string -- passed straight through to the outbound event, matching this file's existing certificationRevoked reason tagging ('certification_revoked' | 'department_changed' | 'job_changed')
+local function RevokeAllSpecializationsForCitizenJob(citizenid, jobName, revokedByCitizenidOrSentinel, reason)
+    -- Read the active set BEFORE the UPDATE so the outbound event below can
+    -- name exactly which specializations were revoked, not just that "some"
+    -- were.
+    local activeSet = Specializations[citizenid] and Specializations[citizenid][jobName]
+    local revokedKeys = {}
+    if activeSet then
+        for key in pairs(activeSet) do
+            revokedKeys[#revokedKeys + 1] = key
+        end
+    end
+    if #revokedKeys == 0 then return end -- nothing active to cascade -- common case, avoid a needless UPDATE
+
+    local ok, err = pcall(
+        MySQL.update.await,
+        'UPDATE k9_certification_specializations SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
+        { revokedByCitizenidOrSentinel, citizenid, jobName }
+    )
+
+    if not ok then
+        print(('[qbx_k9unit] RevokeAllSpecializationsForCitizenJob UPDATE failed for %s/%s: %s -- base certification revoke already committed; specialization rows may be stranded active until the next refresh'):format(citizenid, jobName, tostring(err)))
+        return
+    end
+
+    if Specializations[citizenid] then
+        Specializations[citizenid][jobName] = {}
+    end
+
+    for _, key in ipairs(revokedKeys) do
+        FireOutboundEvent('qbx_k9unit:events:specializationRevoked', citizenid, jobName, key, reason)
     end
 end
 
@@ -1106,9 +1166,31 @@ local function GrantCertification(granterSrc, targetServerId)
         local granterCitizenid = ResolveGranterCitizenId(granterSrc)
         if not granterCitizenid then return end
 
-        local insertOk, insertResultOrErr = pcall(MySQL.insert.await, 'INSERT INTO k9_certifications (citizenid, job, granted_by) VALUES (?, ?, ?)', {
-            targetCitizenid, jobName, granterCitizenid,
-        })
+        -- CERTIFICATION DEPTH (this pass, Part A §9): a brand-new grant
+        -- starts its own expiry clock immediately, but ONLY when an
+        -- operator has explicitly opted in — see this file's header
+        -- "COMPATIBILITY"/"EXPIRY" sections. `tier` is deliberately NOT
+        -- part of this INSERT at all (see header "TIER") — every new row
+        -- still gets the DB's own DEFAULT 'certified', byte-identical to
+        -- this INSERT's shape before this pass, for the "else" branch
+        -- below (which is exactly what every existing test already
+        -- exercises). Date arithmetic happens in SQL
+        -- (`DATE_ADD(NOW(), INTERVAL ? DAY)`), never in Lua — see header
+        -- "EXPIRY" item 3.
+        local expiryDays = Config.Features and Config.Features.CertificationExpiry == true
+            and type(Config.CertificationExpiryDays) == 'number' and Config.CertificationExpiryDays > 0
+            and Config.CertificationExpiryDays or nil
+
+        local insertSql, insertParams
+        if expiryDays then
+            insertSql = 'INSERT INTO k9_certifications (citizenid, job, granted_by, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))'
+            insertParams = { targetCitizenid, jobName, granterCitizenid, expiryDays }
+        else
+            insertSql = 'INSERT INTO k9_certifications (citizenid, job, granted_by) VALUES (?, ?, ?)'
+            insertParams = { targetCitizenid, jobName, granterCitizenid }
+        end
+
+        local insertOk, insertResultOrErr = pcall(MySQL.insert.await, insertSql, insertParams)
 
         if not insertOk then
             if IsDuplicateKeyError(insertResultOrErr) then
@@ -1165,9 +1247,15 @@ end
 --- SPEC.md §4.2/§4.3 revoke flow (manual). Called by both event 3 and
 --- command 7. Must work even when the target is offline (§4.3). Does NOT
 --- run the model check (§4.2.5 applies to grant only).
+--- CERTIFICATION DEPTH (this pass, Part A §2): `reason` is a NEW, OPTIONAL
+--- third argument — nil/omitted (every pre-existing caller) behaves
+--- exactly as before, recording a NULL `revoke_reason`. See this file's
+--- header "REVOKE REASON" for the fixed vocabulary and why a mismatch is
+--- rejected outright rather than silently stored as free text.
 --- @param granterSrc number
 --- @param targetServerId number
-local function RevokeCertification(granterSrc, targetServerId)
+--- @param reason string? -- 'retired'|'reassigned'|'disciplinary'|'performance'|'other', or nil
+local function RevokeCertification(granterSrc, targetServerId, reason)
     if type(targetServerId) ~= 'number' then
         NotifyPlayer(granterSrc, locale('certifications.invalid_target'), 'error')
         return
@@ -1180,6 +1268,11 @@ local function RevokeCertification(granterSrc, targetServerId)
 
     if IsCertifyActionOnCooldown(granterSrc) then
         return -- silent no-op: rate-limited, not an error worth notifying about (matches bark/leash-request convention)
+    end
+
+    if reason ~= nil and not VALID_REVOKE_REASONS[reason] then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_revoke_reason'), 'error')
+        return
     end
 
     local isSelfCert = granterSrc == targetServerId
@@ -1255,10 +1348,17 @@ local function RevokeCertification(granterSrc, targetServerId)
     -- leave behind is whether THIS callback ever saw the server's own
     -- commit acknowledgment, which a transaction's own COMMIT step would
     -- share identically.
+    -- CERTIFICATION DEPTH (this pass, Part A §2): `revoke_reason` added to
+    -- the SET clause — this SHIFTS the WHERE-clause params from
+    -- positions [2]/[3] to [3]/[4] (SET-clause placeholders bind before
+    -- WHERE-clause ones, left-to-right in the SQL text). Every existing
+    -- test asserting on `updateParams[1..3]` for THIS call site was
+    -- updated to match (tests/certifications_spec.lua) — a deliberate,
+    -- reviewed shape change, not an accidental break.
     local updateOk, affectedRowsOrErr = pcall(
         MySQL.update.await,
-        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
-        { granterCitizenid, targetCitizenid, targetJobName }
+        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP, revoke_reason = ? WHERE citizenid = ? AND job = ? AND active = 1',
+        { granterCitizenid, reason, targetCitizenid, targetJobName }
     )
 
     if not updateOk then
@@ -1327,6 +1427,15 @@ local function RevokeCertification(granterSrc, targetServerId)
             ForceBreakPartnershipForCitizenId(targetCitizenid, 'certification_revoked')
         end
     end
+
+    -- CERTIFICATION DEPTH (this pass, Part B §11): a specialization cannot
+    -- outlive the base certification it requires — see this file's header
+    -- "SPECIALIZATIONS". Called unconditionally of targetIsOnline (a
+    -- specialization row is DB-backed, not in-memory-only, so this must
+    -- run for an online OR offline target identically) — best-effort:
+    -- logged on failure, never allowed to turn an already-confirmed base
+    -- revoke back into a reported failure.
+    RevokeAllSpecializationsForCitizenJob(targetCitizenid, targetJobName, granterCitizenid, 'certification_revoked')
 
     NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
 end
