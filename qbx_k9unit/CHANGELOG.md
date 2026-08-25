@@ -1,11 +1,60 @@
 # Changelog
 
-All notable changes to `qbx_k9unit` are documented in this file.
+All notable changes to `qbx_k9unit` are documented in this file, in the
+order they happened, in as much technical detail as the change needs. If
+you want a plain-language summary of where this project stands right now
+and what needs your decision instead of a commit-by-commit history, read
+`PROJECT_STATUS.md` first.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+**All 40 `Config.Features` flags switched to `true`, at the operator's
+request — 2026-08-25.** This is a config-only change (`config.lua`), not a
+code change — every flag named below was already fully implemented and
+reviewed for correctness; this entry exists because flipping every default
+at once is a significant, notable change in what this resource actually
+does on a running server, not because any new code landed. Verified
+directly against `config.lua`, not assumed.
+
+**Action required, and it's urgent:** `Config.Features.BoneSweepDevTool`
+is included in the flip and is now `true`. That flag's own code comment
+says, verbatim, never to enable it on a production server — it spawns and
+attaches real objects in the world on command from anyone holding the
+`k9unit.bonesweep` ACE permission. If this is a live server, set it back
+to `false` in `config.lua` and **restart the resource** (a flag flip alone
+does not unregister the `/k9bonetool` command — see
+`OPERATOR_RUNBOOK.md` §4).
+
+**What this does and does not change about safety:** turning on the
+combat features (`BiteAndHold`, `NonLethalTakedown`, `PropDragging`,
+`HandlerDownDefense`, `FearStressSystem`) does not answer either of the
+two open questions that were tracked as gating that decision — see
+`PROJECT_STATUS.md`'s D3 (whether the client-event origin guard actually
+fails closed, still requiring a live-server test nobody has run) and D13
+(a disclosed, bounded griefing exposure once `FearStressSystem` is
+combined with combat). Both are still open; the risk they describe is now
+live on this server rather than theoretical.
+
+**Documentation consolidation, same date.** Roughly eighteen root-level
+markdown files had accumulated, several overlapping. As part of the same
+pass: `DECISIONS_NEEDED.md` was merged into `PROJECT_STATUS.md` (status and
+open decisions belong in one document); `REFACTOR_ROADMAP_2.md` was merged
+into `REFACTOR_ROADMAP.md` as "Part B"; `COMPLEMENTARY_FEATURES.md` was
+merged into `FEATURE_IDEAS.md` as "Part B"; all three merged-from files
+were left behind as short redirect stubs (the tooling available for this
+pass could not delete a file outright) pointing at their new location.
+`SPEC.md`/`PHASE3_SPEC.md`/`PHASE4_SPEC.md`/`PHASE5_SPEC.md` each gained a
+one-paragraph "historical document" banner but were otherwise left
+unedited. `PLAYER_GUIDE.md` and `OPERATOR_RUNBOOK.md` were updated
+throughout to reflect that every flag is now on, including a corrected XP
+tier table in `PLAYER_GUIDE.md` that still showed the pre-retune
+500/1,500/3,500 thresholds instead of the current 1,250/4,000/9,000. See
+`DOCS_INDEX.md` for the current map of every document in this resource.
+
+---
 
 **Locale migration finished; a real bug closed in the (still disabled) K9
 vest feature; test suite nearly doubled — 2026-08-25 (later this session),

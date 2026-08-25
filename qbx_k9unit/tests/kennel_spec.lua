@@ -703,6 +703,169 @@ t.test('confirmKennelPlaced: a netId already claimed by a DIFFERENT citizenid\'s
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
 end)
 
+-- ----------------------------------------------------------------------
+-- RED-TEAM FIX: confirmKennelPlaced's rejection branches must never delete
+-- an entity the confirming citizenid does not own (server/kennel.lua's
+-- `safeToCleanup`, mirroring server/fetch.lua's `safeToCleanup` pattern).
+-- Each test below drives a VICTIM to a real, confirmed kennel first, then
+-- has a SEPARATE, independently-certified ATTACKER land on one of the four
+-- reachable rejection branches (too-far, TTL-expiry, feature-flag toggle,
+-- certification revoke) while reporting the VICTIM's real netId instead of
+-- a genuine placement of their own -- the exact "open a pending slot,
+-- create nothing, name someone else's real kennel" shape the red-team
+-- finding described. Every test asserts (a) the victim's entity survives,
+-- (b) no removal is ever broadcast for the victim's netId, and (c) the
+-- victim's kennel is still genuinely theirs to pick up afterward -- proving
+-- the fix closes the exploit without stranding the victim's own kennel.
+-- ----------------------------------------------------------------------
+
+--- @param f table
+--- @param netId number
+--- @return boolean
+local function removalWasBroadcastFor(f, netId)
+    for _, e in ipairs(f.clientEvents) do
+        if e.event == 'qbx_k9unit:client:removeKennel' and e.args[1] == netId then
+            return true
+        end
+    end
+    return false
+end
+
+t.test('confirmKennelPlaced: RED-TEAM FIX -- the too-far-from-spawn branch naming a DIFFERENT citizenid\'s real kennel does NOT delete it (the primary reported griefing primitive, no proximity to the victim required)', function()
+    local f = newKennelFixture()
+    local victimNetId, victimHandle = deploySuccessfully(f, 1, 'VICTIM01', 5001, { x = 0, y = 0, z = 0 })
+    f.advance(DEPLOY_COOLDOWN_MS + 1)
+
+    -- Attacker: opens their own pending placement far away on the map,
+    -- creates nothing client-side, then reports the VICTIM's real,
+    -- already-confirmed kennel netId. The victim's kennel is nowhere near
+    -- the attacker's own server-assigned spawn point, so this trips the
+    -- too-far branch -- repeatable roughly every DeployCooldown, with zero
+    -- proximity to the victim ever required.
+    f.setAccess(2, true)
+    f.setPlayer(2, 'ATTACKER1')
+    f.setPed(2, 5002, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimNetId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_too_far'), 'the attacker still gets a genuine rejection, just never a destructive one')
+    t.isNil(f.deletedEntities[victimHandle], 'the victim\'s real, active kennel must survive an attacker naming it from a branch that used to unconditionally delete')
+    t.isTrue(not removalWasBroadcastFor(f, victimNetId), 'no removal may ever be broadcast for an entity the confirming citizenid does not own')
+
+    -- Repeatable: a second attempt after the cooldown clears still fails to
+    -- delete the victim's kennel.
+    f.advance(DEPLOY_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimNetId)
+    t.isNil(f.deletedEntities[victimHandle], 'still not deleted on a second attempt')
+
+    -- The victim's kennel is provably still intact and pickup-able.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, victimNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+end)
+
+t.test('confirmKennelPlaced: RED-TEAM FIX -- letting the TTL expire while naming a DIFFERENT citizenid\'s real kennel does NOT delete it', function()
+    local f = newKennelFixture()
+    local victimNetId, victimHandle = deploySuccessfully(f, 1, 'VICTIM01', 5001, { x = 0, y = 0, z = 0 })
+    f.advance(DEPLOY_COOLDOWN_MS + 1)
+
+    f.setAccess(2, true)
+    f.setPlayer(2, 'ATTACKER1')
+    f.setPed(2, 5002, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
+
+    f.advance(PENDING_TTL_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimNetId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_timed_out'))
+    t.isNil(f.deletedEntities[victimHandle], 'the victim\'s real kennel must never be deleted by an unrelated citizenid\'s own TTL-expiry rejection')
+    t.isTrue(not removalWasBroadcastFor(f, victimNetId), 'no removal may ever be broadcast for an entity the confirming citizenid does not own')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, victimNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+end)
+
+t.test('confirmKennelPlaced: RED-TEAM FIX -- a feature-flag toggle mid-flight while naming a DIFFERENT citizenid\'s real kennel does NOT delete it', function()
+    local f = newKennelFixture()
+    local victimNetId, victimHandle = deploySuccessfully(f, 1, 'VICTIM01', 5001, { x = 0, y = 0, z = 0 })
+    f.advance(DEPLOY_COOLDOWN_MS + 1)
+
+    f.setAccess(2, true)
+    f.setPlayer(2, 'ATTACKER1')
+    f.setPed(2, 5002, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
+
+    f.config.Features.DeployableKennel = false
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimNetId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_unconfirmed'))
+    t.isNil(f.deletedEntities[victimHandle], 'the victim\'s real kennel must never be deleted by an unrelated citizenid\'s own feature-flag rejection')
+    t.isTrue(not removalWasBroadcastFor(f, victimNetId), 'no removal may ever be broadcast for an entity the confirming citizenid does not own')
+
+    -- requestPickupKennel does not itself gate on the feature flag (see its
+    -- own handler) -- the victim's kennel is provably still intact.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, victimNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+end)
+
+t.test('confirmKennelPlaced: RED-TEAM FIX -- a certification revoke mid-flight while naming a DIFFERENT citizenid\'s real kennel does NOT delete it', function()
+    local f = newKennelFixture()
+    local victimNetId, victimHandle = deploySuccessfully(f, 1, 'VICTIM01', 5001, { x = 0, y = 0, z = 0 })
+    f.advance(DEPLOY_COOLDOWN_MS + 1)
+
+    f.setAccess(2, true)
+    f.setPlayer(2, 'ATTACKER1')
+    f.setPed(2, 5002, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
+
+    f.setAccess(2, false) -- decertified between request and confirm
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimNetId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_unconfirmed'))
+    t.isNil(f.deletedEntities[victimHandle], 'the victim\'s real kennel must never be deleted by an unrelated citizenid\'s own certification-revoke rejection')
+    t.isTrue(not removalWasBroadcastFor(f, victimNetId), 'no removal may ever be broadcast for an entity the confirming citizenid does not own')
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, victimNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+end)
+
+t.test('confirmKennelPlaced: RED-TEAM FIX -- a legitimate owner\'s own too-far cleanup still works (safeToCleanup does not strand a genuinely-owned kennel)', function()
+    local f = newKennelFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
+    local netId = freshNetId()
+    local handle = netId + 500000
+    f.registerEntity(netId, handle, {
+        coords = { x = instruction.args[1] + 10.0, y = instruction.args[2], z = instruction.args[3] },
+    })
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_too_far'))
+    t.isTrue(f.deletedEntities[handle], 'safeToCleanup must still allow reclaiming a citizenid\'s OWN real, unclaimed-by-anyone-else object -- the fix must not create a new unbounded trap')
+    t.isTrue(removalWasBroadcastFor(f, netId))
+end)
+
+t.test('confirmKennelPlaced: RED-TEAM FIX -- a legitimate owner\'s own TTL-expiry cleanup still works', function()
+    local f = newKennelFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
+    local netId = freshNetId()
+    local handle = netId + 500000
+    f.registerEntity(netId, handle, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] } })
+
+    f.advance(PENDING_TTL_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_timed_out'))
+    t.isTrue(f.deletedEntities[handle], 'safeToCleanup must still reclaim a citizenid\'s OWN genuinely-orphaned object on TTL expiry')
+end)
+
 t.test('confirmKennelPlaced: success registers the kennel and notifies success', function()
     local f = newKennelFixture()
     deploySuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })

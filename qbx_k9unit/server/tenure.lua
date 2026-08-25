@@ -688,11 +688,45 @@ local function TickPartnershipTenure()
     end
 end
 
+-- CHECKINTERVALMS VALIDATION (QA follow-up -- mirrors server/defense.lua's
+-- own identical PollIntervalMs finding for the identical failure shape): a
+-- raw, unchecked Config.Partnership.TenureBonus.checkIntervalMs value used
+-- to feed a bare Wait() call below on EVERY loop iteration (this file
+-- re-reads tenureCfg fresh every pass, unlike server/defense.lua's own
+-- PollIntervalMs, which is captured once at file-load time and asserted
+-- there before its own thread is ever created). The OLD type check alone
+-- (`type(...) == 'number'`) did NOT reject 0, a negative number, or NaN --
+-- Wait() fed any of those either busy-loops (spamming this file's own real,
+-- if indexed, k9_partnerships SELECT/UPDATE every server frame) or throws
+-- and silently kills this shared thread forever, disabling every future
+-- tenure-milestone grant for the rest of this resource's uptime with
+-- nothing more than a generic Lua traceback to explain why -- the exact
+-- same failure mode server/defense.lua's own PollIntervalMs assert exists
+-- to catch. Unlike that file's hard resource-start assert (appropriate
+-- there since PollIntervalMs is captured once, before its thread is ever
+-- created), this file re-reads the value every iteration, so a soft
+-- fallback + one-time warning (mirroring server/recall.lua's own
+-- RequestCooldownMs = 0 footgun fix) is the fix that fits this file's own
+-- per-iteration re-read design without changing it. A MISSING config value
+-- (nil -- the "TenureBonus schema/config not landed on this server yet"
+-- case this file elsewhere treats as a total silent no-op) stays silent,
+-- matching this file's own established convention; only a PRESENT-but-bad
+-- value (0, negative, NaN, or a non-number) warns.
+local WarnedBadTenureCheckInterval = false
+local TENURE_CHECK_INTERVAL_FALLBACK_MS = 300000
+
 if Config.Features.HandlerPartnership and Config.Features.XPProgression and Config.Features.PartnershipTenureBonus then
     CreateThread(function()
         while true do
             local tenureCfg = Config.Partnership and Config.Partnership.TenureBonus
-            local intervalMs = (type(tenureCfg) == 'table' and type(tenureCfg.checkIntervalMs) == 'number' and tenureCfg.checkIntervalMs) or 300000
+            local rawIntervalMs = type(tenureCfg) == 'table' and tenureCfg.checkIntervalMs or nil
+            local intervalMs = TENURE_CHECK_INTERVAL_FALLBACK_MS
+            if type(rawIntervalMs) == 'number' and rawIntervalMs == rawIntervalMs and rawIntervalMs > 0 then
+                intervalMs = rawIntervalMs
+            elseif rawIntervalMs ~= nil and not WarnedBadTenureCheckInterval then
+                WarnedBadTenureCheckInterval = true
+                print(('[qbx_k9unit] tenure: Config.Partnership.TenureBonus.checkIntervalMs (%s) is not a positive number -- using the built-in %dms interval instead. A non-positive/NaN value here would otherwise feed Wait() directly every loop pass, which can busy-loop or silently kill this thread forever (disabling every future tenure-milestone grant) rather than merely mistiming the poll.'):format(tostring(rawIntervalMs), TENURE_CHECK_INTERVAL_FALLBACK_MS))
+            end
             Wait(intervalMs)
             local ok, err = pcall(TickPartnershipTenure)
             if not ok then

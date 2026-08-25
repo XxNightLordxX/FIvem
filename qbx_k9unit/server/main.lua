@@ -732,7 +732,7 @@ RegisterNetEvent('qbx_k9unit:server:requestLeashAttach', function(targetServerId
     PendingLeashRequests[targetServerId] = { from = src, expiresAt = GetGameTimer() + LEASH_REQUEST_TTL_MS }
 
     TriggerClientEvent('qbx_k9unit:client:leashAttachRequest', targetServerId, src)
-    NotifyPlayer(src, locale('leash.request_sent'), 'inform')
+    NotifyPlayer(src, locale('leash.request_sent'), 'info')
 end)
 
 --- Step 2 of the consent handshake: target's response.
@@ -807,7 +807,7 @@ RegisterNetEvent('qbx_k9unit:server:respondLeashAttach', function(fromServerId, 
     PendingLeashRequests[src] = nil -- consumed either way, accept or decline, now that it's confirmed genuine
 
     if not accepted then
-        NotifyPlayer(fromServerId, locale('leash.request_declined'), 'inform')
+        NotifyPlayer(fromServerId, locale('leash.request_declined'), 'info')
         return
     end
 

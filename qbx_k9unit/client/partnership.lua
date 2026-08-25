@@ -291,7 +291,18 @@ end
 --- @return boolean isPartnered -- the now-fresh value, same as IsPartnered() immediately after this returns
 --- @return number? partnerServerId -- the now-fresh value, same as GetPartnerServerId() immediately after this returns
 function RefreshPartnershipStateFromServer()
-    local isPartneredNow, partnerServerId, isK9 = lib.callback.await('qbx_k9unit:server:getPartnershipState', false)
+    -- FAIL-CLOSED GUARD (dependency-verification finding, this pass):
+    -- `lib.callback.await` throws rather than returning nil on a timeout
+    -- or unregistered-callback response (confirmed against ox_lib's
+    -- `imports/callback/client.lua` and FiveM's `scheduler.lua`
+    -- `Citizen.Await` directly -- see client/main.lua's HasK9Access() for
+    -- the full citation). pcall it and treat a throw the same as an
+    -- authoritative "not partnered" response, rather than leaving a stale
+    -- PartnershipState in place or letting the throw escape uncaught.
+    local ok, isPartneredNow, partnerServerId, isK9 = pcall(lib.callback.await, 'qbx_k9unit:server:getPartnershipState', false)
+    if not ok then
+        isPartneredNow, partnerServerId, isK9 = false, nil, nil
+    end
     PartnershipState = isPartneredNow and { partnerServerId = partnerServerId, isK9 = isK9 } or nil
     return IsPartnered(), GetPartnerServerId()
 end
@@ -358,7 +369,7 @@ function RequestPartnerUp(targetServerId)
     TriggerServerEvent('qbx_k9unit:server:requestPartnerUp', targetServerId)
     -- The target's client is the one that shows the actual accept/decline
     -- prompt (see partnerUpRequest below), not this one.
-    lib.notify({ title = locale('common.notify_title'), description = locale('partnership.partner_request_sent'), type = 'inform' })
+    lib.notify({ title = locale('common.notify_title'), description = locale('partnership.partner_request_sent'), type = 'info' })
 end
 
 --- Ends the current partnership, zero consent required from the other
@@ -489,7 +500,7 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
         -- this file just to get a readable notification.
         description = locale('partnership.ended_with_reason', reason)
     end
-    lib.notify({ title = locale('common.notify_title'), description = description, type = 'inform' })
+    lib.notify({ title = locale('common.notify_title'), description = description, type = 'info' })
 end)
 
 -- The "Partner Up" ox_target option's canInteract below calls

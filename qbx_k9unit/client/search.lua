@@ -242,7 +242,7 @@ local function PerformSearch(targetType, targetEntity)
             lib.notify({
                 title = locale('common.notify_title'),
                 description = locale('search.nothing_found'),
-                type = 'inform',
+                type = 'info',
             })
         end
     end)

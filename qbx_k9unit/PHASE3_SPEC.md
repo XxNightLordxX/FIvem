@@ -1,5 +1,17 @@
 # qbx_k9unit — Phase 3 Detailed Spec (Combat, Takedowns & Advanced Agility)
 
+> **HISTORICAL DESIGN DOCUMENT.** This captures the plan and reasoning as of
+> the dates named inside it (2026-08-23), not a live description of today's
+> code. `config.lua` and the actual `.lua` files always win if something
+> here disagrees with them. See `DOCS_INDEX.md` for where to look for
+> current status instead (`README.md` for technical reference,
+> `PROJECT_STATUS.md` for a plain-language snapshot and open decisions,
+> including the two still-open safety questions, D3 and D13, that gate the
+> combat features this document designs). Kept in full, unmerged with the
+> other phase specs, because each covers a distinct, non-overlapping phase
+> — added by a documentation-consolidation pass, 2026-08-25; nothing below
+> this banner was edited.
+
 Status: **planning only, work-ahead of implementation — no `.lua` file in this
 resource has been touched to produce this document.** Written while Phase 2
 (`ScentTracking`/`BloodTracking`/`WaterTrackingDecay`/`GunpowderSniffing`/

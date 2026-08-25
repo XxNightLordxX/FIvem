@@ -256,7 +256,7 @@ function ToggleK9Camera()
     lib.notify({
         title = locale('common.notify_title'),
         description = isFirstPersonK9View and locale('movement.camera_first_person') or locale('movement.camera_third_person'),
-        type = 'inform',
+        type = 'info',
     })
 end
 
@@ -535,7 +535,7 @@ RegisterNetEvent('qbx_k9unit:client:leashDetached', function(reason)
     if reason == 'partner_disconnected' then
         description = locale('movement.leash_detached_partner_disconnected')
     end
-    lib.notify({ title = locale('common.notify_title'), description = description, type = 'inform' })
+    lib.notify({ title = locale('common.notify_title'), description = description, type = 'info' })
     -- The elastic-restriction thread below naturally stops doing anything
     -- once IsLeashed() is false — nothing else to tear down here.
 end)

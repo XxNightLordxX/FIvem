@@ -139,7 +139,16 @@ end
 --- "radial calls a global, never the export directly" contract).
 --- @param netId number
 local function OpenK9InventoryForNetId(netId)
-    local result = lib.callback.await('qbx_k9unit:server:openK9Inventory', false, netId)
+    -- FAIL-CLOSED GUARD (dependency-verification finding, this pass):
+    -- `lib.callback.await` throws rather than returning nil on a timeout
+    -- or unregistered-callback rejection (see client/main.lua's
+    -- HasK9Access() doc comment for the full ox_lib/FiveM source
+    -- citation). pcall it; the `not result` branch immediately below
+    -- already covers a pcall-caught nil `result` byte-for-byte the same
+    -- as any other falsy response (reason stays nil, so this degrades to
+    -- the existing silent-return path rather than aborting uncaught).
+    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:openK9Inventory', false, netId)
+    if not ok then result = nil end
 
     if not result or not result.ok then
         local reason = result and result.reason

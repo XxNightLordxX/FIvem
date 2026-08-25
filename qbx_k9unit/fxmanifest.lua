@@ -43,8 +43,9 @@ shared_scripts {
 }
 
 -- Phase 4: first NUI surface this resource has ever had (the passive
--- vitality HUD, Config.Features.HealthStaminaHUD — still `false` by
--- default in config.lua, see client/hud.lua). ui_page is loaded/kept
+-- vitality HUD, Config.Features.HealthStaminaHUD — `true` in config.lua
+-- as of 2026-08-25, when every Config.Features flag was enabled; see
+-- client/hud.lua). ui_page is loaded/kept
 -- alive for the entire client session (not opened/closed like a modal —
 -- html/index.html starts hidden and stays that way client-side until
 -- client/hud.lua's poll thread says otherwise), per
@@ -58,10 +59,11 @@ files {
     -- The NUI audio layer fetches 'sounds/<key>.ogg' relative to
     -- html/index.html, so every shipped sound needs its own entry here or it
     -- 404s on the client and the loader degrades to silence -- which looks
-    -- exactly like the feature being off. Only bark.ogg exists so far; it is
-    -- the one that matters by default, since BasicBarkSounds ships true while
-    -- AdvancedBarkRadial and ProximityAudioFX (which gate the other four
-    -- sounds) ship false. Add each new sound by name as it is sourced.
+    -- exactly like the feature being off. Only bark.ogg exists so far.
+    -- As of 2026-08-25 every Config.Features flag ships true, including
+    -- AdvancedBarkRadial and ProximityAudioFX, so the four sounds those
+    -- two gate are now reachable and will 404 into silence until they are
+    -- sourced and listed here. Add each new sound by name as it lands.
     'html/sounds/bark.ogg',
     -- ox_lib 'locale' has been declared at the top of this manifest since Phase
     -- 1, promising localisation that did not exist -- every player-facing

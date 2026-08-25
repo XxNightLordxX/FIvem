@@ -145,7 +145,7 @@ local function ApplyWellbeingSnapshot(stats)
         if isDistractedNow and not wasDistracted then
             lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.distracted'), type = 'error' })
         elseif wasDistracted and not isDistractedNow then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.refocused'), type = 'inform' })
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.refocused'), type = 'info' })
         end
         wasDistracted = isDistractedNow
     end
@@ -155,7 +155,7 @@ local function ApplyWellbeingSnapshot(stats)
         if isHesitatingNow and not wasHesitating then
             lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.hesitating'), type = 'error' })
         elseif wasHesitating and not isHesitatingNow then
-            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.settled'), type = 'inform' })
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.settled'), type = 'info' })
         end
         wasHesitating = isHesitatingNow
     end
@@ -192,7 +192,19 @@ if Config.Features.FatigueSystem or Config.Features.MoodSystem
         while true do
             local isK9 = IsOwnModelK9()
             if isK9 and not wasK9 then
-                local snapshot = lib.callback.await('qbx_k9unit:server:getWellbeingSnapshot', false)
+                -- FAIL-CLOSED GUARD (dependency-verification finding, this
+                -- pass): `lib.callback.await` throws on a timeout/
+                -- unregistered-callback rejection rather than returning
+                -- nil (see client/main.lua's HasK9Access() doc comment for
+                -- the full citation against ox_lib's/FiveM's real source).
+                -- This is a `while true do` thread -- an uncaught throw
+                -- here would kill this entire loop permanently (until a
+                -- resource restart), silently ending the on-demand
+                -- snapshot fetch feature for the rest of this client's
+                -- session. pcall it; `type(snapshot) == 'table'` below
+                -- already treats a nil snapshot as "nothing to apply."
+                local ok, snapshot = pcall(lib.callback.await, 'qbx_k9unit:server:getWellbeingSnapshot', false)
+                if not ok then snapshot = nil end
                 if type(snapshot) == 'table' then
                     ApplyWellbeingSnapshot(snapshot)
                 end
@@ -314,7 +326,18 @@ if Config.Features.MoodSystem then
                     local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
                     if not targetServerId then return end
 
-                    local result = lib.callback.await('qbx_k9unit:server:petK9', false, targetServerId)
+                    -- FAIL-CLOSED GUARD (dependency-verification finding,
+                    -- this pass): `lib.callback.await` throws rather than
+                    -- returning nil on a timeout/unregistered-callback
+                    -- rejection (see client/main.lua's HasK9Access() doc
+                    -- comment for the full citation). pcall it; NotifyResult
+                    -- already treats a nil/falsy `result` as a silent no-op
+                    -- (`if not result then return end`), so a thrown
+                    -- failure now degrades to that exact same, already-
+                    -- established path instead of aborting the onSelect
+                    -- handler uncaught.
+                    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:petK9', false, targetServerId)
+                    if not ok then result = nil end
                     NotifyResult(result, locale('wellbeing.pet_success'))
                 end,
             },
@@ -331,7 +354,13 @@ if Config.Features.MoodSystem then
                     local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
                     if not targetServerId then return end
 
-                    local result = lib.callback.await('qbx_k9unit:server:feedK9', false, targetServerId)
+                    -- FAIL-CLOSED GUARD -- same reasoning as the "Pet K9"
+                    -- onSelect handler above (see its comment for the
+                    -- ox_lib/FiveM source citation); NotifyResult's own
+                    -- `if not result then return end` already covers a
+                    -- pcall-caught nil `result`.
+                    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:feedK9', false, targetServerId)
+                    if not ok then result = nil end
                     NotifyResult(result, locale('wellbeing.feed_success'))
                 end,
             },
@@ -380,7 +409,18 @@ RegisterCommand('k9calmdown', RequestK9CalmDown, false)
 -- ======================================================================
 if Config.Features.DistractionSystem then
     local function UseDistractionItem(itemType, failDescription)
-        local result = lib.callback.await('qbx_k9unit:server:applyK9Distraction', false, itemType)
+        -- FAIL-CLOSED GUARD (dependency-verification finding, this pass;
+        -- this call site was not in the originally reported list --
+        -- re-grepping `lib.callback.await` across client/ this pass turned
+        -- it up too): `lib.callback.await` throws rather than returning
+        -- nil on a timeout/unregistered-callback rejection (see
+        -- client/main.lua's HasK9Access() doc comment for the full
+        -- ox_lib/FiveM source citation). pcall it; the very next line's
+        -- `if not result then return end` already treats a nil result as
+        -- a silent no-op, so a thrown failure now degrades to that exact
+        -- same path instead of aborting this command handler uncaught.
+        local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:applyK9Distraction', false, itemType)
+        if not ok then result = nil end
         if not result then return end
 
         if result.ok then

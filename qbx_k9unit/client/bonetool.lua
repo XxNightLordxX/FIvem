@@ -193,7 +193,7 @@ local function SetPreviewBoneIndex(boneIndex)
     lib.notify({
         title = locale('bonetool.notify_title'),
         description = locale('bonetool.preview_bone_index', boneIndex),
-        type = 'inform',
+        type = 'info',
     })
     print(('[qbx_k9unit] bonetool: previewing bone index %d'):format(boneIndex))
 end
@@ -339,7 +339,7 @@ local function RunAttachTest()
     lib.notify({
         title = locale('bonetool.notify_title'),
         description = locale('bonetool.test_attached', currentBoneIndex),
-        type = 'inform',
+        type = 'info',
     })
 end
 
@@ -402,7 +402,7 @@ local function RunKnownBoneSweep()
     -- diagnostic), same as everywhere else in this migration.
     local message = table.concat(lines, '\n')
     print('[qbx_k9unit] bonetool known-name sweep:\n' .. message)
-    lib.notify({ title = locale('bonetool.notify_title'), description = message, type = 'inform' })
+    lib.notify({ title = locale('bonetool.notify_title'), description = message, type = 'info' })
 end
 
 --- Server-issued instruction — see server/bonetool.lua's own EVENT

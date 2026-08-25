@@ -1,5 +1,15 @@
 # qbx_k9unit — Phase 4 Detailed Spec (Inventory, Progression & K9 Wellbeing)
 
+> **HISTORICAL DESIGN DOCUMENT.** This captures the plan and reasoning as of
+> the dates named inside it (2026-08-23/24), not a live description of
+> today's code. `config.lua` and the actual `.lua` files always win if
+> something here disagrees with them. See `DOCS_INDEX.md` for where to look
+> for current status instead (`README.md` for technical reference,
+> `PROJECT_STATUS.md` for a plain-language snapshot and open decisions).
+> Kept in full, unmerged with the other phase specs, because each covers a
+> distinct, non-overlapping phase — added by a documentation-consolidation
+> pass, 2026-08-25; nothing below this banner was edited.
+
 Status: **planning only — no `.lua` file, `config.lua`, or `SPEC.md` has been
 touched to produce this document.** Written while Phase 2 (mid-implementation
 by other agents) and Phase 3 (planning-complete, `PHASE3_SPEC.md`, not yet

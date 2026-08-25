@@ -163,9 +163,23 @@
             if `id`'s own 'audio:play' is still asynchronously
             fetching/decoding its file when this arrives, this records
             that fact so playback never starts at all once the load
-            finishes — see stoppedBeforeStart below and handleAudioStop's
-            own comment for why this is needed (loading is async; a stop
-            can legitimately arrive before there is anything yet to stop).
+            finishes — see pendingPlayIds/stoppedBeforeStart below and
+            handleAudioStop's own comment for why this is needed (loading is
+            async; a stop can legitimately arrive before there is anything
+            yet to stop). FIXED THIS PASS: this used to record that fact
+            UNCONDITIONALLY for any id with no active sound, not just one
+            whose load was genuinely still in flight — since Lua-side ids
+            (client/audio.lua's nextSoundId) are never reused for the life
+            of the page, an 'audio:stop' arriving for an id whose load had
+            ALREADY settled (or that never had a matching 'audio:play' at
+            all) left a permanent, never-collected entry. The dominant
+            real-world trigger was client/audio.lua's own AUDIO_MAX_LOOP_MS
+            60s ceiling calling StopK9Sound() on every long-lived
+            ProximityAudioFX loop whether or not it ever actually started
+            (growl_ambient.ogg does not exist yet) — one leaked key per
+            nearby K9, roughly once a minute, for the whole session. See
+            pendingPlayIds' own comment for the bound now in place, and
+            html/tests/audio_setgain_stop_spec.js for the regression test.
 
     CONFIDENCE NOTE — HONEST, NOT INDEPENDENTLY VERIFIED IN-ENGINE THIS
     PASS: this bridge assumes FiveM's NUI (CEF-based) browser context lets
@@ -414,14 +428,59 @@
      * @type {Record<number, { source: AudioBufferSourceNode, gain: GainNode }>} */
     var activeSounds = {};
 
-    /** ids that received an 'audio:stop' while their matching 'audio:play'
-     * was still asynchronously loading/decoding — checked (and cleared)
-     * the moment that load settles, so playback never starts for an id
-     * that was already told to stop. Without this, a play/stop pair that
-     * arrives in quick succession could still audibly start playing,
-     * because the buffer fetch/decode that 'audio:play' kicks off is
-     * asynchronous and may not have resolved yet when 'audio:stop' for the
-     * SAME id arrives moments later.
+    /** ids whose 'audio:play' handler has kicked off its async
+     * fetch+decode chain but that chain has not resolved (settled) yet —
+     * i.e. ids for which a same-id 'audio:stop' arriving RIGHT NOW is the
+     * genuine "stop raced ahead of an in-flight load" case stoppedBeforeStart
+     * (below) exists to handle. Written to (set true) at the START of that
+     * async chain in handleAudioPlay, just before loadSoundBuffer(...).then()
+     * is attached, and deleted UNCONDITIONALLY the instant that same .then()
+     * callback runs, whether the load succeeded, 404'd, or failed to decode
+     * — so membership here can never outlive the one in-flight request it
+     * describes, and this object's size can never exceed the number of
+     * ACTUALLY-concurrently-loading sounds at any instant (bounded by real
+     * concurrent PlayK9Sound calls, not by session length).
+     *
+     * This is what stoppedBeforeStart's own bound is built on — see that
+     * var's comment for the leak this replaced (FIXED — previously
+     * stoppedBeforeStart was written unconditionally by handleAudioStop for
+     * ANY id with no active sound, including ids whose 'audio:play' had
+     * already resolved, or that had none at all; since Lua-side ids are a
+     * monotonically-increasing counter that is NEVER reused for the life of
+     * the page — client/audio.lua's nextSoundId — no future 'audio:play'
+     * for that same id could ever arrive to clean such an entry back out,
+     * so it sat forever. The dominant real-world trigger: client/audio.lua's
+     * AUDIO_MAX_LOOP_MS 60s safety-ceiling calls StopK9Sound() — sending
+     * 'audio:stop' — on EVERY long-lived loop sound whether or not it ever
+     * actually started, and client/proximityaudio.lua's discovery thread
+     * mints a brand-new id via a fresh PlayK9Sound() call for the same K9
+     * roughly every 60s for as long as it stays in range; with
+     * Config.Features.ProximityAudioFX on and no real growl_ambient.ogg
+     * file shipped yet (loadSoundBuffer resolves to a null buffer, so
+     * activeSounds[id] is never populated for that id at all — see
+     * handleAudioPlay's own `if (!buffer || wasStoppedEarly) return;`), that
+     * 60s-later 'audio:stop' always landed in handleAudioStop's `!active`
+     * branch and added one permanent, never-collected key to the old
+     * unconditional stoppedBeforeStart map — one leaked key per K9 within
+     * proximity range, roughly once a minute, for the entire session. See
+     * html/tests/audio_setgain_stop_spec.js's "stoppedBeforeStart stays
+     * bounded" case for the regression test proving this stays bounded now.
+     * @type {Record<number, boolean>} */
+    var pendingPlayIds = {};
+
+    /** ids from pendingPlayIds (see above) that received an 'audio:stop'
+     * while still in-flight — checked (and deleted) the moment that id's own
+     * load settles, so playback never starts for an id that was already
+     * told to stop. Without this, a play/stop pair that arrives in quick
+     * succession could still audibly start playing, because the buffer
+     * fetch/decode that 'audio:play' kicks off is asynchronous and may not
+     * have resolved yet when 'audio:stop' for the SAME id arrives moments
+     * later. Bounded the same way pendingPlayIds is: handleAudioStop below
+     * only ever writes an id here if that id is CURRENTLY a member of
+     * pendingPlayIds (i.e. its load is genuinely still in flight right now),
+     * and handleAudioPlay's .then() callback deletes it unconditionally the
+     * moment that same load settles — so an entry here can never survive
+     * past the one in-flight request it was created for.
      * @type {Record<number, boolean>} */
     var stoppedBeforeStart = {};
 
@@ -564,9 +623,18 @@
         var gainValue = clampGain(data.gain);
         var loop = data.loop === true;
 
+        // Mark this id's load in-flight BEFORE attaching .then() — see
+        // pendingPlayIds' own comment: this is what lets handleAudioStop
+        // below tell "still loading" (worth recording) apart from "already
+        // resolved/never existed" (a true no-op, nothing to bound or clean
+        // up), which is the fix for the stoppedBeforeStart leak this file
+        // used to have.
+        pendingPlayIds[id] = true;
+
         loadSoundBuffer(ctx, key).then(function (buffer) {
             var wasStoppedEarly = !!stoppedBeforeStart[id];
             delete stoppedBeforeStart[id];
+            delete pendingPlayIds[id]; // unconditional — this load has now settled, one way or another
 
             if (!buffer || wasStoppedEarly) return;
 
@@ -633,7 +701,9 @@
      * ASYNC fetch/decode before anything actually starts playing, so a
      * fast-following 'audio:stop' for the same id can legitimately arrive
      * before there is an active sound to stop yet — recorded in
-     * stoppedBeforeStart so handleAudioPlay's own async continuation
+     * stoppedBeforeStart (ONLY when that id's load is actually still
+     * in-flight, per pendingPlayIds — see both vars' own comments for the
+     * leak this guard fixes) so handleAudioPlay's own async continuation
      * checks it before ever calling start().
      * @param {{ id: number }} data
      */
@@ -644,7 +714,20 @@
         var active = activeSounds[id];
 
         if (!active) {
-            stoppedBeforeStart[id] = true;
+            // No currently-playing sound for this id. Only worth recording
+            // anything if that id's 'audio:play' is genuinely still loading
+            // right now (pendingPlayIds) — that is the one real race this
+            // bridge needs to close (see stoppedBeforeStart's own comment).
+            // Anything else reaching here — already ended naturally, already
+            // explicitly stopped once before, never started because its file
+            // 404'd/failed to decode, or a stale/unknown/garbage id — has no
+            // pending load left to race against, so this is a true no-op:
+            // nothing to bound, nothing to clean up later, and (the actual
+            // fix) nothing permanently added to either map for an id that
+            // will never be visited again.
+            if (pendingPlayIds[id]) {
+                stoppedBeforeStart[id] = true;
+            }
             return;
         }
 

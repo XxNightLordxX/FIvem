@@ -55,12 +55,13 @@
       contributing system sets its OWN named slot
       (`K9MoveRateModifiers.xpTier` for this file) and calls
       `RecomputeK9MoveRate()` rather than calling the native directly.
-      NEITHER SYMBOL EXISTS IN THIS CODEBASE AS OF THIS PASS (verified by
-      grep immediately before writing this file — no client/wellbeing.lua,
-      no server/combat.lua, no composer in client/movement.lua yet). Per
-      this task's own explicit direction, THIS FILE THEREFORE DOES NOT CALL
-      SetPedMoveRateOverride ITSELF — doing so would be exactly the
-      uncoordinated-caller bug §13.0 Decision 2 exists to prevent. Instead:
+      NEITHER SYMBOL EXISTED IN THIS CODEBASE AS OF THE PASS THAT WROTE THIS
+      FILE (verified by grep immediately before writing it — no
+      client/wellbeing.lua, no server/combat.lua, no composer in
+      client/movement.lua yet). Per that task's own explicit direction, THIS
+      FILE THEREFORE DOES NOT CALL SetPedMoveRateOverride ITSELF — doing so
+      would be exactly the uncoordinated-caller bug §13.0 Decision 2 exists
+      to prevent. Instead:
         - `CachedXPTierSpeedMultiplier` (below) always holds the latest
           server-pushed tier's speedMultiplier, updated on every
           xpTierChanged event, regardless of whether the composer exists
@@ -77,15 +78,16 @@
           shipped yet" situation). If the composer does not exist yet, this
           function is a harmless no-op beyond updating the cached value —
           it does NOT fall back to calling SetPedMoveRateOverride directly.
-        - TODO(coordination, whoever lands client/movement.lua's composer
-          second): once `K9MoveRateModifiers`/`RecomputeK9MoveRate()` exist
-          for real, no change is needed HERE — this file already writes to
-          the exact slot name (`.xpTier`) PHASE4_SPEC.md §13.0 Decision 2
-          specifies. Just confirm the slot name/table shape this file
-          already assumes still matches what actually shipped before
-          treating this coordination point as closed (per PHASE4_SPEC.md
-          §13.5's own "whichever phase lands second should confirm the
-          dependency against the other phase's actual shipped code" rule).
+        - COORDINATION POINT CLOSED (issue-closer sweep, 2026-08-25):
+          `client/movement.lua` now defines both symbols — its
+          `K9MoveRateModifiers` table has a `xpTier = 1.0,` entry
+          (`client/movement.lua:1013`, commented
+          "client/progression.lua, Config.Features.XPProgression") and
+          `RecomputeK9MoveRate()` is defined a few lines below it — the
+          exact slot name and table shape this file already assumed. Both
+          halves confirmed by direct read, not assumed from either file's
+          own comment. Nothing further to do here; this is no longer an
+          open coordination point.
     ======================================================================
 
     TOP-OF-FILE FEATURE GATE (coder-security, this pass -- coordinator-flagged
@@ -141,13 +143,17 @@ local function ApplyXPTierMoveRateEffect()
     if K9MoveRateModifiers then
         K9MoveRateModifiers.xpTier = CachedXPTierSpeedMultiplier
     end
-    -- else: the shared composer (client/movement.lua, PHASE4_SPEC.md §13.0
-    -- Decision 2) has not shipped yet as of this pass — see this file's
-    -- header TODO. CachedXPTierSpeedMultiplier above still holds the
-    -- correct, current, server-authoritative value, ready to be applied the
-    -- moment the composer exists; nothing further to do here in the
-    -- meantime, and specifically NOT a fallback direct
-    -- SetPedMoveRateOverride call.
+    -- else: defensive only now — the shared composer (client/movement.lua,
+    -- PHASE4_SPEC.md §13.0 Decision 2) has shipped and is confirmed to
+    -- define `K9MoveRateModifiers` (see this file's header, "COORDINATION
+    -- POINT CLOSED"), so this branch is not expected to be taken on a
+    -- normal load order. Left in place as a harmless no-op rather than an
+    -- assert, matching this resource's own soft-dependency convention
+    -- (server/medkit.lua's `type(RestoreInjury) == 'function'` guard) for
+    -- the case where some future refactor changes load order again.
+    -- CachedXPTierSpeedMultiplier above still holds the correct, current,
+    -- server-authoritative value regardless, and this function is
+    -- specifically NOT a fallback direct SetPedMoveRateOverride call.
 
     if type(RecomputeK9MoveRate) == 'function' then
         RecomputeK9MoveRate()

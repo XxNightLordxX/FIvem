@@ -766,17 +766,17 @@ end
 --- @param formatRow fun(row: table): string
 local function PresentRows(target, label, rows, formatRow)
     if #rows == 0 then
-        NotifyPlayer(target, locale('admin.no_results_found', label), 'inform')
+        NotifyPlayer(target, locale('admin.no_results_found', label), 'info')
         return
     end
 
-    NotifyPlayer(target, locale('admin.result_count', label, #rows), 'inform')
+    NotifyPlayer(target, locale('admin.result_count', label, #rows), 'info')
 
     local lines = {}
     for i, row in ipairs(rows) do
         lines[#lines + 1] = formatRow(row)
         if #lines >= ROWS_PER_NOTIFY_CHUNK or i == #rows then
-            NotifyPlayer(target, table.concat(lines, '\n'), 'inform')
+            NotifyPlayer(target, table.concat(lines, '\n'), 'info')
             lines = {}
         end
     end

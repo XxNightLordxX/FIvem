@@ -17,8 +17,9 @@ A few words come up a lot below. Here's what they mean in plain English:
   this K9 add-on specifically.
 - **Feature flag** — a switch, in a settings file only server owners can
   edit, that turns one small piece of this resource on or off. You can't
-  flip these yourself — if something below says "off by default," you need
-  to ask your server's staff to turn it on.
+  flip these yourself — if something below isn't working and this guide
+  says it should be on, ask your server's staff whether they've switched
+  that specific piece off.
 - **Radial menu** — a circular pop-up wheel of quick actions. You open it
   with a keybind (set by your server, not by this resource — check your
   keybind settings or ask staff if you don't already use one), then click
@@ -43,22 +44,28 @@ A few words come up a lot below. Here's what they mean in plain English:
 ## Is this stuff even turned on for me?
 
 This resource ships with roughly forty separate pieces, each with its own
-on/off switch. **Only five of them are turned on by default:**
+on/off switch, that your server's staff controls. **As of this guide's last
+check (2026-08-25), every single one of them is turned on** — including
+tracking, searching, combat, gear, health/mood systems, fetch, kennels,
+vests, and XP. That's a change: earlier versions of this guide said only
+five were on by default, and that used to be true. It no longer is.
 
-1. Putting a leash on a K9 (or having your K9 put on one)
-2. The K9 radial menu itself
-3. Loading/releasing a K9 from a patrol vehicle
-4. The basic Bark action
-5. A K9's jump and crouch working like anyone else's
+**Your server's staff can still turn any individual piece back off at any
+time**, so if you try something below and nothing happens, or the game
+says it doesn't recognize a command, that means the feature has been
+switched off on your server specifically — not that you did something
+wrong, and not that this guide is wrong. Ask your server's staff if
+something below doesn't seem to work.
 
-**Everything else described further down — tracking, searching, combat,
-gear, health/mood systems, fetch, kennels, vests, XP, and more — is OFF
-unless your server's staff has specifically turned it on.** If you try
-something below and nothing happens, or the game says it doesn't recognize
-a command, that almost always means the feature is switched off on your
-server, not that you did something wrong. Each section below says plainly
-whether it's on by default or not — ask your server's staff if you want
-something turned on.
+One thing worth knowing, plainly: the combat features (Bite & Hold,
+Non-Lethal Takedown, Dragging — see below) come with an unresolved
+technical question about whether a cheating player could exploit them,
+and a separate, known way a stranger could repeatedly jam one K9's combat
+commands for about a minute at a time. Neither is something you as a
+player can fix, and neither means the features are broken for normal play
+— they're mentioned here so you know this isn't a secret if you notice
+odd behavior. Ask your server's staff if you want the technical detail
+(it's written up in `PROJECT_STATUS.md`).
 
 ---
 
@@ -77,7 +84,12 @@ mean "put a real value here, without the brackets."
 
 ### Commands that exist, but need a feature turned on to do anything
 
-| Command | What it does | Feature it needs (off by default) |
+Every feature in the "needs" column below is turned on by default as of
+this guide's last check — these commands should work out of the box. If
+your server's staff has switched one back off, the matching command below
+stops working (see "On a server where the feature is off," further down).
+
+| Command | What it does | Feature it needs |
 |---|---|---|
 | `/k9calmdown` | Calms your own stressed-out K9 down | Fear/Stress system |
 | `/k9meatbait` | Uses a meat-bait item to distract a nearby K9 — **anyone can use this, even someone a K9 is chasing** | Distraction system |
@@ -89,10 +101,11 @@ mean "put a real value here, without the brackets."
 | `/k9deploykennel` | Places a portable kennel | Deployable Kennel (experimental) |
 | `/k9recall` | Calls your partnered K9 off whatever it's doing | Handler Partnership **and** Recall |
 
-On a server where the feature is off, the command usually doesn't exist at
-all — your game will say it doesn't recognize the command, exactly as if
-you'd typed something made up. `/k9calmdown` is the one exception: it
-always exists, but quietly does nothing if Fear/Stress isn't turned on.
+On a server where a feature has been switched back off, the matching
+command usually doesn't exist at all — your game will say it doesn't
+recognize the command, exactly as if you'd typed something made up.
+`/k9calmdown` is the one exception: it always exists, but quietly does
+nothing if Fear/Stress has been switched off.
 
 ### Staff-only and developer-only commands
 
@@ -273,12 +286,13 @@ mentioned below, it's switched off — not missing by mistake.
 
 ### About Bark's sound
 
-Bark is turned on by default. As of when this guide was last checked, a
+Bark is turned on. As of when this guide was last checked, a
 real, properly-licensed bark sound file has been added and is confirmed to
 actually reach your game client, so a plain Bark should genuinely play a
-sound. Three extra bark sounds used only by an optional "different bark
-styles" feature (itself off by default) do not exist yet, so that feature
-would stay silent even if a server turned it on. This resource is actively
+sound. Three extra bark sounds used only by the "different bark
+styles" feature (also turned on, along with everything else in this
+resource — see the top of this guide) do not exist yet, so that specific
+feature stays silent even though it's switched on. This resource is actively
 being worked on by multiple people at once, so if Bark is ever silent for
 you, that's worth reporting to your server's staff rather than assuming
 it's expected — check `html/sounds/CREDITS.md` in this resource's files for
@@ -327,38 +341,41 @@ you do **not** need to be certified for these three:
 ## World interactions, at a glance (ox_target)
 
 This table lists every "walk up and look at something" option this
-resource can add. Most need a specific feature turned on — the **Default**
-column tells you honestly whether you'll see it on an out-of-the-box
-server.
+resource can add. Every one of them is turned on as of this guide's last
+check (2026-08-25) — the **Feature switch** column names which one your
+server's staff could turn back off if you ever stop seeing an option
+listed here.
 
-| Walk up to... | Option you'll see | What it does | Default |
+| Walk up to... | Option you'll see | What it does | Feature switch |
 |---|---|---|---|
-| A nearby player | **Attach Leash** | Starts the leash consent request | **On** |
-| A nearby player who looks like a K9 | **Certify K9 Handler** | Certifies them (if you're a qualifying supervisor) | **On** (always available, no switch) |
-| A nearby player who looks like a K9 | **Revoke K9 Certification** | Removes their certification | **On** (always available, no switch) |
-| An eligible patrol vehicle | **Load K9 Into Vehicle** | Tucks you into the vehicle | **On** |
-| The vehicle you're tucked into | **Release K9 From Vehicle** | Lets you back out | **On** |
-| A door | **Scratch to Alert** | Plays a scratching sound to alert nearby people — cosmetic only | Off (Door Interaction) |
-| A door | **Nudge Door** | Plays a push animation — this can **never** open a locked door, by design | Off (Door Interaction) |
-| A vehicle | **Search Vehicle** | Sniffs it for contraband | Off (Search Zones) |
-| A person | **Search Person** | Sniffs them for contraband | Off (Search Zones) |
-| A nearby player | **Partner Up** | Sends a long-term partnership request (separate from a leash) | Off (Handler Partnership) |
-| A deployed kennel | **Pick Up Kennel** | Picks the kennel back up | Off (Deployable Kennel) |
-| A K9 player | **Pet K9** | Improves the K9's mood | Off (Mood system) |
-| A K9 player | **Feed K9** | Improves the K9's mood using a treat item | Off (Mood system) |
-| A K9 player | **Open K9 Gear** | Opens the K9's small item storage | Off (K9 Inventory) |
-| A thrown fetch ball | **Pick Up Ball** | Picks up the ball | Off (Fetch) |
-| A nearby player, while carrying a ball | **Deliver Fetch Item** | Delivers it to a handler | Off (Fetch) |
-| A K9 player | **Treat K9** | Heals an injured K9 with a medkit item | Off (K9 Medkit) |
+| A nearby player | **Attach Leash** | Starts the leash consent request | Leash Mechanics |
+| A nearby player who looks like a K9 | **Certify K9 Handler** | Certifies them (if you're a qualifying supervisor) | always available, no switch |
+| A nearby player who looks like a K9 | **Revoke K9 Certification** | Removes their certification | always available, no switch |
+| An eligible patrol vehicle | **Load K9 Into Vehicle** | Tucks you into the vehicle | Vehicle Entry/Exit |
+| The vehicle you're tucked into | **Release K9 From Vehicle** | Lets you back out | Vehicle Entry/Exit |
+| A door | **Scratch to Alert** | Plays a scratching sound to alert nearby people — cosmetic only | Door Interaction |
+| A door | **Nudge Door** | Plays a push animation — this can **never** open a locked door, by design | Door Interaction |
+| A vehicle | **Search Vehicle** | Sniffs it for contraband | Search Zones |
+| A person | **Search Person** | Sniffs them for contraband | Search Zones |
+| A nearby player | **Partner Up** | Sends a long-term partnership request (separate from a leash) | Handler Partnership |
+| A deployed kennel | **Pick Up Kennel** | Picks the kennel back up | Deployable Kennel |
+| A K9 player | **Pet K9** | Improves the K9's mood | Mood system |
+| A K9 player | **Feed K9** | Improves the K9's mood using a treat item | Mood system |
+| A K9 player | **Open K9 Gear** | Opens the K9's small item storage | K9 Inventory |
+| A thrown fetch ball | **Pick Up Ball** | Picks up the ball | Fetch |
+| A nearby player, while carrying a ball | **Deliver Fetch Item** | Delivers it to a handler | Fetch |
+| A K9 player | **Treat K9** | Heals an injured K9 with a medkit item | K9 Medkit |
 
 ---
 
-## If your server turns on the extra stuff
+## The rest of what this resource can do
 
-Everything from here down is **off by default.** Each heading says what
-feature switch it needs. If your server hasn't enabled it, you'll either
-not see the option at all, or (for a few commands) typing it will do
-nothing.
+Everything from here down is **on by default** as of this guide's last
+check (2026-08-25). Each heading names the feature switch it needs, so if
+something below stops working, you know which switch to ask your server's
+staff about — they may have turned that specific piece back off. If a
+switch is off, you'll either not see the option at all, or (for a few
+commands) typing it will do nothing.
 
 ### Searching people and vehicles — needs "Search Zones"
 
@@ -442,7 +459,7 @@ K9** item at any time to immediately call their K9 off whatever it's
 doing — this always works, with no cooldown beyond a couple of seconds
 between uses, specifically so a partner is never stuck.
 
-### K9 wellbeing — needs its own switches (all off by default)
+### K9 wellbeing — needs its own switches (all on by default)
 
 Five separate systems, each its own switch:
 
@@ -533,9 +550,15 @@ actions, if those are also enabled). There are four tiers:
 | Tier | XP needed | Bonus |
 |---|---|---|
 | Recruit K9 | 0 | none |
-| Trained K9 | 500 | slightly faster, slightly better tracking range |
-| Veteran K9 | 1,500 | more of the same |
-| Elite K9 | 3,500 | the most of the same |
+| Trained K9 | 1,250 | slightly faster, slightly better tracking range |
+| Veteran K9 | 4,000 | more of the same |
+| Elite K9 | 9,000 | the most of the same |
+
+(Figures checked directly against `config.lua` on 2026-08-25 — these were
+raised from an earlier 500/1,500/3,500 scale once measured play showed the
+old numbers let a K9 reach the top tier in under an evening; re-check
+`config.lua`'s `Config.XPTiers` yourself if it's been a while, since these
+are tuning numbers a server can change.)
 
 You'll see **"Your K9 has reached the [tier] tier!"** the moment you level
 up. There's no command to check your XP as a player — only the staff-only

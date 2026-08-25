@@ -1098,7 +1098,10 @@ t.test('a successful treat by a DIFFERENT player than the target ALSO notifies t
     end
     t.isNotNil(targetNotify)
     t.equals(targetNotify.description, locale('medkit.target_treated_notice'))
-    t.equals(targetNotify.notifyType, 'inform')
+    -- 'info', not the old 'inform': ox_lib's NotificationType alias is
+    -- 'info' | 'warning' | 'success' | 'error' and never included
+    -- 'inform', so server/medkit.lua's literal was corrected to match.
+    t.equals(targetNotify.notifyType, 'info')
 end)
 
 -- ========================================================================

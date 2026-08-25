@@ -844,20 +844,24 @@ Config.ContrabandScreenFX = {
 -- writes. No mutation path exists in that file at all.
 -- ======================================================================
 Config.AdminAudit = {
-    -- Checked via IsPlayerAceAllowed. SET THIS DELIBERATELY: these commands
-    -- expose who searched whom and when, so this is a privacy boundary as
+    -- WHO CAN RUN THESE: police job rank, not an ACE permission. A caller
+    -- must hold a job listed in Config.Departments below, and either be a
+    -- boss of that job (job.isboss) or sit at or above that department's
+    -- own `auditGrade`. There is no ACE grant to configure -- the old
+    -- AcePermission key was removed on 2026-08-25 when server/admin.lua
+    -- switched to job rank. SET auditGrade DELIBERATELY: these commands
+    -- expose who searched whom and when, so it is a privacy boundary as
     -- well as an admin one.
-    AcePermission = 'k9unit.admin',
 
-    -- Whether a `source == 0` caller bypasses the ACE check. DEFAULTS OFF,
+    -- Whether a `source == 0` caller bypasses the rank check. DEFAULTS OFF,
     -- and think before turning it on: in FiveM `source == 0` is not only the
     -- server console. It is also an RCON client (authenticated by
     -- rcon_password alone) and ANY other resource on this server calling
     -- ExecuteCommand -- these commands are registered unrestricted, so a
     -- compromised or buggy co-located resource could otherwise read the whole
-    -- audit trail with no ACE grant. Turning this on accepts all three.
-    -- A genuine console operator can instead be granted AcePermission above,
-    -- or simply query the database directly.
+    -- audit trail with no rank at all. Turning this on accepts all three.
+    -- A genuine console operator can instead be given a job grade at or
+    -- above auditGrade, or simply query the database directly.
     TrustConsole = false,
 
     -- Shared across all three commands, keyed by caller.

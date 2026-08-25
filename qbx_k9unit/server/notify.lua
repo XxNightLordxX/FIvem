@@ -66,22 +66,64 @@
     - THIS FILE exposes ONE resource-global (no `local`) function:
         NotifyPlayer(target: number, description: string, notifyType: string?, title: string?)
       Sends a single ox_lib `ox_lib:notify` client event to `target`.
-      `notifyType` defaults to `'inform'` and `title` defaults to `'K9 Unit'`
-      -- both defaults exactly match what 9 of the 12 original copies
-      hard-coded (server/main.lua, server/certifications.lua,
+      `notifyType` defaults to `'info'` and `title` defaults to `'K9 Unit'`.
+
+      CORRECTED 2026-08-25 (was `'inform'`): all 9 of the 12 original
+      hand-rolled copies (server/main.lua, server/certifications.lua,
       server/kennel.lua, server/medkit.lua, server/wellbeing.lua,
       server/combat.lua, server/partnership.lua, server/recall.lua,
-      server/propattachment.lua), so every one of those 9 files' call sites
-      needed ZERO changes beyond deleting their own local copy of this
-      function -- the shared signature is a strict superset of theirs.
-      server/tenure.lua's copy was narrower still (`function
-      NotifyPlayer(target, description)`, no `notifyType` parameter at
-      all, always `'inform'`) -- also migrated for free: its call sites
-      only ever passed 2 arguments, which produces the identical
-      `type = 'inform', title = 'K9 Unit'` payload through this shared
-      function's own defaults. Re-confirmed directly against both of
-      server/tenure.lua's actual call sites before deleting its local copy,
-      not assumed from the roadmap's summary alone.
+      server/propattachment.lua) hard-coded their own default as the
+      literal string `'inform'`, and this shared function's default
+      originally copied that literal verbatim to match them byte-for-byte.
+      That literal was wrong on all 9: verified directly against ox_lib's
+      REAL upstream source (resource/interface/client/notify.lua,
+      `overextended/ox_lib` `master` branch) that `lib.notify`'s own
+      `NotificationType` alias is exactly
+      `'info' | 'warning' | 'success' | 'error'` -- `'inform'` is not a
+      member and never has been on the version this resource's
+      fxmanifest.lua depends on. `'inform'` is a leftover from ox_lib v3;
+      the current source only remaps `'inform'` -> `'info'` inside the
+      DEPRECATED back-compat shim `lib.defaultNotify` (`if data.type ==
+      'inform' then data.type = 'info' end`), and this file below always
+      fires `TriggerClientEvent('ox_lib:notify', ...)`, whose CLIENT-side
+      handler is registered directly against `lib.notify`
+      (`RegisterNetEvent('ox_lib:notify', lib.notify)`) -- never through
+      `lib.defaultNotify` -- so that remap never ran for any notification
+      this resource ever sent. It rendered correctly only by accident: the
+      web frontend's `switch(data.type)` in
+      `web/src/features/notifications/NotificationWrapper.tsx` has
+      explicit `case`s for `'error'`/`'success'`/`'warning'` only, and both
+      `'inform'` and the real `'info'` silently fall into the same
+      `default:` branch (blue `circle-info` icon) purely because neither is
+      one of those three explicit cases -- not because `'inform'` is
+      actually handled. Changing this default to the genuinely valid
+      `'info'` therefore changes NOTHING about what a player sees for any
+      call site that relies on this default; it removes the coincidence,
+      not a visual regression.
+
+      This means the default here NO LONGER byte-for-byte matches those 9
+      original copies' own hard-coded literal -- it is now deliberately
+      DIFFERENT from (and a correction of) what they hard-coded. Each of
+      those 9 files' individual call sites that still pass the literal
+      string `'inform'` explicitly (confirmed by direct grep: they do, at
+      every one of their own call sites) are UNCHANGED by this file's
+      default and remain their own separate, pre-existing instance of this
+      exact same bug -- fixing this shared function's default cannot reach
+      an explicit literal passed at a call site; that is out of this
+      file's scope and each such file's own responsibility. The ONLY
+      current caller(s) that omit `notifyType` and therefore actually
+      observe this default's value are server/tenure.lua's 2 call sites
+      (`NotifyPlayer(k9Src, ...)` / `NotifyPlayer(handlerSrc, ...)` for
+      `'tenure.milestone_reached'`) -- confirmed by direct grep of every
+      `NotifyPlayer(...)` call site in this resource before writing this
+      note, not assumed. server/tenure.lua's copy was narrower still
+      before extraction (`function NotifyPlayer(target, description)`, no
+      `notifyType` parameter at all, always `'inform'`) -- migrated for
+      free the same way, its call sites having only ever passed 2
+      arguments, which now produces `type = 'info', title = 'K9 Unit'`
+      through this shared function's own (corrected) defaults. Re-confirmed
+      directly against both of server/tenure.lua's actual call sites before
+      relying on this, not assumed from the roadmap's summary alone.
 
     TWO CALL SITES DELIBERATELY KEPT AS LOCAL WRAPPERS, NOT FLATTENED:
     server/admin.lua (title `'K9 Unit — Admin Audit'`) and
@@ -145,7 +187,7 @@
 --- future caller bug.
 --- @param target number
 --- @param description string
---- @param notifyType string? -- defaults to 'inform', matching every original copy's own default
+--- @param notifyType string? -- defaults to 'info' (a real ox_lib NotificationType member: 'info' | 'warning' | 'success' | 'error'; see this file's header for why the original hard-coded 'inform' default was wrong and why fixing it here does not change any current caller's rendered output except server/tenure.lua's 2-arg call sites)
 --- @param title string? -- defaults to 'K9 Unit', matching 9 of the 12 original copies' hard-coded title
 function NotifyPlayer(target, description, notifyType, title)
     if type(target) ~= 'number' or target <= 0 then
@@ -156,6 +198,6 @@ function NotifyPlayer(target, description, notifyType, title)
     TriggerClientEvent('ox_lib:notify', target, {
         title = title or 'K9 Unit',
         description = description,
-        type = notifyType or 'inform',
+        type = notifyType or 'info',
     })
 end

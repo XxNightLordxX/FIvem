@@ -11,6 +11,35 @@ officer using this resource. This resource does **not** spawn, despawn, or
 possess a ped on anyone's behalf — certification is purely an access-control
 layer on top of a player who is already playing as a dog.
 
+> **CORRECTION, docs-consolidation pass, 2026-08-25: every `Config.Features`
+> flag is now `true`.** Verified by reading `config.lua` directly, not
+> assumed. Every "ships `false`"/"Default: `false`" statement below this
+> point describes the value this resource *shipped with*, not its current
+> value — none of that surrounding prose was rewritten, because the
+> caveats attached to each flag are still exactly the things worth knowing
+> before you *trust* that flag in production, whether you are the one who
+> flipped it or not. Read them as "here is what to understand about this,"
+> not as "here is what to consider before enabling it." Two things this
+> change makes urgent, not hypothetical:
+>
+> 1. **`Config.Features.BoneSweepDevTool` is `true`.** Its own code comment
+>    says, verbatim, never to enable this on a production server — it
+>    spawns and attaches real objects in the world on command. If this
+>    server has real players on it, turn this back to `false` and restart
+>    the resource (a flag flip alone does not unregister the command —
+>    see `OPERATOR_RUNBOOK.md` §4) before reading anything else here.
+> 2. **The combat features (`BiteAndHold`, `NonLethalTakedown`,
+>    `PropDragging`) are live**, and the two open questions that were meant
+>    to gate a decision to enable them (D3, D13 — see `PROJECT_STATUS.md`)
+>    are still unanswered. Turning the flag on did not answer them.
+>
+> For the full current picture in plain language, see `PROJECT_STATUS.md`.
+> This file's own content below was not rewritten for the flag change
+> beyond this notice and a few load-bearing corrections, per this
+> resource's own "layer a correction, don't rewrite history" documentation
+> convention — check `config.lua` directly for anything this notice
+> doesn't cover.
+
 > **Read this before you deploy.** This is a large, actively-developed
 > resource with several `Config.Features` flags whose backing code landed
 > only very recently. **Every `.lua` file on disk is now registered in
@@ -32,17 +61,24 @@ layer on top of a player who is already playing as a dog.
 
 ## Status at a glance
 
-| Phase | Area | State |
+**Table below describes the shipped-default state of each phase, as
+originally written. As of 2026-08-25, every flag named below (and every
+other flag in this resource) is `true` — see the correction notice at the
+top of this file and `PROJECT_STATUS.md` for what's actually live today.**
+
+| Phase | Area | State (as originally shipped) |
 |---|---|---|
 | 1 | Certification, leash, radial menu, vehicle load, bark | Feature-complete, enabled by default |
-| 2 | Tracking, search zones/contraband, vision, door interaction | Implemented, reviewed, ships **disabled** |
-| 3 | Bite & Hold, Non-Lethal Takedown, Prop Dragging, Advanced Agility, Handler Partnership, Handler-Down Defense | Implemented, ships **disabled**; combat mechanics have an open client-trust caveat — do not enable on a live server without reading it |
-| 4 | K9 Inventory, K9 Medkit, wellbeing (Fatigue/Mood/FearStress/Distraction/Injury), XP progression, vitality HUD | Implemented, ships **disabled**. `ContrabandScreenFX` is now wired end-to-end (client file loaded, server-side trigger fires) — see its row in the [config reference](#phase-4--inventory-progression-vitality-all-ship-false) below |
-| 5 | Deployable kennel, advanced bark radial, prop attachments, fetch, proximity audio | Implemented (R&D-grade), ships **disabled**. `DeployableKennel`, `AdvancedBarkRadial`, `ProximityAudioFX`, `PropAttachments`, and `FetchMechanic` all have real client/server code and are **registered in `fxmanifest.lua`** — reachable via the radial menu (Deploy Kennel, Toggle K9 Vest, Fetch) the moment their flag is flipped to `true`. `PropAttachments`/`FetchMechanic`'s attach point is still the root-bone placeholder pending the dev-only bone-index sweep (`client/bonetool.lua`/`server/bonetool.lua`, also registered, ACE-gated, never for a live server) — see Known issues. `CameraFeedPiP` is confirmed impossible with current natives (see below) |
+| 2 | Tracking, search zones/contraband, vision, door interaction | Implemented, reviewed, shipped **disabled** — now enabled |
+| 3 | Bite & Hold, Non-Lethal Takedown, Prop Dragging, Advanced Agility, Handler Partnership, Handler-Down Defense | Implemented, shipped **disabled** — now enabled; combat mechanics have an open client-trust caveat, and two safety questions (D3/D13 in `PROJECT_STATUS.md`) are still unresolved despite being live |
+| 4 | K9 Inventory, K9 Medkit, wellbeing (Fatigue/Mood/FearStress/Distraction/Injury), XP progression, vitality HUD | Implemented, shipped **disabled** — now enabled. `ContrabandScreenFX` is wired end-to-end (client file loaded, server-side trigger fires) |
+| 5 | Deployable kennel, advanced bark radial, prop attachments, fetch, proximity audio | Implemented (R&D-grade), shipped **disabled** — now enabled. `DeployableKennel`, `AdvancedBarkRadial`, `ProximityAudioFX`, `PropAttachments`, and `FetchMechanic` all have real client/server code and are **registered in `fxmanifest.lua`**, reachable via the radial menu (Deploy Kennel, Toggle K9 Vest, Fetch). `PropAttachments`/`FetchMechanic`'s attach point is still the root-bone placeholder pending the dev-only bone-index sweep (`client/bonetool.lua`/`server/bonetool.lua`, also registered, ACE-gated, and **also now `true` — see the top-of-file correction notice, this one must not stay on**) — see Known issues. `CameraFeedPiP` is confirmed impossible with current natives regardless of its flag value (see below) |
 
-Only **five** `Config.Features` flags ship `true`: `LeashMechanics`,
-`RadialMenu`, `VehicleEntryExit`, `BasicBarkSounds`, `AgilityBasicJump`.
-Every other flag ships `false` and must be deliberately opted into.
+**As originally shipped, only five `Config.Features` flags shipped `true`:**
+`LeashMechanics`, `RadialMenu`, `VehicleEntryExit`, `BasicBarkSounds`,
+`AgilityBasicJump`. **That is no longer the current state** — every flag in
+this resource is `true` as of 2026-08-25 (verified directly against
+`config.lua`; re-check it yourself if time has passed).
 
 ## Dependencies
 
@@ -87,10 +123,12 @@ default — it's a hard `fxmanifest.lua` dependency regardless.
 5. Certify your first handler — see
    [How certification works, day one](#how-certification-works-day-one)
    below.
-6. If you plan to enable any flag beyond the five that ship `true`, read
-   its row in the [feature flag reference](#config-features-full-reference)
-   below **first** — several carry a hard "do not enable on a live server
-   yet" caveat.
+6. **Every flag is already `true` as of 2026-08-25** — the "if you plan to
+   enable any flag beyond the five" framing below no longer applies. Read
+   every row in the [feature flag reference](#config-features-full-reference)
+   below regardless, since several carry a caveat worth understanding now
+   that the feature is live, and turn `BoneSweepDevTool` back off
+   immediately if this is a real server (see the top-of-file notice).
 
 ## Database
 
@@ -274,7 +312,7 @@ economy).**
 | `BasicBarkSounds` | `true` | The radial "Bark" item and the server's `relayBark` handler. Plays a **placeholder soundset with no audio behind it** — see [Bark sounds](#bark-sounds-are-placeholders-no-audio-ships) below. | — |
 | `AgilityBasicJump` | `true` | When `true`, jump/crouch use native locomotion unmodified. When `false`, jump/crouch are actively **disabled** for a K9-modeled player. | — |
 
-### Phase 2 — tracking & vision (all ship `false`)
+### Phase 2 — tracking & vision (shipped `false`; all now `true`, see top-of-file notice)
 
 | Flag | Default | What it gates | Prerequisite / caveat |
 |---|---|---|---|
@@ -288,7 +326,7 @@ economy).**
 | `NightVision` | `false` | `J` key (default) toggles `SetNightvision`. | Same as Thermal; mutually exclusive with it. |
 | `DoorInteraction` | `false` | "Scratch to Alert" (server round-trip, cooldown-gated) and "Nudge Door" (100% client-local cosmetic push — never touches lock state). | `Config.DoorInteraction.nudgeRequiresUnlocked` is enforced only as a resource-start assertion; it must never become a real lock-state branch. |
 
-### Phase 3 — combat & agility (all ship `false`)
+### Phase 3 — combat & agility (shipped `false`; all now `true` — the two open safety questions below are NOT resolved by that, see top-of-file notice and `PROJECT_STATUS.md`)
 
 | Flag | Default | What it gates | Prerequisite / caveat |
 |---|---|---|---|
@@ -315,11 +353,16 @@ the hold early, denies a cooldown refund, or blocks a future request.
 gap where a modified client used to be able to trigger an effect like
 indefinite self-invincibility with zero server contact even with every flag
 `false`), but once a mechanic is enabled, an individual handler still does
-not verify a given invocation actually came from the server. Do not enable
-`BiteAndHold`, `NonLethalTakedown`, or `PropDragging` on a live server
-before understanding this.
+not verify a given invocation actually came from the server. **`BiteAndHold`,
+`NonLethalTakedown`, and `PropDragging` are enabled right now** (see the
+top-of-file correction notice) — this is no longer a "before you enable"
+warning, it's a description of a live, unresolved property of your running
+server. See `PROJECT_STATUS.md`'s D3 for the specific open question about
+whether the origin-guard half of this holds up, and D13 for a related,
+separate griefing exposure once `FearStressSystem` (also enabled) is
+combined with combat.
 
-### Phase 4 — inventory, progression, vitality (all ship `false`)
+### Phase 4 — inventory, progression, vitality (shipped `false`; all now `true`, see top-of-file notice)
 
 | Flag | Default | What it gates | Prerequisite / caveat |
 |---|---|---|---|
@@ -334,7 +377,7 @@ before understanding this.
 | `XPProgression` | `false` | Server-authoritative XP per K9 citizenid, persisted in `k9_progression`. | See its own section below for award triggers and anti-farming measures. |
 | `ContrabandScreenFX` | `false` | A brief self-only `SetTimecycleModifier` screen effect for the K9's **own handler** (the searcher, never the searched player or a bystander) on a contraband find at or above a configured alert tier. | **Now fully wired end-to-end**: `client/screenfx.lua` is loaded (`fxmanifest.lua`), and `server/search.lua`'s search-success path fires the `qbx_k9unit:client:applyContrabandScreenFx` event it listens for. An earlier draft of this table said the client file was inert with no server trigger — both halves are real now. Still ships `false`, and `Config.ContrabandScreenFX.modifierName` remains an unverified candidate timecycle-modifier name (harmless no-op if wrong, per this resource's usual convention for an unconfirmed asset name) — see [Known issues](#known-issues--historical-now-resolved) for what used to be wrong here. |
 
-### Phase 5 — audio/props/camera R&D (all ship `false`)
+### Phase 5 — audio/props/camera R&D (shipped `false`; all now `true`, including `BoneSweepDevTool` — see top-of-file notice, that one must not stay on)
 
 | Flag | Default | What it gates | Prerequisite / caveat |
 |---|---|---|---|
@@ -700,9 +743,12 @@ question: which numeric bone index on a dog skeleton is the correct attach
 point for `PropAttachments`'s vest and `FetchMechanic`'s mouth-carry. See
 `OPERATOR_RUNBOOK.md` for the full walkthrough.
 
-**Never enable this on a production server.** `Config.Features.BoneSweepDevTool`
-spawns and attaches real objects on command, and must stay `false` outside
-a dev session. It is additionally gated on its own ACE
+**Never enable this on a production server. As of 2026-08-25 it is enabled
+resource-wide, including on this server if this config file has reached
+one.** Check `config.lua` and set this back to `false` (then restart the
+resource — see the one-way-door note below) if that's the case here.
+`Config.Features.BoneSweepDevTool` spawns and attaches real objects on
+command, and must stay `false` outside a dev session. It is additionally gated on its own ACE
 (`Config.BoneSweepTool.AcePermission`, default `'k9unit.bonesweep'` —
 **deliberately a different principal** from the admin-audit ACE above, so
 granting one never grants the other) — but treat the feature flag itself
@@ -892,12 +938,15 @@ own.
   [Known issues](#known-issues--historical-now-resolved) for what used to be
   wrong here.
 
-See `SPEC.md`, `PHASE3_SPEC.md`, `PHASE4_SPEC.md`, `PHASE5_SPEC.md` for the
-full product spec and phased build plan, and `CHANGELOG.md` for a running
+See `SPEC.md`, `PHASE3_SPEC.md`, `PHASE4_SPEC.md`, `PHASE5_SPEC.md`
+(historical design documents, each now marked as such) for the full
+product spec and phased build plan, and `CHANGELOG.md` for a running
 history of what changed and why. See `OPERATOR_RUNBOOK.md` for the
 step-by-step guide to standing this resource up on a real server (install
-order including the SQL migrations, the dev-server checks that gate
+order including the SQL migrations, the dev-server checks for
 `ScentTracking`/`PropAttachments`/`FetchMechanic`/`DeployableKennel`, the
-sequenced check for the client-event origin guard, and a recommended first
-tranche of flags to enable), and `DECISIONS_NEEDED.md` for the open
-decisions only a server owner can make.
+sequenced check for the client-event origin guard, and — now that every
+flag is `true` — what to verify given that), and `PROJECT_STATUS.md` for
+the open decisions only a server owner can make, plain-language, including
+the two (D3, D13) that specifically concern the combat features this
+resource now ships enabled.

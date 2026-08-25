@@ -321,7 +321,7 @@ AddEventHandler('onResourceStart', function(resourceName)
             -- Handled ENTIRELY here — no client dispatch needed for plain
             -- text, and a human should be able to read the full workflow
             -- even before confirming anything client-side is working.
-            NotifyPlayer(src, BONE_TOOL_USAGE, 'inform')
+            NotifyPlayer(src, BONE_TOOL_USAGE, 'info')
             return
         end
 

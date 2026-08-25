@@ -154,6 +154,20 @@ local HAS_K9_ACCESS_CACHE_TTL_MS = 1000
 local hasK9AccessCache = { value = false, checkedAt = -HAS_K9_ACCESS_CACHE_TTL_MS }
 
 --- Awaits the server's authoritative access check for the LOCAL player.
+---
+--- FAIL-CLOSED GUARD (dependency-verification finding, this pass, confirmed
+--- by reading the real upstream source directly): `lib.callback.await` does
+--- NOT return nil on a timeout or an unregistered-callback response —
+--- ox_lib's `imports/callback/client.lua` `triggerServerCallback` calls
+--- `promise:reject(...)` for both the `SetTimeout(callbackTimeout, ...)`
+--- timeout path and the `cb_invalid` (callback not registered server-side
+--- yet) path, and FiveM's own `scheduler.lua` `Citizen.Await` THROWS
+--- (`error(promise.value, 2)`) whenever `promise.state == 2 or
+--- promise.state == 4` (a rejected promise) rather than returning its
+--- value. An uncaught throw here would previously abort the calling
+--- thread entirely with no access decision at all — this is a hot call
+--- site (ox_target canInteract predicates, client/movement.lua's leash
+--- option), so pcall it and fail closed (deny) on any throw.
 --- @return boolean
 function HasK9Access()
     local now = GetGameTimer()
@@ -161,7 +175,23 @@ function HasK9Access()
         return hasK9AccessCache.value
     end
 
-    local result = lib.callback.await('qbx_k9unit:server:hasK9Access', false)
+    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:hasK9Access', false)
+    if not ok then
+        -- Deliberately does NOT write to hasK9AccessCache: a timeout/
+        -- cb_invalid throw is transient (server hiccup, resource restart
+        -- mid-boot), and caching a false negative here would deny K9
+        -- access for the FULL HAS_K9_ACCESS_CACHE_TTL_MS even after the
+        -- server call would have succeeded again a moment later. Leaving
+        -- `checkedAt` untouched (still stale from before this attempt)
+        -- means the very next call re-attempts the awaited callback
+        -- immediately instead of serving a stuck denial from a poisoned
+        -- cache. Every gated server-side action re-verifies access
+        -- independently regardless (see this cache's own declaration
+        -- comment above), so returning false here for just this one call
+        -- is a display-only fail-closed default, not a security decision.
+        return false
+    end
+
     hasK9AccessCache.value = result == true
     hasK9AccessCache.checkedAt = now
     return hasK9AccessCache.value

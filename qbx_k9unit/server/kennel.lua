@@ -63,25 +63,77 @@
        id" standard (server/main.lua). Here the id names an entity the
        client was JUST instructed to create, but a modified client could
        still report an arbitrary pre-existing networked entity's id
-       instead of a genuine new kennel. ALSO rejects a netId already
-       recorded against a DIFFERENT citizenid's Kennels entry (closes a
-       same-tolerance-radius ownership-hijack path found this pass — see
-       that check's own comment at its call site). On the too-far-from-spawn
-       rejection AND on every re-validation rejection below it (TTL expiry,
-       a feature-flag toggle or certification revoke landing mid-flight, or
-       a race with another kennel already occupying the citizenid's slot) —
-       all reachable only once the client has already created a real
-       networked object in response to event 5 — cleans that entity up via
-       CleanupUnclaimedKennelEntity (resolve + model-verify + delete +
-       broadcast) rather than leaving it orphaned in the world forever, and
-       ALWAYS notifies the player their placement was rejected (a prior pass
-       left three of these re-validation branches fully silent with no
-       cleanup at all — the same "confirm-failure branch returns silently,
-       leaving a real networked object nothing will reclaim" shape flagged
-       this pass in server/fetch.lua and server/propattachment.lua). The one
-       deliberate exception is the wrong-model rejection (see that branch's
-       own comment for why it does NOT clean up: at that point `entity`
-       might not be the genuine kennel at all).
+       instead of a genuine new kennel — including, in the worst case,
+       ANOTHER citizen's already-confirmed kennel.
+
+       RED-TEAM FIX, THIS PASS — CLOSES A LIVE, REPEATABLE GRIEFING
+       PRIMITIVE: `safeToCleanup` below (computed once, immediately after
+       the pending/src/TTL-eligible confirm is accepted, and reused by
+       EVERY rejection branch that follows) mirrors server/fetch.lua's
+       confirmFetchBallThrown/confirmFetchBallDropped `safeToCleanup`
+       pattern exactly — see that file's own doc comment for the reasoning
+       this is copied from. Previously, every rejection branch below either
+       called a since-removed `CleanupUnclaimedKennelEntity` helper (TTL
+       expiry, feature-flag toggle, certification revoke, already-has-a-
+       kennel) or performed its own inline, unconditional `DeleteEntity`
+       (the too-far-from-spawn branch) — EVERY one of those paths deleted
+       whatever `netId` resolved to and model-matched, with NO check that
+       the reporting citizenid actually owned it. Exploit: an attacker with
+       K9 access calls requestDeployKennel (opens their own pending slot,
+       creates nothing client-side), then calls confirmKennelPlaced naming
+       a VICTIM's real, already-deployed kennel's netId. The entity
+       resolves, the model matches (it's a real kennel), and landing on
+       ANY rejection branch — already owning a kennel, letting the TTL
+       expire, or simply placing far enough from the attacker's OWN spawn
+       point to trip the too-far branch (no proximity to the victim's
+       kennel required at all) — deleted the victim's real kennel and
+       broadcast its removal to every connected client. Repeatable roughly
+       every DeployCooldown interval.
+       `safeToCleanup` requires the netId to (a) resolve to a real,
+       currently-existing OBJECT, (b) match a configured kennel prop model,
+       AND (c) NOT already be recorded against a DIFFERENT citizenid's
+       `Kennels` entry (via `FindKennelOwnerByNetId` — the exact
+       server/fetch.lua `FindOtherBallByNetId` shape, applied to this
+       file's own registry). Condition (c) is what actually closes the
+       exploit: a victim's real kennel is, by definition, already recorded
+       in `Kennels` under the victim's own citizenid by the time an
+       attacker could name its netId, so `safeToCleanup` is false for it —
+       every rejection branch below now notifies the caller their placement
+       failed WITHOUT deleting an entity they don't own. Kept from the
+       prior pass unchanged: EVERY rejection branch still ALWAYS notifies
+       the player (never silent), and — ONLY when `safeToCleanup` is true —
+       still reclaims the real, genuinely-owned object rather than leaving
+       it orphaned (the "no unbounded trap" requirement this feature is
+       built to; see RemoveKennelForCitizenid's own note and the playerDropped/
+       onResourceStop sweeps below, all independent of this check and all
+       keyed off `Kennels`' own entries, never a client-supplied netId).
+       The one deliberate exception, unchanged from before, is the
+       wrong-model rejection (see that branch's own comment for why it
+       stays a plain, non-cleanup-attempting rejection even though
+       `safeToCleanup` would already be false for it anyway: at that point
+       `entity` might not be the genuine kennel at all).
+
+       RESIDUAL, DISCLOSED GAP — NOT CLOSED BY THIS FIX, reported to
+       coder-backend/coder-architect/project-lead this pass rather than
+       attempted unilaterally here (needs a decision spanning files this
+       one does not own): `safeToCleanup`'s condition (c) only cross-checks
+       THIS file's own `Kennels` registry — it has no visibility into
+       server/fetch.lua's private `FetchBalls`/`PendingFetchDrops` tables or
+       server/propattachment.lua's own tracked attachments. Confirmed by
+       reading config.lua this pass: `Config.DeployableKennel.
+       fallbackPropModel`, `Config.FetchMechanic.ballPropModel`, and
+       `Config.PropAttachments.fallbackPropModel` are ALL configured as the
+       identical `'prop_tennis_ball'` model. A netId naming another
+       citizen's currently-live fetch ball or attached prop — a real object
+       of the right type, wearing the right (shared) model, but never
+       recorded in `Kennels` at all — therefore still reads as
+       `safeToCleanup == true` here, the same shape of gap server/fetch.lua's
+       own `safeToCleanup` has in reverse (it only cross-checks
+       `FetchBalls`, never `Kennels` or propattachment's own table).
+       Structurally closing this needs either distinct per-feature model
+       hashes (config.lua) or a shared, resource-global "netId currently
+       claimed by feature X" registry every confirm handler consults — both
+       out of this file's remit.
     3. 'qbx_k9unit:server:cancelKennelPlacement' () [THIS FILE]
        Client reports its own placement attempt failed (model never
        loaded, PlaceObjectOnGroundProperly returned false) so the pending
@@ -364,43 +416,45 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
     TriggerClientEvent('qbx_k9unit:client:deployKennelAt', src, spawnX, spawnY, spawnZ)
 end)
 
---- Attempts to reclaim a real, client-created kennel object after a LATE
---- re-validation failure in confirmKennelPlaced below (feature-flag toggle,
---- certification revoke, a race with another kennel already landing, or the
---- pending placement's own TTL expiring) — added THIS PASS. By the time any
---- of confirmKennelPlaced's callers below reach this, the client has already
---- executed 'qbx_k9unit:client:deployKennelAt' and created a genuine
---- networked object; previously, each of these rejection branches returned
---- (some silently, some with a notification) WITHOUT ever resolving or
---- touching that object — since a rejected placement never enters `Kennels`,
---- nothing else in this file would ever ResolveNetworkEntity/DeleteEntity it
---- (RemoveKennelForCitizenid, the playerDropped handler, and the
---- onResourceStop sweep all only loop over `Kennels`' actual entries), so
---- the object sat in the world forever — the identical "confirm-failure
---- branch returns silently, leaving a real networked object nothing will
---- reclaim" shape flagged this pass in server/fetch.lua and
---- server/propattachment.lua.
---- Mirrors the too-far branch's own resolve-then-model-verify-before-delete
---- discipline (see that branch's comment) rather than deleting by netId
---- alone: a netId that does NOT resolve to a genuine, correctly-modeled
---- kennel is left completely untouched (fails closed to "do nothing" rather
---- than becoming an arbitrary-entity-deletion primitive for an unverified
---- client-supplied netId) — same reasoning the wrong-model branch below
---- already documents for why IT deliberately does not delete.
+--- Enforces "at most one `Kennels` entry may ever claim a given netId" —
+--- mirrors server/fetch.lua's `FindOtherBallByNetId` exactly (see that
+--- function's own doc comment for the fuller GLOBAL NETID-UNIQUENESS
+--- INVARIANT framing), applied to this file's own `Kennels` registry.
+--- Returns the citizenid of a DIFFERENT registry entry that already claims
+--- `netId`, if one exists — `excludeCitizenId` lets a caller checking its
+--- OWN citizenid's prospective claim not treat its own prior entry (if any)
+--- as a collision.
+---
+--- SECURITY-CRITICAL, RED-TEAM FIX THIS PASS: every decision about whether
+--- a client-reported netId is SAFE TO DELETE, and every write of a
+--- client-reported netId into `Kennels`, MUST be guarded by this returning
+--- nil first — see confirmKennelPlaced's own `safeToCleanup` below (this
+--- file's header EVENT/CALLBACK CONTRACT item 2 has the full writeup of the
+--- griefing primitive this closes: previously, confirmKennelPlaced's
+--- rejection branches deleted whatever a client-reported netId resolved to
+--- and model-matched, with NO check that the reporting citizenid actually
+--- owned it — an attacker naming a victim's real, already-confirmed
+--- kennel's netId on a call engineered to land on any rejection branch
+--- could delete it out from under them). Do not remove this check from
+--- confirmKennelPlaced without replacing it with an equally strict
+--- alternative.
 --- @param netId number
-local function CleanupUnclaimedKennelEntity(netId)
-    local entity = ResolveNetworkEntity(netId, 3)
-    if not entity then return end
-    if not KennelModelHashes[GetEntityModel(entity)] then return end
-
-    DeleteEntity(entity)
-    TriggerClientEvent('qbx_k9unit:client:removeKennel', -1, netId)
+--- @param excludeCitizenId string?
+--- @return string? otherCitizenId
+local function FindKennelOwnerByNetId(netId, excludeCitizenId)
+    for citizenid, kennel in pairs(Kennels) do
+        if citizenid ~= excludeCitizenId and kennel.netId == netId then
+            return citizenid
+        end
+    end
+    return nil
 end
 
 --- Step 2: client reports the network id of the object it actually
 --- created. Re-validates everything from step 1 plus the entity itself —
 --- see this file's header EVENT/CALLBACK CONTRACT item 2 for the full
---- reasoning.
+--- reasoning, INCLUDING the red-team fix documented there this pass
+--- (`safeToCleanup` below).
 --- @param netId number
 RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     local src = source
@@ -417,66 +471,96 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     end
     PendingKennelPlacements[citizenid] = nil -- consumed either way, success or rejected below
 
-    if GetGameTimer() > pending.expiresAt then
-        NotifyPlayer(src, locale('kennel.placement_timed_out'), 'error')
-        -- CLEANUP FIX, ADDED THIS PASS: see CleanupUnclaimedKennelEntity's
-        -- own doc comment — this branch fires strictly after the client has
-        -- already created a real object; previously nothing here ever
-        -- reclaimed it.
-        CleanupUnclaimedKennelEntity(netId)
-        return
-    end
-
-    -- Re-validate — a certification revoke, a feature-flag toggle, or
-    -- (shouldn't be reachable, but never trust an invariant alone) a
-    -- second kennel landing could have happened during the round trip.
-    --
-    -- CLEANUP FIX, ADDED THIS PASS: all three of these previously returned
-    -- SILENTLY — no NotifyPlayer at all, on top of the same orphaned-object
-    -- gap CleanupUnclaimedKennelEntity's own doc comment describes. A
-    -- rejection this deep in the flow (past the pending/src/TTL checks
-    -- above) is never an unsolicited or forged confirm — it's a genuine
-    -- client honestly reporting a placement it was just instructed to make,
-    -- so the player must always be told, and the object it created must
-    -- always be reclaimed.
-    if not Config.Features.DeployableKennel then
-        NotifyPlayer(src, locale('kennel.placement_failed_unconfirmed'), 'error')
-        CleanupUnclaimedKennelEntity(netId)
-        return
-    end
-    if not HasK9Access(src) then
-        NotifyPlayer(src, locale('kennel.placement_failed_unconfirmed'), 'error')
-        CleanupUnclaimedKennelEntity(netId)
-        return
-    end
-    if Kennels[citizenid] then
-        NotifyPlayer(src, locale('kennel.placement_failed_unconfirmed'), 'error')
-        CleanupUnclaimedKennelEntity(netId)
-        return
-    end
-
     -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this file's
     -- own `NetworkDoesEntityExistWithNetworkId` existence guard followed by
     -- a SEPARATE `GetEntityType(entity) ~= 3` check further down — both
     -- are now server/entities.lua's shared ResolveNetworkEntity(), called
     -- with expectedEntityType = 3 to fold the object-only restriction in
     -- as one call, mirroring server/main.lua's relayDoorScratch exactly.
-    -- The genuinely kennel-specific KennelModelHashes check stays here,
-    -- unchanged, since it isn't part of the generic resolve.
     --
-    -- DISCLOSED, NOT SILENT, MESSAGE-WORDING CHANGE: before this
-    -- migration, an entity that existed but had the wrong GetEntityType
-    -- got its own distinct "unexpected entity type" notification, separate
-    -- from the "could not be confirmed" wording used for a nonexistent
-    -- entity. Folding both into one ResolveNetworkEntity(netId, 3) call
-    -- means both cases now return nil and share the "could not be
-    -- confirmed" message below — the REJECTION itself is unchanged (both
-    -- cases still fail closed), only the player-facing wording for the
-    -- wrong-type case is now less specific. Flagged explicitly per this
-    -- resource's own "strengthen/change silently never, disclose always"
-    -- convention (see server/entities.lua's own doc comment for the
-    -- precedent on HandleSearchTarget's existence-check strengthening).
+    -- SECURITY-CRITICAL, RED-TEAM FIX THIS PASS: resolved HERE, immediately
+    -- after the pending/src match is confirmed, and reused by EVERY branch
+    -- below (never re-resolved) — mirrors server/fetch.lua's
+    -- confirmFetchBallThrown `entity`/`safeToCleanup` placement exactly.
+    -- `safeToCleanup` is the ONLY thing any rejection branch below consults
+    -- before touching this entity: it is NOT simply "did the netId resolve
+    -- to a real, correctly-modeled object" — it additionally requires the
+    -- netId to NOT already be recorded against a DIFFERENT citizenid's
+    -- `Kennels` entry (`FindKennelOwnerByNetId`). That third condition is
+    -- the one that actually matters: without it, an attacker could report
+    -- ANOTHER citizen's real, already-confirmed kennel's netId, deliberately
+    -- land on a rejection branch (already own a kennel, let the TTL expire,
+    -- or place far enough from their OWN spawn point to trip the too-far
+    -- branch below), and this handler would delete that OTHER citizen's
+    -- kennel via THIS caller's own confirm — see this file's header EVENT/
+    -- CALLBACK CONTRACT item 2 for the full griefing-primitive writeup this
+    -- closes. Every branch that independently re-reaches the identical
+    -- cross-citizenid collision case (the DEFENSE-IN-DEPTH check further
+    -- down, before the success write) gets `safeToCleanup == false` for
+    -- free from this same check.
     local entity = ResolveNetworkEntity(netId, 3)
+    local safeToCleanup = entity ~= nil
+        and KennelModelHashes[GetEntityModel(entity)]
+        and not FindKennelOwnerByNetId(netId, citizenid)
+
+    --- Notifies `src` their placement was rejected and, ONLY if
+    --- `safeToCleanup` says this citizenid genuinely owns the resolved
+    --- entity, reclaims it (direct server-side DeleteEntity attempt plus
+    --- the broadcast backstop — see RemoveKennelForCitizenid's own CLEANUP
+    --- CONFIDENCE NOTE in this file's header for why both). Shared by every
+    --- rejection branch below that is reachable only once the client has
+    --- already created a real networked object in response to event 5 (TTL
+    --- expiry, a feature-flag toggle or certification revoke landing
+    --- mid-flight, a race with another kennel already occupying the
+    --- citizenid's slot, or placing too far from the assigned spot) so
+    --- there is exactly one place that decides "is it actually safe to
+    --- delete this" — never re-derived, and never skipped, per branch.
+    --- @param message string
+    local function RejectPlacement(message)
+        NotifyPlayer(src, message, 'error')
+        if safeToCleanup then
+            DeleteEntity(entity)
+            TriggerClientEvent('qbx_k9unit:client:removeKennel', -1, netId)
+        end
+    end
+
+    if GetGameTimer() > pending.expiresAt then
+        RejectPlacement(locale('kennel.placement_timed_out'))
+        return
+    end
+
+    -- Re-validate — a certification revoke, a feature-flag toggle, or
+    -- (shouldn't be reachable, but never trust an invariant alone) a
+    -- second kennel landing could have happened during the round trip. A
+    -- rejection this deep in the flow (past the pending/src/TTL checks
+    -- above) is never an unsolicited or forged confirm — it's a genuine
+    -- client honestly reporting a placement it was just instructed to make,
+    -- so the player is always told, and — only when `safeToCleanup` says
+    -- it is genuinely this citizenid's own object — it is always reclaimed.
+    if not Config.Features.DeployableKennel then
+        RejectPlacement(locale('kennel.placement_failed_unconfirmed'))
+        return
+    end
+    if not HasK9Access(src) then
+        RejectPlacement(locale('kennel.placement_failed_unconfirmed'))
+        return
+    end
+    if Kennels[citizenid] then
+        RejectPlacement(locale('kennel.placement_failed_unconfirmed'))
+        return
+    end
+
+    -- DISCLOSED, NOT SILENT, MESSAGE-WORDING CHANGE: before the
+    -- ResolveNetworkEntity migration, an entity that existed but had the
+    -- wrong GetEntityType got its own distinct "unexpected entity type"
+    -- notification, separate from the "could not be confirmed" wording used
+    -- for a nonexistent entity. Folding both into one
+    -- ResolveNetworkEntity(netId, 3) call means both cases share the "could
+    -- not be confirmed" message below — the REJECTION itself is unchanged
+    -- (both cases still fail closed), only the player-facing wording for
+    -- the wrong-type case is less specific. Nothing to clean up either way
+    -- (there was never a real, correctly-typed entity to resolve), so this
+    -- stays a plain notify, not routed through RejectPlacement.
     if not entity then
         NotifyPlayer(src, locale('kennel.placement_failed_unconfirmed'), 'error')
         return
@@ -488,18 +572,21 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     -- modified client could report instead of a genuine new kennel.
     if not KennelModelHashes[GetEntityModel(entity)] then
         -- DELIBERATELY NOT deleting `entity` here, even though this file's
-        -- other rejection branches DO clean up their own resolved entity
-        -- (see the distance-check branch below, added this pass). This is
-        -- the one branch where `entity` might NOT be the kennel the client
-        -- actually created at all — it's exactly the "modified client
-        -- reports an arbitrary pre-existing networked entity's id instead"
-        -- case this check exists to catch (see this file's header EVENT/
-        -- CALLBACK CONTRACT item 2). Calling DeleteEntity on it here would
-        -- turn this model check from a rejection into the very
-        -- arbitrary-entity-deletion primitive it's meant to prevent —
-        -- reintroducing the exact bug class this handler's whole
-        -- ResolveNetworkEntity/KennelModelHashes design was hardened
-        -- against. Fail closed: refuse to track it, touch nothing else.
+        -- other rejection branches DO (via RejectPlacement, when
+        -- `safeToCleanup` allows it). This is the one branch where `entity`
+        -- might NOT be the kennel the client actually created at all — it's
+        -- exactly the "modified client reports an arbitrary pre-existing
+        -- networked entity's id instead" case this check exists to catch
+        -- (see this file's header EVENT/CALLBACK CONTRACT item 2).
+        -- `safeToCleanup` is already false here regardless (it requires the
+        -- identical model match), so routing this through RejectPlacement
+        -- would behave identically — but this branch stays a deliberately
+        -- separate, plain, non-cleanup-attempting rejection anyway: calling
+        -- any cleanup-capable path here, even one that happens to be a
+        -- no-op today, would reintroduce the exact arbitrary-entity-deletion
+        -- shape this whole model-check exists to prevent should that
+        -- invariant ever change underneath it. Fail closed: refuse to
+        -- track it, touch nothing else.
         NotifyPlayer(src, locale('kennel.placement_failed_wrong_model'), 'error')
         return
     end
@@ -510,58 +597,55 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     local dz = entityCoords.z - pending.coords.z
     local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
     if dist > KENNEL_CONFIRM_DISTANCE_TOLERANCE then
-        -- CLEANUP FIX, ADDED THIS PASS: `entity` has already passed the
-        -- object-type check (ResolveNetworkEntity's expectedEntityType = 3)
-        -- AND the KennelModelHashes model check above — by this point it is
-        -- credibly the genuine kennel prop THIS client was just instructed
-        -- to create (server/kennel.lua's own spawn point), just placed
-        -- somewhere the ground-snap moved too far from it. Previously this
-        -- branch only notified and returned, leaving that real, frozen,
-        -- now-permanently-untracked object sitting in the world forever —
-        -- nothing else in this file would ever ResolveNetworkEntity/
-        -- DeleteEntity it (it never enters `Kennels`, so
-        -- RemoveKennelForCitizenid, the playerDropped handler, and the
-        -- onResourceStop sweep all only ever loop over `Kennels`' actual
-        -- entries) and ox_target's "Pick Up Kennel" option would keep
-        -- showing for it to any nearby player while requestPickupKennel
-        -- rejects everyone ("you do not own that kennel") since no
-        -- citizenid's registry entry ever points at it — a real, if
-        -- unintentional, permanent-litter case for the exact "every placed
-        -- kennel must always be removable" requirement this feature is
-        -- built to. Clean it up the same way RemoveKennelForCitizenid does:
-        -- a direct server-side attempt plus the broadcast backstop for
-        -- whichever connected client currently holds real network
-        -- ownership, in case the direct attempt is a no-op on this FXServer
-        -- build (see RemoveKennelForCitizenid's own CLEANUP CONFIDENCE NOTE
-        -- in this file's header for why both).
-        DeleteEntity(entity)
-        TriggerClientEvent('qbx_k9unit:client:removeKennel', -1, netId)
-        NotifyPlayer(src, locale('kennel.placement_failed_too_far'), 'error')
+        -- `entity` has already passed the object-type check
+        -- (ResolveNetworkEntity's expectedEntityType = 3), the
+        -- KennelModelHashes model check above, AND (via `safeToCleanup`)
+        -- the cross-citizenid ownership check — by this point it is
+        -- credibly THIS citizenid's own genuine kennel prop, just placed
+        -- somewhere the ground-snap moved too far from it. Reachable
+        -- WITHOUT any proximity to another citizen's kennel at all (this
+        -- citizenid's own pending.coords is all that's compared against),
+        -- so — unlike before this pass — this can never be used to delete
+        -- an entity `safeToCleanup` doesn't already vouch for. Cleaned up
+        -- via RejectPlacement rather than leaving this real, frozen,
+        -- now-permanently-untracked object sitting in the world forever
+        -- (it never enters `Kennels`, so RemoveKennelForCitizenid, the
+        -- playerDropped handler, and the onResourceStop sweep would never
+        -- otherwise see it) — the exact "every placed kennel must always be
+        -- removable" requirement this feature is built to.
+        RejectPlacement(locale('kennel.placement_failed_too_far'))
         return
     end
 
-    -- DEFENSE-IN-DEPTH, ADDED THIS PASS: reject if this exact netId is
-    -- already recorded as a DIFFERENT citizenid's active kennel. Without
-    -- this, a modified client could exploit the distance tolerance above
-    -- (reachable whenever two certified handlers place within
-    -- KENNEL_CONFIRM_DISTANCE_TOLERANCE of each other, e.g. side by side at
-    -- the same station) to report someone else's already-confirmed kennel's
-    -- netId as its own new placement. Kennels[citizenid] would then point at
-    -- an entity a DIFFERENT citizenid's entry ALSO still points at — the
-    -- first of the two to pick theirs up (or disconnect) DeleteEntity's the
-    -- shared entity out from under the other, whose own registry slot is
-    -- left referencing a netId that no longer resolves to anything.
-    -- RemoveKennelForCitizenid's ResolveNetworkEntity call on that stale
-    -- netId then simply finds nothing and returns without ever clearing
-    -- their Kennels slot — an unbounded trap (this feature's own explicit
-    -- "always removable by its owner" requirement): they can never place a
-    -- new kennel again ("you already have an active kennel deployed") and
-    -- have nothing left in the world to pick up to clear it.
-    for otherCitizenid, otherKennel in pairs(Kennels) do
-        if otherKennel.netId == netId and otherCitizenid ~= citizenid then
-            NotifyPlayer(src, locale('kennel.placement_failed_already_claimed'), 'error')
-            return
-        end
+    -- DEFENSE-IN-DEPTH: reject if this exact netId is already recorded as a
+    -- DIFFERENT citizenid's active kennel. Without this, a modified client
+    -- could exploit the distance tolerance above (reachable whenever two
+    -- certified handlers place within KENNEL_CONFIRM_DISTANCE_TOLERANCE of
+    -- each other, e.g. side by side at the same station) to report someone
+    -- else's already-confirmed kennel's netId as its own new placement.
+    -- Kennels[citizenid] would then point at an entity a DIFFERENT
+    -- citizenid's entry ALSO still points at — the first of the two to pick
+    -- theirs up (or disconnect) DeleteEntity's the shared entity out from
+    -- under the other, whose own registry slot is left referencing a netId
+    -- that no longer resolves to anything. RemoveKennelForCitizenid's
+    -- ResolveNetworkEntity call on that stale netId then simply finds
+    -- nothing and returns without ever clearing their Kennels slot — an
+    -- unbounded trap (this feature's own explicit "always removable by its
+    -- owner" requirement): they can never place a new kennel again ("you
+    -- already have an active kennel deployed") and have nothing left in the
+    -- world to pick up to clear it.
+    -- Re-runs FindKennelOwnerByNetId explicitly here (rather than only
+    -- trusting `safeToCleanup`'s earlier snapshot) for the same reason
+    -- server/fetch.lua's confirmFetchBallThrown re-runs FindOtherBallByNetId
+    -- a second time before its own success write: `citizenid` is confirmed
+    -- above to have no `Kennels` entry of its own yet, so any hit here is
+    -- necessarily a genuine cross-citizenid collision, and this is the
+    -- gate that actually decides whether to WRITE `Kennels[citizenid]`, a
+    -- distinct concern from `safeToCleanup` deciding whether to DELETE.
+    local otherCitizenid = FindKennelOwnerByNetId(netId, citizenid)
+    if otherCitizenid then
+        NotifyPlayer(src, locale('kennel.placement_failed_already_claimed'), 'error')
+        return
     end
 
     Kennels[citizenid] = {

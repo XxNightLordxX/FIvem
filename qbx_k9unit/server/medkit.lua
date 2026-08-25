@@ -567,7 +567,7 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     local notifyOk, notifyErr = pcall(function()
         NotifyPlayer(source, locale('medkit.treated_success'), 'success')
         if targetServerId ~= source then
-            NotifyPlayer(targetServerId, locale('medkit.target_treated_notice'), 'inform')
+            NotifyPlayer(targetServerId, locale('medkit.target_treated_notice'), 'info')
         end
     end)
     if not notifyOk then

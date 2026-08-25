@@ -160,3 +160,19 @@ newly-surfaced OpenGameArt "CC0 Sound Effects"/"80 CC0 creature SFX"
 collections — both are unverified leads only, same status CREDITS.md already
 assigns its own unverified leads. Do not pursue the Internet Archive 78rpm
 route without dedicated recording-date research; it is not a quick win.
+
+---
+
+**Docs-consolidation note, 2026-08-25.** This recommendation has since been
+carried out: `html/sounds/CREDITS.md` records `bark.ogg` as downloaded,
+converted, and credited under OGA-BY 3.0, and `fxmanifest.lua`'s `files{}`
+block now lists `'html/sounds/bark.ogg'` — confirmed by reading both files
+directly. `PLAYER_GUIDE.md` and `PROJECT_STATUS.md` both describe the Bark
+action as audible today, not silent.
+
+**This file is a natural candidate to fold into `html/sounds/CREDITS.md`**
+(the same licensing decision, split across two files, is exactly the kind
+of overlap this project's own documentation-consolidation effort is trying
+to remove elsewhere). Not done as part of this pass because `CREDITS.md`
+is outside this pass's editable scope — flagged here for whoever owns that
+file next.

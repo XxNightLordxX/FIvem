@@ -155,7 +155,25 @@ local function baselineWellbeingConfig()
             jumpBlockThreshold     = 20,
             speedPenaltyMultiplier = 0.80,
             damageDecayAmount      = 10,
-            passiveRegenPerTick    = 0.1,
+            -- RAISED 0.1 -> 1.0 (this task's own recommendation, reported to
+            -- the task owner for config.lua -- see server/wellbeing.lua's
+            -- header, STUCK-K9 SOFTLOCK FIX item 1, for the full arithmetic).
+            -- config.lua itself still ships 0.1 as of this pass (not owned
+            -- by this task) -- this fixture encodes the RECOMMENDED value so
+            -- the bounded-ticks tests below prove the fix that should ship,
+            -- not the bug that currently does. See the dedicated
+            -- "CURRENTLY-SHIPPED 0.1 RATE" section further down for tests
+            -- pinned against the OLD value instead, documenting the
+            -- QA-reported bug's own exact arithmetic.
+            passiveRegenPerTick    = 1.0,
+            -- NEW FIELD (this task, reported to the task owner for
+            -- config.lua -- see server/wellbeing.lua's header, STUCK-K9
+            -- SOFTLOCK FIX item 2). 100 = Injury.max = a full reset on
+            -- death/respawn, this task's own chosen default. Set to 0 to
+            -- disable (an operator preferring "still limping after
+            -- respawn," a genuine supported no-op per server/wellbeing.lua's
+            -- own `restoreAmount > 0` guard).
+            deathRespawnRestoreAmount = 100,
         },
     }
 end
@@ -254,12 +272,24 @@ local function newWellbeingFixture(opts)
     local coordsByPed = {}
     local function GetEntityCoords(ped) return coordsByPed[ped] or vec3(0, 0, 0) end
 
+    -- DEATH/RESPAWN (this task) -- defaults every ped to 200 (alive, native
+    -- max health), matching combat_spec.lua's/medkit_spec.lua's own default
+    -- so a fixture that never calls setHealth behaves exactly as before
+    -- this addition.
+    local healthByPed = {}
+    local function GetEntityHealth(ped) return healthByPed[ped] or 200 end
+
     -- Safety-net stubs only -- see this file's header on why the Fatigue
     -- rest-source scan is not exercised. Never expected to be hit given
     -- every fixture config's restSources = {}.
     local function GetAllObjects() return {} end
     local function GetAllVehicles() return {} end
     local function GetHashKey(name) return name end
+
+    -- STARTUP VALIDATION (this task) -- GetCurrentResourceName/onResourceStart
+    -- support for exercising the new WarnIfItemMissing/onResourceStart block.
+    local RESOURCE_NAME = 'qbx_k9unit'
+    local function GetCurrentResourceName() return RESOURCE_NAME end
 
     -- exports.ox_inventory:GetItemCount/RemoveItem -- keyed by source, then item name.
     local itemCounts = {}
@@ -271,6 +301,21 @@ local function newWellbeingFixture(opts)
         if have < count then return false end
         itemCounts[source][itemName] = have - count
         return true
+    end
+
+    -- exports.ox_inventory:Items(itemName) -- the server's own live item
+    -- registry (this task, STARTUP VALIDATION section). Keyed by item name
+    -- -> true (registered); a name never registered here correctly returns
+    -- nil, matching real ox_inventory's own getItem() behavior for an
+    -- unknown name.
+    local registeredItems = {}
+    local throwOnItemsExport = false
+    local function oxItems(_self, itemName)
+        if throwOnItemsExport then
+            error('simulated native failure: ox_inventory Items()')
+        end
+        if registeredItems[itemName] then return { name = itemName } end
+        return nil
     end
 
     local config = {
@@ -294,16 +339,18 @@ local function newWellbeingFixture(opts)
         lib                  = lib,
         exports = {
             qbx_core = { GetPlayer = qbxGetPlayer },
-            ox_inventory = { GetItemCount = oxGetItemCount, RemoveItem = oxRemoveItem },
+            ox_inventory = { GetItemCount = oxGetItemCount, RemoveItem = oxRemoveItem, Items = oxItems },
         },
         GetPlayers           = GetPlayers,
         GetPlayerPed         = GetPlayerPed,
         GetEntityModel       = GetEntityModel,
         IsConfiguredK9Model  = IsConfiguredK9Model,
         GetEntityCoords      = GetEntityCoords,
+        GetEntityHealth      = GetEntityHealth,
         GetAllObjects        = GetAllObjects,
         GetAllVehicles       = GetAllVehicles,
         GetHashKey           = GetHashKey,
+        GetCurrentResourceName = GetCurrentResourceName,
         Config               = config,
     })
 
@@ -335,11 +382,14 @@ local function newWellbeingFixture(opts)
         setModel = function(ped, model) modelByPed[ped] = model end,
         setIsK9Model = function(model, isK9) k9Models[model] = isK9 end,
         setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
+        setHealth = function(ped, hp) healthByPed[ped] = hp end,
         setItemCount = function(src, itemName, n)
             itemCounts[src] = itemCounts[src] or {}
             itemCounts[src][itemName] = n
         end,
         getItemCount = function(src, itemName) return (itemCounts[src] and itemCounts[src][itemName]) or 0 end,
+        registerInventoryItem = function(itemName) registeredItems[itemName] = true end,
+        setThrowOnItemsExport = function(v) throwOnItemsExport = v end,
         invokeCallback = function(name, source, ...)
             assert(callbacks[name], 'no callback registered for ' .. name)
             return callbacks[name](source, ...)
@@ -354,6 +404,18 @@ local function newWellbeingFixture(opts)
             env.source = src
             for _, handler in ipairs(eventHandlers['playerDropped'] or {}) do
                 handler()
+            end
+        end,
+        --- Fires 'onResourceStart' with the given resourceName -- mirrors
+        --- firePlayerDropped's shape. `resourceName` defaults to this
+        --- fixture's own stubbed GetCurrentResourceName() value ('qbx_k9unit')
+        --- so the common case ("this resource itself just started") needs no
+        --- argument; callers testing the `GetCurrentResourceName() ~=
+        --- resourceName` guard pass a different name explicitly.
+        --- @param resourceName string?
+        fireResourceStart = function(resourceName)
+            for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
+                handler(resourceName or 'qbx_k9unit')
             end
         end,
         registeredNetEvents = registeredNetEvents,

@@ -1,213 +1,302 @@
-# qbx_k9unit — Project Status
+# qbx_k9unit — Status & Decisions
 
-**Measured:** 2026-08-25, against commit `9808e56` (184 commits on this
-branch). Written by the release-manager pass, read-only on code — no
-`.lua`, `config.lua`, or `fxmanifest.lua` file was touched to produce this
-document.
+**Measured 2026-08-25**, by reading `config.lua` and the current test suite
+directly — not copied from an older document. This file used to be two
+separate documents (`PROJECT_STATUS.md`, a snapshot of how the project was
+doing, and `DECISIONS_NEEDED.md`, a list of calls only you can make). They
+are merged here on purpose: "what needs your decision" is part of "where
+things stand," and keeping them in separate files was exactly why decisions
+were getting missed.
 
-**Before you trust this:** this project is being worked on by many people
-at once, right now, in parallel. Two earlier versions of this exact
-document went stale within about a day of being written. If it's been more
-than a few hours since the date above, ask whoever's actively working on
-this project whether more has landed, or run `git log --oneline -20`
-yourself before relying on anything below.
+**This project is being worked on by several people at once, right now.**
+Anything below can go stale within hours. If it's been more than a day
+since the date above, ask whoever is actively working on this project
+whether something changed, or check the specific thing yourself (this
+document says how, item by item).
 
-## The short version
+## Words used in this document
 
-- **Five basic features work today and ship switched on**: leash control,
-  the K9 radial menu (a pie-shaped quick-select menu), getting a K9 in and
-  out of vehicles with its handler, basic jumping, and a bark sound that —
-  see below — doesn't actually make a sound yet.
-- **A large amount of further work is fully built and tested, but switched
-  off on purpose.** Tracking dogs, search dogs, combat assistance,
-  inventory restrictions, an XP/fitness system, deployable kennels, and
-  fetch are all finished code, not placeholders. They're off because
-  someone needs to review and approve them before they go live on a real
-  server, the same way this project has treated every new feature all
-  along.
-- **Two decisions are blocking the combat features specifically, and
-  neither can be settled by writing more code.** See section 3.
-- **Automated checks**: 698 individual test cases across 17 files, all
-  passing — I ran the suite myself. Lint and syntax are also clean — I ran
-  those myself too, not copied from a comment.
+- **Resource** — an add-on a FiveM server installs. "This resource" means
+  this K9 add-on.
+- **Feature flag** — an on/off switch in `config.lua` (each one is a line
+  like `Config.Features.SomeName = true`). Only whoever manages your
+  server's files can change one. Flipping a flag on doesn't just turn on
+  a menu option — it also turns on the server-side code behind it.
+- **Native** — a built-in game engine function this resource calls (e.g.
+  "make this object visible," "check this player's health"). Mentioned
+  below only where it matters to a decision.
+- **netId ("network ID")** — the number the game uses to identify one
+  specific object/vehicle/ped across every connected player's game at
+  once, so "delete this exact kennel" can't accidentally mean "delete
+  someone else's kennel."
+- **ACE permission** — a named permission your server grants to specific
+  people (usually staff), separate from any in-game job or rank. A few
+  features below only work for someone your server has explicitly granted
+  one to.
+- **Citizen ID** — the permanent ID for one specific player character,
+  used any time a record needs to survive that person disconnecting or
+  changing jobs.
+- **Migration** — a small script that updates an existing database to
+  match a newer version of this resource, run once by whoever manages the
+  server's database.
+- **Cooldown** — a required wait before an action can be repeated. Used
+  throughout this resource to stop spam and stop players from earning
+  rewards too fast.
+- **XP farm** — a way to earn far more in-game experience than intended,
+  for far less real effort or risk, by exploiting how a system is
+  triggered rather than by actually doing the work it's meant to reward.
 
-## 1. What works today (switched on by default)
+---
 
-A feature flag is an on/off switch in `config.lua` (`Config.Features.X`).
-Five of the 40 that exist are `true` (on); the other 35 are `false` (off).
-The five that are on:
+## The one-paragraph version
 
-- **`LeashMechanics`** — officers can leash and unleash a K9.
-- **`RadialMenu`** — the K9 quick-select menu is available in-game.
-- **`VehicleEntryExit`** — a K9 can get in and out of vehicles alongside its
-  handler.
-- **`AgilityBasicJump`** — a K9 can jump and crouch using the game's own
-  built-in animations. It cannot yet vault over fences or through windows —
-  that's a separate, still-off feature (`AgilityAdvanced`).
-- **`BasicBarkSounds`** — the code that's supposed to play a bark sound
-  runs, but **there is still no actual sound file behind it**, so nothing
-  plays. This has been true since the feature was first built. It's a
-  disclosed gap, not a bug, and not something that will error or crash —
-  see section 5 for exactly where this stands right now.
+**Every one of this resource's 40 feature flags is now switched on** —
+confirmed by reading `config.lua` directly on the date above, not assumed
+from an older note. That includes features this project had deliberately
+kept off pending a safety/balance review, most importantly the three
+combat features and a developer-only tool that its own code comment says
+should never run on a live server (see the next section — read it first).
+Two open safety questions about the combat features (D3 and D13, below)
+still have **no answer**. Turning the flag on did not answer them — it
+just means whatever risk they describe is live on your server now, not
+hypothetical. Automated tests still pass in full (698 checks across 17
+files, plus clean lint/syntax, all confirmed by running them directly on
+the date above), which tells you the code does what its authors intended —
+it does not tell you the two open questions below are resolved, because
+neither is something a test can check.
 
-## 2. What's built but switched off, and why
+---
 
-**Tracking & search** (`ScentTracking`, `BloodTracking`,
-`WaterTrackingDecay`, `GunpowderSniffing`, `SearchZones`,
-`ContrabandAlerts`, `ThermalVision`, `NightVision`, `DoorInteraction`) —
-fully built and the most reviewed part of this project. Using these
-features doesn't affect any player who isn't already part of the search
-in progress, which makes this the safest group to turn on first. One
-thing to fix before you do: the example contraband item list in the
-config uses placeholder item names — swap those for your own real item
-names first.
+## Read this first — one setting that should not stay on
 
-**Combat & backup** (`BiteAndHold`, `NonLethalTakedown`,
-`HandlerDownDefense`, `PropDragging`, plus `Recall` — the handler's "call
-your dog off" escape hatch — and `HandlerPartnership`, the registry these
-depend on) — fully built. Six separate ways a player could have farmed XP
-unfairly (earned far more than intended for far less effort or risk) were
-found and closed over the course of this project. **This whole group is
-blocked from going live by two open decisions, not by missing code** — see
-section 3.
+**`Config.Features.BoneSweepDevTool` is currently `true`.**
 
-**Inventory, XP, and K9 wellbeing** (`K9Inventory`, `XPProgression`,
-`HealthStaminaHUD`, `FatigueSystem`, `MoodSystem`, `FearStressSystem`,
-`DistractionSystem`, `InjuryLimping`, `K9Medkit`, `ContrabandScreenFX`) —
-fully built. The numbers driving XP tiers and contraband-alert thresholds
-are still placeholders, meant to be tuned to your own server's economy
-before you turn this group on — that's a numbers-tuning task, not a defect.
+Plain version: this turns on a hidden command (`/k9bonetool`) that lets
+whoever has a specific staff permission spawn and attach real objects in
+the game world, on demand, in front of any player. It exists purely so a
+developer can figure out exactly where a cosmetic vest should attach to a
+dog's body — a one-time, private test-server job. The code that builds
+this feature says, in its own words, **"never enable this on a production
+server."** Right now, on this server, it is enabled.
 
-**Audio, props, and kennels** (`AdvancedBarkRadial`, `ProximityAudioFX`,
-`PropAttachments`, `FetchMechanic`, `DeployableKennel`, `CameraFeedPiP`) —
-mixed:
-- `DeployableKennel`, `PropAttachments`, and `FetchMechanic` are built and
-  tested, held back by one small polish item — the point where a prop
-  attaches to a K9's body still uses a placeholder position instead of a
-  fitted one.
-- `AdvancedBarkRadial` and `ProximityAudioFX` are built but, like
-  `BasicBarkSounds` above, need real sound files before they'd do anything
-  audible. See section 5.
-- `CameraFeedPiP` (a picture-in-picture, bodycam-style camera view) is
-  **genuinely not built, and can't be right now** — the game engine simply
-  doesn't have the capability yet. This was checked directly against an
-  open, unresolved request to the game engine's own developers, not
-  assumed. This isn't a "coming soon" item; it's currently impossible.
+It's ACE-gated (see the glossary above), so a random player can't reach it
+— but the flag itself, not the permission, is described in this
+resource's own documentation as "the real switch," and the real switch is
+on.
 
-## 3. Two decisions that need a human, not more code
+**What to do:** ask whoever manages this server's files to open
+`config.lua`, find `BoneSweepDevTool`, set it back to `false`, and restart
+the resource (not just save the file — the command stays reachable until
+an actual restart, even after the switch is flipped back). This is the
+single most urgent item in this whole document.
 
-### D3 — Does a security check actually work the way we think it does?
+---
+
+## What's live right now, grouped by area
+
+All 40 flags are `true`. Grouping them tells you more than a flat list —
+some groups are low-risk now that they're on, some carry real, still-open
+questions.
+
+| Group | What it covers | Should you worry? |
+|---|---|---|
+| **Core (Phase 1)** | Leash, radial menu, vehicle load/unload, basic bark, jump/crouch | No — this is the original, most-reviewed part of the resource, re-verified conformant repeatedly. |
+| **Tracking & search** | Scent/blood/gunpowder trailing, vehicle/person search, contraband alerts, thermal/night vision, door interaction | Low. Nothing here restrains, damages, or moves another player. One real to-do: `Config.SearchContrabandItems` still lists placeholder item names (`weed_bud`, `coke_brick`, etc.) — swap these for your own server's real item names, or searches won't find anything real. Also see D6 below (a live check that was never run). |
+| **Combat** | Bite & Hold, Non-Lethal Takedown, Dragging, Handler-Down Defense, the Handler Partnership registry, Recall | **Yes — see D3 and D13 below before treating this as safe.** A cheater can already shrug off the restraining half of these mechanics on a modified client; that's disclosed and accepted by turning them on, not a new problem. What's *not* settled is whether the security check meant to stop a different exploit (self-granted invincibility) actually works the way this project believes, and whether a griefing exploit against `FearStressSystem` (also now on) is something you're willing to live with. |
+| **Inventory, XP, wellbeing** | K9 gear stash, K9 medkit, XP progression, Fatigue/Mood/Fear-Stress/Distraction/Injury | Low risk to other players, but every number driving these (XP awards, thresholds) is still an unreviewed placeholder — see "placeholder numbers are now live money" below. |
+| **Audio, props, kennel** | Advanced bark variants, proximity audio, cosmetic vest, fetch, deployable kennel | Low. Two are cosmetic-only and known to look wrong until a one-time dev task is done (D8/D9 below); most bark/ambient sounds are still silent because the audio files don't exist yet (see D7). |
+| **Admin & developer tools** | The read-only admin/audit commands, the bone-sweep dev tool | The audit commands are safe by design (read-only, and nobody can use them until you grant the `k9unit.admin` ACE permission). **The bone-sweep tool is not safe — see the urgent warning above.** |
+| **Not really a feature** | `CameraFeedPiP` | Flipping this to `true` does nothing at all — no code exists behind it. The idea (a live camera feed) has been confirmed genuinely impossible with the game engine's current capabilities, not just unbuilt. Harmless either way. |
+
+---
+
+## Two decisions that need a human, not more code
+
+Both of these gate the combat group above, which is now switched on. Turning
+the flag on did not close either question — it made both of them live
+questions about your actual running server instead of a "before you enable
+this" caveat.
+
+### D3 — Does a security check actually work the way this project believes?
 
 **Plain version:** there's a check meant to stop a player's own game client
-from faking a message that's supposed to come only from the server. It's
-the standard, officially-documented way the game engine's own makers say
-to guard against exactly this, and it's now applied everywhere in this
-project.
+from faking a message that's supposed to come only from the server — the
+exact hole that once let a player grant themselves invincibility with
+every feature switched off. It's the standard, officially-documented way
+the game engine's own makers say to guard against this, and it's applied
+everywhere in this resource now.
 
-**The problem:** nobody has been able to prove, just by reading the code,
-that it can't be tricked under one specific and realistic sequence of
-events (a player who has already received one real message from the
-server, and later tries to fake one themselves). Four separate attempts to
-answer this by reading the game engine's own source code have all hit the
-same wall — the part of the engine that actually decides this isn't in any
-file that's possible to read from outside the engine's own private build
-process.
+**The problem:** nobody has been able to prove, by reading code alone, that
+it can't be tricked under one specific, realistic sequence: a player who
+has already received one genuine message from the server, then tries to
+fake one themselves. Four separate attempts to settle this by reading the
+game engine's own source code have all hit the same wall — the part that
+actually decides this isn't in any file that can be read from outside the
+engine's own private build process.
 
-**Why we can't just fix this in code:** this isn't a bug in our code to
-patch — it's a question about how the game engine itself behaves. The only
-way to know for sure is to run a real test on a real, running server:
-connect a test account, let it receive one genuine message from the
-server, then try to fake one from that same connection, and see what
-happens. It takes about five minutes. As of this document, nobody has run
-it yet.
+**Why this can't just be fixed in code:** this isn't a bug in this
+resource to patch — it's a question about how the game engine itself
+behaves. The only way to know for sure is a real test on a real, running
+server: connect a test account, let it receive one genuine message from
+the server, then try to fake one from that same connection, and see what
+happens. It takes about five minutes. As of this document, **nobody has
+run it.**
 
-**What this blocks:** `BiteAndHold`, `NonLethalTakedown`, and
-`PropDragging` — the combat features that lean on this specific check the
-most.
+**What this blocks:** trusting Bite & Hold, Non-Lethal Takedown, and
+Dragging as actually secure — all three are switched on right now, leaning
+on this exact, unverified check.
+
+**Your call:** trust it as shipped (it's applied everywhere, and is
+strictly better than nothing), or run the five-minute sequenced check
+before trusting these combat features with real players. Do not settle
+this by reading more code — only the live test settles it.
 
 ### D13 — Is a limited griefing exploit acceptable on your server?
 
-**Plain version:** once you turn on `FearStressSystem` (a feature that
-makes a K9 hesitate under stress, still off by default) together with the
-combat features, any player standing nearby — a total stranger, with no
-relationship at all to that K9 or its handler — can repeatedly send a
-signal that says "there's gunfire nearby" and force that K9 to refuse
-bite/takedown commands for about a minute at a time. They can keep doing
-this for as long as they want to stay nearby.
+**Plain version:** with `FearStressSystem` on (it now is) alongside the
+combat features (also on), any player standing nearby a K9 — a total
+stranger, no relationship to that K9 or its handler required — can
+repeatedly send a signal that says "there's gunfire nearby" and force that
+K9 to refuse Bite & Hold / Takedown commands for about a minute at a time,
+for as long as they want to keep doing it. This costs the attacker
+essentially nothing.
 
-**What's already fixed:** a single hesitation episode can no longer last
-forever — it automatically resets after about a minute, so this was
-already tightened once. What's left is the bounded, repeatable version:
-someone can still force that one-minute lockout again and again, at almost
-no cost or effort.
+**What's already fixed:** a single episode can no longer last forever —
+after about 64 seconds it resets automatically, and the attacker has to
+start over. This is a real fix, not just a comment; it's been confirmed
+directly in the code.
 
-**Why this isn't a bug for a programmer to fix:** the underlying signal
-("I heard gunfire nearby") has no way to verify who actually fired a gun —
-that's true by design, the same way this project already accepted for a
-lower-stakes feature (scent tracking). There's no code change that closes
-this without removing the feature's whole premise.
+**What's still open:** the *repeatable* version. Someone can force that
+64-second lockout again and again. There's no code fix for this — the
+underlying signal ("I heard gunfire nearby") has no way to verify who
+actually fired a gun, by design, the same tradeoff this project already
+accepted for a lower-stakes feature (scent tracking).
 
-**The actual decision:** is a bounded, repeatable, low-effort way to
-annoy one K9 and its handler for about a minute at a time an acceptable
-cost, in exchange for the added realism, on your server's live PvP? That's
-a judgment call about what you want your server to be like — not something
-this project can answer for you.
+**The actual decision:** is a repeatable, low-effort way to jam one K9's
+combat commands for about a minute at a time, with no relationship to that
+K9 required, an acceptable cost on your server, given the realism it buys?
+This is a judgment call about what kind of server you want to run — not
+something more code can answer.
 
-## 4. Automated checks (run directly for this document)
+---
 
-- **Tests:** `tests/run.sh` — 17 spec files, 698 individual checks, all
-  passing.
-- **Lint:** `luacheck` — 67 files, 0 warnings, 0 errors.
-- **Syntax:** every `.lua` file in the project parses cleanly
-  (`luac5.4 -p`).
-- **Nothing is "built and forgotten":** every `.lua` file on disk is listed
-  in `fxmanifest.lua` (the file that tells the game which scripts to send
-  to players) — 25 client files and 22 server files, matched one-to-one.
-- **In-game text:** `locales/en.json` holds exactly 306 entries, one per
-  piece of text a player can see. Counted directly from the file, not
-  estimated.
+## Everything else that used to live in `DECISIONS_NEEDED.md`
 
-## 5. The K9 bark sound, right now, at the moment this was checked
+Most of these are no longer decisions waiting on you — either they were
+already answered, or your choice to enable every flag has answered them by
+implication. Kept here so nothing quietly disappears.
 
-`BasicBarkSounds` has shipped switched on without an actual sound file
-behind it since it was first built — that's been disclosed the whole time,
-not hidden. The wait has been for a properly licensed sound (see
-`AUDIO_SOURCING.md` for the full reasoning on where to get one and why an
-earlier candidate was wrongly ruled out).
+**Already answered by turning everything on:**
+- *Which features do you want on, and which should wait for review first?*
+  Answered: all of them, now. The tracking/search group was the
+  lowest-risk recommendation; combat was the highest-risk. Both are on.
+- *Accept that a modified client can ignore the restraining half of combat
+  effects, or keep those features off?* Answered by turning combat on —
+  this project logs non-compliance but never punishes it automatically
+  (the only allowed responses are `'log'` and `'notify_staff'`, never an
+  automatic kick or ban), which limits the damage a false positive from lag
+  could do.
 
-**As of the exact moment I checked:** a real, working sound file exists
-inside the project folder, and I confirmed it genuinely is a valid sound
-file, not a placeholder. But it has **not yet been saved into the
-project's permanent history**, and it has **not yet been added to the
-list of files the game actually sends to players**. Until both of those
-happen, players still won't hear anything — so as of right now, nothing
-has changed for anyone running this resource. This looks like someone
-else's work in progress, not something that needs your attention today.
+**Already fixed in code — nothing left to decide, mentioned for completeness:**
+- Two XP-farming defects (a dead scent-range bonus that never actually
+  worked, and a way to replant your own contraband and get paid for
+  finding it repeatedly) were found and closed. If you want to retune the
+  actual numbers (still placeholders — see below), that's optional, not a
+  fix that's owed.
+- Dependency version pinning: FiveM has no way to pin a dependency's
+  version in `fxmanifest.lua` at all — confirmed against the game engine's
+  own source. Nothing to decide here; this resource instead documents
+  "last version checked" (see `README.md`) and, for `ox_inventory`
+  specifically, checks at startup that the feature it needs actually
+  exists before using it.
 
-## 6. Other work in progress in the shared project folder right now
+**Now urgent, because the feature they gate is live rather than pending:**
+- **Scent tracking's one-time live check was never run.** `ScentTracking`
+  is on right now, but the exact shape of the data it reads from
+  `ox_inventory` was only confirmed by reading that other resource's
+  source code, never by testing against a real, running install. The
+  five-minute fix: drop an item as a certified K9 handler on your actual
+  server, and read the logged data once to confirm it looks like what this
+  resource expects. If it doesn't match, scent tracking will misbehave
+  quietly rather than crash.
+- **The cosmetic vest and fetch-carry attach at the wrong point on a dog's
+  body.** Both features are fully playable, but the attachment point is
+  currently a placeholder (the root of the skeleton), so they'll look
+  visibly wrong. A developer-only sweep tool exists to find the correct
+  spot — see the urgent warning above for why that tool must be turned
+  back off immediately after use, and never left on.
+- **The deployable kennel's object model was swapped after a prior model
+  was found not to exist**, based on the best evidence available
+  (`prop_dog_cage_01`, confirmed to exist in a real object database with a
+  screenshot) but not yet confirmed by actually placing one and looking at
+  it. Low stakes: if it's ever wrong, a real, working fallback object
+  appears instead of a broken one — but worth a two-minute check now that
+  the feature is live.
 
-Besides what's recorded in `CHANGELOG.md`, a few more not-yet-finished
-edits were sitting in the project folder at the exact moment I checked —
-normal for a project several people are actively editing at once, not a
-warning sign by itself:
+**Bark and ambient audio — partly resolved, partly still your call:**
+The single sound needed for the default "Bark" action (`bark.ogg`) has
+been sourced under a permissive, attribution-only license and is
+confirmed wired up to actually reach players — this one already works.
+Four more sound files (three alternate barks, one ambient growl) used by
+optional features that are now switched on are still silent, because no
+audio file has been supplied for them yet. Every real candidate found
+requires giving credit to the original creator; none is public domain.
+That's a small, one-line-of-credit-text decision for whoever runs this
+server, not a blocker — accept an attribution-only license, accept a
+share-alike one (a heavier condition, worth reading about before
+accepting), commission your own, or leave those specific sounds silent.
+See `AUDIO_SOURCING.md` for the details.
 
-- The new bark sound file and an updated credits/attribution note
-  (section 5).
-- More test coverage being written for the admin commands, and a
-  brand-new test file for the "call your K9 off" safety feature.
+**A version number is overdue.** This resource is still labelled `0.1.0`.
+Given that every flag is now on, a real version bump (not just to `0.2.0`
+— substantially more has landed since that number was drafted) is worth
+doing so anyone tracking this resource elsewhere can tell "the everything-on
+configuration" apart from the original narrow release.
 
-None of this is reflected in the numbers in section 4 except where noted,
-since none of it has been saved to the project's history yet.
+---
 
-## 7. What I could not verify
+## Placeholder numbers are now live, not theoretical
 
-- **The exact, low-level way the game engine decides a message really came
-  from its own server** (what decision D3 depends on) — this lives inside
-  the engine's own private source, which isn't available to read. It can
-  only be settled by the live test described in D3.
-- **Whether the dependency versions this project lists (`qbx_core`,
-  `ox_lib`, and so on) are still current** — that's tracked separately, by
-  whoever's checking dependencies, not re-verified here.
-- **Whether the in-progress edits in section 6 will be finished as-is,
-  changed, or dropped** before they're saved to the project's history — I
-  only saw one snapshot in time.
+Every number that decides how much XP an action pays, how much contraband
+weight triggers which alert, and similar tuning values, is still marked in
+`config.lua` as an unreviewed placeholder — drafted for realism, never
+checked against real play. That was a low-stakes note while those systems
+were switched off. **It is not low-stakes now.** With XP progression,
+wellbeing, and contraband alerts all live, these numbers are actively
+shaping what your players can earn and how, starting today. Nothing here
+is broken — the known XP-farming loopholes have been closed — but nobody
+has confirmed the *remaining, intended* numbers feel right for your
+server. Worth a look before this runs unattended for weeks.
+
+---
+
+## What's actually been tested, verified today
+
+- **Automated tests:** 698 individual checks across 17 files, all passing
+  — run directly to produce this line, not copied from a comment.
+- **Lint and syntax:** clean across every `.lua` file in the resource —
+  also run directly.
+- **Nothing is dead code:** every `.lua` file on disk is wired into
+  `fxmanifest.lua`, the file that tells the game which scripts to actually
+  send to players.
+
+None of this tells you the two open decisions above are resolved — a test
+suite checks that code does what its own author intended, not whether the
+underlying design choice (D3, D13) is safe. Keep them separate in your own
+head, because it's easy to read "all tests pass" as "everything is fine."
+
+---
+
+## What I could not verify
+
+- The exact, low-level way the game engine decides a message really came
+  from its own server (what D3 hinges on) — this lives inside the engine's
+  own private source, not readable from here. Only the live test described
+  in D3 can settle it.
+- Whether anyone has already flipped `BoneSweepDevTool` back off since this
+  document was written — re-check `config.lua` directly; this is the one
+  fact in this whole document most worth re-verifying yourself before
+  acting on anything else here.
+- Whether the placeholder numbers mentioned above have been retuned by a
+  concurrent pass — check `config.lua`'s own comments for a more recent
+  date than the one at the top of this document.

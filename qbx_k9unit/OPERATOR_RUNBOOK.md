@@ -3,8 +3,16 @@
 This is a step-by-step guide for the person standing this resource up on a
 real server — not a design document. For *why* something works the way it
 does, or for the full list of every config flag, see `README.md`. For the
-open decisions only a server owner can make, see `DECISIONS_NEEDED.md`; this
+open decisions only a server owner can make, see `PROJECT_STATUS.md`; this
 runbook turns several of those decisions into concrete steps.
+
+**Read this before anything else below: as of 2026-08-25, every one of this
+resource's 40 feature flags is switched on** (checked directly in
+`config.lua`, not assumed). Every "before you enable X" instruction in this
+document below is now "X is already enabled — do this now, not before you
+flip a switch that's already flipped." One flag in particular,
+`BoneSweepDevTool`, is dangerous to leave on — see section 4 immediately if
+you haven't already turned it back off.
 
 **This file needs no `fxmanifest.lua` entry.** Documentation files are never
 loaded by the resource — do not add `OPERATOR_RUNBOOK.md` (or `README.md`)
@@ -91,12 +99,15 @@ section 5 (recommended first tranche) below.
 
 ---
 
-## 2. Dev-server checks required before enabling certain features
+## 2. Dev-server checks — now overdue, since these flags are already on
 
-Do these on a real dev server — not production — before flipping the
-listed flag to `true` there. None of them are hard blockers (each feature
-degrades safely if you skip the check), but each closes a real,
-disclosed unknown.
+**Originally written as "do this before flipping the flag." All of these
+flags are already `true`.** Do these on a real dev server as soon as you
+can — they're no longer optional pre-checks gating a decision, they're
+verification steps for something already live. None of them are hard
+blockers (each feature degrades safely if you skip the check), but each
+closes a real, disclosed unknown, and skipping it for longer just means
+running longer on an unverified assumption.
 
 ### 2a. `ScentTracking` — confirm the `ox_inventory` hook payload
 
@@ -108,8 +119,9 @@ if a runtime check confirms `registerHook` exists on your build of
 `ox_inventory`, and disables scent tracking cleanly with one clear warning
 if it doesn't.
 
-**What to actually do:** on a dev server, set `Config.Features.ScentTracking
-= true`, restart, drop an item as a certified K9 handler, and read the
+**What to actually do:** `Config.Features.ScentTracking` is already `true`
+(confirm that's still the case in your own `config.lua`), so on a dev
+server just restart, drop an item as a certified K9 handler, and read the
 logged hook payload once. Confirm the field names it prints match what
 `server/tracking.lua` expects before trusting this in production. This is
 a five-minute check, not a code change.
@@ -124,9 +136,18 @@ mouth-carry. Neither is broken or unsafe as shipped — this step is about
 polish, not safety, so it's fine to skip it and enable both features as-is
 if you don't mind the placeholder look.
 
-If you want to fix it:
+**`Config.Features.BoneSweepDevTool` is currently `true` everywhere,
+including on any live server this config file has reached — not just on a
+dev server.** Read section 4 below before doing anything else in this
+subsection; the short version is that this flag must never stay `true`
+outside a private dev session, and if it's `true` on a real server right
+now, turning it back off is more urgent than finishing the sweep itself.
 
-1. On a **dev server only**, set `Config.Features.BoneSweepDevTool = true`
+If you want to fix it, on a **dev server only**:
+
+1. Confirm `Config.Features.BoneSweepDevTool = true` on that dev server
+   (it already is, resource-wide, as of this document's last check —
+   confirm your dev server's own copy of `config.lua` still has it set)
    and restart.
 2. Grant yourself `Config.BoneSweepTool.AcePermission` (default
    `k9unit.bonesweep` — deliberately a *different* ACE principal from the
@@ -165,7 +186,14 @@ but real object rather than a silent failure or a broken entity.
 
 ---
 
-## 3. The sequenced origin-guard check (before enabling any combat feature)
+## 3. The sequenced origin-guard check — run this now, combat is already on
+
+**`BiteAndHold`, `NonLethalTakedown`, and `PropDragging` are already
+`true`.** This section used to be framed as a check to run "before
+enabling any combat feature." That framing is stale: the decision to
+enable them has already been made. What's below is now the check you run
+to find out whether that decision is currently safe, not a gate on making
+it.
 
 **Background, briefly:** every client-side event handler in this resource
 checks `if source ~= 65535 then return end` at the top, to reject a locally
@@ -208,8 +236,10 @@ fresh client) tells you nothing. This is the whole point of the sequencing
 **Your call**: treat the guard as sufficient as shipped (it's applied
 everywhere, and the per-feature flag gating closes the original
 "flags-off" exploit independently of whether this specific guard holds),
-or run this exact sequenced test on a dev server before enabling
-`BiteAndHold`, `NonLethalTakedown`, or `PropDragging`. The more of that
+or run this exact sequenced test on a dev server before trusting
+`BiteAndHold`, `NonLethalTakedown`, or `PropDragging` in production — all
+three are already enabled by default; this test is what tells you whether
+that's currently safe, not a precondition for turning them on. The more of that
 Category B combat surface you turn on, the more this result matters —
 Category B effects (movement restriction, forced ragdoll, damage
 suppression) only work at all if the target's own client executes them,
@@ -221,12 +251,25 @@ itself the effect on demand" (a live exploit, if the guard doesn't hold).
 
 ## 4. One-way doors — know before you flip these
 
-### `BoneSweepDevTool` needs a restart to turn off, not just a config flip
+### `BoneSweepDevTool` — currently `true`. This is the most urgent item in this whole document.
 
-Like every other command in this resource, `/k9bonetool` is registered
-**once**, at resource start — gating happens at registration time, not
-inside the handler, which is what makes a disabled feature genuinely inert
-rather than merely hidden. The consequence: turning `Config.Features.BoneSweepDevTool`
+**As of 2026-08-25, `Config.Features.BoneSweepDevTool` is `true`.** Its own
+code comment says, in these words, "never enable this on a production
+server." It spawns and attaches real objects in the world on command from
+anyone holding the `k9unit.bonesweep` ACE permission. If this server has
+real players on it, this needs fixing now, not at the end of your reading
+list.
+
+**What to do, in order:**
+1. Open `config.lua`, set `Config.Features.BoneSweepDevTool = false`.
+2. **Restart the resource.** This is not optional and not implied by
+   saving the file.
+
+**Why the restart matters, specifically:** like every other command in
+this resource, `/k9bonetool` is registered **once**, at resource start —
+gating happens at registration time, not inside the handler, which is what
+makes a disabled feature genuinely inert rather than merely hidden. The
+consequence: turning `Config.Features.BoneSweepDevTool`
 back to `false` **without restarting the resource** does not unregister
 `/k9bonetool`. It stays reachable (still ACE-gated) until the next
 restart. For most flags in this resource that's harmless. For this one it
@@ -266,36 +309,39 @@ distribute, that obligation travels with every copy of it.
 
 ---
 
-## 5. Recommended first tranche to enable and playtest
+## 5. What used to be "recommended first tranche" — now a catch-up checklist
 
-Forty `Config.Features` flags exist; five ship `true`. **Don't flip
-everything at once.** Pick a first tranche, playtest it, and expand from
-there.
+**This section originally recommended enabling flags gradually, starting
+with the lowest-risk group and leaving combat for last, if at all.** That
+recommendation has been overtaken: all 40 flags, including combat, are
+already `true` (see the top of this document). The advice below is kept,
+rewritten as a checklist of what to verify now that everything is live at
+once, rather than a rollout plan — the original reasoning for *why* each
+item matters is unchanged, only the tense.
 
-**Start with the tracking/search group:** `ScentTracking`, `BloodTracking`,
-`GunpowderSniffing`, `SearchZones`, `ContrabandAlerts`. This is the
-lowest-risk group in the whole resource — every one of these is read-only
-with respect to other players (nothing here restrains, damages, or moves
-another player's character), there's no player-vs-player state to abuse,
-and this group has been reviewed and re-reviewed more than anything else
-built on top of it.
+**Tracking/search group** (`ScentTracking`, `BloodTracking`,
+`GunpowderSniffing`, `SearchZones`, `ContrabandAlerts`) — still the
+lowest-risk group in the whole resource (nothing here restrains, damages,
+or moves another player's character, and it's the most reviewed part of
+this resource). Two things worth doing now that it's live:
 
-Two things to do before or alongside enabling this group:
+- Run the section 2a dev check for `ScentTracking` — it has an extra
+  prerequisite (a live `ox_inventory` hook) the others don't, and that
+  check has never been run against a real install.
+- Replace `Config.SearchContrabandItems`' placeholder item names
+  (`'weed_bud'`, `'coke_brick'`, etc.) with your own economy's real
+  `ox_inventory` item names if you haven't already — with `SearchZones`
+  live, a search against those placeholder names simply won't find
+  anything real on your server.
 
-- Run the section 2a dev check for `ScentTracking` specifically — it's the
-  one flag in this group with its own extra prerequisite (the others don't
-  depend on the `ox_inventory` hook at all).
-- Before enabling `SearchZones`, replace `Config.SearchContrabandItems`'
-  placeholder item names (`'weed_bud'`, `'coke_brick'`, etc.) with your own
-  economy's real `ox_inventory` item names — they won't match anything on
-  a real server otherwise.
-
-**Leave combat (`BiteAndHold`, `NonLethalTakedown`, `PropDragging`) for
-last, if at all.** These are the highest-risk group, for the reasons in
-section 3 above and `DECISIONS_NEEDED.md`'s D2 — a modified client can
-always ignore the restraining half of these mechanics, and no amount of
-config-flipping changes that. Everything else in this resource (tracking,
-search, vision, inventory, wellbeing, progression, kennel, fetch, prop
-attachments, the admin/audit surface) carries no equivalent trust-boundary
-caveat and can be evaluated purely on whether you want the feature, not on
-whether it's safe to expose.
+**Combat group** (`BiteAndHold`, `NonLethalTakedown`, `PropDragging`) —
+was the highest-risk group, recommended last "if at all." It's on. That
+doesn't mean the risk went away: a modified client can still ignore the
+restraining half of these mechanics regardless of config, and the two
+open questions in `PROJECT_STATUS.md` (D3, D13) are exactly about how much
+that should worry you. Run section 3's sequenced check now, and read
+`PROJECT_STATUS.md`'s D3/D13 write-ups if you haven't. Everything else in
+this resource (tracking, search, vision, inventory, wellbeing,
+progression, kennel, fetch, prop attachments, the admin/audit surface)
+carries no equivalent trust-boundary caveat and can be evaluated purely on
+whether you want the feature, not on whether it's safe to expose.

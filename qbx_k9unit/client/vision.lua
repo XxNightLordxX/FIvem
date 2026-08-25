@@ -228,7 +228,7 @@ function ToggleThermalVision()
     lib.notify({
         title = locale('common.notify_title'),
         description = turningOn and locale('vision.thermal_on') or locale('vision.thermal_off'),
-        type = 'inform',
+        type = 'info',
     })
 
     if turningOn then
@@ -256,7 +256,7 @@ function ToggleNightVision()
     lib.notify({
         title = locale('common.notify_title'),
         description = turningOn and locale('vision.night_on') or locale('vision.night_off'),
-        type = 'inform',
+        type = 'info',
     })
 
     if turningOn then

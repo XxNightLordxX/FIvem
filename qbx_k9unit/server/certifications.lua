@@ -382,6 +382,31 @@ function RefreshCertificationCache(citizenid, jobName)
     return active
 end
 
+--- Re-checks a SPECIFIC (citizenid, job) row's `active` column directly
+--- against the DB, independent of and deliberately NOT via
+--- RefreshCertificationCache's own return value -- see the three call
+--- sites below (RevokeCertification, RevokeCertificationOffline, and the
+--- QBCore:Server:OnJobUpdate auto-revoke branch) for why: that function's
+--- fail-closed contract collapses "confirmed inactive" and "the read
+--- itself failed" into the same `false`, which is the right call for an
+--- ACCESS-checking consumer but the wrong one for a caller that just had
+--- its OWN revoke UPDATE throw and needs to tell "the UPDATE genuinely
+--- never committed" apart from "unreadable, true outcome unknown" before
+--- deciding whether to report success or run any further side effects.
+--- @param citizenid string
+--- @param jobName string
+--- @return boolean? active -- true/false if confirmed against the DB, nil if the read itself failed
+local function IsCertRowConfirmedActive(citizenid, jobName)
+    local ok, activeIdOrErr = pcall(MySQL.scalar.await, 'SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
+        citizenid, jobName,
+    })
+    if not ok then
+        print(('[qbx_k9unit] cert-row reconciliation read failed for %s/%s: %s'):format(citizenid, jobName, tostring(activeIdOrErr)))
+        return nil
+    end
+    return activeIdOrErr ~= nil
+end
+
 --- SPEC.md §4.2 certifier eligibility check (granter side only — does not
 --- check the target or proximity, see GrantCertification/RevokeCertification).
 --- @param source number
@@ -829,12 +854,48 @@ local function RevokeCertification(granterSrc, targetServerId)
 
     -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
     -- row matches (SPEC.md §4.3).
-    local affectedRows = MySQL.update.await(
+    --
+    -- Wrapped in pcall (this file's own RefreshCertificationCache/
+    -- GrantCertification precedent): a real DB error (bad connection,
+    -- deadlock, schema drift) otherwise raises an uncaught script error
+    -- straight out of this event/command handler instead of degrading —
+    -- see IsCertRowConfirmedActive's own doc comment for why the failure
+    -- branch below reconciles against a fresh, independent read rather
+    -- than just assuming the UPDATE failed outright. A SQL transaction is
+    -- deliberately NOT used here either: this is the only write in this
+    -- function, and a single UPDATE is already atomic at the
+    -- storage-engine level — the only real ambiguity a thrown error can
+    -- leave behind is whether THIS callback ever saw the server's own
+    -- commit acknowledgment, which a transaction's own COMMIT step would
+    -- share identically.
+    local updateOk, affectedRowsOrErr = pcall(
+        MySQL.update.await,
         'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
         { granterCitizenid, targetCitizenid, targetJobName }
     )
 
-    if not affectedRows or affectedRows == 0 then
+    if not updateOk then
+        print(('[qbx_k9unit] RevokeCertification UPDATE failed for %s/%s: %s -- reconciling before reporting an outcome'):format(targetCitizenid, targetJobName, tostring(affectedRowsOrErr)))
+
+        local stillActive = IsCertRowConfirmedActive(targetCitizenid, targetJobName)
+        if stillActive ~= false then
+            -- Either confirmed still active (the UPDATE genuinely never
+            -- committed — an honest failure, the target keeps their
+            -- current, correct certification) or unreadable (nil, true
+            -- outcome unknown) — in BOTH cases, never claim a revoke
+            -- succeeded that this code cannot confirm, and never run the
+            -- side effects below (leash/partnership teardown, HUD
+            -- metadata, the target-facing notice) against a guess.
+            NotifyPlayer(granterSrc, locale('certifications.revoke_error'), 'error')
+            return
+        end
+
+        -- Confirmed inactive despite the client-side error (e.g. a
+        -- success acknowledgment lost after a real commit) — fall through
+        -- to the normal success path below against this now-confirmed
+        -- truth; RefreshCertificationCache below will pick up the correct
+        -- state.
+    elseif not affectedRowsOrErr or affectedRowsOrErr == 0 then
         NotifyPlayer(granterSrc, locale('certifications.target_not_actively_certified'), 'inform')
         return
     end
@@ -953,13 +1014,36 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
     end
 
     -- No LIMIT needed — uq_one_active_cert_per_job guarantees at most one
-    -- row matches (SPEC.md §4.3). Same UPDATE pattern as the online path.
-    local affectedRows = MySQL.update.await(
+    -- row matches (SPEC.md §4.3). Same UPDATE pattern as the online path —
+    -- including the same pcall + reconcile-on-throw discipline; see
+    -- RevokeCertification's own doc comment above for the full reasoning
+    -- (a thrown DB error must degrade this offline-capable command, not
+    -- raise an uncaught script error, and a SQL transaction would not
+    -- resolve the one genuine ambiguity a thrown error can leave behind
+    -- here either).
+    local updateOk, affectedRowsOrErr = pcall(
+        MySQL.update.await,
         'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
         { granterCitizenid, citizenid, job }
     )
 
-    if not affectedRows or affectedRows == 0 then
+    if not updateOk then
+        print(('[qbx_k9unit] RevokeCertificationOffline UPDATE failed for %s/%s: %s -- reconciling before reporting an outcome'):format(citizenid, job, tostring(affectedRowsOrErr)))
+
+        local stillActive = IsCertRowConfirmedActive(citizenid, job)
+        if stillActive ~= false then
+            -- Confirmed still active, or unreadable (true outcome
+            -- unknown) — never claim a revoke succeeded that this code
+            -- cannot confirm; see RevokeCertification's identical branch
+            -- above for the full reasoning.
+            NotifyPlayer(granterSrc, locale('certifications.revoke_error'), 'error')
+            return
+        end
+
+        -- Confirmed inactive despite the client-side error — fall through
+        -- to the normal success path below against this now-confirmed
+        -- truth.
+    elseif not affectedRowsOrErr or affectedRowsOrErr == 0 then
         -- Distinguish "no matching active cert" from success — a granter
         -- typo'ing a citizenid should not look identical to a real revoke.
         NotifyPlayer(granterSrc, locale('certifications.offline_target_not_certified'), 'inform')
@@ -1093,17 +1177,58 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
 
     local oldJob = cached.job
 
-    MySQL.update.await(
+    -- Wrapped in pcall — this fires directly out of an AddEventHandler
+    -- with nothing above it to catch a thrown error, so a real DB error
+    -- (bad connection, deadlock, schema drift) would otherwise raise an
+    -- uncaught script error out of this handler instead of degrading,
+    -- silently skipping every side effect below (leash/partnership
+    -- teardown) with no controlled log line explaining why. Same "a
+    -- transaction would not resolve the one genuine ambiguity a thrown
+    -- error can leave behind" reasoning as RevokeCertification above —
+    -- this is this function's only write.
+    local updateOk, updateErr = pcall(
+        MySQL.update.await,
         'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
         { 'system:job_change', citizenid, oldJob }
     )
 
+    if not updateOk then
+        print(('[qbx_k9unit] OnJobUpdate auto-revoke UPDATE failed for %s/%s: %s -- reconciling before applying any side effects'):format(citizenid, oldJob, tostring(updateErr)))
+
+        -- Reconcile against an independent, fresh read before running ANY
+        -- of the side effects below — see IsCertRowConfirmedActive's own
+        -- doc comment for why this can't just trust
+        -- RefreshCertificationCache's collapsed return value here. Those
+        -- side effects (leash detach, partnership teardown, the
+        -- player-facing "your cert was revoked" notice) must only fire on
+        -- a CONFIRMED loss, never a merely-unknown one.
+        local stillActive = IsCertRowConfirmedActive(citizenid, oldJob)
+        if stillActive ~= false then
+            -- Confirmed still certified for the old job (the UPDATE
+            -- genuinely never committed), or unreadable (true outcome
+            -- unknown) — in BOTH cases nothing was confirmed lost, so
+            -- there is nothing accurate to tell this player beyond the
+            -- console log above for an operator to investigate. `cached`
+            -- above is still accurate either way (never touched by this
+            -- branch), so the in-memory cache is not at risk of diverging
+            -- from the DB here.
+            return
+        end
+
+        -- Confirmed inactive despite the client-side error (e.g. a
+        -- success acknowledgment lost after a real commit) — fall through
+        -- to the normal "certification just ended" side effects below
+        -- against this now-confirmed truth.
+    end
+
     -- Outbound integration event (server/exports.lua's EVENT CONTRACT §2) —
-    -- fired right after the UPDATE above. This branch is only reached once
-    -- `cached.active` and a real job-name change have already been
-    -- confirmed (see the guards above), so — unlike the two manual revoke
-    -- paths — there is no separate `affectedRows` result to gate on here;
-    -- the awaited UPDATE having returned at all IS this path's commit point.
+    -- fired once the UPDATE above is confirmed to have taken effect
+    -- (either it returned normally, or the pcall failure branch above
+    -- already independently confirmed the row is inactive before falling
+    -- through here). This branch is only reached once `cached.active` and
+    -- a real job-name change have already been confirmed (see the guards
+    -- above), so — unlike the two manual revoke paths — there is no
+    -- separate `affectedRows` result to gate on here.
     FireOutboundEvent('qbx_k9unit:events:certificationRevoked', citizenid, oldJob, 'job_changed')
 
     -- Repopulate the cache scoped to the NEW job (almost certainly

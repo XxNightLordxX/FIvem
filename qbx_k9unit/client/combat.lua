@@ -508,12 +508,52 @@ local function PlayBiteHoldStance()
     TaskStartScenarioInPlace(ped, scenarioName, 0, true)
 end
 
+-- MUTUAL GUARD vs. client/vehicle.lua's VehicleEntryExit (QA-reported real
+-- defect, this pass, siblings closed proactively at the same time): a K9
+-- "tucked" into a vehicle via EnterNearestK9Vehicle() is frozen, invisible,
+-- collisionless, and attached to the vehicle — no live target could see or
+-- reach it, and it has no body free to bite/take down/drag anything. Every
+-- one of this file's three self-initiated triggers below (RequestBiteHold,
+-- RequestTakedown, RequestDrag) must refuse while tucked, for two reasons
+-- together: (1) the effect would be physically nonsensical (an invisible,
+-- immobile K9 reaching out to restrain a target); (2) for RequestDrag
+-- specifically, granting one would start the shared maintenance thread's
+-- per-tick `AttachEntityToEntity(targetPed, PlayerPedId(), ...)` (see
+-- "ActiveDragAsHolder" below) against a ped ALREADY attached to a vehicle as
+-- ITS OWN child — a nested attach chain nobody designed for (the dragged
+-- target becomes a rigid child of a ped that is itself invisible, frozen,
+-- collisionless, and bolted to a vehicle). client/vehicle.lua's own
+-- EnterNearestK9Vehicle() carries the symmetric guard for the opposite
+-- ordering (a K9 that starts the drag/hold FIRST, then selects "Enter
+-- Vehicle") — neither guard alone covers both directions, so both files
+-- carry one.
+--
+-- Soft dependency, `type(...) == 'function'` runtime existence guard — this
+-- resource's established convention for an optional cross-file read (see
+-- client/defense.lua's identical guard on THIS file's own
+-- IsBiteHoldEngaged, and client/agility.lua's/client/movement.lua's own
+-- `IsInK9Vehicle and IsInK9Vehicle()` guards on this exact global). Not
+-- purely a load-order concern (client/vehicle.lua loads before this file in
+-- fxmanifest.lua, and IsInK9Vehicle() is declared unconditionally there,
+-- with no feature-flag gate of its own) — this also keeps this file able to
+-- run standalone (e.g. a unit test harness that loads client/combat.lua
+-- without client/vehicle.lua) without erroring on a missing global.
+--- @return boolean
+local function IsBlockedByVehicleTuck()
+    return type(IsInK9Vehicle) == 'function' and IsInK9Vehicle()
+end
+
 --- Self-initiated BiteAndHold trigger — PHASE3_SPEC.md §12.5.1. Called from
 --- client/radial.lua's "Bite & Hold / Release" item when not currently
 --- engaged (see IsBiteHoldEngaged() below for the toggle).
 function RequestBiteHold()
     if not CanShowK9UI() then
         DenyK9UIAccess()
+        return
+    end
+
+    if IsBlockedByVehicleTuck() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_by_vehicle'), type = 'error' })
         return
     end
 
@@ -548,6 +588,13 @@ end
 function RequestTakedown()
     if not CanShowK9UI() then
         DenyK9UIAccess()
+        return
+    end
+
+    -- MUTUAL GUARD vs. client/vehicle.lua's VehicleEntryExit — see
+    -- IsBlockedByVehicleTuck()'s own doc comment above for the full writeup.
+    if IsBlockedByVehicleTuck() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_by_vehicle'), type = 'error' })
         return
     end
 
@@ -601,6 +648,15 @@ end
 function RequestDrag()
     if not CanShowK9UI() then
         DenyK9UIAccess()
+        return
+    end
+
+    -- MUTUAL GUARD vs. client/vehicle.lua's VehicleEntryExit — see
+    -- IsBlockedByVehicleTuck()'s own doc comment above for the full writeup.
+    -- This is the QA-reported real defect's OWN reverse-order case (enter
+    -- vehicle first, then request a drag).
+    if IsBlockedByVehicleTuck() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_by_vehicle'), type = 'error' })
         return
     end
 

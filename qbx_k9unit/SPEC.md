@@ -1,5 +1,15 @@
 # qbx_k9unit — Product Spec
 
+> **HISTORICAL DESIGN DOCUMENT.** This captures the plan and reasoning as of
+> the dates named inside it (mostly 2026-08-23/24), not a live description
+> of today's code. `config.lua` and the actual `.lua` files always win if
+> something here disagrees with them. See `DOCS_INDEX.md` for where to look
+> for current status instead (`README.md` for technical reference,
+> `PROJECT_STATUS.md` for a plain-language snapshot and open decisions).
+> Kept in full, unmerged with the other phase specs, because each covers a
+> distinct, non-overlapping phase — added by a documentation-consolidation
+> pass, 2026-08-25; nothing below this banner was edited.
+
 Status: Phase 1 (vertical slice) is **complete and reviewed** — certification
 grant/revoke/check, the consensual two-player leash system, the "K9 Unit"
 radial menu, K9 vehicle load/release, and the bark relay all shipped and

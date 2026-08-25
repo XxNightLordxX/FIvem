@@ -74,6 +74,18 @@ local function newTenureFixture(opts)
     local fakeNow = 0
     local threadRunner = Sandbox.newThreadRunner()
 
+    -- Captures every ms value actually passed to Wait() inside the
+    -- production thread loop -- fixtures/sandbox.lua's own Wait stub ignores
+    -- its argument entirely (it just yields), so this is the ONLY way this
+    -- suite can observe whether a misconfigured checkIntervalMs reaches
+    -- Wait() unguarded or is caught by server/tenure.lua's own validation
+    -- first (see the CHECKINTERVALMS VALIDATION tests below).
+    local waitCalls = {}
+    local function CapturingWait(ms)
+        waitCalls[#waitCalls + 1] = ms
+        return threadRunner.Wait(ms)
+    end
+
     local dbRows = {} -- id -> { id, k9_citizenid, handler_citizenid, tenure_bonus_tier_granted, establishedAt }
     local singleAwaitCallCount = 0
     local updateAwaitCallCount = 0
@@ -198,7 +210,7 @@ local function newTenureFixture(opts)
 
     local env = Sandbox.newEnv({
         CreateThread = threadRunner.CreateThread,
-        Wait = threadRunner.Wait,
+        Wait = CapturingWait,
         GetPlayers = GetPlayers,
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
@@ -241,6 +253,7 @@ local function newTenureFixture(opts)
         awardXPCalls = awardXPCalls,
         notifyCalls = notifyCalls,
         printedLines = printedLines,
+        waitCalls = waitCalls,
     }
 end
 
@@ -546,6 +559,107 @@ t.test('CLOSED, see server/tenure.lua ITEM 4: TenureFullyCollected intentionally
     -- locking in the REAL observed behavior here, not the documented intent.
     t.equals(fx.singleAwaitCallCount(), queriesSoFar + 1,
         'current behavior: the SELECT still runs once more even though every milestone is already collected -- see this test\'s own header note')
+end)
+
+
+-- ----------------------------------------------------------------------
+-- Race/staleness: the in-memory GetActivePartnerCitizenId pre-filter says
+-- "partnered", but the DB row it should be backed by does not exist (or no
+-- longer matches) -- must defer silently, never crash, per this file's own
+-- header constraint 5 ("never the final authority") and its own inline
+-- comment on this exact branch ("cache said partnered; DB now disagrees").
+-- ----------------------------------------------------------------------
+
+t.test('DISCREPANCY/RACE: the in-memory pre-filter reports a K9-role partnership, but no matching k9_partnerships row exists in the DB -- silent defer, not a crash', function()
+    local fx = newTenureFixture()
+    wireHappyPath(fx)
+    -- Deliberately never fx.addRow(...) -- GetActivePartnerCitizenId says
+    -- 'K9-CID' is partnered and K9-role, but the SELECT finds nothing.
+    fx.setNow(86400)
+    local ok = pcall(runOneTick, fx)
+    t.isTrue(ok, 'a cache/DB disagreement must never throw out of the maintenance thread')
+    t.equals(fx.singleAwaitCallCount(), 1, 'the SELECT is still attempted -- the cache is only ever a pre-filter, never trusted as final')
+    t.equals(#fx.awardXPCalls, 0)
+    t.equals(#fx.notifyCalls, 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- CHECKINTERVALMS VALIDATION (this pass's own fix): a misconfigured
+-- Config.Partnership.TenureBonus.checkIntervalMs must never reach Wait()
+-- unguarded -- mirrors server/defense.lua's own PollIntervalMs finding for
+-- the identical failure shape (a bad value here can busy-loop or silently
+-- kill this shared thread forever). Unlike server/defense.lua's load-time
+-- assert, this file re-reads the config every loop pass, so the fix is a
+-- soft fallback (to the real shipped default, 300000ms) plus a one-time
+-- warning, not a hard resource-start failure.
+-- ----------------------------------------------------------------------
+
+t.test('FOOTGUN FIX: checkIntervalMs = 0 never reaches Wait() directly -- the real 300000ms fallback is used instead, with a loud one-time warning', function()
+    -- NOTE on count: runOneTick() both PRIMES (one Wait() call, reaching the
+    -- very first loop iteration) and STEPS (one more Wait() call, after the
+    -- first real TickPartnershipTenure pass loops back to the top) -- see
+    -- fixtures/sandbox.lua's own newThreadRunner doc comment. A single
+    -- runOneTick() call therefore always produces exactly 2 captured Wait()
+    -- calls, both of which must reflect the SAME validated fallback.
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { checkIntervalMs = 0, milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
+    runOneTick(fx)
+    t.equals(#fx.waitCalls, 2)
+    t.equals(fx.waitCalls[1], 300000, 'a 0 checkIntervalMs must never be passed straight to Wait() -- it can busy-loop the real thread')
+    t.equals(fx.waitCalls[2], 300000, 'the fallback must apply on every loop pass, not just the first')
+    t.equals(#fx.printedLines, 1)
+    t.contains(fx.printedLines[1], 'checkIntervalMs')
+end)
+
+t.test('FOOTGUN FIX: a negative checkIntervalMs is treated exactly like 0 -- same fallback, same warning', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { checkIntervalMs = -500, milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
+    runOneTick(fx)
+    t.equals(fx.waitCalls[1], 300000)
+    t.equals(fx.waitCalls[2], 300000)
+    t.contains(fx.printedLines[1], 'checkIntervalMs')
+end)
+
+t.test('FOOTGUN FIX: a NaN checkIntervalMs is treated exactly like 0 -- same fallback, same warning (a naive > 0 check alone would miss this)', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { checkIntervalMs = 0 / 0, milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
+    runOneTick(fx)
+    t.equals(fx.waitCalls[1], 300000)
+    t.equals(fx.waitCalls[2], 300000)
+    t.contains(fx.printedLines[1], 'checkIntervalMs')
+end)
+
+t.test('FOOTGUN FIX: a non-numeric (string) checkIntervalMs also falls back and warns', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { checkIntervalMs = 'often', milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
+    runOneTick(fx)
+    t.equals(fx.waitCalls[1], 300000)
+    t.equals(fx.waitCalls[2], 300000)
+    t.contains(fx.printedLines[1], 'checkIntervalMs')
+end)
+
+t.test('checkIntervalMs entirely MISSING (TenureBonus table present, field omitted) silently falls back too -- no warning, matching this file\'s own established "not configured yet" convention', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
+    runOneTick(fx)
+    t.equals(fx.waitCalls[1], 300000)
+    t.equals(fx.waitCalls[2], 300000)
+    t.equals(#fx.printedLines, 0, 'a merely-absent field is not the same as a present-but-bad one -- must stay silent')
+end)
+
+t.test('A VALID, positive checkIntervalMs is used exactly as configured, with no warning', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { checkIntervalMs = 45000, milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
+    runOneTick(fx)
+    t.equals(fx.waitCalls[1], 45000, 'the real configured value must be used verbatim, not silently overridden by the fallback')
+    t.equals(fx.waitCalls[2], 45000)
+    t.equals(#fx.printedLines, 0)
+end)
+
+t.test('The checkIntervalMs warning prints at most ONCE across many ticks, even though the same bad value is re-read every loop pass', function()
+    local fx = newTenureFixture({ partnershipCfgOverride = { ProximityMeters = 5.0, TenureBonus = { checkIntervalMs = 0, milestones = { { afterSeconds = 86400, actionKey = 'partnershipTenure1Day' } } } } })
+    runOneTick(fx) -- prime (1 Wait call) + 1 step (1 more Wait call) = 2 total
+    runOneTick(fx) -- already primed -- 1 more step = 1 more Wait call = 3 total
+    runOneTick(fx) -- 1 more step = 1 more Wait call = 4 total
+    t.equals(#fx.printedLines, 1, 'a live server under normal tick volume against an already-broken config must get exactly one warning line, not a flood')
+    t.equals(#fx.waitCalls, 4)
+    for i = 1, #fx.waitCalls do
+        t.equals(fx.waitCalls[i], 300000, 'the fallback keeps applying on every single loop pass, not just the first')
+    end
 end)
 
 os.exit(t.summary())

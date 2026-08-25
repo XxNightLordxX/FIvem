@@ -330,7 +330,7 @@ function ConfirmHandlerDownDefense(actionType)
     end
 
     if not targetNetId then
-        lib.notify({ title = locale('common.notify_title'), description = locale('defense.no_hostile_detected'), type = 'inform' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('defense.no_hostile_detected'), type = 'info' })
         return
     end
 

@@ -287,6 +287,131 @@
       cache — never cleared on disconnect (a K9 who logs off tired should
       still be tired on reconnect within the same server session).
     ======================================================================
+
+    ======================================================================
+    STUCK-K9 SOFTLOCK FIX (this pass, coder-backend) — a QA finding, VERIFIED
+    against this file/client/wellbeing.lua/server/medkit.lua/config.lua as
+    they actually stood before touching anything, not assumed. The chain
+    QA reported was accurate on every link: `Config.Wellbeing.Injury
+    .passiveRegenPerTick = 0.1` per 5000ms tick regenerates Injury at
+    0.02/s, so a K9 dropped to 0 (a handful of `relayDamageEvent` hits at
+    `damageDecayAmount = 10` each, trivial in one firefight) took ~16.7 real
+    minutes to clear `jumpBlockThreshold` (20) and ~25 minutes to clear
+    `sprintBlockThreshold` (30) — client/wellbeing.lua's INPUT_SPRINT/
+    INPUT_JUMP thread `DisableControlAction`-blocks both, unconditionally,
+    below those thresholds, with no server override (PHASE4_SPEC.md §13.0
+    Decision 3's own disclosed, deliberate limitation — never a security
+    boundary, but a real gameplay one). This file had NO death/respawn
+    handling anywhere before this pass (confirmed: no `IsEntityDead`/
+    `GetEntityHealth` call of any kind existed here), and wellbeing state is
+    deliberately persisted across disconnect (this header, FILE-TO-FILE
+    CONTRACT, above) — so neither dying nor reconnecting ever cleared a
+    depleted Injury value. K9Medkit is the only fast remedy, and
+    `Config.K9Medkit.itemName` ships as an explicitly-documented PLACEHOLDER
+    that must exist in the target server's own ox_inventory items table —
+    unregistered, `GetItemCount` resolves 0 forever and every heal fails
+    closed as a generic `no_item`, indistinguishable from a player simply
+    not carrying one, with nothing anywhere explaining why. Three
+    independent, separable fixes, all landed this pass:
+
+    1. REGEN RATE — NOT fixed in this file (this file does not own
+       config.lua). `Config.Wellbeing.Injury.passiveRegenPerTick` should be
+       raised 0.1 -> 1.0, matching the EXACT precedent already set for
+       `Config.Wellbeing.Mood.passiveRegenPerTick` (0.2 -> 1.0, that field's
+       own comment: "This is the ONLY recovery path for a solo handler").
+       Injury's own hard sprint/jump BLOCK makes this an even stronger case
+       for parity than Mood's speed-multiplier-only penalty, not a weaker
+       one. At 1.0/tick: jumpBlockThreshold(20) clears in 100s (~1.67 min),
+       sprintBlockThreshold(30) in 150s (~2.5 min), a full 0->100 climb in
+       500s (~8.33 min, identical to Mood's own already-adopted number).
+       Reported to the task owner for config.lua; NOT applied here.
+
+    2. DEATH/RESPAWN RESET — fixed below (`PED_DEAD_HEALTH_THRESHOLD`,
+       `injuryDiedWhileTracked`, and the death-transition block inside
+       TickWellbeing's `Config.Features.InjuryLimping` branch). DECISION:
+       a K9 that dies and is later revived/respawned is treated the same
+       way this resource already treats every OTHER measure of that ped's
+       condition across the exact same event — its REAL native health is
+       already reset to full by whatever laststand/ambulance system handles
+       revival/respawn (nothing in this resource, or in the game engine,
+       makes a fresh life inherit the previous one's wounds); a virtual
+       Injury value surviving that same event completely unmodified is the
+       actual inconsistency, not a deliberate design. `Config.Wellbeing
+       .Injury.deathRespawnRestoreAmount` (new field, reported to the task
+       owner for config.lua — recommended default 100, i.e. Injury.max, a
+       FULL reset) is added to Injury the tick this file's own maintenance
+       loop first observes a tracked K9's native health recover above
+       `PED_DEAD_HEALTH_THRESHOLD` after having been at or below it.
+       CONFIGURABLE, per this task's own instruction: an operator who wants
+       "still limping after respawn" for realism sets it to 0 (a genuine,
+       supported no-op) or any partial value between 0 and Injury.max.
+       `IsEntityDead` is deliberately NOT used for this detection — that
+       native has NO FXServer server-side registration at all
+       (server/combat.lua's and server/medkit.lua's own, independently
+       confirmed "NATIVE-AVAILABILITY FIX" findings, both citing a direct
+       search of citizenfx/fivem's own native-registration source; not
+       re-verified a third time here, reused as already-established fact)
+       and always silently returns `false` server-side. `PED_DEAD_HEALTH_
+       THRESHOLD = 100` mirrors server/combat.lua's/server/medkit.lua's own
+       identical constant and reasoning (a GTA ped is conventionally
+       declared dead at 100 health, not 0 — the reason default max health
+       is 200). DISCLOSED LIMITATION: detection is polled once per
+       `Config.Wellbeing.tickIntervalMs` (5000ms default), so a death-then-
+       respawn cycle shorter than one tick interval would never be observed
+       as a transition and would not trigger this restore — not expected in
+       practice (every real QB/qbx laststand/ambulance flow this resource
+       is aware of takes minutes, not single-digit seconds), but stated
+       plainly rather than claimed away, matching this file's own house
+       style elsewhere (see the relayWeaponFire section's own residual-risk
+       writeup).
+
+    3. SILENT PLACEHOLDER-ITEM FAILURE — fixed below (`WarnIfItemMissing`,
+       the trailing `AddEventHandler('onResourceStart', ...)` block).
+       Mirrors server/combat.lua's own established "resource-start WARNING,
+       never an assert" pattern for `Config.Combat.PropDragging
+       .IsPlayerDownedOverride` verbatim (same reasoning: a misconfigured
+       placeholder here degrades one feature's usefulness, it does not
+       defeat this resource's own access control the way inventory.lua's
+       `accessScope`/search.lua's assert-guarded fields do, so a hard stop
+       at resource start would be a disproportionate response). Checks
+       EVERY single-item-name placeholder config value this resource
+       depends on against ox_inventory's own live item registry
+       (`exports.ox_inventory:Items(name)`, confirmed against a fresh read
+       of ox_inventory's own `modules/items/server.lua` this pass — returns
+       the item's registered data table, or nil if that name was never
+       registered), not just `Config.K9Medkit.itemName`:
+       `Config.Wellbeing.Mood.feedItemName`, `Config.Wellbeing.Distraction
+       .meatBaitItemName`, and `.whistleItemName` are this file's own three;
+       `Config.K9Medkit.itemName` is ALSO checked HERE, even though
+       server/medkit.lua is the file that actually consumes it — a
+       deliberate exception to this resource's usual "each file validates
+       its own config" convention, forced by this task's own file-ownership
+       boundary (editing server/medkit.lua was explicitly out of scope for
+       this pass). Config is a plain global table already read from every
+       file in this resource; reading `Config.K9Medkit.itemName` from here
+       introduces no new cross-file coupling that didn't already exist
+       (server/medkit.lua remains the ONLY file that ever mutates
+       ox_inventory on this item's behalf). If server/medkit.lua is ever
+       edited by someone with standing to do so, moving that one check
+       there and deleting it here is a reasonable, low-risk follow-up —
+       until then, one consolidated warning beats a silently-missing one.
+       Every check is gated on its OWNING `Config.Features.*` flag (never
+       warns about an item a disabled feature will never touch) and every
+       `exports.ox_inventory:Items(...)` call is `pcall`-wrapped (an
+       unexpected export error becomes its own loud warning, never a thrown
+       resource-start failure) — a WARNING, never an assert, per this
+       task's own explicit instruction never to block resource start over
+       an operator's inventory configuration.
+
+       NOTED, NOT FIXED (out of this pass's scope — a different file, a
+       different failure shape): `Config.SearchContrabandItems` (server/
+       search.lua) is also a "placeholder item name" list per its own
+       config.lua comment, but a missing entry there silently under-detects
+       contraband weight rather than making a single action fail closed
+       every time — a materially different, lower-severity failure mode,
+       on a LIST rather than a single critical dependency, in a file this
+       pass does not own. Left to whoever next touches server/search.lua.
+    ======================================================================
 ]]
 
 -- WellbeingStats[citizenid] = {
@@ -311,6 +436,19 @@ local WellbeingStats = {}
 -- the relayWeaponFire AddEventHandler's own header comment for the full
 -- exploit/fix writeup.
 local RecentGunfire = {}
+
+--- DEATH/RESPAWN DETECTION for Injury's own reset (this pass, coder-backend
+--- softlock fix — see this file's header, STUCK-K9 SOFTLOCK FIX item 2, for
+--- the full writeup). Mirrors server/combat.lua's and server/medkit.lua's
+--- own identical `PED_DEAD_HEALTH_THRESHOLD` constant and reasoning
+--- verbatim, not re-derived here: `IsEntityDead` has NO FXServer server-side
+--- registration (confirmed independently by both of those files against
+--- citizenfx/fivem's own native-registration source) and always silently
+--- returns `false` server-side, so `GetEntityHealth(ped) <=
+--- PED_DEAD_HEALTH_THRESHOLD` is the correct, native-availability-confirmed
+--- substitute — a GTA ped is conventionally declared dead at 100 health,
+--- not 0 (the reason a ped's default max health is 200, not 100).
+local PED_DEAD_HEALTH_THRESHOLD = 100
 
 --- @param value number
 --- @param min number
@@ -340,6 +478,15 @@ local function EnsureStats(citizenid)
             hesitatingUntil = 0,
             hesitationEpisodeStartedAt = 0,
             lastCoords = nil,
+            -- DEATH/RESPAWN RESET (this pass, coder-backend softlock fix):
+            -- true from the tick a tracked K9's native health is FIRST
+            -- observed at/below PED_DEAD_HEALTH_THRESHOLD until the tick it
+            -- is next observed genuinely alive again — see this file's
+            -- header, STUCK-K9 SOFTLOCK FIX item 2, and TickWellbeing's own
+            -- Injury branch below for the full read/reset cycle. Starts
+            -- false: a freshly-referenced citizenid has never been observed
+            -- dead by this tracker.
+            injuryDiedWhileTracked = false,
         }
         WellbeingStats[citizenid] = stats
     end
@@ -1016,7 +1163,40 @@ local function TickWellbeing()
                     end
 
                     if Config.Features.InjuryLimping then
-                        stats.injury = Clamp(stats.injury + Config.Wellbeing.Injury.passiveRegenPerTick, 0, Config.Wellbeing.Injury.max)
+                        -- DEATH/RESPAWN RESET (this pass, coder-backend
+                        -- softlock fix) — see this file's header, STUCK-K9
+                        -- SOFTLOCK FIX item 2, for the full decision
+                        -- writeup. `coords`/`ped` above already resolve this
+                        -- K9's own live, server-held state this tick; the
+                        -- one extra native call here (GetEntityHealth) is
+                        -- gated behind InjuryLimping specifically, per this
+                        -- file's own "never call/track anything a disabled
+                        -- flag hasn't activated" discipline.
+                        local isDeadNow = GetEntityHealth(ped) <= PED_DEAD_HEALTH_THRESHOLD
+                        if isDeadNow then
+                            stats.injuryDiedWhileTracked = true
+                        elseif stats.injuryDiedWhileTracked then
+                            -- Transition observed: dead on a previous tick,
+                            -- genuinely alive again now (revived or
+                            -- respawned) — restore, then clear the flag so
+                            -- this only ever fires once per death.
+                            stats.injuryDiedWhileTracked = false
+                            local restoreAmount = tonumber(Config.Wellbeing.Injury.deathRespawnRestoreAmount)
+                            if restoreAmount and restoreAmount > 0 then
+                                stats.injury = Clamp(stats.injury + restoreAmount, 0, Config.Wellbeing.Injury.max)
+                            end
+                        end
+
+                        -- Passive regen is deliberately SKIPPED for a tick
+                        -- where the K9 is observed genuinely dead
+                        -- (isDeadNow) — a corpse does not passively recover
+                        -- from its injuries; the restore above (when the
+                        -- transition to alive is observed) is the intended
+                        -- recovery moment, and normal passive regen resumes
+                        -- from the very same tick onward.
+                        if not isDeadNow then
+                            stats.injury = Clamp(stats.injury + Config.Wellbeing.Injury.passiveRegenPerTick, 0, Config.Wellbeing.Injury.max)
+                        end
                     end
 
                     if Config.Features.FearStressSystem then
@@ -1172,3 +1352,63 @@ if Config.Features.FatigueSystem or Config.Features.MoodSystem
         end
     end)
 end
+
+-- ======================================================================
+-- STARTUP VALIDATION — PLACEHOLDER ox_inventory ITEM NAMES (this pass,
+-- coder-backend softlock fix). See this file's header, STUCK-K9 SOFTLOCK
+-- FIX item 3, for the full writeup on scope/reasoning, including WHY
+-- Config.K9Medkit.itemName is checked from this file rather than
+-- server/medkit.lua. Mirrors server/combat.lua's own established
+-- "resource-start WARNING, never an assert" pattern for
+-- Config.Combat.PropDragging.IsPlayerDownedOverride verbatim.
+-- ======================================================================
+
+--- Warns (loudly, to server console) if `itemName` does not resolve in
+--- this server's own live ox_inventory item registry. A WARNING ONLY —
+--- never throws, never prevents resource start, per this task's explicit
+--- instruction not to fail a resource over an operator's own inventory
+--- configuration. `exports.ox_inventory:Items(name)` (confirmed this pass
+--- against a fresh read of ox_inventory's own modules/items/server.lua —
+--- `exports('Items', function(item) return getItem(nil, item) end)`,
+--- returning the item's own registered data table or nil) is wrapped in
+--- `pcall` so an unexpected export error (e.g. a very old ox_inventory
+--- build without this export) becomes its own loud, distinct warning
+--- instead of ever propagating out of `onResourceStart`.
+--- @param itemName any
+--- @param configPath string -- e.g. 'Config.K9Medkit.itemName', for the printed message only
+--- @param featureFlagName string -- e.g. 'Config.Features.K9Medkit', for the printed message only
+local function WarnIfItemMissing(itemName, configPath, featureFlagName)
+    if type(itemName) ~= 'string' or itemName == '' then
+        print(('[qbx_k9unit] WARNING: %s is enabled but %s is not a valid item name (%s) -- cannot verify it against ox_inventory at all.'):format(featureFlagName, configPath, tostring(itemName)))
+        return
+    end
+
+    local ok, item = pcall(function() return exports.ox_inventory:Items(itemName) end)
+    if not ok then
+        print(('[qbx_k9unit] WARNING: could not verify %s (%q) against ox_inventory for %s -- the Items() export itself errored: %s. Confirm ox_inventory is installed and up to date.'):format(configPath, itemName, featureFlagName, tostring(item)))
+        return
+    end
+
+    if not item then
+        print(('[qbx_k9unit] WARNING: %s is enabled but %s (%q) does not exist in this server\'s ox_inventory item registry. Every attempt to use this feature will silently fail as a generic "you do not have that item" error -- indistinguishable from a player simply not carrying one, with nothing else explaining why. Add %q to your ox_inventory data/items.lua (or point %s at a real, existing item name) before relying on this feature.'):format(featureFlagName, configPath, itemName, itemName, configPath))
+    end
+end
+
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    if Config.Features.K9Medkit then
+        -- Checked HERE, not in server/medkit.lua -- see this file's header
+        -- for why.
+        WarnIfItemMissing(Config.K9Medkit.itemName, 'Config.K9Medkit.itemName', 'Config.Features.K9Medkit')
+    end
+
+    if Config.Features.MoodSystem then
+        WarnIfItemMissing(Config.Wellbeing.Mood.feedItemName, 'Config.Wellbeing.Mood.feedItemName', 'Config.Features.MoodSystem')
+    end
+
+    if Config.Features.DistractionSystem then
+        WarnIfItemMissing(Config.Wellbeing.Distraction.meatBaitItemName, 'Config.Wellbeing.Distraction.meatBaitItemName', 'Config.Features.DistractionSystem')
+        WarnIfItemMissing(Config.Wellbeing.Distraction.whistleItemName, 'Config.Wellbeing.Distraction.whistleItemName', 'Config.Features.DistractionSystem')
+    end
+end)

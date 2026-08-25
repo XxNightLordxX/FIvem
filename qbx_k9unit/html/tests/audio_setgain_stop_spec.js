@@ -7,6 +7,43 @@
     something (client/audio.lua's own PlayK9Sound/StopK9Sound contract:
     `id` addresses "the exact playback instance", so both a not-yet-started
     and an already-ended id must be silent no-ops, never an error).
+
+    LEAK FIX REGRESSION TESTS (bottom of this file, before t.run()) --
+    app.js's own `stoppedBeforeStart` map used to be written to
+    UNCONDITIONALLY by handleAudioStop for ANY id with no currently-active
+    sound, including an id whose 'audio:play' had already fully resolved (or
+    that never had a matching 'audio:play' at all). Since Lua-side ids
+    (client/audio.lua's `nextSoundId`) are a monotonically-increasing
+    counter NEVER reused for the life of the page, no future 'audio:play'
+    for that same id could ever arrive to clean such an entry back out --
+    it sat in memory forever. The dominant real-world trigger:
+    client/audio.lua's own AUDIO_MAX_LOOP_MS (60s) safety-ceiling calls
+    StopK9Sound() -- sending 'audio:stop' -- on EVERY long-lived
+    ProximityAudioFX loop sound whether or not it ever actually started
+    (growl_ambient.ogg does not exist on disk, per audio_play_spec.js's own
+    "one real file, four missing" note, so loadSoundBuffer resolves to a
+    null buffer and activeSounds[id] is never populated at all); with
+    Config.Features.ProximityAudioFX now on, client/proximityaudio.lua's
+    discovery thread re-triggers a BRAND NEW id for the same nearby K9
+    roughly every 60 seconds it stays in range, so this leaked one
+    permanent key per nearby K9 roughly once a minute for the entire
+    session -- unbounded for as long as any K9 stayed near any player.
+
+    app.js exposes NO internal state for a test to read directly (by
+    design -- see sandbox.js's own header: "app.js exposes none... the
+    IIFE's whole surface area IS this message listener"), so the tests
+    below prove boundedness BEHAVIORALLY rather than by reading
+    stoppedBeforeStart's size: they drive the exact leak-triggering
+    sequence many times over many distinct ids, then reuse one of those
+    exact ids for a brand-new, entirely unrelated, legitimate audio:play.
+    Reusing a real Lua-issued id never actually happens in production (the
+    counter never wraps), but it is precisely what makes this a real
+    regression guard: if EVEN ONE of the prior late-arriving audio:stop
+    calls had left a stale stoppedBeforeStart[id] entry behind (the pre-fix
+    bug), handleAudioPlay's own `if (!buffer || wasStoppedEarly) return;`
+    would wrongly treat this brand-new play as "stopped before it started"
+    and silently refuse to ever start it -- a real, observable, provable
+    consequence of the leak, not just an abstract memory-growth number.
 */
 'use strict';
 
@@ -151,6 +188,104 @@ t.test('audio:setGain and audio:stop both no-op cleanly on a null/undefined data
     h.postMessage('audio:stop', undefined);
     await new Promise((r) => setImmediate(r));
     t.isTrue(true, 'no throw for any of the four calls above');
+});
+
+// ------------------------------------------------------------------
+// LEAK FIX REGRESSION TESTS -- see this file's header for the full
+// characterization of the bug and why the proof below is behavioral.
+// ------------------------------------------------------------------
+
+t.test('LEAK FIX: an audio:stop that arrives AFTER its id\'s own audio:play already resolved (missing file, never started) leaves nothing behind -- proven by reusing that exact id for a brand-new legitimate play afterward', async () => {
+    const h = createHarness();
+    const N = 200;
+
+    // Reproduces client/audio.lua's real leak-triggering shape: N distinct
+    // loop=true 'audio:play' requests for a sound key that 404s
+    // (growl_ambient.ogg genuinely does not exist on disk -- see
+    // audio_play_spec.js's own sanity test), so activeSounds[id] is NEVER
+    // populated for any of them (handleAudioPlay's own
+    // `if (!buffer || wasStoppedEarly) return;`).
+    for (let id = 1; id <= N; id++) {
+        h.postMessage('audio:play', { id, sound: 'growl_ambient', gain: 1, loop: true });
+    }
+
+    // Let every one of the N loads fully settle (all real 404s) BEFORE any
+    // stop arrives -- this is deliberately the "already resolved" case
+    // (client/audio.lua's AUDIO_MAX_LOOP_MS ceiling firing a full 60
+    // simulated seconds after its own async load finished), not the
+    // legitimate in-flight race already covered by audio_play_spec.js's
+    // own 'RACE:' test.
+    await new Promise((r) => setTimeout(r, 300));
+
+    for (let id = 1; id <= N; id++) {
+        h.postMessage('audio:stop', { id });
+    }
+    await new Promise((r) => setImmediate(r));
+
+    // THE PROOF: reuse one id from smack in the middle of that batch for a
+    // brand-new, totally unrelated, legitimate play against a REAL file
+    // (bark.ogg). Before this fix, id 100's late 'audio:stop' above would
+    // have left a permanent stoppedBeforeStart[100] = true entry with
+    // nothing left to ever clear it, and this new play would silently
+    // never start.
+    const reusedId = 100;
+    h.postMessage('audio:play', { id: reusedId, sound: 'bark', gain: 1, loop: false });
+
+    await waitFor(() => {
+        const ctx = h.getAudioContextInstance();
+        return !!(ctx && ctx._lastCreatedSource && ctx._lastCreatedSource._started);
+    }, { timeoutMs: 3000, label: 'reused id 100 to still start a brand-new legitimate play' });
+
+    t.isTrue(h.getAudioContextInstance()._lastCreatedSource._started, 'no stale stoppedBeforeStart entry survived from any of the 200 prior late-stop cycles');
+    t.isTrue(h.getAudioContextInstance()._lastCreatedSource.loop === false, 'the NEW play\'s own loop:false was applied -- this is genuinely the reused-id play, not some leftover state from the id-100 loop attempt');
+});
+
+t.test('LEAK FIX: the SAME check holds for the very first and very last id of a large batch, not just one lucky id in the middle', async () => {
+    const h = createHarness();
+    const N = 50;
+
+    for (let id = 1; id <= N; id++) {
+        h.postMessage('audio:play', { id, sound: 'growl_ambient', gain: 1, loop: true });
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    for (let id = 1; id <= N; id++) {
+        h.postMessage('audio:stop', { id });
+    }
+    await new Promise((r) => setImmediate(r));
+
+    for (const reusedId of [1, N]) {
+        h.postMessage('audio:play', { id: reusedId, sound: 'bark', gain: 1, loop: false });
+        await waitFor(() => {
+            const ctx = h.getAudioContextInstance();
+            return !!(ctx && ctx._lastCreatedSource && ctx._lastCreatedSource._started);
+        }, { timeoutMs: 3000, label: `reused id ${reusedId} to start a brand-new legitimate play` });
+        // Stop it again immediately so the next iteration's waitFor is
+        // checking a FRESH _lastCreatedSource, not the previous one.
+        h.postMessage('audio:stop', { id: reusedId });
+        await new Promise((r) => setImmediate(r));
+    }
+    t.isTrue(true, 'both the first and last id of the batch were reusable without being poisoned by a stale entry');
+});
+
+t.test('LEAK FIX: a stray audio:stop for an id that NEVER had any matching audio:play at all is a true no-op and does not poison that id for a later real play either', async () => {
+    const h = createHarness();
+
+    // No audio:play for id 777 has ever been sent -- this is the
+    // "stale/unknown id" case handleAudioStop's own comment already
+    // documents as a no-op; the leak fix additionally guarantees it adds
+    // nothing to stoppedBeforeStart (pendingPlayIds[777] was never true).
+    for (let i = 0; i < 50; i++) {
+        h.postMessage('audio:stop', { id: 777 });
+    }
+    await new Promise((r) => setImmediate(r));
+
+    h.postMessage('audio:play', { id: 777, sound: 'bark', gain: 1, loop: false });
+    await waitFor(() => {
+        const ctx = h.getAudioContextInstance();
+        return !!(ctx && ctx._lastCreatedSource && ctx._lastCreatedSource._started);
+    }, { timeoutMs: 2000, label: 'id 777 to play normally despite 50 prior stray stops' });
+
+    t.isTrue(h.getAudioContextInstance()._lastCreatedSource._started);
 });
 
 t.run();

@@ -149,13 +149,45 @@ local function newMainFixture()
     -- exactly HOW MANY real round trips it caused -- the only way to prove
     -- the TTL cache is actually suppressing calls, not just returning a
     -- plausible value. table.remove() on an empty queue returns nil, which
-    -- models a server round trip that failed/timed out/came back empty --
-    -- exactly the case this spec's own report is asked to characterize.
+    -- models a server round trip that resolved successfully to nil/nothing
+    -- (e.g. the server callback itself returned nothing) -- a genuinely
+    -- DIFFERENT case from a timeout/unregistered-callback failure below.
+    --
+    -- THROW MODELING (dependency-verification finding, this pass -- a
+    -- second-hand report was VERIFIED against the real upstream source
+    -- directly, not taken on faith): a prior draft of this fixture modeled
+    -- every failed/timed-out round trip as `lib.callback.await` returning
+    -- plain nil. That is WRONG. Read directly this pass:
+    --   ox_lib imports/callback/client.lua's triggerServerCallback does
+    --   `SetTimeout(callbackTimeout, function() promise:reject(("callback
+    --   event '%s' timed out"):format(key)) end)` for a timeout, and its
+    --   pendingCallbacks response handler does `promise:reject(response)`
+    --   when response == 'cb_invalid' (callback not registered
+    --   server-side) -- both go through `return table.unpack(Citizen.Await(promise))`.
+    --   FiveM's own data/shared/citizen/scripting/lua/scheduler.lua
+    --   Citizen.Await does `if promise.state == 2 or promise.state == 4
+    --   then error(promise.value, 2) end` -- a rejected promise makes
+    --   Citizen.Await THROW via Lua's error(), it never returns a value at
+    --   all in that case.
+    -- `queueCallbackTimeout`/`queueCallbackInvalid` below queue a distinct,
+    -- identity-tagged marker (never confusable with a real nil/false/table
+    -- response) that callbackAwait recognizes and turns into a real Lua
+    -- error() call, so every site under test genuinely exercises its own
+    -- pcall guard rather than a plain-nil stand-in.
+    local ThrowMarkerMT = {}
+    local function callbackThrow(message)
+        return setmetatable({ message = message }, ThrowMarkerMT)
+    end
+
     local callbackResponses = {}
     local callbackCallLog = {}
     local function callbackAwait(eventName, timeout, ...)
         callbackCallLog[#callbackCallLog + 1] = { event = eventName, timeout = timeout, args = { ... } }
-        return table.remove(callbackResponses, 1)
+        local response = table.remove(callbackResponses, 1)
+        if type(response) == 'table' and getmetatable(response) == ThrowMarkerMT then
+            error(response.message, 2)
+        end
+        return response
     end
 
     local notifyCalls = {}
@@ -234,6 +266,18 @@ local function newMainFixture()
         setPed = function(handle) pedHandle = handle end,
         setModel = function(entity, hash) entityModels[entity] = hash end,
         queueCallbackResponse = function(value) callbackResponses[#callbackResponses + 1] = value end,
+        -- Queues a THROWING round trip -- see callbackAwait's own comment
+        -- above for the verified real-source citation. `eventName` is only
+        -- used to build a readable message, same shape as ox_lib's real
+        -- rejection strings; the exact text is not asserted on by any test
+        -- below, only that HasK9Access() fails closed and does not let the
+        -- error escape uncaught.
+        queueCallbackTimeout = function(eventName)
+            callbackResponses[#callbackResponses + 1] = callbackThrow(("callback event '%s' timed out"):format(eventName))
+        end,
+        queueCallbackInvalid = function(eventName)
+            callbackResponses[#callbackResponses + 1] = callbackThrow(("callback '%s' does not exist"):format(eventName))
+        end,
         callbackCallCount = function() return #callbackCallLog end,
         lastCallbackCall = function() return callbackCallLog[#callbackCallLog] end,
         notifyCalls = notifyCalls,
@@ -400,34 +444,71 @@ t.test('HasK9Access: the server explicitly denying access (false) is returned an
     t.equals(f.callbackCallCount(), 1)
 end)
 
--- THE load-bearing case this spec was specifically asked to prove: which
--- way a FAILED round trip (no response at all -- ox_lib's lib.callback.await
--- returns nil on a timeout/failure, never throws) resolves.
-t.test('HasK9Access: a FAILED round trip (lib.callback.await returns nil) FAILS CLOSED -- returns false, never true', function()
+-- THE load-bearing case this spec was specifically asked to prove --
+-- REVISED this pass after a dependency-verification agent's claim was
+-- independently verified against the REAL upstream source (both ox_lib's
+-- imports/callback/client.lua and FiveM's own scheduler.lua, fetched and
+-- read directly, not taken on a second-hand report): `lib.callback.await`
+-- does NOT return nil on a timeout or an unregistered-callback ('cb_invalid')
+-- response -- it THROWS, via ox_lib's promise:reject(...) feeding FiveM's
+-- own Citizen.Await, which calls error(promise.value, 2) on a rejected
+-- promise. The previous version of this section modeled the failure case
+-- as a plain nil return and asserted the failure got cached for the full
+-- TTL -- BOTH of those were wrong and have been replaced below. See
+-- callbackAwait's own comment in newMainFixture() above for the full
+-- citation, and client/main.lua's HasK9Access() for the real pcall guard
+-- these tests now exercise.
+t.test('HasK9Access: a callback TIMEOUT (lib.callback.await throws) FAILS CLOSED -- returns false, never true, never lets the error escape', function()
     local f = newMainFixture()
-    -- Deliberately queue NOTHING -- callbackAwait's table.remove() on an
-    -- empty queue returns nil, modeling exactly this failure/timeout case.
+    f.queueCallbackTimeout('qbx_k9unit:server:hasK9Access')
     local result = f.env.HasK9Access()
-    t.isFalse(result, 'HasK9Access must fail closed on a failed/absent server response -- a cache that fails OPEN here would show K9 UI to an uncertified player')
+    t.isFalse(result, 'HasK9Access must fail closed on a thrown timeout -- a cache that fails OPEN here would show K9 UI to an uncertified player, and an uncaught throw would abort the calling thread with no decision at all')
     t.equals(f.callbackCallCount(), 1, 'the round trip really was attempted, not skipped')
 end)
 
-t.test('HasK9Access: a failed round trip is ALSO cached as false -- the failure-closed result is not silently retried every call within the TTL', function()
+t.test('HasK9Access: an UNREGISTERED callback (lib.callback.await throws cb_invalid) FAILS CLOSED -- returns false, never true', function()
     local f = newMainFixture()
-    t.isFalse(f.env.HasK9Access(), 'first call: failed round trip (no response queued), fails closed')
+    f.queueCallbackInvalid('qbx_k9unit:server:hasK9Access')
+    local result = f.env.HasK9Access()
+    t.isFalse(result, 'a cb_invalid throw (e.g. the server-side resource has not registered this callback yet) must fail closed the same as a timeout')
+    t.equals(f.callbackCallCount(), 1)
+end)
+
+t.test('HasK9Access: a thrown failure is NOT cached -- the very next call, even within the TTL, re-attempts rather than sticking on a poisoned false', function()
+    local f = newMainFixture()
+    f.queueCallbackTimeout('qbx_k9unit:server:hasK9Access')
+    t.isFalse(f.env.HasK9Access(), 'first call: thrown timeout, fails closed for THIS call')
     t.equals(f.callbackCallCount(), 1)
 
-    -- A genuinely-true response is queued now. If the cache had NOT stored
-    -- the earlier failure as `false` (e.g. left checkedAt stale so every
-    -- call re-queries), this second call would consume it and return true
-    -- -- which would still be safe-ish (a real check ran) but would
-    -- contradict client/main.lua's own documented ~1000ms debounce
-    -- contract. The CURRENTLY OBSERVED, correct behavior is that the
-    -- failure is cached exactly like a real `false` would be: no second
-    -- round trip inside the TTL at all.
+    -- Deliberately NO f.advance() -- still the exact same instant, well
+    -- inside HAS_K9_ACCESS_CACHE_TTL_MS. A genuinely-true response is
+    -- queued now. If the earlier failure HAD been written into
+    -- hasK9AccessCache (poisoning it with a false negative that sticks for
+    -- the full TTL, the exact regression this test guards against), this
+    -- second call would silently return the stale cached false and never
+    -- even attempt a second round trip. The correct behavior is the
+    -- opposite of a real success being cached: a FAILURE must not stick,
+    -- so this call re-attempts immediately and reflects the fresh true.
     f.queueCallbackResponse(true)
-    t.isFalse(f.env.HasK9Access(), 'still the cached false from the earlier failed round trip')
-    t.equals(f.callbackCallCount(), 1, 'no second round trip within the TTL, even though this call could have "used" the freshly-queued true')
+    t.isTrue(f.env.HasK9Access(), 'a failed lookup must not poison the cache with a false negative for the whole TTL -- the very next call must re-check')
+    t.equals(f.callbackCallCount(), 2, 'a genuine second round trip happened -- the earlier failure was not served from a poisoned cache entry')
+end)
+
+t.test('HasK9Access: AFTER a thrown failure is followed by a real success, THAT success IS cached normally for the rest of the TTL', function()
+    local f = newMainFixture()
+    f.queueCallbackTimeout('qbx_k9unit:server:hasK9Access')
+    t.isFalse(f.env.HasK9Access())
+    f.queueCallbackResponse(true)
+    t.isTrue(f.env.HasK9Access())
+    t.equals(f.callbackCallCount(), 2)
+
+    -- Now a real cache exists (checkedAt was stamped by the SUCCESSFUL
+    -- second call above). A third call at the same instant must be a
+    -- normal cache HIT -- proving the fix only skips caching ON FAILURE,
+    -- it does not disable the TTL cache altogether.
+    f.queueCallbackResponse(false) -- must not be consulted -- still within the TTL from the successful call
+    t.isTrue(f.env.HasK9Access(), 'still the cached true from the successful round trip, not a third live call')
+    t.equals(f.callbackCallCount(), 2, 'no third round trip -- the TTL cache still works normally once a real (non-thrown) result lands')
 end)
 
 -- ----------------------------------------------------------------------

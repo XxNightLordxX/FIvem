@@ -966,16 +966,104 @@ end)
 --- @param broadcastReason string -- sent to whichever party/parties are online via partnershipEnded
 --- @return boolean ended -- false if `citizenid` wasn't actively partnered (no-op, not an error)
 local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
-    local row = MySQL.single.await(
+    -- Wrapped in its own pcall purely to log which specific query failed
+    -- (mirrors RefreshPartnershipCache's identical query above) before
+    -- propagating -- both of this function's own call sites (the
+    -- breakPartnership event and ForceBreakPartnershipForCitizenId below)
+    -- already wrap this entire function in their own pcall and degrade
+    -- sensibly on a thrown error. Re-raising here (rather than swallowing)
+    -- is correct: nothing has been written yet at this point, so there is
+    -- no state to reconcile -- the caller-level pcall already knows how to
+    -- report "the break failed" to whichever audience it has.
+    local selectOk, rowOrErr = pcall(
+        MySQL.single.await,
         'SELECT id, k9_citizenid, handler_citizenid FROM k9_partnerships WHERE active = 1 AND (k9_citizenid = ? OR handler_citizenid = ?) LIMIT 1',
         { citizenid, citizenid }
     )
+    if not selectOk then
+        print(('[qbx_k9unit] DoBreakPartnership SELECT failed for %s: %s'):format(citizenid, tostring(rowOrErr)))
+        error(rowOrErr, 0)
+    end
+
+    local row = rowOrErr
     if not row then return false end -- no-op: this citizenid isn't currently partnered
 
-    local affectedRows = MySQL.update.await(
+    local partnerCitizenid = (row.k9_citizenid == citizenid) and row.handler_citizenid or row.k9_citizenid
+
+    -- STATE-CONSISTENCY DESIGN NOTE (this pass -- a partnership break that
+    -- "half-succeeds", the SELECT above having worked and this UPDATE then
+    -- throwing, is a real, distinct risk from mere error *propagation*):
+    -- the SELECT is read-only and can never leave partial state behind on
+    -- its own -- this UPDATE is the ONLY write in this function, and a
+    -- single UPDATE statement is already atomic at the storage-engine
+    -- level (InnoDB commits it whole or not at all) regardless of whether
+    -- it is additionally wrapped in an explicit `MySQL.transaction`.
+    -- Wrapping this SELECT+UPDATE pair in a SQL transaction would add NO
+    -- additional atomicity here -- there is no SECOND write that needs to
+    -- commit-or-roll-back together with this one, so a transaction is
+    -- deliberately NOT used. What a transaction genuinely could NOT fix
+    -- either -- because nothing running on this side of the connection
+    -- can, for the same reason a distributed commit-ack is fundamentally
+    -- ambiguous -- is the narrow case where this UPDATE actually commits
+    -- on the DB server but the success acknowledgment is lost before this
+    -- callback ever sees it (e.g. a connection drop in exactly that
+    -- window): the identical ambiguity would exist at a transaction's own
+    -- COMMIT step. Rather than guessing "assume success" or "assume
+    -- failure" for that window, this reconciles with an independent, fresh
+    -- read of the SAME row below and acts on whatever the DB actually
+    -- says, so neither the in-memory cache nor any notification sent can
+    -- ever diverge from the persisted row, no matter which way the
+    -- ambiguous case actually landed.
+    local updateOk, affectedRowsOrErr = pcall(
+        MySQL.update.await,
         'UPDATE k9_partnerships SET active = 0, ended_by = ?, ended_at = CURRENT_TIMESTAMP WHERE id = ? AND active = 1',
         { endedByValue, row.id }
     )
+
+    if not updateOk then
+        print(('[qbx_k9unit] DoBreakPartnership UPDATE failed for partnership id=%s (citizenid=%s): %s -- reconciling against a fresh read before reporting an outcome'):format(tostring(row.id), citizenid, tostring(affectedRowsOrErr)))
+
+        -- Independent, directly-pcall'd re-read -- deliberately NOT via
+        -- RefreshPartnershipCache's own return value: that function's
+        -- fail-closed contract collapses "confirmed not partnered" and
+        -- "the read itself failed" into the same nil, which is correct
+        -- for the ACCESS-checking callers it normally serves but wrong
+        -- here, where "confirmed ended" and "unknown" must be told apart
+        -- before deciding whether to report success.
+        local reconcileOk, activeValueOrErr = pcall(MySQL.scalar.await, 'SELECT active FROM k9_partnerships WHERE id = ? LIMIT 1', { row.id })
+
+        if reconcileOk and activeValueOrErr == 0 then
+            -- Confirmed against the DB itself: the UPDATE actually
+            -- committed despite this call's own client-side error.
+            -- Refresh both caches to match the now-confirmed truth and
+            -- report/broadcast the success that genuinely happened,
+            -- rather than a failure that would otherwise leave every
+            -- consumer of this cache believing an already-ended
+            -- partnership is still active.
+            RefreshPartnershipCache(citizenid)
+            RefreshPartnershipCache(partnerCitizenid)
+            TellCitizenIdPartnershipEnded(citizenid, broadcastReason)
+            TellCitizenIdPartnershipEnded(partnerCitizenid, broadcastReason)
+            FireOutboundEvent('qbx_k9unit:events:partnershipEnded', row.k9_citizenid, row.handler_citizenid, broadcastReason)
+            return true
+        end
+
+        if not reconcileOk then
+            print(('[qbx_k9unit] DoBreakPartnership reconciliation read ALSO failed for partnership id=%s -- true outcome unknown, manual DB check required: %s'):format(tostring(row.id), tostring(activeValueOrErr)))
+        end
+
+        -- Either confirmed still active (the UPDATE genuinely never
+        -- committed -- a consistent, honest failure, nothing to
+        -- reconcile) or the reconciliation read itself failed (true
+        -- outcome unknown) -- in BOTH cases, fail closed: never claim a
+        -- break succeeded that this code cannot confirm against the DB,
+        -- and leave both caches untouched rather than guess. Re-raise so
+        -- this function's own call sites report failure exactly like any
+        -- other query error here.
+        error(affectedRowsOrErr, 0)
+    end
+
+    local affectedRows = affectedRowsOrErr
 
     -- Refresh BOTH citizenids' cache unconditionally, regardless of whether
     -- this specific call actually flipped the row: either this call won a
@@ -992,7 +1080,6 @@ local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
         return false -- lost the race above -- someone else already ended this exact row
     end
 
-    local partnerCitizenid = (row.k9_citizenid == citizenid) and row.handler_citizenid or row.k9_citizenid
     TellCitizenIdPartnershipEnded(citizenid, broadcastReason)
     TellCitizenIdPartnershipEnded(partnerCitizenid, broadcastReason)
 

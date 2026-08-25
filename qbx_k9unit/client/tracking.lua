@@ -220,7 +220,19 @@ local function StartTrack(trackType)
     trackRequestGeneration = trackRequestGeneration + 1
     local myGeneration = trackRequestGeneration
 
-    local result = lib.callback.await('qbx_k9unit:server:findTrackableSource', false, trackType)
+    -- FAIL-CLOSED GUARD (dependency-verification finding, this pass):
+    -- `lib.callback.await` throws rather than returning nil on a timeout
+    -- or unregistered-callback rejection (see client/main.lua's
+    -- HasK9Access() doc comment for the full ox_lib/FiveM source
+    -- citation). Uncaught here, a throw would skip the `startInFlight =
+    -- false` reset below entirely, permanently wedging `startInFlight`
+    -- true and bricking every future Start*Track() call for the rest of
+    -- this client's session (this function's own in-flight-guard comment
+    -- above already flags why that flag must always get reset). pcall it;
+    -- the `not result or not result.found` branch further below already
+    -- treats a nil `result` the same as "nothing nearby."
+    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findTrackableSource', false, trackType)
+    if not ok then result = nil end
 
     startInFlight = false
 

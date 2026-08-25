@@ -1,6 +1,16 @@
 # qbx_k9unit — Phase 5 Detailed Spec (continued): ProximityAudioFX,
 # PropAttachments, FetchMechanic
 
+> **HISTORICAL DESIGN DOCUMENT.** This captures the plan and reasoning as of
+> the date named inside it (2026-08-24), not a live description of today's
+> code. `config.lua` and the actual `.lua` files always win if something
+> here disagrees with them. See `DOCS_INDEX.md` for where to look for
+> current status instead (`README.md` for technical reference,
+> `PROJECT_STATUS.md` for a plain-language snapshot and open decisions).
+> Kept in full, unmerged with the other phase specs, because each covers a
+> distinct, non-overlapping phase — added by a documentation-consolidation
+> pass, 2026-08-25; nothing below this banner was edited.
+
 Status: **planning only — no `.lua`/`config.lua`/`fxmanifest.lua` file was
 touched to produce this document.** `DeployableKennel` and
 `AdvancedBarkRadial` (the other two `SPEC.md` §6.7 line items) are already

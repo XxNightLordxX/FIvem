@@ -137,6 +137,42 @@ function EnterNearestK9Vehicle()
 
     if IsInK9Vehicle() then return end -- already in one
 
+    -- MUTUAL GUARD vs. client/combat.lua's PropDragging/BiteAndHold
+    -- (QA-reported real defect, this pass): this function attaches, freezes,
+    -- hides, and disables collision on the SAME ped (PlayerPedId()) that
+    -- combat.lua's shared maintenance thread re-attaches EVERY TICK as the
+    -- HOLDER anchor of an active drag (AttachEntityToEntity(targetPed,
+    -- PlayerPedId(), ...), see that file's "ActiveDragAsHolder" block) or
+    -- plays a one-shot cosmetic stance on for an active bite hold
+    -- (PlayBiteHoldStance). Entering a vehicle mid-drag would attach this
+    -- ped to the vehicle as a CHILD while combat.lua keeps attaching the
+    -- dragged target to this SAME ped as a PARENT every frame — a nested
+    -- attach chain nobody designed for (the dragged target becomes a rigid
+    -- child of a ped that is itself invisible/frozen/collisionless/attached
+    -- to a vehicle), and a griefing-usable one since the target has no way
+    -- to see or reach the now-hidden K9 holding it. Checked here (not just
+    -- left to RequestDrag()'s own symmetric IsInK9Vehicle() guard below)
+    -- because the two triggers are reachable in EITHER order — a K9 already
+    -- mid-drag/mid-hold selecting "Enter Vehicle" is the direction
+    -- RequestDrag()'s own guard cannot catch.
+    --
+    -- Soft dependency, `type(...) == 'function'` runtime existence guard —
+    -- this resource's established convention (see client/defense.lua's
+    -- identical guard on this exact function) — because IsBiteHoldEngaged/
+    -- IsDragEngaged only exist at all once client/combat.lua's own top-level
+    -- gate (`Config.Features.BiteAndHold/NonLethalTakedown/PropDragging`)
+    -- lets that file's globals get defined; VehicleEntryExit can be enabled
+    -- on a server that runs none of those three, in which case neither
+    -- global is ever declared.
+    if type(IsDragEngaged) == 'function' and IsDragEngaged() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.blocked_by_drag'), type = 'error' })
+        return
+    end
+    if type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.blocked_by_bite_hold'), type = 'error' })
+        return
+    end
+
     local ped = PlayerPedId()
     -- Real-defect guard (client-logic review finding): IS_PED_IN_ANY_VEHICLE
     -- (verified against the Cfx native reference, PED namespace, BOOL
@@ -401,6 +437,15 @@ local function RegisterVehicleOxTargetOptions()
             canInteract = function(entity, distance, coords, name)
                 if not Config.Features.VehicleEntryExit then return false end
                 if IsInK9Vehicle() then return false end
+                -- DISPLAY-OPTIMIZATION MIRROR of EnterNearestK9Vehicle()'s own
+                -- load-bearing mutual guard above — hides the option instead of
+                -- letting onSelect show a rejection notify for the common case.
+                -- Not the real boundary (that's inside EnterNearestK9Vehicle()
+                -- itself, which re-checks this regardless of what canInteract
+                -- decided), same "canInteract is a UX convenience" posture this
+                -- file already documents for every other predicate here.
+                if type(IsDragEngaged) == 'function' and IsDragEngaged() then return false end
+                if type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then return false end
                 if not K9VehicleHashes[GetEntityModel(entity)] then return false end
                 return CanShowK9UI()
             end,

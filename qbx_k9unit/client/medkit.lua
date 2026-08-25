@@ -80,7 +80,16 @@
 --- result, so a future reason value only needs updating here.
 --- @param targetServerId number
 local function RequestTreatK9(targetServerId)
-    local result = lib.callback.await('qbx_k9unit:server:useK9Medkit', false, targetServerId)
+    -- FAIL-CLOSED GUARD (dependency-verification finding, this pass):
+    -- `lib.callback.await` throws rather than returning nil on a timeout
+    -- or unregistered-callback rejection (see client/main.lua's
+    -- HasK9Access() doc comment for the full ox_lib/FiveM source
+    -- citation). pcall it; the very next line's `if not result then
+    -- return end` already treats a nil result as a silent no-op, so a
+    -- thrown failure now degrades to that exact same path instead of
+    -- aborting this onSelect handler uncaught.
+    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:useK9Medkit', false, targetServerId)
+    if not ok then result = nil end
     if not result then return end
 
     -- DUPLICATE-TOAST FIX (this pass, coder-backend): a `result.ok` branch

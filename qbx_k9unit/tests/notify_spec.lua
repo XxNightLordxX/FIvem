@@ -214,19 +214,17 @@ t.test('bonetool local NotifyPlayer: an authorized "help" invocation also carrie
     registeredCommands.k9bonetool(src, { 'help' })
     t.equals(#boneToolCapturedClientEvents, 1)
     t.equals(boneToolCapturedClientEvents[1][3].title, 'K9 Unit — Bone Tool')
-    -- Deliberately still 'inform', NOT 'info': server/bonetool.lua's own
-    -- 'help' call site (`NotifyPlayer(src, BONE_TOOL_USAGE, 'inform')`)
-    -- passes that literal string explicitly, so it is completely
-    -- unaffected by server/notify.lua's own `notifyType or 'info'`
-    -- default fix (that default only applies when a caller omits the
-    -- argument entirely) -- this is a separate, still-open instance of
-    -- the same invalid-ox_lib-NotificationType issue, at a call site this
-    -- pass does not own. Update this assertion (to 'info', with a comment
-    -- citing ox_lib's NotificationType alias same as the rest of this
-    -- file) only once server/bonetool.lua's own call site is fixed to
-    -- match -- changing just this assertion without that fix would make
-    -- this spec assert something the real code does not do.
-    t.equals(boneToolCapturedClientEvents[1][3].type, 'inform')
+    -- 'info', not the old 'inform'. server/bonetool.lua's 'help' call
+    -- site passes its type literally rather than relying on
+    -- server/notify.lua's default, so it needed its own fix; that fix
+    -- has now landed and this assertion tracks it. ox_lib's real
+    -- NotificationType alias is 'info' | 'warning' | 'success' | 'error'
+    -- -- 'inform' was never a member. It is a v3 leftover that ox_lib
+    -- only remaps inside the deprecated lib.defaultNotify shim, which
+    -- this resource never calls, so it reached the frontend unmapped and
+    -- rendered correctly purely by falling through the same default:
+    -- branch as 'info'.
+    t.equals(boneToolCapturedClientEvents[1][3].type, 'info')
 end)
 
 -- ----------------------------------------------------------------------
