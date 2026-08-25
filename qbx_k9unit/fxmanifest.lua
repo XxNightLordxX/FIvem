@@ -76,6 +76,21 @@ files {
     'html/sounds/bark_aggressive.ogg',
     'html/sounds/bark_calm.ogg',
     'html/sounds/growl_ambient.ogg',
+    -- K9 Command Tablet (Config.Features.CommandTablet). FiveM allows only
+    -- ONE ui_page, which is already html/index.html for the vitality HUD, so
+    -- the tablet lives in its own document loaded through an <iframe> that
+    -- index.html embeds, with tablet-bridge.js relaying between the two
+    -- windows. That keeps it fully isolated from the HUD's own DOM, CSS and
+    -- JS -- html/app.js is not touched at all -- which matters because the
+    -- HUD is a passive always-on surface and the tablet is an interactive
+    -- one that takes NUI focus.
+    -- EVERY ONE OF THESE FOUR MUST BE LISTED. An unlisted asset is a 404
+    -- that the loader swallows, and a tablet that silently never renders
+    -- looks exactly like the feature being switched off.
+    'html/tablet.html',
+    'html/tablet.js',
+    'html/tablet.css',
+    'html/tablet-bridge.js',
     -- ox_lib 'locale' has been declared at the top of this manifest since Phase
     -- 1, promising localisation that did not exist -- every player-facing
     -- string was hardcoded English until now. That migration is COMPLETE as of

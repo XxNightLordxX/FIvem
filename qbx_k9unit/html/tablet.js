@@ -353,7 +353,6 @@
         action_working: 'Working...',
         action_failed: 'Action failed.',
         action_succeeded: 'Done.',
-        no_permissions_held: 'None.',
         no_certifications: 'Not certified in any department.',
         my_certifications_heading: 'Certifications',
         my_xp_heading: 'XP',
@@ -373,7 +372,6 @@
         person_xp_heading: 'XP',
         xp_tier_unknown: 'No XP record yet.',
         use_label: 'Use',
-        loading_more: 'Loading...',
         not_available_short: 'Unavailable',
         opening_person: 'Loading record...',
     };

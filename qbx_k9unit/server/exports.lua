@@ -219,11 +219,30 @@
        right alongside the existing `PushTierSnapshot(targetSrc, newTier)`
        call in that same branch.
 
+    7. 'qbx_k9unit:events:k9Down' (ADDED — FEATURE_IDEAS.md Part A §7, "K9
+       down / injured critically" dispatch integration hook)
+       (source: number, citizenid: string, jobName: string, coords: vector3,
+        health: number)
+       Fire from: server/integrations.lua's own self-contained health-poll
+       thread (PollK9Health), not from an existing success point in another
+       file — see that file's own header for the full design (edge-triggered
+       on a configurable Config.K9DownDispatch.healthThreshold, a minimum
+       qualifying duration, and a per-source re-fire cooldown, mirroring
+       server/wellbeing.lua's own PED_DEAD_HEALTH_THRESHOLD pattern) and for
+       why this is a poll rather than a hook inside that file's existing
+       TickWellbeing loop (an ownership-boundary decision for this session,
+       not a structural preference). The one payload in this whole contract
+       that carries a location (`coords`), deliberately: unlike the other
+       six events, a dispatch alert's entire purpose is a map pin.
+
     Every payload above uses ONLY values the owning file already computes
-    for its own internal purposes (a DB column just written, or an existing
-    TriggerClientEvent's own arguments) — wiring this in is arithmetic-free,
-    matching FEATURE_IDEAS.md Part B's own "Effort: small" assessment for
-    this item.
+    for its own internal purposes (a DB column just written, an existing
+    TriggerClientEvent's own arguments, or — for #7 — a live, server-resolved
+    read taken at the moment of firing) — wiring #1 through #6 in was
+    arithmetic-free, matching FEATURE_IDEAS.md Part B's own "Effort: small"
+    assessment for that item; #7 is genuinely new detection logic, scoped to
+    its own file rather than any existing one, per server/integrations.lua's
+    own header.
     ======================================================================
 
     ======================================================================

@@ -181,9 +181,18 @@
     server-spawned NPC ped. Verified against the canonical
     citizenfx/fivem native declarations this session:
     - SetEntityCanBeDamaged (0x1760FFA8AB074D66, `ENTITY` namespace) is
-      CONFIRMED CLIENT-ONLY — no `apiset` entry in the primary source,
-      which per that same repo's own codegen convention means the native
-      never lands in FXServer's compiled table at all. The original
+      CONFIRMED CLIENT-ONLY. CORRECTION (later verification pass, folded in
+      here rather than left in a separate note): this was originally
+      justified as "no `apiset` entry in the primary source", but that test
+      is invalid on its own — GetEntityCoords, definitely server-callable
+      (this file calls it server-side directly), has byte-for-byte
+      identical apiset-less frontmatter, so absence of the field doesn't
+      distinguish the two. The client-only conclusion still holds, just on
+      a different, valid basis: a docs.fivem.net search-index snippet
+      quoting that native's own page badge verbatim, "this native is part
+      of the 'client' API set" (MEDIUM-HIGH confidence — a search-index
+      snippet of the real page, not a direct fetch, but a specific,
+      unambiguous quote, not an inference). The original
       server-side call in HandleTakedownRequest's NPC branch was
       therefore a SILENT NO-OP, a real correctness/safety bug: the
       damage-bracket that is supposed to make a takedown non-lethal never

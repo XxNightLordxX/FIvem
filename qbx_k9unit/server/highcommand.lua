@@ -515,7 +515,26 @@ AddEventHandler('onResourceStart', function(resourceName)
         -- caller learns nothing about argument validity") -- appropriate
         -- here for an even stronger reason than admin.lua's read-only
         -- audit surface: this command mints economy value.
-        if not (type(IsHighCommand) == 'function' and IsHighCommand(source)) then
+        -- Two independent routes to authorization, matching the resolution
+        -- order config.lua's Config.Permissions block documents: an explicit
+        -- 'k9.givexp' grant, OR high command rank. The grant path exists so
+        -- an individual officer can be given this without being promoted to
+        -- high command, which is the whole point of the permission layer.
+        -- Both are guarded with type(fn) == 'function' so this command still
+        -- works with either feature disabled -- with both off, nobody
+        -- qualifies and it fails closed, which is correct.
+        local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source)
+
+        local hasGivexpGrant = false
+        if not isHighCommandCaller and type(HasPermission) == 'function' then
+            local callerPlayer = exports.qbx_core:GetPlayer(source)
+            local callerCitizenid = callerPlayer and callerPlayer.PlayerData and callerPlayer.PlayerData.citizenid
+            if type(callerCitizenid) == 'string' and callerCitizenid ~= '' then
+                hasGivexpGrant = HasPermission(callerCitizenid, 'k9.givexp') == true
+            end
+        end
+
+        if not (isHighCommandCaller or hasGivexpGrant) then
             LogAuditInvocation(source, 'n/a', 'denied')
             NotifyPlayer(source, locale('highcommand.not_authorized'), 'error')
             return

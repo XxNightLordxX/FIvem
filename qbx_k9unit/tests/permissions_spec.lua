@@ -378,8 +378,13 @@ local function newIntegrationFixture()
     local function GetHashKeyStub(_name) return 111 end
     local function TriggerEventStub(_name, ...) end
 
-    local capturedCallbacks = {}
-    local libStub = { callback = { register = function(name, fn) capturedCallbacks[name] = fn end } }
+    -- lib.callback.register is only actually reached by server/certifications.lua's
+    -- hasK9Access callback here (permissions.lua's OWN tabletGrant/Revoke
+    -- registrations are gated behind Config.Features.CommandTablet, false in
+    -- this fixture) -- nothing in this suite needs to invoke it, so this is a
+    -- pure no-op stub, just enough for `lib.callback.register(...)` to not
+    -- throw "attempt to index a nil value" at those files' own load time.
+    local libStub = { callback = { register = function(_name, _fn) end } }
 
     local Config = {
         Features = { PermissionGrants = true, HighCommand = true, AdminAuditCommands = true, CommandTablet = false },
@@ -468,6 +473,7 @@ local function tryLoadPermissionsWithConfig(permissionsConfig)
     local env = Sandbox.newEnv({
         Config = { Permissions = permissionsConfig },
         GetGameTimer = function() return 0 end,
+        AddEventHandler = function(_name, _fn) end,
     })
     return pcall(function()
         Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -1062,6 +1068,7 @@ do
     end)
 
     t.test('tabletRevokePermission: failure returns { ok = false, reason = <outcome> }', function()
+        f.advanceTime(2000)
         local result = f.callbacks['qbx_k9unit:server:tabletRevokePermission'](hcSrc, 'TABLET-TARGET', 'not.real')
         t.isFalse(result.ok)
         t.equals(result.reason, 'invalid_permission')
