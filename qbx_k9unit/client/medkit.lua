@@ -282,7 +282,23 @@ RegisterNetEvent('qbx_k9unit:client:applyMedkitHeal', function(newHealth)
     -- gap between those two reads, the result can only be a safe
     -- under-heal capped to the lower of the two ceilings, never an
     -- overheal above whatever is actually live right now.
-    newHealth = math.max(0, math.min(newHealth, GetEntityMaxHealth(ped)))
+    --
+    -- MONOTONIC-HEAL FLOOR (this pass, correctness fix): the lower bound
+    -- here was previously a flat `0`, not this ped's own CURRENT live
+    -- health. server/medkit.lua's RunUseK9MedkitMutation guarantees
+    -- newHealth >= currentHealth only as measured AT COMPUTE TIME -- the
+    -- exact same network-latency gap the DEAD-K9 GUARD above already
+    -- accounts for also means a second, older/reordered/retried
+    -- applyMedkitHeal for this same K9 could still arrive and be processed
+    -- AFTER a newer one already raised this ped's live health past it. A
+    -- "heal" handler applying a lower absolute value than the ped's CURRENT
+    -- health would visibly reduce it -- the exact "heal event that hurts"
+    -- outcome this file's own header explicitly says a medkit must never
+    -- cause. Reading currentHealth live, right here, and using it (not 0)
+    -- as the floor makes this call structurally a no-op-or-increase only,
+    -- regardless of event ordering.
+    local currentHealth = GetEntityHealth(ped)
+    newHealth = math.max(currentHealth, math.min(newHealth, GetEntityMaxHealth(ped)))
 
     SetEntityHealth(ped, newHealth)
 end)
