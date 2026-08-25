@@ -320,6 +320,7 @@
     "loaded": "Loaded into the vehicle.",
     "released": "Released from the vehicle.",
     "vehicle_lost": "Lost contact with the vehicle — released.",
+    "released_on_death": "Your K9 went down while loaded — released from the vehicle.",
     "target_enter_label": "Load K9 Into Vehicle",
     "target_exit_label": "Release K9 From Vehicle"
   },

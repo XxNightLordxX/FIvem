@@ -54,7 +54,16 @@ t.test('NotifyPlayer: 2-arg call (target, description) uses both documented defa
     t.equals(e.eventName, 'ox_lib:notify')
     t.equals(e.target, 101)
     t.equals(e.payload.description, 'hello')
-    t.equals(e.payload.type, 'inform', 'notifyType must default to inform')
+    -- 'info' (not the old 'inform') -- verified against ox_lib's REAL
+    -- upstream `resource/interface/client/notify.lua`:
+    -- `---@alias NotificationType 'info' | 'warning' | 'success' | 'error'`.
+    -- 'inform' is not, and never was, a member of that alias; it is a
+    -- leftover from ox_lib v3 only remapped to 'info' inside the
+    -- DEPRECATED `lib.defaultNotify` back-compat shim, which this file's
+    -- `TriggerClientEvent('ox_lib:notify', ...)` never routes through
+    -- (the client registers that event directly against `lib.notify`) --
+    -- see server/notify.lua's own header for the full writeup.
+    t.equals(e.payload.type, 'info', 'notifyType must default to the valid ox_lib NotificationType "info", not the invalid legacy "inform"')
     t.equals(e.payload.title, 'K9 Unit', 'title must default to K9 Unit')
 end)
 
@@ -78,7 +87,10 @@ t.test('NotifyPlayer: an explicit nil notifyType/title (positional) still falls 
     resetEvents()
     NotifyPlayer(104, 'explicit nils', nil, nil)
     local e = capturedEvents[1]
-    t.equals(e.payload.type, 'inform')
+    -- 'info', not 'inform' -- ox_lib's NotificationType alias only
+    -- contains 'info' | 'warning' | 'success' | 'error'; see the first
+    -- test above for the full citation.
+    t.equals(e.payload.type, 'info')
     t.equals(e.payload.title, 'K9 Unit')
 end)
 
@@ -86,7 +98,9 @@ t.test('NotifyPlayer: title-only override (notifyType nil, title given) -- mirro
     resetEvents()
     NotifyPlayer(105, 'desc', nil, 'K9 Unit — Something')
     local e = capturedEvents[1]
-    t.equals(e.payload.type, 'inform', 'a nil notifyType with a real title must still default type to inform')
+    -- 'info', not 'inform' -- see the first test in this file for the
+    -- ox_lib NotificationType citation.
+    t.equals(e.payload.type, 'info', 'a nil notifyType with a real title must still default type to the valid "info"')
     t.equals(e.payload.title, 'K9 Unit — Something')
 end)
 
@@ -98,7 +112,9 @@ t.test('NotifyPlayer: sequential calls to different targets do not leak state be
     t.equals(capturedEvents[1].target, 201)
     t.equals(capturedEvents[1].payload.type, 'error')
     t.equals(capturedEvents[2].target, 202)
-    t.equals(capturedEvents[2].payload.type, 'inform', 'the second, default call must not inherit the first call\'s override')
+    -- 'info', not 'inform' -- see the first test in this file for the
+    -- ox_lib NotificationType citation.
+    t.equals(capturedEvents[2].payload.type, 'info', 'the second, default call must not inherit the first call\'s override, and must default to the valid "info"')
 end)
 
 -- ----------------------------------------------------------------------
@@ -198,6 +214,18 @@ t.test('bonetool local NotifyPlayer: an authorized "help" invocation also carrie
     registeredCommands.k9bonetool(src, { 'help' })
     t.equals(#boneToolCapturedClientEvents, 1)
     t.equals(boneToolCapturedClientEvents[1][3].title, 'K9 Unit — Bone Tool')
+    -- Deliberately still 'inform', NOT 'info': server/bonetool.lua's own
+    -- 'help' call site (`NotifyPlayer(src, BONE_TOOL_USAGE, 'inform')`)
+    -- passes that literal string explicitly, so it is completely
+    -- unaffected by server/notify.lua's own `notifyType or 'info'`
+    -- default fix (that default only applies when a caller omits the
+    -- argument entirely) -- this is a separate, still-open instance of
+    -- the same invalid-ox_lib-NotificationType issue, at a call site this
+    -- pass does not own. Update this assertion (to 'info', with a comment
+    -- citing ox_lib's NotificationType alias same as the rest of this
+    -- file) only once server/bonetool.lua's own call site is fixed to
+    -- match -- changing just this assertion without that fix would make
+    -- this spec assert something the real code does not do.
     t.equals(boneToolCapturedClientEvents[1][3].type, 'inform')
 end)
 
@@ -241,10 +269,17 @@ local adminExportsStub = {
 local AdminConfig = {
     Features = { AdminAuditCommands = true },
     AdminAudit = {
-        AcePermission = 'k9unit.admin',
         CommandCooldownMs = 300,
         TrustConsole = false,
         MaxResults = { Certifications = 50, Partnerships = 50, SearchLog = 50 },
+    },
+    -- server/admin.lua asserts Config.Departments is present whenever
+    -- AdminAuditCommands is on: since 2026-08-25 IsAuthorizedAdmin resolves
+    -- the caller's own department threshold from it instead of an ACE grant.
+    -- This spec never authorizes anyone (its GetPlayer stub always returns
+    -- nil), so a single real-shaped entry is all the assert needs.
+    Departments = {
+        police = { label = 'Los Santos Police Department', certifierGrade = 4, auditGrade = 4, autoAccessGrade = nil },
     },
 }
 

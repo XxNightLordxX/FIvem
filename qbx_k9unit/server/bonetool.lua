@@ -31,10 +31,36 @@
     question a human still needs to answer.
 
     ======================================================================
-    ACCESS MODEL — same two-factor gate this task's own brief requires
+    ACE GATE RECONSIDERED, AND CONFIRMED, NOT CARRIED OVER BY DEFAULT (this
+    pass, alongside server/admin.lua's ACE->police-job-rank rewrite): the
+    project owner's reasoning for moving admin.lua's audit surface off ACE
+    was that IT is a police-oversight function, so the right people to
+    trust with it are senior officers in-game, not console/permissions-file
+    holders. That reasoning does NOT transfer to this file. This tool is a
+    DEV-SERVER-ONLY diagnostic (see this file's own header opening
+    paragraph) with no relationship to police work at all — it exists to
+    let a human find a bone INDEX on a quadruped skeleton, nothing about
+    "senior enough in Config.Departments" bears on who should be trusted to
+    spawn/attach test props on a dev box. Concretely, a job-rank gate would
+    be WORSE here on both sides of the population it would (mis)select:
+      - a developer/QA tester on a dev server may have no police job at all
+        (a fresh/test character), so a job-rank gate could lock out the
+        exact people this tool is FOR;
+      - a genuinely senior police officer with no development/server-owner
+        role has no legitimate reason to spawn/attach props on command, so
+        a job-rank gate would hand this out far too widely relative to its
+        actual blast radius (real CreateObject + AttachEntityToEntity
+        calls, see this file's own "test" subcommand).
+    This IS "server-operator tooling" in the sense the admin.lua file used
+    to describe itself, before this pass's reasoning changed for THAT file
+    specifically — an out-of-game, console/permissions-file trust boundary
+    remains the correct primitive here, which is exactly what ACE already
+    is. Kept UNCHANGED: same two-factor gate this task's own brief requires
     (explicit config flag AND an ACE permission check), following
-    server/admin.lua's precedent exactly (read that file's own "ACCESS
-    MODEL" header section before changing anything here):
+    server/admin.lua's ORIGINAL precedent (this file predates and is
+    unaffected by that file's own subsequent rewrite — read admin.lua's
+    current "ACCESS MODEL" header section for why THAT file changed and why
+    the same reasoning does not apply here):
       1. Config.Features.BoneSweepDevTool must be `true` — checked AT
          COMMAND-REGISTRATION TIME in the onResourceStart block below, not
          merely inside the handler. If it's not `true`, the '/k9bonetool'

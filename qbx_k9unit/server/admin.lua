@@ -72,44 +72,95 @@
     follows.
 
     ======================================================================
-    ACCESS MODEL — THE FIRST ACE-GATED SURFACE IN THIS RESOURCE, disclosed
-    explicitly (COMPLEMENTARY_FEATURES.md §9's own "precedent-setting
-    choice, not a blocker" flag). Every other gated action in this resource
-    (HasK9Access, IsEligibleCertifier, CheckPartnershipEligibility) is
-    job/grade-scoped — a K9-HANDLER feature. This surface is
-    SERVER-OPERATOR tooling: "can this connected principal read the
-    search/cert/partnership audit trail" has nothing to do with department
-    membership or K9 certification — an off-duty or civilian-job admin
-    principal must still be able to run these commands, and a certified K9
-    handler with no admin ACE must not. ACE is the correct primitive for
-    that distinction, not a job.grade.level threshold. Precedent for using
-    IsPlayerAceAllowed at all in this codebase: server/combat.lua's
-    FlagNonCompliance staff-notification path
-    (`IsPlayerAceAllowed(tostring(playerId), 'command')`) — but that call
-    site hardcodes FXServer's generic 'command' ace name. THIS file's ace
-    name is a Config value instead (Config.AdminAudit.AcePermission), per
-    this task's explicit "make the ace name configurable" requirement, so a
-    server owner can scope this to a dedicated principal (e.g.
-    'k9unit.admin') rather than overloading the same ace every other
-    'command'-gated resource on their server also checks.
+    ACCESS MODEL — REVISED (project-owner-directed design change, this
+    pass): this surface was originally the first ACE-gated action in this
+    resource (COMPLEMENTARY_FEATURES.md §9's own "precedent-setting choice,
+    not a blocker" flag), on the reasoning that "can this connected
+    principal read the search/cert/partnership audit trail" is
+    SERVER-OPERATOR tooling, unrelated to department membership or K9
+    certification. That reasoning was sound for what it covered, but the
+    project owner's own correction is sound too: ACE is granted from the
+    server console or a permissions file — a SERVER-ADMIN trust boundary —
+    but this is a POLICE resource, and the people who should be trusted to
+    review K9 certification/partnership/search history are SENIOR OFFICERS
+    IN-GAME, not whoever happens to have console access. Every OTHER gated
+    action in this resource (HasK9Access, IsEligibleCertifier,
+    CheckPartnershipEligibility) already uses a job/grade threshold for
+    exactly this kind of authority question; this file now does too.
 
-    CONSOLE (source == 0) IS NOT TRUSTED BY DEFAULT (this reverses this
-    file's original design -- see IsAuthorizedAdmin's own comment for the
-    three-producer reasoning). It is opt-in via Config.AdminAudit.TrustConsole.
-    The superseded original note read: console is trusted unconditionally, WITHOUT an
-    IsPlayerAceAllowed call — DISCLOSED AS A JUDGMENT CALL, not silently
-    decided, same posture server/search.lua's header uses for its own
-    "explicit decision, not a silent default" per-target-cooldown question:
-    FXServer's server console already has unconditional, irrevocable
-    control over this entire process (filesystem, database credentials,
-    the ability to add/remove any ACE principal including its own), so
-    gating a READ-ONLY query behind the same ACE system the console
-    operator could trivially grant themselves anyway would be security
-    theater, not a real boundary. No existing file in this resource
-    establishes a precedent either way — every other command here operates
-    on a live, connected-player source (granterSrc/source), which console
-    (source == 0) never satisfies, so this exact question never came up
-    before this file. FLAGGED FOR CODER-SECURITY TO CONFIRM OR OVERRIDE.
+    GATED ON POLICE JOB RANK, mirroring server/certifications.lua's
+    IsEligibleCertifier EXACTLY — read that function before touching
+    IsAuthorizedAdmin below — including both of its hardening properties,
+    carried over here from day one rather than waiting to rediscover them:
+      - `job.isboss` ALWAYS qualifies, regardless of the configured numeric
+        threshold. A department boss must be able to audit their own
+        department at least as freely as they can already certify/revoke
+        in it.
+      - `job.grade.level` is explicitly type-checked (`type(...) ==
+        'number'`) before ever reaching the `>=` comparison — never merely
+        checked for truthiness/non-nil. A job object shaped differently
+        than qbx_core's documented `{ name, level: number }` schema (a
+        non-number `level`) must FAIL CLOSED (deny) here, never throw an
+        uncaught "attempt to compare number with <type>" error on this
+        authorization path — the exact class of bug coder-security already
+        found and fixed twice in server/certifications.lua
+        (IsEligibleCertifier's own certifierGrade comparison, and
+        HasK9Access's autoAccessGrade branch).
+    Threshold: `Config.Departments[job.name].auditGrade` — a NEW per-
+    department field (config.lua's to add; not this file's). Deliberately
+    a SEPARATE field from `certifierGrade`, not a reuse of it: auditing is
+    a read-only oversight action over a genuinely privacy-sensitive dataset
+    (who searched whom), and a server owner may reasonably want that bar
+    set independently of who is trusted to grant/revoke certifications —
+    e.g. restricting audit to command staff while certifierGrade stays at
+    "K9 training sergeant," or the reverse. Both currently ship with the
+    same default per department (see this file's own "CONFIG THIS FILE
+    ASSUMES EXISTS" section below) purely so day-one behavior doesn't
+    surprise an operator who hasn't reconsidered the split yet — nothing
+    about the code ties the two together.
+
+    NOT SCOPED TO THE CALLER'S OWN DEPARTMENT: passing IsAuthorizedAdmin at
+    all (senior enough in ANY configured Config.Departments job) authorizes
+    every command in this file, including `/k9auditdept` against a
+    DIFFERENT department's roster than the caller's own. This mirrors an
+    existing precedent already established in this resource —
+    GrantCertification explicitly allows cross-department certification
+    (§4.2.3: "this only requires the target be in *some* configured
+    department, not the SAME one as the granter") — rather than inventing a
+    new, narrower same-department-only rule found nowhere else in this
+    codebase. Flagged for coder-security/project-owner to confirm or
+    override if audit access should in fact be department-scoped.
+
+    CONSOLE (source == 0) IS STILL NOT TRUSTED BY DEFAULT — opt-in via the
+    SAME Config.AdminAudit.TrustConsole flag this file already had, kept
+    UNCHANGED by this rewrite, and for a STRONGER reason than before: a
+    job-rank check has NOTHING to compare for source == 0 at all (the
+    console has no Player/PlayerData/job — Config.Departments[nil] is
+    simply nil, not a crash, but it can never be a truthy match either).
+    Without this explicit, separately-reasoned bypass, console access would
+    not merely default off, it would be STRUCTURALLY IMPOSSIBLE under a
+    job-rank gate — silently removing a documented operator capability as a
+    side effect of swapping the authorization mechanism, not a decision
+    anyone actually made. The original three-producer rationale for
+    defaulting this OFF is UNCHANGED by this rewrite — see
+    IsAuthorizedAdmin's own comment below for the full writeup, preserved
+    verbatim from before this pass. A server owner who wants a genuine
+    console operator to run these commands still sets TrustConsole = true
+    and still accepts that all three producers (console, RCON, any
+    co-located resource via ExecuteCommand) gain access, exactly as before.
+
+    ACE IS NO LONGER USED BY THIS FILE AT ALL, as of this pass.
+    `Config.AdminAudit.AcePermission` is now DEAD CONFIG — see this pass's
+    hand-off note to the config owner: recommended for removal, not merely
+    left unread by this file. `IsPlayerAceAllowed` itself remains a
+    confirmed apiset:server native (`curl`-verified against
+    ext/native-decls/IsPlayerAceAllowed.md this pass) and is still used
+    elsewhere in this resource (server/combat.lua's FlagNonCompliance
+    staff-notification path, server/bonetool.lua's own separate ACE gate —
+    see that file's own header for why IT was deliberately left ACE-gated,
+    not moved to job rank, by this same pass) — nothing about this rewrite
+    calls that native's own correctness into question, this file simply no
+    longer has a reason to call it.
     ======================================================================
 
     SQL SAFETY — read before touching any query function below:
@@ -333,11 +384,25 @@
     has actually opted in — never silently on an unrelated server that
     hasn't touched this feature at all):
       Config.Features.AdminAuditCommands  : boolean (new; default false)
-      Config.AdminAudit.AcePermission     : string  (new; ace principal name)
-      Config.AdminAudit.CommandCooldownMs : number  (new; shared per-source cooldown, ms)
+      Config.AdminAudit.TrustConsole      : boolean (existing; default false — see ACCESS MODEL above for why this is unchanged, not removed, by the ACE->job-rank rewrite)
+      Config.AdminAudit.CommandCooldownMs : number  (existing; shared per-source cooldown, ms)
       Config.AdminAudit.MaxResults.Certifications : integer, 1..100
       Config.AdminAudit.MaxResults.Partnerships   : integer, 1..100
       Config.AdminAudit.MaxResults.SearchLog      : integer, 1..100
+      Config.Departments[job].auditGrade  : number (NEW this pass, per department —
+                                            see ACCESS MODEL above; job.grade.level
+                                            required to run any command in this file,
+                                            job.isboss always qualifies too, same
+                                            shape as Config.Departments[job].certifierGrade
+                                            in server/certifications.lua). Recommended
+                                            defaults matching this pass's report to the
+                                            config owner: police=4, sheriff=3, bcso=3
+                                            (identical to each department's own
+                                            certifierGrade, day one — see rationale above).
+
+      Config.AdminAudit.AcePermission is now DEAD CONFIG — no longer read by
+      this file as of this pass (see ACCESS MODEL above). Recommended for
+      removal from config.lua, not merely left in place unread.
 ]]
 
 -- Hard ceiling enforced regardless of what Config.AdminAudit.MaxResults.*
@@ -409,17 +474,35 @@ end
 
 --- Server-authoritative authorization check for every command in this
 --- file. See this file's header "ACCESS MODEL" section for the full
---- reasoning on both the ACE-not-job-grade choice and the console
+--- reasoning on both the ACE->job-rank rewrite and the console
 --- (source == 0) carve-out.
+---
+--- JOB-RANK CHECK (this pass, project-owner-directed): mirrors
+--- server/certifications.lua's IsEligibleCertifier exactly — same
+--- Config.Departments[job.name] membership requirement, same job.isboss
+--- short-circuit, same explicit `type(job.grade.level) == 'number'` guard
+--- before ever comparing it, applied against a NEW, separate threshold
+--- (Config.Departments[job.name].auditGrade, not certifierGrade — see
+--- header for why these are deliberately independent fields). FAILS CLOSED
+--- on every path where a job cannot be fully resolved: no Player, no
+--- PlayerData, no job, job.name not a configured department, no
+--- dept.auditGrade (or a non-number one), no job.grade, or a non-number
+--- job.grade.level all return false — none of them ever reach the `>=`
+--- comparison, so none of them can throw. `job.isboss` is the only path
+--- that returns true without inspecting job.grade at all, matching
+--- IsEligibleCertifier's own documented behavior.
 --- @param source number
 --- @return boolean
 local function IsAuthorizedAdmin(source)
-    -- SECURITY REVIEW OUTCOME (coder-security): this function previously did
-    -- `if source == 0 then return true end`, on the reasoning that the server
-    -- console already owns the process, the DB and the ACE system, so gating a
-    -- read-only query behind ACE was not a real boundary. That reasoning is
-    -- sound for the console -- and WRONG for FiveM, because `source == 0` has
-    -- three distinct producers that this layer cannot tell apart:
+    -- SECURITY REVIEW OUTCOME (coder-security, prior pass, preserved verbatim
+    -- -- the reasoning below is about `source == 0` itself and is unaffected
+    -- by swapping the second branch from an ACE check to a job-rank check):
+    -- this function previously did `if source == 0 then return true end`, on
+    -- the reasoning that the server console already owns the process, the DB
+    -- and the ACE system, so gating a read-only query behind ACE was not a
+    -- real boundary. That reasoning is sound for the console -- and WRONG for
+    -- FiveM, because `source == 0` has three distinct producers that this
+    -- layer cannot tell apart:
     --   1. the real server console (the case the reasoning describes),
     --   2. an RCON client, authenticated only by `rcon_password` -- a
     --      network-facing credential, entirely separate from filesystem/DB/ACE
@@ -432,11 +515,41 @@ local function IsAuthorizedAdmin(source)
     --      reading the entire privacy-sensitive audit trail with no ACE grant
     --      of its own.
     -- So the blanket bypass trusted a far broader and weaker set of actors than
-    -- its justification described. It is now opt-in and defaults off.
+    -- its justification described. It is opt-in and defaults off. THIS PASS
+    -- ADDS A SECOND, INDEPENDENT REASON THIS BRANCH MUST STAY EXPLICIT: a
+    -- job-rank check has no job object to consult for source == 0 at all, so
+    -- without this early, separately-reasoned return, console access would be
+    -- structurally impossible rather than a deliberate default -- see header
+    -- ACCESS MODEL for the full writeup.
     if source == 0 then
         return Config.AdminAudit.TrustConsole == true
     end
-    return IsPlayerAceAllowed(tostring(source), Config.AdminAudit.AcePermission)
+
+    local Player = exports.qbx_core:GetPlayer(source)
+    if not Player or not Player.PlayerData then return false end
+
+    local job = Player.PlayerData.job
+    if not job or not Config.Departments[job.name] then return false end
+
+    -- job.isboss always qualifies regardless of the configured numeric
+    -- threshold -- same rule, same reasoning, as
+    -- server/certifications.lua's IsEligibleCertifier.
+    if job.isboss then return true end
+
+    -- SAME hardening IsEligibleCertifier/HasK9Access already carry: an
+    -- explicit type check on BOTH operands before the `>=` comparison, not a
+    -- pcall. A pcall here would convert a real job-shape bug into exactly the
+    -- silent "this rank can never audit anything" no-op this codebase's own
+    -- prior security fixes exist to stop happening quietly. Non-number
+    -- dept.auditGrade (unset/misconfigured department) or non-number
+    -- job.grade.level (a job object shaped differently than qbx_core's
+    -- documented `{ name, level: number }` schema) both FAIL CLOSED here --
+    -- this function returns false, never throws, and never reaches the
+    -- comparison with a bad operand on either side.
+    local dept = Config.Departments[job.name]
+    if type(dept.auditGrade) ~= 'number' then return false end
+
+    return job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept.auditGrade
 end
 
 --- Parses and clamps an optional caller-supplied result-count argument.
@@ -817,13 +930,37 @@ AddEventHandler('onResourceStart', function(resourceName)
         '[qbx_k9unit] Config.Features.AdminAuditCommands is true but Config.AdminAudit is missing.'
     )
     assert(
-        type(Config.AdminAudit.AcePermission) == 'string' and Config.AdminAudit.AcePermission ~= '',
-        '[qbx_k9unit] Config.AdminAudit.AcePermission must be a non-empty string.'
-    )
-    assert(
         type(Config.AdminAudit.CommandCooldownMs) == 'number' and Config.AdminAudit.CommandCooldownMs >= MIN_COMMAND_COOLDOWN_MS,
         ('[qbx_k9unit] Config.AdminAudit.CommandCooldownMs must be a number >= %dms.'):format(MIN_COMMAND_COOLDOWN_MS)
     )
+    -- Config.AdminAudit.AcePermission is intentionally NOT asserted here any
+    -- more -- this file no longer calls IsPlayerAceAllowed at all as of this
+    -- pass (see header "ACCESS MODEL"). If a shipped config still declares
+    -- it, that's harmless dead data, not a startup failure.
+
+    -- NEW this pass (ACE->job-rank rewrite): IsAuthorizedAdmin compares
+    -- job.grade.level against Config.Departments[job.name].auditGrade for
+    -- every non-boss caller. Asserted here, not left to fail silently at
+    -- first use, for the SAME reason server/certifications.lua asserts
+    -- dept.certifierGrade at its own load time: a missing/malformed
+    -- auditGrade on any configured department would otherwise mean every
+    -- non-boss officer in that department silently, permanently fails
+    -- every audit command (IsAuthorizedAdmin's own type-check already fails
+    -- closed at runtime -- see that function's doc comment -- but a
+    -- fail-closed RUNTIME default is not a substitute for a loud STARTUP
+    -- error once this feature has actually been opted into). Only run once
+    -- Config.Features.AdminAuditCommands is true, matching this whole
+    -- block's own "operator has opted in, deserves an immediate failure"
+    -- convention -- an unrelated server that never touches this feature at
+    -- all must not be forced to add auditGrade to every department it
+    -- didn't otherwise need to configure for this file.
+    assert(type(Config.Departments) == 'table', '[qbx_k9unit] Config.Features.AdminAuditCommands is true but Config.Departments is missing -- IsAuthorizedAdmin requires it to resolve the caller\'s own department threshold.')
+    for jobName, dept in pairs(Config.Departments) do
+        assert(
+            type(dept) == 'table' and type(dept.auditGrade) == 'number',
+            ('[qbx_k9unit] Config.Departments[%s].auditGrade must be a number -- IsAuthorizedAdmin compares job.grade.level >= dept.auditGrade for every non-boss officer in that department. A missing/malformed value here means every audit command silently (but safely, per IsAuthorizedAdmin\'s own fail-closed type check) denies every non-boss caller in that department, with nothing logged at startup to explain why.'):format(tostring(jobName))
+        )
+    end
 
     local maxResults = Config.AdminAudit.MaxResults
     assert(type(maxResults) == 'table', '[qbx_k9unit] Config.AdminAudit.MaxResults must be a table.')

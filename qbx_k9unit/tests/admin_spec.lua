@@ -126,7 +126,7 @@ local Config = {
     -- name) plus the absence of any 'ambulance' entry is enough to exercise
     -- both the valid and unconfigured-department branches below.
     Departments = {
-        police = { label = 'Los Santos Police Department', certifierGrade = 4, autoAccessGrade = nil },
+        police = { label = 'Los Santos Police Department', certifierGrade = 4, auditGrade = 4, autoAccessGrade = nil },
     },
 }
 
@@ -171,9 +171,19 @@ t.isNotNil(registeredCommands.k9auditdept, 'onResourceStart must register k9audi
 --- without needing to fast-forward the fake clock. Returns nothing; inspect
 --- capturedQueries/capturedNotifications/capturedPrints afterward.
 local nextSource = 1000
+--- Authorization moved from an ACE grant to police job rank on 2026-08-25.
+--- IsAuthorizedAdmin no longer calls IsPlayerAceAllowed at all, so granting
+--- an ACE here would authorize nothing. A source is now authorized by having
+--- a resolvable player whose job is a configured department at or above that
+--- department's auditGrade -- grade 4 against the fixture's police entry.
 local function freshAuthorizedSource()
     nextSource = nextSource + 1
-    aceGrants[tostring(nextSource)] = true
+    playersBySource[nextSource] = {
+        PlayerData = {
+            citizenid = 'CIT' .. tostring(nextSource),
+            job = { name = 'police', grade = { level = 4 } },
+        },
+    }
     return nextSource
 end
 
@@ -330,10 +340,9 @@ end)
 -- IsAuthorizedAdmin: access control, checked BEFORE argument validity
 -- ----------------------------------------------------------------------
 
-t.test('IsAuthorizedAdmin: a source with no ACE grant is denied, no query ever runs', function()
+t.test('IsAuthorizedAdmin: a source with no resolvable player record is denied, no query ever runs', function()
     resetCaptures()
     local src = 9001
-    aceGrants[tostring(src)] = false
     registeredCommands.k9auditcert(src, { 'ABCD1234' })
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
@@ -343,7 +352,6 @@ end)
 t.test('IsAuthorizedAdmin: denial is checked before argument shape (malformed args never even inspected)', function()
     resetCaptures()
     local src = 9002
-    aceGrants[tostring(src)] = false
     -- Deliberately malformed AND unauthorized: if auth were checked after
     -- args, this would fail on citizenid validity with an 'invalid_args'
     -- audit outcome instead of 'denied'.
@@ -370,6 +378,101 @@ t.test('IsAuthorizedAdmin: console (source == 0) is allowed once TrustConsole is
     registeredCommands.k9auditcert(0, { 'ABCD1234' })
     t.equals(#capturedQueries, 1)
     Config.AdminAudit.TrustConsole = false -- restore for subsequent tests
+end)
+
+--- Registers a player record of an ARBITRARY shape at a fresh source, so the
+--- cases below can drive IsAuthorizedAdmin's job-rank branches directly
+--- rather than only its always-authorized happy path.
+--- @param playerData table? the PlayerData table to expose, or nil for "no record"
+--- @return number source
+local function freshSourceWithPlayerData(playerData)
+    nextSource = nextSource + 1
+    if playerData ~= nil then
+        playersBySource[nextSource] = { PlayerData = playerData }
+    end
+    return nextSource
+end
+
+t.test('IsAuthorizedAdmin: a job that is not a configured K9 department is denied', function()
+    resetCaptures()
+    -- 'ambulance' is deliberately absent from the Config.Departments fixture.
+    -- Grade 10 is far above any auditGrade -- rank must not substitute for
+    -- being in a K9 department at all.
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITAMB1',
+        job = { name = 'ambulance', grade = { level = 10 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 0)
+    t.equals(#capturedNotifications, 1)
+    t.contains(capturedNotifications[1].description, 'not authorized')
+end)
+
+t.test('IsAuthorizedAdmin: a configured department at a grade BELOW auditGrade is denied', function()
+    resetCaptures()
+    -- The fixture's police auditGrade is 4; grade 3 is one short. This is the
+    -- case that proves the threshold is really compared, not merely that a
+    -- configured department was found.
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITLOW1',
+        job = { name = 'police', grade = { level = 3 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 0)
+    t.equals(#capturedNotifications, 1)
+    t.contains(capturedNotifications[1].description, 'not authorized')
+end)
+
+t.test('IsAuthorizedAdmin: job.isboss authorizes regardless of grade level', function()
+    resetCaptures()
+    -- Grade 0 is below auditGrade 4, but qbx_core's isboss flag marks a job
+    -- owner -- they are authorized without meeting the numeric threshold.
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITBOSS',
+        job = { name = 'police', isboss = true, grade = { level = 0 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 1)
+end)
+
+t.test('IsAuthorizedAdmin: a non-number job.grade.level fails CLOSED, it does not throw', function()
+    resetCaptures()
+    -- A hand-corrupted DB row (or a future qbx_core shape change) could hand
+    -- back a string where a number is expected. A `>=` against a string would
+    -- raise an uncaught 'attempt to compare' error inside the command
+    -- handler; the guard must deny instead. pcall proves no error escapes.
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITBAD1',
+        job = { name = 'police', grade = { level = '4' } },
+    })
+    local ok, err = pcall(registeredCommands.k9auditcert, src, { 'ABCD1234' })
+    t.isTrue(ok, 'a non-number grade level must not raise: ' .. tostring(err))
+    t.equals(#capturedQueries, 0)
+    t.equals(#capturedNotifications, 1)
+    t.contains(capturedNotifications[1].description, 'not authorized')
+end)
+
+t.test('IsAuthorizedAdmin: a job table with no grade sub-table at all fails CLOSED', function()
+    resetCaptures()
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITNOG1',
+        job = { name = 'police' },
+    })
+    local ok, err = pcall(registeredCommands.k9auditcert, src, { 'ABCD1234' })
+    t.isTrue(ok, 'a missing grade table must not raise: ' .. tostring(err))
+    t.equals(#capturedQueries, 0)
+    t.equals(#capturedNotifications, 1)
+    t.contains(capturedNotifications[1].description, 'not authorized')
+end)
+
+t.test('IsAuthorizedAdmin: a player record with no job at all fails CLOSED', function()
+    resetCaptures()
+    local src = freshSourceWithPlayerData({ citizenid = 'CITNOJ1' })
+    local ok, err = pcall(registeredCommands.k9auditcert, src, { 'ABCD1234' })
+    t.isTrue(ok, 'a missing job table must not raise: ' .. tostring(err))
+    t.equals(#capturedQueries, 0)
+    t.equals(#capturedNotifications, 1)
+    t.contains(capturedNotifications[1].description, 'not authorized')
 end)
 
 -- ----------------------------------------------------------------------
@@ -634,10 +737,9 @@ end)
 -- below is what would have caught that).
 -- ----------------------------------------------------------------------
 
-t.test('k9auditdept: a source with no ACE grant is denied, no query ever runs', function()
+t.test('k9auditdept: a source with no resolvable player record is denied, no query ever runs', function()
     resetCaptures()
     local src = 9101
-    aceGrants[tostring(src)] = false
     registeredCommands.k9auditdept(src, { 'police' })
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)

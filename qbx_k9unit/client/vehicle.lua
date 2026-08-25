@@ -243,6 +243,30 @@ end)
 -- player why, rather than leaving them frozen/invisible relying on
 -- knowing to open the radial menu instead.
 --
+-- OWN-DEATH RELEASE (lifecycle QA finding, this pass — the softlock this
+-- thread's death branch below exists to close): this was the only place in
+-- the codebase applying a persistent native ped state with no own-death
+-- handling at all, unlike client/vision.lua (~line 165),
+-- client/screenfx.lua (~line 297), client/propattachment.lua's "OWN-DEATH
+-- AUTO-DETACH" (~line 384) and client/fetch.lua's "OWN-DEATH AUTO-DETACH/
+-- DROP" (~line 558), all of which force-clear on IsEntityDead(PlayerPedId()).
+-- That gap mattered here specifically because client/combat.lua's own
+-- repeatedly-verified finding (its ActiveBiteHold/ActiveDragSpeedLimit/
+-- ActiveForcedRagdoll death branches, ~lines 1435/1564/1611) is that the
+-- standard FiveM respawn flow REUSES the same ped handle rather than
+-- allocating a new one — none of collision-disabled, frozen, invisible or
+-- attached reset on death or respawn on their own, so a K9 who died while
+-- tucked would respawn frozen/invisible/collisionless/still-attached with
+-- no self-service recovery (no keybind for this, and the ox_target
+-- "Release From Vehicle" option above requires hovering the vehicle, which
+-- is unreachable while frozen and invisible — let alone while dead).
+-- Folded into THIS existing thread rather than a new dedicated one (unlike
+-- client/fetch.lua's/client/propattachment.lua's separate poll threads):
+-- this thread already runs at the exact cadence needed (active only while
+-- vehicleState is set, idling otherwise) for the exact same time window a
+-- death-while-tucked can occur in, so a second parallel thread polling the
+-- same PlayerPedId() over the same window would be pure duplication.
+--
 -- One persistent thread for the resource's whole lifetime, matching
 -- client/movement.lua's leash pull-back thread's own established
 -- idle/active dual-interval convention, rather than spawning a new thread
@@ -268,8 +292,52 @@ CreateThread(function()
 
         if vehicleState then
             sleepMs = VEHICLE_WATCHDOG_ACTIVE_MS
+            local ped = PlayerPedId()
 
-            if ResolveVehicleFromState() then
+            if DoesEntityExist(ped) and IsEntityDead(ped) then
+                -- OWN-DEATH RELEASE — see this thread's own header comment
+                -- above ("OWN-DEATH RELEASE") for the full why. Checked
+                -- BEFORE the vehicle-resolve branch below on purpose: death
+                -- must release regardless of whether the vehicle is still
+                -- present, and doing so here (rather than as a third,
+                -- independent branch) keeps this thread's per-iteration
+                -- work mutually exclusive — exactly one of "release for
+                -- death," "still fine," or "release for vehicle loss" runs
+                -- per tick, and vehicleState is nilled inside this same
+                -- iteration, so the vehicle-loss branch below can never
+                -- ALSO fire for the same tuck. If the vehicle happened to
+                -- despawn during the same death (ResolveVehicleFromState()
+                -- already nil by the time this runs), that is exactly the
+                -- nil-vehicle case ReleasePedFromVehicleState already
+                -- documents and tolerates — a single release either way,
+                -- never two: once vehicleState is nil, every other release
+                -- path (ExitK9Vehicle, onResourceStop, this thread's own
+                -- outer `if vehicleState then` guard) already no-ops on a
+                -- nil vehicleState, so there is no path left that could
+                -- run ReleasePedFromVehicleState a second time for the
+                -- same ride.
+                --
+                -- Reuses ReleasePedFromVehicleState exactly as every other
+                -- caller does — including its reposition-near-vehicle step
+                -- — rather than a death-specific variant, so the four
+                -- native states stay cleared in exactly one place. Calling
+                -- SetEntityCoords/SetEntityHeading on an already-dead ped
+                -- is harmless, and moving the corpse out from the vehicle's
+                -- attach offset to just behind it is arguably nicer than
+                -- leaving it floating mid-air relative to a (possibly still
+                -- moving, if someone else is driving) vehicle -- but this
+                -- is NOT relied on for correctness. Wherever this
+                -- resource's actual respawn/ambulance flow next places this
+                -- ped once it resurrects it is that flow's decision, same
+                -- as for a K9 that died any other way; this thread's only
+                -- job is making sure that flow inherits an unfrozen,
+                -- visible, collidable, detached ped instead of one still
+                -- wearing this file's four vehicle flags.
+                missStreak = 0
+                ReleasePedFromVehicleState(ped, ResolveVehicleFromState())
+                vehicleState = nil
+                lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.released_on_death'), type = 'error' })
+            elseif ResolveVehicleFromState() then
                 missStreak = 0
             else
                 missStreak = missStreak + 1
@@ -279,7 +347,7 @@ CreateThread(function()
                     -- vehicle is nil here by construction (that's what triggered
                     -- this branch), so ReleasePedFromVehicleState just restores
                     -- the ped in place per its own documented nil-vehicle path.
-                    ReleasePedFromVehicleState(PlayerPedId(), nil)
+                    ReleasePedFromVehicleState(ped, nil)
                     vehicleState = nil
                     lib.notify({ title = locale('common.notify_title'), description = locale('vehicle.vehicle_lost'), type = 'error' })
                 end

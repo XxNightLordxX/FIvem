@@ -185,16 +185,26 @@ Config.Departments = {
     ['police'] = {
         label           = 'Los Santos Police Department',
         certifierGrade  = 4,    -- job.grade.level required to grant/revoke certs (job.isboss always qualifies too)
+        -- job.grade.level required to run the read-only /k9audit* commands.
+        -- These were ACE-gated until 2026-08-25 and are now gated on police
+        -- rank instead, at the project owner's request: auditing K9
+        -- certifications is a senior-officer function, not a server-admin
+        -- one. Set at or above certifierGrade -- someone trusted to grant a
+        -- certification should be able to see who holds one. job.isboss
+        -- always qualifies, same as certifierGrade.
+        auditGrade      = 4,
         autoAccessGrade = nil,  -- nil = no auto-bypass; set an integer to let that grade+ skip certification (see §4.1 assumption)
     },
     ['sheriff'] = {
         label           = 'Blaine County Sheriff',
         certifierGrade  = 3,
+        auditGrade      = 3,
         autoAccessGrade = nil,
     },
     ['bcso'] = {
         label           = 'Blaine County Sheriff (legacy job name)',
         certifierGrade  = 3,
+        auditGrade      = 3,
         autoAccessGrade = nil,
     },
 }
