@@ -170,11 +170,96 @@
 -- or RefreshCertificationCache(citizenid, jobName).
 local Certifications = {}
 
+-- ======================================================================
+-- CONFIG-SAFETY GUARD (coder-backend, this pass) — every sibling server
+-- file (propattachment.lua, bonetool.lua, progression.lua, admin.lua,
+-- search.lua) asserts its own config's shape loudly, failing resource
+-- start on a genuine misconfiguration; THIS file — the authorization root
+-- HasK9Access gates nearly every other feature behind — had none (found
+-- and reported by the agent that wrote tests/certifications_spec.lua's 47
+-- cases, which deliberately did not fabricate startup-assert tests for
+-- asserts that did not exist).
+--
+-- Run UNCONDITIONALLY, at this file's own LOAD time — NOT deferred into an
+-- onResourceStart handler the way every sibling file above does it. That
+-- matters here specifically: the K9ModelHashes block immediately below
+-- this guard already reads Config.Peds and calls GetHashKey on every
+-- entry's model field the instant this file itself loads, at file scope —
+-- by the time any onResourceStart handler could run, that read has
+-- already happened. config.lua is a shared_script, loaded in full before
+-- any server_scripts file (this one included) starts executing, so Config
+-- already holds its real, final values by the time this line runs — not a
+-- load-order gamble, the same reasoning server/search.lua's own
+-- file-load-time ContrabandItemSet precomputation comment already gives
+-- for the identical structural point ("config.lua is a shared_script,
+-- loaded before this file").
+--
+-- CHECKED AGAINST THE ACTUAL SHIPPED config.lua before writing every
+-- assert below (Config.Departments.police/sheriff/bcso — certifierGrade
+-- 4/3/3, autoAccessGrade nil for all three; Config.Peds' four real a_c_*
+-- models; Config.CertifyProximityMeters = 5.0): every one of them passes
+-- against the real shipped config. Also re-run against
+-- tests/certifications_spec.lua's own newFixture() default Config shape
+-- (2-department Config.Departments, 2-entry Config.Peds, proximityMeters
+-- default 5.0) and its explicit autoAccessGrade-bypass fixtures (10, an
+-- integer) — none of the spec's 47 cases construct a Config shape any of
+-- these asserts would reject.
+-- ======================================================================
+assert(type(Config.Departments) == 'table',
+    '[qbx_k9unit] Config.Departments must be a table -- HasK9Access, IsEligibleCertifier, and every ' ..
+    'certify/revoke path index it by job.name to decide K9 access and certifier eligibility; a missing ' ..
+    'table would make every job fail K9 access outright, with the failure surfacing only as "nobody can ' ..
+    'ever use K9 features," never as a clear config error.')
+for jobName, dept in pairs(Config.Departments) do
+    assert(type(dept) == 'table',
+        ('[qbx_k9unit] Config.Departments[%s] must be a table with certifierGrade/autoAccessGrade/label fields -- ' ..
+        'IsEligibleCertifier and HasK9Access both index straight into it (dept.certifierGrade, dept.autoAccessGrade) ' ..
+        'with no type guard of their own.'):format(tostring(jobName)))
+    assert(type(dept.certifierGrade) == 'number',
+        ('[qbx_k9unit] Config.Departments[%s].certifierGrade must be a number -- IsEligibleCertifier compares ' ..
+        'job.grade.level >= dept.certifierGrade directly for every non-boss officer in this department. A ' ..
+        'malformed value here (nil, a string, a boolean) surfaces as a certifier who can silently never certify ' ..
+        'or revoke anyone in this department, with no error and nothing logged -- exactly the failure mode this ' ..
+        'assert exists to catch at start instead.'):format(jobName))
+    assert(dept.autoAccessGrade == nil or type(dept.autoAccessGrade) == 'number',
+        ('[qbx_k9unit] Config.Departments[%s].autoAccessGrade must be nil (no auto-bypass -- the shipped default, ' ..
+        'and a legitimate, MUST-stay-valid value) or a number -- HasK9Access only ever treats it as a bypass ' ..
+        'threshold when `type(dept.autoAccessGrade) == \'number\'` holds; any other non-nil value (a string, a ' ..
+        'boolean, a table) silently disables the bypass with no error, which looks identical to a deliberate nil ' ..
+        'to whoever configured it.'):format(jobName))
+end
+
 --- Precomputed set of Config.Peds model hashes, built once at file load.
 --- Used ONLY by the grant-time model check (§4.2 condition 5) — per
 --- §4.1/§4.5, ordinary access checks (HasK9Access) never consult this.
 --- Generic over Config.Peds — no hardcoded model name anywhere (SPEC.md §3
 --- acceptance bullet 3), including custom streamed entries.
+--
+-- CONFIG-SAFETY GUARD (coder-backend, this pass) — see the block above
+-- this comment for the full "why load time, not onResourceStart"
+-- reasoning; this specific assert must run BEFORE the `for` loop three
+-- lines below it, since that loop is what actually calls GetHashKey on
+-- every entry.
+assert(type(Config.Peds) == 'table' and #Config.Peds > 0,
+    '[qbx_k9unit] Config.Peds must be a non-empty array -- K9ModelHashes (built immediately below, at this ' ..
+    'file\'s own load time) is derived entirely from it, and IsConfiguredK9Model (the grant-time model check, ' ..
+    'SPEC.md §4.2.5) could never accept ANY model if this were empty or malformed -- every certification grant ' ..
+    'attempt would fail with "target not K9 model" regardless of the target\'s actual ped.')
+for i, pedEntry in ipairs(Config.Peds) do
+    assert(type(pedEntry) == 'table' and type(pedEntry.model) == 'string' and pedEntry.model ~= '',
+        ('[qbx_k9unit] Config.Peds[%d].model must be a non-empty string -- GetHashKey(pedEntry.model) is called ' ..
+        'on it at this file\'s own load time to build K9ModelHashes; a missing/empty/non-string model here means ' ..
+        'that entry can never be matched by IsConfiguredK9Model, silently and permanently, with nothing logged ' ..
+        'to explain why a real K9 model never passes the grant-time check.'):format(i))
+end
+
+assert(type(Config.CertifyProximityMeters) == 'number' and Config.CertifyProximityMeters > 0,
+    '[qbx_k9unit] Config.CertifyProximityMeters must be a positive number -- GrantCertification and ' ..
+    'RevokeCertification both compare a live, server-measured distance against it (SPEC.md §4.2.4) before ' ..
+    'allowing an online grant/revoke. Zero or negative would make every such attempt fail as "too far" ' ..
+    'regardless of actual proximity, and a non-number would throw at the very first certify/revoke attempt ' ..
+    'instead of failing loudly here at resource start.')
+
 local K9ModelHashes = {}
 for _, pedEntry in ipairs(Config.Peds) do
     K9ModelHashes[GetHashKey(pedEntry.model)] = true
