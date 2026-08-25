@@ -157,9 +157,15 @@
     confirmed apiset:server native (`curl`-verified against
     ext/native-decls/IsPlayerAceAllowed.md this pass) and is still used
     elsewhere in this resource (server/combat.lua's FlagNonCompliance
-    staff-notification path, server/bonetool.lua's own separate ACE gate —
-    see that file's own header for why IT was deliberately left ACE-gated,
-    not moved to job rank, by this same pass) — nothing about this rewrite
+    staff-notification path, and, until later the
+    same day, server/bonetool.lua. NOTE: bonetool.lua has SINCE been
+    converted off ACE too, so any claim here that it was "deliberately left
+    ACE-gated" is stale. It now gates on `job.isboss` only -- a deliberately
+    stricter principal than this file's `auditGrade`, because read-only audit
+    access must not also confer a prop-spawning dev tool -- plus a replicated
+    convar an operator must set on purpose. server/combat.lua's
+    FlagNonCompliance staff-notification path is now the only live
+    IsPlayerAceAllowed call site left in this resource) — nothing about this rewrite
     calls that native's own correctness into question, this file simply no
     longer has a reason to call it.
     ======================================================================

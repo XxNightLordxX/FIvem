@@ -240,24 +240,46 @@ local AwardXPCooldown = NewNestedCooldown(500)
 -- shared budget, the four independent ceilings simply never interact, which
 -- is exactly the gap this section exists to close.
 --
--- IMPLEMENTATION: a per-citizenid TOKEN BUCKET, not a fixed-window counter
--- that resets to 0 on a wall-clock boundary. A fixed window has a
--- well-known boundary-doubling flaw for exactly this use case: a player
--- could spend their full budget in the last instant of window N, then spend
--- a full budget again in the first instant of window N+1, mint 2x the
--- intended cap within a couple of real seconds around every window edge. A
--- token bucket has no edge to exploit -- capacity refills continuously at a
--- constant rate, so the enforced ceiling (XP_MINT_BUDGET_CAP_XP per
--- XP_MINT_BUDGET_WINDOW_MS) holds over ANY rolling window of that length,
--- not just ones aligned to a reset boundary. A brand-new citizenid's bucket
--- starts FULL (capacity == the intended hourly ceiling, by design -- see the
--- two constants' own ratio below), not empty: this is the standard, correct
--- token-bucket initialization for "at most N per any window," and starting
--- empty would only needlessly punish a legitimate new player's first hour
--- for no security benefit (the realistic legitimate rate this resource's own
--- config.lua comment documents, ~500 XP/hr, sits far enough below the cap
--- that a full-from-the-start bucket never meaningfully matters for real
--- play).
+-- IMPLEMENTATION: a per-citizenid TOKEN BUCKET that STARTS EMPTY (tokens =
+-- 0) for a brand-new or freshly-recreated citizenid, refilling continuously
+-- toward XP_MINT_BUDGET_CAP_XP at a constant rate -- NOT a fixed-window
+-- counter that resets to 0 on a wall-clock boundary, and NOT a bucket that
+-- starts FULL either. Two properties, both verified by direct simulation
+-- before landing this (see this pass's own report), not assumed:
+--   1. A fixed window has a well-known boundary-doubling flaw: a player
+--      could spend a full budget in the last instant of window N, then spend
+--      a full budget again in the first instant of window N+1, minting up to
+--      2x the intended cap within a couple of real seconds around every
+--      window edge. A token bucket has no such edge -- capacity refills
+--      continuously, never resets to 0 on a clock boundary.
+--   2. STARTING EMPTY, not full, matters just as much: a bucket that started
+--      FULL would let that SAME 2x-cap burst happen on every citizenid's
+--      very first hour (an untouched bucket already holding a full cap's
+--      worth of "free" tokens, on top of the cap's worth that then refills
+--      DURING that same hour) -- simulated before landing this: starting
+--      full grants up to 7,150 XP in a citizenid's first simulated hour of
+--      continuous max-rate farming, comfortably defeating this section's own
+--      3,600 XP/hr design goal. Starting EMPTY instead makes the bound
+--      rigorous, not approximate: for a bucket at 0 at time 0, cumulative XP
+--      granted by any later time T is bounded by XP_MINT_BUDGET_CAP_XP * (T
+--      / XP_MINT_BUDGET_WINDOW_MS), with equality only reachable by spending
+--      every token the instant it accrues (continuous max-rate farming) --
+--      no idle-then-burst pattern can ever beat continuous farming for the
+--      metric that actually matters (time to reach a fixed cumulative total,
+--      e.g. the 9,000-XP Elite tier), since banking tokens during an idle
+--      stretch only shifts WHEN within a window they get spent, never
+--      creates tokens ahead of the linear accrual schedule. Re-verified by
+--      direct simulation (start-empty, continuous max-rate farming): exactly
+--      3,600 XP granted at T=1hr, exactly 9,000 XP granted at T=2.5hr --
+--      matching this section's own numbers below exactly, not merely
+--      approximately.
+--   Starting empty costs a legitimate new player nothing in practice: the
+--   realistic legitimate rate this resource's own config.lua comment
+--   documents, ~500 XP/hr, accrues into an empty bucket far faster than it
+--   could ever be spent (inside the first ~8.3 real minutes of play, an
+--   empty bucket already holds more headroom than a legitimate hour's worth
+--   of play could consume), so a start-empty bucket is never the reason a
+--   genuine player notices anything different.
 --
 -- NUMBERS CHOSEN (XP_MINT_BUDGET_CAP_XP / XP_MINT_BUDGET_WINDOW_MS below):
 -- 3,600 XP per 3,600,000ms (1 hour). Needed: strictly below 4,500 XP/hr
@@ -374,15 +396,23 @@ local function RefillMintBudget(bucket, now)
 end
 
 -- Bounds XPMintBudget's memory growth WITHOUT resetting any citizenid's
--- remaining budget early (see XPMintBudget's own declaration comment above
+-- remaining budget EARLY (see XPMintBudget's own declaration comment above
 -- for why playerDropped cannot be used here the way K9XP/AwardXPCooldown
 -- use it). An entry is only ever dropped once `now - lastRefillAt >=
 -- XP_MINT_BUDGET_WINDOW_MS` -- the exact point at which RefillMintBudget
--- would have clamped it back to a full bucket had anyone looked -- so
--- dropping it here and letting AwardXP recreate a fresh, full bucket on that
--- citizenid's next award is observably identical to leaving the old entry
--- in place. Sweep interval (5 minutes) is well under the window (1 hour) so
--- no entry lingers long past the point it became safe to drop; not built on
+-- would have clamped it back to a FULL bucket had anyone looked. Dropping it
+-- here and letting AwardXP recreate a fresh EMPTY bucket (see AwardXP's own
+-- comment on why new/recreated buckets start at 0, not at capacity) on that
+-- citizenid's next award is therefore CONSERVATIVE, not exactly identical to
+-- leaving the old (by then full) entry in place -- a citizenid who returns
+-- right after this sweep evicted them starts back at 0 instead of resuming
+-- from a full bucket. That is always the SAFE direction (strictly less
+-- budget available, never more), and never actually reachable by a
+-- genuinely legitimate player (see AwardXP's own comment: real play never
+-- gets remotely close to a full bucket in the first place), so it costs
+-- nothing in practice while keeping this sweep's own logic simple. Sweep
+-- interval (5 minutes) is well under the window (1 hour) so no entry lingers
+-- long past the point it became safe to drop; not built on
 -- server/cooldowns.lua's own :StartSweep helper since this tracker's shape
 -- (tokens + lastRefillAt, not a single timestamp) does not fit that
 -- constructor's isStaleFn(now, loggedAt) signature. Only started when the
@@ -718,7 +748,19 @@ function AwardXP(citizenid, actionKey)
         local budgetNow = GetGameTimer()
         local bucket = XPMintBudget[citizenid]
         if not bucket then
-            bucket = { tokens = XP_MINT_BUDGET_CAP_XP, lastRefillAt = budgetNow }
+            -- STARTS EMPTY (0), NEVER full -- see the XP_MINT_BUDGET_*
+            -- section's own "IMPLEMENTATION" comment above for the full
+            -- reasoning and the simulation numbers that made this pass
+            -- correct this from an earlier, wrong "starts full" draft:
+            -- starting full lets a fresh/returning citizenid stack a whole
+            -- extra cap's worth of unearned tokens on top of a full window's
+            -- worth of real accrual, up to ~2x this section's own intended
+            -- ceiling. Starting at 0 makes "cumulative XP granted by any
+            -- elapsed time T is at most CAP * T / WINDOW_MS" a hard, provable
+            -- bound instead of an approximation, and costs a genuine player
+            -- nothing (real play accrues into an empty bucket far faster
+            -- than it could ever spend it).
+            bucket = { tokens = 0, lastRefillAt = budgetNow }
             XPMintBudget[citizenid] = bucket
         else
             RefillMintBudget(bucket, budgetNow)

@@ -65,9 +65,19 @@
     tucked into a vehicle via client/vehicle.lua's EnterNearestK9Vehicle()
     is frozen/invisible/attached, so none of RequestBiteHold/RequestTakedown/
     RequestDrag should be able to start anything against it). Tested below
-    against the file as it now stands. See "A REAL, CURRENTLY-FAILING TEST,
-    AND WHY IT IS LEFT FAILING" further down for the one genuine gap this
-    guard's own locale() call site has -- reported, not silently avoided.
+    against the file as it now stands. ONE REAL, TRANSIENT FINDING while
+    writing these tests, disclosed for the record even though it has since
+    been fixed by someone else: at the moment this guard's own three call
+    sites landed, they called `locale('combat.blocked_by_vehicle')`, and
+    that exact key did not yet exist anywhere in locales/en.json (confirmed
+    at the time: a plain grep found nothing, and locales/en.json had no
+    uncommitted changes, so this was not the ordinary "en.json mid-edit"
+    false alarm tests/README.md warns about -- it was a real gap, reported
+    to the coordinator with a suggested string rather than silently worked
+    around here). The key was added shortly after being reported (see
+    locales/en.json's real "combat.blocked_by_vehicle" entry) -- the
+    vehicle-tuck test section below now passes against the real, current
+    text, fetched via locale() rather than typed in by hand.
 
     ======================================================================
     D3 -- WHAT THE SOURCE-ORIGIN GUARD TESTS BELOW DO AND DO NOT PROVE
@@ -615,7 +625,7 @@ t.test('vehicle-tuck guard: IsInK9Vehicle present but false -- proceeds normally
     t.equals(#f.serverEvents, 1)
 end)
 
-t.test('A REAL, CURRENTLY-FAILING TEST, AND WHY IT IS LEFT FAILING: IsInK9Vehicle true must block RequestBiteHold/RequestTakedown/RequestDrag with a notify and zero server contact -- client/combat.lua\'s new guard calls locale(\'combat.blocked_by_vehicle\'), and that key does not exist in locales/en.json (confirmed: grep returns nothing, and locales/en.json has no uncommitted changes, so this is NOT the "en.json mid-edit" false alarm tests/README.md warns about -- it is a real, reported gap). Sandbox.locale() is never stubbed away in this suite, so this test legitimately throws until that key is added. Reported to the coordinator with a suggested string ("Not available while your K9 is tucked away in a vehicle.") rather than worked around here -- per this task\'s own hard rule, a failing spec is a finding to report, not to quietly avoid exercising.', function()
+t.test('vehicle-tuck guard: IsInK9Vehicle true blocks RequestBiteHold/RequestTakedown/RequestDrag with a notify and zero server contact (locale key "combat.blocked_by_vehicle" was missing from locales/en.json when this test was first written mid-session -- confirmed added since, real string re-checked via locale() below rather than typed in by hand, per this suite\'s own convention)', function()
     local f = newCombatFixture({ isInK9Vehicle = true })
     f.addPoolPed(50, { x = 1 }) -- deliberately resolvable -- a bypassed guard WOULD produce a visible server event
     f.env.RequestBiteHold()

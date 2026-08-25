@@ -77,7 +77,7 @@ Config.Features = {
     -- isn't independently verified.
     HandlerPartnership   = true,
 
-    -- server/tenure.lua (COMPLEMENTARY_FEATURES.md §7). Grants a one-time,
+    -- server/tenure.lua (FEATURE_IDEAS.md Part B §7). Grants a one-time,
     -- flat XP bonus to the K9-role party when a partnership's CONTINUOUS
     -- tenure crosses a configured threshold -- the first gameplay
     -- consequence wired to the HandlerPartnership registry, which landed as
@@ -103,24 +103,32 @@ Config.Features = {
     K9Medkit             = true,
     ContrabandScreenFX   = true,
 
-    -- server/admin.lua. A read-only, ACE-gated in-game audit surface over
-    -- the three tables this resource already writes (k9_certifications,
-    -- k9_partnerships, k9_search_log) -- three commands, six hardcoded
-    -- SELECTs, zero mutation paths of any kind. Replaces "documented raw
-    -- SQL an admin runs by hand" (COMPLEMENTARY_FEATURES.md item 2). Ships
-    -- false per this resource's convention for a newly-landed surface; note
-    -- this one exposes WHO SEARCHED WHOM, so it is privacy-sensitive as
-    -- well as security-sensitive -- set AcePermission before flipping it on.
+    -- server/admin.lua. A read-only, JOB-RANK-gated in-game audit surface
+    -- over the three tables this resource already writes (k9_certifications,
+    -- k9_partnerships, k9_search_log) -- five commands, nine hardcoded SQL
+    -- templates, zero mutation paths of any kind. Replaces "documented raw
+    -- SQL an admin runs by hand" (FEATURE_IDEAS.md Part B item 2). This one
+    -- exposes WHO SEARCHED WHOM, so it is a privacy boundary as well as a
+    -- security one: set `auditGrade` on each Config.Departments entry below
+    -- deliberately. There is no ACE permission to grant -- that gate was
+    -- removed on 2026-08-25.
     AdminAuditCommands   = true,
 
     -- server/bonetool.lua + client/bonetool.lua. A DEV-SERVER-ONLY sweep that
     -- attaches a marker prop to bone indices in sequence so a human can
     -- visually identify the right one for a quadruped skeleton -- the
     -- question that blocked PropAttachments and FetchMechanic through three
-    -- research passes. NEVER enable this on a production server: it spawns
-    -- and attaches props on command. It is additionally ACE-gated
-    -- (Config.BoneSweepTool.AcePermission), so this flag alone does not make
-    -- it reachable -- but treat the flag as the real switch and leave it off.
+    -- research passes. This flag ALONE does not make the tool reachable: as
+    -- of 2026-08-25 it also requires a replicated convar an operator must
+    -- set on purpose (`setr qbx_k9unit_enable_bone_dev_tool 1`), and the
+    -- caller must be a boss of a configured Config.Departments job. That
+    -- second opt-in exists precisely because this flag was once flipped true
+    -- alongside 39 others with nothing to distinguish it.
+    -- Its real blast radius is narrow -- every effect is local to the
+    -- caller's own client (a debug marker, and one non-networked prop on
+    -- their own ped), and the server never accepts an entity or netId from
+    -- the client -- but it is still a dev tool. Leave the convar unset on a
+    -- production server.
     BoneSweepDevTool     = true,
     -- OPERATIONAL CAVEAT, and it matters most for THIS flag specifically.
     -- Nothing in this resource flips a Config.Features.* flag while running:
@@ -1339,10 +1347,13 @@ Config.PropAttachments = {
 -- own comment. Dev servers only.
 -- ======================================================================
 Config.BoneSweepTool = {
-    -- A SEPARATE principal from Config.AdminAudit.AcePermission on purpose.
-    -- Granting someone read-only audit access should not also hand them a tool
-    -- that spawns and attaches props to peds.
-    AcePermission     = 'k9unit.bonesweep',
+    -- Authorization is deliberately a SEPARATE, stricter principal from the
+    -- audit commands' own `auditGrade`: granting someone read-only audit
+    -- access must not also hand them a tool that spawns and attaches props.
+    -- server/bonetool.lua therefore grants on `job.isboss` ONLY -- no numeric
+    -- grade branch -- so there is no key to set here. The former
+    -- `AcePermission = 'k9unit.bonesweep'` was removed on 2026-08-25 when
+    -- that file dropped IsPlayerAceAllowed.
     TestPropModel     = 'prop_tennis_ball',
     MaxBoneIndex      = 200,
     TestOffsetX = 0.0, TestOffsetY = 0.0, TestOffsetZ = 0.0,

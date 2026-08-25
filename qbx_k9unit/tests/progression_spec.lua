@@ -61,12 +61,63 @@ end
 
 local function TriggerClientEvent(_eventName, _target, ...) end
 
--- AwardXP's DB write now runs inside its own CreateThread(...) (silent-
--- failure fix: MySQL.insert.await instead of a callback-less MySQL.insert).
--- The stubbed MySQL.insert.await below never yields, so it's safe to run
--- the thread body synchronously/immediately rather than via a coroutine.
+-- AwardXP's DB write runs inside its own CreateThread(...) (silent-failure
+-- fix: MySQL.insert.await instead of a callback-less MySQL.insert). The
+-- stubbed MySQL.insert.await below never yields, so that thread still runs
+-- to completion the instant CreateThread is called (resuming a coroutine
+-- whose body never hits a Wait() runs it to completion in that one resume,
+-- exactly like a plain `fn()` call would) -- no behavior change for any
+-- existing test below that relies on the DB write happening synchronously
+-- inline.
+--
+-- EIGHTH-XP-FARM-FIX ADDITION: server/progression.lua's new shared XP mint
+-- budget also starts a SECOND, RECURRING
+-- `CreateThread(function() while true do Wait(...) ... end end)` sweep
+-- thread (memory-bounding -- see that file's own declaration comment) -- the
+-- first genuine "while true do Wait(...) ... end" shaped thread this spec
+-- has ever needed to sandbox. A plain `fn()` call would infinite-loop
+-- forever the instant this spec loads server/progression.lua (Wait() never
+-- returns inside a real while-true loop with no real clock). Handled the
+-- same way tests/fixtures/sandbox.lua's own newThreadRunner is documented
+-- to work, but inlined here (not that shared helper) specifically so the
+-- ONE-SHOT DB-write thread keeps running immediately/synchronously at
+-- CreateThread-call time, exactly as before: `CreateThread` creates a
+-- coroutine and resumes it ONCE right away -- a one-shot body (no Wait())
+-- runs to completion on that single resume and is never captured; a
+-- recurring body yields at its first Wait() and IS captured, so a later
+-- test can advance it deterministically via stepMintBudgetSweep() (no
+-- wall-clock delay) to exercise the sweep's own eviction logic directly.
+local capturedRecurringThreads = {}
+local waitCalls = {} -- every ms value passed to Wait() -- lets a test assert on the sweep's own cadence, not just its effect
 local function CreateThread(fn)
-    fn()
+    local co = coroutine.create(fn)
+    local ok, err = coroutine.resume(co)
+    if not ok then
+        error(('progression_spec.lua: a captured CreateThread body errored: %s'):format(tostring(err)))
+    end
+    if coroutine.status(co) ~= 'dead' then
+        capturedRecurringThreads[#capturedRecurringThreads + 1] = co
+    end
+end
+local function Wait(ms)
+    waitCalls[#waitCalls + 1] = ms
+    coroutine.yield()
+end
+
+--- Resumes every still-alive recurring thread once -- one full sweep pass
+--- per call (each thread is already parked at its own Wait(), either from
+--- CreateThread's own initial resume or this function's previous call),
+--- matching tests/fixtures/sandbox.lua's own newThreadRunner stepping
+--- semantics.
+local function stepMintBudgetSweep()
+    for _, co in ipairs(capturedRecurringThreads) do
+        if coroutine.status(co) ~= 'dead' then
+            local ok, err = coroutine.resume(co)
+            if not ok then
+                error(('progression_spec.lua: stepMintBudgetSweep: a captured thread errored: %s'):format(tostring(err)))
+            end
+        end
+    end
 end
 
 local playerByCitizenId = {}
@@ -122,6 +173,7 @@ local env = Sandbox.newEnv({
     TriggerEvent = TriggerEvent,
     TriggerClientEvent = TriggerClientEvent,
     CreateThread = CreateThread,
+    Wait = Wait,
     exports = exportsStub,
     print = printStub,
     MySQL = MySQLStub,
