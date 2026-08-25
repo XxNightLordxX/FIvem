@@ -36,6 +36,15 @@ Config.Features = {
     GunpowderSniffing    = true,
     SearchZones          = true,
     ContrabandAlerts     = true,
+
+    -- server/findalert.lua + client/findalert.lua (K9_IDEAS.md §1, "Make
+    -- finds feel like a real alert, not a pop-up message"). A pure REACTION
+    -- layer over the search outcome server/search.lua already computes --
+    -- it adds no detection logic of its own. When a search comes back
+    -- positive, the searching K9's own character automatically sits (a real
+    -- detection dog's "trained final response") and barks. The text message
+    -- you already get is unchanged; this is on top of it, not instead of it.
+    FindAlerts           = true,
     ThermalVision        = true,
     NightVision          = true,
     DoorInteraction      = true, -- nudge-open / scratch-to-alert
@@ -580,6 +589,14 @@ Config.FeatureControl = {
         NonLethalTakedown = true,
         PropDragging      = true,
         AdminAuditCommands = true,
+        -- FindAlerts does NOT fit the "acts on another player" rationale
+        -- above -- it is cosmetic and affects only the searcher's own
+        -- character. It is listed anyway because the requirement is that
+        -- high command can switch ANY feature on or off for an individual,
+        -- not only the dangerous ones. Treat the paragraph above as the
+        -- reason the original four were chosen, not as a rule limiting what
+        -- may appear here.
+        FindAlerts        = true,
     },
 
     -- Whether a handler/K9 may open the tablet and see what they hold.
@@ -953,6 +970,43 @@ Config.ContrabandAlertTiers = {
     { minWeight = 0,   alert = 'clean' },           -- nothing found / below any threshold
     { minWeight = 1,   alert = 'whine' },           -- small personal-use amount
     { minWeight = 250, alert = 'aggressive_bark' }, -- large stash
+}
+
+-- ======================================================================
+-- FIND ALERTS (Config.Features.FindAlerts) -- K9_IDEAS.md §1. A reaction
+-- layer over the tier names Config.ContrabandAlertTiers above already
+-- defines. It adds no new tiers; it only says how the SEARCHING K9's own
+-- character should react to each existing one.
+--
+-- THERE IS DELIBERATELY NO 'clean' ROW, and that is not an oversight. A
+-- real detection dog's trained final response only fires on a genuine
+-- positive. A tier with no row here -- 'clean', or any new tier you add to
+-- Config.ContrabandAlertTiers above without adding a row here -- means "no
+-- automatic reaction". It fails closed to silence; it never guesses.
+--
+-- `sit` plays the same sit animation the manual Sit radial option uses.
+-- `sound` is a sound name, and both below resolve to a real file that
+-- actually ships (html/sounds/bark_alert.ogg and bark_aggressive.ogg). A
+-- sound name with no file behind it degrades to silence, which looks
+-- exactly like the feature being switched off -- so if you change these,
+-- check html/sounds/ for what is actually there.
+-- ======================================================================
+Config.FindAlerts = {
+    reactionsByAlertTier = {
+        whine           = { sit = true, sound = 'Bark_Alert' },
+        aggressive_bark = { sit = true, sound = 'Bark_Aggressive' },
+    },
+
+    -- Also react when the K9 reaches the end of a scent, blood or gunpowder
+    -- trail, with the same strength as a big find.
+    --
+    -- ONE HONEST LIMITATION: the event this listens for is only fired while
+    -- Config.Features.XPProgression is ALSO on, because it lives inside
+    -- that flag's own check for an unrelated reason. So with XPProgression
+    -- off, this particular bonus stays silent even with tracking and
+    -- FindAlerts both on. The contraband-search reaction above is
+    -- unaffected and works either way.
+    reactOnTrackArrival = true,
 }
 
 -- ======================================================================

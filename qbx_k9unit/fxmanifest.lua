@@ -133,6 +133,7 @@ client_scripts {
     'client/vehicle.lua',
     'client/tracking.lua', -- Phase 2
     'client/search.lua',   -- Phase 2
+    'client/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), client half. Reuses client/main.lua's PlaySoundOnNetworkEntity at runtime only, so no load-order requirement beyond that file existing.
     'client/vision.lua',   -- Phase 2
     'client/hud.lua',      -- Phase 4
     'client/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
@@ -162,6 +163,14 @@ server_scripts {
     -- files since main.lua/certifications.lua/tracking.lua/search.lua all
     -- call these resource-global constructors at their own file-load time.
     'server/cooldowns.lua',
+    -- Live feature control (Config.Features.RuntimeFeatureControl). Loaded
+    -- immediately after cooldowns.lua for two reasons, both hard: it calls
+    -- NewCooldown at its own file-load time, and it must run BEFORE every
+    -- feature file whose gate is evaluated at onResourceStart, so a
+    -- persisted override from the tablet is already applied by the time
+    -- those files read Config.Features. Later in this list and a toggle
+    -- would silently not survive a restart.
+    'server/runtimecontrol.lua',
     -- REFACTOR_ROADMAP.md near-term item 2: shared defensive netId->entity
     -- resolver (ResolveNetworkEntity), loaded alongside cooldowns.lua and
     -- before main.lua/search.lua, its two consumers.
@@ -225,6 +234,7 @@ server_scripts {
     'server/defense.lua',
     'server/tracking.lua', -- Phase 2
     'server/search.lua',   -- Phase 2
+    'server/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), server half. An ADDITIONAL consumer of server/search.lua's searchCompleted and client/tracking.lua's reportTrackSourceArrival events -- it adds no detection logic of its own, which is why it needs no ordering against either. It DOES call NewCooldown at its own file-load time, so server/cooldowns.lua before it is a hard requirement; HasK9Access is runtime-only.
     'server/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
     'server/kennel.lua',    -- Phase 5 R&D (DeployableKennel, phase2_notes/phase5_features_research.md §5) -- loaded after cooldowns.lua (NewCooldown at file-load time) and certifications.lua (HasK9Access)
     'server/medkit.lua',    -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4) -- loaded after cooldowns.lua (NewCooldown/NewMutex at file-load time) and certifications.lua (IsConfiguredK9Model); no ordering dependency on server/wellbeing.lua since RestoreInjury is called through a runtime existence guard, not a load-order assumption

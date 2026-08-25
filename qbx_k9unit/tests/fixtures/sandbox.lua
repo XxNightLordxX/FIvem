@@ -119,6 +119,34 @@ function Sandbox.locale(key, ...)
     return value
 end
 
+--- vector2/vector3/vector4 are NOT natives and have no decl page to check.
+--- They are Lua RUNTIME TYPES that CitizenFX's Lua build adds to the
+--- language itself, in both realms, so a production file may use them at
+--- file-load time -- config.lua does, for Config.K9EquipmentShop.locations,
+--- because ox_target's addSphereZone takes a vector3 for `coords`. Plain
+--- lua5.4 has no such constructor, so without these the sandbox raises
+--- "attempt to call a nil value (global 'vector3')" and every spec that
+--- loads the real config.lua fails at once -- which is exactly what
+--- happened when that config landed, taking 14 spec files red in one go.
+---
+--- These are DELIBERATELY minimal: a table carrying x/y/z(/w) and nothing
+--- else. They model the fields production code reads, not CitizenFX's real
+--- vector arithmetic. If a production file ever starts doing MATH on one of
+--- these (v1 - v2, #v, v * 2), this stub will not catch the bug, and the
+--- right move then is to give it real metamethods rather than to widen a
+--- test around it. Recorded so nobody mistakes silence here for coverage.
+local function makeVector(fields)
+    return function(...)
+        local v, args = {}, { ... }
+        for i, name in ipairs(fields) do v[name] = args[i] end
+        return v
+    end
+end
+
+Sandbox.vector2 = makeVector({ 'x', 'y' })
+Sandbox.vector3 = makeVector({ 'x', 'y', 'z' })
+Sandbox.vector4 = makeVector({ 'x', 'y', 'z', 'w' })
+
 function Sandbox.newEnv(overrides)
     local env = {}
     for key, value in pairs(_G) do
@@ -126,6 +154,9 @@ function Sandbox.newEnv(overrides)
     end
     env._G = env
     env.locale = Sandbox.locale
+    env.vector3 = Sandbox.vector3
+    env.vector2 = Sandbox.vector2
+    env.vector4 = Sandbox.vector4
     for key, value in pairs(overrides or {}) do
         env[key] = value
     end
