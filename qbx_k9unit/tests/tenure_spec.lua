@@ -530,7 +530,7 @@ end)
 -- described.
 -- ----------------------------------------------------------------------
 
-t.test('DISCREPANCY: TenureFullyCollected does NOT skip the SELECT on a fully-collected partnership (still runs every tick)', function()
+t.test('CLOSED, see server/tenure.lua ITEM 4: TenureFullyCollected intentionally does NOT skip the SELECT -- keyed on row.id, which only exists after the query returns. Measured and left as-is: the query is a unique-key point lookup every 5 minutes, and a citizenid-keyed pre-query cache would need invalidation hooks in partnership teardown that could silently withhold milestones if one were missed', function()
     local fx = newTenureFixture()
     wireHappyPath(fx)
     fx.addRow(1, 'K9-CID', 'HANDLER-CID', 0, 0)

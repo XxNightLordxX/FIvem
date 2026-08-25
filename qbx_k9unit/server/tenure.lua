@@ -372,6 +372,141 @@
 -- repopulates this entry once). Bounded, cheap, unbounded-but-fine growth
 -- profile, same accepted shape as server/certifications.lua's own
 -- `Certifications` cache and server/progression.lua's own `K9XP` cache.
+--
+-- ITEM 4 CLOSURE (REFACTOR_ROADMAP_2.md item 4 / tests/README.md "What's NOT
+-- covered" / tests/tenure_spec.lua's own DISCREPANCY case -- this is the
+-- fourth pass over this exact question; this section exists specifically so
+-- there is no fifth. Dated: 2026-08-25.):
+--
+-- 1. DOES THE DISCREPANCY STILL HOLD? Yes, re-verified directly against the
+--    live code below, not assumed from the prior comment: `TenureFullyCollected`
+--    is keyed on `row.id`, and `row` does not exist until the
+--    `MySQL.single.await` SELECT inside CheckTenureMilestonesForK9 has
+--    already returned it. There is no code path in this file where that
+--    cache is consulted before the SELECT runs. Confirmed unchanged.
+--
+-- 2. MEASURED COST (numbers read directly from config.lua/sql/install.sql
+--    this pass, not guessed):
+--      - Tick cadence: `Config.Partnership.TenureBonus.checkIntervalMs` =
+--        300000 (config.lua, Config.Partnership block) = one tick per 5
+--        real-world minutes, confirmed identical to this file's own
+--        300000 fallback default a few lines below.
+--      - Queries per tick: at most one `k9_partnerships` SELECT per
+--        currently-connected player who (a) is online (this tick's own
+--        `GetPlayers()` loop) AND (b) is CURRENTLY the K9-role party of an
+--        active partnership per the in-memory `GetActivePartnerCitizenId`
+--        pre-filter -- i.e. bounded by concurrent player count, never by
+--        `k9_partnerships` table size.
+--      - Is it indexed? Yes, and more than merely indexed: the SELECT's
+--        WHERE clause is `active = 1 AND k9_citizenid = ?`, which is an
+--        exact-match on both leading columns of
+--        `KEY idx_k9_citizenid_active (k9_citizenid, active)`
+--        (sql/install.sql, `k9_partnerships` CREATE TABLE, read directly
+--        this pass). Further, `UNIQUE KEY uq_one_active_partnership_per_k9
+--        (active_partner_k9_key)` on the same table makes it a DB-enforced
+--        invariant that at most ONE row can ever match that predicate pair
+--        -- this is not "an indexed scan," it is a unique-key-equivalent
+--        point lookup; `LIMIT 1` in the SQL text is a formality, not a
+--        safety net for an otherwise-multi-row match.
+--      - Does table SIZE matter here? Measurably no, and this is the
+--        actual answer to "how large can k9_partnerships realistically
+--        get" rather than a guessed row count (which would be
+--        unmeasurable and beside the point): `k9_partnerships` is
+--        append-mostly (a broken partnership flips `active` to 0, it is
+--        never DELETEd -- same audit-log shape as `k9_certifications`,
+--        confirmed from that table's own header), so it grows without
+--        bound over a server's lifetime. But an InnoDB B-tree index's
+--        lookup cost scales with the LOG of row count, and this
+--        particular lookup is additionally capped to at most 1 matching
+--        row by the UNIQUE constraint above -- the difference between a
+--        10-thousand-row and a 10-million-row `k9_partnerships` table is a
+--        couple of extra B-tree page descents (typically still
+--        buffer-pool-resident for a table this actively queried), not a
+--        change in query class. Table growth is therefore not a variable
+--        that can turn this into an expensive query at any realistic
+--        FiveM server lifetime -- this is a structural property of the
+--        schema (verified from sql/install.sql), not an estimate.
+--      - Bounding the realistic worst case: this repository ships no
+--        server.cfg/sv_maxclients for this resource to read (it is a
+--        resource, not a full server artifact), so there is no single
+--        "real" concurrent-player number to cite -- but the query-rate
+--        math does not need one to make the point. Even an intentionally
+--        generous upper bound of 1024 SIMULTANEOUSLY online, K9-role,
+--        actively-partnered players (itself already an overshoot: each
+--        such player requires an equally-online handler counterpart, a
+--        currently-valid certification, AND department membership per
+--        this file's own activity gate a few lines below, so the
+--        realistic population eligible for this query on ANY real
+--        install is a small fraction of total concurrent players, not a
+--        majority of them) yields at most 1024 point-lookup queries
+--        spread across one 300-second tick window, i.e. ~3.4
+--        queries/second sustained, each a sub-millisecond warm-cache
+--        unique-index point lookup. That is not a load figure worth
+--        measuring against connection-pool or query-thread capacity --
+--        config.lua's own comment on this same `checkIntervalMs` value
+--        already prices it as "effectively free," and this pass's
+--        measurement confirms that framing rather than merely repeating
+--        it.
+--
+-- 3. DECISION: LEAVE IT. Do not build a `k9Citizenid`-keyed pre-query
+--    cache. The cost this would remove (section 2 above) is not
+--    measurably distinguishable from zero at any realistic install size or
+--    population; the coupling required to remove it safely is real, not
+--    hypothetical, and strictly larger than "add one hook call":
+--      - A correct pre-query cache MUST be invalidated the instant a
+--        `k9Citizenid`'s ACTIVE `k9_partnerships` row changes -- not just
+--        on `DoBreakPartnership`, but on EVERY call site that can flip a
+--        row's `active` flag for a K9-role citizenid: a self-initiated
+--        break, AND every forced-teardown path this file's own header
+--        already enumerates from server/certifications.lua
+--        (`RevokeCertification`/`RevokeCertificationOffline`/
+--        `OnJobUpdate` -> `ForceBreakPartnershipForCitizenId`), AND the
+--        establish path itself (a fresh INSERT reactivating tenure at
+--        zero for what may be the SAME citizenid that was just marked
+--        fully-collected under a different, now-inactive row id).
+--        Missing even ONE of those call sites reproduces exactly the
+--        failure mode this file's own header already names: a stale
+--        "fully collected" verdict silently withholding every future
+--        milestone from a legitimate brand-new partnership, forever,
+--        with no error, no log line, and no test short of a full
+--        integration pass likely to catch it before a real player
+--        notices their tenure bonus never arrives.
+--      - Concretely, the hook this WOULD require (specified here so a
+--        future pass does not have to re-derive it, but NOT implemented,
+--        because server/partnership.lua is not this file's own): a
+--        resource-global this file would export, e.g.
+--        `InvalidateTenureCache(k9Citizenid)`, called by
+--        server/partnership.lua from (a) every code path that sets an
+--        existing row's `active` to 0 for that row's `k9_citizenid`
+--        (`DoBreakPartnership` and any forced-teardown caller reached via
+--        `ForceBreakPartnershipForCitizenId`), and (b) every successful
+--        establishing INSERT, keyed on the NEW row's `k9_citizenid`. That
+--        is a minimum of two, and realistically three-plus, call sites in
+--        a file this pass does not own, each one a silent-failure surface
+--        if ever missed by a future editor of THAT file who has no reason
+--        to know this file depends on it being complete -- a materially
+--        different, and materially worse, risk shape than "one extra
+--        already-indexed point lookup every 5 minutes for an
+--        already-fully-tenured, still-online K9."
+--    A one-file, reversible, zero-hard-dependency status quo that costs an
+--    immeasurable amount of DB time is preferable to a two-file coupling
+--    that can silently break a different subsystem's future edits. This
+--    conclusion is final for this item: re-opening it should require new
+--    evidence (e.g. a measured, reproduced DB load problem), not a
+--    re-description of the same already-quantified tradeoff.
+--
+-- 4. tests/tenure_spec.lua: NO assertion change required. This decision
+--    does not change server/tenure.lua's runtime behavior at all (no code
+--    below this comment block was touched), so the existing
+--    'DISCREPANCY: TenureFullyCollected does NOT skip the SELECT on a
+--    fully-collected partnership (still runs every tick)' case continues
+--    to assert the real, current, intentionally-kept behavior and remains
+--    accurate as a regression guard. Its own test name still calls this a
+--    "DISCREPANCY" (between the ORIGINAL pre-correction header wording and
+--    the code) rather than a "closed, intentional design decision" -- that
+--    framing is now stale given this section, but updating that test's
+--    name/comment (not its assertions) belongs to whoever owns
+--    tests/tenure_spec.lua, not this file.
 local TenureFullyCollected = {}
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
