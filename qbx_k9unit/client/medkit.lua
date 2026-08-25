@@ -59,7 +59,56 @@
     - Triggers `qbx_k9unit:server:useK9Medkit` (server/medkit.lua) and
       handles `qbx_k9unit:client:applyMedkitHeal` (server/medkit.lua) — see
       that file's header for the full event/callback contract.
+    - THIS FILE exposes one resource-global function for a radial entry
+      point: `RequestTreatNearestK9()` — see its own doc comment near the
+      bottom of this file for the full contract. Added because, until this
+      pass, every bit of "treat a K9" logic lived entirely inside the
+      ox_target `onSelect` closure below with nothing else in this
+      resource able to reach it — a radial "Treat K9" item had no global to
+      call. Mirrors client/movement.lua's RequestLeashAttach() shape: a
+      thin, re-checked entry point that funnels into the SAME
+      request/response implementation the ox_target option already uses
+      (RequestTreatK9(targetServerId) below), never a second, divergent
+      treat-request code path.
 ]]
+
+--- Shared "ask the server to treat this specific K9" implementation —
+--- called by both the ox_target `onSelect` below (targetServerId already
+--- resolved from the interacted ped) and RequestTreatNearestK9() further
+--- down (targetServerId resolved from a self-initiated nearest-K9 scan).
+--- Kept as the ONE place that awaits the callback and interprets its
+--- result, so a future reason value only needs updating here.
+--- @param targetServerId number
+local function RequestTreatK9(targetServerId)
+    local result = lib.callback.await('qbx_k9unit:server:useK9Medkit', false, targetServerId)
+    if not result then return end
+
+    if result.ok then
+        lib.notify({ title = 'K9 Unit', description = 'K9 treated.', type = 'success' })
+    else
+        -- Mirrors client/search.lua's own "unrecognized reason ->
+        -- plain error notify" fallback discipline — no client-side
+        -- change is required if server/medkit.lua ever adds a new
+        -- reason value.
+        local reasonLabel = ({
+            feature_disabled      = 'K9 medkit is not enabled.',
+            no_access             = 'You are not authorized to treat a K9.',
+            invalid_target        = 'That is not a valid K9 to treat.',
+            -- 'target_dead' — server/medkit.lua's own correctness
+            -- pass: a medkit heals an injured, ALIVE K9, never
+            -- revives a dead one (that's a real laststand/EMS
+            -- system's job, not a plain consumable's).
+            target_dead           = 'That K9 needs a real revive, not a medkit.',
+            too_far               = 'Get closer to the K9 first.',
+            on_cooldown           = 'This K9 was treated too recently.',
+            no_item               = 'You do not have a K9 medkit.',
+            treatment_in_progress = 'This K9 is already being treated.',
+            medkit_failed         = 'Unable to treat the K9 right now.',
+        })[result.reason] or 'Unable to treat the K9 right now.'
+
+        lib.notify({ title = 'K9 Unit', description = reasonLabel, type = 'error' })
+    end
+end
 
 exports.ox_target:addGlobalPlayer({
     {
@@ -75,37 +124,79 @@ exports.ox_target:addGlobalPlayer({
             local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
             if not targetServerId then return end
 
-            local result = lib.callback.await('qbx_k9unit:server:useK9Medkit', false, targetServerId)
-            if not result then return end
-
-            if result.ok then
-                lib.notify({ title = 'K9 Unit', description = 'K9 treated.', type = 'success' })
-            else
-                -- Mirrors client/search.lua's own "unrecognized reason ->
-                -- plain error notify" fallback discipline — no client-side
-                -- change is required if server/medkit.lua ever adds a new
-                -- reason value.
-                local reasonLabel = ({
-                    feature_disabled      = 'K9 medkit is not enabled.',
-                    no_access             = 'You are not authorized to treat a K9.',
-                    invalid_target        = 'That is not a valid K9 to treat.',
-                    -- 'target_dead' — server/medkit.lua's own correctness
-                    -- pass: a medkit heals an injured, ALIVE K9, never
-                    -- revives a dead one (that's a real laststand/EMS
-                    -- system's job, not a plain consumable's).
-                    target_dead           = 'That K9 needs a real revive, not a medkit.',
-                    too_far               = 'Get closer to the K9 first.',
-                    on_cooldown           = 'This K9 was treated too recently.',
-                    no_item               = 'You do not have a K9 medkit.',
-                    treatment_in_progress = 'This K9 is already being treated.',
-                    medkit_failed         = 'Unable to treat the K9 right now.',
-                })[result.reason] or 'Unable to treat the K9 right now.'
-
-                lib.notify({ title = 'K9 Unit', description = reasonLabel, type = 'error' })
-            end
+            RequestTreatK9(targetServerId)
         end,
     },
 })
+
+--- Same nearest-candidate scan shape as client/radial.lua's own
+--- FindNearestLeashCandidate()/FindNearestPartnerCandidate() — duplicated
+--- here rather than shared (this file has no import mechanism to reach
+--- those, and per this task's file-ownership split client/radial.lua is
+--- out of scope here) — for RequestTreatNearestK9()'s self-initiated
+--- (radial) entry point below. Filters to a live K9 model, unlike
+--- FindNearestLeashCandidate (which filters to none) — this file's own
+--- ox_target `canInteract` above applies the exact same IsEntityModelK9
+--- filter, for the same "why show/offer this against a human player"
+--- reasoning. Display-only: server/medkit.lua's HandleUseK9Medkit
+--- independently re-verifies the target's real model, aliveness,
+--- proximity, and certification regardless of what this scan picks.
+--- @return number? candidateServerId
+local function FindNearestTreatableK9()
+    local myPed = PlayerPedId()
+    local myCoords = GetEntityCoords(myPed)
+    local nearestPlayer, nearestDist
+
+    for _, playerId in ipairs(GetActivePlayers()) do
+        if playerId ~= PlayerId() then
+            local targetPed = GetPlayerPed(playerId)
+            if targetPed ~= 0 and DoesEntityExist(targetPed) and IsEntityModelK9(targetPed) then
+                local dist = #(myCoords - GetEntityCoords(targetPed))
+                if dist <= Config.K9Medkit.range and (not nearestDist or dist < nearestDist) then
+                    nearestPlayer, nearestDist = playerId, dist
+                end
+            end
+        end
+    end
+
+    if not nearestPlayer then return nil end
+    return GetPlayerServerId(nearestPlayer)
+end
+
+--- Resource-global — radial self-service entry point (see FILE-TO-FILE
+--- CONTRACT above). Mirrors client/movement.lua's RequestLeashAttach()
+--- shape: re-checks CanShowK9UI() itself rather than trusting that a
+--- caller (a future client/radial.lua item) already did, per this
+--- codebase's "must not be triggerable by a modified client" spirit — the
+--- server re-validates independently regardless (server/medkit.lua's
+--- HandleUseK9Medkit). This is an INITIATION action (starts a treat
+--- request against a found target), not a release/termination one, so —
+--- unlike a termination path — it is gated, not exempted, per this
+--- resource's established initiation-vs-termination gating split (see
+--- client/movement.lua's DetachLeash()/client/recall.lua's RequestRecall()
+--- for the termination side of that split).
+--- Feature-flag/no-candidate cases are each notified distinctly so a
+--- player understands why nothing happened, then funnels into the SAME
+--- RequestTreatK9() implementation the ox_target option above uses.
+function RequestTreatNearestK9()
+    if not CanShowK9UI() then
+        DenyK9UIAccess()
+        return
+    end
+
+    if not Config.Features.K9Medkit then
+        lib.notify({ title = 'K9 Unit', description = 'K9 medkit is not enabled.', type = 'error' })
+        return
+    end
+
+    local targetServerId = FindNearestTreatableK9()
+    if not targetServerId then
+        lib.notify({ title = 'K9 Unit', description = 'No nearby K9 to treat.', type = 'error' })
+        return
+    end
+
+    RequestTreatK9(targetServerId)
+end
 
 --- Server-pushed heal application — see server/medkit.lua's header for why
 --- this is client-self-applied rather than a direct server-side

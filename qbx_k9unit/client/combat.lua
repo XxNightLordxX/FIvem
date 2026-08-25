@@ -209,14 +209,28 @@
     than asserted as solved: NetworkRequestControlOfEntity is itself a
     best-effort ASK of the current owning client (PHASE3_SPEC.md §12.0 item
     8, point 3's own citation of citizenfx/fivem issue #3338), not a
-    server-forceable guarantee — this codebase has NO confirmed
-    NetworkHasControlOfEntity-style success check to gate on (not found in
-    this resource's own native-verification notes), so every call site below
-    fires the request and proceeds with the effect native regardless of
-    whether control was actually granted. In the common case (an ambient NPC
-    with no other client actively contesting it) this converges to genuine
-    control within a frame or two; it is not a guarantee, and is disclosed
-    as such rather than presented as a fixed problem.
+    server-forceable guarantee. CORRECTION (native-api-assistant audit, this
+    pass): an earlier version of this note claimed no success-check native
+    exists for this — that was stale. NetworkHasControlOfEntity (hash
+    0x01BF60A500E28887) DOES exist and would report whether the request in
+    fact succeeded. It is still deliberately NOT called here: this file's
+    only thread is the single shared maintenance CreateThread serving every
+    active effect on this client (see "SHARED MAINTENANCE THREAD" below), and
+    gating on NetworkHasControlOfEntity via a blocking-wait idiom (loop until
+    it returns true, or Wait/retry before proceeding) would stall that one
+    thread — and therefore every OTHER concurrently-active effect this same
+    client is enforcing (e.g. its own ActiveBiteHold as a target, a
+    completely unrelated role) — for as long as control is contested or never
+    granted. The audit's conclusion: keep the existing fire-and-forget
+    pattern (request, then proceed with the effect native regardless), and
+    do not adopt a wait loop. Every call site below fires the request and
+    proceeds with the effect native regardless of whether control was
+    actually granted, exactly as before this correction — only the
+    "no such native exists" claim was wrong, not the resulting design. In the
+    common case (an ambient NPC with no other client actively contesting it)
+    this converges to genuine control within a frame or two; it is not a
+    guarantee, and is disclosed as such rather than presented as a fixed
+    problem.
 
     MOVE-RATE COMPOSER SCOPE — client/movement.lua's RecomputeK9MoveRate()
     (PHASE4_SPEC.md §13.0 Decision 2) is HARD-GATED on IsOwnModelK9(): it
@@ -252,25 +266,27 @@
       real boundary" posture as every other gated client action in this
       resource.
     - Reads Config.Combat.BiteAndHold/.NonLethalTakedown/.PropDragging
-      (config.lua — the PropDragging sub-table is REQUESTED, not yet
-      landed, as of this pass; see this pass's own report for the exact
-      block sent to coder-backend).
+      (config.lua — the PropDragging sub-table has since LANDED (confirmed
+      present in config.lua as of this review pass, with range/
+      maxDragDurationMs/dragSpeedMultiplier/maxDragDistance all populated);
+      this note is kept only as a historical record that it was once a
+      cross-file request, not a current gap).
     - Exposes RequestBiteHold(), ReleaseBiteHold(), IsBiteHoldEngaged(),
       RequestTakedown(), RequestDrag(), ReleaseDrag(), and IsDragEngaged()
       as bare globals (this resource's established "global helper, private
-      per-file state" convention), ready for a client/radial.lua
-      "Bite & Hold" / "Takedown" / "Drag" entry to call — NOT wired into
-      client/radial.lua by this pass (out of scope: coder-frontend owns that
-      file and is wiring the combat entry point separately; flagged to them
-      directly). Every Config.Features flag involved stays `false` by
-      default regardless, so this is a real, disclosed gap (these actions
-      currently have NO in-game entry point at all, self-initiated-trigger
-      side) rather than a silent one — mirrors client/radial.lua's own
-      existing Config.Features-gated block shape (e.g. its
-      LeashMechanics/VehicleEntryExit items) exactly.
+      per-file state" convention). UPDATE (confirmed present as of this
+      review pass): client/radial.lua (coder-frontend) has since wired all
+      three — "Bite & Hold" / "Takedown" / "Drag" radial entries calling
+      RequestBiteHold()/ReleaseBiteHold()/IsBiteHoldEngaged(),
+      RequestTakedown(), and RequestDrag()/ReleaseDrag()/IsDragEngaged()
+      respectively — so this is no longer a dangling contract with zero
+      caller; kept as historical context only. Every Config.Features flag
+      involved still stays `false` by default regardless (see config.lua),
+      so these actions remain genuinely inert in a default install even
+      though an in-game entry point now exists.
     - Calls the resource-global NetworkRequestControlOfEntity native
-      (REQUESTED for .luacheckrc's read_globals, not yet landed — see this
-      pass's own report) before manipulating any NPC/target ped this
+      (landed in .luacheckrc's read_globals — confirmed present as of this
+      review pass) before manipulating any NPC/target ped this
       client does not already control — see "NETWORK OWNERSHIP OF THE
       TARGET PED" above.
     ======================================================================
@@ -722,9 +738,11 @@ if Config.Features.BiteAndHold then
     -- meaning this "REAL BUG FIX" pass's own fix could silently no-op in
     -- exactly the conditions it was written to correct. Requested here,
     -- best-effort (see this file's header "NETWORK OWNERSHIP OF THE TARGET
-    -- PED" for the full, honest caveat — there is no confirmed
-    -- NetworkHasControlOfEntity-style success check in this codebase to
-    -- gate on, so this fires the request and proceeds regardless).
+    -- PED" for the full, honest caveat, including this pass's correction of
+    -- a stale claim there — NetworkHasControlOfEntity DOES exist, it is just
+    -- deliberately not used as a gate here because doing so would require a
+    -- blocking-wait idiom on this file's one shared thread, so this fires
+    -- the request and proceeds regardless).
     --- @param npcNetId number
     --- @param expiresAt number -- server GetGameTimer() timestamp; NOT compared directly against this client's own clock, see header CLOCK-DOMAIN NOTE
     RegisterNetEvent('qbx_k9unit:client:applyNpcBiteHold', function(npcNetId, expiresAt)

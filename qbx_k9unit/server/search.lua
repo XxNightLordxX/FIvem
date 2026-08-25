@@ -114,12 +114,29 @@
       see HandleSearchTarget's own doc comment, step 8) — deliberate,
       not a duplicate-by-accident, since certification.lua's revoke path
       can run to completion during that same await window.
-    - THIS FILE exposes NO resource-global functions. (Its own
-      `ResolveConnectedPlayerFromPed` WAS the original, most-documented
-      implementation of that helper — see server/entities.lua for why it
-      moved there under REFACTOR_ROADMAP.md item 2b, and this file's
-      HandleSearchTarget for the one remaining call site, unchanged
-      besides now calling the shared global.)
+    - THIS FILE exposes exactly one resource-global function:
+      `GetContrabandAlertTier(totalWeight)` — a thin pass-through to the
+      file-local `ResolveAlertTier`, added purely as a test/inspection seam
+      (same shape and same reason as server/progression.lua's
+      `GetXPTier`/`ResolveTier` pair: identical pure, boundary-sensitive
+      tier-walk logic worth driving directly in a test, without also
+      needing to drive entity resolution, ox_inventory container
+      recursion, natives, or this file's mutex/cooldown state). See
+      GetContrabandAlertTier's own doc comment, right after
+      ResolveAlertTier below, for why this does NOT weaken this file's
+      trust boundary: it takes a plain number and returns a
+      Config.ContrabandAlertTiers entry, with no access whatsoever to any
+      target's real inventory, no proximity check, no HasK9Access check,
+      and no cooldown state — the real capability grant this file's header
+      calls "the same category as a certification grant" is the
+      ox_inventory read inside HandleSearchTarget, which this wrapper
+      never touches, shortcuts, or provides a path into.
+      (Separately: its own `ResolveConnectedPlayerFromPed` WAS the
+      original, most-documented implementation of that helper — see
+      server/entities.lua for why it moved there under
+      REFACTOR_ROADMAP.md item 2b, and this file's HandleSearchTarget for
+      the one remaining call site, unchanged besides now calling the
+      shared global.)
     - THIS FILE owns `SearchMutex`, `SearchCooldown`, and
       `TargetSearchCooldown` below as file-local state (each a
       server/cooldowns.lua tracker instance, per REFACTOR_ROADMAP.md item 1
@@ -351,6 +368,34 @@ local function ResolveAlertTier(totalWeight)
         end
     end
     return resolvedTier
+end
+
+--- Resource-global test/inspection seam — see FILE-TO-FILE CONTRACT above.
+--- Identical role to server/progression.lua's `GetXPTier` over its own
+--- file-local `ResolveTier`: a thin, deliberately dumb pass-through that
+--- lets a test agent exercise this file's pure, boundary-sensitive tier
+--- walk directly, without also having to drive entity resolution,
+--- recursive ox_inventory container reads, natives, or SearchMutex/
+--- SearchCooldown/TargetSearchCooldown/ContrabandXpState.
+---
+--- DELIBERATELY NOT A NEW CAPABILITY GRANT (do not widen this signature to
+--- accept a target/netId/source and resolve anything real internally —
+--- that would reopen exactly the "map-wide contraband oracle" hole
+--- HandleSearchTarget's own validation order exists to close). This
+--- function only ever sees a plain `number` the caller already has and
+--- returns a `Config.ContrabandAlertTiers` entry — it performs, and can
+--- never be made to perform via any argument, an ox_inventory read, a
+--- HasK9Access check, an entity/proximity check, or a cooldown check.
+--- Calling this with a fabricated totalWeight teaches a caller nothing
+--- about any real player's or vehicle's actual contraband; the one real
+--- capability grant this file's header claims certifications.lua-level
+--- scrutiny for — reading a target's REAL, live inventory — lives
+--- entirely inside HandleSearchTarget above and is untouched by, and
+--- unreachable through, this wrapper.
+--- @param totalWeight number
+--- @return table tier -- { minWeight, alert }
+function GetContrabandAlertTier(totalWeight)
+    return ResolveAlertTier(totalWeight)
 end
 
 --- BLOCKING per contraband_search_security_review.md §1: iterates

@@ -182,7 +182,7 @@ end
 --- as a bare global here per this file's own established "declare once,
 --- reuse everywhere" convention (see CanShowK9UI/IsOwnModelK9 above).
 function DenyK9UIAccess()
-    lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+    lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
 end
 
 -- Placeholder sound reference. SPEC.md §7 flags that "bark sounds" need

@@ -61,13 +61,22 @@
 -- here at all), same treatment contraband_search_contract.md §4's
 -- "Rejection UX note" already recommends for search's identical on_cooldown
 -- case.
+-- Each value below is a distinct locale() call (not a plain string) rather
+-- than a table literal, since these must be resolved through ox_lib's
+-- locale() at lookup time like every other player-facing string in this
+-- resource — see locales/README.md. Kept as six SEPARATE keys (not
+-- collapsed into one templated message): each reason is a genuinely
+-- different failure cause (disabled feature vs. wrong target vs. no
+-- certification vs. too far vs. not authorized vs. a stash-open failure),
+-- the same non-collapsing discipline locales/README.md documents for
+-- server/kennel.lua's similarly-shaped NotifyPlayer messages.
 local K9_INVENTORY_REASON_MESSAGES = {
-    feature_disabled  = 'K9 gear access is disabled on this server.',
-    invalid_target    = 'That is not a working K9.',
-    no_access         = 'That K9 is not currently certified for duty.',
-    too_far           = 'You are too far away to access that K9\'s gear.',
-    not_authorized    = 'You are not authorized to access that K9\'s gear.',
-    stash_failed      = 'Unable to open K9 gear right now.',
+    feature_disabled  = locale('inventory.reason_feature_disabled'),
+    invalid_target    = locale('inventory.reason_invalid_target'),
+    no_access         = locale('inventory.reason_no_access'),
+    too_far           = locale('inventory.reason_too_far'),
+    not_authorized    = locale('inventory.reason_not_authorized'),
+    stash_failed      = locale('inventory.reason_stash_failed'),
 }
 
 --- Register the "Open K9 Gear" ox_target option on nearby player peds whose
@@ -81,7 +90,7 @@ exports.ox_target:addGlobalPlayer({
     {
         name = 'qbx_k9unit:openK9Inventory',
         icon = 'fas fa-briefcase',
-        label = 'Open K9 Gear',
+        label = locale('inventory.open_gear_target_label'),
         distance = Config.K9Inventory.interactRange,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.K9Inventory then return false end
@@ -128,8 +137,8 @@ exports.ox_target:addGlobalPlayer({
                 -- two analogous reasons.
                 if reason and reason ~= 'on_cooldown' and reason ~= 'request_in_progress' then
                     lib.notify({
-                        title = 'K9 Unit',
-                        description = K9_INVENTORY_REASON_MESSAGES[reason] or 'Unable to open K9 gear.',
+                        title = locale('common.notify_title'),
+                        description = K9_INVENTORY_REASON_MESSAGES[reason] or locale('inventory.unable_to_open_generic'),
                         type = 'error',
                     })
                 end

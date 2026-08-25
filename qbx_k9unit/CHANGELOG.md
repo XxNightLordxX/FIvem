@@ -453,9 +453,16 @@ integration that did not actually exist in code until this pass). Everything bel
   currently implementable against this dependency at all, not merely
   unbuilt; see `server/inventory.lua`'s header for the full trace and the
   `RegisterStash`/`hasGroup` source citations. Item-whitelist enforcement
-  (`Config.K9Inventory.allowedItems`) is **not** implemented this pass and
-  currently has no effect even if set — left honestly inert rather than
-  a half-built enforcement path.
+  (`Config.K9Inventory.allowedItems`) was **not** implemented this pass and
+  had no effect even if set — left honestly inert rather than a half-built
+  enforcement path. **Correction, later pass:** this is no longer accurate.
+  `Config.K9Inventory.allowedItems` is now genuinely enforced — see
+  "Added — landed after the entries above" below for the real mechanism
+  (a pre-mutation `ox_inventory` `registerHook('swapItems', ...)` veto, not
+  an advisory/observer-only callback). `config.lua`'s own comment on this
+  field has not yet been updated to match and still reads as if this were
+  unimplemented — flagged for that file's owner, not editable from this
+  document.
 - **K9 Medkit (`Config.Features.K9Medkit`, still `false`)** — a "Treat K9"
   ox_target world interaction letting a department member or a configured
   EMS-job player (`Config.K9Medkit.emsJobs`) use a real, consumed
@@ -1209,13 +1216,16 @@ sweep the third round's own entry flagged as still open:
   `PropAttachments`, and `FetchMechanic` have since landed
   (`client/proximityaudio.lua`; `client/propattachment.lua` +
   `server/propattachment.lua`; `client/fetch.lua` + `server/fetch.lua`) —
-  none of them are registered in `fxmanifest.lua` yet, so all three remain
-  unusable regardless, but "no code" is no longer the accurate description.
-  `CameraFeedPiP` is unaffected and remains genuinely uncoded and
-  infeasible. The broken link this line previously pointed to
-  (`README.md#config-options-not-yet-wired-up`, a section that doesn't
-  exist) is removed rather than left dangling — see `README.md`'s
-  [Known issues](README.md#known-issues--code-that-exists-but-does-not-run)
+  at the time this note was first written none of them were registered in
+  `fxmanifest.lua`, so all three were unusable regardless. **That has since
+  changed too: all five files/pairs are now registered in `fxmanifest.lua`**
+  and reachable from the radial menu ("Toggle K9 Vest", "Fetch") the moment
+  their own still-`false` flag is flipped on. `CameraFeedPiP` is unaffected
+  and remains genuinely uncoded and infeasible. The broken link this line
+  previously pointed to (`README.md#config-options-not-yet-wired-up`, a
+  section that doesn't exist) is removed rather than left dangling — see
+  `README.md`'s
+  [Known issues](README.md#known-issues--historical-now-resolved)
   section for the current, actual state of what is and isn't wired in.
 - **A whole-codebase technical-debt audit (`REFACTOR_ROADMAP.md` Revision
   5) found the previously-closed shared `ResolveNetworkEntity`

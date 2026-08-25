@@ -13,18 +13,22 @@ layer on top of a player who is already playing as a dog.
 
 > **Read this before you deploy.** This is a large, actively-developed
 > resource with several `Config.Features` flags whose backing code landed
-> only very recently. As of this pass, every file this document previously
-> flagged as "written but not loaded by `fxmanifest.lua`" (the public
-> exports, the admin/audit commands, the tenure bonus, the NUI audio
-> bridge, and the contraband screen effect) **has been wired into the
-> manifest** — see
-> [Known issues — code that exists but does not run](#known-issues--code-that-exists-but-does-not-run)
-> for the small number of gaps that remain (a fresh batch of Phase 5 R&D
-> files, still landing as of this writing, and one plumbing file with no
-> caller yet). Do not assume a file's presence on disk means it runs —
-> check that section, not just this paragraph, since this resource is
-> being edited by multiple agents in parallel and this snapshot can go
-> stale quickly.
+> only very recently. **Every `.lua` file on disk is now registered in
+> `fxmanifest.lua`** — re-verified directly against the current manifest
+> while writing this pass, not assumed from an earlier note. That includes
+> the last two files this document used to flag as having no manifest
+> caller at all (`client/audio.lua`'s NUI sound bridge now has a real
+> caller — see [Bark sounds](#bark-sounds-are-placeholders-no-audio-ships)
+> below) and the full Phase 5 R&D batch
+> (`client/propattachment.lua`/`server/propattachment.lua`,
+> `client/fetch.lua`/`server/fetch.lua`, `client/proximityaudio.lua`,
+> `client/bonetool.lua`/`server/bonetool.lua`). See
+> [Known issues — historical, now resolved](#known-issues--historical-now-resolved)
+> for what used to be wrong here. A flag still shipping `false` is not the
+> same thing as a file not running — check each flag's own row in the
+> [config reference](#configfeatures--full-reference) below for what's
+> actually reachable today, since this resource is being edited by multiple
+> agents in parallel and this snapshot can go stale quickly.
 
 ## Status at a glance
 
@@ -34,7 +38,7 @@ layer on top of a player who is already playing as a dog.
 | 2 | Tracking, search zones/contraband, vision, door interaction | Implemented, reviewed, ships **disabled** |
 | 3 | Bite & Hold, Non-Lethal Takedown, Prop Dragging, Advanced Agility, Handler Partnership, Handler-Down Defense | Implemented, ships **disabled**; combat mechanics have an open client-trust caveat — do not enable on a live server without reading it |
 | 4 | K9 Inventory, K9 Medkit, wellbeing (Fatigue/Mood/FearStress/Distraction/Injury), XP progression, vitality HUD | Implemented, ships **disabled**. `ContrabandScreenFX` is now wired end-to-end (client file loaded, server-side trigger fires) — see its row in the [config reference](#phase-4--inventory-progression-vitality-all-ship-false) below |
-| 5 | Deployable kennel, advanced bark radial | Implemented (R&D-grade), ships **disabled**. `ProximityAudioFX`, `PropAttachments`, and `FetchMechanic` now have real client/server code on disk (`client/proximityaudio.lua`, `client/propattachment.lua`+`server/propattachment.lua`, `client/fetch.lua`+`server/fetch.lua`), but **none of it is registered in `fxmanifest.lua`** as of this pass, so all three remain completely inert regardless of their flags — see Known issues. `CameraFeedPiP` is confirmed impossible with current natives (see below) |
+| 5 | Deployable kennel, advanced bark radial, prop attachments, fetch, proximity audio | Implemented (R&D-grade), ships **disabled**. `DeployableKennel`, `AdvancedBarkRadial`, `ProximityAudioFX`, `PropAttachments`, and `FetchMechanic` all have real client/server code and are **registered in `fxmanifest.lua`** — reachable via the radial menu (Deploy Kennel, Toggle K9 Vest, Fetch) the moment their flag is flipped to `true`. `PropAttachments`/`FetchMechanic`'s attach point is still the root-bone placeholder pending the dev-only bone-index sweep (`client/bonetool.lua`/`server/bonetool.lua`, also registered, ACE-gated, never for a live server) — see Known issues. `CameraFeedPiP` is confirmed impossible with current natives (see below) |
 
 Only **five** `Config.Features` flags ship `true`: `LeashMechanics`,
 `RadialMenu`, `VehicleEntryExit`, `BasicBarkSounds`, `AgilityBasicJump`.
@@ -319,26 +323,26 @@ before understanding this.
 
 | Flag | Default | What it gates | Prerequisite / caveat |
 |---|---|---|---|
-| `K9Inventory` | `false` | A per-K9 `ox_inventory` gear stash, "Open K9 Gear" ox_target option. | `Config.K9Inventory.accessScope` is hard-locked to `'department'` (any player in a configured department, any grade). There is **no** real owner-only mode — `ox_inventory`'s stash access is gated exclusively by `groups`, never by the `owner` argument, so a previous `'ownerOnly'` config value never actually restricted access and has been removed. |
+| `K9Inventory` | `false` | A per-K9 `ox_inventory` gear stash, "Open K9 Gear" ox_target option. | `Config.K9Inventory.accessScope` is hard-locked to `'department'` (any player in a configured department, any grade). There is **no** real owner-only mode — `ox_inventory`'s stash access is gated exclusively by `groups`, never by the `owner` argument, so a previous `'ownerOnly'` config value never actually restricted access and has been removed. `Config.K9Inventory.allowedItems` (default `nil` — no whitelist) is **now genuinely enforced**, correcting an earlier draft of this table that said it "has no effect even if set": `server/inventory.lua` registers a real, pre-mutation `exports.ox_inventory:registerHook('swapItems', ...)` veto that rejects any item not on the list *before* it ever lands in the stash (confirmed against `ox_inventory`'s own source — returning `false` from the hook stops the write, not an after-the-fact undo), printing one warning and disabling the whitelist (not the whole stash) if the target `ox_inventory` build lacks `registerHook`. |
 | `K9Medkit` | `false` | "Treat K9" ox_target interaction, consumes a real `ox_inventory` item to restore health. | Authorized by job (a configured department, `Config.K9Medkit.emsJobs`, default `{ 'ambulance' }`, or an override hook) — not by the user's own K9 certification. |
 | `HealthStaminaHUD` | `false` | A passive vitality HUD (`client/hud.lua`, this resource's first NUI surface). | Hunger/thirst fields read from `qbx_core` metadata at **medium confidence** — field names/scale not independently verified against a live install; confirm before enabling in production. |
-| `FatigueSystem` | `false` | Stamina-linked stat; sprinting decays it, idle regenerates it; low fatigue reduces move speed. | Part of the shared wellbeing subsystem (one tick, one store) — see below. |
+| `FatigueSystem` | `false` | Stamina-linked stat; sprinting decays it, idle regenerates it; low fatigue reduces move speed. | Part of the shared wellbeing subsystem (one tick, one store) — see below. Idle regen near a configured rest source (`Config.Wellbeing.Fatigue.restSources`, default `{ 'water_bowl' }`) is now genuinely faster (`restRegenPerTick`, default `4.0`/tick vs `idleRegenPerTick`'s `1.0`) — matched server-side every tick against `GetAllObjects()`/`GetAllVehicles()` within `restRadius` (never a client-claimed "I'm near one" position), not the config-comment-only placeholder an earlier pass left this as. `config.lua`'s own comment on this field still reads "NOT WIRED THIS PASS" as of this writing — stale; flagged for `config.lua`'s owner to correct, not edited here (out of scope for this doc pass). |
 | `MoodSystem` | `false` | Damage decays it; "Pet K9"/"Feed K9" restore it; low mood reduces move speed. | Same subsystem. |
 | `FearStressSystem` | `false` | Nearby gunfire raises it; above a threshold it imposes temporary command-refusal. | Only meaningful once a real consumer of `IsHesitating()` is also enabled (currently only the still-disabled combat flags). |
-| `DistractionSystem` | `false` | A thrown meat-bait item or ultrasonic whistle briefly distracts nearby K9s. | Deliberately usable by **any** player — not gated on K9 UI access. |
+| `DistractionSystem` | `false` | A thrown meat-bait item or ultrasonic whistle briefly distracts nearby K9s. | Deliberately usable by **any** player — not gated on K9 UI access. `Config.Wellbeing.Distraction.flashbangImmune`'s real, callable half now exists: `IsFlashbangImmune(citizenid)` is a genuine resource-global accessor (same contract as `IsHesitating`/`IsDistracted`), correcting an earlier draft that called this "aspirational config only, not implemented." What remains genuinely unbuilt is the *consumer* side — no companion flashbang/stun resource with a confirmed event shape exists for this codebase to listen to and suppress, so nothing calls the new accessor yet; a future flashbang resource wanting to honor immunity would call `IsFlashbangImmune(citizenid)` before applying its own stun effect. |
 | `InjuryLimping` | `false` | Damage decays it; blocks sprint/jump input client-locally below a threshold; restored by `K9Medkit`. | Client-local enforcement, not a server-side boundary. |
 | `XPProgression` | `false` | Server-authoritative XP per K9 citizenid, persisted in `k9_progression`. | See its own section below for award triggers and anti-farming measures. |
-| `ContrabandScreenFX` | `false` | A brief self-only `SetTimecycleModifier` screen effect for the K9's **own handler** (the searcher, never the searched player or a bystander) on a contraband find at or above a configured alert tier. | **Now fully wired end-to-end**: `client/screenfx.lua` is loaded (`fxmanifest.lua`), and `server/search.lua`'s search-success path fires the `qbx_k9unit:client:applyContrabandScreenFx` event it listens for. An earlier draft of this table said the client file was inert with no server trigger — both halves are real now. Still ships `false`, and `Config.ContrabandScreenFX.modifierName` remains an unverified candidate timecycle-modifier name (harmless no-op if wrong, per this resource's usual convention for an unconfirmed asset name) — see [Known issues](#known-issues--code-that-exists-but-does-not-run) for the current, narrower list of gaps. |
+| `ContrabandScreenFX` | `false` | A brief self-only `SetTimecycleModifier` screen effect for the K9's **own handler** (the searcher, never the searched player or a bystander) on a contraband find at or above a configured alert tier. | **Now fully wired end-to-end**: `client/screenfx.lua` is loaded (`fxmanifest.lua`), and `server/search.lua`'s search-success path fires the `qbx_k9unit:client:applyContrabandScreenFx` event it listens for. An earlier draft of this table said the client file was inert with no server trigger — both halves are real now. Still ships `false`, and `Config.ContrabandScreenFX.modifierName` remains an unverified candidate timecycle-modifier name (harmless no-op if wrong, per this resource's usual convention for an unconfirmed asset name) — see [Known issues](#known-issues--historical-now-resolved) for what used to be wrong here. |
 
 ### Phase 5 — audio/props/camera R&D (all ship `false`)
 
 | Flag | Default | What it gates | Prerequisite / caveat |
 |---|---|---|---|
-| `DeployableKennel` | `false` | Places a world kennel object (`/k9deploykennel`); server computes the spawn point and independently re-validates the placed object. | `Config.DeployableKennel.propModel` (`'prop_doghouse_01'`) is a **single-source, unconfirmed** prop name found in an unrelated third-party resource's config — it has not been independently cross-verified as a real streamable model. `fallbackPropModel` (`'prop_tennis_ball'`, confirmed real) is used automatically if the primary model fails to load, so a bad `propModel` degrades to "an oddly-shaped real object" rather than a silent failure. |
+| `DeployableKennel` | `false` | Places a world kennel object (`/k9deploykennel`); server computes the spawn point and independently re-validates the placed object. Reachable from the radial menu ("Deploy Kennel") as well as the command. | `Config.DeployableKennel.propModel` (`'prop_doghouse_01'`) is a **single-source, unconfirmed** prop name found in an unrelated third-party resource's config — it has not been independently cross-verified as a real streamable model. `fallbackPropModel` (`'prop_tennis_ball'`, confirmed real) is used automatically if the primary model fails to load, so a bad `propModel` degrades to "an oddly-shaped real object" rather than a silent failure. |
 | `AdvancedBarkRadial` | `false` | Turns the single "Bark" radial item into a 3-way Alert/Aggressive/Calm submenu. | Requires `BasicBarkSounds` also enabled. Same no-audio caveat as below. |
-| `ProximityAudioFX` | `false` | Ambient K9 presence audio that scales with a listener's live distance, built on `client/audio.lua`'s bridge. | Real client code (`client/proximityaudio.lua`) and a `Config.ProximityAudioFX` table now exist, but the file **is not in `fxmanifest.lua`**, so it does not run — see [Known issues](#known-issues--code-that-exists-but-does-not-run). |
-| `PropAttachments` | `false` | Cosmetic prop (vest/harness) toggle on a K9's own ped. | Real client+server code and config exist, but **neither file is in `fxmanifest.lua`** — see Known issues. |
-| `FetchMechanic` | `false` | Not documented elsewhere in this table yet — see `PHASE5_SPEC.md`. | Real client+server code now exists (`client/fetch.lua`/`server/fetch.lua`), but **neither file is in `fxmanifest.lua`** — see Known issues. |
+| `ProximityAudioFX` | `false` | Ambient K9 presence audio that scales with a listener's live distance, built on `client/audio.lua`'s bridge. | `client/proximityaudio.lua` and `Config.ProximityAudioFX` are real and **registered in `fxmanifest.lua`** — reachable the moment this flag is `true`. Still silent, like every other bark/ambient path, until real `.ogg` audio is supplied — see [Bark sounds](#bark-sounds-are-placeholders-no-audio-ships). |
+| `PropAttachments` | `false` | Cosmetic prop (vest/harness) toggle on a K9's own ped, reachable from the radial menu ("Toggle K9 Vest"). | Real client+server code, config, and radial entry all exist and are registered. `Config.PropAttachments.boneIndex` is still the root-bone (`0`) placeholder pending the dev-only bone-index sweep (`BoneSweepDevTool`, `client/bonetool.lua`/`server/bonetool.lua`) — degrades to "visibly attached at the wrong point," never a crash. |
+| `FetchMechanic` | `false` | Throw a ball, the K9 fetches it, the handler collects it back manually — see `PHASE5_SPEC.md`. Reachable from the radial menu ("Fetch": Throw/Drop, Recall). | Real client+server code (`client/fetch.lua`/`server/fetch.lua`) is registered and reachable. Ships in `mouthCarryMode = 'delete-and-reappear'` mode rather than a real mouth-attach pending the same bone-index sweep as `PropAttachments`. Handler-disconnect and carrier-disconnect cleanup (`playerDropped`) end an in-progress cycle rather than leaking a networked ball into the world permanently. |
 | `CameraFeedPiP` | `false` | No code exists, and **confirmed impossible with currently-available natives**: there is no native to render a secondary camera feed into an NUI texture. Document this as impossible-today, not "coming soon." | — |
 
 #### Bark sounds are placeholders (no audio ships)
@@ -352,17 +356,38 @@ asset ships anywhere in this resource.**
 A newer NUI audio bridge (`client/audio.lua` + matching handlers in
 `html/app.js`) exists as **plumbing only** — it plays a real file via Web
 Audio if a server owner supplies one at `html/sounds/<key>.ogg`, with
-distance-based gain. It is not yet connected to anything that would trigger
-it in a running server (see
-[Known issues](#known-issues--code-that-exists-but-does-not-run) below).
+distance-based gain. **It now has a real caller.** `client/main.lua`'s
+`PlaySoundOnNetworkEntity` (the function every bark — Phase 1 basic and all
+three `AdvancedBarkRadial` variants — routes through) calls
+`client/audio.lua`'s `PlayK9Sound` immediately after its existing
+`PlaySoundFromEntity` native call, guarded by the same
+`type(PlayK9Sound) == 'function'` existence check used everywhere else in
+this resource for a soft cross-file dependency. `client/proximityaudio.lua`
+is a second, independent consumer of the same bridge for `ProximityAudioFX`.
+Until a server owner supplies real `.ogg` files (see the table below), both
+paths still degrade to a silent no-op end to end — the gap left is audio
+assets, not wiring.
 
-An automated sourcing pass searched for CC0/public-domain bark audio and
-found this environment's network egress blocked to every candidate
-audio-hosting domain tried (`freesound.org`, `opengameart.org`, `kenney.nl`,
-`pixabay.com`, `commons.wikimedia.org`). **No audio files were added.** See
-`html/sounds/CREDITS.md` for the full sourcing brief, licensing checklist,
-and four named candidate leads (none independently verified) for whoever
-sources these next.
+An automated sourcing pass searched for CC0/public-domain bark audio.
+**No audio files were added**, and a follow-up licence-verification pass
+(`html/sounds/CREDITS.md`, 2026-08-25) checked every candidate lead directly
+against its own source page/API rather than trusting a search snippet, with
+a genuinely useful finding: **nothing usable is public domain.** The
+Wikimedia Commons files a previous note called "public domain" are actually
+**CC BY-SA 3.0/4.0** (attribution *plus* share-alike — a copyleft term, worth
+pausing on before shipping it inside a distributed resource). The
+OpenGameArt file a previous note called "CC0" is actually **OGA-BY 3.0**
+(attribution only, no share-alike) — it sits in a collection literally named
+"CC0 Audio," which is what made the original claim look right on a quick
+text search; the licence field on the asset itself says otherwise. Kenney
+has no dog/animal audio pack, and Wikimedia's own CC0 category has no
+genuine bark (only the London place name "Barking" and spoken-word clips).
+This is a licensing decision for whoever runs this resource, not something
+made on their behalf: accept OGA-BY 3.0 (lightest obligation, `.wav`, needs
+converting to `.ogg`), accept CC BY-SA (already `.ogg`, but share-alike),
+or commission/record real audio instead. See `html/sounds/CREDITS.md` for
+the full trace, source URLs, and the pre-drop checklist for whoever makes
+that call.
 
 **To make barks audible, a server owner must supply four short (well under
 2 seconds, well under 1MB), genuinely Ogg Vorbis files** at these exact
@@ -375,12 +400,11 @@ paths, and add matching entries to `fxmanifest.lua`'s `files{}` block:
 | `html/sounds/bark_aggressive.ogg` | `AdvancedBarkRadial` "Aggressive Bark" |
 | `html/sounds/bark_calm.ogg` | `AdvancedBarkRadial` "Calm Bark" |
 
-Even once real files are supplied, note that `client/audio.lua` itself
-**is** loaded by `fxmanifest.lua` today, but nothing in `client/main.lua`
-calls into it — its bark relay is still on the native
-`PlaySoundFromEntity` path. `client/proximityaudio.lua` is written to be a
-second consumer of this bridge, but that file is not yet in the manifest
-either — see Known issues.
+`client/audio.lua` is loaded by `fxmanifest.lua` and, as described above,
+is now genuinely called from both `client/main.lua`'s bark relay and
+`client/proximityaudio.lua`'s ambient presence audio — supplying the four
+`.ogg` files below is the only remaining step to make barks and proximity
+audio audible.
 
 ### `Config.Features.HandlerPartnership`
 
@@ -461,11 +485,14 @@ same "unknown state" default the resource already uses elsewhere — `false`,
 its answer from the same server-authoritative source the internal code
 already uses rather than trusting a caller-supplied value as fact.
 
-Both expose `GetAPIVersion()` returning
-`{ major = 1, minor = 0, patch = 0, string = '1.0.0' }`. A consumer should
-call this once and branch on `.major` — an additive change bumps `minor`,
-a breaking change (removed/renamed export, narrowed return shape) bumps
-`major`.
+Server and client each carry their **own independent** `GetAPIVersion()` —
+they are two separate contracts, not one mirrored number, and have already
+diverged: **server is `{ major = 1, minor = 0, patch = 0, string = '1.0.0' }`**;
+**client is `{ major = 1, minor = 1, patch = 0, string = '1.1.0' }`**
+(bumped for the three new client exports below). A consumer should call
+each side's own `GetAPIVersion()` independently and branch on `.major` — an
+additive change bumps `minor`, a breaking change (removed/renamed export,
+narrowed return shape) bumps `major`.
 
 ### Server exports (`server/exports.lua`)
 
@@ -538,6 +565,9 @@ security-relevant, use the **server** export of the same name instead.
 | `IsNightVisionActive` | `()` | `boolean` |
 | `IsBiteHoldEngaged` | `()` | `boolean` |
 | `IsDragEngaged` | `()` | `boolean` |
+| `HasFreshDefensePrompt` | `()` | `boolean` — **added in 1.1.0.** Is there a still-fresh (not yet expired) `HandlerDownDefense` prompt pending for the local player's own K9 right now. Local UI state, not a security check, same posture as `CanShowK9UI()`. |
+| `GetDefenseSuggestedTargetNetId` | `()` | `number?` — **added in 1.1.0.** The server-suggested hostile netId attached to the current fresh defense prompt, if any. |
+| `IsFetchCarryEngaged` | `()` | `boolean` — **added in 1.1.0.** Is the local K9 currently mid-fetch-carry (`FetchMechanic`). Same shape/justification as `IsBiteHoldEngaged`/`IsDragEngaged` — an animation-management resource may want to know before doing something that would visibly conflict with it on the same ped. |
 
 **No action export exists** (`RequestPartnerUp`, `RequestLeashAttach`,
 `RequestBiteHold`, `ToggleThermalVision`, etc.) — every self-initiated
@@ -545,50 +575,55 @@ action in this resource has its own consent/proximity/cooldown context tied
 to this resource's own UI flow (radial menu, ox_target option) that an
 external resource driving it directly would bypass.
 
-## Known issues — code that exists but does not run
+## Known issues — historical, now resolved
 
-**This section has changed substantially since it was last written, and is
-likely to keep changing** — this resource is being actively built by
-multiple agents in parallel, and several Phase 5 files listed below
-appeared mid-pass while this section was being re-verified. Re-check
-`fxmanifest.lua`'s script lists directly before trusting this table if any
-time has passed since 2026-08-24.
+**Every file on disk is loaded, and every file that needed a caller has
+one, as of this pass** — verified by a direct read of the current
+`fxmanifest.lua`, not inferred from an earlier note. This section used to
+carry a growing table of "real code, zero reachability" files while this
+resource's manifest was still catching up with its own source tree; that
+table is retired below rather than deleted outright, since a future reader
+hitting a stale copy of this file benefits more from seeing what changed
+than from a silent disappearance.
 
-An earlier revision of this section listed six files as written but not
-loaded by `fxmanifest.lua`: `server/exports.lua`, `client/exports.lua`,
-`client/audio.lua`, `client/screenfx.lua`, `server/tenure.lua`, and
-`server/admin.lua`. **All six are now in `fxmanifest.lua`'s
-`server_scripts`/`client_scripts`** — verified by direct read of the current
-manifest, not inferred. The config/schema gaps that revision also flagged
-for `server/tenure.lua` (`Config.Partnership.TenureBonus`, the
-`tenure_bonus_tier_granted` column) and `server/admin.lua`
-(`Config.AdminAudit.AcePermission`) are likewise resolved — both config
-tables now exist in `config.lua` and the column exists in
-`sql/install.sql`. None of those six files should be treated as inert for
-the "not loaded" reason anymore.
+**What used to be listed here, and its current status:**
 
-**What is actually true today:**
+- `server/exports.lua`, `client/exports.lua`, `client/audio.lua`,
+  `client/screenfx.lua`, `server/tenure.lua`, `server/admin.lua` — an
+  earlier revision listed these six as written but not loaded. All six have
+  been in `fxmanifest.lua` for some time now.
+- `client/propattachment.lua`/`server/propattachment.lua`,
+  `client/fetch.lua`/`server/fetch.lua`, `client/proximityaudio.lua`,
+  `client/bonetool.lua`/`server/bonetool.lua` — the Phase 5 R&D batch. All
+  five files/pairs are registered in `fxmanifest.lua`. Their flags
+  (`PropAttachments`, `FetchMechanic`, `ProximityAudioFX`,
+  `BoneSweepDevTool`) still ship `false` by default — that is a feature
+  being off, not a file failing to load.
+- `client/audio.lua` — the last item in this table, and the last one
+  corrected: an earlier revision said this file's NUI bark/ambient bridge
+  had "no caller yet inside the manifest." That is now false —
+  `client/main.lua`'s bark relay calls `PlayK9Sound` directly (see
+  [Bark sounds](#bark-sounds-are-placeholders-no-audio-ships) above), and
+  `client/proximityaudio.lua` is a second, independent consumer. The only
+  gap left for audible barks is real `.ogg` assets, not wiring.
 
-| File | What it implements | Current gap |
-|---|---|---|
-| `client/audio.lua` | The NUI bark/ambient audio bridge (`PlayK9Sound`/`StopK9Sound`) | Loaded, but **has no caller yet inside the manifest**: `client/main.lua`'s bark relay is still on the native `PlaySoundFromEntity` path, and its intended in-tree consumer `client/proximityaudio.lua` IS now registered, so this file does have a caller when `ProximityAudioFX` is enabled. Loading this file today does nothing observable on its own. |
-| `client/propattachment.lua`, `server/propattachment.lua` | `Config.Features.PropAttachments` — cosmetic prop (vest/harness) toggle on a K9's own ped | **Registered in `fxmanifest.lua`** (was "not in" until `933eb9e`/`faae5ff`; the flag still ships `false`, so the feature is off, not absent.) Real client+server code and a `Config.PropAttachments` table exist, but the feature cannot run at all until both files are added to the manifest. |
-| `client/fetch.lua`, `server/fetch.lua` | `Config.Features.FetchMechanic` | **Registered in `fxmanifest.lua`** (was "not in" until `933eb9e`/`faae5ff`; the flag still ships `false`, so the feature is off, not absent.) New since the previous revision of this document, which described this feature as having no code at all — that is no longer accurate at the source-file level, but it remains completely unusable until wired in. |
-| `client/proximityaudio.lua` | `Config.Features.ProximityAudioFX` — ambient K9 presence audio that scales with listener distance, built on `client/audio.lua`'s bridge | **Registered in `fxmanifest.lua`** (was "not in" until `933eb9e`/`faae5ff`; the flag still ships `false`, so the feature is off, not absent.) Same status as the two rows above: real code, zero reachability. |
-| `client/bonetool.lua`, `server/bonetool.lua` | A dev-only, ACE-gated tool for finding a real attach bone index on a quadruped skeleton (referenced by `client/propattachment.lua`'s own header as a prerequisite research step) | **Registered in `fxmanifest.lua`** (was "not in" until `933eb9e`/`faae5ff`; the flag still ships `false`, so the feature is off, not absent.) Not a player-facing feature; not expected to ship enabled on a live server even once wired in. |
+`Config.Features.HandlerDownDefense` and `Config.Features.Recall` were also
+previously described in this document as having "zero code" or being
+"still not built." Both are implemented and wired
+(`server/defense.lua`/`client/defense.lua`,
+`server/recall.lua`/`client/recall.lua`) — see their rows in the
+[Phase 3 table](#phase-3--combat--agility-all-ship-false) above, and all six
+Phase 3/5 radial menu entries this unblocked ("Partner Up", "Recall K9",
+"Handler-Down Response", "Fetch", "Toggle K9 Vest", "Deploy Kennel") are
+live in `client/radial.lua` today, each gated on its own still-`false` flag.
 
-None of the five files/pairs above are documented elsewhere in this README
-as active features, and none should be — they are real but currently
-unreachable. This is reported as a finding, not silently worked around.
-
-Separately, **`Config.Features.HandlerDownDefense` and
-`Config.Features.Recall` are both implemented and wired**
-(`server/defense.lua`/`client/defense.lua` and `server/recall.lua`/
-`client/recall.lua` respectively, all four listed in `fxmanifest.lua` and
-gated on their own flags). Earlier revisions of this document described one
-or both as having "zero code" or being "still not built" — that was true
-when written and is no longer true. See their rows in the
-[Phase 3 table](#phase-3--combat--agility-all-ship-false) above.
+**What is still genuinely unreachable, and why**: nothing, for the "missing
+manifest registration" reason this section used to track. What remains off
+is off by `Config.Features` default, documented per-flag in the
+[config reference](#configfeatures--full-reference) above, or blocked on a
+real disclosed gap (bark/ambient audio has no licensed asset yet;
+`PropAttachments`/`FetchMechanic`'s attach bone is still the root-bone
+placeholder pending the dev-only sweep) — not on a file failing to load.
 
 ## Commands
 
@@ -728,6 +763,13 @@ own.
   `server/tracking.lua`, `server/search.lua` — Phase 2, disabled by default.
 - `client/hud.lua`, `html/index.html`/`style.css`/`app.js` — the vitality
   HUD and its NUI frontend (`HealthStaminaHUD`).
+- `locales/en.json` — `ox_lib 'locale'` has been declared in
+  `fxmanifest.lua` since Phase 1, but this is the first real locale file.
+  Only `client/vision.lua`, `client/vehicle.lua`, and `client/kennel.lua`
+  (3 of roughly 48 `client`/`server` `.lua` files) have actually been
+  migrated to it so far — see `locales/README.md` for the pattern, the
+  `common.*` shared-key convention, and the honest "what's left" count
+  before assuming any other file is localized.
 - `server/inventory.lua`, `client/inventory.lua` — the K9 gear stash
   (`K9Inventory`).
 - `server/medkit.lua`, `client/medkit.lua` — the K9 medkit (`K9Medkit`).
@@ -745,8 +787,9 @@ own.
 - `server/exports.lua`, `client/exports.lua` — the public API documented
   above. Loaded by `fxmanifest.lua` and callable today.
 - `client/audio.lua` — the NUI bark/ambient audio bridge. Loaded by
-  `fxmanifest.lua`, but has no in-manifest caller yet — see
-  [Known issues](#known-issues--code-that-exists-but-does-not-run).
+  `fxmanifest.lua`, and now genuinely called from `client/main.lua`'s bark
+  relay and from `client/proximityaudio.lua` — see
+  [Bark sounds](#bark-sounds-are-placeholders-no-audio-ships) above.
 - `client/screenfx.lua` — `ContrabandScreenFX`'s client effect. Loaded by
   `fxmanifest.lua`, and `server/search.lua` now fires the event it listens
   for — wired end-to-end, still ships `false`.
@@ -757,8 +800,11 @@ own.
   `client/fetch.lua`, `server/fetch.lua`, `client/proximityaudio.lua`,
   `client/bonetool.lua`, `server/bonetool.lua` — `PropAttachments`,
   `FetchMechanic`, `ProximityAudioFX`, and a dev-only bone-index tool,
-  respectively. Real code exists for all of these, but **none of these
-  seven files are loaded by `fxmanifest.lua` yet** — see Known issues.
+  respectively. All seven files are loaded by `fxmanifest.lua` and reachable
+  from the radial menu (Toggle K9 Vest, Fetch) or `/k9deploykennel`-style
+  commands the moment their flag is `true` — see
+  [Known issues](#known-issues--historical-now-resolved) for what used to be
+  wrong here.
 
 See `SPEC.md`, `PHASE3_SPEC.md`, `PHASE4_SPEC.md`, `PHASE5_SPEC.md` for the
 full product spec and phased build plan, and `CHANGELOG.md` for a running

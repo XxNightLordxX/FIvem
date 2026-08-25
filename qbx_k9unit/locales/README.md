@@ -23,6 +23,21 @@ exact count this leaves). Do not assume a file is unmigrated just because
 it isn't named in the two-file list above; check whether it actually has
 any player-facing strings first.
 
+**Update (third migration pass):** `client/main.lua`, `client/movement.lua`,
+`client/agility.lua`, and `client/inventory.lua` are now also migrated (new
+`movement.*`/`agility.*`/`inventory.*` groups below, plus one new `common.*`
+key — see "The `common.no_k9_access` promotion" below). These were chosen
+as the highest-traffic remaining files: `client/main.lua` holds
+`BasicBarkSounds`, one of only five features shipping `true` by default, so
+its strings are live on every install today (its bark-playback path itself
+has no player-facing strings — only its `DenyK9UIAccess()` helper did).
+`client/movement.lua` is this resource's largest client file and owns the
+leash consent handshake, the two door-interaction actions, and the
+certify/revoke `ox_target` entry points, all of which show `lib.notify`/
+`lib.alertDialog` text or `ox_target` labels. `client/agility.lua` and
+`client/inventory.lua` are smaller but each had at least one real
+player-facing string worth closing out in the same pass.
+
 ## Format (verified against ox_lib source, not assumed)
 
 Checked directly against `overextended/ox_lib`
@@ -96,6 +111,20 @@ this same `common.*` group (e.g. `common.no_k9_access`) for the identical
 reason above — it too is duplicated verbatim across several other files
 (`client/movement.lua` alone hardcodes it at least four times).
 
+### The `common.no_k9_access` promotion (third migration pass)
+
+Done, per the plan the paragraph above laid out: `DenyK9UIAccess()`
+(`client/main.lua`) now calls `locale('common.no_k9_access')`, and every
+verbatim copy of `'You cannot use K9 features right now.'` found across
+this pass's four files was pointed at the SAME key rather than minted
+per-file — `client/movement.lua` (`K9Sit()`, `RequestLeashAttach()`,
+`ScratchAtDoor()`, `NudgeDoor()`, four call sites) and `client/agility.lua`
+(`TryVault()`, one call site). Confirmed by grep before this pass:
+`client/tracking.lua` also hardcodes this exact string — it is NOT touched
+by this change (out of scope, a different file), but whoever migrates it
+next should point it at `common.no_k9_access` too rather than minting a
+fourth copy.
+
 ### `kennel.*` (added in the second migration pass, `client/kennel.lua`)
 
 Five new leaf keys: `already_deployed`, `prop_load_failed`,
@@ -108,6 +137,75 @@ Kennel" `ox_target` option label). See "What's left" below for an
 important **non**-duplication note about `server/kennel.lua`'s own
 similarly-worded-but-different `NotifyPlayer` strings — do not reuse
 `kennel.placement_failed` for those when that file gets migrated.
+
+### `movement.*` / `agility.*` / `inventory.*` (added in the third migration pass)
+
+`movement.*` (`client/movement.lua`, 20 leaf keys): the camera
+first/third-person pair (`camera_first_person`/`camera_third_person`, kept
+as two full-sentence keys rather than one templated "%s-person view."
+string — same "on/off state words don't translate uniformly" reasoning the
+"Why no interpolation was used for the vision on/off strings" section below
+already gives, applied here to a different on/off-shaped pair), the leash
+consent-handshake strings (`leash_request_header`/`leash_request_content`
+— the latter is this pass's only `%s`-interpolated string,
+`locale('movement.leash_request_content', fromName)` — plus
+`accept_label`/`decline_label` for the `lib.alertDialog` buttons), the
+leash lifecycle notifications (`already_leashed`, `leash_request_sent`,
+`leash_now_leashed`, `leash_now_anchoring`, `leash_detached`,
+`leash_detached_partner_disconnected`, `leash_snapped_too_far`), three
+`ox_target` labels (`attach_leash_target_label`,
+`certify_handler_target_label`, `revoke_certification_target_label`), the
+door-interaction error/label strings (`nothing_to_scratch`,
+`nothing_to_nudge`, `scratch_door_target_label`, `nudge_door_target_label`),
+and the camera keybind description (`toggle_camera_keybind_label`). Also
+new: `officer_fallback_name` (`"Officer #%d"`) — the leash-request prompt's
+fallback display name for a target whose `GetPlayerName` isn't resolvable
+used to be built with Lua string concatenation (`'Officer #' .. fromServerId`)
+directly in `client/movement.lua`; that's exactly the untranslatable
+pattern this whole migration exists to close (see "Format" below), so it's
+now `locale('movement.officer_fallback_name', fromServerId)` like every
+other dynamic value here, not a special case.
+
+**Deliberately kept separate, not collapsed:** `leash_detached` ("Leash
+detached.") and `leash_detached_partner_disconnected` ("Leash detached —
+your partner disconnected.") look like a base string plus an appended
+reason clause, which might tempt a future editor into one templated key
+with an optional `%s` reason argument. They're kept as two independent
+full-sentence keys instead, same reasoning as the vision on/off pair and
+`kennel.placement_failed`'s own non-duplication note above: whether and how
+a reason clause attaches to a sentence varies by language, so a template
+that assumes English's "base sentence + dash + reason" structure would
+translate awkwardly or incorrectly elsewhere. Revisit only with a concrete
+translator complaint, not preemptively.
+
+`agility.*` (`client/agility.lua`, 1 leaf key): `vault_keybind_label`, the
+Advanced Agility vault's `RegisterKeyMapping` description. `TryVault()`'s
+own `lib.notify` denial message reuses `common.no_k9_access` (see above) —
+no new key needed for it.
+
+`inventory.*` (`client/inventory.lua`, 8 leaf keys): `open_gear_target_label`
+(the "Open K9 Gear" `ox_target` option), `unable_to_open_generic` (the
+fallback shown when `openK9Inventory`'s callback returns an unrecognized/nil
+`reason`), and six `reason_*` keys (`reason_feature_disabled`,
+`reason_invalid_target`, `reason_no_access`, `reason_too_far`,
+`reason_not_authorized`, `reason_stash_failed`) for
+`K9_INVENTORY_REASON_MESSAGES`'s six distinct rejection causes.
+
+**Deliberately kept separate, not collapsed (the exact trap this file's own
+"What's left" section warns about for `server/kennel.lua`):** all six
+`reason_*` strings, plus `unable_to_open_generic`, read similarly ("K9 gear
+access is disabled...", "That is not a working K9.", "...not currently
+certified...", "...too far away...", "...not authorized...", "Unable to
+open K9 gear right now." / "Unable to open K9 gear."), but each is a
+genuinely distinct failure cause reported by a different `reason` value
+from the server's `openK9Inventory` callback (feature off, wrong target,
+uncertified target, distance, caller authorization, and a stash-open
+failure, respectively), plus a separate generic fallback for an
+unrecognized/nil reason. None were merged into one templated "Unable to
+open K9 gear: %s" message — doing so would erase the distinction between
+"this is disabled" and "you're not allowed," which matters for a player
+trying to understand what to do next, and would make each cause
+individually untranslatable as a complete sentence.
 
 ## Why no interpolation was used for the vision on/off strings
 

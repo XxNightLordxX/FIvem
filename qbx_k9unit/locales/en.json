@@ -1,7 +1,8 @@
 {
     "common": {
         "notify_title": "K9 Unit",
-        "not_k9_model": "This only works while playing a K9 character."
+        "not_k9_model": "This only works while playing a K9 character.",
+        "no_k9_access": "You cannot use K9 features right now."
     },
     "vision": {
         "thermal_on": "Thermal vision on.",
@@ -24,5 +25,42 @@
         "placement_failed": "Kennel placement failed.",
         "no_suitable_ground": "No suitable ground to place the kennel here.",
         "pickup_target_label": "Pick Up Kennel"
+    },
+    "movement": {
+        "camera_first_person": "First-person view.",
+        "camera_third_person": "Third-person view.",
+        "toggle_camera_keybind_label": "Toggle K9 First/Third Person Camera",
+        "already_leashed": "You are already leashed.",
+        "leash_request_sent": "Leash request sent.",
+        "leash_request_header": "K9 Leash Request",
+        "leash_request_content": "%s wants to attach a leash to you. Accept?",
+        "officer_fallback_name": "Officer #%d",
+        "accept_label": "Accept",
+        "decline_label": "Decline",
+        "leash_now_leashed": "You are now leashed.",
+        "leash_now_anchoring": "You are now anchoring the leash.",
+        "leash_detached": "Leash detached.",
+        "leash_detached_partner_disconnected": "Leash detached — your partner disconnected.",
+        "leash_snapped_too_far": "Leash snapped — you got too far from your handler.",
+        "attach_leash_target_label": "Attach Leash",
+        "certify_handler_target_label": "Certify K9 Handler",
+        "revoke_certification_target_label": "Revoke K9 Certification",
+        "nothing_to_scratch": "Nothing there to scratch at.",
+        "nothing_to_nudge": "Nothing there to nudge.",
+        "scratch_door_target_label": "Scratch to Alert",
+        "nudge_door_target_label": "Nudge Door"
+    },
+    "agility": {
+        "vault_keybind_label": "K9 Advanced Agility Vault (fence/window)"
+    },
+    "inventory": {
+        "open_gear_target_label": "Open K9 Gear",
+        "reason_feature_disabled": "K9 gear access is disabled on this server.",
+        "reason_invalid_target": "That is not a working K9.",
+        "reason_no_access": "That K9 is not currently certified for duty.",
+        "reason_too_far": "You are too far away to access that K9's gear.",
+        "reason_not_authorized": "You are not authorized to access that K9's gear.",
+        "reason_stash_failed": "Unable to open K9 gear right now.",
+        "unable_to_open_generic": "Unable to open K9 gear."
     }
 }

@@ -1,0 +1,229 @@
+-- =====================================================================
+-- qbx_k9unit :: migration 0004 :: add k9_certifications active-cert
+-- backstop (active_cert_key + uq_one_active_cert_per_job), plus the two
+-- plain lookup indexes idx_citizen_job_active / idx_job_active, to an
+-- EXISTING k9_certifications table that predates them.
+--
+-- WHY THIS FILE EXISTS (db-schema re-reconciliation pass, 2026-08-25):
+-- SPEC.md section 9 item 1 records this table's DB-level uniqueness
+-- backstop as something db-schema's Phase 1 review "resolved" and
+-- "added" to an already-drafted certification table design ("dedicated
+-- table confirmed, with an added DB-level uniqueness backstop" -- SPEC.md
+-- section 9 item 1; see also section 4.3's own "Reviewed and refined by
+-- db-schema" framing). That wording means the generated column, its
+-- unique index, and very likely the two plain lookup indexes below were
+-- not necessarily present in the very first shape `k9_certifications`
+-- ever took in this project's history -- the exact same "column/index
+-- added to an existing table's CREATE TABLE, but no migration shipped
+-- alongside it" situation that made migration 0003 above necessary for
+-- `k9_partnerships.tenure_bonus_tier_granted`. Unlike that case, no
+-- earlier migration file was ever written to backfill this one, and
+-- `CREATE TABLE IF NOT EXISTS` in install.sql/migration-less installs
+-- does NOT retroactively add a column/index to a table that already
+-- exists in some earlier shape -- so any database whose k9_certifications
+-- table was created before this backstop landed is silently missing it
+-- today, with no error or warning anywhere.
+--
+-- WHY THIS IS A SERIOUS GAP, NOT A COSMETIC ONE: server/certifications.lua's
+-- GrantCertification does an application-level SELECT-then-INSERT
+-- (SELECT ... WHERE citizenid = ? AND job = ? AND active = 1, then INSERT)
+-- with NO transaction/locking of its own between the two statements. Its
+-- own comments are explicit that this is safe ONLY because
+-- `uq_one_active_cert_per_job` is expected to throw a real MySQL/MariaDB
+-- 1062 duplicate-key error on the second of two concurrent grant requests
+-- for the same (citizenid, job), which `IsDuplicateKeyError`/the calling
+-- code then treats as "lost the race, not a real failure." On a database
+-- missing this constraint, that 1062 never happens: two near-simultaneous
+-- grant requests for the same target/department can BOTH pass the
+-- pre-check and BOTH insert, leaving two simultaneously active
+-- k9_certifications rows for the same (citizenid, job) -- a real,
+-- silent TOCTOU window with no error, no log line, and no code path that
+-- would ever notice on that database, exactly the class of gap this pass
+-- was asked to close.
+--
+-- WHO NEEDS THIS FILE: any existing installation that already has
+-- `k9_certifications` (created by an earlier `install.sql`) but does NOT
+-- yet have `active_cert_key` / `uq_one_active_cert_per_job` (and/or the
+-- two plain lookup indexes below). A fresh install never needs this file
+-- -- current install.sql already creates this table with all of the
+-- below in one CREATE TABLE. Running this against a database that was
+-- built from the current install.sql is a documented, guaranteed no-op
+-- (see below) -- it is always safe to run this file "just in case," on
+-- every upgrade, exactly like migration 0003.
+--
+-- IDEMPOTENT / SAFE TO RE-RUN, EACH PIECE INDEPENDENTLY: four separate
+-- INFORMATION_SCHEMA-guarded stored-procedure blocks below (one for the
+-- generated column, one for the unique key, one for each of the two plain
+-- indexes) -- each checks its own target's existence before acting, so
+-- this file is safe to run against a database in ANY partial state (e.g.
+-- one that already has the plain indexes but not the generated column, or
+-- vice versa), not just the two extremes of "has everything" / "has
+-- nothing." Column is added before the unique key that references it
+-- (MySQL/MariaDB requires the column to exist before an index can be
+-- built on it) -- this file's four blocks are ordered for exactly that
+-- dependency, so running the whole file top-to-bottom in one pass always
+-- works regardless of which pieces (if any) a given database already has.
+--
+-- WHY NOT A PLAIN `ADD COLUMN IF NOT EXISTS` / `ADD INDEX IF NOT EXISTS`:
+-- same portability reasoning as migration 0003's own header (not repeated
+-- in full here) -- that syntax is MariaDB-only / MySQL 8.0.29+ only, and
+-- this resource's migrations must not assume a specific MySQL/MariaDB
+-- version. The INFORMATION_SCHEMA-guarded procedure pattern below is
+-- identical in shape to migration 0003's, extended to also guard
+-- KEY/INDEX existence via INFORMATION_SCHEMA.STATISTICS (the correct
+-- catalog view for index presence, as opposed to .COLUMNS for column
+-- presence).
+--
+-- WHY BACKFILLING active_cert_key IS SAFE FOR EXISTING ROWS: it is a
+-- VIRTUAL generated column (`GENERATED ALWAYS AS (...) VIRTUAL`), computed
+-- from `active`/`citizenid`/`job` on every read -- MySQL/MariaDB derives
+-- its value for every pre-existing row automatically the moment the
+-- column is added; there is no data to backfill by hand and no way for
+-- this ALTER to compute a wrong value for a row that predates it. If two
+-- rows already active for the same (citizenid, job) exist on a given
+-- database BECAUSE of the exact race this migration closes going forward,
+-- the subsequent `ADD UNIQUE KEY` step will fail loudly (a real duplicate
+-- entry error, on the ALTER itself) rather than silently accepting a bad
+-- state -- see the operator note below for how to handle that specific
+-- case; this migration deliberately does not try to auto-resolve it.
+--
+-- OPERATOR NOTE if the `ADD UNIQUE KEY` step below fails with a duplicate
+-- entry error: it means this database already accumulated more than one
+-- simultaneously-active k9_certifications row for the same (citizenid,
+-- job) pair before this constraint was ever enforced -- exactly the data
+-- corruption this migration exists to prevent from happening again. This
+-- migration deliberately does NOT decide which of the duplicate active
+-- rows to keep/deactivate for you (a real access-control/audit judgment
+-- call, not a schema-layer one) -- per this pass's own "never write a
+-- destructive statement" constraint, no ALTER/UPDATE/DELETE resolving
+-- that conflict is included here. Identify the conflicting rows first
+-- (`SELECT citizenid, job, COUNT(*) FROM k9_certifications WHERE active = 1
+-- GROUP BY citizenid, job HAVING COUNT(*) > 1;`), decide by hand which row
+-- should remain the sole active one for each conflicting pair, `UPDATE`
+-- the others to `active = 0` (never delete the audit row), THEN re-run
+-- this migration file -- the unique-key step will then succeed.
+--
+-- NO DESTRUCTIVE STATEMENT: this file only ever ADDs a column and ADDs
+-- indexes; it never DROPs, TRUNCATEs, or rewrites any existing column,
+-- table, or row.
+--
+-- ORDERING REQUIREMENT: this file assumes `k9_certifications` itself
+-- already exists (created by `install.sql`) -- run install.sql first on
+-- any database that lacks it entirely. Applying this file's numeric
+-- filename order (0001, 0002, 0003, 0004, ...) after install.sql, as
+-- documented in install.sql's own header, always satisfies this.
+-- =====================================================================
+
+-- ---------------------------------------------------------------------
+-- Step 1: add `active_cert_key` (generated column) if missing.
+-- ---------------------------------------------------------------------
+DELIMITER $$
+
+CREATE PROCEDURE `qbx_k9unit_migration_0004_add_active_cert_key_column`()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'k9_certifications'
+          AND COLUMN_NAME = 'active_cert_key'
+    ) THEN
+        ALTER TABLE `k9_certifications`
+            ADD COLUMN `active_cert_key` VARCHAR(105)
+                GENERATED ALWAYS AS (
+                    CASE WHEN `active` = 1
+                         THEN CONCAT(`citizenid`, '::', `job`)
+                         ELSE NULL
+                    END
+                ) VIRTUAL
+                AFTER `active`;
+    END IF;
+END$$
+
+DELIMITER ;
+
+CALL `qbx_k9unit_migration_0004_add_active_cert_key_column`();
+
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_active_cert_key_column`;
+
+-- ---------------------------------------------------------------------
+-- Step 2: add `uq_one_active_cert_per_job` (unique key on the column just
+-- added/confirmed above) if missing. Depends on Step 1 having already run
+-- in this same pass, or on a database where the column was already
+-- present from an earlier partial application.
+-- ---------------------------------------------------------------------
+DELIMITER $$
+
+CREATE PROCEDURE `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'k9_certifications'
+          AND INDEX_NAME = 'uq_one_active_cert_per_job'
+    ) THEN
+        ALTER TABLE `k9_certifications`
+            ADD UNIQUE KEY `uq_one_active_cert_per_job` (`active_cert_key`);
+    END IF;
+END$$
+
+DELIMITER ;
+
+CALL `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`();
+
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`;
+
+-- ---------------------------------------------------------------------
+-- Step 3: add `idx_citizen_job_active` if missing (server/admin.lua's
+-- '/k9auditcert' relies on this exact index -- see sql/install.sql's own
+-- comment on it and server/admin.lua's QueryCertificationHistory).
+-- ---------------------------------------------------------------------
+DELIMITER $$
+
+CREATE PROCEDURE `qbx_k9unit_migration_0004_add_idx_citizen_job_active`()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'k9_certifications'
+          AND INDEX_NAME = 'idx_citizen_job_active'
+    ) THEN
+        ALTER TABLE `k9_certifications`
+            ADD KEY `idx_citizen_job_active` (`citizenid`, `job`, `active`);
+    END IF;
+END$$
+
+DELIMITER ;
+
+CALL `qbx_k9unit_migration_0004_add_idx_citizen_job_active`();
+
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_idx_citizen_job_active`;
+
+-- ---------------------------------------------------------------------
+-- Step 4: add `idx_job_active` if missing (SPEC.md 4.3's admin-path
+-- "list all certified handlers in department X" query relies on this
+-- exact index -- see sql/install.sql's own comment on it).
+-- ---------------------------------------------------------------------
+DELIMITER $$
+
+CREATE PROCEDURE `qbx_k9unit_migration_0004_add_idx_job_active`()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM INFORMATION_SCHEMA.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'k9_certifications'
+          AND INDEX_NAME = 'idx_job_active'
+    ) THEN
+        ALTER TABLE `k9_certifications`
+            ADD KEY `idx_job_active` (`job`, `active`);
+    END IF;
+END$$
+
+DELIMITER ;
+
+CALL `qbx_k9unit_migration_0004_add_idx_job_active`();
+
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_idx_job_active`;

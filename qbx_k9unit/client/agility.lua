@@ -213,7 +213,7 @@ if Config.Features.AgilityAdvanced then
     --- directly here.
     local function TryVault()
         if not CanShowK9UI() then
-            lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+            lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
             return
         end
 
@@ -259,5 +259,5 @@ if Config.Features.AgilityAdvanced then
         TryVault()
     end, false)
 
-    RegisterKeyMapping('qbx_k9unit:vault', 'K9 Advanced Agility Vault (fence/window)', 'keyboard', 'X')
+    RegisterKeyMapping('qbx_k9unit:vault', locale('agility.vault_keybind_label'), 'keyboard', 'X')
 end

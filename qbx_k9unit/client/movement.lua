@@ -247,15 +247,15 @@ local isFirstPersonK9View = false
 --- modes already do that for any ped model without per-model tuning.
 function ToggleK9Camera()
     if not IsOwnModelK9() then
-        lib.notify({ title = 'K9 Unit', description = 'This only works while playing a K9 character.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('common.not_k9_model'), type = 'error' })
         return
     end
 
     isFirstPersonK9View = not isFirstPersonK9View
     SetFollowPedCamViewMode(isFirstPersonK9View and 4 or 1)
     lib.notify({
-        title = 'K9 Unit',
-        description = isFirstPersonK9View and 'First-person view.' or 'Third-person view.',
+        title = locale('common.notify_title'),
+        description = isFirstPersonK9View and locale('movement.camera_first_person') or locale('movement.camera_third_person'),
         type = 'inform',
     })
 end
@@ -264,7 +264,7 @@ RegisterCommand('qbx_k9unit:toggleCamera', function()
     ToggleK9Camera()
 end, false)
 
-RegisterKeyMapping('qbx_k9unit:toggleCamera', 'Toggle K9 First/Third Person Camera', 'keyboard', 'L')
+RegisterKeyMapping('qbx_k9unit:toggleCamera', locale('movement.toggle_camera_keybind_label'), 'keyboard', 'L')
 
 -- qa-tester finding: a resource restart while isFirstPersonK9View is true
 -- previously left the game's follow-cam stuck in mode 4 (first-person)
@@ -325,7 +325,7 @@ local K9_SIT_DEFAULT_SCENARIO = 'WORLD_DOG_SITTING_SHEPHERD' -- fallback if play
 
 function K9Sit()
     if not CanShowK9UI() then
-        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
         return
     end
 
@@ -367,19 +367,19 @@ function RequestLeashAttach(targetPlayerServerId)
     -- before bothering the server (which re-validates authoritatively
     -- regardless, see server/main.lua's CheckLeashEligibility).
     if not CanShowK9UI() then
-        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
         return
     end
 
     if IsLeashed() then
-        lib.notify({ title = 'K9 Unit', description = 'You are already leashed.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('movement.already_leashed'), type = 'error' })
         return
     end
 
     TriggerServerEvent('qbx_k9unit:server:requestLeashAttach', targetPlayerServerId)
     -- The target's client is the one that shows the actual accept/decline
     -- prompt (see leashAttachRequest below), not this one.
-    lib.notify({ title = 'K9 Unit', description = 'Leash request sent.', type = 'inform' })
+    lib.notify({ title = locale('common.notify_title'), description = locale('movement.leash_request_sent'), type = 'inform' })
 end
 
 --- Detaches the current leash, if any, with ZERO consent required from
@@ -413,7 +413,7 @@ RegisterNetEvent('qbx_k9unit:client:leashAttachRequest', function(fromServerId)
     -- empirically verified in-engine as part of this change).
     if source ~= 65535 then return end
     local fromPlayer = GetPlayerFromServerId(fromServerId)
-    local fromName = (fromPlayer ~= -1 and GetPlayerName(fromPlayer)) or ('Officer #' .. fromServerId)
+    local fromName = (fromPlayer ~= -1 and GetPlayerName(fromPlayer)) or locale('movement.officer_fallback_name', fromServerId)
 
     -- If the local player leashes/unleashes/disconnects mid-prompt, or
     -- either side is no longer eligible by the time they answer, the
@@ -422,11 +422,11 @@ RegisterNetEvent('qbx_k9unit:client:leashAttachRequest', function(fromServerId)
     -- just needs to send the response and handle a later rejection
     -- gracefully, not assume acceptance always succeeds.
     local response = lib.alertDialog({
-        header = 'K9 Leash Request',
-        content = ('%s wants to attach a leash to you. Accept?'):format(fromName),
+        header = locale('movement.leash_request_header'),
+        content = locale('movement.leash_request_content', fromName),
         centered = true,
         cancel = true,
-        labels = { confirm = 'Accept', cancel = 'Decline' },
+        labels = { confirm = locale('movement.accept_label'), cancel = locale('movement.decline_label') },
     })
 
     TriggerServerEvent('qbx_k9unit:server:respondLeashAttach', fromServerId, response == 'confirm')
@@ -451,8 +451,8 @@ RegisterNetEvent('qbx_k9unit:client:leashAttached', function(partnerServerId, is
     leashState = { partnerServerId = partnerServerId, isConstrained = isConstrained }
     detachRequestedForSafety = false
     lib.notify({
-        title = 'K9 Unit',
-        description = isConstrained and 'You are now leashed.' or 'You are now anchoring the leash.',
+        title = locale('common.notify_title'),
+        description = isConstrained and locale('movement.leash_now_leashed') or locale('movement.leash_now_anchoring'),
         type = 'success',
     })
     -- The elastic-restriction thread below is a perpetual loop that reads
@@ -479,11 +479,11 @@ RegisterNetEvent('qbx_k9unit:client:leashDetached', function(reason)
     leashState = nil
     detachRequestedForSafety = false
 
-    local description = 'Leash detached.'
+    local description = locale('movement.leash_detached')
     if reason == 'partner_disconnected' then
-        description = 'Leash detached — your partner disconnected.'
+        description = locale('movement.leash_detached_partner_disconnected')
     end
-    lib.notify({ title = 'K9 Unit', description = description, type = 'inform' })
+    lib.notify({ title = locale('common.notify_title'), description = description, type = 'inform' })
     -- The elastic-restriction thread below naturally stops doing anything
     -- once IsLeashed() is false — nothing else to tear down here.
 end)
@@ -532,7 +532,7 @@ CreateThread(function()
                     -- the server confirms via leashDetached.
                     if not detachRequestedForSafety then
                         detachRequestedForSafety = true
-                        lib.notify({ title = 'K9 Unit', description = 'Leash snapped — you got too far from your handler.', type = 'error' })
+                        lib.notify({ title = locale('common.notify_title'), description = locale('movement.leash_snapped_too_far'), type = 'error' })
                         DetachLeash()
                     end
                 elseif dist > pullZoneStart and not IsPedInAnyVehicle(myPed, false) and not (IsInK9Vehicle and IsInK9Vehicle()) then
@@ -616,7 +616,7 @@ exports.ox_target:addGlobalPlayer({
     {
         name = 'qbx_k9unit:attachLeash',
         icon = 'fas fa-link',
-        label = 'Attach Leash',
+        label = locale('movement.attach_leash_target_label'),
         distance = LEASH_TARGET_DISTANCE_FACTOR * Config.LeashMaxDistance,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.LeashMechanics then return false end
@@ -701,7 +701,7 @@ exports.ox_target:addGlobalPlayer({
     {
         name = 'qbx_k9unit:certifyHandler',
         icon = 'fas fa-id-badge',
-        label = 'Certify K9 Handler',
+        label = locale('movement.certify_handler_target_label'),
         distance = CERTIFY_TARGET_DISTANCE_FACTOR * Config.CertifyProximityMeters,
         canInteract = function(entity, distance, coords, name)
             if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-cert stays command-only (/k9certify [own id]), matches the leash option's self-exclusion above
@@ -723,7 +723,7 @@ exports.ox_target:addGlobalPlayer({
     {
         name = 'qbx_k9unit:revokeHandler',
         icon = 'fas fa-id-badge',
-        label = 'Revoke K9 Certification',
+        label = locale('movement.revoke_certification_target_label'),
         distance = CERTIFY_TARGET_DISTANCE_FACTOR * Config.CertifyProximityMeters,
         canInteract = function(entity, distance, coords, name)
             if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-decert stays command-only, matches certify above
@@ -1206,12 +1206,12 @@ local function ScratchAtDoor(entity)
     -- independently re-verifies Config.Features.DoorInteraction AND
     -- HasK9Access(source) regardless of what this client claims.
     if not CanShowK9UI() then
-        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
         return
     end
 
     if not DoesEntityExist(entity) then
-        lib.notify({ title = 'K9 Unit', description = 'Nothing there to scratch at.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('movement.nothing_to_scratch'), type = 'error' })
         return
     end
 
@@ -1318,12 +1318,12 @@ local function NudgeDoor(entity)
     -- precisely because nothing below grants any real capability regardless
     -- (see the SAFETY DESIGN notes above).
     if not CanShowK9UI() then
-        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
         return
     end
 
     if not DoesEntityExist(entity) then
-        lib.notify({ title = 'K9 Unit', description = 'Nothing there to nudge.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('movement.nothing_to_nudge'), type = 'error' })
         return
     end
 
@@ -1395,7 +1395,7 @@ if Config.Features.DoorInteraction then
         {
             name = 'qbx_k9unit:scratchDoor',
             icon = 'fas fa-paw',
-            label = 'Scratch to Alert',
+            label = locale('movement.scratch_door_target_label'),
             distance = Config.DoorInteraction.interactDistance,
             canInteract = function(entity, distance, coords, name)
                 if not CanShowK9UI() then return false end
@@ -1424,7 +1424,7 @@ if Config.Features.DoorInteraction then
             -- are deliberately minimal because of.
             name = 'qbx_k9unit:nudgeDoor',
             icon = 'fas fa-hand-paper',
-            label = 'Nudge Door',
+            label = locale('movement.nudge_door_target_label'),
             distance = Config.DoorInteraction.interactDistance,
             canInteract = function(entity, distance, coords, name)
                 if not CanShowK9UI() then return false end
