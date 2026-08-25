@@ -81,6 +81,8 @@ need action.
 | Find alerts on trails | Covered — the reaction no longer depends on the XP system being switched on. |
 | Partnership survives disconnect | On purpose. Partnerships are meant to last across a shift; leashes are not. |
 | Audio near clustered K9s | Several K9s standing together each track the others, so the cost grows faster than the number of dogs. Fine at normal play; the thing to watch if resmon ever creeps. |
+| Scent tracking on qb-inventory | **The one to know about.** If you run `qb-inventory` rather than `ox_inventory`, the K9 will not pick up scent from items dropped on the ground. Everything else about tracking works. This one is called out separately because of HOW it fails: the connection reports success and then quietly does nothing, because qb-inventory never announces a ground drop at all. Nothing appears in your console. |
+| Vehicle search on qb-inventory | Searching a vehicle always comes back empty on `qb-inventory`. Searching a person still works. This one does report a failure rather than pretending. |
 | Inventories we cannot support | Five of the eight inventories in the compat list are paid scripts with no readable source. They are listed but stay inert, and say why in the console rather than pretending. Confirming one needs a live install, not more searching. |
 | Tenure database check | Runs one small indexed query every five minutes per fully-tenured pair rather than skipping it. Deliberate, documented and tested — do not "fix" it. |
 
@@ -116,9 +118,6 @@ our tables — not that you can remove oxmysql.*
 
 
 
-- **Connecting the compat adapters.** The translation layer for other
-  targeting and inventory scripts is written but not yet called, so today
-  everything still goes through `ox_target` and `ox_inventory` directly.
 
 ---
 

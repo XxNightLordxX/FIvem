@@ -291,6 +291,18 @@ local function newMedkitFixture(opts)
         Features = { K9Medkit = opts.k9Medkit ~= false },
         Departments = opts.departments or baselineDepartments(),
         K9Medkit = opts.k9MedkitCfg or baselineK9MedkitConfig(),
+        -- COMPAT-LAYER MIGRATION (coder-backend, this pass): pins the
+        -- 'inventory' system straight to 'ox_inventory' via `override`
+        -- (shared/compat/core.lua's TIER 1, skipping the candidate walk).
+        -- The other four systems get empty-but-present tables so
+        -- DetectSystem's own "missing or malformed" warning never fires.
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
     }
 
     local restoreInjuryCalls = {}
@@ -303,7 +315,24 @@ local function newMedkitFixture(opts)
         print = printStub,
         exports = {
             qbx_core = { GetPlayer = qbxGetPlayer },
-            ox_inventory = { GetItemCount = oxGetItemCount, RemoveItem = oxRemoveItem },
+            -- COMPAT-LAYER MIGRATION (this pass): server/medkit.lua now
+            -- calls `K9Compat.Get('inventory').GetItemCount`/`.RemoveItem`
+            -- instead of `exports.ox_inventory:...` directly.
+            -- shared/compat/inventory.lua's BuildOxInventoryServer requires
+            -- ALL SEVEN server-realm methods present as callable exports
+            -- before it returns ANYTHING -- GetInventoryItems/
+            -- GetContainerFromSlot/RegisterStash/RegisterShop/registerHook
+            -- (never called by server/medkit.lua at all) are stubbed as
+            -- harmless no-ops purely so capability verification passes.
+            ox_inventory = {
+                GetItemCount = oxGetItemCount,
+                RemoveItem = oxRemoveItem,
+                GetInventoryItems = function() return {} end,
+                GetContainerFromSlot = function() return nil end,
+                RegisterStash = function() return true end,
+                RegisterShop = function() return true end,
+                registerHook = function() return 1 end,
+            },
         },
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
@@ -314,6 +343,20 @@ local function newMedkitFixture(opts)
         HasK9Role = HasK9Role,
         lib = libStub,
         Config = config,
+        -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory is
+        -- the only resource this fixture's Compat.Systems.inventory.override
+        -- names, and it always reports 'started' (this file never tests an
+        -- undetected-inventory scenario -- that risk is covered by
+        -- shared/compat/inventory.lua's own dedicated spec and this task's
+        -- own per-file stub-degrade writeup in server/medkit.lua's header).
+        -- AddEventHandler is a bare no-op: shared/compat/core.lua calls it
+        -- unconditionally at its own load time, but nothing in this fixture
+        -- ever fires 'onResourceStart' (server/medkit.lua registers none of
+        -- its own), so K9Compat detects lazily on its first Get() call,
+        -- inline, with no CreateThread/Wait ever needed either.
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
+        AddEventHandler = function() end,
     }
     if opts.withRestoreInjury then
         envOverrides.RestoreInjury = function(citizenid, amount)
@@ -328,6 +371,13 @@ local function newMedkitFixture(opts)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
+    -- COMPAT-LAYER MIGRATION (this pass): server/medkit.lua's
+    -- GetItemCount/RemoveItem calls are now routed through
+    -- `K9Compat.Get('inventory')` -- load the REAL, unmodified
+    -- shared/compat/core.lua + shared/compat/inventory.lua first (never a
+    -- hand-written fake translation layer).
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env)
     Sandbox.loadInto('../server/medkit.lua', env)
 
     --- Drives `callbacks[name]` inside a real Lua coroutine, auto-resuming
@@ -765,31 +815,58 @@ end)
 
 -- ========================================================================
 -- MUST-MATTER #3(a): the mutex releases on the ERROR path, not just
--- success. A thrown error inside the mutex-held mutation body (simulated
--- via GetItemCount throwing) is followed by a fully successful retry
--- against the SAME target citizenid -- proving Release ran even though the
--- mutation errored.
+-- success. A thrown error inside the mutex-held mutation body is followed
+-- by a fully successful retry against the SAME target citizenid -- proving
+-- Release ran even though the mutation errored.
+--
+-- COMPAT-LAYER MIGRATION (coder-backend, this pass) -- FAULT INJECTION
+-- POINT CHANGED, BEHAVIOR GENUINELY DIFFERENT, NOT JUST A TEST TIDY-UP:
+-- this pair of tests used to inject the fault via GetItemCount throwing.
+-- That no longer produces an uncaught error at all: `K9Compat.Get('inventory')
+-- .GetItemCount` is now the real call site, and shared/compat/core.lua's
+-- own `BuildSafeAdapter` pcall-wraps every adapter method -- a throwing
+-- GetItemCount is caught INSIDE the adapter and reported as `0` (fails
+-- closed, per shared/compat/inventory.lua's own documented "possession
+-- assumed zero" contract, which that file's own header cites THIS file's
+-- pre-existing "unregistered, GetItemCount resolves 0 forever" convention
+-- as precedent for). So `f.setThrowOnGetItemCount(true)` now degrades
+-- cleanly to a plain `no_item` result (the possession check correctly
+-- reads carriedCount=0) -- never reaches RunUseK9MedkitMutation's own
+-- pcall boundary at all, and therefore never produces `medkit_failed` or
+-- the "useK9Medkit mutation error" console line either. This is a real,
+-- disclosed behavior change from the migration (a throwing inventory
+-- export now reads as "no item", not "internal error") -- arguably MORE
+-- correct given this file's own established fail-closed philosophy, and
+-- reported as such rather than silently patched over.
+--
+-- These two tests still need a genuine UNCAUGHT error inside the
+-- mutex-held mutation body to prove their own point (mutex release on the
+-- error path, and the diagnostic print) -- `throwOnMaxHealth` (GetEntityMaxHealth,
+-- a plain native this file calls directly, never routed through K9Compat)
+-- now serves that role instead, reaching RunUseK9MedkitMutation's own pcall
+-- boundary exactly like GetItemCount used to.
 -- ========================================================================
 
-t.test('a thrown error inside the mutex-held mutation (GetItemCount throws) is caught, reported as medkit_failed, and RELEASES the mutex -- an immediate retry against the same target fully succeeds', function()
+t.test('a thrown error inside the mutex-held mutation (GetEntityMaxHealth throws) is caught, reported as medkit_failed, and RELEASES the mutex -- an immediate retry against the same target fully succeeds', function()
     local f = newMedkitFixture()
     wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
     wireTargetK9(f, TARGET_SRC, { health = 150, maxHealth = 200 })
 
-    f.setThrowOnGetItemCount(true)
+    f.setThrowOnMaxHealth(true)
     local ok, failedResult = pcall(f.invokeCallback, CALLBACK_NAME, USER_SRC, TARGET_SRC)
     t.isTrue(ok, 'the thrown native error must never escape the callback -- HandleUseK9Medkit\'s own pcall must catch it')
     t.isFalse(failedResult.ok)
     t.equals(failedResult.reason, 'medkit_failed')
     t.equals(#f.clientEvents, 0, 'no heal may have been applied on the errored attempt')
 
-    -- The error happened BEFORE MedkitCooldown.Touch (which runs only after
-    -- a successful item-possession check) -- no time advance is needed for
-    -- this retry to be genuinely fresh, which is exactly what makes a
-    -- 'treatment_in_progress'/leaked-mutex regression observable here: if
-    -- Release had NOT run, this retry would be rejected with
-    -- treatment_in_progress instead of succeeding.
-    f.setThrowOnGetItemCount(false)
+    -- The error happens BEFORE MedkitCooldown.Touch (which runs only after
+    -- RemoveItem succeeds, and the health-read/clamp -- where this throw
+    -- happens -- runs before RemoveItem is even attempted) -- no time
+    -- advance is needed for this retry to be genuinely fresh, which is
+    -- exactly what makes a 'treatment_in_progress'/leaked-mutex regression
+    -- observable here: if Release had NOT run, this retry would be
+    -- rejected with treatment_in_progress instead of succeeding.
+    f.setThrowOnMaxHealth(false)
     local retryResult = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
     t.isTrue(retryResult.ok, 'the mutex must have been released on the error path -- a leaked mutex would report treatment_in_progress forever')
     t.isNotNil(lastClientEvent(f, HEAL_EVENT), 'the retry must be a real, fully successful heal, not merely "not blocked"')
@@ -799,7 +876,7 @@ t.test('the print diagnostic for a caught mutation error names the source and ci
     local f = newMedkitFixture()
     wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
     wireTargetK9(f, TARGET_SRC, { health = 150, maxHealth = 200, citizenid = 'K9-ERR-CID' })
-    f.setThrowOnGetItemCount(true)
+    f.setThrowOnMaxHealth(true)
     f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
     local found = false
     for _, line in ipairs(f.printedLines) do
@@ -1224,7 +1301,18 @@ local function newMedkitPlusWellbeingStartupFixture(opts)
     local function printStub(...)
         local parts = {}
         for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
-        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+        local line = table.concat(parts, '\t')
+        -- COMPAT-LAYER MIGRATION (this pass): shared/compat/core.lua's own
+        -- onResourceStart handler (loaded below) fires on every
+        -- fireResourceStart('qbx_k9unit') call and prints its OWN
+        -- diagnostic-command line every time regardless of config (see
+        -- equipmentshop_spec.lua's identical comment for the full "every
+        -- branch of that handler prints something" writeup) -- filtered
+        -- here since every assertion below is about server/medkit.lua's or
+        -- server/wellbeing.lua's own startup warning surface, several of
+        -- which assert EXACTLY ZERO lines for a disabled feature.
+        if line:find('[qbx_k9unit] K9Compat:', 1, true) then return end
+        printedLines[#printedLines + 1] = line
     end
 
     local RESOURCE_NAME = 'qbx_k9unit'
@@ -1309,6 +1397,17 @@ local function newMedkitPlusWellbeingStartupFixture(opts)
         -- wellbeing feature flag above is false and this section never
         -- calls into any of those handlers.
         Wellbeing = { FearStress = { hesitationDurationMs = 8000 }, tickIntervalMs = 5000 },
+        -- COMPAT-LAYER MIGRATION (this pass): pins the 'inventory' system
+        -- straight to 'ox_inventory' via `override`. The other four
+        -- systems get empty-but-present tables so DetectSystem's own
+        -- "missing or malformed" warning never fires for them.
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
     }
 
     local env = Sandbox.newEnv({
@@ -1320,9 +1419,31 @@ local function newMedkitPlusWellbeingStartupFixture(opts)
         lib = lib,
         print = printStub,
         GetCurrentResourceName = GetCurrentResourceName,
+        -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory
+        -- always reports 'started' (this fixture never exercises an
+        -- undetected-inventory scenario).
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
         exports = {
             qbx_core = { GetPlayer = qbxGetPlayer },
-            ox_inventory = { Items = oxItems, GetItemCount = oxGetItemCount, RemoveItem = oxRemoveItem },
+            -- COMPAT-LAYER MIGRATION (this pass): server/medkit.lua's
+            -- GetItemCount/RemoveItem are now routed through
+            -- `K9Compat.Get('inventory')` -- shared/compat/inventory.lua's
+            -- BuildOxInventoryServer requires all seven server-realm
+            -- methods present; `Items` is server/wellbeing.lua's own,
+            -- deliberately un-routed direct call (see that file's own
+            -- COMPAT-LAYER FINDING comment -- no server-realm ItemExists
+            -- exists in the contract), kept as-is here.
+            ox_inventory = {
+                Items = oxItems,
+                GetItemCount = oxGetItemCount,
+                RemoveItem = oxRemoveItem,
+                GetInventoryItems = function() return {} end,
+                GetContainerFromSlot = function() return nil end,
+                RegisterStash = function() return true end,
+                RegisterShop = function() return true end,
+                registerHook = function() return 1 end,
+            },
         },
         GetPlayerPed = GetPlayerPed,
         GetPlayers = function() return {} end,
@@ -1341,6 +1462,15 @@ local function newMedkitPlusWellbeingStartupFixture(opts)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
+    -- COMPAT-LAYER MIGRATION (this pass): server/medkit.lua's
+    -- GetItemCount/RemoveItem calls are now routed through
+    -- `K9Compat.Get('inventory')` -- load the REAL, unmodified
+    -- shared/compat/core.lua + shared/compat/inventory.lua first.
+    -- server/wellbeing.lua's own `Items` check stays a direct
+    -- `exports.ox_inventory:Items` call (deliberately un-routed, see that
+    -- file's own COMPAT-LAYER FINDING comment), so it needs nothing extra.
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env)
     Sandbox.loadInto('../server/medkit.lua', env)
     Sandbox.loadInto('../server/wellbeing.lua', env)
 

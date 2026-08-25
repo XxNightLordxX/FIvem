@@ -358,9 +358,17 @@ local function SumContrabandWeight(inventoryId, items, depth)
         if depth < MAX_CONTAINER_RECURSION_DEPTH then
             -- A non-container slot simply resolves to nil/false here —
             -- pcall-wrapped since a mid-scan entity/inventory change could
-            -- make this error rather than cleanly return nil.
+            -- make this error rather than cleanly return nil. ROUTED THROUGH
+            -- K9Compat.Get('inventory') (this pass, coder-backend) --
+            -- shared/compat/core.lua's
+            -- RequiredMethods.inventory.server.GetContainerFromSlot -- never
+            -- a direct `exports.ox_inventory:GetContainerFromSlot` call. The
+            -- adapter itself never throws (BuildSafeAdapter, shared/compat/
+            -- core.lua) so this outer pcall is now pure defense-in-depth,
+            -- kept unchanged rather than removed -- it cost nothing before
+            -- this pass and costs nothing now.
             local containerOk, containerInv = pcall(function()
-                return exports.ox_inventory:GetContainerFromSlot(inventoryId, slot.slot)
+                return K9Compat.Get('inventory').GetContainerFromSlot(inventoryId, slot.slot)
             end)
             if containerOk and containerInv and containerInv.items then
                 total = total + SumContrabandWeight(containerInv.id or inventoryId, containerInv.items, depth + 1)
@@ -1198,11 +1206,42 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- ambiguous scan rather than opening a new one. A person target's
     -- `inventoryId` (their own live numeric server id) has no equivalent
     -- ambiguity, so the table form is applied ONLY for targetType == 'vehicle'.
+    -- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+    -- shared/compat/core.lua's
+    -- RequiredMethods.inventory.server.GetInventoryItems -- never a direct
+    -- `exports.ox_inventory:GetInventoryItems` call. The adapter never
+    -- throws (BuildSafeAdapter, shared/compat/core.lua) so this outer pcall
+    -- is now pure defense-in-depth (kept unchanged -- costs nothing).
+    --
+    -- STUB-DEGRADE ANALYSIS (this task's own explicit question): on the
+    -- no-op stub (nothing detected), `GetInventoryItems` returns `nil` for
+    -- both branches -- `items == nil` below already reports `search_failed`
+    -- (a genuine "the search could not be performed" outcome, correctly
+    -- never collapsed into `contrabandFound = false`/'clean', per this
+    -- function's own established discipline) rather than crashing or
+    -- silently reporting a false clean bill. On qb-inventory specifically
+    -- (the other CONFIRMED backend): the PERSON branch (`inventoryId` is a
+    -- plain numeric server id) is REAL -- shared/compat/inventory.lua's
+    -- qb-inventory GetInventoryItems is composed onto its own confirmed
+    -- `GetInventory` export for a scalar id -- so person search keeps
+    -- working. The VEHICLE branch is NOT: that adapter's own header
+    -- discloses table-shaped `inv` (the `{ id, netid }` form this file
+    -- passes for an uncached vehicle trunk) has "NO confirmed qb-inventory
+    -- equivalent... fails closed to nil" -- meaning vehicle search always,
+    -- deterministically resolves to `search_failed` on a qb-inventory
+    -- server, never a false clean bill and never a crash, but also never a
+    -- working vehicle search. This is a REAL functional gap this task's own
+    -- question is meant to surface, not a security hole (the fail direction
+    -- is "search did not happen," never "search happened and found
+    -- nothing") -- reported to main; no code change made here to paper over
+    -- it, since inventing a qb-inventory container-lookup shape this
+    -- session never confirmed would be exactly the guessing this codebase's
+    -- own compat layer explicitly forbids.
     local queryOk, items = pcall(function()
         if targetType == 'vehicle' then
-            return exports.ox_inventory:GetInventoryItems({ id = inventoryId, netid = targetNetId })
+            return K9Compat.Get('inventory').GetInventoryItems({ id = inventoryId, netid = targetNetId })
         end
-        return exports.ox_inventory:GetInventoryItems(inventoryId)
+        return K9Compat.Get('inventory').GetInventoryItems(inventoryId)
     end)
 
     -- RE-CHECK HasK9Access(source) NOW, immediately after the awaited

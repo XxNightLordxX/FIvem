@@ -118,9 +118,28 @@ local function newInventoryFixture(opts)
     local hookRegistrations = {} -- array of { event = , callback = }
     local registerStashCalls = {} -- { {stashId=, label=, slots=, maxWeight=, owner=, groups=}, ... }
     local hookExportAvailable = opts.hookExportAvailable ~= false
+    -- COMPAT-LAYER MIGRATION (coder-backend, this pass): server/inventory.lua
+    -- now calls `K9Compat.Get('inventory').RegisterHook`/`.RegisterStash`
+    -- instead of `exports.ox_inventory:registerHook`/`:RegisterStash`
+    -- directly. shared/compat/inventory.lua's BuildOxInventoryServer
+    -- requires ALL SEVEN server-realm methods (GetInventoryItems/
+    -- GetContainerFromSlot/GetItemCount/RemoveItem/RegisterStash/
+    -- RegisterShop/registerHook) present as callable exports before it
+    -- returns ANYTHING -- a partial stub (this fixture only ever exercised
+    -- registerHook/RegisterStash/GetItemCount/RemoveItem before this pass)
+    -- would make the WHOLE adapter fail verification, so BOTH RegisterHook
+    -- AND RegisterStash below would always resolve to the no-op stub
+    -- regardless of `hookExportAvailable`/`oxInventoryState`. GetInventoryItems/
+    -- GetContainerFromSlot/RegisterShop (never called by server/inventory.lua
+    -- at all) are added purely so capability verification passes;
+    -- `hookExportAvailable = false` still correctly fails the WHOLE
+    -- adapter (not just registerHook) since ALL SEVEN are required --
+    -- matching this file's own documented all-or-nothing verification
+    -- contract, not a narrower "only registerHook is missing" simulation.
     local oxInventoryExports = {
         registerHook = function(_self, event, callback)
             hookRegistrations[#hookRegistrations + 1] = { event = event, callback = callback }
+            return 1
         end,
         RegisterStash = function(_self, stashId, label, slots, maxWeight, owner, groups)
             if opts.registerStashShouldError then
@@ -129,9 +148,13 @@ local function newInventoryFixture(opts)
             registerStashCalls[#registerStashCalls + 1] = {
                 stashId = stashId, label = label, slots = slots, maxWeight = maxWeight, owner = owner, groups = groups,
             }
+            return true
         end,
         GetItemCount = function(_self, ...) return 0 end,
         RemoveItem = function(_self, ...) return false end,
+        GetInventoryItems = function(_self, ...) return {} end,
+        GetContainerFromSlot = function(_self, ...) return nil end,
+        RegisterShop = function(_self, ...) return true end,
     }
     if not hookExportAvailable then
         oxInventoryExports.registerHook = nil
@@ -147,7 +170,16 @@ local function newInventoryFixture(opts)
     local function printStub(...)
         local parts = {}
         for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
-        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+        local line = table.concat(parts, '\t')
+        -- COMPAT-LAYER MIGRATION (this pass): filter out shared/compat/
+        -- core.lua's OWN console lines (its diagnostic-command
+        -- registration message fires on every fireResourceStart('qbx_k9unit')
+        -- call, see equipmentshop_spec.lua's identical comment for the full
+        -- "every branch of that handler prints something" writeup) -- every
+        -- assertion in this suite is about server/inventory.lua's own
+        -- warning surface.
+        if line:find('[qbx_k9unit] K9Compat:', 1, true) then return end
+        printedLines[#printedLines + 1] = line
     end
 
     local callbacks = {} -- name -> handler
@@ -200,6 +232,20 @@ local function newInventoryFixture(opts)
             allowedItems  = opts.allowedItems, -- nil by default, matching the shipped default
         },
         Departments = departments,
+        -- COMPAT-LAYER MIGRATION (this pass): pins the 'inventory' system
+        -- straight to 'ox_inventory' via `override` (shared/compat/
+        -- core.lua's TIER 1, skipping the whole candidate-scanning walk).
+        -- The other four systems are given empty-but-present tables so
+        -- DetectSystem's own "Config.Compat.Systems.%s is missing or
+        -- malformed" warning never fires for them (this fixture has no use
+        -- for any system but 'inventory').
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
     }
 
     local env = Sandbox.newEnv({
@@ -223,10 +269,26 @@ local function newInventoryFixture(opts)
         HasK9Access                   = HasK9Access,
         IsConfiguredK9Model           = IsConfiguredK9Model,
         Config                        = config,
+        -- COMPAT-LAYER MIGRATION (this pass): server realm; only
+        -- 'ox_inventory' reports a state at all, exactly mirroring
+        -- `GetResourceState` above (both driven by the same
+        -- `oxInventoryState` fixture option).
+        IsDuplicityVersion = function() return true end,
+        CreateThread = function(fn) fn() end, -- shared/compat/core.lua's ScheduleInitialDetection needs this; graceMs resolves to 0 with no Config.Compat.startupGraceMs set, so no real Wait is ever hit
+        Wait = function() end,
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
+
+    -- COMPAT-LAYER MIGRATION (this pass): server/inventory.lua's
+    -- registerHook/RegisterStash calls are now routed through
+    -- `K9Compat.Get('inventory')` -- load the REAL, unmodified
+    -- shared/compat/core.lua + shared/compat/inventory.lua (never a
+    -- hand-written fake translation layer) before the file under test.
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env)
+
     Sandbox.loadInto('../server/inventory.lua', env)
 
     return {
@@ -404,9 +466,15 @@ t.test("The hook is never registered, and exactly one warning is printed, when o
     local f = newInventoryFixture({ allowedItems = { 'k9_treat' }, hookExportAvailable = false })
     f.fireResourceStart('qbx_k9unit')
     t.equals(f.hookRegistrationCount(), 0)
+    -- COMPAT-LAYER MIGRATION (this pass): the warning text is now
+    -- backend-agnostic ("no compatible inventory backend hook registration
+    -- succeeded"), not a literal mention of ox_inventory's own export name
+    -- -- see server/inventory.lua's RegisterK9InventoryItemFilterHook doc
+    -- comment for the full writeup on why a hardcoded ox_inventory-specific
+    -- message would be wrong once other backends are in play.
     local found = false
     for _, line in ipairs(f.printedLines) do
-        if line:find('registerHook export is unavailable', 1, true) then found = true end
+        if line:find('no compatible inventory backend hook registration succeeded', 1, true) then found = true end
     end
     t.isTrue(found)
 end)

@@ -91,6 +91,18 @@ local Config = {
         { minWeight = 1,   alert = 'whine' },
         { minWeight = 250, alert = 'aggressive_bark' },
     },
+    -- COMPAT-LAYER MIGRATION (coder-backend, this pass): pins the
+    -- 'inventory' system straight to 'ox_inventory' via `override`
+    -- (shared/compat/core.lua's TIER 1, skipping the candidate-scanning
+    -- walk). The other four systems get empty-but-present tables so
+    -- DetectSystem's own "missing or malformed" warning never fires.
+    Compat = {
+        diagnosticCommand = false,
+        Systems = {
+            inventory = { override = 'ox_inventory' },
+            target = {}, framework = {}, dispatch = {}, ambulance = {},
+        },
+    },
 }
 
 local env = Sandbox.newEnv({
@@ -100,8 +112,34 @@ local env = Sandbox.newEnv({
     CreateThread = CreateThread,
     Wait = threadRunner.Wait,
     lib = libStub,
-    exports = { ox_inventory = {} }, -- never called by this spec's own path; present so a stray reference doesn't nil-index
+    -- COMPAT-LAYER MIGRATION (this pass): server/search.lua's
+    -- GetContainerFromSlot/GetInventoryItems calls are now routed through
+    -- `K9Compat.Get('inventory')` -- shared/compat/inventory.lua's
+    -- BuildOxInventoryServer requires ALL SEVEN server-realm methods
+    -- present as callable exports before it returns ANYTHING.
+    -- GetInventoryItems is reassigned to a real recording stub further
+    -- below (this section's own tests populate it); the other five
+    -- (GetContainerFromSlot/GetItemCount/RemoveItem/RegisterStash/
+    -- RegisterShop -- never called by server/search.lua at all, except
+    -- GetContainerFromSlot which this section's own tests never populate a
+    -- nested container for) are harmless no-ops purely so capability
+    -- verification passes.
+    exports = {
+        ox_inventory = {
+            GetInventoryItems = function() return {} end,
+            GetContainerFromSlot = function() return nil end,
+            GetItemCount = function() return 0 end,
+            RemoveItem = function() return false end,
+            RegisterStash = function() return true end,
+            RegisterShop = function() return true end,
+            registerHook = function() return 1 end,
+        },
+    },
     Config = Config,
+    -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory
+    -- always reports 'started'.
+    IsDuplicityVersion = function() return true end,
+    GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
 })
 
 Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -121,6 +159,13 @@ Sandbox.loadInto('../server/entities.lua', env) -- ResolveNetworkEntity/ResolveC
 -- this comment mirrors.
 Sandbox.loadInto('../server/datastore.lua', env)
 Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
+-- COMPAT-LAYER MIGRATION (this pass): server/search.lua's
+-- GetContainerFromSlot/GetInventoryItems calls are now routed through
+-- `K9Compat.Get('inventory')` -- load the REAL, unmodified
+-- shared/compat/core.lua + shared/compat/inventory.lua first (never a
+-- hand-written fake translation layer).
+Sandbox.loadInto('../shared/compat/core.lua', env)
+Sandbox.loadInto('../shared/compat/inventory.lua', env)
 Sandbox.loadInto('../server/search.lua', env)
 
 -- Fire onResourceStart: search.lua's own config-safety guards (the
@@ -446,8 +491,18 @@ local function newSearchPlusProgressionFixture()
 
     local playerByCitizenId2 = {}
     local playersBySource2 = {}
+    -- COMPAT-LAYER MIGRATION (this pass): see this file's shared `env`
+    -- section above for the full "why all seven server-realm methods" writeup.
     local exportsStub2 = {
-        ox_inventory = {},
+        ox_inventory = {
+            GetInventoryItems = function() return {} end,
+            GetContainerFromSlot = function() return nil end,
+            GetItemCount = function() return 0 end,
+            RemoveItem = function() return false end,
+            RegisterStash = function() return true end,
+            RegisterShop = function() return true end,
+            registerHook = function() return 1 end,
+        },
         qbx_core = {
             GetPlayer = function(_self, source) return playersBySource2[source] end,
             GetPlayerByCitizenId = function(_self, citizenid) return playerByCitizenId2[citizenid] end,
@@ -489,6 +544,15 @@ local function newSearchPlusProgressionFixture()
         XPTiers = {
             { xp = 0, label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
         },
+        -- COMPAT-LAYER MIGRATION (this pass): see this file's shared Config
+        -- section above for the full writeup.
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
     }
 
     local env2 = Sandbox.newEnv({
@@ -511,6 +575,10 @@ local function newSearchPlusProgressionFixture()
         GetPlayerPed = function(_source) return 42 end,
         GetEntityCoords = function(_entity) return ZERO_VEC end,
         Config = Config2,
+        -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory
+        -- always reports 'started'.
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env2)
@@ -525,6 +593,10 @@ local function newSearchPlusProgressionFixture()
     Sandbox.loadInto('../server/datastore.lua', env2)
     Sandbox.loadInto('../server/progression.lua', env2)
     Sandbox.loadInto('../server/events.lua', env2) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
+    -- COMPAT-LAYER MIGRATION (this pass): see this file's shared `env`
+    -- section above for the full writeup.
+    Sandbox.loadInto('../shared/compat/core.lua', env2)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env2)
     Sandbox.loadInto('../server/search.lua', env2)
     for _, handler in ipairs(eventHandlers2['onResourceStart'] or {}) do
         handler('qbx_k9unit')

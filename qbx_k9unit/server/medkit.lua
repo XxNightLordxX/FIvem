@@ -319,6 +319,38 @@
        server-authoritative-write design this task does not ask for — so
        this window is real, is not claimed to be zero, and is kept as
        small as ordering alone can make it rather than pretended away.
+
+    5. COMPAT-LAYER MIGRATION + STUB-DEGRADE ANALYSIS (coder-backend, this
+       pass) — `GetItemCount`/`RemoveItem` above are now routed through
+       `K9Compat.Get('inventory')` (shared/compat/core.lua's
+       RequiredMethods.inventory.server), never a direct
+       `exports.ox_inventory:...` call. ox_inventory is a hard
+       fxmanifest.lua dependency today, so this file's item-consumption path
+       has never had to survive it being absent or swapped — routed through
+       the compat layer, it now can be, so the actual question this task
+       asks: what happens on the no-op stub? `GetItemCount` fails closed to
+       `0` (documented adapter behavior, both confirmed backends) — the
+       possession check above already treats `0` identically to "genuinely
+       doesn't have one," so an undetected inventory reads as `no_item`,
+       never a crash or a silent success. `RemoveItem` fails closed to
+       `false` — reached only if `GetItemCount` somehow returned >= 1 while
+       the inventory was actually unusable (should not happen in practice:
+       both are the SAME adapter instance for the SAME backend within one
+       call), and if it ever did, this function's own existing "should not
+       happen" branch (immediately below RemoveItem's call site) already
+       returns `no_item` with nothing stamped/consumed — the same reason
+       string this file already used before this pass for an unexpected
+       ox_inventory failure. Both outcomes are indistinguishable, from the
+       caller's perspective, from "you don't have a medkit" — a clean,
+       disclosed "feature switched off" degrade (a player-facing `no_item`
+       notify via client/medkit.lua's existing reason handling), never a
+       hang or an uncaught error. On qb-inventory specifically (the other
+       CONFIRMED backend), both methods are REAL (composed onto
+       `GetItemCount`/`RemoveItem` exports, per shared/compat/inventory.lua's
+       own qb-inventory section) with no disclosed semantic gap for this
+       file's usage (a plain possession check and a plain single-item
+       removal — neither depends on any of that adapter's documented
+       qb-inventory limitations, e.g. no container concept, no groups ACL).
     ======================================================================
 ]]
 
@@ -536,7 +568,14 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- fail (returns `false`). Everything that can still fail in the normal
     -- sense (the health reads/clamp above) has already run and succeeded
     -- by this line — see CORRECTNESS PASS finding 4.
-    local removed = exports.ox_inventory:RemoveItem(source, Config.K9Medkit.itemName, 1)
+    --
+    -- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+    -- shared/compat/core.lua's RequiredMethods.inventory.server.RemoveItem
+    -- -- never a direct `exports.ox_inventory:RemoveItem` call. The
+    -- adapter returns `false` (never a fabricated `true`) on any
+    -- capability/call failure, same fail-closed contract this file already
+    -- relied on.
+    local removed = K9Compat.Get('inventory').RemoveItem(source, Config.K9Medkit.itemName, 1)
     if not removed then
         -- Should not happen given the possession check above (neither
         -- ox_inventory call yields, per this file's header) — never

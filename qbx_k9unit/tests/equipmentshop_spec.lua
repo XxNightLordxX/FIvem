@@ -123,13 +123,48 @@ local function newFixture(opts)
     local function printStub(...)
         local parts = {}
         for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
-        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+        local line = table.concat(parts, '\t')
+        -- COMPAT-LAYER MIGRATION (this pass): shared/compat/core.lua's own
+        -- `onResourceStart` handler (loaded below, alongside
+        -- shared/compat/inventory.lua, since server/equipmentshop.lua now
+        -- routes RegisterShop through K9Compat) fires the SAME
+        -- 'qbx_k9unit' onResourceStart event this fixture's own
+        -- fireResourceStart() drives, and unconditionally prints its own
+        -- diagnostic-command registration line every single time (every
+        -- branch of that one AddEventHandler body prints something,
+        -- confirmed by reading it: registered, not registered by config,
+        -- or misconfigured all print). That line is K9Compat's OWN
+        -- documented output, not server/equipmentshop.lua's -- every
+        -- assertion in this suite is about equipmentshop.lua's own warning
+        -- surface, so K9Compat's own `[qbx_k9unit] K9Compat:`-prefixed
+        -- lines are filtered out here at the source rather than chased
+        -- with a one-time clear (which would not work here -- unlike
+        -- server/datastore.lua's own one-time boot print, this one fires
+        -- fresh on every fireResourceStart() call, i.e. inside individual
+        -- tests, not just once at fixture-load time).
+        if line:find('[qbx_k9unit] K9Compat:', 1, true) then return end
+        printedLines[#printedLines + 1] = line
     end
 
     local registeredItems = opts.registeredItems or {}
     local throwOnRegisterShop = opts.throwOnRegisterShop or false
     local registerShopCalls = {}
 
+    -- COMPAT-LAYER MIGRATION (coder-backend, this pass): server/equipmentshop.lua
+    -- now calls `K9Compat.Get('inventory').RegisterShop(...)` instead of
+    -- `exports.ox_inventory:RegisterShop(...)` directly. shared/compat/
+    -- inventory.lua's BuildOxInventoryServer requires ALL SEVEN
+    -- server-realm methods (GetInventoryItems/GetContainerFromSlot/
+    -- GetItemCount/RemoveItem/RegisterStash/RegisterShop/registerHook) to
+    -- be present as callable exports before it returns ANYTHING -- a
+    -- partial stub (just Items/RegisterShop, as this fixture had before
+    -- this pass) makes the WHOLE adapter fail verification and silently
+    -- fall back to the no-op stub, so RegisterShop below would always
+    -- report failure regardless of `throwOnRegisterShop`. The six methods
+    -- this file never actually exercises (GetInventoryItems/
+    -- GetContainerFromSlot/GetItemCount/RemoveItem/RegisterStash/
+    -- registerHook) are stubbed as harmless no-ops purely so capability
+    -- verification passes.
     local exportsStub = {
         ox_inventory = {
             Items = function(_self, itemName)
@@ -141,7 +176,14 @@ local function newFixture(opts)
                     error('simulated incompatible ox_inventory RegisterShop signature')
                 end
                 registerShopCalls[#registerShopCalls + 1] = { shopType = shopType, shopDetails = shopDetails }
+                return true
             end,
+            GetInventoryItems = function() return {} end,
+            GetContainerFromSlot = function() return nil end,
+            GetItemCount = function() return 0 end,
+            RemoveItem = function() return false end,
+            RegisterStash = function() return true end,
+            registerHook = function() return 1 end,
         },
         qbx_core = {
             GetPlayer = function(_self, source)
@@ -155,6 +197,25 @@ local function newFixture(opts)
         Features = { K9EquipmentShop = opts.featureEnabled },
         K9EquipmentShop = opts.shopConfig,
         Departments = opts.departments,
+        -- COMPAT-LAYER MIGRATION (this pass): pins the 'inventory' system
+        -- straight to 'ox_inventory' via `override` -- shared/compat/
+        -- core.lua's TIER 1, which skips the whole candidate-scanning walk
+        -- entirely (no Config.Features.ResourceAutoDetect/autoDetect
+        -- needed). The other four systems (target/framework/dispatch/
+        -- ambulance) are given empty-but-present tables, NOT left absent,
+        -- so DetectSystem's own "Config.Compat.Systems.%s is missing or
+        -- malformed" warning path (a real console print) never fires for
+        -- them -- this fixture has no use for any system but 'inventory'.
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {},
+                framework = {},
+                dispatch = {},
+                ambulance = {},
+            },
+        },
     }
 
     local world = opts.world or newWorld()
@@ -178,6 +239,17 @@ local function newFixture(opts)
     -- real wall-clock time.
     local fakeNow = { value = 0 }
 
+    -- COMPAT-LAYER MIGRATION (this pass): shared/compat/core.lua's
+    -- startup-detection thread (ScheduleInitialDetection, fired from ITS
+    -- OWN onResourceStart handler the moment this fixture's
+    -- fireResourceStart('qbx_k9unit') runs) needs a CreateThread -- run
+    -- synchronously (no real coroutine scheduling needed here: with
+    -- Config.Compat.startupGraceMs left unset, that function resolves
+    -- graceMs to 0 and never calls Wait at all, so a bare `fn()` is
+    -- sufficient and deterministic).
+    local function CreateThreadStub(fn) fn() end
+    local function WaitStub() end
+
     local env = Sandbox.newEnv({
         GetCurrentResourceName = GetCurrentResourceName,
         AddEventHandler = AddEventHandler,
@@ -190,6 +262,15 @@ local function newFixture(opts)
         MySQL = { query = { await = makeQueryAwait(world) }, insert = { await = makeInsertAwait(world) } },
         IsHighCommand = isHighCommand,
         HasPermission = hasPermission,
+        -- COMPAT-LAYER MIGRATION (this pass): server realm, and ox_inventory
+        -- (the only resource this fixture's Config.Compat.Systems.inventory.override
+        -- names) reports 'started' -- everything else 'missing', matching
+        -- this fixture's own "nothing is running unless a test says so"
+        -- posture for every other stub in this file.
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
+        CreateThread = CreateThreadStub,
+        Wait = WaitStub,
     })
 
     -- server/equipmentshop.lua's new runtime-locations section calls
@@ -218,6 +299,16 @@ local function newFixture(opts)
     -- identical SQL/params shape, unchanged.
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env)
+
+    -- COMPAT-LAYER MIGRATION (this pass): server/equipmentshop.lua's
+    -- RegisterShop call is now routed through `K9Compat.Get('inventory')`
+    -- -- load the REAL, unmodified shared/compat/core.lua + shared/compat/
+    -- inventory.lua (never a hand-written fake translation layer, which
+    -- would just assert against itself), same "real core.lua + real
+    -- adapter" pattern tests/clientwellbeing_spec.lua/tests/clientsearch_spec.lua
+    -- already establish for a routed file.
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env)
 
     -- Discard anything server/datastore.lua printed on its way up before
     -- loading the file under test. That file legitimately prints ONE boot

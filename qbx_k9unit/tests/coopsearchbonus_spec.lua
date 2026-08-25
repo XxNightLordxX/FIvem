@@ -79,8 +79,29 @@ local function newFixture()
 
     local playerByCitizenId = {}
     local playersBySource = {}
+    -- COMPAT-LAYER MIGRATION (coder-backend, this pass): server/search.lua's
+    -- GetContainerFromSlot/GetInventoryItems calls are now routed through
+    -- `K9Compat.Get('inventory')` -- shared/compat/inventory.lua's
+    -- BuildOxInventoryServer requires ALL SEVEN server-realm methods
+    -- present as callable exports before it returns ANYTHING. Without
+    -- these (and without K9Compat itself loaded, see below), every search
+    -- in this file used to silently resolve to `search_failed` forever --
+    -- which this file's own round-robin XP-advancement loops
+    -- (`while env.GetXP(citizenid) < targetXp do ... end`) then spun on
+    -- forever too, since a search that never succeeds never mints XP.
+    -- GetInventoryItems is reassigned to a real recording stub further
+    -- below; the other five (never called by this file's own tests) are
+    -- harmless no-ops purely so capability verification passes.
     local exportsStub = {
-        ox_inventory = {},
+        ox_inventory = {
+            GetInventoryItems = function() return {} end,
+            GetContainerFromSlot = function() return nil end,
+            GetItemCount = function() return 0 end,
+            RemoveItem = function() return false end,
+            RegisterStash = function() return true end,
+            RegisterShop = function() return true end,
+            registerHook = function() return 1 end,
+        },
         qbx_core = {
             GetPlayer = function(_self, source) return playersBySource[source] end,
             GetPlayerByCitizenId = function(_self, citizenid) return playerByCitizenId[citizenid] end,
@@ -132,6 +153,17 @@ local function newFixture()
             { xp = 4000, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10 },
             { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20 },
         },
+        -- COMPAT-LAYER MIGRATION (this pass): pins the 'inventory' system
+        -- straight to 'ox_inventory' via `override`. The other four
+        -- systems get empty-but-present tables so DetectSystem's own
+        -- "missing or malformed" warning never fires.
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
     }
 
     -- coordsByHandle[handle] -> vector3. Every unset handle defaults to
@@ -178,6 +210,10 @@ local function newFixture()
         GetEntityCoords = GetEntityCoords,
         GetActivePartnerCitizenId = function(citizenid) return partnerOf[citizenid] end,
         Config = Config,
+        -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory
+        -- always reports 'started'.
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -200,6 +236,11 @@ local function newFixture()
     Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted into its own file; the manifest loads it in the real resource, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/progression.lua', env)
     Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted into its own file; the manifest loads it in the real resource, so a sandbox that omits it fails where the game would not
+    -- COMPAT-LAYER MIGRATION (this pass): load the REAL, unmodified
+    -- shared/compat/core.lua + shared/compat/inventory.lua before
+    -- server/search.lua (never a hand-written fake translation layer).
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env)
     Sandbox.loadInto('../server/search.lua', env)
     for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
         handler('qbx_k9unit')

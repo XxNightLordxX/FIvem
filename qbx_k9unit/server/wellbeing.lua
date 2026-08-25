@@ -1069,14 +1069,24 @@ lib.callback.register('qbx_k9unit:server:feedK9', function(source, targetServerI
         return { ok = false, reason = 'on_cooldown' }
     end
 
-    local carriedCount = exports.ox_inventory:GetItemCount(source, Config.Wellbeing.Mood.feedItemName)
+    -- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+    -- shared/compat/core.lua's RequiredMethods.inventory.server -- never a
+    -- direct `exports.ox_inventory:...` call. STUB-DEGRADE: on the no-op
+    -- stub, GetItemCount fails closed to `0` (never a fabricated count),
+    -- so this reads as `no_item` -- a clean, disclosed "feature switched
+    -- off" degrade, same reason string this file already used for a real
+    -- missing-item case. RemoveItem fails closed to `false` the same way.
+    -- On qb-inventory (the other CONFIRMED backend), both are REAL
+    -- (composed onto that backend's own confirmed GetItemCount/RemoveItem
+    -- exports) with no disclosed gap for this plain single-item usage.
+    local carriedCount = K9Compat.Get('inventory').GetItemCount(source, Config.Wellbeing.Mood.feedItemName)
     if not carriedCount or carriedCount < 1 then
         return { ok = false, reason = 'no_item' }
     end
 
     AffectionCooldown.Touch(source, targetCitizenid)
 
-    local removed = exports.ox_inventory:RemoveItem(source, Config.Wellbeing.Mood.feedItemName, 1)
+    local removed = K9Compat.Get('inventory').RemoveItem(source, Config.Wellbeing.Mood.feedItemName, 1)
     if not removed then
         return { ok = false, reason = 'no_item' }
     end
@@ -1156,12 +1166,16 @@ lib.callback.register('qbx_k9unit:server:applyK9Distraction', function(source, i
         itemName, radius, durationMs = D.whistleItemName, D.whistleRadius, D.whistleDurationMs
     end
 
-    local carriedCount = exports.ox_inventory:GetItemCount(source, itemName)
+    -- ROUTED THROUGH K9Compat.Get('inventory') -- see the Mood/petK9 callback
+    -- above (this same file) for the full stub-degrade writeup; identical
+    -- shape and identical degrade here (fails closed to `no_item`, never a
+    -- crash or a fabricated success).
+    local carriedCount = K9Compat.Get('inventory').GetItemCount(source, itemName)
     if not carriedCount or carriedCount < 1 then
         return { ok = false, reason = 'no_item' }
     end
 
-    local removed = exports.ox_inventory:RemoveItem(source, itemName, 1)
+    local removed = K9Compat.Get('inventory').RemoveItem(source, itemName, 1)
     if not removed then
         return { ok = false, reason = 'no_item' }
     end
@@ -1697,6 +1711,24 @@ end
 -- server/medkit.lua. Mirrors server/combat.lua's own established
 -- "resource-start WARNING, never an assert" pattern for
 -- Config.Combat.PropDragging.IsPlayerDownedOverride verbatim.
+--
+-- COMPAT-LAYER FINDING (coder-backend, this pass), DELIBERATELY NOT ROUTED:
+-- `exports.ox_inventory:Items(itemName)` below is left as a direct call,
+-- NOT `K9Compat.Get('inventory')...` -- shared/compat/core.lua's
+-- RequiredMethods.inventory table only lists `ItemExists` under the CLIENT
+-- realm, never under `server`, and this function runs entirely server-side.
+-- There is no server-side accessor in the current contract this could route
+-- through on ANY backend. Reported per this task's own explicit instruction
+-- ("if a call site has no clean accessor, that is a finding, not a licence
+-- to improvise") rather than worked around -- see server/equipmentshop.lua's
+-- own WarnIfItemMissing for the identical finding, reported once there in
+-- full and not re-derived here. Consequence: on a non-ox_inventory backend
+-- this one operator-facing sanity warning simply never fires true (its own
+-- `GetResourceState('ox_inventory')` check inside the export access below
+-- fails closed) -- the STASH/DISTRACTION/MOOD mutation paths themselves are
+-- now correctly backend-agnostic (see this file's GetItemCount/RemoveItem
+-- call sites above), only this one pre-flight existence check stays
+-- ox_inventory-specific until the contract gains a server-side ItemExists.
 -- ======================================================================
 
 --- Warns (loudly, to server console) if `itemName` does not resolve in

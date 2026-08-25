@@ -801,24 +801,38 @@ end)
 --- being absent from an otherwise-started `ox_inventory` (e.g. a fork that
 --- removed the hooks module entirely but is still `GetResourceState`
 --- `'started'`) — disclosed here rather than silently assumed airtight.
---- @return boolean
-local function IsOxInventoryHookCapable()
-    if GetResourceState('ox_inventory') ~= 'started' then
-        return false
-    end
-
-    local ok, hookExport = pcall(function() return exports.ox_inventory.registerHook end)
-    return ok and type(hookExport) == 'function'
-end
+---
+--- COMPAT-LAYER MIGRATION (this pass, coder-backend): this whole function is
+--- DELETED, not kept alongside a new call, and every word of reasoning
+--- above is preserved here (not deleted with it) because it is EXACTLY the
+--- reasoning `IsResourceExportCapable` in shared/compat/inventory.lua now
+--- implements generically, per-adapter, for WHATEVER inventory backend
+--- Config.Compat actually resolved — same order (`GetResourceState(...) ==
+--- 'started'` checked first, unconditionally, before any export access is
+--- attempted), same shape (a pcall'd INDEX, never a probe CALL), same
+--- disclosed honesty limit (indexing an export cannot prove a specific
+--- name truly exists on FXServer, only that accessing it didn't throw). A
+--- second, ox_inventory-only copy of this exact check would have answered
+--- the wrong question on any other backend (ox_inventory not started ->
+--- always `false`, even when e.g. qb-inventory's own real hook mechanism IS
+--- available) — this is the identical REFACTOR_ROADMAP duplicate
+--- server/inventory.lua's own header already flagged for its byte-for-byte
+--- copy of this same function, now resolved on both sides by routing
+--- through the shared adapter layer instead of keeping either local copy.
+--- `RegisterScentInventoryHook` below now reads `K9Compat.Get('inventory').RegisterHook`'s
+--- own boolean return value in place of this function's result, preserving
+--- the exact "warn once, feature stays cleanly inert" behavior this file's
+--- own doc comment below already documents.
 
 --- DEVELOPER_REFERENCE.md §9 items 11/17. GATED AT REGISTRATION (this pass) on BOTH
---- Config.Features.ScentTracking AND IsOxInventoryHookCapable() above —
+--- Config.Features.ScentTracking AND the routed `RegisterHook` call's own
+--- boolean return below (see the migration note above this doc comment) —
 --- matches this resource's established "config-gated registration, not
 --- just config-gated behavior" convention (client/vision.lua's `if
 --- Config.Features.ThermalVision then RegisterCommand(...) end`,
 --- server/admin.lua's/server/combat.lua's own `onResourceStart`-gated
---- blocks below this comment mirrors): if either check is false,
---- `exports.ox_inventory:registerHook` is never called at all — not
+--- blocks below this comment mirrors): if the feature flag is off,
+--- `K9Compat.Get('inventory').RegisterHook` is never called at all — not
 --- registered-then-early-returning inside its own callback body the way
 --- relayDamageEvent/relayWeaponFire above stay registered and check
 --- Config.Features internally (those are payload-less RegisterNetEvent
@@ -909,19 +923,54 @@ end
 --- this function for why the second call site is needed. Behavior at each
 --- individual call is completely unchanged from the original single-call-site
 --- version.
+-- COMPAT-LAYER MIGRATION + STUB-DEGRADE ANALYSIS (coder-backend, this pass):
+-- ROUTED THROUGH K9Compat.Get('inventory') (shared/compat/core.lua's
+-- RequiredMethods.inventory.server.RegisterHook) below, never a direct
+-- `exports.ox_inventory:registerHook` call. `RegisterHook`'s own boolean
+-- return replaces the deleted `IsOxInventoryHookCapable()` (see that
+-- function's own migration note above) for deciding whether to print the
+-- warning -- the plain-Lua-function calling convention for `callback`
+-- itself is UNCHANGED (confirmed correct: any function crossing a resource
+-- export boundary is msgpack-packed into a callable table by the runtime
+-- before it ever reaches the far side, so a plain function here is, and has
+-- always been, the only convention that works -- see
+-- shared/compat/inventory.lua's own RegisterHook doc comment for the full
+-- citation) -- do not wrap `callback` in anything else.
+--
+-- STUB-DEGRADE, undetected inventory: `RegisterHook` returns `false`, the
+-- warning below prints once, and TrackableLog.scent simply never receives
+-- an entry -- `findTrackableSource('scent')` already, correctly, falls
+-- through to `{ found = false }`, exactly the pre-existing "silently
+-- inert, loudly warned once" posture this file's own header already
+-- documents for an ox_inventory-missing session. A clean, disclosed
+-- "feature switched off" degrade, never a crash.
+--
+-- STUB-DEGRADE, qb-inventory specifically (the other CONFIRMED backend) --
+-- WORTH FLAGGING LOUDLY, a DIFFERENT failure shape from the one above:
+-- `RegisterHook('swapItems', ...)` SUCCEEDS on qb-inventory (returns
+-- `true` -- no warning ever prints) via that adapter's real
+-- `AddHook('ItemAdded', ...)` veto point, BUT shared/compat/inventory.lua's
+-- own qb-inventory section discloses, from a complete read of that
+-- backend's server-side source, that a ground-drop NEVER fires `ItemAdded`
+-- at all on that backend (dropping is its own `Drops[...]` table
+-- construction with no hook call beside it) -- so this callback's own
+-- `if payload.toType ~= 'drop' then return end` guard is simply never
+-- reached with `toType == 'drop'` on qb-inventory: registration reports
+-- success, but scent-from-drop detection is a confirmed, permanent no-op
+-- for this feature on that backend, with NOTHING here able to detect or
+-- warn about it (there is no failure to observe -- the hook is genuinely,
+-- successfully registered, it is just never invoked the way this feature
+-- needs). This is disclosed at the adapter layer already (see that file's
+-- qb-inventory RegisterHook doc comment) and is an architectural fact about
+-- qb-inventory, not something this call site can work around -- flagged
+-- here, loudly, exactly because "registered successfully but silently does
+-- nothing" is a materially worse failure mode for an operator to discover
+-- than "warned once at startup," and is exactly the risk class this task's
+-- own stub-degrade question exists to surface.
 local function RegisterScentInventoryHook()
     if not Config.Features.ScentTracking then return end -- nothing to gate for; do not probe/warn about a disabled-by-default feature
 
-    if not IsOxInventoryHookCapable() then
-        print('[qbx_k9unit] WARNING: Config.Features.ScentTracking is enabled but ' ..
-            'ox_inventory\'s registerHook export is unavailable (ox_inventory is missing, not ' ..
-            'started, or this build does not support hook registration) -- scent tracking ' ..
-            'disabled. No scent sources will ever be logged; findTrackableSource(\'scent\') will ' ..
-            'always report found = false.')
-        return
-    end
-
-    exports.ox_inventory:registerHook('swapItems', function(payload)
+    local registered = K9Compat.Get('inventory').RegisterHook('swapItems', function(payload)
         if payload.toType ~= 'drop' then return end -- only a ground-drop counts as a scent source; trunk/stash/give moves are not
 
         -- Defense-in-depth rate limit, stamped BEFORE any log-append work, same
@@ -941,6 +990,13 @@ local function RegisterScentInventoryHook()
             ticketIssued = false, -- ANTI-FARM FIX (this pass) — see findTrackableSource's own comment on this field for the full writeup
         }
     end)
+
+    if not registered then
+        print('[qbx_k9unit] WARNING: Config.Features.ScentTracking is enabled but ' ..
+            'no compatible inventory backend hook registration succeeded (see /k9compat, if ' ..
+            'enabled, for exactly why) -- scent tracking disabled. No scent sources will ever be ' ..
+            'logged; findTrackableSource(\'scent\') will always report found = false.')
+    end
 end
 
 -- LIFECYCLE FIX (coder-backend, this pass): dispatches to
@@ -977,8 +1033,26 @@ end
 -- however many times ox_inventory itself restarts, precisely because each
 -- restart already wiped ox_inventory's own hook table clean first, so there
 -- is never anything stale here to duplicate.
+--
+-- COMPAT-LAYER MIGRATION (this pass): branch 2's condition used to hardcode
+-- `resourceName == 'ox_inventory'` -- now asks K9Compat itself which
+-- resource actually backs the 'inventory' system, same pattern
+-- server/inventory.lua's own RegisterK9InventoryItemFilterHook dispatch and
+-- client/inventory.lua's own RegisterK9InventoryOxTargetOption dispatch
+-- already establish for this exact class of gap. `K9Compat.Redetect()` is
+-- forced here (not relying on shared/compat/core.lua's own onResourceStart
+-- redetect hook having already run for this SAME event) for the same
+-- "correct regardless of relative handler-registration order" reason those
+-- two call sites give. Hardcoding 'ox_inventory' here would have silently
+-- reopened exactly the single-backend gap this whole pass exists to close.
 AddEventHandler('onResourceStart', function(resourceName)
-    if resourceName == GetCurrentResourceName() or resourceName == 'ox_inventory' then
+    if resourceName == GetCurrentResourceName() then
+        RegisterScentInventoryHook()
+        return
+    end
+
+    K9Compat.Redetect()
+    if resourceName == K9Compat.Which('inventory') then
         RegisterScentInventoryHook()
     end
 end)

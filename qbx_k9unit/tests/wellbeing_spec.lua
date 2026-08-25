@@ -237,7 +237,19 @@ local function newWellbeingFixture(opts)
     local function printStub(...)
         local parts = {}
         for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
-        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+        local line = table.concat(parts, '\t')
+        -- COMPAT-LAYER MIGRATION (this pass): shared/compat/core.lua's own
+        -- onResourceStart handler (loaded below, since server/wellbeing.lua
+        -- now routes GetItemCount/RemoveItem through K9Compat) fires on
+        -- every fireResourceStart('qbx_k9unit') call and prints its OWN
+        -- diagnostic-command line every time regardless of config (see
+        -- equipmentshop_spec.lua's identical comment for the full "every
+        -- branch of that handler prints something" writeup) -- filtered
+        -- here since every assertion in this suite is about
+        -- server/wellbeing.lua's own warning surface, several of which
+        -- assert EXACTLY ZERO lines for a disabled feature.
+        if line:find('[qbx_k9unit] K9Compat:', 1, true) then return end
+        printedLines[#printedLines + 1] = line
     end
 
     local notifyCalls = {}
@@ -343,6 +355,18 @@ local function newWellbeingFixture(opts)
             Blood     = { relayCooldownMs = 500 },
             Gunpowder = { relayCooldownMs = 300 },
         },
+        -- COMPAT-LAYER MIGRATION (coder-backend, this pass): pins the
+        -- 'inventory' system straight to 'ox_inventory' via `override`
+        -- (shared/compat/core.lua's TIER 1, skipping the candidate-scanning
+        -- walk). The other four systems get empty-but-present tables so
+        -- DetectSystem's own "missing or malformed" warning never fires.
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'ox_inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
     }
 
     local env = Sandbox.newEnv({
@@ -355,9 +379,30 @@ local function newWellbeingFixture(opts)
         print                = printStub,
         NotifyPlayer         = NotifyPlayer,
         lib                  = lib,
+        -- COMPAT-LAYER MIGRATION (this pass): server/wellbeing.lua's
+        -- GetItemCount/RemoveItem calls (Mood petK9/feedK9, Distraction
+        -- meatBait/whistle) are now routed through `K9Compat.Get('inventory')`
+        -- -- shared/compat/inventory.lua's BuildOxInventoryServer requires
+        -- ALL SEVEN server-realm methods present as callable exports before
+        -- it returns ANYTHING. `Items` stays a direct, un-routed
+        -- `exports.ox_inventory:Items` call (see server/wellbeing.lua's own
+        -- COMPAT-LAYER FINDING comment -- no server-realm ItemExists exists
+        -- in the contract). GetInventoryItems/GetContainerFromSlot/
+        -- RegisterStash/RegisterShop/registerHook (never called by
+        -- server/wellbeing.lua at all) are harmless no-ops purely so
+        -- capability verification passes.
         exports = {
             qbx_core = { GetPlayer = qbxGetPlayer },
-            ox_inventory = { GetItemCount = oxGetItemCount, RemoveItem = oxRemoveItem, Items = oxItems },
+            ox_inventory = {
+                GetItemCount = oxGetItemCount,
+                RemoveItem = oxRemoveItem,
+                Items = oxItems,
+                GetInventoryItems = function() return {} end,
+                GetContainerFromSlot = function() return nil end,
+                RegisterStash = function() return true end,
+                RegisterShop = function() return true end,
+                registerHook = function() return 1 end,
+            },
         },
         GetPlayers           = GetPlayers,
         GetPlayerPed         = GetPlayerPed,
@@ -371,10 +416,22 @@ local function newWellbeingFixture(opts)
         GetHashKey           = GetHashKey,
         GetCurrentResourceName = GetCurrentResourceName,
         Config               = config,
+        -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory
+        -- always reports 'started' (this file never tests an
+        -- undetected-inventory scenario -- covered by shared/compat/
+        -- inventory.lua's own dedicated spec and this task's own per-file
+        -- stub-degrade writeup in server/wellbeing.lua's header).
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
+    -- COMPAT-LAYER MIGRATION (this pass): load the REAL, unmodified
+    -- shared/compat/core.lua + shared/compat/inventory.lua before the file
+    -- under test (never a hand-written fake translation layer).
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env)
     Sandbox.loadInto('../server/wellbeing.lua', env)
 
     local primed = false
