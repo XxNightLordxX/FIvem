@@ -69,12 +69,60 @@
        already confirmed HIGH confidence against real ox_inventory source
        this session (see that file's header) — not re-verified independently
        here, but the same confirmed signatures apply unchanged.
-    5. Flashbang immunity (Config.Wellbeing.Distraction.flashbangImmune) is
-       NOT implemented anywhere in this file — PHASE4_SPEC.md §13.4.3.4
-       flags this as genuinely integration-dependent on an unconfirmed
-       third-party flashbang/stun resource's own event shape, not a
-       guaranteed native-only deliverable. Left as aspirational config only,
-       exactly as that document leaves it — not glossed over as "done."
+    5. Flashbang immunity (Config.Wellbeing.Distraction.flashbangImmune) —
+       THIS PASS (coder-backend) implements the one half achievable without
+       guessing a third-party resource's own event shape:
+       `IsFlashbangImmune(citizenid)`, a resource-global accessor mirroring
+       `IsHesitating`/`IsDistracted`'s exact established contract (self-only
+       citizenid lookup, type-checked, gated on
+       Config.Features.DistractionSystem, zero cross-player influence — it
+       reads only static config plus its own string argument). PHASE4_SPEC.md
+       §13.4.3.4's reality check still stands UNCHANGED for the other half:
+       nothing in this codebase, and no confirmed third-party flashbang/stun
+       resource's event name/payload shape, exists for this file to listen
+       for and suppress — inventing one here would be exactly the kind of
+       guess SPEC.md §11.6 already refused for the door-lock nudge-open
+       dependency. A companion flashbang/stun resource (or a future addition
+       to THIS resource, once one exists) that wants to honor immunity calls
+       `IsFlashbangImmune(citizenid)` before applying its own stun effect,
+       guarded with the same `type(IsFlashbangImmune) == 'function'` pattern
+       RestoreInjury's own call site already establishes for exactly this
+       "genuine new cross-file/cross-resource dependency, no consumer exists
+       yet" shape. That is the real, callable half now shipped; the event-
+       side hookup remains genuinely integration-dependent, not glossed over
+       as solved.
+    6. Fatigue rest-source regen (Config.Wellbeing.Fatigue.restRegenPerTick /
+       .restRadius / .restSources) — THIS PASS (coder-backend) wires this
+       using PHASE4_SPEC.md §13.4.3.1 open question 1's own "a world-object
+       proximity check" reading (not an item-name check — no dropped-item
+       log exists for this purpose, and inventing one would duplicate
+       server/tracking.lua's own scent-log machinery for no disclosed
+       benefit). `restSources` entries are treated as model names, hashed
+       once via `GetHashKey`, and matched every tick against
+       `GetAllObjects()`/`GetAllVehicles()` — server-side natives that
+       enumerate every currently-networked entity regardless of any one
+       client's own streaming radius, which is why they're the right choice
+       here over a client-reported "I am near a kennel" claim or a
+       client-supplied coordinate, per this document's own "never trust a
+       client-claimed position" rule (see TickWellbeing's own comment at
+       that call site for the full server-authority note). This satisfies
+       the open question's own explicit "extensible rather than hardcoded to
+       water bowl alone" requirement: adding Phase 5's deployable kennel
+       prop model or a K9 vehicle model to `restSources` needs no code
+       change here, only a config edit. COST, DISCLOSED: the
+       `GetAllObjects()`/`GetAllVehicles()` scan runs ONCE per tick, shared
+       across every online K9 (not once per K9) — see TickWellbeing's own
+       comment at that call site for the exact bound. NATIVE CONFIDENCE:
+       MEDIUM-HIGH, not independently verified in-engine this pass —
+       `GetAllObjects`/`GetAllVehicles`/`GetEntityModel`/`GetEntityCoords`
+       are documented, widely-used, cross-side (client AND server) CFX
+       natives per common ecosystem knowledge (the same category of
+       confidence this codebase's own convention, e.g. client/hud.lua's
+       stamina-native note, treats as "plausible, flag for a
+       native-api-assistant pass" rather than "settled"), not re-confirmed
+       against a live server this session. Loop in native-api-assistant
+       before enabling FatigueSystem with a non-empty restSources on a live
+       server.
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 4, wellbeing subsystem.
@@ -193,6 +241,18 @@
       direct, natural extension of the SAME pattern it names for
       IsHesitating — added here so Phase 3's combat.lua has a real hook for
       BOTH command-breaking wellbeing states, not just one).
+    - IsFlashbangImmune(citizenid: string) -> boolean — THIS PASS
+      (coder-backend). See CONFIDENCE GRADING item 5 above for the full
+      "what this does and does not solve" writeup. Unlike IsHesitating/
+      IsDistracted, this reads NO per-citizenid state at all — it is a pure
+      config check (Config.Features.DistractionSystem AND
+      Config.Wellbeing.Distraction.flashbangImmune), the `citizenid`
+      argument existing only to match the established accessor shape and to
+      type-guard against a non-string caller mistake, exactly like every
+      other accessor here. Self-only by construction: nothing about this
+      function's result can be influenced by another player, ever — it
+      cannot be used as a lever against anyone else's K9, unlike
+      IsHesitating's disclosed residual risk above.
 
     FILE-TO-FILE CONTRACT:
     - Calls `IsConfiguredK9Model(modelHash)`, resource-global from
@@ -748,6 +808,30 @@ function IsDistracted(citizenid)
     return stats ~= nil and stats.distractedUntil > GetGameTimer()
 end
 
+--- Config.Wellbeing.Distraction.flashbangImmune's real, callable half — see
+--- this file's header CONFIDENCE GRADING item 5 for the full writeup on
+--- what is and isn't solved by this accessor existing. Deliberately reads
+--- NO per-citizenid state (unlike IsHesitating/IsDistracted above) — a
+--- flashbang-immune K9 is immune because of static config, not because of
+--- anything that has happened to it, so there is nothing to look up. The
+--- `citizenid` parameter exists only to match the established accessor
+--- shape/type-guard convention, not because this function's answer can
+--- ever differ per citizenid today.
+--- SELF-DETERMINED, NOT INFLUENCEABLE: this function's return value can
+--- NEVER be changed by another player's action, another player's
+--- proximity, or any forgeable client-triggered signal — it is a pure
+--- function of static server config. It is not, and cannot become, the
+--- same class of lever `relayWeaponFire`/`IsHesitating` were before this
+--- pass's HESITATION_MAX_CONTINUOUS_MS cap.
+--- @param citizenid string
+--- @return boolean
+function IsFlashbangImmune(citizenid)
+    if not Config.Features.DistractionSystem then return false end
+    if type(citizenid) ~= 'string' then return false end
+
+    return Config.Wellbeing.Distraction.flashbangImmune == true
+end
+
 -- ======================================================================
 -- ON-DEMAND SNAPSHOT — see this file's header EVENT/CALLBACK CONTRACT
 -- item 1.
@@ -764,6 +848,32 @@ lib.callback.register('qbx_k9unit:server:getWellbeingSnapshot', function(source)
 
     return SnapshotOf(EnsureStats(citizenid))
 end)
+
+-- ======================================================================
+-- FATIGUE — rest-source model resolution. THIS PASS (coder-backend).
+-- Config.Wellbeing.Fatigue.restSources is a list of MODEL NAMES (an object
+-- prop like a kennel, or a vehicle model like one of Config.K9Vehicles'
+-- entries) treated as a "rest point" — PHASE4_SPEC.md §13.4.3.1 open
+-- question 1's own "a world-object proximity check" reading (see this
+-- file's header CONFIDENCE GRADING item 6 for the full writeup on why this
+-- reading was chosen over an item-name check). Hashed ONCE here
+-- (restSources is static config, never mutated at runtime) rather than
+-- re-hashing the same handful of strings every tick.
+-- ======================================================================
+local RestSourceModelHashes = nil
+
+--- @return table<number, boolean> hashes -- memoized, built on first call
+local function GetRestSourceModelHashes()
+    if RestSourceModelHashes then return RestSourceModelHashes end
+
+    RestSourceModelHashes = {}
+    for _, modelName in ipairs(Config.Wellbeing.Fatigue.restSources) do
+        if type(modelName) == 'string' and modelName ~= '' then
+            RestSourceModelHashes[GetHashKey(modelName)] = true
+        end
+    end
+    return RestSourceModelHashes
+end
 
 -- ======================================================================
 -- SHARED TICK LOOP — PHASE4_SPEC.md §13.0 Decision 1. ONE loop for all
@@ -790,6 +900,41 @@ local function TickWellbeing()
         RecentGunfire = fresh
     end
 
+    -- FATIGUE — resolve every currently-networked rest-source entity's
+    -- position ONCE per tick, SHARED across every K9 checked below (NOT
+    -- once per K9 — this is the whole cost-control point: the expensive
+    -- part, enumerating world entities, is paid at most once per tick
+    -- regardless of how many K9s are online; each K9's own check below is
+    -- then just a distance compare against however many rest sources this
+    -- scan actually found, typically small). `GetAllObjects()`/
+    -- `GetAllVehicles()` are server-side natives that enumerate every
+    -- currently-networked entity server-wide, regardless of any one
+    -- client's own streaming radius — the correct, server-authoritative
+    -- source for "is there really a rest source near this K9's own live
+    -- position," never a client-claimed "I am resting" report or a
+    -- client-supplied coordinate. DISCLOSED COST: this scan's own runtime
+    -- is O(total networked objects + total networked vehicles) once per
+    -- tick, independent of K9 count — on a server with very many world
+    -- objects/vehicles this is the single most expensive line in this
+    -- file's tick; skipped entirely (nil, not an empty table) whenever
+    -- FatigueSystem is off or restSources is empty, so a server that never
+    -- configures a rest source pays nothing beyond the length check below.
+    local restSourcePositions = nil
+    if Config.Features.FatigueSystem and #Config.Wellbeing.Fatigue.restSources > 0 then
+        restSourcePositions = {}
+        local modelHashes = GetRestSourceModelHashes()
+        for _, obj in ipairs(GetAllObjects()) do
+            if modelHashes[GetEntityModel(obj)] then
+                restSourcePositions[#restSourcePositions + 1] = GetEntityCoords(obj)
+            end
+        end
+        for _, veh in ipairs(GetAllVehicles()) do
+            if modelHashes[GetEntityModel(veh)] then
+                restSourcePositions[#restSourcePositions + 1] = GetEntityCoords(veh)
+            end
+        end
+    end
+
     for _, playerId in ipairs(GetPlayers()) do
         local src = tonumber(playerId)
         if src then
@@ -806,7 +951,36 @@ local function TickWellbeing()
                             if speed >= Config.Wellbeing.Fatigue.sprintSpeedThreshold then
                                 stats.fatigue = Clamp(stats.fatigue - Config.Wellbeing.Fatigue.sprintDecayPerTick, 0, Config.Wellbeing.Fatigue.max)
                             else
-                                stats.fatigue = Clamp(stats.fatigue + Config.Wellbeing.Fatigue.idleRegenPerTick, 0, Config.Wellbeing.Fatigue.max)
+                                -- REST-SOURCE REGEN, THIS PASS: a stationary/
+                                -- non-sprinting K9 within restRadius of any
+                                -- rest-source position resolved above
+                                -- regenerates at restRegenPerTick instead of
+                                -- idleRegenPerTick. `coords` is this K9's OWN
+                                -- server-resolved live position (the same
+                                -- value already used for the sprint-speed
+                                -- sample above) — never a client-claimed "I
+                                -- am near a rest point." Per-K9 cost here is
+                                -- O(#restSourcePositions), not O(1) in the
+                                -- strict sense, but bounded by however many
+                                -- matching rest-source entities actually
+                                -- exist server-wide this tick (see the scan
+                                -- above for the shared, once-per-tick cost
+                                -- this amortizes against).
+                                local nearRestSource = false
+                                if restSourcePositions then
+                                    for _, restCoords in ipairs(restSourcePositions) do
+                                        if #(coords - restCoords) <= Config.Wellbeing.Fatigue.restRadius then
+                                            nearRestSource = true
+                                            break
+                                        end
+                                    end
+                                end
+
+                                if nearRestSource then
+                                    stats.fatigue = Clamp(stats.fatigue + Config.Wellbeing.Fatigue.restRegenPerTick, 0, Config.Wellbeing.Fatigue.max)
+                                else
+                                    stats.fatigue = Clamp(stats.fatigue + Config.Wellbeing.Fatigue.idleRegenPerTick, 0, Config.Wellbeing.Fatigue.max)
+                                end
                             end
                         end
                     end

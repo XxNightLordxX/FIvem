@@ -246,6 +246,10 @@ globals = {
     -- §13.5 names as the cross-cutting dependency Phase 3's
     -- server/combat.lua consumes.
     "RestoreInjury", "IsHesitating", "IsDistracted",
+    -- server/wellbeing.lua -- pure config read, no per-citizenid state, so a
+    -- companion stun/flashbang resource can check immunity before applying an
+    -- effect. Same cross-file accessor contract as IsHesitating/IsDistracted.
+    "IsFlashbangImmune",
     -- client/wellbeing.lua (Phase 4) -- the calm-down action a future
     -- radial entry calls rather than re-deriving its own validation.
     "RequestK9CalmDown",
