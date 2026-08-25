@@ -327,6 +327,13 @@ local function RemovePropAttachmentForCitizenid(citizenid)
     local attachment = PropAttachmentState[citizenid]
     if not attachment then return end
     PropAttachmentState[citizenid] = nil
+    -- CROSS-FEATURE NETID CLAIM REGISTRY (coder-architect, this pass —
+    -- server/entities.lua's own header section has the full writeup):
+    -- releases this citizenid's claim on attachment.netId so the netId can
+    -- be legitimately reused/reclaimed afterward without tripping
+    -- IsNetworkEntityClaimedByOther for anyone else. A no-op if this exact
+    -- (feature, ownerId) pair never held the claim.
+    ReleaseNetworkEntity(attachment.netId, 'propattachment', citizenid)
 
     local entity = ResolveNetworkEntity(attachment.netId)
     if entity then
@@ -630,13 +637,28 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     -- entity into their own registry — exactly the property this file's own
     -- header "WHY THIS NEVER ACCEPTS A CLIENT-CLAIMED TARGET" section
     -- argues this file does not allow.
-    if FindOtherPropAttachmentByNetId(netId, citizenid) then
+    --
+    -- CROSS-FEATURE NETID CLAIM REGISTRY (coder-architect, this pass): this
+    -- file's NETWORK-OWNERSHIP GUARD above already independently closes the
+    -- cross-feature version of this same class of gap (a client-reported
+    -- netId naming another citizen's real, live server/kennel.lua kennel or
+    -- server/fetch.lua ball, both sharing this exact prop model per
+    -- config.lua, can never pass that guard, since its true OneSync owner is
+    -- that OTHER client, never `src`) -- so this addition is defense-in-depth
+    -- consistency with server/kennel.lua/server/fetch.lua's own equivalent
+    -- checks, not independently load-bearing here. See
+    -- server/entities.lua's own header section for the full writeup.
+    if FindOtherPropAttachmentByNetId(netId, citizenid) or IsNetworkEntityClaimedByOther(netId, 'propattachment', citizenid) then
         NotifyPlayer(src, locale('propattachment.attach_failed_already_tracked'), 'error')
         TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
         return
     end
 
     PropAttachmentState[citizenid] = { netId = netId, ownerSrc = src }
+    -- Records this claim in the shared cross-feature registry so
+    -- server/kennel.lua's and server/fetch.lua's own equivalent checks can
+    -- see it too -- see server/entities.lua's own header section.
+    ClaimNetworkEntity(netId, 'propattachment', citizenid)
     NotifyPlayer(src, locale('propattachment.attached_success'), 'success')
 end)
 

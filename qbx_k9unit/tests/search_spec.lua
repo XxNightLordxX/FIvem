@@ -50,6 +50,29 @@ end
 
 local threadRunner = Sandbox.newThreadRunner()
 
+-- server/search.lua's k9_search_log audit write runs inside its own ONE-SHOT
+-- CreateThread(...) (silent-failure fix: MySQL.insert.await instead of a
+-- callback-less MySQL.insert -- see that function's own SILENT-FAILURE FIX
+-- comment). Sandbox.newThreadRunner's own CreateThread only CAPTURES a thread
+-- for a later runner.step(), and this spec never calls step() -- so handing
+-- that one-shot write to it would leave it never resumed and the audit row
+-- never written, failing the assertions below for a pure harness reason
+-- rather than a real one. Mirror tests/progression_spec.lua's own inlined
+-- CreateThread instead: create the coroutine and resume it ONCE right away,
+-- so a one-shot body (no Wait()) runs to completion on that single resume,
+-- exactly as FXServer's real CreateThread would. A recurring
+-- `while true do Wait(...) end` body (server/cooldowns.lua's load-time sweep)
+-- still yields at its first Wait and is simply left parked there -- the same
+-- place threadRunner.CreateThread left it before, since step() is never
+-- called here either way. Wait still comes from threadRunner.
+local function CreateThread(fn)
+    local co = coroutine.create(fn)
+    local ok, err = coroutine.resume(co)
+    if not ok then
+        error(('search_spec.lua: a CreateThread body errored: %s'):format(tostring(err)))
+    end
+end
+
 local registeredCallbacks = {}
 local libStub = {
     callback = {
@@ -74,7 +97,7 @@ local env = Sandbox.newEnv({
     GetGameTimer = GetGameTimer,
     AddEventHandler = AddEventHandler,
     GetCurrentResourceName = GetCurrentResourceName,
-    CreateThread = threadRunner.CreateThread,
+    CreateThread = CreateThread,
     Wait = threadRunner.Wait,
     lib = libStub,
     exports = { ox_inventory = {} }, -- never called by this spec's own path; present so a stray reference doesn't nil-index
@@ -176,7 +199,7 @@ env.TriggerClientEvent = function(eventName, _playerId, ...)
         triggerClientEventCount = triggerClientEventCount + 1
     end
 end
-env.MySQL = { insert = function(...) mysqlInsertCount = mysqlInsertCount + 1 end }
+env.MySQL = { insert = { await = function(_sql, _params) mysqlInsertCount = mysqlInsertCount + 1; return 1 end } } -- .await shape: search.lua's audit write is now CreateThread + MySQL.insert.await (silent-failure fix), not a callback-less MySQL.insert
 env.AwardXP = function(citizenid, actionKey) awardCalls[#awardCalls + 1] = { citizenid = citizenid, actionKey = actionKey } end
 
 local exportsStub = env.exports
@@ -251,6 +274,39 @@ t.test('CONSTRAINT CHECK: toggling the weight while the mint cooldown is still a
     t.equals(mysqlInsertCount, mysqlBefore + 1, 'the k9_search_log audit row must still be written for this attempt even though XP was withheld')
     t.equals(triggerEventCount, triggerBefore + 1, 'the outbound searchCompleted event must still fire')
     t.equals(triggerClientEventCount, alertBefore + 1, 'the contraband alert broadcast must still fire -- this gate must never touch it')
+end)
+
+t.test('SILENT-FAILURE FIX: a k9_search_log audit INSERT that genuinely FAILS is caught and logged, never propagated into the search result', function()
+    -- Pins server/search.lua's LogSearchAttempt silent-failure fix. That write
+    -- moved from a decorative `pcall(MySQL.insert, ...)` (fire-and-forget: the
+    -- pcall returns before the query runs, so a real SQL failure could never
+    -- reach it) to `CreateThread(function() pcall(MySQL.insert.await, ...) end)`,
+    -- which DOES surface a genuine query error. This test drives that newly-real
+    -- error path with the four failure shapes a live MySQL/MariaDB actually
+    -- returns for this INSERT -- 1146 (k9_search_log missing: install.sql or a
+    -- migration never applied), 1265 (an ENUM value drift on result/target_type),
+    -- and 1406 (an over-length target_plate/alert_tier) -- and asserts the fix
+    -- kept its OTHER half of the contract: a logging failure must still never
+    -- surface as, or cause, a search failure for the requesting officer. Without
+    -- the pcall this raises straight out of the callback and result.ok is nil.
+    fakeNow = 200000 -- clear of every cooldown window armed by the tests above
+    local realInsert = env.MySQL.insert
+    for _, sqlError in ipairs({
+        "ERROR 1146 (42S02): Table 'k9.k9_search_log' doesn't exist",
+        "ERROR 1265 (01000): Data truncated for column 'result' at row 1",
+        "ERROR 1406 (22001): Data too long for column 'target_plate' at row 1",
+        "ERROR 1406 (22001): Data too long for column 'alert_tier' at row 1",
+    }) do
+        env.MySQL.insert = { await = function(_sql, _params) error(sqlError, 0) end }
+        local triggerBefore = triggerEventCount
+        local ok, result = pcall(searchVehicle, 501, 3003, 15)
+        t.isTrue(ok, 'a failing audit INSERT must never raise out of the searchTarget callback: ' .. sqlError)
+        t.isTrue(result.ok, 'the search itself must still succeed and report normally despite the audit write failing: ' .. sqlError)
+        t.equals(result.totalWeight, 15, 'the requester must still get the real weight even though the audit row was lost')
+        t.equals(triggerEventCount, triggerBefore + 1, 'the outbound searchCompleted event must still fire after a failed audit write')
+        fakeNow = fakeNow + 100000 -- fresh window for the next iteration's own search
+    end
+    env.MySQL.insert = realInsert
 end)
 
 t.test('past the mint cooldown window, the still-differing weight now pays -- the earlier skipped attempt was never silently treated as paid', function()

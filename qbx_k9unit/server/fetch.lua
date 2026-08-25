@@ -179,6 +179,21 @@
     player's recall/delivery/expiry then deletes an entity the other
     player's entry still believes it owns). Do not remove these checks
     without replacing them with an equally strict alternative.
+
+    CROSS-FEATURE EXTENSION OF THIS SAME INVARIANT (coder-architect, this
+    pass): `FindOtherBallByNetId` only ever scans THIS file's own
+    `FetchBalls` table — it has no visibility into server/kennel.lua's
+    `Kennels` or server/propattachment.lua's `PropAttachmentState`, both of
+    which share this file's exact `ballPropModel` ('prop_tennis_ball') per
+    config.lua. Every one of the three WRITE sites named above (and every
+    `safeToCleanup` rejection-branch cleanup gate) now ALSO requires
+    server/entities.lua's `not IsNetworkEntityClaimedByOther(netId, 'fetch',
+    <citizenid>)` — see each call site's own comment, and
+    server/entities.lua's own header section for the full exploit (in both
+    its rejection-branch and, more severely, its plain-success-path shapes)
+    this closes. `FindOtherBallByNetId` itself is unchanged and stays in
+    place, layered underneath the new cross-feature check, not replaced by
+    it.
 ]]
 
 -- GATE AT REGISTRATION, NOT INSIDE THE HANDLER — this file's whole purpose
@@ -286,6 +301,12 @@ local function EndFetchCycle(citizenid, ball)
     end
 
     if ball.netId then
+        -- Releases this citizenid's claim on ball.netId in the shared
+        -- cross-feature registry (server/entities.lua) so the netId can be
+        -- legitimately reused/reclaimed afterward without tripping
+        -- IsNetworkEntityClaimedByOther for anyone else -- a no-op if this
+        -- exact (feature, ownerId) pair never held the claim.
+        ReleaseNetworkEntity(ball.netId, 'fetch', citizenid)
         local entity = ResolveNetworkEntity(ball.netId)
         if entity then
             DeleteEntity(entity)
@@ -436,10 +457,23 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
 
     -- See this handler's own doc comment above for why this is derived
     -- FIRST and reused by every failure branch below.
+    --
+    -- CROSS-FEATURE FIX (coder-architect, this pass): `FindOtherBallByNetId`
+    -- alone only ever catches a collision against ANOTHER `FetchBalls`
+    -- entry -- it has no visibility into server/kennel.lua's `Kennels` or
+    -- server/propattachment.lua's `PropAttachmentState`, both of which
+    -- share this exact prop model with `FetchBalls` per config.lua (see
+    -- this file's header, and server/entities.lua's own CROSS-FEATURE
+    -- NETID CLAIM REGISTRY section, for the full writeup). A netId naming
+    -- another citizen's real, live kennel/vest is a real object of the
+    -- right type/model, never recorded in `FetchBalls` at all, so it used
+    -- to read as `safeToCleanup == true` here regardless.
+    -- `IsNetworkEntityClaimedByOther` (server/entities.lua) closes that.
     local entity = ResolveNetworkEntity(netId, 3)
     local safeToCleanup = entity ~= nil
         and FetchBallModelHashes[GetEntityModel(entity)]
         and not FindOtherBallByNetId(netId, citizenid)
+        and not IsNetworkEntityClaimedByOther(netId, 'fetch', citizenid)
 
     --- @param message string?
     local function RejectThrow(message)
@@ -483,7 +517,18 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
     -- this same check above), so RejectThrow correctly notifies but sends
     -- no cleanup instruction — never delete an entity this citizenid does
     -- not actually own.
-    if FindOtherBallByNetId(netId, citizenid) then
+    --
+    -- CROSS-FEATURE FIX (coder-architect, this pass) — THE MORE SEVERE HALF
+    -- of this pass's fix, found auditing this exact gate: WITHOUT
+    -- IsNetworkEntityClaimedByOther below, a netId naming another citizen's
+    -- real, live kennel/vest (never in `FetchBalls`, sharing this exact
+    -- model per config.lua) sailed straight through this gate and got
+    -- WRITTEN into `FetchBalls[citizenid]` below as if it were this
+    -- citizenid's own genuine thrown ball -- no rejection branch needed at
+    -- all. The attacker's own very next requestRecallFetchBall (a clean,
+    -- ordinary, already-audited call) would then delete the victim's real
+    -- kennel/vest via THIS file's own EndFetchCycle.
+    if FindOtherBallByNetId(netId, citizenid) or IsNetworkEntityClaimedByOther(netId, 'fetch', citizenid) then
         RejectThrow(locale('fetch.placement_failed_already_tracked'))
         return
     end
@@ -499,6 +544,10 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
         createdAt = now,
         expiresAt = now + Config.FetchMechanic.maxBallLifetimeMs,
     }
+    -- Records this claim in the shared cross-feature registry so
+    -- server/kennel.lua's and server/propattachment.lua's own equivalent
+    -- checks can see it too -- see server/entities.lua's own header section.
+    ClaimNetworkEntity(netId, 'fetch', citizenid)
 
     NotifyPlayer(src, locale('fetch.thrown_success'), 'success')
 end)
@@ -682,12 +731,30 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallCarried', function(netId)
     -- with another citizenid's existing entry, but this write is exactly
     -- the kind this file's header invariant exists to guard: end the cycle
     -- rather than let two entries point at the same physical object.
-    if FindOtherBallByNetId(netId, pending.throwerCitizenId) then
+    --
+    -- CROSS-FEATURE FIX (coder-architect, this pass): `FindOtherBallByNetId`
+    -- alone has no visibility into server/kennel.lua's `Kennels` or
+    -- server/propattachment.lua's `PropAttachmentState` -- a carrier's
+    -- client could report a victim's real, live kennel/vest netId (sharing
+    -- this exact model per config.lua) as its own freshly-attached
+    -- replacement, and this write would have silently hijacked it into THIS
+    -- citizenid's own `ball.netId`, reachable for deletion by any later
+    -- release/recall/deliver/expiry. `IsNetworkEntityClaimedByOther`
+    -- (server/entities.lua) closes that the same way as every other write
+    -- site this pass touched.
+    if FindOtherBallByNetId(netId, pending.throwerCitizenId) or IsNetworkEntityClaimedByOther(netId, 'fetch', pending.throwerCitizenId) then
         EndFetchCycle(pending.throwerCitizenId, ball)
         return
     end
 
+    -- Releases the OLD (pre-pickup, about-to-be-superseded) netId's claim
+    -- and claims the NEW one, in the shared cross-feature registry
+    -- (server/entities.lua) -- keeps the registry's view of `ball.netId`
+    -- always current, exactly mirroring the field assignment on the very
+    -- next line.
+    ReleaseNetworkEntity(ball.netId, 'fetch', pending.throwerCitizenId)
     ball.netId = netId
+    ClaimNetworkEntity(netId, 'fetch', pending.throwerCitizenId)
 end)
 
 --- 'attach'-mode pickup failed client-side (model never loaded, or
@@ -793,10 +860,17 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallDropped', function(netId)
 
     -- See confirmFetchBallThrown's own doc comment for why this is derived
     -- FIRST and reused by every failure branch below.
+    --
+    -- CROSS-FEATURE FIX (coder-architect, this pass): same
+    -- IsNetworkEntityClaimedByOther addition as confirmFetchBallThrown's own
+    -- `safeToCleanup` above -- see that handler's own comment for the full
+    -- writeup, and server/entities.lua's header for the shared exploit this
+    -- closes across all three of this resource's netId-confirm features.
     local entity = ResolveNetworkEntity(netId, 3)
     local safeToCleanup = entity ~= nil
         and FetchBallModelHashes[GetEntityModel(entity)]
         and not FindOtherBallByNetId(netId, pending.throwerCitizenId)
+        and not IsNetworkEntityClaimedByOther(netId, 'fetch', pending.throwerCitizenId)
 
     local function RejectDrop()
         if safeToCleanup then
@@ -826,12 +900,25 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallDropped', function(netId)
     -- `false` in exactly this case, so RejectDrop correctly sends no
     -- cleanup instruction — never delete an entity this citizenid does not
     -- actually own.
-    if FindOtherBallByNetId(netId, pending.throwerCitizenId) then
+    --
+    -- CROSS-FEATURE FIX (coder-architect, this pass) — THE MORE SEVERE HALF,
+    -- same shape as confirmFetchBallThrown's own success-write gate: without
+    -- IsNetworkEntityClaimedByOther, a "recreated ball" report naming a
+    -- victim's real, live kennel/vest netId (never in `FetchBalls`, sharing
+    -- this exact model) would sail through this gate and get WRITTEN into
+    -- `ball.netId` below, reachable for deletion by this citizenid's own
+    -- very next release/recall/deliver.
+    if FindOtherBallByNetId(netId, pending.throwerCitizenId) or IsNetworkEntityClaimedByOther(netId, 'fetch', pending.throwerCitizenId) then
         RejectDrop()
         return
     end
 
+    -- Releases the OLD (pre-drop, about-to-be-superseded) netId's claim and
+    -- claims the NEW one -- see confirmFetchBallCarried's own identical
+    -- comment above.
+    ReleaseNetworkEntity(ball.netId, 'fetch', pending.throwerCitizenId)
     ball.netId = netId
+    ClaimNetworkEntity(netId, 'fetch', pending.throwerCitizenId)
 end)
 
 --- The "returns to handler and releases" leg — see this file's header for

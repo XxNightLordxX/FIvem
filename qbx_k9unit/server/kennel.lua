@@ -113,27 +113,38 @@
        `safeToCleanup` would already be false for it anyway: at that point
        `entity` might not be the genuine kennel at all).
 
-       RESIDUAL, DISCLOSED GAP — NOT CLOSED BY THIS FIX, reported to
-       coder-backend/coder-architect/project-lead this pass rather than
-       attempted unilaterally here (needs a decision spanning files this
-       one does not own): `safeToCleanup`'s condition (c) only cross-checks
-       THIS file's own `Kennels` registry — it has no visibility into
+       CROSS-FEATURE GAP — CLOSED THIS PASS (coder-architect):
+       `safeToCleanup`'s condition (c) above only ever cross-checked THIS
+       file's own `Kennels` registry — it had no visibility into
        server/fetch.lua's private `FetchBalls`/`PendingFetchDrops` tables or
        server/propattachment.lua's own tracked attachments. Confirmed by
-       reading config.lua this pass: `Config.DeployableKennel.
-       fallbackPropModel`, `Config.FetchMechanic.ballPropModel`, and
+       reading config.lua: `Config.DeployableKennel.fallbackPropModel`,
+       `Config.FetchMechanic.ballPropModel`, and
        `Config.PropAttachments.fallbackPropModel` are ALL configured as the
-       identical `'prop_tennis_ball'` model. A netId naming another
-       citizen's currently-live fetch ball or attached prop — a real object
-       of the right type, wearing the right (shared) model, but never
-       recorded in `Kennels` at all — therefore still reads as
-       `safeToCleanup == true` here, the same shape of gap server/fetch.lua's
-       own `safeToCleanup` has in reverse (it only cross-checks
-       `FetchBalls`, never `Kennels` or propattachment's own table).
-       Structurally closing this needs either distinct per-feature model
-       hashes (config.lua) or a shared, resource-global "netId currently
-       claimed by feature X" registry every confirm handler consults — both
-       out of this file's remit.
+       identical `'prop_tennis_ball'` model — a real object of the right
+       type, wearing the right (shared) model, but never recorded in
+       `Kennels` at all, therefore used to read as `safeToCleanup == true`
+       here. Worse, auditing this pass found the SAME shared-model blindness
+       also let a foreign object be silently WRITTEN into `Kennels` on the
+       plain SUCCESS path below (no rejection branch needed at all) — see
+       the DEFENSE-IN-DEPTH pre-write check further down for that half of
+       the fix.
+       FIXED via server/entities.lua's new `IsNetworkEntityClaimedByOther`
+       (a shared, resource-global "netId currently claimed by feature X"
+       registry, exactly the shape this comment previously named as the
+       needed-but-out-of-remit fix) — every one of this file's own
+       `safeToCleanup` computations and pre-write uniqueness checks now
+       additionally requires `not IsNetworkEntityClaimedByOther(netId,
+       'kennel', citizenid)`, and every successful write/removal of a
+       `Kennels` entry now calls `ClaimNetworkEntity`/`ReleaseNetworkEntity`
+       so server/fetch.lua's and server/propattachment.lua's own equivalent
+       checks can see THIS file's claims too. See that file's own header
+       section for the full exploit writeup and why a shared table was
+       chosen over retrofitting server/propattachment.lua's
+       NetworkGetEntityOwner-based guard into this file instead. The
+       existing `FindKennelOwnerByNetId` same-feature check is UNCHANGED and
+       stays in place alongside the new cross-feature check, layered, not
+       replaced.
     3. 'qbx_k9unit:server:cancelKennelPlacement' () [THIS FILE]
        Client reports its own placement attempt failed (model never
        loaded, PlaceObjectOnGroundProperly returned false) so the pending
@@ -288,6 +299,12 @@ local function RemoveKennelForCitizenid(citizenid)
     local kennel = Kennels[citizenid]
     if not kennel then return end
     Kennels[citizenid] = nil
+    -- Releases this citizenid's claim on kennel.netId in the shared
+    -- cross-feature registry (server/entities.lua) so the netId can be
+    -- legitimately reused/reclaimed afterward without tripping
+    -- IsNetworkEntityClaimedByOther for anyone else -- a no-op if this
+    -- exact (feature, ownerId) pair never held the claim.
+    ReleaseNetworkEntity(kennel.netId, 'kennel', citizenid)
 
     -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this file's
     -- own inline `NetworkDoesEntityExistWithNetworkId` / `NetworkGetEntityFromNetworkId`
@@ -498,10 +515,22 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     -- cross-citizenid collision case (the DEFENSE-IN-DEPTH check further
     -- down, before the success write) gets `safeToCleanup == false` for
     -- free from this same check.
+    --
+    -- CROSS-FEATURE FIX (coder-architect, this pass): `FindKennelOwnerByNetId`
+    -- alone only ever catches a collision against ANOTHER `Kennels` entry --
+    -- it has no visibility into server/fetch.lua's `FetchBalls` or
+    -- server/propattachment.lua's `PropAttachmentState`, both of which share
+    -- this exact prop model with `Kennels` per config.lua (see this file's
+    -- header CROSS-FEATURE GAP section). `IsNetworkEntityClaimedByOther`
+    -- (server/entities.lua) closes that: it is false only when `netId` is
+    -- either unclaimed anywhere, or already claimed by THIS citizenid's own
+    -- kennel -- never when it names a genuinely different feature's or
+    -- citizen's real, live object.
     local entity = ResolveNetworkEntity(netId, 3)
     local safeToCleanup = entity ~= nil
         and KennelModelHashes[GetEntityModel(entity)]
         and not FindKennelOwnerByNetId(netId, citizenid)
+        and not IsNetworkEntityClaimedByOther(netId, 'kennel', citizenid)
 
     --- Notifies `src` their placement was rejected and, ONLY if
     --- `safeToCleanup` says this citizenid genuinely owns the resolved
@@ -642,8 +671,22 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     -- necessarily a genuine cross-citizenid collision, and this is the
     -- gate that actually decides whether to WRITE `Kennels[citizenid]`, a
     -- distinct concern from `safeToCleanup` deciding whether to DELETE.
+    --
+    -- CROSS-FEATURE FIX (coder-architect, this pass) — THE MORE SEVERE HALF
+    -- of this pass's fix, found auditing this exact gate: `FindKennelOwnerByNetId`
+    -- alone only rejects a netId already sitting in `Kennels` -- a netId
+    -- naming another citizen's REAL, LIVE server/fetch.lua ball or
+    -- server/propattachment.lua vest (never in `Kennels` at all, sharing
+    -- this exact model per config.lua) sailed straight through this gate
+    -- and got WRITTEN into `Kennels[citizenid]` below as if it were this
+    -- citizenid's own genuine kennel -- no rejection branch needed at all.
+    -- The attacker's own very next requestPickupKennel (a clean, ordinary,
+    -- already-audited call) would then delete the victim's real fetch
+    -- ball/vest via THIS file's own RemoveKennelForCitizenid. Closed the
+    -- same way as `safeToCleanup` above: `IsNetworkEntityClaimedByOther`
+    -- (server/entities.lua) additionally guards this write.
     local otherCitizenid = FindKennelOwnerByNetId(netId, citizenid)
-    if otherCitizenid then
+    if otherCitizenid or IsNetworkEntityClaimedByOther(netId, 'kennel', citizenid) then
         NotifyPlayer(src, locale('kennel.placement_failed_already_claimed'), 'error')
         return
     end
@@ -653,6 +696,10 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
         ownerSrc = src,
         createdAt = GetGameTimer(),
     }
+    -- Records this claim in the shared cross-feature registry so
+    -- server/fetch.lua's and server/propattachment.lua's own equivalent
+    -- checks can see it too -- see server/entities.lua's own header section.
+    ClaimNetworkEntity(netId, 'kennel', citizenid)
 
     NotifyPlayer(src, locale('kennel.deployed_success'), 'success')
 end)

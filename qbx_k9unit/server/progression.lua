@@ -240,59 +240,85 @@ local AwardXPCooldown = NewNestedCooldown(500)
 -- shared budget, the four independent ceilings simply never interact, which
 -- is exactly the gap this section exists to close.
 --
--- IMPLEMENTATION: a per-citizenid TOKEN BUCKET that STARTS EMPTY (tokens =
--- 0) for a brand-new or freshly-recreated citizenid, refilling continuously
+-- IMPLEMENTATION: a per-citizenid TOKEN BUCKET, refilling continuously
 -- toward XP_MINT_BUDGET_CAP_XP at a constant rate -- NOT a fixed-window
--- counter that resets to 0 on a wall-clock boundary, and NOT a bucket that
--- starts FULL either. Two properties, both verified by direct simulation
--- before landing this (see this pass's own report), not assumed:
---   1. A fixed window has a well-known boundary-doubling flaw: a player
---      could spend a full budget in the last instant of window N, then spend
---      a full budget again in the first instant of window N+1, minting up to
---      2x the intended cap within a couple of real seconds around every
---      window edge. A token bucket has no such edge -- capacity refills
---      continuously, never resets to 0 on a clock boundary.
---   2. STARTING EMPTY, not full, matters just as much: a bucket that started
---      FULL would let that SAME 2x-cap burst happen on every citizenid's
---      very first hour (an untouched bucket already holding a full cap's
---      worth of "free" tokens, on top of the cap's worth that then refills
---      DURING that same hour) -- simulated before landing this: starting
---      full grants up to 7,150 XP in a citizenid's first simulated hour of
---      continuous max-rate farming, comfortably defeating this section's own
---      3,600 XP/hr design goal. Starting EMPTY instead makes the bound
---      rigorous, not approximate: for a bucket at 0 at time 0, cumulative XP
---      granted by any later time T is bounded by XP_MINT_BUDGET_CAP_XP * (T
---      / XP_MINT_BUDGET_WINDOW_MS), with equality only reachable by spending
---      every token the instant it accrues (continuous max-rate farming) --
---      no idle-then-burst pattern can ever beat continuous farming for the
---      metric that actually matters (time to reach a fixed cumulative total,
---      e.g. the 9,000-XP Elite tier), since banking tokens during an idle
---      stretch only shifts WHEN within a window they get spent, never
---      creates tokens ahead of the linear accrual schedule. Re-verified by
---      direct simulation (start-empty, continuous max-rate farming): exactly
---      3,600 XP granted at T=1hr, exactly 9,000 XP granted at T=2.5hr --
---      matching this section's own numbers below exactly, not merely
---      approximately.
---   Starting empty costs a legitimate new player nothing in practice: the
---   realistic legitimate rate this resource's own config.lua comment
---   documents, ~500 XP/hr, accrues into an empty bucket far faster than it
---   could ever be spent (inside the first ~8.3 real minutes of play, an
---   empty bucket already holds more headroom than a legitimate hour's worth
---   of play could consume), so a start-empty bucket is never the reason a
---   genuine player notices anything different.
+-- counter that resets to 0 on a wall-clock boundary. A fixed window has a
+-- well-known boundary-doubling flaw for this exact use case: a player could
+-- spend a full budget in the last instant of window N, then spend a full
+-- budget again in the first instant of window N+1, minting up to 2x the
+-- intended cap within a couple of real seconds around every window edge. A
+-- token bucket has no such edge -- capacity refills continuously, never
+-- resets to 0 on a clock boundary.
+--
+-- STARTING BALANCE -- THIS TOOK THREE ATTEMPTS TO GET RIGHT, in this same
+-- pass, each verified by direct simulation rather than assumed correct on
+-- reasoning alone (see this pass's own report for the full numbers):
+--   1. REJECTED: start FULL (tokens = XP_MINT_BUDGET_CAP_XP). The textbook
+--      token-bucket default, and it does let a brand-new citizenid's first
+--      award through -- but it re-opens exactly the burst-doubling flaw the
+--      fixed-window rejection above already exists to avoid, just shifted to
+--      "every citizenid's first hour" (and every hour immediately following
+--      a long-idle-triggered sweep eviction, see the sweep thread's own
+--      comment below): a full starting balance PLUS a full hour's continuous
+--      refill-and-spend on top of it. Simulated: up to 7,150 XP in a
+--      citizenid's first simulated hour of continuous max-rate farming --
+--      pushing worst-case time-to-Elite back down to ~1.5 hours, BELOW the
+--      >2-hour floor this entire section exists to restore.
+--   2. REJECTED: start EMPTY (tokens = 0). This makes the bound rigorous
+--      instead of approximate for a bucket already in motion (cumulative XP
+--      granted by any elapsed time T becomes provably <= CAP * T / WINDOW_MS)
+--      -- but it has a fatal edge case at T=0 itself: a bucket created AND
+--      checked inside the SAME AwardXP call has, by definition, zero elapsed
+--      time since its own creation, so it can never have refilled anything
+--      yet -- meaning EVERY citizenid's FIRST-EVER AwardXP call, every
+--      session, was silently denied before K9XP was ever touched. Caught by
+--      two independent agents hitting it live via tests/progression_spec.lua
+--      (9 failures, every one consistent with "AwardXP never grants on a
+--      fresh citizenid") before this shipped -- a full regression of the
+--      happy path, not a theoretical edge case, and THE SAME FOOTGUN SHAPE
+--      server/cooldowns.lua's own IsOnCooldown has for a non-positive
+--      threshold: a boundary condition silently meaning "blocked forever"
+--      instead of "unrestricted."
+--   3. CHOSEN: start at XP_MINT_BUDGET_STARTER_TOKENS (see its own
+--      declaration below) -- a small, ONE-TIME allowance, sized to the
+--      worst-case realistic SAME-TICK burst this file's own award table can
+--      produce for a single citizenid (the SUM of every Config.XP.awards
+--      value, computed once from the real live config, never hardcoded), NOT
+--      the full cap. This exists specifically because AwardXP can
+--      legitimately fire more than once in the SAME tick for the SAME
+--      citizenid with DIFFERENT actionKeys (server/tenure.lua's
+--      CheckTenureMilestonesForK9 -- see AwardXPCooldown's own declaration
+--      comment above: a K9 reunited after a long absence can cross several
+--      one-time, non-repeating milestones in a single pass, and every one of
+--      them must still be paid). A starting balance this small barely moves
+--      the long-run bound at all (see NUMBERS CHOSEN below for the exact,
+--      simulated impact) while completely fixing both rejected attempts'
+--      failure modes: a brand-new citizenid's first award (or first-tick
+--      burst) is never denied, and no citizenid can ever bank close to a
+--      whole extra cap's worth of "free" tokens the way a full start would.
+--
+-- Re-verified by direct simulation with the REAL shipped award table (search
+-- 25 + track 10 + bite 20 + takedown 30 + tenure 15+40+100 = 240 starter
+-- tokens), continuous max-rate round-robin farming across all four
+-- mechanics: 3,835 XP granted at T=1hr (vs. the four independent
+-- per-mechanic ceilings' own UNCAPPED sum of 5,700 XP/hr -- this budget is
+-- still the binding constraint), and the 9,000-XP Elite tier first reached
+-- at T=8,790,000ms = 2.442 hours (~2h 26.5m) -- comfortably over the 2-hour
+-- floor, though with a smaller margin (~26.5 minutes) than a pure
+-- start-empty design's clean 2.5h would have had.
 --
 -- NUMBERS CHOSEN (XP_MINT_BUDGET_CAP_XP / XP_MINT_BUDGET_WINDOW_MS below):
--- 3,600 XP per 3,600,000ms (1 hour). Needed: strictly below 4,500 XP/hr
--- (9000 / 4500 = exactly 2.0 hours -- the retuned floor requires MORE than 2
--- hours, so the cap must clear that with real margin, not sit on the
--- boundary). 3,600 gives Elite (9,000 XP) at 9000/3600 = 2.5 hours -- a
--- clean, round number both as a ceiling (3,600 XP in 3,600,000ms) and as a
--- margin (30 minutes / 25% above the 2-hour floor). Recomputed tier times at
--- this REAL post-fix ceiling, reported to whoever owns config.lua for that
--- file's own Config.XPTiers economy comment (not edited by this pass):
---   Trained (1,250 XP): 1250/3600 = 0.347h  (~20m 50s)
---   Veteran (4,000 XP): 4000/3600 = 1.111h  (~1h 6m 40s)
---   Elite   (9,000 XP): 9000/3600 = 2.5h    (2h 30m -- clears the floor)
+-- 3,600 XP per 3,600,000ms (1 hour) -- clean, round numbers to reason about.
+-- Needed: comfortably below 4,500 XP/hr (9000 / 4500 = exactly 2.0 hours --
+-- the retuned floor requires MORE than 2 hours, so the cap must clear that
+-- with real margin, not sit on the boundary), which it does even with the
+-- 240-XP starter offset above (2.442h > 2.0h). Recomputed tier times at this
+-- REAL post-fix ceiling (simulated, not the pure-continuous approximation),
+-- reported to whoever owns config.lua for that file's own Config.XPTiers
+-- economy comment (not edited by this pass):
+--   Trained (1,250 XP): reached at ~0.283h (~17m)
+--   Veteran (4,000 XP): reached at ~1.050h (~1h 3m)
+--   Elite   (9,000 XP): reached at ~2.442h (~2h 26.5m -- clears the floor)
 --
 -- FILE-LOCAL CONSTANTS, NOT CONFIG KEYS -- same reasoning as every one of
 -- the four per-mechanic mint cooldowns' own "FILE-LOCAL CONSTANTS, NOT
@@ -303,8 +329,8 @@ local AwardXPCooldown = NewNestedCooldown(500)
 -- exists to close. The only way to weaken it is to edit this file's own
 -- source under code review.
 -- ==========================================================================
-local XP_MINT_BUDGET_CAP_XP    = 3600     -- XP -- also the bucket's max capacity (burst allowance == the steady-state cap, standard token-bucket sizing)
-local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: the bucket goes from empty to full over exactly this many real ms
+local XP_MINT_BUDGET_CAP_XP    = 3600     -- XP -- the bucket's max capacity (a citizenid can never hold more than this many unspent tokens at once, however long they go without earning)
+local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: a bucket held at 0 reaches full capacity after exactly this many real ms of continuous refill
 
 --- Shared validity test, deliberately mirroring server/cooldowns.lua's own
 --- IsValidThreshold (identical rejection list: non-number, NaN, non-
@@ -316,6 +342,24 @@ local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: the bu
 --- @return boolean
 local function IsValidBudgetParam(value)
     return type(value) == 'number' and value == value and value > 0
+end
+
+--- TEST/INSPECTION SEAM (resource-global, no `local`) -- same precedent and
+--- reasoning as server/search.lua's GetContrabandAlertTier: a thin pass-
+--- through to a file-local pure function, added specifically so a spec can
+--- exercise the exact validity logic this section's fail-OPEN decision is
+--- built on with ARBITRARY inputs (0, negative, nil, NaN), not just the two
+--- hardcoded constants above -- there is no other way to reach a `local`
+--- function's behavior for inputs other than the ones this file's own
+--- top-level code happens to call it with (see tests/fixtures/sandbox.lua's
+--- own header on this exact limitation). Widens no trust boundary: this
+--- performs a plain, side-effect-free math/type check on a number the
+--- caller already has, reads no player/citizenid/XP state, and cannot be
+--- used to influence or observe any real award.
+--- @param value any
+--- @return boolean
+function IsValidXpMintBudgetParam(value)
+    return IsValidBudgetParam(value)
 end
 
 -- CRITICAL DESIGN CHOICE, READ BEFORE EVER CHANGING EITHER CONSTANT ABOVE:
@@ -358,6 +402,16 @@ if not XPMintBudgetEnabled then
          'two constants in server/progression.lua.'):format(tostring(XP_MINT_BUDGET_CAP_XP), tostring(XP_MINT_BUDGET_WINDOW_MS))
     )
 end
+
+-- Deliberately NOT also exposing a read-only status/enabled accessor here as
+-- a second test seam -- tests/progression_spec.lua's own EIGHTH-XP-farm-fix
+-- compound-farm test already proves the REAL shipped constants are valid
+-- and enabled, more precisely than a boolean flag could: it asserts the
+-- EXACT total (3,600 XP after one simulated hour of round-robined real
+-- awards, 9,000 XP after 2.5) that is only reachable at all if
+-- XPMintBudgetEnabled is true AND both constants are exactly what they
+-- claim to be. A second global purely for this would be redundant surface
+-- for no extra coverage.
 
 -- XPMintBudget[citizenid] = { tokens = number, lastRefillAt = gameTimerMs }.
 -- DELIBERATELY NOT cleared on playerDropped (unlike K9XP/AwardXPCooldown

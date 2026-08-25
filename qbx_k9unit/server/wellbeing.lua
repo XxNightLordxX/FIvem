@@ -422,6 +422,51 @@
 --                                              -- HESITATION_MAX_CONTINUOUS_MS below (coder-security,
 --                                              -- this pass) for why this exists.
 --     lastCoords,                             -- vector3? -- previous tick's sample, for Fatigue's sprint-speed calc
+--     injuryDiedWhileTracked,                 -- boolean -- see this file's header, STUCK-K9 SOFTLOCK
+--                                              -- FIX item 2 and its FOLLOW-UP note, for the full writeup.
+--
+-- TWO DIFFERENT CATEGORIES OF FIELD LIVE IN THIS SAME TABLE -- read this
+-- before adding a new one, since conflating them is exactly the bug class a
+-- regression pass found here once already:
+--   1. PERSISTED VALUES (fatigue/mood/fearStress/injury, and the absolute
+--      GetGameTimer()-timestamp fields distractedUntil/hesitatingUntil/
+--      hesitationEpisodeStartedAt): meant to survive a disconnect --
+--      "a K9 who logs off tired should still be tired on reconnect" is this
+--      file's own established rule, and the timestamp fields specifically
+--      stay correct across a disconnect for a different, non-obvious reason
+--      -- GetGameTimer() is a process-uptime clock that keeps advancing
+--      while a player is offline, so a stored absolute future timestamp is
+--      still a meaningful comparison against a LATER GetGameTimer() read
+--      after they reconnect, exactly as if they had stayed connected the
+--      whole time. Never reset these on playerDropped/a model switch.
+--   2. TRANSIENT, SESSION/PED-INSTANCE-SCOPED OBSERVATIONS (lastCoords,
+--      injuryDiedWhileTracked): a snapshot of something true about THIS
+--      SPECIFIC, CURRENTLY-LIVE ped handle as of the last tick this file
+--      actually observed it -- meaningless the instant that ped handle
+--      stops being the one backing this citizenid (a disconnect, or a
+--      switch away from a K9 model while still connected), because the
+--      NEXT ped handle this citizenid is ever attached to (a reconnect's
+--      fresh spawn, or a switch back to a K9 model) carries no relationship
+--      to whatever the old one's last-observed state was. lastCoords was
+--      already reset on both paths from this file's very first version of
+--      this logic (the "bogus sprint-speed on reconnect/model-swap" fix).
+--      injuryDiedWhileTracked was NOT, when it was first added -- a
+--      regression pass found this let a K9 disconnect while dead and
+--      reconnect to a fresh, genuinely-alive ped, which this file's own
+--      tick loop then misread as a real dead-to-alive TRANSITION and paid
+--      out a full deathRespawnRestoreAmount for free, no revive/ambulance/
+--      medkit/delay required, repeatably -- exactly the cost-free loop this
+--      field's own config.lua comment's disclosed-risk paragraph assumed a
+--      real revive flow's own friction would prevent. FIXED: both reset
+--      sites below (the model-switch-away branch inside TickWellbeing, and
+--      the playerDropped handler) now clear injuryDiedWhileTracked
+--      alongside lastCoords -- same category, same fix shape, applied
+--      consistently rather than only at the one site a regression test
+--      happened to exercise first. A future field belongs in category 2,
+--      and needs the SAME reset at BOTH sites, if it is ever a plain
+--      boolean/non-timestamp snapshot of "what did I last see this ped
+--      doing" rather than an absolute clock comparison or one of the four
+--      genuinely-persisted stats themselves.
 -- }
 local WellbeingStats = {}
 
@@ -485,7 +530,11 @@ local function EnsureStats(citizenid)
             -- header, STUCK-K9 SOFTLOCK FIX item 2, and TickWellbeing's own
             -- Injury branch below for the full read/reset cycle. Starts
             -- false: a freshly-referenced citizenid has never been observed
-            -- dead by this tracker.
+            -- dead by this tracker. TRANSIENT, PED-INSTANCE-SCOPED, NOT a
+            -- persisted value — see the WellbeingStats struct comment above
+            -- (category 2) for why this MUST be reset wherever lastCoords
+            -- is reset, and the FOLLOW-UP fix for the disconnect-while-dead
+            -- exploit that shipped without that reset the first time.
             injuryDiedWhileTracked = false,
         }
         WellbeingStats[citizenid] = stats
@@ -1297,18 +1346,40 @@ local function TickWellbeing()
                 -- as the distance between that stale position and their new
                 -- one divided by a SINGLE tickIntervalMs, producing a huge
                 -- bogus "sprint" speed and applying one wrong
-                -- sprintDecayPerTick hit. Only touches `lastCoords` — never
-                -- the rest of `stats` (fatigue/mood/fearStress/injury
-                -- deliberately persist across a model switch or
-                -- disconnect/reconnect within the same server session, per
-                -- this file's own header). Reads `WellbeingStats` directly
-                -- rather than `EnsureStats` so this never creates a fresh
-                -- entry for a citizenid that has never actually been
-                -- K9-modeled this session.
+                -- sprintDecayPerTick hit. Only touches the TRANSIENT,
+                -- ped-instance-scoped observations (`lastCoords`,
+                -- `injuryDiedWhileTracked`) — never the four persisted stats
+                -- themselves (fatigue/mood/fearStress/injury deliberately
+                -- persist across a model switch or disconnect/reconnect
+                -- within the same server session, per this file's own
+                -- header). Reads `WellbeingStats` directly rather than
+                -- `EnsureStats` so this never creates a fresh entry for a
+                -- citizenid that has never actually been K9-modeled this
+                -- session.
+                --
+                -- `injuryDiedWhileTracked` RESET (FOLLOW-UP FIX, this pass):
+                -- see the WellbeingStats struct comment above (category 2)
+                -- for why this belongs in the SAME category as `lastCoords`
+                -- and needs the identical reset — a K9 that dies, switches
+                -- away from its K9 model while still connected (the same
+                -- rare appearance-swap edge case this comment already names
+                -- for the sprint-speed bug), and is later revived by
+                -- whatever unrelated means while non-K9-modeled would
+                -- otherwise carry a stale `true` back into the K9 branch the
+                -- moment it switches back — read there as a genuine
+                -- dead-to-alive transition it never actually observed, and
+                -- pay out a free deathRespawnRestoreAmount. This mirrors the
+                -- playerDropped handler's own identical reset immediately
+                -- below, for the disconnect-shaped version of the exact same
+                -- bug (that one was the one a regression pass actually
+                -- caught first — this branch is fixed alongside it rather
+                -- than left as a second, narrower instance of the same
+                -- root cause).
                 local citizenid = ResolveCitizenid(src)
                 local stats = citizenid and WellbeingStats[citizenid]
                 if stats then
                     stats.lastCoords = nil
+                    stats.injuryDiedWhileTracked = false
                 end
             end
         end

@@ -21,6 +21,21 @@
     Only FiveM natives this file touches are stubbed: NetworkGetEntityFromNetworkId,
     DoesEntityExist, GetEntityType (all test-controlled maps/sets) and
     GetPlayers/GetPlayerPed (for ResolveConnectedPlayerFromPed).
+
+    Also covers ClaimNetworkEntity/ReleaseNetworkEntity/
+    IsNetworkEntityClaimedByOther (coder-architect, this pass) -- the
+    CROSS-FEATURE NETID CLAIM REGISTRY that closes the residual gap
+    server/kennel.lua's and server/fetch.lua's own header comments each
+    disclosed (see this file's own header section for the full writeup):
+    three resource-globals, no natives involved at all, so these tests need
+    no additional stubs beyond testkit itself. The actual CROSS-FILE
+    integration -- proving server/kennel.lua's and server/fetch.lua's own
+    confirm handlers genuinely share ONE registry instance and correctly
+    reject a cross-feature collision -- is covered in kennel_spec.lua's and
+    fetch_spec.lua's own dedicated CROSS-FEATURE sections (a combined
+    fixture loading both production files together), not duplicated here;
+    this file only proves the three primitives' own, file-local contract in
+    isolation.
 ]]
 
 local t = dofile('testkit.lua')
@@ -76,9 +91,15 @@ Sandbox.loadInto('../server/entities.lua', env)
 
 local ResolveNetworkEntity = env.ResolveNetworkEntity
 local ResolveConnectedPlayerFromPed = env.ResolveConnectedPlayerFromPed
+local ClaimNetworkEntity = env.ClaimNetworkEntity
+local ReleaseNetworkEntity = env.ReleaseNetworkEntity
+local IsNetworkEntityClaimedByOther = env.IsNetworkEntityClaimedByOther
 
 t.isNotNil(ResolveNetworkEntity, 'server/entities.lua must define global ResolveNetworkEntity')
 t.isNotNil(ResolveConnectedPlayerFromPed, 'server/entities.lua must define global ResolveConnectedPlayerFromPed')
+t.isNotNil(ClaimNetworkEntity, 'server/entities.lua must define global ClaimNetworkEntity')
+t.isNotNil(ReleaseNetworkEntity, 'server/entities.lua must define global ReleaseNetworkEntity')
+t.isNotNil(IsNetworkEntityClaimedByOther, 'server/entities.lua must define global IsNetworkEntityClaimedByOther')
 
 --- Test helper: registers netId 100 -> entity 5000, marks entity 5000 as
 --- existing, with no type assigned (entityTypes[5000] defaults to 0, never

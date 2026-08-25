@@ -75,6 +75,25 @@
       server/combat.lua's ValidateCombatRequest (player-vs-NPC
       resolution) — every call site's existing use is unchanged, this
       file only consolidates the one shared implementation.
+
+      THIRD, coder-architect this pass — CROSS-FEATURE NETID CLAIM
+      REGISTRY, closing the RESIDUAL GAP server/kennel.lua's and
+      server/fetch.lua's own header comments each independently disclosed
+      but could not close alone (a decision spanning files neither owns by
+      itself):
+        ClaimNetworkEntity(netId: number, feature: string, ownerId: string)
+        ReleaseNetworkEntity(netId: number, feature: string, ownerId: string)
+        IsNetworkEntityClaimedByOther(netId: number, feature: string, ownerId: string) -> boolean
+      See this file's own dedicated header section below (immediately above
+      `ClaimedNetworkEntities`'s declaration) for the full exploit this
+      closes and why a shared table was chosen here over retrofitting
+      server/propattachment.lua's own NetworkGetEntityOwner-based guard
+      into the other two files. Reused by server/kennel.lua's
+      confirmKennelPlaced, server/fetch.lua's confirmFetchBallThrown/
+      confirmFetchBallCarried/confirmFetchBallDropped, and
+      server/propattachment.lua's confirmPropAttached — every call site's
+      own comment says exactly which of the three functions it calls and
+      why.
     ======================================================================
 ]]
 
@@ -245,4 +264,177 @@ function ResolveConnectedPlayerFromPed(entity)
         end
     end
     return nil
+end
+
+--[[
+    ======================================================================
+    CROSS-FEATURE NETID CLAIM REGISTRY (coder-architect, this pass).
+
+    THE GAP THIS CLOSES: three independent features each run a client-claimed-
+    netId confirm handshake and each already guards its OWN registry against
+    a same-feature collision -- server/kennel.lua's FindKennelOwnerByNetId
+    (Kennels), server/fetch.lua's FindOtherBallByNetId (FetchBalls),
+    server/propattachment.lua's FindOtherPropAttachmentByNetId
+    (PropAttachmentState) -- but none of the three can see the other two's
+    registries. config.lua configures Config.DeployableKennel.fallbackPropModel,
+    Config.FetchMechanic.ballPropModel, and Config.PropAttachments.fallbackPropModel
+    to the IDENTICAL 'prop_tennis_ball' model (the one prop in this resource
+    with a confirmed-real, source-verified track record -- see config.lua's
+    own comment on why the other two are unverified guesses this resource
+    deliberately does not replace, and why substituting a distinct model for
+    two of the three would trade a security gap for a silent "prop never
+    loads" gap instead). A netId naming another citizen's real, live object
+    from a DIFFERENT feature is therefore a real object, of a model every one
+    of the three files' own allowlists accepts, that is simply absent from
+    the checking file's OWN registry -- passing that file's own same-feature
+    check.
+
+    TWO exploitable shapes this was found to enable, not just one:
+      (a) The originally-scoped shape: the netId lands on a REJECTION branch
+          (TTL expiry, a feature-flag toggle, a certification revoke, an
+          already-active-limit race, too-far-from-spawn) whose own
+          `safeToCleanup`-style gate only re-checked the SAME registry, so it
+          read as "safe" and the cross-feature victim's real object was
+          deleted/instructed-to-be-deleted.
+      (b) The more severe shape found auditing this pass: the netId reaches a
+          file's own SUCCESS path outright (no rejection branch needed at
+          all) because it is genuinely unclaimed IN THAT FILE'S registry --
+          e.g. server/fetch.lua's confirmFetchBallThrown writing
+          `FetchBalls[citizenid] = { netId = <a victim's real kennel's netId>, ... }`,
+          after which the attacker's own subsequent, ordinary
+          requestRecallFetchBall deletes the victim's kennel. Every WRITE
+          site (a brand-new registry entry, or overwriting an existing
+          entry's `.netId` field) needed the identical fix as every
+          REJECTION-branch cleanup gate, not just the latter.
+
+    THE FIX: a single shared table below, plus three resource-global
+    functions. Every one of the three files' own successful WRITES calls
+    `ClaimNetworkEntity`; every one of their own REMOVALS (or netId
+    overwrites -- release the OLD value, then claim the NEW one) calls
+    `ReleaseNetworkEntity`; and every one of their own safeToCleanup/pre-write
+    uniqueness checks additionally consults `IsNetworkEntityClaimedByOther`
+    -- see each call site's own comment in server/kennel.lua/server/fetch.lua/
+    server/propattachment.lua for exactly which of the three it calls and
+    why. This is ADDITIVE, never a replacement for each file's own existing
+    same-feature FindXByNetId check -- both stay in place, layered, per this
+    resource's established "layered checks over a single point of failure"
+    convention (server/propattachment.lua's own GLOBAL NETID-UNIQUENESS
+    GUARD/NETWORK-OWNERSHIP GUARD pairing is the precedent this mirrors).
+
+    WHY A SHARED TABLE, NOT server/propattachment.lua's NetworkGetEntityOwner-
+    BASED GUARD (a stronger, native-backed check that file already uses for
+    its own, narrower first-writer-wins race): considered, and rejected for
+    server/kennel.lua and server/fetch.lua specifically. Retrofitting a
+    NetworkGetEntityOwner mock into those two files' already-large,
+    already-green spec suites (45 + 88 cases at the time of this pass) would
+    mean auditing and updating the implicit "who currently network-owns this
+    handle" assumption on nearly every existing test case that registers an
+    entity -- a much larger, higher-regression-risk diff for no closer a fix.
+    The shared registry closes the exact same class of gap (a client-reported
+    netId genuinely belongs to someone else's real object) without touching
+    either file's existing entity model, and is purely additive: it cannot
+    change the outcome for any existing honest-flow test, since the new
+    condition is only ever false when a DIFFERENT feature or DIFFERENT owner
+    already legitimately holds that exact netId, which never happens for an
+    honest client naming its own, never-yet-claimed creation.
+    server/propattachment.lua's own NetworkGetEntityOwner guard stays exactly
+    as it is and already independently closes this same class of gap for
+    that file (a cross-citizen/cross-feature attacker can never be the
+    current network owner of an entity they did not create) -- this registry
+    is layered ON TOP of it there too, both for defense-in-depth consistency
+    across all three files and because server/kennel.lua's and
+    server/fetch.lua's own checks need propattachment's claims recorded here
+    to see them at all.
+
+    NO NEW "UNBOUNDED TRAP": this registry only ever makes an existing
+    safeToCleanup/pre-write check MORE conservative (an additional `and`
+    condition, never a removed one) or blocks a WRITE that would otherwise
+    have hijacked a foreign object into the wrong registry -- it never gates
+    a genuine owner's own termination/cleanup path (RemoveKennelForCitizenid,
+    EndFetchCycle, RemovePropAttachmentForCitizenid, and every
+    playerDropped/onResourceStop/maintenance-thread sweep that funnels
+    through them) on anything. See each of those three files' own updated
+    call sites for the walk-through of why disconnect/resource-stop/TTL-
+    expiry cleanup for a GENUINE owner is unaffected.
+
+    LOAD ORDER: this file already loads before server/kennel.lua,
+    server/fetch.lua, and server/propattachment.lua (fxmanifest.lua's
+    server_scripts list) for ResolveNetworkEntity's sake -- no new ordering
+    requirement.
+    ======================================================================
+]]
+
+-- ClaimedNetworkEntities[netId] = { feature: string, ownerId: string } --
+-- see this file's own CROSS-FEATURE NETID CLAIM REGISTRY header section
+-- immediately above. Local: reached only through the three functions below,
+-- never read directly by another file.
+local ClaimedNetworkEntities = {}
+
+--- Records that `netId` is now claimed by `feature` (a short, fixed string
+--- identifying the calling file -- every current caller passes exactly one
+--- of 'kennel' / 'fetch' / 'propattachment', though this function does not
+--- itself enforce that list) on behalf of `ownerId` (that feature's own
+--- citizenid). MUST be called at every point one of those three files writes
+--- a client-reported netId into its own registry -- a brand-new entry, or
+--- overwriting an existing entry's `.netId` field (release the OLD value
+--- first via ReleaseNetworkEntity, THEN claim the new one here, so the
+--- registry never simultaneously double-claims a netId that briefly used to
+--- belong to the same citizenid's own prior value). Safe to call repeatedly
+--- for the same (netId, feature, ownerId) triple -- simply overwrites.
+--- Silently does nothing if `netId` is not a number (defensive; every
+--- current caller has already resolved a real, live entity from `netId`
+--- before reaching this call, so this guard is not expected to trigger in
+--- practice).
+--- @param netId number
+--- @param feature string
+--- @param ownerId string
+function ClaimNetworkEntity(netId, feature, ownerId)
+    if type(netId) ~= 'number' then return end
+    ClaimedNetworkEntities[netId] = { feature = feature, ownerId = ownerId }
+end
+
+--- Clears `netId`'s claim, but ONLY if it is currently recorded against the
+--- EXACT (feature, ownerId) pair supplied -- this function never blindly
+--- clears whatever is there, so one feature/citizen can never accidentally
+--- (or via a bug elsewhere) release a claim it does not itself hold. MUST be
+--- called at every point one of the three files above stops tracking a netId
+--- it previously claimed: a full registry-entry removal
+--- (RemoveKennelForCitizenid, EndFetchCycle, RemovePropAttachmentForCitizenid),
+--- or overwriting an entry's `.netId` field with a NEW value (release the
+--- OLD value here first, then ClaimNetworkEntity the new one). A no-op if
+--- `netId` was never claimed, or is currently claimed by a DIFFERENT
+--- (feature, ownerId) pair than the one supplied.
+--- @param netId number
+--- @param feature string
+--- @param ownerId string
+function ReleaseNetworkEntity(netId, feature, ownerId)
+    if type(netId) ~= 'number' then return end
+    local claim = ClaimedNetworkEntities[netId]
+    if claim and claim.feature == feature and claim.ownerId == ownerId then
+        ClaimedNetworkEntities[netId] = nil
+    end
+end
+
+--- Returns true if `netId` is CURRENTLY claimed by anyone OTHER than
+--- (feature, ownerId) -- a different feature entirely, or the same feature
+--- under a different ownerId. Returns false if `netId` is unclaimed, or
+--- already claimed by this exact (feature, ownerId) pair (a caller
+--- re-confirming/overwriting its OWN prior claim is never a collision with
+--- itself). Every one of the three files' own safeToCleanup-style
+--- rejection-branch checks and pre-write uniqueness checks MUST additionally
+--- require this to return false before either (a) treating a client-reported
+--- netId as safe to delete/instruct-a-delete-for, or (b) writing it into
+--- that file's own registry -- see this file's own header section above for
+--- the exact exploit (in both its rejection-branch and plain-success-path
+--- shapes) this closes. Returns false (never claimed) if `netId` is not a
+--- number.
+--- @param netId number
+--- @param feature string
+--- @param ownerId string
+--- @return boolean
+function IsNetworkEntityClaimedByOther(netId, feature, ownerId)
+    if type(netId) ~= 'number' then return false end
+    local claim = ClaimedNetworkEntities[netId]
+    if not claim then return false end
+    return claim.feature ~= feature or claim.ownerId ~= ownerId
 end

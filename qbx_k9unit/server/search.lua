@@ -675,11 +675,13 @@ end
 --- Fire-and-forget audit log write to `k9_search_log`
 --- (sql/install.sql — see that table's own header comment for the full
 --- db-schema rationale and integration note this function implements).
---- Non-blocking (`MySQL.insert(...)` WITHOUT `.await`) so a slow/contended
---- DB write never delays or risks the searchTarget callback's own
---- response to the requesting officer — and pcall-wrapped for the same
---- reason: a logging failure must never surface as (or cause) a search
---- failure to the caller. Only called for outcomes that reached a real
+--- Non-blocking so a slow/contended DB write never delays or risks the
+--- searchTarget callback's own response to the requesting officer — but
+--- non-blocking via `CreateThread` + `MySQL.insert.await`, NOT via a bare
+--- `MySQL.insert(...)`; see the SILENT-FAILURE FIX note at the write
+--- itself below for why that distinction is the entire point. A logging
+--- failure must still never surface as (or cause) a search failure to the
+--- caller, so the write stays pcall-wrapped and log-only. Only called for outcomes that reached a real
 --- inventory-read attempt (`'found'|'clean'|'search_failed'`) — never for
 --- early rejections (feature_disabled/no_access/search_in_progress/
 --- on_cooldown/too_far/invalid_target), per the table's own documented
@@ -708,13 +710,43 @@ local function LogSearchAttempt(source, targetType, plateOrNil, targetCitizenidO
     local searcherJob = searcherData and searcherData.job and searcherData.job.name
     if not searcherCitizenid or not searcherJob then return end -- defensive: nothing sane to log
 
-    pcall(MySQL.insert, [[
-        INSERT INTO k9_search_log
-            (searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ]], {
-        searcherCitizenid, searcherJob, targetType, plateOrNil, targetCitizenidOrNil, result, totalWeightOrNil, alertTierOrNil,
-    })
+    -- SILENT-FAILURE FIX (audit finding — identical anti-pattern, and
+    -- identical fix, to server/progression.lua's AwardXP UPSERT; see that
+    -- function's own SILENT-FAILURE FIX comment for the full derivation).
+    -- This used to be `pcall(MySQL.insert, [[...]], {...})` — fire-and-forget,
+    -- no callback. That pcall was decorative, not protective: oxmysql's
+    -- non-`.await` entry point returns the instant the query is HANDED OFF
+    -- to its async worker, before the query has run, so a real failure
+    -- surfaces later and entirely outside this pcall's stack frame. And
+    -- oxmysql only forwards a query error into a caller-supplied callback
+    -- when `return_callback_errors` is enabled (fxmanifest.lua's
+    -- `mysql_option` metadata — not set anywhere in this resource), which a
+    -- callback-less call never opted into either way. Net effect: a missing
+    -- `k9_search_log` table (an unapplied install.sql/migration), an ENUM
+    -- value drift on `result`/`target_type`, or an over-length
+    -- `target_plate`/`alert_tier` would make every search-audit row silently
+    -- never write — no error, no log line, nothing — while searches kept
+    -- working normally, leaving a forensic audit log that is quietly empty
+    -- exactly when it is needed. FIXED by moving the write into its own
+    -- CreateThread and using `MySQL.insert.await` inside it: `.await`
+    -- requests error propagation unconditionally, regardless of the
+    -- `return_callback_errors` resource metadata, so a real query failure
+    -- now raises a genuine Lua error this pcall actually catches and logs.
+    -- CreateThread is what keeps this non-blocking for the searchTarget
+    -- callback: `.await` yields the coroutine it runs IN, so the coroutine
+    -- that suspends is this write's own, never the caller's execution path.
+    CreateThread(function()
+        local insertOk, insertErr = pcall(MySQL.insert.await, [[
+            INSERT INTO k9_search_log
+                (searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ]], {
+            searcherCitizenid, searcherJob, targetType, plateOrNil, targetCitizenidOrNil, result, totalWeightOrNil, alertTierOrNil,
+        })
+        if not insertOk then
+            print(('[qbx_k9unit] search: k9_search_log audit INSERT failed for searcher %s (%s) targetType=%s result=%s -- this search WAS performed but is NOT recorded in the audit log: %s'):format(searcherCitizenid, searcherJob, tostring(targetType), tostring(result), tostring(insertErr)))
+        end
+    end)
 
     -- Outbound integration event (server/exports.lua's EVENT CONTRACT §5) --
     -- wired HERE, not at each of this file's own call sites, so the event
