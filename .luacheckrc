@@ -207,6 +207,16 @@ globals = {
     -- client/audio.lua -- NUI audio bridge (Phase 5). Plumbing only; no
     -- audio files ship with this resource, see html/sounds/CREDITS.md.
     "PlayK9Sound", "StopK9Sound", "IsK9SoundActive",
+    -- Accessor so client/proximityaudio.lua can read client/audio.lua's
+    -- AUDIO_MAX_DISTANCE at runtime instead of hand-copying it. Those two
+    -- constants MUST agree: a trigger distance above the gain-falloff
+    -- ceiling means every ambient loop plays at gain 0.0 -- a live audio
+    -- source and a poll thread producing nothing audible, with no error.
+    -- proximityaudio.lua currently clamps against a local duplicate of the
+    -- ceiling, which defends the likely direction (trigger distance raised)
+    -- but not the reverse (ceiling lowered). This entry exists so that
+    -- duplicate can be replaced by a live read.
+    "GetK9AudioMaxDistance",
     -- server/combat.lua -- termination primitive with no gate of its own,
     -- exposed for server/recall.lua. Authorization is the CALLER's job;
     -- gating a termination path is how an unbounded trap gets built.
