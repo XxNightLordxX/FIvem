@@ -381,7 +381,15 @@ local PARTNERSHIP_ESTABLISH_MUTEX_KEY = 'establish'
 -- accept/decline prompts at a target with no rate limit), same
 -- NewCooldown()-backed, per-INITIATOR-source keying, same
 -- :RegisterPlayerDropped() cleanup.
-local PartnerRequestCooldown = NewCooldown(Config.Partnership.RequestCooldownMs)
+--
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua, this pass, QA sandbox
+-- repro — see that file's header ADDENDUM) wraps the raw Config read below
+-- rather than handing it straight to NewCooldown: an uncaught non-positive
+-- value there would abort THIS FILE's load from that line onward instead of
+-- just disabling this one cooldown. Fallback matches config.lua's own
+-- shipped default.
+local PartnerRequestCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.Partnership.RequestCooldownMs, 1000, 'Config.Partnership.RequestCooldownMs'))
 PartnerRequestCooldown.RegisterPlayerDropped()
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12

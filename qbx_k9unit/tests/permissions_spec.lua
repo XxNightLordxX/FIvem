@@ -443,6 +443,7 @@ local function newIntegrationFixture()
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/datastore.lua', env)       -- real K9Store -- server/admin.lua's own query functions read through this now (the datastore migration), never their own SafeQuery+raw-SQL pair; DatabaseEnabled() fails safe to true (real-DB mode) since this fixture's Config has no Config.Database, so K9Store routes through this fixture's own `mysql` stub below exactly like the pre-migration code did
     Sandbox.loadInto('../server/highcommand.lua', env)   -- real IsHighCommand
     Sandbox.loadInto('../server/certifications.lua', env) -- real HasK9Access / IsEligibleCertifier
     Sandbox.loadInto('../server/admin.lua', env)           -- real IsAuthorizedAdmin

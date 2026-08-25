@@ -699,22 +699,29 @@ local LEASH_TARGET_DISTANCE_FACTOR = 0.5
 -- for real in CheckLeashEligibility (server/main.lua), so this predicate
 -- doesn't need to be perfect.
 --
+-- ROUTED THROUGH K9Compat.Get('target') (shared/compat/target.lua), never a
+-- direct `exports.ox_target` call -- every canInteract/onSelect pair in
+-- this file is unchanged (still authored against ox_target's own
+-- convention), so an operator running a different supported target script
+-- gets every one of these options translated automatically instead of
+-- losing them outright.
+--
 -- LIFECYCLE FIX (this pass): extracted into a named function — see the
 -- combined `AddEventHandler('onResourceStart', ...)` near the end of this
--- file (after all three ox_target registration functions it dispatches
--- are defined) for why: ox_target keeps addGlobalPlayer/addGlobalObject's
--- registries in plain file-local Lua tables inside its own client chunk
--- (confirmed by reading ox_target's client/api.lua directly), reloaded
--- empty on ox_target's own restart with nothing else prompting a re-add.
--- Mirrors server/tracking.lua's RegisterScentInventoryHook /
+-- file (after all three target-registration functions it dispatches are
+-- defined) for why: every supported target script keeps its own
+-- addGlobalPlayer/addGlobalObject-equivalent registry in a plain
+-- file-local Lua table inside its own client chunk, reloaded empty on THAT
+-- resource's own restart with nothing else prompting a re-add. Mirrors
+-- server/tracking.lua's RegisterScentInventoryHook /
 -- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
 -- identical bug class against ox_inventory. DUPLICATE-VS-REPLACE: every
--- option this file registers always sets `name`, and ox_target's own
--- `addTarget` unconditionally removes any existing option with the same
--- name+resource before appending, so re-running any of these three
--- functions never duplicates an entry.
+-- option this file registers always sets `name`, and every adapter's own
+-- registration primitive dedups/replaces by that same name (or label, per
+-- shared/compat/target.lua's own per-adapter notes), so re-running any of
+-- these three functions never duplicates an entry.
 local function RegisterLeashOxTargetOption()
-    exports.ox_target:addGlobalPlayer({
+    K9Compat.Get('target').AddGlobalPlayer({
         {
             name = 'qbx_k9unit:attachLeash',
             icon = 'fas fa-link',
@@ -805,7 +812,7 @@ local CERTIFY_TARGET_DISTANCE_FACTOR = 0.5
 -- (same ox_target lifecycle bug, same fix shape, same combined
 -- `AddEventHandler` near the end of this file).
 local function RegisterCertifyOxTargetOptions()
-    exports.ox_target:addGlobalPlayer({
+    K9Compat.Get('target').AddGlobalPlayer({
         {
             name = 'qbx_k9unit:certifyHandler',
             icon = 'fas fa-id-badge',
@@ -1593,7 +1600,7 @@ end
 -- Register the "Scratch to Alert" ox_target option on nearby door-like
 -- objects (SPEC.md §11.5: "available on any door within
 -- Config.DoorInteraction.interactDistance regardless of lock state").
--- Config-gated AT REGISTRATION (the whole exports.ox_target:addGlobalObject
+-- Config-gated AT REGISTRATION (the whole K9Compat.Get('target').AddGlobalObject
 -- call below is wrapped in `if Config.Features.DoorInteraction`), not just
 -- inside canInteract/onSelect — mirrors client/vision.lua's "config-gated
 -- registration, not just config-gated behavior" precedent
@@ -1638,7 +1645,7 @@ local function RegisterDoorInteractionOxTargetOptions()
             'repurposed as a real gate without a reviewed code change. See ' ..
             'phase2_notes/RESEARCH_ARCHIVE.md#door-interaction Finding 3.')
 
-        exports.ox_target:addGlobalObject({
+        K9Compat.Get('target').AddGlobalObject({
             {
                 name = 'qbx_k9unit:scratchDoor',
                 icon = 'fas fa-paw',
@@ -1691,14 +1698,27 @@ end
 
 -- Sole call site for RegisterLeashOxTargetOption() / RegisterCertifyOxTargetOptions()
 -- / RegisterDoorInteractionOxTargetOptions() above: this resource's own
--- start, or ox_target's own start — mirrors server/tracking.lua's
--- RegisterScentInventoryHook / server/inventory.lua's
--- RegisterK9InventoryItemFilterHook fixes for the identical class of gap
--- against ox_inventory. Combined into one handler (rather than one per
--- function) since all three share the identical two-branch condition and
--- this file already defines all three by this point.
+-- start, or a restart of whatever resource actually backs the 'target'
+-- system -- mirrors server/tracking.lua's RegisterScentInventoryHook /
+-- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
+-- identical class of gap against ox_inventory. Combined into one handler
+-- (rather than one per function) since all three share the identical
+-- two-branch condition and this file already defines all three by this
+-- point. This file never names a third-party target resource directly (see
+-- shared/compat/target.lua) -- K9Compat.Redetect() is forced before
+-- checking K9Compat.Which('target') so this is correct regardless of
+-- relative handler-registration order against shared/compat/core.lua's own
+-- onResourceStart/onClientResourceStart redetect hook for this SAME event.
 AddEventHandler('onResourceStart', function(resourceName)
-    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+    if resourceName == GetCurrentResourceName() then
+        RegisterLeashOxTargetOption()
+        RegisterCertifyOxTargetOptions()
+        RegisterDoorInteractionOxTargetOptions()
+        return
+    end
+
+    K9Compat.Redetect()
+    if resourceName == K9Compat.Which('target') then
         RegisterLeashOxTargetOption()
         RegisterCertifyOxTargetOptions()
         RegisterDoorInteractionOxTargetOptions()

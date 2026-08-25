@@ -1603,6 +1603,29 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
         -- rather than re-resolving by citizenid.
         ForceDetachLeashForSource(targetServerId, 'certification_revoked')
 
+        -- An in-progress bite-hold, takedown or drag must not outlive the
+        -- certification that authorised it either. This is the THIRD member
+        -- of the "must not outlive certification" family, and it was the one
+        -- missing: leash and partnership were both torn down here with
+        -- comments citing SPEC.md's "immediately", and the hold was not.
+        -- Without this, an officer decertified mid-incident kept physically
+        -- holding or dragging their target for the rest of that mechanic's
+        -- own duration -- up to 15s for a bite-hold, 20s for a drag -- with
+        -- zero K9 access the entire time. The combat maintenance tick
+        -- re-checks expiry, holder death and target resolvability every
+        -- 500ms but never re-checks access, so nothing else would have
+        -- caught it.
+        -- SOURCE-keyed, like the leash call and unlike the partnership one:
+        -- a hold only exists for a connected holder, so there is nothing to
+        -- end on an offline path. Same runtime existence guard as its
+        -- siblings -- server/combat.lua loads after this file, so this is a
+        -- deliberate guard rather than a load-order assumption, and a
+        -- missing function is a silent skip because there is then no hold
+        -- system to have a hold in.
+        if type(EndActiveEffectForHolder) == 'function' then
+            pcall(EndActiveEffectForHolder, targetServerId)
+        end
+
         -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): a K9 partnership must not
         -- outlive its K9-role party's certification either — same
         -- "immediately" requirement as leash directly above, now extended
@@ -2477,6 +2500,29 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     if not job or not Config.Departments[job.name] then
         ForceDetachOfficerLeashForSource(source, 'department_changed')
 
+        -- An in-progress bite-hold, takedown or drag must not outlive the
+        -- certification that authorised it (department change) either. This is the THIRD member
+        -- of the "must not outlive certification" family, and it was the one
+        -- missing: leash and partnership were both torn down here with
+        -- comments citing SPEC.md's "immediately", and the hold was not.
+        -- Without this, an officer decertified mid-incident kept physically
+        -- holding or dragging their target for the rest of that mechanic's
+        -- own duration -- up to 15s for a bite-hold, 20s for a drag -- with
+        -- zero K9 access the entire time. The combat maintenance tick
+        -- re-checks expiry, holder death and target resolvability every
+        -- 500ms but never re-checks access, so nothing else would have
+        -- caught it.
+        -- SOURCE-keyed, like the leash call and unlike the partnership one:
+        -- a hold only exists for a connected holder, so there is nothing to
+        -- end on an offline path. Same runtime existence guard as its
+        -- siblings -- server/combat.lua loads after this file, so this is a
+        -- deliberate guard rather than a load-order assumption, and a
+        -- missing function is a silent skip because there is then no hold
+        -- system to have a hold in.
+        if type(EndActiveEffectForHolder) == 'function' then
+            pcall(EndActiveEffectForHolder, source)
+        end
+
         -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): department loss ends an
         -- active partnership the same way it ends an active leash pairing
         -- directly above — a partnership's handler-role party who no
@@ -2590,6 +2636,29 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     -- force-detach directly rather than re-resolving by citizenid — same
     -- reasoning as the online branch of RevokeCertification above.
     ForceDetachLeashForSource(source, 'certification_revoked')
+
+    -- An in-progress bite-hold, takedown or drag must not outlive the
+    -- certification that authorised it either. This is the THIRD member
+    -- of the "must not outlive certification" family, and it was the one
+    -- missing: leash and partnership were both torn down here with
+    -- comments citing SPEC.md's "immediately", and the hold was not.
+    -- Without this, an officer decertified mid-incident kept physically
+    -- holding or dragging their target for the rest of that mechanic's
+    -- own duration -- up to 15s for a bite-hold, 20s for a drag -- with
+    -- zero K9 access the entire time. The combat maintenance tick
+    -- re-checks expiry, holder death and target resolvability every
+    -- 500ms but never re-checks access, so nothing else would have
+    -- caught it.
+    -- SOURCE-keyed, like the leash call and unlike the partnership one:
+    -- a hold only exists for a connected holder, so there is nothing to
+    -- end on an offline path. Same runtime existence guard as its
+    -- siblings -- server/combat.lua loads after this file, so this is a
+    -- deliberate guard rather than a load-order assumption, and a
+    -- missing function is a silent skip because there is then no hold
+    -- system to have a hold in.
+    if type(EndActiveEffectForHolder) == 'function' then
+        pcall(EndActiveEffectForHolder, source)
+    end
 
     -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): same "must not outlive
     -- certification loss" requirement as leash immediately above, applied

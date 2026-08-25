@@ -1522,6 +1522,202 @@
         return row;
     }
 
+    // ---- Certification tier editing screen (high command only) ----
+
+    /**
+     * Owner's own words: "Allow high command to edit the tiers trainee
+     * certified senior etc add more roles edit permissions for those roles
+     * etc." Renders the LIVE catalogue from state.certTiers (populated by
+     * loadCertTiers() -- see that function's own comment on why this is
+     * never a hardcoded list), a per-row Edit/Move Up/Move Down/Delete set
+     * of controls, and (when a draft is open) the add/edit form below the
+     * table. server/certtiers.lua's own CanManageCertTiers is the real
+     * authorization gate, re-checked on every one of the four callbacks
+     * this screen calls -- see THE SECURITY RULE.
+     */
+    function buildCertTiersScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('cert_tiers_heading') }));
+
+        // HAZARD 3, surfaced per the server side's own explicit ask: a
+        // successful reorder's `warning` is non-optional and must not be
+        // silently discarded -- its own prominent banner, not folded into
+        // the generic (and easy-to-miss-amid-other-clicks) actionNotice.
+        if (state.certTierWarning) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: state.certTierWarning }));
+        }
+
+        if (state.certTiersLoading && !state.certTiers) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.certTiersError && !state.certTiers) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: errorText(state.certTiersError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadCertTiers));
+            return wrap;
+        }
+        if (!state.certTiers) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        wrap.appendChild(buildCertTiersTable());
+
+        if (state.certTierDraft) {
+            wrap.appendChild(buildCertTierDraftForm());
+        } else {
+            wrap.appendChild(mkButton(S('cert_tiers_add_label'), 'k9tablet-btn', openNewCertTierDraft, { disabled: state.pendingAction }));
+        }
+
+        return wrap;
+    }
+
+    function buildCertTiersTable() {
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_position'), S('column_key'), S('column_label'), S('column_capabilities'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < state.certTiers.length; i++) {
+            tbody.appendChild(buildCertTierRow(state.certTiers[i], i));
+        }
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /** @param {string} capabilityKey @returns {string} */
+    function certTierCapabilityLabel(capabilityKey) {
+        var def = state.certTierCapabilityCatalog[capabilityKey];
+        return (def && typeof def.label === 'string' && def.label.length > 0) ? def.label : capabilityKey;
+    }
+
+    /** @param {object} capabilities @returns {string} */
+    function certTierCapabilitiesSummary(capabilities) {
+        if (!capabilities || typeof capabilities !== 'object') return S('cert_tier_no_capabilities');
+        var labels = [];
+        for (var key in capabilities) {
+            if (Object.prototype.hasOwnProperty.call(capabilities, key) && capabilities[key] === true) {
+                labels.push(certTierCapabilityLabel(key));
+            }
+        }
+        if (labels.length === 0) return S('cert_tier_no_capabilities');
+        return labels.join(', ');
+    }
+
+    /** @param {object} tier @param {number} index */
+    function buildCertTierRow(tier, index) {
+        var tr = mk('tr');
+        tr.appendChild(mk('td', { text: String(index + 1) }));
+        tr.appendChild(mk('td', { text: tier.key }));
+        tr.appendChild(mk('td', { text: tier.label }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: certTierCapabilitiesSummary(tier.capabilities) }));
+
+        var actionsTd = mk('td', { class: 'k9tablet-cert-tier-actions' });
+        actionsTd.appendChild(mkButton(S('cert_tier_move_up_label'), 'k9tablet-btn', function () {
+            moveCertTier(index, -1);
+        }, { disabled: state.pendingAction || index === 0, title: S('cert_tier_move_up_title') }));
+        actionsTd.appendChild(mkButton(S('cert_tier_move_down_label'), 'k9tablet-btn', function () {
+            moveCertTier(index, 1);
+        }, { disabled: state.pendingAction || index === state.certTiers.length - 1, title: S('cert_tier_move_down_title') }));
+        actionsTd.appendChild(mkButton(S('cert_tier_edit_label'), 'k9tablet-btn', function () {
+            openCertTierEditDraft(tier);
+        }, { disabled: state.pendingAction }));
+
+        // UX CONVENIENCE ONLY -- see server/certtiers.lua's own
+        // PROTECTED_TIER_KEYS/HAZARD 2: 'certified' is UNCONDITIONALLY
+        // undeletable server-side regardless of this hint; a modified
+        // client sending certTiersDelete for 'certified' anyway still gets
+        // refused (reason='protected_tier') by the real gate.
+        var isProtected = tier.key === 'certified';
+        actionsTd.appendChild(mkConfirmButton(S('cert_tier_delete_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
+            deleteCertTier(tier.key);
+        }, { disabled: state.pendingAction || isProtected, title: isProtected ? S('cert_tier_error_protected_tier') : undefined }));
+
+        // A delete REFUSAL (tier_in_use/protected_tier) renders inline on
+        // THIS specific row -- "cannot, and here is why" -- not merely as
+        // an easy-to-miss generic top-of-panel notice (which still also
+        // shows, for anyone not looking at this exact row).
+        if (state.certTierActionError && state.certTierActionError.key === tier.key) {
+            actionsTd.appendChild(mk('p', { class: 'k9tablet-error-text k9tablet-cert-tier-row-error', text: state.certTierActionError.text }));
+        }
+
+        tr.appendChild(actionsTd);
+        return tr;
+    }
+
+    /** Add/edit form -- see openNewCertTierDraft()/openCertTierEditDraft()
+     * for how state.certTierDraft is populated. `key` is editable only for
+     * a BRAND NEW tier: server/certtiers.lua's own certTiersUpsert treats
+     * an existing key's ordinal as fixed (only ReorderTiers ever changes
+     * it) and has no "rename" concept -- submitting a DIFFERENT key while
+     * editing would create a second, separate tier, not rename this one,
+     * so the key input is disabled once a tier already exists under it. */
+    function buildCertTierDraftForm() {
+        var draft = state.certTierDraft;
+        var wrap = mk('div', { class: 'k9tablet-cert-tier-form' });
+
+        var keyRow = mk('div', { class: 'k9tablet-theme-field' + (state.certTierFieldError === 'key' ? ' k9tablet-theme-field--invalid' : '') });
+        keyRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('cert_tier_key_label') }));
+        var keyInput = mk('input', { class: 'k9tablet-cert-tier-key-input', attrs: { type: 'text', placeholder: S('cert_tier_key_placeholder'), maxlength: '20' } });
+        keyInput.value = draft.key;
+        if (draft.isNew) {
+            keyInput.addEventListener('input', function (e) { draft.key = e.target.value; });
+        } else {
+            keyInput.setAttribute('disabled', 'disabled');
+        }
+        keyRow.appendChild(keyInput);
+        wrap.appendChild(keyRow);
+
+        var labelRow = mk('div', { class: 'k9tablet-theme-field' + (state.certTierFieldError === 'label' ? ' k9tablet-theme-field--invalid' : '') });
+        labelRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('cert_tier_label_label') }));
+        var labelInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', maxlength: '60' } });
+        labelInput.value = draft.label;
+        labelInput.addEventListener('input', function (e) { draft.label = e.target.value; });
+        labelRow.appendChild(labelInput);
+        wrap.appendChild(labelRow);
+
+        var capsWrap = mk('div', { class: 'k9tablet-cert-tier-capabilities' + (state.certTierFieldError === 'capabilities' ? ' k9tablet-theme-field--invalid' : '') });
+        capsWrap.appendChild(mk('p', { class: 'k9tablet-theme-field-label', text: S('cert_tier_capabilities_label') }));
+        var anyCapability = false;
+        for (var capKey in state.certTierCapabilityCatalog) {
+            if (!Object.prototype.hasOwnProperty.call(state.certTierCapabilityCatalog, capKey)) continue;
+            anyCapability = true;
+            capsWrap.appendChild(buildCertTierCapabilityCheckbox(capKey, draft));
+        }
+        if (!anyCapability) {
+            capsWrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('cert_tier_no_capabilities') }));
+        }
+        wrap.appendChild(capsWrap);
+
+        var actions = mk('div', { class: 'k9tablet-theme-actions' });
+        actions.appendChild(mkButton(S('cert_tier_save_label'), 'k9tablet-btn', saveCertTierDraft, { disabled: state.pendingAction }));
+        actions.appendChild(mkButton(S('cert_tier_cancel_label'), 'k9tablet-link-btn', closeCertTierDraft));
+        wrap.appendChild(actions);
+
+        return wrap;
+    }
+
+    /** One checkbox row bound to `draft.capabilities[capabilityKey]`,
+     * mutating the WORKING COPY directly (never sent anywhere until Save)
+     * -- same posture as buildThemeColorField's own color inputs.
+     * @param {string} capabilityKey @param {object} draft */
+    function buildCertTierCapabilityCheckbox(capabilityKey, draft) {
+        var row = mk('label', { class: 'k9tablet-cert-tier-capability-row' });
+        var checkbox = mk('input', { attrs: { type: 'checkbox' } });
+        checkbox.checked = draft.capabilities[capabilityKey] === true;
+        checkbox.addEventListener('change', function (e) {
+            draft.capabilities[capabilityKey] = !!(e.target && e.target.checked);
+        });
+        row.appendChild(checkbox);
+        row.appendChild(mk('span', { text: certTierCapabilityLabel(capabilityKey) }));
+        return row;
+    }
+
     // ------------------------------------------------------------------
     // DATA LOADERS
     // ------------------------------------------------------------------
@@ -1694,6 +1890,113 @@
         return target;
     }
 
+    /** Substitutes `{key}`-style tokens in `template` from `replacements`
+     * -- this file's only string-formatting need (currently just
+     * cert_tier_error_tier_in_use's `{count}`), so a tiny token replace is
+     * used rather than pulling in a template-literal/sprintf dependency.
+     * @param {string} template @param {Record<string, string|number>} replacements @returns {string} */
+    function formatTemplate(template, replacements) {
+        var out = template;
+        for (var key in replacements) {
+            if (Object.prototype.hasOwnProperty.call(replacements, key)) {
+                out = out.split('{' + key + '}').join(String(replacements[key]));
+            }
+        }
+        return out;
+    }
+
+    /** Fetched fresh every time the Cert Tiers tab is opened (see
+     * buildTabs()) -- NEVER a hardcoded list. server/certtiers.lua's own
+     * header: the catalogue is Config.CertificationTiers defaults merged
+     * with database overrides (database wins), and high command can add
+     * tiers at runtime -- a list captured once here would already be stale
+     * the moment anyone adds/renames/deletes a tier. High command only
+     * (server/certtiers.lua's own CanManageCertTiers re-verifies this on
+     * every one of the four callbacks regardless of whether this ever
+     * loads). */
+    function loadCertTiers() {
+        state.certTiersLoading = true;
+        state.certTiersError = null;
+        render();
+
+        fetchNui('tablet:certTiersList', {}).then(function (result) {
+            state.certTiersLoading = false;
+            if (!result || result.ok !== true) {
+                state.certTiersError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.certTiers = Array.isArray(result.tiers) ? result.tiers : [];
+            state.certTierCapabilityCatalog = (result.capabilityCatalog && typeof result.capabilityCatalog === 'object') ? result.capabilityCatalog : {};
+            render();
+        });
+    }
+
+    /** @param {object|undefined} result @returns {string} */
+    function certTierErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'denied': return S('cert_tier_error_denied');
+            case 'rate_limited': return S('cert_tier_error_rate_limited');
+            case 'invalid_key': return S('cert_tier_error_invalid_key');
+            case 'invalid_label': return S('cert_tier_error_invalid_label');
+            case 'invalid_capabilities': return S('cert_tier_error_invalid_capabilities');
+            case 'busy': return S('cert_tier_error_busy');
+            case 'too_many_tiers': return S('cert_tier_error_too_many_tiers');
+            case 'unknown_tier': return S('cert_tier_error_unknown_tier');
+            // 'protected_tier'/'tier_in_use' are REFUSALS ("cannot, and
+            // here is why"), not generic failures -- per this task's own
+            // instruction, given their own explanatory copy rather than a
+            // bare machine code or S('action_failed').
+            case 'protected_tier': return S('cert_tier_error_protected_tier');
+            case 'tier_in_use': return formatTemplate(S('cert_tier_error_tier_in_use'), { count: typeof result.referenceCount === 'number' ? result.referenceCount : '' });
+            case 'must_include_every_tier': return S('cert_tier_error_must_include_every_tier');
+            case 'invalid_key_set': return S('cert_tier_error_invalid_key_set');
+            case 'invalid_payload': return S('cert_tier_error_invalid_payload');
+            case 'db_error': return S('cert_tier_error_db_error');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
+    /** @param {string|undefined} errorCode @returns {string|null} */
+    function certTierFieldFromError(errorCode) {
+        if (errorCode === 'invalid_key') return 'key';
+        if (errorCode === 'invalid_label') return 'label';
+        if (errorCode === 'invalid_capabilities') return 'capabilities';
+        return null;
+    }
+
+    /** Opens a BLANK draft for a brand-new tier. @see buildCertTierDraftForm */
+    function openNewCertTierDraft() {
+        state.certTierDraft = { key: '', label: '', capabilities: {}, isNew: true };
+        state.certTierFieldError = null;
+        render();
+    }
+
+    /** Opens a draft pre-filled from an EXISTING tier row -- a COPY of its
+     * capabilities set, never the live object, so cancelling never mutates
+     * state.certTiers. @param {object} tier */
+    function openCertTierEditDraft(tier) {
+        var capabilities = {};
+        if (tier.capabilities && typeof tier.capabilities === 'object') {
+            for (var k in tier.capabilities) {
+                if (Object.prototype.hasOwnProperty.call(tier.capabilities, k) && tier.capabilities[k] === true) capabilities[k] = true;
+            }
+        }
+        state.certTierDraft = { key: tier.key, label: tier.label, capabilities: capabilities, isNew: false };
+        state.certTierFieldError = null;
+        render();
+    }
+
+    function closeCertTierDraft() {
+        state.certTierDraft = null;
+        state.certTierFieldError = null;
+        render();
+    }
+
     /**
      * Generic mutation runner -- every grant/revoke/certify/decertify/
      * givexp/block/unblock action shares this shape. Disables further
@@ -1783,6 +2086,122 @@
                 state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
             } else {
                 state.actionNotice = { kind: 'error', text: S('action_failed') };
+            }
+            render();
+        });
+    }
+
+    /**
+     * Saves the cert-tier draft form's current working copy. Converts
+     * `draft.capabilities` (a {capKey:true} SET, convenient for the
+     * checkbox UI) into the ARRAY shape server/certtiers.lua's own
+     * NormalizeCapabilitiesInput expects (`ipairs`-iterated) immediately
+     * before sending -- the set shape never leaves this function.
+     * NOT the generic runMutation() helper: a rejected save carries a
+     * `field` naming which of the three inputs failed (key/label/
+     * capabilities), which runMutation's own message-only handling has no
+     * slot for, same reasoning as saveTheme() above.
+     */
+    function saveCertTierDraft() {
+        if (state.pendingAction || !state.certTierDraft) return;
+        var draft = state.certTierDraft;
+        var capabilities = [];
+        for (var capKey in draft.capabilities) {
+            if (Object.prototype.hasOwnProperty.call(draft.capabilities, capKey) && draft.capabilities[capKey] === true) {
+                capabilities.push(capKey);
+            }
+        }
+
+        state.pendingAction = true;
+        state.certTierFieldError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:certTiersUpsert', { key: draft.key, label: draft.label, capabilities: capabilities }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.certTiers = Array.isArray(result.tiers) ? result.tiers : state.certTiers;
+                if (result.capabilityCatalog && typeof result.capabilityCatalog === 'object') state.certTierCapabilityCatalog = result.capabilityCatalog;
+                state.certTierDraft = null;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                state.certTierFieldError = certTierFieldFromError(result && result.error);
+                state.actionNotice = { kind: 'error', text: certTierErrorText(result) };
+            }
+            render();
+        });
+    }
+
+    /**
+     * Swaps tier `index` with its immediate neighbour (`direction` is -1
+     * for up / +1 for down) and submits the FULL resulting key order --
+     * server/certtiers.lua's own certTiersReorder REFUSES any partial
+     * reorder (must be an exact permutation of every known tier, see its
+     * own HAZARD 3), so this always sends every key, never just the two
+     * that moved. A no-op past either end of the list (nothing to swap
+     * with) -- also enforced by each row's own `disabled` state in
+     * buildCertTierRow, this is the real, server-call-blocking guard,
+     * that being a convenience only.
+     * @param {number} index @param {number} direction -1 | 1
+     */
+    function moveCertTier(index, direction) {
+        if (state.pendingAction || !state.certTiers) return;
+        var targetIndex = index + direction;
+        if (targetIndex < 0 || targetIndex >= state.certTiers.length) return;
+
+        var orderedKeys = [];
+        for (var i = 0; i < state.certTiers.length; i++) orderedKeys.push(state.certTiers[i].key);
+        var moved = orderedKeys[index];
+        orderedKeys[index] = orderedKeys[targetIndex];
+        orderedKeys[targetIndex] = moved;
+
+        state.pendingAction = true;
+        state.certTierWarning = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:certTiersReorder', { orderedKeys: orderedKeys }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.certTiers = Array.isArray(result.tiers) ? result.tiers : state.certTiers;
+                // Non-optional per server/certtiers.lua's own HAZARD 3 --
+                // ALWAYS present on a successful reorder; forwarded as-is
+                // regardless, so a future wording change needs no client
+                // edit.
+                state.certTierWarning = (typeof result.warning === 'string' && result.warning.length > 0) ? result.warning : null;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                state.actionNotice = { kind: 'error', text: certTierErrorText(result) };
+            }
+            render();
+        });
+    }
+
+    /**
+     * Deletes tier `key`. A REFUSAL (tier_in_use -- still referenced by at
+     * least one k9_certifications row; protected_tier -- 'certified',
+     * unconditionally) is rendered INLINE on that tier's own row
+     * (state.certTierActionError) as "cannot, and here is why", per this
+     * task's own explicit instruction, alongside the same text in the
+     * generic top-of-panel notice for visibility.
+     * @param {string} key
+     */
+    function deleteCertTier(key) {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.certTierActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:certTiersDelete', { key: key }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.certTiers = Array.isArray(result.tiers) ? result.tiers : state.certTiers;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                var text = certTierErrorText(result);
+                state.certTierActionError = { key: key, text: text };
+                state.actionNotice = { kind: 'error', text: text };
             }
             render();
         });

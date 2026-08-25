@@ -309,7 +309,12 @@
     - Calls NewCooldown()/NewMutex() (server/cooldowns.lua) — every
       cooldown/in-flight-guard below is one of these constructors, never a
       hand-rolled table, per REFACTOR_ROADMAP.md item 1's own standing
-      convention for this resource.
+      convention for this resource. The four cooldowns constructed straight
+      from a Config.Combat.*.cooldownMs/targetCooldownMs field are each
+      first passed through ResolveConfiguredThresholdMs (also
+      server/cooldowns.lua) — see that call's own comment block and
+      cooldowns.lua's header ADDENDUM for why a raw Config read must never
+      reach NewCooldown's constructor unguarded in this file specifically.
     - Calls IsHesitating(citizenid)/IsDistracted(citizenid), resource-globals
       from server/wellbeing.lua, ONLY IF THOSE FUNCTIONS EXIST (`type(...) ==
       'function'` guard — same soft-dependency convention as
@@ -472,10 +477,32 @@ local ActiveHolds = {}
 -- resolve its own target without a linear scan of ActiveHolds.
 local K9ActiveEffect = {}
 
-local BiteHoldCooldown = NewCooldown(Config.Combat.BiteAndHold.cooldownMs)
+-- ALL FOUR ResolveConfiguredThresholdMs CALLS BELOW (this pass, coder-backend
+-- -- QA sandbox repro): these four constructors used to hand a raw
+-- Config.Combat.*.cooldownMs value straight to NewCooldown. A single
+-- non-positive one of them (e.g. an operator setting cooldownMs = 0 meaning
+-- "no cooldown", this resource's own repeatedly-documented FOOTGUN) threw
+-- inside NewCooldown's own AssertValidDefaultThreshold at THIS file's
+-- top-level load time -- which does not just disable that one cooldown, it
+-- aborts this entire file's execution from that line onward, silently
+-- un-defining EndActiveEffectForHolder (near the bottom of this file, this
+-- codebase's own termination primitive server/recall.lua and
+-- server/training.lua both depend on) along with every
+-- BiteAndHold/NonLethalTakedown/PropDragging RegisterNetEvent below it.
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua, see that file's header
+-- ADDENDUM for the full incident) resolves each value to something always
+-- valid BEFORE NewCooldown ever sees it -- printing one unmissable warning
+-- naming the exact key/found value/substituted fallback instead of erroring
+-- -- so a bad Config number degrades to "this one cooldown uses a safe
+-- built-in value" rather than "this file, and everything depending on it,
+-- stops existing." Fallback literals below match config.lua's own shipped
+-- defaults for each field exactly.
+local BiteHoldCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.Combat.BiteAndHold.cooldownMs, 20000, 'Config.Combat.BiteAndHold.cooldownMs'))
 BiteHoldCooldown.RegisterPlayerDropped()
 
-local TakedownCooldown = NewCooldown(Config.Combat.NonLethalTakedown.cooldownMs)
+local TakedownCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.Combat.NonLethalTakedown.cooldownMs, 25000, 'Config.Combat.NonLethalTakedown.cooldownMs'))
 TakedownCooldown.RegisterPlayerDropped()
 
 -- Keyed by targetNetId, NOT a player source -- no per-connection cleanup
@@ -483,7 +510,8 @@ TakedownCooldown.RegisterPlayerDropped()
 -- TargetSearchCooldown, keyed by a resolved plate/citizenid string for the
 -- exact same reason). Swept periodically below rather than relying on
 -- RegisterPlayerDropped.
-local TakedownTargetCooldown = NewCooldown(Config.Combat.NonLethalTakedown.targetCooldownMs)
+local TakedownTargetCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.Combat.NonLethalTakedown.targetCooldownMs, 30000, 'Config.Combat.NonLethalTakedown.targetCooldownMs'))
 
 -- XP-FARM FIX (this pass, coder-backend -- coordinator-flagged, independently
 -- re-verified by re-reading requestBiteHold/HandleTakedownRequest side by
@@ -509,7 +537,8 @@ local TakedownTargetCooldown = NewCooldown(Config.Combat.NonLethalTakedown.targe
 -- for why it is set slightly above NonLethalTakedown's 30000 rather than
 -- copied verbatim (a bite hold can pay out repeatedly inside its 15s
 -- window; a takedown is one discrete event).
-local BiteHoldTargetCooldown = NewCooldown(Config.Combat.BiteAndHold.targetCooldownMs)
+local BiteHoldTargetCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.Combat.BiteAndHold.targetCooldownMs, 35000, 'Config.Combat.BiteAndHold.targetCooldownMs'))
 
 -- Guards the SHORT yield inside HandleTakedownRequest (the server-computed
 -- speed-sample window) against the SAME K9 firing a second overlapping

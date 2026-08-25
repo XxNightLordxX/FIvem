@@ -189,6 +189,79 @@
     reported pass its own comment already calls for — not folded into this
     pass.
     ======================================================================
+
+    ADDENDUM (this pass, coder-backend — QA sandbox repro, re-verified
+    before landing this, not taken on the report alone): backstop 1 above
+    (constructor-time hard error) was written on the assumption that
+    "crash at resource start naming the bad value" is strictly better than
+    "silently permanent fail-closed" — true in isolation, but QA proved a
+    worse consequence that assumption hadn't accounted for. `error()`
+    thrown from the middle of a file's own top-level chunk — e.g. `local X
+    = NewCooldown(Config.Y.zMs)` sitting between other top-level
+    statements, which is exactly the shape every real call site in this
+    resource uses — aborts execution of THAT ENTIRE FILE from that line
+    onward: every function definition, RegisterNetEvent, AddEventHandler,
+    and resource-global assignment textually BELOW the failing line in the
+    SAME file silently never happens, for the rest of that resource's
+    uptime, with nothing but one script-error line at boot to explain why.
+    Reproduced concretely (loaded the real server/cooldowns.lua then
+    server/combat.lua in a sandbox with only
+    Config.Combat.BiteAndHold.cooldownMs set to 0, every other default left
+    at its shipped value): server/combat.lua throws at its own
+    `BiteHoldCooldown = NewCooldown(...)` line and takes
+    EndActiveEffectForHolder down with it — the termination primitive
+    server/recall.lua and server/training.lua both depend on, and this
+    codebase's own documented "never let this become unreachable" guarantee
+    — along with every BiteAndHold/NonLethalTakedown/PropDragging net event
+    in that file. A single mis-set Config number must never be able to
+    reach into an unrelated termination/cleanup path in the same file —
+    this resource forbids the unbounded-trap class outright, and a config
+    typo creating one is exactly that class, just approached from a
+    direction backstop 1 didn't originally consider.
+
+    RESOLUTION: `ResolveConfiguredThresholdMs` below — CLAMP AND WARN
+    (print, not error) — for exactly the shape that made this reachable: a
+    RAW, operator-editable Config field read straight into NewCooldown/
+    NewNestedCooldown as the constructor default. Applied at this pass's
+    own re-derived (not assumed) 11 call sites: server/combat.lua (x4:
+    BiteHoldCooldown, TakedownCooldown, TakedownTargetCooldown,
+    BiteHoldTargetCooldown), server/defense.lua (x2: AttackerReportCooldown,
+    DefenseTriggerCooldown), server/fetch.lua (x2: ThrowCooldown,
+    PickupCooldown — the latter's old `Config.FetchMechanic.pickupCooldownMs
+    or 500` idiom is REPLACED here, not layered under, since `0 or 500`
+    evaluates to `0` in Lua and never actually guarded the one value an
+    operator is most likely to set — this was a real, live gap, not a
+    hypothetical), server/kennel.lua (x1: DeployCooldown),
+    server/partnership.lua (x1: PartnerRequestCooldown), and
+    server/pursuitsprint.lua (x1: PursuitSprintCooldown — that file's own
+    PRE-EXISTING `assert` ahead of its NewCooldown call, which independently
+    hard-errored on the same input, is replaced by the same call-site
+    pattern for the same reason, not left in place beside it). Grep for
+    `ResolveConfiguredThresholdMs` across server/*.lua to keep this list
+    honest as new call sites are added.
+
+    AssertValidDefaultThreshold's constructor-time hard error is
+    DELIBERATELY UNCHANGED and remains the correct behavior for the OTHER
+    real shape in this resource: a hardcoded LOCAL CONSTANT handed to
+    NewCooldown (e.g. `NewCooldown(CERTIFY_ACTION_COOLDOWN_MS)`, itself a
+    `local X = <literal>` a few lines above in the same file, per
+    server/certifications.lua/server/main.lua/server/admin.lua and every
+    other call site NOT listed above). A bad value there is a PROGRAMMER
+    typo in a literal no operator config.lua edit can ever reach — there is
+    no config-typo pathway to be proportionate about, and crashing loudly
+    at development time (long before any server ships) is the correct,
+    standard response, not a bug this addendum is fixing. THE TEST THAT
+    DECIDES WHICH SHAPE A GIVEN CALL SITE IS: does an operator's config.lua
+    edit alone, with no code change, reach this value? If yes, wrap it in
+    ResolveConfiguredThresholdMs before handing it to NewCooldown/
+    NewNestedCooldown. If no (a hand-picked literal, only a code change
+    could ever alter it), passing it straight through and letting
+    AssertValidDefaultThreshold catch a dev typo remains the right call —
+    do not blanket-apply ResolveConfiguredThresholdMs to every call site
+    "to be safe"; that would silently swallow a real future programmer bug
+    in a hardcoded constant behind a fallback instead of catching it at
+    development time where it belongs.
+    ======================================================================
 ]]
 
 --- Shared validity test for any threshold this file ever compares elapsed
@@ -240,6 +313,13 @@ end
 --- before any player ever reaches the guarded action — see IsValidThreshold
 --- above for why this matters and what it can't catch (per-call-only
 --- thresholds, guarded separately at call time below).
+---
+--- NOT the right guard for a value read directly from an operator-editable
+--- Config field, though — this file's own header ADDENDUM explains why an
+--- error thrown from here aborts the CALLER's entire file from that line
+--- onward, and points call sites with that shape at ResolveConfiguredThresholdMs
+--- below instead, which resolves such a value to something always valid
+--- before it ever reaches this function.
 --- @param defaultThresholdMs any
 --- @param constructorName string
 local function AssertValidDefaultThreshold(defaultThresholdMs, constructorName)
@@ -254,6 +334,65 @@ local function AssertValidDefaultThreshold(defaultThresholdMs, constructorName)
             3 -- blame the constructor call site, not this line
         )
     end
+end
+
+--- Resolves a value read directly from Config into a threshold safe to hand
+--- to NewCooldown/NewNestedCooldown as a constructor default — CLAMP AND
+--- WARN (print), never error-and-abort — for exactly the "raw,
+--- operator-editable Config value passed straight through as a constructor
+--- default" call shape. See this file's header ADDENDUM section for the
+--- QA-found incident this responds to, the full list of call sites it is
+--- applied at, and — just as importantly — why AssertValidDefaultThreshold
+--- itself is deliberately NOT changed to do this for every caller.
+---
+--- Call this BEFORE NewCooldown/NewNestedCooldown, at the call site, for
+--- any constructor default sourced directly from a Config field an
+--- operator can edit. Do not use it for a hardcoded local constant default
+--- (e.g. `NewCooldown(SOME_LOCAL_COOLDOWN_MS)`) — that shape has no
+--- config-typo pathway and should keep failing loudly via
+--- AssertValidDefaultThreshold instead; see this file's header ADDENDUM
+--- for the exact test that decides which shape a given call site is.
+--- @param configuredValue any -- the raw value read from Config, completely unvalidated (may be nil, a string, NaN, 0, negative, ...)
+--- @param fallbackMs number -- a positive, hardcoded call-site literal (never itself read from Config) used only when configuredValue is invalid — typically the same value config.lua ships as this field's own default. An invalid fallbackMs is treated as the CALL SITE's own bug, not an operator's, and still errors (see below).
+--- @param configKeyName string -- the exact dotted Config path this value was read from (e.g. "Config.Combat.BiteAndHold.cooldownMs"), used ONLY in the printed warning below — must be precise enough that an operator can find the one field to fix in a multi-thousand-line config.lua without guessing. The printed warning names this key, the value found, and what was substituted — "invalid cooldown" helps nobody find it.
+--- @return number resolvedMs -- configuredValue unchanged if valid, otherwise fallbackMs
+function ResolveConfiguredThresholdMs(configuredValue, fallbackMs, configKeyName)
+    -- A bad fallback is THIS CALL SITE's own bug (a typo'd literal), never
+    -- an operator's — same "crash loudly, no config-typo pathway" standard
+    -- AssertValidDefaultThreshold applies to a hardcoded constant default,
+    -- applied here to the fallback argument specifically so a broken
+    -- fallback can never silently reintroduce the permanent fail-closed
+    -- footgun one level down (a caller passing e.g. fallbackMs = 0 would
+    -- otherwise "successfully" resolve every invalid Config read to
+    -- another invalid value, defeating this whole function's purpose).
+    if not IsValidThreshold(fallbackMs) then
+        error(
+            ('[qbx_k9unit] ResolveConfiguredThresholdMs called with an invalid fallbackMs (%s) for %s -- ' ..
+             'the fallback is a hardcoded call-site literal, not an operator-editable value, so this is a ' ..
+             'programmer bug at the call site, not a Config problem. Fix the fallback argument -- it must ' ..
+             'be a positive number.')
+                :format(tostring(fallbackMs), tostring(configKeyName)),
+            2 -- blame the call site, not this line
+        )
+    end
+
+    if IsValidThreshold(configuredValue) then
+        return configuredValue
+    end
+
+    -- LOUD, but never fatal: names the exact key, the value found, and
+    -- what was substituted, per this task's own requirement -- "invalid
+    -- cooldown" helps nobody find one bad field in a 2,000+ line config.
+    print(
+        ('[qbx_k9unit] cooldowns.lua: %s is missing or not a positive number (found: %s). 0/negative/nil/NaN ' ..
+         'here does NOT mean "no cooldown" in this resource\'s cooldown API -- it would otherwise permanently ' ..
+         'block the guarded action instead (this file\'s own documented FAIL-CLOSED behavior; see ' ..
+         'IsValidThreshold above). Using the built-in fallback of %dms for %s instead so this feature keeps ' ..
+         'working while the config is fixed -- find %s in config.lua and set it to a positive number of ' ..
+         'milliseconds.')
+            :format(configKeyName, tostring(configuredValue), fallbackMs, configKeyName, configKeyName)
+    )
+    return fallbackMs
 end
 
 --- Flat, single-level `key -> lastTouchedAtMs` cooldown tracker. See this

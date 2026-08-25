@@ -264,7 +264,15 @@ local PendingKennelPlacements = {}
 -- REFACTOR_ROADMAP.md item 1 convention (server/cooldowns.lua): per-source
 -- rate limit on requesting a NEW placement — spam defense only, distinct
 -- from the one-active-kennel-per-citizenid limit enforced separately below.
-local DeployCooldown = NewCooldown(Config.DeployableKennel.deployCooldownMs)
+--
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua, this pass, QA sandbox
+-- repro — see that file's header ADDENDUM) wraps the raw Config read below
+-- rather than handing it straight to NewCooldown: an uncaught non-positive
+-- value there would abort THIS FILE's load from that line onward instead of
+-- just disabling this one cooldown. Fallback matches config.lua's own
+-- shipped default.
+local DeployCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.DeployableKennel.deployCooldownMs, 5000, 'Config.DeployableKennel.deployCooldownMs'))
 DeployCooldown.RegisterPlayerDropped()
 
 -- Meters of slack over the server-chosen spawn point allowed when

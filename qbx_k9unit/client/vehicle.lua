@@ -414,21 +414,28 @@ end)
 -- here the same way leash ended up needing one, not silently trusting
 -- the client further than intended; nothing below forecloses adding one
 -- later).
+-- ROUTED THROUGH K9Compat.Get('target') (shared/compat/target.lua), never a
+-- direct `exports.ox_target` call -- both canInteract/onSelect pairs below
+-- are unchanged (still authored against ox_target's own convention), so an
+-- operator running a different supported target script gets both options
+-- translated automatically instead of losing them outright.
+--
 -- LIFECYCLE FIX (this pass): extracted into a named function, sole call
 -- site the AddEventHandler('onResourceStart', ...) below, so both options
--- come back after a bare `restart ox_target`, not just after this
--- resource's own restart -- ox_target keeps addGlobalVehicle's registry in
--- a plain file-local Lua table inside its own client chunk (confirmed by
--- reading ox_target's client/api.lua directly), reloaded empty on
--- ox_target's own restart with nothing else prompting a re-add. Mirrors
+-- come back after a bare restart of whatever resource actually backs the
+-- 'target' system, not just after this resource's own restart -- every
+-- supported target script keeps its own registry in a plain file-local Lua
+-- table inside its own client chunk, reloaded empty on THAT resource's own
+-- restart with nothing else prompting a re-add. Mirrors
 -- server/tracking.lua's RegisterScentInventoryHook /
 -- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
 -- identical bug class against ox_inventory. DUPLICATE-VS-REPLACE: both
--- options below always set `name`, and ox_target's own `addTarget`
--- unconditionally removes any existing option with the same name+resource
--- before appending, so re-running this never duplicates either entry.
+-- options below always set `name`, and every adapter's own registration
+-- primitive dedups/replaces by that same name (or label, per
+-- shared/compat/target.lua's own per-adapter notes), so re-running this
+-- never duplicates either entry.
 local function RegisterVehicleOxTargetOptions()
-    exports.ox_target:addGlobalVehicle({
+    K9Compat.Get('target').AddGlobalVehicle({
         {
             name = 'qbx_k9unit:enterVehicle',
             icon = 'fas fa-dog',
@@ -470,7 +477,20 @@ local function RegisterVehicleOxTargetOptions()
 end
 
 AddEventHandler('onResourceStart', function(resourceName)
-    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+    if resourceName == GetCurrentResourceName() then
+        RegisterVehicleOxTargetOptions()
+        return
+    end
+
+    -- This file never names a third-party target resource directly (see
+    -- shared/compat/target.lua) -- whichever one actually backs the
+    -- 'target' system is asked of K9Compat itself. Redetect() is forced
+    -- here rather than relying on shared/compat/core.lua's own
+    -- onResourceStart/onClientResourceStart redetect hook having already
+    -- run for this SAME event, so this check is correct regardless of
+    -- relative handler-registration order between the two files.
+    K9Compat.Redetect()
+    if resourceName == K9Compat.Which('target') then
         RegisterVehicleOxTargetOptions()
     end
 end)

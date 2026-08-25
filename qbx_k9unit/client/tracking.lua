@@ -478,7 +478,22 @@ CreateThread(function()
                 -- that totalDist itself falls under 0.1 still reports — that
                 -- branch only guards collecting markers along a remaining
                 -- line, not this check.
-                if Config.Features.XPProgression and not trackingState.arrivalReported
+                -- DELIBERATELY NOT gated on Config.Features.XPProgression.
+                -- It used to be, because this event started life as this
+                -- file's own XP trigger. It has a second, independent
+                -- consumer now -- server/findalert.lua's trail-arrival
+                -- bark-and-sit reaction -- and gating the SEND on an
+                -- unrelated flag made that reaction silently dead whenever
+                -- XPProgression was off, while FindAlerts' other reaction
+                -- (search completion) kept working. That presents to an
+                -- operator as "find alerts work for searches but not for
+                -- tracking", with no reason to suspect an XP flag.
+                -- Sending unconditionally is safe: server/tracking.lua's own
+                -- handler returns early on Config.Features.XPProgression at
+                -- its top, so no XP is minted when the flag is off. The
+                -- server never trusts this as a claim of arrival either --
+                -- it re-derives the distance itself.
+                if not trackingState.arrivalReported
                     and totalDist <= Config.XP.trackArrivalRadius then
                     trackingState.arrivalReported = true
                     TriggerServerEvent('qbx_k9unit:server:reportTrackSourceArrival')

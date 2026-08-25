@@ -585,7 +585,20 @@ local function RegisterPartnerUpOxTargetOption()
 end
 
 AddEventHandler('onResourceStart', function(resourceName)
-    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+    if resourceName == GetCurrentResourceName() then
+        RegisterPartnerUpOxTargetOption()
+        return
+    end
+
+    -- This file never names a third-party target resource directly (see
+    -- shared/compat/target.lua) -- whichever one actually backs the
+    -- 'target' system is asked of K9Compat itself. Redetect() is forced
+    -- here rather than relying on shared/compat/core.lua's own
+    -- onResourceStart/onClientResourceStart redetect hook having already
+    -- run for this SAME event, so this check is correct regardless of
+    -- relative handler-registration order between the two files.
+    K9Compat.Redetect()
+    if resourceName == K9Compat.Which('target') then
         RegisterPartnerUpOxTargetOption()
     end
 end)

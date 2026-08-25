@@ -135,21 +135,33 @@
       client/pursuitsprint.lua's own header together.
 
     ======================================================================
-    COOLDOWN FOOTGUN (server/cooldowns.lua's own documented failure class,
-    validated explicitly here, not left to that file's generic backstop
-    alone): Config.PursuitSprint.cooldownMs is asserted to be a real,
-    positive number BEFORE it is ever handed to NewCooldown below. An
-    operator setting cooldownMs = 0 meaning "no cooldown" would otherwise
-    make NewCooldown(0) construct successfully (a nil-vs-0 distinction
-    NewCooldown's OWN constructor guard does catch -- AssertValidDefaultThreshold
-    rejects a non-nil-but-invalid default -- so this resource's shared
-    infrastructure would ALSO catch a literal 0 at resource start; the
-    assert below exists for a clearer, qbx_k9unit-specific error message
-    naming this exact field, not because the shared guard would miss it)
-    end up PERMANENTLY denying every request once cooldowns.lua's own
-    IsOnCooldown treats a non-positive threshold as fail-closed ("always on
-    cooldown"), per that file's own FOOTGUN writeup -- never silently
-    meaning "unlimited".
+    COOLDOWN FOOTGUN (server/cooldowns.lua's own documented failure class)
+    -- UPDATED a later pass (QA sandbox repro; see cooldowns.lua's header
+    ADDENDUM for the full incident): this section used to say
+    Config.PursuitSprint.cooldownMs was asserted positive BEFORE ever
+    reaching NewCooldown below, specifically so a bad value would hard-ERROR
+    at resource start with a clearer, field-naming message than
+    cooldowns.lua's own generic AssertValidDefaultThreshold would give. That
+    reasoning held for the SYMPTOM (a bad value must never silently mean
+    "no cooldown") but missed the MECHANISM: `error()` thrown from either
+    that assert OR from AssertValidDefaultThreshold aborts THIS FILE's own
+    load from that line onward, same as QA proved concretely against
+    server/combat.lua. This file has no termination path of its own to
+    strand, but there is no reason to accept "the entire PursuitSprint
+    feature silently stops registering its one net event" when "one
+    cooldown falls back to a safe built-in value, loudly, and the feature
+    keeps working" is available for free -- consistency with every other
+    cooldown call site in this resource is itself worth having, not just
+    this file's own narrower blast radius. The old assert immediately
+    before NewCooldown below is REPLACED with
+    ResolveConfiguredThresholdMs (server/cooldowns.lua) -- same exact-field
+    naming in the printed message, clamp-and-warn instead of error-and-abort.
+    A non-positive Config.PursuitSprint.cooldownMs value still can never
+    mean "unlimited" -- IsOnCooldown's own fail-closed handling makes that
+    structurally impossible regardless of how the threshold got here -- it
+    now means "PursuitSprint uses its shipped default cooldown until the
+    config is fixed" instead of "PursuitSprint's net event was never
+    registered at all."
 
     ======================================================================
     PER-PERSON FEATURE CONTROL (Config.FeatureControl.RequireGrant --

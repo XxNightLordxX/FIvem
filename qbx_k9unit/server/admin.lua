@@ -966,8 +966,7 @@ end
 --- @param limit number
 --- @return table rows
 local function QuerySearchLogRecent(limit)
-    local sql = ('SELECT %s FROM k9_search_log ORDER BY id DESC LIMIT %d'):format(SEARCH_LOG_COLUMNS, limit)
-    return SafeQuery(sql, {})
+    return K9Store.SearchLog_GetRecent(limit)
 end
 
 --- '/k9auditxp' query — see this file's header "COMMAND SURFACE" item 4
@@ -979,8 +978,7 @@ end
 --- @param citizenid string
 --- @return table rows -- 0 or 1 rows
 local function QueryProgressionSnapshot(citizenid)
-    local sql = 'SELECT xp, updated_at FROM k9_progression WHERE citizenid = ? LIMIT 1'
-    return SafeQuery(sql, { citizenid })
+    return K9Store.XP_GetSnapshotRows(citizenid)
 end
 
 --- '/k9auditdept' query — see this file's header "COMMAND SURFACE" item 5
@@ -997,8 +995,7 @@ end
 --- @param limit number -- already clamped by ClampLimit
 --- @return table rows
 local function QueryDepartmentRoster(job, limit)
-    local sql = ('SELECT citizenid, granted_by, granted_at FROM k9_certifications WHERE job = ? AND active = 1 ORDER BY granted_at DESC LIMIT %d'):format(limit)
-    return SafeQuery(sql, { job })
+    return K9Store.Cert_GetActiveRosterByJob(job, limit)
 end
 
 -- ======================================================================

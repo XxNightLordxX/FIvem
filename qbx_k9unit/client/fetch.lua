@@ -453,36 +453,42 @@ RegisterCommand('k9recallfetchball', function()
     RequestRecallFetchBall()
 end, false)
 
--- "Pick Up Ball" / "Deliver to Handler" ox_target options — LIFECYCLE FIX
--- (this pass): pulled into a named function so it can be re-run any time
--- ox_target itself (re)starts, not just once at this file's own load time.
--- ox_target keeps its addModel/addGlobalPlayer registries in plain
--- file-local Lua tables inside its OWN client chunk (confirmed by reading
--- ox_target's client/api.lua directly this pass), cleared only by
--- ox_target's own `onClientResourceStop` handler when the CALLING resource
--- (this one) stops — a bare `restart ox_target` while this resource keeps
--- running reloads that chunk with empty tables and nothing else asks
--- anyone to re-register, silently and permanently losing both options for
--- the rest of this resource's uptime. See the `AddEventHandler`
--- immediately below for the two triggers this now dispatches on, mirroring
--- server/tracking.lua's RegisterScentInventoryHook fix for the identical
--- bug class against ox_inventory.
+-- "Pick Up Ball" / "Deliver to Handler" target options — ROUTED THROUGH
+-- K9Compat.Get('target') (shared/compat/target.lua), never a direct
+-- `exports.ox_target` call — canInteract/onSelect below are unchanged
+-- (still authored against ox_target's own convention), so an operator
+-- running a different supported target script gets both options
+-- translated automatically instead of losing them outright.
 --
--- DUPLICATE-VS-REPLACE (verified against ox_target's client/api.lua
--- `addTarget`, this pass): every option below always has `name` set, and
--- `addTarget` unconditionally calls `removeTarget(target, checkNames,
--- resource, true)` BEFORE appending — i.e. re-running this against a
--- registry that already holds an option with the same name AND resource
--- (`GetInvokingResource()`, always this resource here) REPLACES it, it
--- never duplicates. No extra remove-before-add call is needed here; the
--- exports themselves are already idempotent.
+-- LIFECYCLE FIX (this pass): pulled into a named function so it can be
+-- re-run any time the resource actually backing the 'target' system
+-- (re)starts, not just once at this file's own load time. Every supported
+-- target script keeps its own addModel/addGlobalPlayer-equivalent
+-- registries in plain file-local Lua tables inside its OWN client chunk,
+-- cleared only by that resource's own `onClientResourceStop` handler when
+-- the CALLING resource (this one) stops — a bare restart of that resource
+-- while this resource keeps running reloads that chunk with empty tables
+-- and nothing else asks anyone to re-register, silently and permanently
+-- losing both options for the rest of this resource's uptime. See the
+-- `AddEventHandler` immediately below for the two triggers this now
+-- dispatches on, mirroring server/tracking.lua's RegisterScentInventoryHook
+-- fix for the identical bug class against ox_inventory.
+--
+-- DUPLICATE-VS-REPLACE: every option below always has `name` set, and
+-- every adapter's own registration primitive dedups/replaces by that same
+-- name (or label, per shared/compat/target.lua's own per-adapter notes) —
+-- i.e. re-running this against a registry that already holds an option
+-- with the same name REPLACES it, it never duplicates. No extra
+-- remove-before-add call is needed here; the exports themselves are
+-- already idempotent.
 local DELIVER_TARGET_DISTANCE_FACTOR = 0.5
 
 local function RegisterFetchOxTargetOptions()
-    -- "Pick Up Ball" ox_target option — targets the configured ball prop
-    -- model directly by hash, mirroring client/kennel.lua's own addModel
-    -- pattern.
-    exports.ox_target:addModel({
+    -- "Pick Up Ball" target option -- targets the configured ball prop
+    -- model directly by hash, mirroring client/kennel.lua's own AddModel
+    -- pattern. Routed through K9Compat.Get('target')
+    -- (shared/compat/target.lua), never a direct `exports.ox_target` call.
+    K9Compat.Get('target').AddModel({
         GetHashKey(Config.FetchMechanic.ballPropModel),
     }, {
         {
@@ -509,8 +515,10 @@ local function RegisterFetchOxTargetOptions()
     -- requestDeliverFetchBall independently re-verifies ownership, the target's
     -- identity as the real thrower, and live proximity — this predicate doesn't
     -- need to be perfect (same posture client/partnership.lua's "Partner Up"
-    -- canInteract predicate already documents in full).
-    exports.ox_target:addGlobalPlayer({
+    -- canInteract predicate already documents in full). Routed through
+    -- K9Compat.Get('target') (shared/compat/target.lua), never a direct
+    -- `exports.ox_target` call.
+    K9Compat.Get('target').AddGlobalPlayer({
         {
             name = 'qbx_k9unit:deliverFetchBall',
             icon = 'fas fa-hand-holding',
@@ -533,12 +541,24 @@ end
 -- start (the original, only trigger before this pass — `onResourceStart`
 -- fires once for a resource's own boot, same idiom this file's other
 -- `GetCurrentResourceName()` checks already use, just via the start event
--- instead of the stop event) OR, new this pass, ox_target's OWN start —
--- same two-branch shape as server/tracking.lua's RegisterScentInventoryHook
--- / server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
--- identical class of gap against ox_inventory.
+-- instead of the stop event) OR a restart of whatever resource actually
+-- backs the 'target' system — same two-branch shape as
+-- server/tracking.lua's RegisterScentInventoryHook / server/inventory.lua's
+-- RegisterK9InventoryItemFilterHook fixes for the identical class of gap
+-- against ox_inventory. This file never names a third-party target
+-- resource directly (see shared/compat/target.lua) -- K9Compat.Redetect()
+-- is forced before checking K9Compat.Which('target') so this is correct
+-- regardless of relative handler-registration order against
+-- shared/compat/core.lua's own onResourceStart/onClientResourceStart
+-- redetect hook for this SAME event.
 AddEventHandler('onResourceStart', function(resourceName)
-    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+    if resourceName == GetCurrentResourceName() then
+        RegisterFetchOxTargetOptions()
+        return
+    end
+
+    K9Compat.Redetect()
+    if resourceName == K9Compat.Which('target') then
         RegisterFetchOxTargetOptions()
     end
 end)

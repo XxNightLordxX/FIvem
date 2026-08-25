@@ -300,7 +300,17 @@ local DeadHandlerAlreadyNotified = {}
 -- server/tracking.lua's DamageRelayCooldown, for the same reason (a client
 -- can call TriggerServerEvent directly, bypassing any local debounce in
 -- client/defense.lua's own gameEventTriggered hook).
-local AttackerReportCooldown = NewCooldown(Config.Combat.HandlerDownDefense.attackerReportCooldownMs)
+--
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua, this pass, QA sandbox
+-- repro) wraps both raw Config reads below rather than handing them
+-- straight to NewCooldown -- an uncaught error thrown from inside
+-- NewCooldown's own constructor guard would abort THIS FILE's load from
+-- that line onward (see cooldowns.lua's header ADDENDUM for the mechanism),
+-- silently un-registering every AddEventHandler/RegisterNetEvent below it
+-- in this file over a single non-positive Config number. Fallbacks below
+-- match config.lua's own shipped defaults for each field.
+local AttackerReportCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.Combat.HandlerDownDefense.attackerReportCooldownMs, 500, 'Config.Combat.HandlerDownDefense.attackerReportCooldownMs'))
 AttackerReportCooldown.RegisterPlayerDropped()
 
 -- Per-handler rate limit on actually SENDING a handlerDownDefenseTrigger
@@ -311,20 +321,23 @@ AttackerReportCooldown.RegisterPlayerDropped()
 -- system that briefly toggles the override's result) does not spam their
 -- partner K9 with repeated prompts for what is, from the K9's perspective,
 -- the same ongoing incident.
-local DefenseTriggerCooldown = NewCooldown(Config.Combat.HandlerDownDefense.retriggerCooldownMs)
+local DefenseTriggerCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.Combat.HandlerDownDefense.retriggerCooldownMs, 30000, 'Config.Combat.HandlerDownDefense.retriggerCooldownMs'))
 DefenseTriggerCooldown.RegisterPlayerDropped()
 
--- POLL-INTERVAL VALIDATION (QA follow-up, this pass): the two cooldown
--- thresholds above (attackerReportCooldownMs/retriggerCooldownMs) are both
--- validated at resource-start time by server/cooldowns.lua's own
--- AssertValidDefaultThreshold, which now hard-ERRORS on a non-nil,
--- non-positive value rather than silently failing closed forever -- but
--- that guard lives INSIDE NewCooldown's constructor and has no visibility
--- into pollIntervalMs at all, since that value never passes through
--- NewCooldown; it feeds a bare `Wait()` call directly in the maintenance
--- thread below. That makes it the one number in this exact Config block
--- with NO loud-failure backstop, and a different (worse) failure mode than
--- a bad cooldown threshold: `Wait()` throws on a non-number argument, and
+-- POLL-INTERVAL VALIDATION (QA follow-up, this pass; UPDATED a later pass,
+-- QA sandbox repro -- see cooldowns.lua's header ADDENDUM): the two cooldown
+-- thresholds above (attackerReportCooldownMs/retriggerCooldownMs) are each
+-- resolved through ResolveConfiguredThresholdMs before ever reaching
+-- NewCooldown, so an invalid Config value there now degrades to a loud
+-- warning + a safe built-in fallback rather than reaching
+-- AssertValidDefaultThreshold's hard error at all in practice -- but
+-- neither mechanism has any visibility into pollIntervalMs, since that
+-- value never passes through NewCooldown or ResolveConfiguredThresholdMs;
+-- it feeds a bare `Wait()` call directly in the maintenance thread below.
+-- That makes it the one number in this exact Config block validated by
+-- neither backstop, and a different (worse) failure mode than a bad
+-- cooldown threshold: `Wait()` throws on a non-number argument, and
 -- that throw is NOT inside the `pcall` below (the pcall only wraps
 -- TryNotifyPartnerK9, deliberately, so a per-player error there can't kill
 -- the shared thread for every OTHER player) -- an uncaught error here kills

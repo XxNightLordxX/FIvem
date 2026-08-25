@@ -329,25 +329,32 @@ end)
 -- independently re-verifies real ownership against its Kennels registry
 -- and rejects (with a notification, not silently) anyone who isn't the
 -- actual owner.
+-- ROUTED THROUGH K9Compat.Get('target') (shared/compat/target.lua), never a
+-- direct `exports.ox_target` call -- canInteract/onSelect below are
+-- unchanged (still authored against ox_target's own convention), so an
+-- operator running a different supported target script gets this option
+-- translated automatically instead of losing it outright.
+--
 -- LIFECYCLE FIX (this pass): extracted into a named function so this option
--- can be re-registered any time ox_target itself (re)starts, not just once
--- at this file's own load time — ox_target keeps addModel's registry in a
--- plain file-local Lua table inside its own client chunk (confirmed by
--- reading ox_target's client/api.lua directly), reloaded empty on
--- ox_target's own restart with nothing else prompting a re-add. Mirrors
+-- can be re-registered any time the resource actually backing the 'target'
+-- system (re)starts, not just once at this file's own load time — every
+-- supported target script keeps its own registry in a plain file-local Lua
+-- table inside its own client chunk, reloaded empty on THAT resource's own
+-- restart with nothing else prompting a re-add. Mirrors
 -- server/tracking.lua's RegisterScentInventoryHook /
 -- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
 -- identical bug class against ox_inventory. The Config.Features.
 -- DeployableKennel gate stays AT REGISTRATION (inside this function, not
--- just inside canInteract) exactly as before, so a re-registration on
--- ox_target's restart never adds an option this file's original load-time
--- code would have skipped. DUPLICATE-VS-REPLACE: the option below always
--- sets `name`, and ox_target's own `addTarget` unconditionally removes any
--- existing option with the same name+resource before appending, so
--- re-running this never duplicates the entry.
+-- just inside canInteract) exactly as before, so a re-registration on the
+-- target resource's restart never adds an option this file's original
+-- load-time code would have skipped. DUPLICATE-VS-REPLACE: the option
+-- below always sets `name`, and every adapter's own registration primitive
+-- dedups/replaces by that same name (or label, per
+-- shared/compat/target.lua's own per-adapter notes), so re-running this
+-- never duplicates the entry.
 local function RegisterKennelOxTargetOption()
     if Config.Features.DeployableKennel then
-        exports.ox_target:addModel({
+        K9Compat.Get('target').AddModel({
             GetHashKey(Config.DeployableKennel.propModel),
             GetHashKey(Config.DeployableKennel.fallbackPropModel),
         }, {
@@ -376,7 +383,20 @@ end
 -- RegisterK9InventoryItemFilterHook fixes for the identical class of gap
 -- against ox_inventory.
 AddEventHandler('onResourceStart', function(resourceName)
-    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+    if resourceName == GetCurrentResourceName() then
+        RegisterKennelOxTargetOption()
+        return
+    end
+
+    -- This file never names a third-party target resource directly (see
+    -- shared/compat/target.lua) -- whichever one actually backs the
+    -- 'target' system is asked of K9Compat itself. Redetect() is forced
+    -- here rather than relying on shared/compat/core.lua's own
+    -- onResourceStart/onClientResourceStart redetect hook having already
+    -- run for this SAME event, so this check is correct regardless of
+    -- relative handler-registration order between the two files.
+    K9Compat.Redetect()
+    if resourceName == K9Compat.Which('target') then
         RegisterKennelOxTargetOption()
     end
 end)

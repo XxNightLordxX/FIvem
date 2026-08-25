@@ -152,11 +152,14 @@
         deliverProximityMeters, maintenanceIntervalMs,
         mouthCarryMode, mouthBoneIndex, mouthOffsetX, mouthOffsetY, mouthOffsetZ,
         pickupCooldownMs, -- OPTIONAL; PickupCooldown below falls back to
-          -- an in-file default (500ms) if absent, so this file never errors
-          -- on a config.lua that predates this hardening pass — see that
-          -- local's own comment. (`releaseCooldownMs` is no longer read at
-          -- all; see releaseFetchBall's doc comment for why its gate was
-          -- removed rather than kept with a defensive default.)
+          -- an in-file default (500ms) if absent OR invalid (non-positive/
+          -- NaN/non-number), via ResolveConfiguredThresholdMs
+          -- (server/cooldowns.lua) — so this file never errors on a
+          -- config.lua that predates this hardening pass, AND never errors
+          -- on an operator setting this to 0 meaning "no cooldown" either —
+          -- see that local's own comment. (`releaseCooldownMs` is no longer
+          -- read at all; see releaseFetchBall's doc comment for why its
+          -- gate was removed rather than kept with a defensive default.)
       }
 
     ======================================================================
@@ -223,19 +226,37 @@ local PendingFetchDrops = {}
 -- hand-rolled table. Per-THROWER rate limit on requesting a NEW throw only
 -- — distinct from the one-active-ball-per-citizenid limit enforced
 -- separately below.
-local ThrowCooldown = NewCooldown(Config.FetchMechanic.throwCooldownMs)
+--
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua, this pass, QA sandbox
+-- repro — see that file's header ADDENDUM) wraps the raw Config read below
+-- rather than handing it straight to NewCooldown: an uncaught non-positive
+-- value there would abort THIS FILE's load from that line onward instead of
+-- just disabling this one cooldown. Fallback matches config.lua's own
+-- shipped default.
+local ThrowCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.FetchMechanic.throwCooldownMs, 5000, 'Config.FetchMechanic.throwCooldownMs'))
 ThrowCooldown.RegisterPlayerDropped()
 
 -- Red-team hardening: requestPickupFetchBall previously had no rate limit
 -- at all (only the initial throw did) — a dedicated NewCooldown tracker,
 -- per this file's own REFACTOR_ROADMAP.md convention, never a hand-rolled
 -- table. `Config.FetchMechanic.pickupCooldownMs` is an OPTIONAL tunable not
--- yet in every config.lua; the `or 500` fallback keeps this file correct
--- (never erroring on a nil threshold — see server/cooldowns.lua's own
--- FAIL-CLOSED note on why a missing/non-positive threshold must never
--- silently disable a cooldown) on a server that hasn't added it yet.
--- releaseFetchBall deliberately has NO cooldown; see its own doc comment.
-local PickupCooldown = NewCooldown(Config.FetchMechanic.pickupCooldownMs or 500)
+-- yet in every config.lua.
+--
+-- THE OLD `Config.FetchMechanic.pickupCooldownMs or 500` IDIOM HERE IS
+-- REPLACED, NOT KEPT (this pass, QA sandbox repro): `or 500` only ever
+-- guarded the field being ABSENT (nil) — `0 or 500` evaluates to `0` in
+-- Lua, since 0 is truthy, so an operator explicitly setting
+-- pickupCooldownMs = 0 (meaning "no cooldown", this resource's own
+-- repeatedly-documented FOOTGUN) sailed straight through this fallback
+-- unchanged and into NewCooldown's constructor guard, which then errored
+-- and aborted this entire file's load — the exact inconsistency this pass's
+-- audit flagged against ThrowCooldown immediately above, which had no
+-- fallback idiom to even give that false impression. ResolveConfiguredThresholdMs
+-- correctly treats missing AND non-positive as the same "invalid, use the
+-- fallback and warn" case.
+local PickupCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    Config.FetchMechanic.pickupCooldownMs, 500, 'Config.FetchMechanic.pickupCooldownMs'))
 PickupCooldown.RegisterPlayerDropped()
 
 -- NotifyPlayer used to be defined here as its own local copy (a 13th
