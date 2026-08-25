@@ -42,6 +42,19 @@ read_globals = {
     -- Threading / events
     "CreateThread", "Wait", "AddEventHandler", "RegisterNetEvent",
     "TriggerClientEvent", "TriggerServerEvent", "TriggerEvent", "RegisterCommand",
+    -- Cancellable-wait primitives, needed by any thread that must abort a long
+    -- sleep early instead of polling on a short Wait (client/combat.lua's
+    -- suppression thread is the first such consumer). These are NOT natives and
+    -- so have no ext/native-decls entry -- the 404 there means nothing for them.
+    -- VERIFIED against primary source instead, in the Lua runtime itself:
+    --   data/shared/citizen/scripting/lua/deferred.lua sets `_G.promise = M`
+    --   data/shared/citizen/scripting/lua/scheduler.lua:114 sets
+    --     `SetTimeout = Citizen.SetTimeout`
+    -- and code/components/citizen-scripting-lua/src/LuaScriptRuntime.cpp loads
+    -- BOTH files unconditionally via LoadSystemFile at runtime init. That
+    -- component is the shared Lua runtime, so both globals exist on client and
+    -- server alike -- no per-side qualification needed.
+    "promise", "SetTimeout",
     -- GET_RESOURCE_STATE. Used by server/tracking.lua's ox_inventory
     -- capability probe as the first gate, because accessing an export on a
     -- resource that is not started can throw rather than return nil.
