@@ -2864,3 +2864,45 @@ resource, method).
 ownership, or XP check anywhere in this resource. If an adapter is tempted
 to let a detected resource's answer influence an authorization decision,
 that belongs in the file that owns the authorization check, not here.
+
+---
+
+## Watchdog record
+
+A scheduled job re-checks this resource periodically. Only the MOST RECENT
+pass is kept here, deliberately — the old `WATCHDOG_LOG.md` was an
+append-forever file, which is exactly the decision-history this
+consolidation cut. What a future pass needs is what was last covered, not
+every pass ever run. Overwrite this section; do not append to it.
+
+**2026-08-25 18:46 UTC — clean, plus the documentation consolidation
+finished.**
+
+- 24 commits reviewed since the previous pass. All 146 Lua files parse;
+  luacheck 0 warnings / 0 errors across 145; all 63 spec files pass.
+- Five regression spot-checks, all still correct, verified by reading code
+  rather than comments: `Config.Features.AgilityBasicJump` is read at
+  client/movement.lua:1281; `LeashPairs` still records `isK9` in both
+  directions at server/main.lua:849-850; `RevokeCertificationOffline`
+  still calls `RefreshCertificationCache`; client/vehicle.lua still has its
+  `onResourceStop` cleanup; client/radial.lua still pairs
+  `lib.registerRadial` (5 sites) with `lib.addRadialItem` (3) — the
+  2026-08-23 hard-error fix is intact.
+- Bark audio: still resolved. All five `.ogg` files ship and all five are
+  listed in the manifest's `files{}` block.
+- Completion claims audited: no stale ones. The struck-through `**Resolved**`
+  items in §4 are recorded answers the code still depends on, not claims
+  about present state.
+- **The ox dependency question was deliberately NOT re-checked.** The
+  previous pass established the criterion for reassessing it: an archive
+  banner reappearing on one of the four repositories, or six months without
+  commits. Neither can have happened in the six hours since. Re-running a
+  check whose own stated trigger has not fired is theatre, not diligence.
+- **Documentation consolidation completed this pass.** 20 markdown files
+  down to 9. A previous agent merged fifteen documents into this file but
+  had no shell access, so it left redirect stubs and asked whoever did to
+  remove them. Done — but only after repointing **329 code citations**
+  across 51 files first, because deleting the stubs before that would have
+  turned every `SPEC.md §4.2`-style reference into a dead link. Verified
+  comment-only: every changed line in a `.lua` file sits inside a comment,
+  and the parse and lint results above confirm nothing structural moved.

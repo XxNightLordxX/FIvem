@@ -194,7 +194,7 @@ function IsFetchCarryEngaged()
 end
 
 --- Self-initiated throw trigger — a HUMAN HANDLER action (gated on
---- HasK9Access() alone, NOT CanShowK9UI()/IsOwnModelK9() — SPEC.md's own
+--- HasK9Access() alone, NOT CanShowK9UI()/IsOwnModelK9() — DEVELOPER_REFERENCE.md's own
 --- "on a handler command" wording, DEVELOPER_REFERENCE.md §14.4.3's resolved
 --- design: the thrower need not currently be riding a K9 model).
 function RequestThrowFetchBall()

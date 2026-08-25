@@ -3,7 +3,7 @@
 
     EXTERNAL-SYSTEM INTEGRATION SURFACE -- the seam this resource offers to
     dispatch, MDT, evidence, jail, phone, billing, or any other operator-run
-    system, KNOWN OR UNKNOWN, per FEATURE_IDEAS.md Part A §7 ("K9-down
+    system, KNOWN OR UNKNOWN, per DEVELOPER_REFERENCE.md Part A §7 ("K9-down
     dispatch integration hook") and Part B §2/§3 ("Dispatch integration" /
     "MDT / evidence integration"). Read those three sections before touching
     this file.
@@ -102,7 +102,7 @@
     reopened as "new" by a future audit.
 
     ======================================================================
-    K9-DOWN DISPATCH HOOK (FEATURE_IDEAS.md Part A §7, THIS FILE's actual
+    K9-DOWN DISPATCH HOOK (DEVELOPER_REFERENCE.md Part A §7, THIS FILE's actual
     new logic) -- 'qbx_k9unit:events:k9Down'.
 
     WHY A SELF-CONTAINED POLL, NOT A HOOK INSIDE server/wellbeing.lua'S

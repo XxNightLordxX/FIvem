@@ -206,7 +206,7 @@ local PropAttachmentState = {}
 -- directly.
 local PendingPropAttachConfirm = {}
 
--- REFACTOR_ROADMAP.md item 1 convention (server/cooldowns.lua): per-source
+-- DEVELOPER_REFERENCE.md item 1 convention (server/cooldowns.lua): per-source
 -- rate limit on toggling the attachment — spam/abuse guard only, distinct
 -- from the one-active-attachment-per-citizenid limit enforced separately
 -- below. Threshold supplied per-call from Config.PropAttachments.toggleCooldownMs,
@@ -216,7 +216,7 @@ local ToggleCooldown = NewCooldown()
 ToggleCooldown.RegisterPlayerDropped()
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
 -- implementation -- see that file's own header for the extraction writeup.
 -- Every call site below is unchanged: this file never passed a custom

@@ -393,7 +393,7 @@ local PartnerRequestCooldown = NewCooldown(ResolveConfiguredThresholdMs(
 PartnerRequestCooldown.RegisterPlayerDropped()
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
 -- implementation -- see that file's own header for the extraction writeup.
 -- Every call site below is unchanged: this file never passed a custom

@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/entities.lua
 
-    coder-architect, REFACTOR_ROADMAP.md near-term item 2 ("Extract the
+    coder-architect, DEVELOPER_REFERENCE.md near-term item 2 ("Extract the
     'resolve network entity defensively' helper — same call, now backed by
     6 real instances instead of 2"). Pure structural extraction, NOT a
     redesign: the SERVER-side half of that item — previously two
@@ -53,12 +53,12 @@
       comment). Both call sites' existing entity-type/proximity checks are
       preserved exactly — this file only consolidates the common
       "resolve + existence-guard" prefix both of them already did
-      independently. As of REFACTOR_ROADMAP.md item 2's Revision 5
+      independently. As of DEVELOPER_REFERENCE.md item 2's Revision 5
       reopening, also reused by server/kennel.lua (3 call sites) and
       server/inventory.lua (1 call site) — see each call site's own
       "migrated from X" comment.
         ResolveConnectedPlayerFromPed(entity: number) -> number?
-      REFACTOR_ROADMAP.md item 2b ("scan connected players, match by ped,
+      DEVELOPER_REFERENCE.md item 2b ("scan connected players, match by ped,
       return the server id" — same responsibility as ResolveNetworkEntity
       above, not a new shared-utility concern). Extracted from
       server/search.lua's original `ResolveConnectedPlayerFromPed` (the
@@ -136,7 +136,7 @@
 --- guarantee, spelled out explicitly since every caller layers its own
 --- additional checks on top of this one and needs to know where this
 --- function's own guarantee ends (audited as a security primitive, not
---- just a convenience wrapper, per REFACTOR_ROADMAP.md item 2's own
+--- just a convenience wrapper, per DEVELOPER_REFERENCE.md item 2's own
 --- "resolve a client-claimed netId defensively" framing):
 ---
 --- GUARANTEES (enforced, not advisory -- every one of these is a hard
@@ -221,7 +221,7 @@ end
 --- belongs to, or nil if it doesn't belong to any currently-connected
 --- player (an NPC, or a stale/despawned handle).
 ---
---- REFACTOR_ROADMAP.md item 2b. Extracted from three independent,
+--- DEVELOPER_REFERENCE.md item 2b. Extracted from three independent,
 --- byte-identical hand-written copies of this exact function:
 --- server/search.lua's original (the first-written, most-documented copy,
 --- whose own doc comment is preserved below verbatim), server/inventory.lua's
@@ -237,7 +237,7 @@ end
 --- from server/search.lua's original doc comment — this reasoning applies
 --- equally to every caller, not just the one that first wrote it): the
 --- design notes server/search.lua was built from
---- (phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §3 step 9, and that file's
+--- (DEVELOPER_REFERENCE.md#contraband-search §3 step 9, and that file's
 --- own prior scaffold) suggested
 --- `GetPlayerServerId(NetworkGetPlayerIndexFromPed(entity))` for this
 --- resolution. That combination was never independently re-verified as

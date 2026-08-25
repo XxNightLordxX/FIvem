@@ -291,7 +291,7 @@ end
 -- natural extraction (a resource-global IsPlayerWantedEligible in, say,
 -- server/entities.lua or a new shared file) for a future consolidation
 -- pass, same shape as this codebase's own precedent for
--- ResolveConnectedPlayerFromPed (REFACTOR_ROADMAP.md item 2b, "extracted
+-- ResolveConnectedPlayerFromPed (DEVELOPER_REFERENCE.md item 2b, "extracted
 -- from three independent, byte-identical hand-written copies").
 -- Defensively reads Config.Combat via `type(...) == 'table'` since that
 -- table is owned by a concurrently-edited config.lua this pass does not

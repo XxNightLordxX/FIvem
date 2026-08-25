@@ -643,15 +643,15 @@ end)
 -- FILE'S CODE does when `source` holds a given value at call time. NONE
 -- of them settle, and none should be read as settling, the underlying
 -- engine question this project tracks as open decision D3
--- (PROJECT_STATUS.md) -- whether FiveM's real client runtime can ever be
+-- (DEVELOPER_REFERENCE.md) -- whether FiveM's real client runtime can ever be
 -- made to deliver a forged local trigger with a stale/incorrect `source`
 -- left over from an earlier genuine server-sent event landing on the
 -- same connection. Independent attempts to settle D3 by reading the game
 -- engine's own source code have repeatedly hit the same wall (four,
--- per PROJECT_STATUS.md's own count as of this session; this task's own
+-- per DEVELOPER_REFERENCE.md's own count as of this session; this task's own
 -- brief counts five -- whichever the exact number, neither this test file
 -- nor any other Lua-level sandbox test can add or subtract from it).
--- PROJECT_STATUS.md's own words: "Do not settle this by reading more
+-- DEVELOPER_REFERENCE.md's own words: "Do not settle this by reading more
 -- code -- only the live test settles it." A green result below proves the
 -- guard AS WRITTEN rejects a non-65535 source; it must never be mistaken
 -- for having closed D3.

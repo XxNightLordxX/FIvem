@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/equipmentshop.lua
 
-    K9 EQUIPMENT SHOP (client half) -- FEATURE_IDEAS.md Part B §6. See
+    K9 EQUIPMENT SHOP (client half) -- DEVELOPER_REFERENCE.md Part B §6. See
     server/equipmentshop.lua's own header for the full design and, in
     particular, its "VERIFIED, NOT ASSUMED" section point 2 for exactly why
     this small companion file exists at all: a shop registered from an

@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/cooldowns.lua
 
-    coder-architect, REFACTOR_ROADMAP.md item 1 ("Extract the shared
+    coder-architect, DEVELOPER_REFERENCE.md item 1 ("Extract the shared
     cooldown/TTL/mutex helper now — retroactively, not preemptively").
     Pure structural extraction, NOT a redesign: every one of the 11
     independent hand-rolled cooldown/mutex tables inventoried in the
@@ -101,7 +101,7 @@
     mutex tables and are NOT touched here. They're a different shape
     entirely — an append-only ARRAY of `{coords, loggedAt}` entries pruned
     by age and separately scanned-by-distance at query time, not a
-    `key -> lastTouchedAtMs` map at all. REFACTOR_ROADMAP.md's own inventory
+    `key -> lastTouchedAtMs` map at all. DEVELOPER_REFERENCE.md's own inventory
     table (and its item-1 tally of exactly 11 tables) does not count
     TrackableLog among them, and separately flags the "array of aged log
     entries, nearest-match scan" shape as medium-term item 5

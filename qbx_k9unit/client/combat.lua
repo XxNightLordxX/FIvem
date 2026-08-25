@@ -195,7 +195,7 @@
     client doesn't necessarily own network control of) and, on the holder
     side, to the attach itself. Every native call against a target/NPC
     entity below is preceded by a best-effort NetworkRequestControlOfEntity
-    call (phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat's own §1/§4 confirm this
+    call (DEVELOPER_REFERENCE.md#phase-3-combat's own §1/§4 confirm this
     native and explicitly name it as "needed before an NPC-target client can
     reliably drive SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes/
     AttachEntityToEntity on an entity it doesn't already own network control
@@ -368,7 +368,7 @@
 -- invocation of it, once registered, genuinely came from the server. See
 -- "SOURCE-ORIGIN GUARD" immediately below the per-mechanic gating section
 -- for the dedicated fix for that half, landed separately (coder-security,
--- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary). Do not read this comment
+-- DEVELOPER_REFERENCE.md#trust-boundary). Do not read this comment
 -- block's presence alone as "solved" — only "off is inert again"; the
 -- origin guard below is what actually closes the self-triggering gap for
 -- the "on" case.
@@ -745,7 +745,7 @@ end
 
 -- ======================================================================
 -- SOURCE-ORIGIN GUARD (coder-security, this pass, per design assessment
--- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary — read that document in full
+-- DEVELOPER_REFERENCE.md#trust-boundary — read that document in full
 -- before touching this block; this comment is a summary of it, not a
 -- replacement for it). Fixes the specific gap the per-mechanic gate above
 -- explicitly disclaimed: once a mechanic's flag is on, its handlers are
@@ -844,7 +844,7 @@ end
 --- @param dragState { targetNetId: number, isPlayerTarget: boolean }
 --- @return number? targetPed
 local function AssertDragAsHolderTick(dragState)
-    local targetPed = ResolveNetworkEntity(dragState.targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+    local targetPed = ResolveNetworkEntity(dragState.targetNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
 
     if targetPed then
         NetworkRequestControlOfEntity(targetPed) -- best-effort, see header "NETWORK OWNERSHIP OF THE TARGET PED"
@@ -1103,7 +1103,7 @@ if Config.Features.BiteAndHold then
     -- previously called NetworkRequestControlOfEntity before driving
     -- SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes on the NPC —
     -- this resource's OWN research note
-    -- (phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §1/§4) explicitly names that
+    -- (DEVELOPER_REFERENCE.md#phase-3-combat §1/§4) explicitly names that
     -- native as the correct prerequisite for exactly this situation ("needed
     -- before an NPC-target client can reliably drive
     -- SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes/
@@ -1122,7 +1122,7 @@ if Config.Features.BiteAndHold then
     --- @param expiresAt number -- server GetGameTimer() timestamp; NOT compared directly against this client's own clock, see header CLOCK-DOMAIN NOTE
     RegisterNetEvent('qbx_k9unit:client:applyNpcBiteHold', function(npcNetId, expiresAt)
         if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
-        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        local npcPed = ResolveNetworkEntity(npcNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
         if not npcPed then return end -- despawned/streamed-out between the server's grant and this event arriving — nothing to apply to
 
         NetworkRequestControlOfEntity(npcPed)
@@ -1152,7 +1152,7 @@ if Config.Features.BiteAndHold then
     RegisterNetEvent('qbx_k9unit:client:endNpcBiteHold', function(npcNetId, reason)
         if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         ActiveNpcEffects[npcNetId] = nil
-        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        local npcPed = ResolveNetworkEntity(npcNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
         if npcPed then
             NetworkRequestControlOfEntity(npcPed)
             SetBlockingOfNonTemporaryEvents(npcPed, false)
@@ -1166,7 +1166,7 @@ if Config.Features.NonLethalTakedown then
     -- identical here.
     --- DEVELOPER_REFERENCE.md §12.0 item 8 / server/combat.lua's own header: applies
     --- the ragdoll + damage-bracket locally, bracket-before-ragdoll ordering,
-    --- per phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §2 ("damage-bracket + health
+    --- per DEVELOPER_REFERENCE.md#phase-3-combat §2 ("damage-bracket + health
     --- floor BEFORE the ragdoll task, never after") — same ordering
     --- applyNpcTakedown below uses for the NPC-target path. See this file's
     --- header "RAGDOLL FALL-DIRECTION" note for why this uses the TARGET's
@@ -1182,7 +1182,7 @@ if Config.Features.NonLethalTakedown then
         local forward = GetEntityForwardVector(ped)
         -- SET_PED_TO_RAGDOLL_WITH_FALL(ped, minTime, maxTime, nFallType, dirX,
         -- dirY, dirZ, fGroundHeight, grab1[xyz], grab2[xyz]) — grab params
-        -- documented unused, per phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §2.
+        -- documented unused, per DEVELOPER_REFERENCE.md#phase-3-combat §2.
         -- minTime/maxTime (1000, 1500) match applyNpcTakedown below exactly,
         -- for parity between the two paths — both are UNTUNED placeholders,
         -- not previously specified anywhere in this codebase's own config/spec.
@@ -1208,7 +1208,7 @@ if Config.Features.NonLethalTakedown then
     -- native-api-assistant pass named SetEntityCanBeDamaged specifically
     -- (confirmed CLIENT-ONLY) but did NOT independently re-confirm
     -- NETWORK_REQUEST_CONTROL_OF_ENTITY's necessity for THIS specific
-    -- native pairing the way phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat's §1
+    -- native pairing the way DEVELOPER_REFERENCE.md#phase-3-combat's §1
     -- table does for SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes/
     -- AttachEntityToEntity by name — applying the SAME fix here on the
     -- strength of "any client-side ped-behavior/physics native aimed at an
@@ -1220,7 +1220,7 @@ if Config.Features.NonLethalTakedown then
     --- @param expiresAt number -- server GetGameTimer() timestamp; NOT compared directly against this client's own clock, see header CLOCK-DOMAIN NOTE
     RegisterNetEvent('qbx_k9unit:client:applyNpcTakedown', function(npcNetId, expiresAt)
         if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
-        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        local npcPed = ResolveNetworkEntity(npcNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
         if not npcPed then return end
 
         NetworkRequestControlOfEntity(npcPed)
@@ -1293,7 +1293,7 @@ if Config.Features.NonLethalTakedown then
     RegisterNetEvent('qbx_k9unit:client:endNpcTakedown', function(npcNetId, reason)
         if source ~= 65535 then return end -- server-origin guard, see header "SOURCE-ORIGIN GUARD"
         ActiveNpcEffects[npcNetId] = nil
-        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        local npcPed = ResolveNetworkEntity(npcNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
         if npcPed then
             NetworkRequestControlOfEntity(npcPed)
             SetEntityCanBeDamaged(npcPed, true)
@@ -1342,7 +1342,7 @@ if Config.Features.PropDragging then
         if not ActiveDragAsHolder or ActiveDragAsHolder.targetNetId ~= targetNetId then return end -- stale/foreign event, e.g. a race with a brand-new drag — never clear a DIFFERENT drag's state
 
         local wasNpcTarget = not ActiveDragAsHolder.isPlayerTarget
-        local targetPed = ResolveNetworkEntity(targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        local targetPed = ResolveNetworkEntity(targetNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
         if targetPed then
             NetworkRequestControlOfEntity(targetPed)
             DetachEntity(targetPed, true, false)
@@ -1607,7 +1607,7 @@ CreateThread(function()
             if IsEntityDead(myPed) then
                 TriggerServerEvent('qbx_k9unit:server:reportHolderDied')
 
-                local targetPed = ResolveNetworkEntity(ActiveDragAsHolder.targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+                local targetPed = ResolveNetworkEntity(ActiveDragAsHolder.targetNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
                 if targetPed then
                     DetachEntity(targetPed, true, false)
                     if not ActiveDragAsHolder.isPlayerTarget then
@@ -1765,7 +1765,7 @@ CreateThread(function()
 
             for npcNetId, effect in pairs(ActiveNpcEffects) do
                 ActiveNpcEffects[npcNetId] = nil
-                local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+                local npcPed = ResolveNetworkEntity(npcNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
                 if npcPed then
                     NetworkRequestControlOfEntity(npcPed)
                     if effect.kind == 'bite' then
@@ -1785,7 +1785,7 @@ CreateThread(function()
         for npcNetId, effect in pairs(ActiveNpcEffects) do
             if now >= effect.localDeadline then
                 ActiveNpcEffects[npcNetId] = nil
-                local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+                local npcPed = ResolveNetworkEntity(npcNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
                 if npcPed then
                     NetworkRequestControlOfEntity(npcPed)
                     if effect.kind == 'bite' then
@@ -1848,7 +1848,7 @@ AddEventHandler('onResourceStop', function(resourceName)
     end
 
     for npcNetId, effect in pairs(ActiveNpcEffects) do
-        local npcPed = ResolveNetworkEntity(npcNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        local npcPed = ResolveNetworkEntity(npcNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
         if npcPed then
             NetworkRequestControlOfEntity(npcPed)
             if effect.kind == 'bite' then
@@ -1860,7 +1860,7 @@ AddEventHandler('onResourceStop', function(resourceName)
     end
 
     if ActiveDragAsHolder then
-        local targetPed = ResolveNetworkEntity(ActiveDragAsHolder.targetNetId) -- REFACTOR_ROADMAP.md item 2 (client/main.lua)
+        local targetPed = ResolveNetworkEntity(ActiveDragAsHolder.targetNetId) -- DEVELOPER_REFERENCE.md item 2 (client/main.lua)
         if targetPed then
             NetworkRequestControlOfEntity(targetPed)
             DetachEntity(targetPed, true, false)

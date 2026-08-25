@@ -241,7 +241,7 @@ end, false)
 RegisterNetEvent('qbx_k9unit:client:attachK9Prop', function()
     -- SOURCE-ORIGIN GUARD (coder-security precedent — see
     -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup, not
+    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup, not
     -- re-derived here). 65535 is FiveM's documented client-side sentinel
     -- for "this event genuinely came from the server" (citizenfx/fivem-docs,
     -- "Secure your events"). Confidence: MEDIUM-HIGH, the official
@@ -348,7 +348,7 @@ RegisterNetEvent('qbx_k9unit:client:removeK9PropAttachment', function(netId)
     if not Config.Features.PropAttachments then return end
     if type(netId) ~= 'number' then return end
 
-    -- REFACTOR_ROADMAP.md near-term item 2 migration: this was previously a
+    -- DEVELOPER_REFERENCE.md near-term item 2 migration: this was previously a
     -- hand-rolled "NetworkDoesEntityExistWithNetworkId -> NetworkGetEntityFromNetworkId
     -- -> DoesEntityExist" sequence, the exact pattern this resource already
     -- centralised into client/main.lua's ResolveNetworkEntity (a NEW,

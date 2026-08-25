@@ -2,7 +2,7 @@
     tests/clientbreed_spec.lua
 
     Direct, black-box tests of client/movement.lua's BREED MOVE-RATE WEIGHT
-    addition (FEATURE_IDEAS.md Part A §4) against the REAL, unmodified
+    addition (DEVELOPER_REFERENCE.md Part A §4) against the REAL, unmodified
     production file -- a NEW, separate spec file per this task's own
     instruction, deliberately NOT folded into the existing
     tests/clientmovement_spec.lua (owned by another agent this session; see

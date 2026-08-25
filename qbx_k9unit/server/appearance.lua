@@ -246,7 +246,7 @@ end
 --- Same as IsCertifiedK9ForJob, but across EVERY department at once — used
 --- ONLY by MaybeRevertK9Appearance's reconciliation (a citizenid can hold a
 --- separate active cert for a DIFFERENT department than the one that just
---- got revoked -- SPEC.md's own "cross-department granting IS currently
+--- got revoked -- DEVELOPER_REFERENCE.md's own "cross-department granting IS currently
 --- allowed" -- and losing one must not revert an appearance still backed
 --- by the other). FAILS OPEN here deliberately (an unreadable row is
 --- treated as "assume still qualified, don't revert") -- unlike every

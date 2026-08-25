@@ -2,7 +2,7 @@
     tests/integrations_spec.lua
 
     Tests for server/integrations.lua (the external-system integration
-    surface -- FEATURE_IDEAS.md Part A §7 / Part B §2/§3, see that file's
+    surface -- DEVELOPER_REFERENCE.md Part A §7 / Part B §2/§3, see that file's
     own header for the full design writeup) against the REAL, unmodified
     production file, loaded alongside the REAL server/cooldowns.lua (its
     K9DownFireCooldown is a genuine NewCooldown() instance, not a stub --

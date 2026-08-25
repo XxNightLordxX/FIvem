@@ -17,37 +17,37 @@
 
     Ephemeral/in-memory only, deliberately not persisted — mirrors
     server/main.lua's `LeashPairs` precedent (both are live-session data,
-    not account data). SPEC.md §10 flags this as still needing db-schema's
+    not account data). DEVELOPER_REFERENCE.md §10 flags this as still needing db-schema's
     confirmation that the precedent holds here too; not assumed settled by
     this file.
 
     AUTHORITATIVE SOURCES FOR THIS FILE'S BODY, IN ORDER OF PRECEDENCE:
-    1. SPEC.md §11.4 items 1, 3, 4 (event/callback contract) and §11.5's
+    1. DEVELOPER_REFERENCE.md §11.4 items 1, 3, 4 (event/callback contract) and §11.5's
        "Scent tracking" / "Blood trail tracking" / "Gunpowder residue
        sniffing" / "Water tracking" acceptance criteria — the base
        contract.
-    2. SPEC.md §11.6's reality-check refinements (gunpowder/blood relay is
+    2. DEVELOPER_REFERENCE.md §11.6's reality-check refinements (gunpowder/blood relay is
        genuinely authored code, not free). Its framing of scent's
        ox_inventory hook as unconfirmed is SUPERSEDED by item 9 below —
        kept here verbatim rather than edited so the historical reasoning
        trail stays intact.
-    3. phase2_notes/RESEARCH_ARCHIVE.md#tracking — client-logic-lens refinement
+    3. DEVELOPER_REFERENCE.md#tracking — client-logic-lens refinement
        of §11.4 items 1/3, plus two explicit "flag for coder-security"
        notes worth restating here since THIS file is where they land:
        (a) `findTrackableSource`'s signature must never grow a
        client-supplied coordinate parameter, (b) `relayDamageEvent` trusts
        the FACT of damage but never the reported location.
-    4. phase2_notes/RESEARCH_ARCHIVE.md#tracking — confirms the
+    4. DEVELOPER_REFERENCE.md#tracking — confirms the
        `CEventNetworkEntityDamage` relay pattern is real and sound, but
        flags that it does NOT fire for script-applied damage (only organic
        gameplay damage) — a real, documented gap, not a bug to fix here.
-    5. phase2_notes/RESEARCH_ARCHIVE.md#tracking — confirms `IsPedShooting`
+    5. DEVELOPER_REFERENCE.md#tracking — confirms `IsPedShooting`
        debounce is the right client-side
        trigger for gunpowder (this file only ever receives the resulting
        relay event, it does no shooting-detection itself), and that the
        water-crossing modifier is entirely a CLIENT-side concern
        (client/tracking.lua) — this file never needs to know about water.
-    6. SPEC.md §9 items 10, 11, 14 — standing open questions touching this
+    6. DEVELOPER_REFERENCE.md §9 items 10, 11, 14 — standing open questions touching this
        file specifically (relay-code effort is real authored work, not
        free; whether tracking needs abuse-limits beyond the per-type
        cooldown is an explicit open judgment call, not decided here). Item
@@ -64,7 +64,7 @@
     8. exploit-tester finding (2026-08-23, red-team pass against the
        finished client files) + coordinator decision, same day — see
        "FORGED TRAIL DECISION" below.
-    9. phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution (tech-scout pass, same day)
+    9. DEVELOPER_REFERENCE.md#scent-source-resolution (tech-scout pass, same day)
        + this pass's implementation (coder-backend, 2026-08-23) — CONFIRMS
        and CLOSES items 2/6's "scent's ox_inventory hook is unconfirmed"
        framing. A real, first-party `ox_inventory` server-side hook,
@@ -98,11 +98,11 @@
     an ammo-consumption delta against a per-player cache) both introduce
     real false-negative risk against legitimate reports (armor can absorb
     all health loss from a genuine hit; weapon switches/reloads would need
-    their own extra state) for a feature SPEC.md §11.6 and
-    phase2_notes/RESEARCH_ARCHIVE.md#tracking §3 item 2 already explicitly frame
-    as acceptable-risk: tracking grants no real capability (SPEC.md §11.6),
+    their own extra state) for a feature DEVELOPER_REFERENCE.md §11.6 and
+    DEVELOPER_REFERENCE.md#tracking §3 item 2 already explicitly frame
+    as acceptable-risk: tracking grants no real capability (DEVELOPER_REFERENCE.md §11.6),
     and "a false report just plants a harmless phantom blood-trail
-    location" (RESEARCH_ARCHIVE.md#tracking §3 item 2's own words, written
+    location" (DEVELOPER_REFERENCE.md#tracking §3 item 2's own words, written
     before this exact scenario was raised again by exploit-tester).
     DECISION: accept this as a known, documented limitation — a griefer can
     waste a K9 officer's time with a fabricated trail, never anything
@@ -111,7 +111,7 @@
     degrade the legitimate feature for real players wearing armor or
     switching weapons. Revisit ONLY if a later phase ever conditions
     something server-authoritative on a resolved trail source (mirrors the
-    exact "revisit if a later phase changes the stakes" framing SPEC.md
+    exact "revisit if a later phase changes the stakes" framing DEVELOPER_REFERENCE.md
     §4.1 already uses for the vehicle-entry-exit exception).
 
     NOTE — THIS DECISION DOES NOT APPLY TO SCENT (added this pass, see item
@@ -192,7 +192,7 @@
     this for whatever tickets do get minted.
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT — Phase 2, per SPEC.md §11.4 items 1, 3, 4.
+    EVENT/CALLBACK CONTRACT — Phase 2, per DEVELOPER_REFERENCE.md §11.4 items 1, 3, 4.
     Identical in shape to server/certifications.lua's contract block so
     coder-backend/coder-frontend can work in parallel without live
     coordination, per that file's own stated rationale for this format.
@@ -206,14 +206,14 @@
        OWN live position via GetEntityCoords(GetPlayerPed(source)) —
        NEVER a client-supplied coordinate (the signature deliberately
        takes only `trackType`, no coords parameter — do not add one
-       later, see phase2_notes/RESEARCH_ARCHIVE.md#tracking §3 item 1).
+       later, see DEVELOPER_REFERENCE.md#tracking §3 item 1).
        Enforces Config.Tracking.<Type>.searchCooldownMs per caller.
 
     Server events (RegisterNetEvent, client->server):
     2. 'qbx_k9unit:server:relayDamageEvent' () [THIS FILE]
        Triggered by a client's own `gameEventTriggered('CEventNetworkEntityDamage', ...)`
        handler when the LOCAL PLAYER IS THE VICTIM (confirmed real pattern,
-       phase2_notes/RESEARCH_ARCHIVE.md#tracking §0). Takes no meaningful
+       DEVELOPER_REFERENCE.md#tracking §0). Takes no meaningful
        payload — the server logs the reporting client's own live
        coordinates, never a client-supplied position, exactly like
        server/main.lua's relayBark "resolve the sender's own ped, don't
@@ -230,7 +230,7 @@
        not this LOGGING-side cooldown (how often a single shooter's fire
        events get recorded at all). Do not conflate the two.
     4. 'qbx_k9unit:server:reportTrackSourceArrival' () [THIS FILE] PHASE 4
-       ADDITION (Config.Features.XPProgression, PHASE4_SPEC.md §13.4.1).
+       ADDITION (Config.Features.XPProgression, DEVELOPER_REFERENCE.md §13.4.1).
        Fired by client/tracking.lua's render thread the first tick it
        observes its own live distance to a resolved source drop to/below
        Config.XP.trackArrivalRadius (client/tracking.lua's own header, EVENT/
@@ -248,8 +248,8 @@
        rate limit).
 
     ox_inventory hooks (exports.ox_inventory:registerHook, ox_inventory ->
-    THIS FILE, server-to-server — added this pass, SPEC.md §9 items 11/17,
-    phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution):
+    THIS FILE, server-to-server — added this pass, DEVELOPER_REFERENCE.md §9 items 11/17,
+    DEVELOPER_REFERENCE.md#scent-source-resolution):
     5. 'swapItems' [THIS FILE]
        ADDENDUM (coordinator decision, 2026-08-24): registration is now
        GATED on a runtime capability check (`IsOxInventoryHookCapable()`,
@@ -280,7 +280,7 @@
        NOT an anti-forgery measure the way events 2/3's relayCooldownMs is.
 
     Client events (RegisterNetEvent, server->client): none from this file
-    — per SPEC.md §11.4 item 7's own reasoning (already applied to
+    — per DEVELOPER_REFERENCE.md §11.4 item 7's own reasoning (already applied to
     Phase 1's `hasK9Access`), tracking-result delivery is
     request/response shaped, so `findTrackableSource` above being a
     lib.callback is sufficient; no fire-and-forget result event is needed.
@@ -341,11 +341,11 @@
       `findTrackableSource` below). This supersedes the OLDER version of
       this note (visible in history/diff) that said scent intentionally had
       no entry here pending a live-query design — that plan was superseded
-      by phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution's confirmed
+      by DEVELOPER_REFERENCE.md#scent-source-resolution's confirmed
       registerHook-based design (see item 9 in this file's header
       AUTHORITATIVE SOURCES list) before it was ever built.
     - SCENT BRANCH STATUS, UPDATED THIS PASS: the ox_inventory
-      `swapItems` hook is now confirmed (phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution,
+      `swapItems` hook is now confirmed (DEVELOPER_REFERENCE.md#scent-source-resolution,
       tech-scout pass, 2026-08-23 — HIGH confidence on the hook name/payload
       shape from direct source-reading, see that note's §6 confidence table)
       and wired up below. `findTrackableSource`'s 'scent' branch no longer
@@ -360,11 +360,11 @@
 ]]
 
 -- Ephemeral, in-memory only per-type event log backing Scent/Blood/
--- Gunpowder tracking (SPEC.md §11.3, §11.4 items 3/4; scent's entry added
--- this pass per phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution — see the
+-- Gunpowder tracking (DEVELOPER_REFERENCE.md §11.3, §11.4 items 3/4; scent's entry added
+-- this pass per DEVELOPER_REFERENCE.md#scent-source-resolution — see the
 -- FILE-TO-FILE CONTRACT "STRUCTURAL NOTE, UPDATED THIS PASS" above for why
 -- it's now structurally identical to blood/gunpowder rather than absent) —
--- NOT persisted, mirrors server/main.lua's `LeashPairs` precedent (SPEC.md
+-- NOT persisted, mirrors server/main.lua's `LeashPairs` precedent (DEVELOPER_REFERENCE.md
 -- §10 flags this precedent as still needing db-schema's confirmation, not
 -- assumed settled here).
 -- TrackableLog[trackType][i] = { coords = vector3, loggedAt = <GetGameTimer() ms>,
@@ -384,13 +384,13 @@ local TrackableLog = {
 }
 
 -- Per-(source, trackType) QUERY-side cooldown backing
--- Config.Tracking.<Type>.searchCooldownMs (SPEC.md §11.4 item 1). Distinct
+-- Config.Tracking.<Type>.searchCooldownMs (DEVELOPER_REFERENCE.md §11.4 item 1). Distinct
 -- from the LOGGING-side rate limits below (relayDamageEvent/
 -- relayWeaponFire) — this one throttles how often a K9 can re-run
 -- "Track <Type>", not how often a shooter/victim's own client can report
 -- a source event.
 --
--- REFACTOR_ROADMAP.md item 1: was its own hand-rolled
+-- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled
 -- `LastTrackQueryAt[source][trackType]` table, now a NewNestedCooldown()
 -- instance (server/cooldowns.lua) — same two-level (source, trackType) key,
 -- no default threshold baked in (each call site passes the relevant
@@ -401,7 +401,7 @@ local TrackableLog = {
 local TrackQueryCooldown = NewNestedCooldown()
 TrackQueryCooldown.RegisterPlayerDropped()
 
--- Per-source LOGGING-side rate limits (SPEC.md §11.4 items 3/4, sized by
+-- Per-source LOGGING-side rate limits (DEVELOPER_REFERENCE.md §11.4 items 3/4, sized by
 -- the coordinator-amendment fields Config.Tracking.Blood/Gunpowder.relayCooldownMs
 -- — "needs its own tight per-player rate limit... independent of, and in
 -- addition to, Config.Tracking.Gunpowder's *search*-side cooldown, since
@@ -412,7 +412,7 @@ TrackQueryCooldown.RegisterPlayerDropped()
 -- and a modified client can call TriggerServerEvent directly, bypassing
 -- the client-side debounce entirely).
 --
--- REFACTOR_ROADMAP.md item 1: both were their own hand-rolled per-source
+-- DEVELOPER_REFERENCE.md item 1: both were their own hand-rolled per-source
 -- tables, now NewCooldown() instances (server/cooldowns.lua) — same
 -- per-source key, same playerDropped-based cleanup, behavior unchanged.
 local DamageRelayCooldown = NewCooldown()
@@ -422,12 +422,12 @@ WeaponFireRelayCooldown.RegisterPlayerDropped()
 
 -- PHASE 4 ADDITION (coder-backend, XPProgression pass) -- PendingTrackArrival[src]
 -- = { trackType, coords, expiresAt, createdAt, minElapsedMs }. Backs
--- Config.XP.awards.trackSourceResolved (config.lua, PHASE4_SPEC.md §13.4.1
+-- Config.XP.awards.trackSourceResolved (config.lua, DEVELOPER_REFERENCE.md §13.4.1
 -- open question 3): findTrackableSource's own `found = true` reveal below
 -- is deliberately NOT the XP award trigger -- awarding there would let a K9
 -- farm XP by repeatedly triggering a search without ever completing it (the
 -- exact gap that open question flags, explicitly left unresolved by
--- PHASE4_SPEC.md and closed here). Instead, a successful resolve stores
+-- DEVELOPER_REFERENCE.md and closed here). Instead, a successful resolve stores
 -- where the K9 would need to walk to, and XP is only granted once
 -- 'qbx_k9unit:server:reportTrackSourceArrival' below confirms the K9's OWN
 -- LIVE server-side position is within Config.XP.trackArrivalRadius of that
@@ -586,7 +586,7 @@ local TRACK_TICKET_MINT_COOLDOWN_MS = 30000
 -- server/progression.lua caps the TOTAL across mechanics.
 
 -- Per-source rate limit on the 'swapItems' ox_inventory hook below (added
--- this pass, SPEC.md §9 items 11/17, phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution).
+-- this pass, DEVELOPER_REFERENCE.md §9 items 11/17, DEVELOPER_REFERENCE.md#scent-source-resolution).
 -- UNLIKE DamageRelayCooldown/WeaponFireRelayCooldown above, this is NOT
 -- closing an anti-forgery gap — the hook is server-to-server, so
 -- `payload.source` cannot be relabeled by a client to claim a drop that
@@ -618,7 +618,7 @@ local TRACK_TYPE_CONFIG = {
 -- Prune pass interval. Deliberately well under the shortest maxAgeSeconds
 -- in play (Gunpowder's 120s, "residue is time-sensitive") so a stale entry
 -- never lingers past its window by more than this margin — an
--- implementation detail, not a spec-mandated number (SPEC.md §11.4 items
+-- implementation detail, not a spec-mandated number (DEVELOPER_REFERENCE.md §11.4 items
 -- 3/4 only require that pruning happen on some periodic interval).
 local TRACKABLE_LOG_PRUNE_INTERVAL_MS = 15000
 
@@ -667,16 +667,16 @@ CreateThread(function()
     end
 end)
 
---- SPEC.md §11.4 item 3. Triggered by a client's own `gameEventTriggered`
+--- DEVELOPER_REFERENCE.md §11.4 item 3. Triggered by a client's own `gameEventTriggered`
 --- ('CEventNetworkEntityDamage') handler, filtered CLIENT-SIDE to "local
 --- player is the victim" (confirmed real pattern,
---- phase2_notes/RESEARCH_ARCHIVE.md#tracking §0 — `data[1]` is the
+--- DEVELOPER_REFERENCE.md#tracking §0 — `data[1]` is the
 --- cross-source-corroborated victim entity handle). Takes no meaningful
 --- payload by design — do not add a coordinate argument later (see this
---- file's header FILE-TO-FILE CONTRACT / phase2_notes/RESEARCH_ARCHIVE.md#tracking
+--- file's header FILE-TO-FILE CONTRACT / DEVELOPER_REFERENCE.md#tracking
 --- §3 item 2's explicit warning that this is an easy regression).
 ---
---- CAVEAT (phase2_notes/RESEARCH_ARCHIVE.md#tracking §0): `CEventNetworkEntityDamage`
+--- CAVEAT (DEVELOPER_REFERENCE.md#tracking §0): `CEventNetworkEntityDamage`
 --- does NOT fire for script-applied damage (only organic gameplay damage —
 --- real weapon hits, falls, vehicle impacts, melee). Not a bug to fix here,
 --- just a documented gap worth this comment so a future "why didn't blood
@@ -690,7 +690,7 @@ end)
 RegisterNetEvent('qbx_k9unit:server:relayDamageEvent', function()
     local src = source
 
-    if not Config.Features.BloodTracking then return end -- silent no-op, per SPEC.md §3
+    if not Config.Features.BloodTracking then return end -- silent no-op, per DEVELOPER_REFERENCE.md §3
 
     -- LOGGING-side rate limit — stamped BEFORE any log-append work (see
     -- DamageRelayCooldown's own doc comment above for why this ordering
@@ -710,15 +710,15 @@ RegisterNetEvent('qbx_k9unit:server:relayDamageEvent', function()
     }
 end)
 
---- SPEC.md §11.4 item 4. Triggered by a client on a debounced local
+--- DEVELOPER_REFERENCE.md §11.4 item 4. Triggered by a client on a debounced local
 --- false->true transition of IsPedShooting(PlayerPedId()) (confirmed
---- real, stable native — phase2_notes/RESEARCH_ARCHIVE.md#tracking §0 "adjacent
---- check", phase2_notes/RESEARCH_ARCHIVE.md#tracking §2 Option A). Takes no
+--- real, stable native — DEVELOPER_REFERENCE.md#tracking §0 "adjacent
+--- check", DEVELOPER_REFERENCE.md#tracking §2 Option A). Takes no
 --- meaningful payload — same "never trust a client-supplied coordinate"
 --- rule as relayDamageEvent above.
 ---
 --- NOTE: `IsPedShooting`'s exact per-round vs. per-burst semantics are
---- UNCONFIRMED this session (phase2_notes/RESEARCH_ARCHIVE.md#tracking
+--- UNCONFIRMED this session (DEVELOPER_REFERENCE.md#tracking
 --- §2.3) — a high-fire-rate weapon could generate many debounced
 --- transitions in a short window even with client-side debouncing, so this
 --- server-side rate limit does not assume the client-side debounce alone
@@ -811,7 +811,7 @@ local function IsOxInventoryHookCapable()
     return ok and type(hookExport) == 'function'
 end
 
---- SPEC.md §9 items 11/17. GATED AT REGISTRATION (this pass) on BOTH
+--- DEVELOPER_REFERENCE.md §9 items 11/17. GATED AT REGISTRATION (this pass) on BOTH
 --- Config.Features.ScentTracking AND IsOxInventoryHookCapable() above —
 --- matches this resource's established "config-gated registration, not
 --- just config-gated behavior" convention (client/vision.lua's `if
@@ -863,7 +863,7 @@ end
 --- capability/config is missing -> loud warning, not a hard stop" reasoning.
 ---
 --- Confirmed real mechanism otherwise unchanged from the original
---- implementation, phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution §2/§4
+--- implementation, DEVELOPER_REFERENCE.md#scent-source-resolution §2/§4
 --- (tech-scout pass, 2026-08-23): `swapItems` fires SERVER-SIDE,
 --- synchronously, on every slot-to-slot item move ox_inventory processes
 --- (trunk/stash transfers, giving an item to another player, AND dropping
@@ -885,7 +885,7 @@ end
 ---
 --- CONFIDENCE NOTE (honest grading, not independently re-verified against a
 --- live ox_inventory install this session — full breakdown in
---- phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution §2/§6): HIGH confidence the hook
+--- DEVELOPER_REFERENCE.md#scent-source-resolution §2/§6): HIGH confidence the hook
 --- name/payload shape (`source`, `toType`, `dropId`) is real and current —
 --- corroborated two independent ways this session (direct read of
 --- `modules/inventory/server.lua`'s `dropItem` function's own
@@ -936,7 +936,7 @@ local function RegisterScentInventoryHook()
         if ped == 0 then return end -- defensive: no live ped (e.g. a system/script-originated drop with no real connected player behind payload.source)
 
         TrackableLog.scent[#TrackableLog.scent + 1] = {
-            coords = GetEntityCoords(ped), -- the DROPPING PLAYER'S OWN live position — NEVER ox_inventory's internal/eventual drop-inventory .coords (not yet created at this point in ox_inventory's own dropItem flow anyway, per RESEARCH_ARCHIVE.md#scent-source-resolution §2) and NEVER anything client-supplied
+            coords = GetEntityCoords(ped), -- the DROPPING PLAYER'S OWN live position — NEVER ox_inventory's internal/eventual drop-inventory .coords (not yet created at this point in ox_inventory's own dropItem flow anyway, per DEVELOPER_REFERENCE.md#scent-source-resolution §2) and NEVER anything client-supplied
             loggedAt = GetGameTimer(),
             ticketIssued = false, -- ANTI-FARM FIX (this pass) — see findTrackableSource's own comment on this field for the full writeup
         }
@@ -983,20 +983,20 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 end)
 
---- SPEC.md §11.4 item 1. Resolves the nearest trackable source of
+--- DEVELOPER_REFERENCE.md §11.4 item 1. Resolves the nearest trackable source of
 --- `trackType` for the CALLING K9's own live server-side position.
 --- Validation order (cheapest/most-defensive checks first, same discipline
---- phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §3 establishes for the
+--- DEVELOPER_REFERENCE.md#contraband-search §3 establishes for the
 --- higher-stakes searchTarget callback in server/search.lua — applied here
 --- too even though the stakes are lower, since this reveal is
---- client-cosmetic only, no real capability granted, per SPEC.md §11.6's
+--- client-cosmetic only, no real capability granted, per DEVELOPER_REFERENCE.md §11.6's
 --- own framing):
 ---   1. Payload-shape / trackType validity.
 ---   2. Config.Features.<Type> — real server-side no-op regardless of
 ---      client UI state.
 ---   3. HasK9Access(source).
 ---   4. Per-(source, trackType) cooldown — stamped BEFORE any lookup work
----      below, mirroring the ordering fix RESEARCH_ARCHIVE.md#contraband-search §3
+---      below, mirroring the ordering fix DEVELOPER_REFERENCE.md#contraband-search §3
 ---      step 13 mandates for searchTarget's cooldown-vs-await race (applies
 ---      here in case the 'scent' branch ever awaits an ox_inventory call).
 ---   5. Resolve the caller's own LIVE position — never a client-supplied
@@ -1007,14 +1007,14 @@ end)
 --- STILL-OPEN, NOT DECIDED BY THIS FILE (flag before finalizing elsewhere):
 ---   - §11 doesn't specify a distinguishing `reason` field for WHY
 ---     `found = false` (no source in range vs. on cooldown vs. no access) —
----     phase2_notes/RESEARCH_ARCHIVE.md#tracking §2.4 flags this as a small,
+---     DEVELOPER_REFERENCE.md#tracking §2.4 flags this as a small,
 ---     genuinely open UX question, not decided here. This implementation
 ---     collapses all three into a bare `{ found = false }`, matching the
----     signature SPEC.md §11.4 item 1 actually specifies.
+---     signature DEVELOPER_REFERENCE.md §11.4 item 1 actually specifies.
 ---   - Whether an in-progress tracking session should auto-cancel on
 ---     mid-session loss of K9 access (mirroring
 ---     ForceDetachLeashForSource's precedent for leash) —
----     phase2_notes/RESEARCH_ARCHIVE.md#tracking §5 item 4 flags this as
+---     DEVELOPER_REFERENCE.md#tracking §5 item 4 flags this as
 ---     lower-stakes than leash (cosmetic only) but explicitly undecided;
 ---     not implemented here since a client re-polling this callback next
 ---     "Track" attempt already re-verifies access on its own.
@@ -1046,7 +1046,7 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     if ped == 0 then return { found = false } end -- defensive: no live ped to read a position from
     local myCoords = GetEntityCoords(ped) -- NEVER a client-supplied coordinate
 
-    -- PHASE 4 ADDITION (coder-backend, XPProgression pass, PHASE4_SPEC.md
+    -- PHASE 4 ADDITION (coder-backend, XPProgression pass, DEVELOPER_REFERENCE.md
     -- §13.4.1 item (a)): "crossing a threshold... changes... the server's
     -- own authoritative scent-range bonus for that K9, read by
     -- server/tracking.lua's findTrackableSource in place of
@@ -1093,8 +1093,8 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     local sourceCoords
 
     -- 'scent' / 'blood' / 'gunpowder': nearest still-fresh logged entry
-    -- within maxRange. UPDATED THIS PASS (SPEC.md §9 items 11/17,
-    -- phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution §4): 'scent' no longer
+    -- within maxRange. UPDATED THIS PASS (DEVELOPER_REFERENCE.md §9 items 11/17,
+    -- DEVELOPER_REFERENCE.md#scent-source-resolution §4): 'scent' no longer
     -- special-cases `sourceCoords = nil` — TrackableLog.scent is now fed by
     -- the 'swapItems' ox_inventory hook above, so it is scanned by this
     -- exact same loop, identically to blood/gunpowder. Discards entries
@@ -1129,7 +1129,7 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     -- PHASE 4 ADDITION (coder-backend, XPProgression pass) -- see
     -- PendingTrackArrival's own declaration comment above for the full
     -- anti-farm rationale. Only bothers tracking a pending arrival at all
-    -- when the feature is enabled, per SPEC.md §3's "read the flag at the
+    -- when the feature is enabled, per DEVELOPER_REFERENCE.md §3's "read the flag at the
     -- point of use" rule -- when XPProgression is false this is simply dead
     -- state nobody ever reads (reportTrackSourceArrival's own handler below
     -- also re-checks the flag independently).
@@ -1183,7 +1183,7 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     return {
         found = true,
         coords = sourceCoords,
-        -- Informational only (phase2_notes/RESEARCH_ARCHIVE.md#tracking
+        -- Informational only (DEVELOPER_REFERENCE.md#tracking
         -- §1.2) — config.lua is a shared_script so the client can already
         -- read Config.WaterTrackingDecay.breaksTrail directly; populate it
         -- anyway for future-proofing (e.g. a later per-type override).
@@ -1268,7 +1268,7 @@ end)
 -- maxAgeSeconds schedule regardless of whether the original reporter is
 -- still connected.
 --
--- REFACTOR_ROADMAP.md item 1: TrackQueryCooldown/DamageRelayCooldown/
+-- DEVELOPER_REFERENCE.md item 1: TrackQueryCooldown/DamageRelayCooldown/
 -- WeaponFireRelayCooldown/ScentDropRelayCooldown each already registered
 -- their OWN independent `playerDropped` handler via
 -- :RegisterPlayerDropped() at their own declaration above, so there is no

@@ -277,7 +277,7 @@ local function CompleteHunt()
     TriggerServerEvent('qbx_k9unit:server:relayBark', 'alert')
 end
 
--- TRUST-BOUNDARY ORIGIN GUARD (phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary,
+-- TRUST-BOUNDARY ORIGIN GUARD (DEVELOPER_REFERENCE.md#trust-boundary,
 -- same convention client/screenfx.lua already applies to its own server->
 -- client push): `source ~= 65535` is FiveM's documented way to reject a
 -- local, zero-server-contact self-TriggerEvent of this same event name.

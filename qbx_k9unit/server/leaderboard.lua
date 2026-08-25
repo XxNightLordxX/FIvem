@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/leaderboard.lua
 
-    Handler leaderboard / '/k9stats' -- FEATURE_IDEAS.md Part A Tier C
+    Handler leaderboard / '/k9stats' -- DEVELOPER_REFERENCE.md Part A Tier C
     §10. A pure, read-only ranking over `k9_progression` (server/
     progression.lua's own XP persistence table) -- no new state, no new
     write path, no new risk to the economy. Exactly matches this idea's
@@ -105,7 +105,7 @@
         file. The information disclosed is comparable to what any
         department roster/leaderboard already surfaces in comparable FiveM
         PD resources, and is explicitly the kind of "reliable engagement/
-        retention hook" FEATURE_IDEAS.md's own write-up names as this
+        retention hook" DEVELOPER_REFERENCE.md's own write-up names as this
         idea's value.
       - CONCRETE PRECEDENT ALREADY SET BY THIS RESOURCE, NOT INVENTED HERE:
         server/exports.lua's `GetXP`/`GetXPTier` exports already hand any
@@ -141,7 +141,7 @@
     ======================================================================
 
     RATE LIMITING: one NewCooldown() instance, keyed by the CALLER's own
-    source (server/cooldowns.lua, REFACTOR_ROADMAP.md item 1's own
+    source (server/cooldowns.lua, DEVELOPER_REFERENCE.md item 1's own
     "shared constructor, not a hand-rolled table" convention) -- a DB-load/
     spam guard, not an authorization boundary, same posture
     server/admin.lua's own AuditCooldown documents for its own five

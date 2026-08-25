@@ -38,13 +38,13 @@
        about what that log actually contains. Read server/tracking.lua in
        full before writing this file: `relayDamageEvent` is payload-less BY
        DESIGN (that file's own header, quoting phase2_notes/
-       RESEARCH_ARCHIVE.md#tracking's explicit warning against ever
+       DEVELOPER_REFERENCE.md#tracking's explicit warning against ever
        adding a payload) -- it logs ONLY the victim's own coordinates, for
        blood-trail purposes, with NO attacker/source-of-damage field
        anywhere in `TrackableLog`. There is no "who damaged this player"
        data anywhere in this codebase to reuse. Server-side, there is also
        no substitute: `gameEventTriggered`/`CEventNetworkEntityDamage` is
-       CLIENT-ONLY (confirmed, phase2_notes/RESEARCH_ARCHIVE.md#tracking's own
+       CLIENT-ONLY (confirmed, DEVELOPER_REFERENCE.md#tracking's own
        "Client-side only... FiveM's server process does not run game-event
        simulation at all" finding, already relied on by server/tracking.lua
        itself) -- there is no server-side native or event that answers "who
@@ -106,7 +106,7 @@
     behavior for BOTH PropDragging and HandlerDownDefense automatically,
     which is the entire point of a single per-server integration point
     (mirrors this codebase's own "one shared cooldown/mutex helper" and "one
-    shared netId resolver" extraction precedents -- REFACTOR_ROADMAP.md
+    shared netId resolver" extraction precedents -- DEVELOPER_REFERENCE.md
     items 1/2 -- applied here to a config surface instead of a function).
     If a future maintainer would rather this field live at a shared
     top-level `Config.Combat.IsPlayerDownedOverride` instead of nested under
@@ -642,7 +642,7 @@ RegisterNetEvent('qbx_k9unit:server:reportHandlerAttacker', function(attackerNet
 
     local reporterPed = GetPlayerPed(src)
     if reporterPed ~= 0 and attackerPed == reporterPed then
-        return -- defensive: never record the reporter as their own attacker (e.g. self-inflicted/environmental damage where the game event's attacker field degenerates to the victim itself, per phase2_notes/RESEARCH_ARCHIVE.md#tracking's own documented args[2] caveat)
+        return -- defensive: never record the reporter as their own attacker (e.g. self-inflicted/environmental damage where the game event's attacker field degenerates to the victim itself, per DEVELOPER_REFERENCE.md#tracking's own documented args[2] caveat)
     end
 
     LastHostile[src] = { attackerNetId = attackerNetId, at = GetGameTimer() }

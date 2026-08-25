@@ -87,7 +87,7 @@
 
     Every `qbx_k9unit:client:*` handler in this file opens with
     `if source ~= 65535 then return end` (coder-security pass, per
-    phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary). This spec's sandbox models
+    DEVELOPER_REFERENCE.md#trust-boundary). This spec's sandbox models
     `source` as an ordinary Lua global the handler reads via `_ENV` --
     exactly like every other stubbed native here -- and each test below
     sets it explicitly before invoking the captured handler. That is
@@ -95,11 +95,11 @@
     processed, anything else is rejected before doing any work.
 
     IT IS NOT SUFFICIENT, AND IS NOT CLAIMED TO BE SUFFICIENT, to settle
-    PROJECT_STATUS.md's still-OPEN decision D3: whether FiveM's real client
+    DEVELOPER_REFERENCE.md's still-OPEN decision D3: whether FiveM's real client
     runtime always/reliably repopulates `source` this way on every genuine
     dispatch, or whether it can fail open via a stale carry-over from a
     prior genuine server-sent event landing on a since-forged local
-    trigger. As of this spec's writing, PROJECT_STATUS.md's own D3 section
+    trigger. As of this spec's writing, DEVELOPER_REFERENCE.md's own D3 section
     describes at least four independent attempts to settle this by reading
     the game engine's own source code, all of which hit the same wall (the
     part that actually decides this is not in any file readable from

@@ -78,7 +78,7 @@ shared_scripts {
 -- alive for the entire client session (not opened/closed like a modal —
 -- html/index.html starts hidden and stays that way client-side until
 -- client/hud.lua's poll thread says otherwise), per
--- phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge §7.
+-- DEVELOPER_REFERENCE.md#hud-bridge §7.
 ui_page 'html/index.html'
 
 files {
@@ -170,13 +170,13 @@ client_scripts {
     'client/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), client half. Reuses client/main.lua's PlaySoundOnNetworkEntity at runtime only, so no load-order requirement beyond that file existing.
     'client/vision.lua',   -- Phase 2
     'client/hud.lua',      -- Phase 4
-    'client/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
-    'client/kennel.lua',   -- Phase 5 R&D (DeployableKennel, phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §5)
-    'client/medkit.lua',   -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4)
-    'client/wellbeing.lua', -- Phase 4 (unified Fatigue/Mood/FearStress/Distraction/Injury subsystem, PHASE4_SPEC.md §13.0 Decision 1)
-    'client/progression.lua', -- Phase 4 (XPProgression, PHASE4_SPEC.md §13.4.1)
-    'client/combat.lua', -- Phase 3 (BiteAndHold/NonLethalTakedown, PHASE3_SPEC.md §12.5.1/§12.5.2) -- the client half of server/combat.lua; no ordering dependency on anything else in this list (reads Config.Combat/Config.Features from config.lua, already loaded via shared_scripts, and calls CanShowK9UI/DenyK9UIAccess from client/main.lua, which is loaded earlier in this same list, but Lua global-function resolution here is at CALL time, not load time, so this would still work even loaded first)
-    'client/partnership.lua', -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7/§12.3) -- the client half of server/partnership.lua (Partner Up consent prompt, ox_target option, IsPartnered()/GetPartnerServerId(), and RefreshPartnershipStateFromServer() which yields on a server callback to re-sync the local cache before a caller decides Partner Up vs Break Partnership -- the local cache alone can under-report after a reconnect. The radial entry is now wired, in client/radial.lua). Same "no ordering dependency" note as client/combat.lua above -- calls CanShowK9UI()/IsOwnModelK9() from client/main.lua only at CALL time (inside RequestPartnerUp/the ox_target predicate), never at file-load time.
+    'client/inventory.lua', -- Phase 4 (K9Inventory, DEVELOPER_REFERENCE.md §13.4.2)
+    'client/kennel.lua',   -- Phase 5 R&D (DeployableKennel, DEVELOPER_REFERENCE.md#phase-5-research §5)
+    'client/medkit.lua',   -- Phase 4 (K9Medkit, DEVELOPER_REFERENCE.md §13.4.4)
+    'client/wellbeing.lua', -- Phase 4 (unified Fatigue/Mood/FearStress/Distraction/Injury subsystem, DEVELOPER_REFERENCE.md §13.0 Decision 1)
+    'client/progression.lua', -- Phase 4 (XPProgression, DEVELOPER_REFERENCE.md §13.4.1)
+    'client/combat.lua', -- Phase 3 (BiteAndHold/NonLethalTakedown, DEVELOPER_REFERENCE.md §12.5.1/§12.5.2) -- the client half of server/combat.lua; no ordering dependency on anything else in this list (reads Config.Combat/Config.Features from config.lua, already loaded via shared_scripts, and calls CanShowK9UI/DenyK9UIAccess from client/main.lua, which is loaded earlier in this same list, but Lua global-function resolution here is at CALL time, not load time, so this would still work even loaded first)
+    'client/partnership.lua', -- Phase 3 (HandlerPartnership registry, DEVELOPER_REFERENCE.md §12.0 item 7/§12.3) -- the client half of server/partnership.lua (Partner Up consent prompt, ox_target option, IsPartnered()/GetPartnerServerId(), and RefreshPartnershipStateFromServer() which yields on a server callback to re-sync the local cache before a caller decides Partner Up vs Break Partnership -- the local cache alone can under-report after a reconnect. The radial entry is now wired, in client/radial.lua). Same "no ordering dependency" note as client/combat.lua above -- calls CanShowK9UI()/IsOwnModelK9() from client/main.lua only at CALL time (inside RequestPartnerUp/the ox_target predicate), never at file-load time.
     'client/defense.lua', -- Phase 3 HandlerDownDefense client half -- soft dependency on client/combat.lua's IsBiteHoldEngaged via a runtime existence guard, so no hard load-order requirement
     'client/propattachment.lua', -- Phase 5 R&D (PropAttachments). Also owns the generic AttachPropToOwnPed/DetachAndDeleteProp mechanic that client/bonetool.lua and client/fetch.lua both reuse rather than hand-rolling a third copy.
     'client/bonetool.lua',       -- Dev-only bone-index sweep (BoneSweepDevTool). Placed here for topical grouping only; calls propattachment's globals at runtime, so no load-order requirement.
@@ -185,8 +185,8 @@ client_scripts {
     'client/audio.lua', -- Phase 5 NUI audio bridge. The NUI audio bridge, and it is LIVE: client/main.lua's PlaySoundOnNetworkEntity calls PlayK9Sound() (guarded with type()), and all five sound keys this bridge can request now ship and are listed in this manifest's files{} block (see html/sounds/CREDITS.md for provenance and licensing). A key with no file degrades to a silent no-op end to end, which looks exactly like the feature being off -- so keep that list complete.
     'client/proximityaudio.lua', -- Phase 5 (ProximityAudioFX). Distance-scaled gain over client/audio.lua's NUI bridge, so it loads after it. Registers no net-event handlers at all -- a security sweep confirmed the forged-event class does not apply. Its sound, growl_ambient.ogg, now ships (Config.ProximityAudioFX.soundName -> ToAudioFileKey's lowercase fallback, not the SOUND_NAME_TO_FILE_KEY map).
     'client/recall.lua', -- Phase 3 Recall (client half). Exposes RequestRecall() and the k9recall command. Deliberately does NOT call CanShowK9UI()/DenyK9UIAccess() -- Recall is a TERMINATION path and gating one is how the unbounded trap this resource forbids gets built.
-    'client/training.lua', -- Training Mode (FEATURE_IDEAS.md Part A Tier B §6) -- the client half of server/training.lua. Rehearses the search / bite-and-hold FLOW against a scripted fake server response inside a Config.TrainingZones area; never touches a real target and never mints XP (server/training.lua's THE XP DECISION section is the authority on why -- do not "restore" an award here). No load-order dependency: reaches the server only through lib.callback.await at call time.
-    'client/equipmentshop.lua', -- K9 Supply shop walk-up (FEATURE_IDEAS.md Part B §6) -- the client half of server/equipmentshop.lua. Adds the ox_target marker ox_inventory's own RegisterShop does not create, then hands off to exports.ox_inventory:openInventory('shop', ...). Every price/permission decision stays inside ox_inventory's own server-side shop code; this file only opens the UI. No load-order dependency.
+    'client/training.lua', -- Training Mode (DEVELOPER_REFERENCE.md Part A Tier B §6) -- the client half of server/training.lua. Rehearses the search / bite-and-hold FLOW against a scripted fake server response inside a Config.TrainingZones area; never touches a real target and never mints XP (server/training.lua's THE XP DECISION section is the authority on why -- do not "restore" an award here). No load-order dependency: reaches the server only through lib.callback.await at call time.
+    'client/equipmentshop.lua', -- K9 Supply shop walk-up (DEVELOPER_REFERENCE.md Part B §6) -- the client half of server/equipmentshop.lua. Adds the ox_target marker ox_inventory's own RegisterShop does not create, then hands off to exports.ox_inventory:openInventory('shop', ...). Every price/permission decision stays inside ox_inventory's own server-side shop code; this file only opens the UI. No load-order dependency.
     'client/exports.lua', -- Public client-side export surface. No load-order dependency: every wrapped function is reached through a `type(fn) == 'function'` guard plus pcall, so an export over a file that early-returns under its own feature flag returns a documented nil/false rather than erroring.
 }
 
@@ -198,7 +198,7 @@ server_scripts {
     -- table itself. Loaded FIRST among this resource's own files: it has no
     -- dependency of its own, and every file below it is a consumer.
     'server/datastore.lua',
-    -- REFACTOR_ROADMAP.md item 1: shared cooldown/mutex helper (NewCooldown/
+    -- DEVELOPER_REFERENCE.md item 1: shared cooldown/mutex helper (NewCooldown/
     -- NewNestedCooldown/NewMutex), loaded FIRST among this resource's own
     -- files since main.lua/certifications.lua/tracking.lua/search.lua all
     -- call these resource-global constructors at their own file-load time.
@@ -211,7 +211,7 @@ server_scripts {
     -- those files read Config.Features. Later in this list and a toggle
     -- would silently not survive a restart.
     'server/runtimecontrol.lua',
-    -- REFACTOR_ROADMAP.md near-term item 2: shared defensive netId->entity
+    -- DEVELOPER_REFERENCE.md near-term item 2: shared defensive netId->entity
     -- resolver (ResolveNetworkEntity), loaded alongside cooldowns.lua and
     -- before main.lua/search.lua, its two consumers.
     'server/entities.lua',
@@ -296,7 +296,7 @@ server_scripts {
     -- IsHighCommand/HasPermission/HasK9Access it consults (21 call sites,
     -- all at runtime, so this is convention rather than a hard requirement).
     'server/tablet.lua',
-    -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7
+    -- Phase 3 (HandlerPartnership registry, DEVELOPER_REFERENCE.md §12.0 item 7
     -- Revision 5/§12.3) -- loaded after server/cooldowns.lua (NewCooldown/
     -- NewMutex at this file's own file-load time) and server/certifications.lua
     -- (IsConfiguredK9Model/HasK9Access reuse at runtime inside the
@@ -314,7 +314,7 @@ server_scripts {
     -- can actually FIRE (a real player action), every server_scripts file
     -- below has already finished loading regardless of manifest order.
     'server/partnership.lua',
-    -- Phase 3 HandlerDownDefense (PHASE3_SPEC.md §12.5.3) -- hard dependency on
+    -- Phase 3 HandlerDownDefense (DEVELOPER_REFERENCE.md §12.5.3) -- hard dependency on
     -- cooldowns.lua (NewCooldown at file-load time); reads partnership state via
     -- GetActivePartnerCitizenId, server-side only, never a client claim.
     'server/defense.lua',
@@ -325,24 +325,24 @@ server_scripts {
     'server/sarcalls.lua', -- K9_IDEAS.md §3 (SARCalls), server half. HARD load-order dependency on server/cooldowns.lua (NewCooldown at file-load time) and after server/certifications.lua for HasK9Access. AwardXP is behind a runtime guard, so no ordering against progression.lua. Holds the hidden target coordinate and never sends it to a client.
     'server/search.lua',   -- Phase 2
     'server/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), server half. An ADDITIONAL consumer of server/search.lua's searchCompleted and client/tracking.lua's reportTrackSourceArrival events -- it adds no detection logic of its own, which is why it needs no ordering against either. It DOES call NewCooldown at its own file-load time, so server/cooldowns.lua before it is a hard requirement; HasK9Access is runtime-only.
-    'server/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
-    'server/kennel.lua',    -- Phase 5 R&D (DeployableKennel, phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §5) -- loaded after cooldowns.lua (NewCooldown at file-load time) and certifications.lua (HasK9Access)
-    'server/medkit.lua',    -- Phase 4 (K9Medkit, PHASE4_SPEC.md §13.4.4) -- loaded after cooldowns.lua (NewCooldown/NewMutex at file-load time) and certifications.lua (IsConfiguredK9Model); no ordering dependency on server/wellbeing.lua since RestoreInjury is called through a runtime existence guard, not a load-order assumption
-    -- Phase 4 (unified wellbeing subsystem, PHASE4_SPEC.md §13.0 Decision 1) --
+    'server/inventory.lua', -- Phase 4 (K9Inventory, DEVELOPER_REFERENCE.md §13.4.2)
+    'server/kennel.lua',    -- Phase 5 R&D (DeployableKennel, DEVELOPER_REFERENCE.md#phase-5-research §5) -- loaded after cooldowns.lua (NewCooldown at file-load time) and certifications.lua (HasK9Access)
+    'server/medkit.lua',    -- Phase 4 (K9Medkit, DEVELOPER_REFERENCE.md §13.4.4) -- loaded after cooldowns.lua (NewCooldown/NewMutex at file-load time) and certifications.lua (IsConfiguredK9Model); no ordering dependency on server/wellbeing.lua since RestoreInjury is called through a runtime existence guard, not a load-order assumption
+    -- Phase 4 (unified wellbeing subsystem, DEVELOPER_REFERENCE.md §13.0 Decision 1) --
     -- loaded after cooldowns.lua (NewCooldown at file-load time) and
     -- certifications.lua (HasK9Access). Deliberately loaded AFTER
     -- server/tracking.lua: both register a handler for the same
     -- relayDamageEvent/relayWeaponFire client events (FiveM fires every
     -- registered handler, so this is an additional CONSUMER of an existing
-    -- signal, not a replacement -- PHASE4_SPEC.md §13.0's own "a new
+    -- signal, not a replacement -- DEVELOPER_REFERENCE.md §13.0's own "a new
     -- consumer, not a new detection mechanism" framing), and each keeps its
     -- own independent rate limit.
     'server/wellbeing.lua',
-    -- Phase 4 (XPProgression, PHASE4_SPEC.md §13.4.1) -- loaded after
+    -- Phase 4 (XPProgression, DEVELOPER_REFERENCE.md §13.4.1) -- loaded after
     -- tracking.lua/search.lua, which call AwardXP/GetXPTier through runtime
     -- existence guards rather than a load-order assumption.
     'server/progression.lua',
-    -- Phase 3 (BiteAndHold/NonLethalTakedown, PHASE3_SPEC.md §12.5.1/
+    -- Phase 3 (BiteAndHold/NonLethalTakedown, DEVELOPER_REFERENCE.md §12.5.1/
     -- §12.5.2/§12.0 item 8) -- loaded after cooldowns.lua (NewCooldown/
     -- NewMutex at file-load time, per this file's own header) and
     -- entities.lua/certifications.lua (ResolveNetworkEntity/HasK9Access,
@@ -382,7 +382,7 @@ server_scripts {
     'server/fetch.lua',
     'server/recall.lua',
     -- Partnership-tenure milestone XP bonus (Config.Features.PartnershipTenureBonus,
-    -- FEATURE_IDEAS.md Part B item 7) -- the first gameplay consequence
+    -- DEVELOPER_REFERENCE.md Part B item 7) -- the first gameplay consequence
     -- wired to the HandlerPartnership registry, which landed as a
     -- foundation with none. Extends partnership.lua/progression.lua through
     -- their already-exposed accessors; no load-order dependency on either.
@@ -395,7 +395,7 @@ server_scripts {
     -- resource writes. Loaded after cooldowns.lua (NewCooldown at file-load
     -- time); deliberately does NOT call into certifications.lua or
     -- partnership.lua -- see its own ACCESS MODEL header.
-    -- Training Mode server half (FEATURE_IDEAS.md Part A Tier B §6). HARD
+    -- Training Mode server half (DEVELOPER_REFERENCE.md Part A Tier B §6). HARD
     -- load-order requirement on server/cooldowns.lua: it calls NewCooldown()
     -- at THIS FILE'S OWN file-load time (twice -- ToggleCooldown and
     -- ActionCooldown), not lazily inside a handler, so cooldowns.lua being
@@ -418,7 +418,7 @@ server_scripts {
     -- without that index the query is a full table scan plus a filesort on
     -- every engine, so do not remove it.
     'server/leaderboard.lua',
-    -- K9 Supply shop registration (FEATURE_IDEAS.md Part B §6). Sells the
+    -- K9 Supply shop registration (DEVELOPER_REFERENCE.md Part B §6). Sells the
     -- item names this codebase already invented as documented placeholders
     -- with nowhere to buy them (k9_medkit / k9_treat / k9_meat_bait /
     -- k9_ultrasonic_whistle) -- it finishes a half-built loop rather than

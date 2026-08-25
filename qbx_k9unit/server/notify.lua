@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/notify.lua
 
-    REFACTOR_ROADMAP.md's "NEW, unrecorded: NotifyPlayer -- 12 independent
+    DEVELOPER_REFERENCE.md's "NEW, unrecorded: NotifyPlayer -- 12 independent
     copies, not the '2, closed' Revision 2 recorded" finding. Re-verified by
     direct grep before writing this file, NOT taken on the roadmap's word
     alone: 12 independent `local function NotifyPlayer(...)` definitions,

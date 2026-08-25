@@ -375,7 +375,7 @@
 -- `Certifications` cache and server/progression.lua's own `K9XP` cache.
 --
 -- ITEM 4 CLOSURE (DEVELOPER_REFERENCE.md Part B item 4 -- formerly
--- REFACTOR_ROADMAP_2.md, merged 2026-08-25 / DEVELOPER_REFERENCE.md §20 "What's NOT
+-- DEVELOPER_REFERENCE.md, merged 2026-08-25 / DEVELOPER_REFERENCE.md §20 "What's NOT
 -- covered" / tests/tenure_spec.lua's own DISCREPANCY case -- this is the
 -- fourth pass over this exact question; this section exists specifically so
 -- there is no fifth. Dated: 2026-08-25.):

@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/equipmentshop.lua
 
-    K9 EQUIPMENT SHOP -- FEATURE_IDEAS.md Part B §6 (coder-backend, this
+    K9 EQUIPMENT SHOP -- DEVELOPER_REFERENCE.md Part B §6 (coder-backend, this
     pass). "The cheapest of the three" per that doc: registers a "K9 Supply"
     shop via `ox_inventory`'s own `RegisterShop` export, selling the item
     names this codebase has already invented and left as documented
@@ -9,7 +9,7 @@
     `k9_meat_bait`, `k9_ultrasonic_whistle` -- server/medkit.lua's
     Config.K9Medkit.itemName and server/wellbeing.lua's Mood/Distraction item
     names). Right now, on a fresh install with the wellbeing subsystem
-    enabled (it is, by default, per PROJECT_STATUS.md), there is nothing to
+    enabled (it is, by default, per DEVELOPER_REFERENCE.md), there is nothing to
     actually buy -- this file finishes that half-built loop, it does not
     start a new one.
 

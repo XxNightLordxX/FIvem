@@ -43,7 +43,7 @@
       before acting, same as every other gated client action in this
       resource.
     - THIS FILE calls client/main.lua's ResolveNetworkEntity(netId)
-      (REFACTOR_ROADMAP.md item 2) in the removeKennel handler and the
+      (DEVELOPER_REFERENCE.md item 2) in the removeKennel handler and the
       onResourceStop cleanup below — do not re-implement the
       NetworkDoesEntityExistWithNetworkId/NetworkGetEntityFromNetworkId/
       DoesEntityExist sequence here; both were 2 of the 11 copies the
@@ -163,7 +163,7 @@ end, false)
 RegisterNetEvent('qbx_k9unit:client:deployKennelAt', function(x, y, z)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup;
+    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
     -- not re-derived here). 65535 is FiveM's documented client-side
     -- sentinel for "this event genuinely came from the server"
     -- (citizenfx/fivem-docs, "Secure your events"). Without this, a
@@ -241,7 +241,7 @@ end)
 RegisterNetEvent('qbx_k9unit:client:removeKennel', function(netId)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup;
+    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
     -- not re-derived here). THIS is the highest-severity handler in this
     -- file to guard: without this check, and before the feature gate and
     -- model check below existed, a forged local
@@ -264,7 +264,7 @@ RegisterNetEvent('qbx_k9unit:client:removeKennel', function(netId)
         myKennelNetId = nil
     end
 
-    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this handler's
+    -- DEVELOPER_REFERENCE.md item 2 (Revision 5 migration): was this handler's
     -- own inline NetworkDoesEntityExistWithNetworkId -> NetworkGetEntityFromNetworkId
     -- -> DoesEntityExist sequence.
     local entity = ResolveNetworkEntity(netId)
@@ -302,7 +302,7 @@ AddEventHandler('onResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     if not myKennelNetId then return end
 
-    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): same inline
+    -- DEVELOPER_REFERENCE.md item 2 (Revision 5 migration): same inline
     -- sequence as the removeKennel handler above, now the shared resolver.
     local entity = ResolveNetworkEntity(myKennelNetId)
     if entity then

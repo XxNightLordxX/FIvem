@@ -2,17 +2,17 @@
     qbx_k9unit/server/search.lua
 
     Phase 2 implementation (coder-backend). THIS IS THE SECURITY-CRITICAL
-    FILE OF PHASE 2, per SPEC.md §11.1 sub-phase 2b ("this is also the
+    FILE OF PHASE 2, per DEVELOPER_REFERENCE.md §11.1 sub-phase 2b ("this is also the
     piece coder-security should review first, per the task's explicit
     direction to confirm search results can't be client-claimed") and per
-    phase2_notes/RESEARCH_ARCHIVE.md#contraband-search's own framing ("designing
+    DEVELOPER_REFERENCE.md#contraband-search's own framing ("designing
     early because the trust boundary doesn't move even if config field
     names do"). Get an explicit coder-security sign-off on this
     implementation before it ships, the same standard
     server/certifications.lua's header already sets for §4's grant/revoke
     flow.
 
-    Owns (SPEC.md §11.3's `server/search.lua` row): the
+    Owns (DEVELOPER_REFERENCE.md §11.3's `server/search.lua` row): the
     `qbx_k9unit:server:searchTarget` callback — server-authoritative
     "search vehicle/person for contraband" (§6.3/§11.5), including the
     contraband-alert broadcast (§11.4 item 2, gated on
@@ -24,20 +24,20 @@
     contents — the same category of real capability grant as
     server/certifications.lua's grant/revoke — whereas server/tracking.lua
     (this file's sibling) only ever reveals a client-cosmetic marker trail
-    (SPEC.md §11.6, no real capability granted).
+    (DEVELOPER_REFERENCE.md §11.6, no real capability granted).
 
     AUTHORITATIVE SOURCES FOR THIS FILE'S BODY, IN ORDER OF PRECEDENCE:
-    1. SPEC.md §11.4 item 2 (event/callback contract) and §11.5's
+    1. DEVELOPER_REFERENCE.md §11.4 item 2 (event/callback contract) and §11.5's
        "Search vehicle/person + contraband alert tiers" acceptance
        criteria — the base contract this file satisfies.
-    2. phase2_notes/RESEARCH_ARCHIVE.md#contraband-search — supplements §11.4/
+    2. DEVELOPER_REFERENCE.md#contraband-search — supplements §11.4/
        §11.5 with the exact server-authoritative validation order (§3), the
        REAL confirmed ox_inventory export surface (§1 —
        `GetInventoryItems`, `GetContainerFromSlot`, read against the actual
        overextended/ox_inventory source, not guessed), the mandatory
        container-recursion requirement (§2), and the race-safe
        rate-limiting/mutex design (§4).
-    3. phase2_notes/RESEARCH_ARCHIVE.md#contraband-search — every BLOCKING
+    3. DEVELOPER_REFERENCE.md#contraband-search — every BLOCKING
        finding in its §8 summary is implemented below as a hard
        requirement, not optional hardening:
          - Blocking: contraband alert broadcast is DISTANCE-FILTERED (see
@@ -51,7 +51,7 @@
            purely on the resolved target identity (plate/citizenid) — it
            carries NO searcher dimension at all, so this is genuinely a
            per-target lock shared across every searcher, not a per-(source,
-           target) pair as SPEC.md's original text and earlier comments in
+           target) pair as DEVELOPER_REFERENCE.md's original text and earlier comments in
            this file described. See HandleSearchTarget's own doc comment
            (§5 below) for the corrected, accurate description.
          - Per-target cooldown timestamp written BEFORE the awaited
@@ -134,16 +134,16 @@
       (Separately: its own `ResolveConnectedPlayerFromPed` WAS the
       original, most-documented implementation of that helper — see
       server/entities.lua for why it moved there under
-      REFACTOR_ROADMAP.md item 2b, and this file's HandleSearchTarget for
+      DEVELOPER_REFERENCE.md item 2b, and this file's HandleSearchTarget for
       the one remaining call site, unchanged besides now calling the
       shared global.)
     - THIS FILE owns `SearchMutex`, `SearchCooldown`, and
       `TargetSearchCooldown` below as file-local state (each a
-      server/cooldowns.lua tracker instance, per REFACTOR_ROADMAP.md item 1
+      server/cooldowns.lua tracker instance, per DEVELOPER_REFERENCE.md item 1
       — see each one's own doc comment for why it exists and which original
       hand-rolled table it replaced).
     - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)`,
-      exposed by server/entities.lua (REFACTOR_ROADMAP.md near-term item 2),
+      exposed by server/entities.lua (DEVELOPER_REFERENCE.md near-term item 2),
       inside HandleSearchTarget below — do not re-implement the
       resolve/existence-guard sequence here. HandleSearchTarget's own
       targetType-vs-GetEntityType cross-check is NOT delegated to that
@@ -178,7 +178,7 @@
       declaration comment, for the exact farm this closes and why
       TargetSearchCooldown's per-target-only, no-searcher-dimension shape
       could never have closed it alone.
-    - COOPERATIVE SEARCH BONUS (coder-backend, this pass, FEATURE_IDEAS.md
+    - COOPERATIVE SEARCH BONUS (coder-backend, this pass, DEVELOPER_REFERENCE.md
       Part B §10): THIS FILE also owns `CoopSearchXpMintCooldown` (see its
       own declaration comment, right after the EIGHTH-XP-FARM-FIX
       cross-file pointer above, for the full spec/arithmetic) and calls two
@@ -266,14 +266,14 @@ AddEventHandler('onResourceStart', function(resourceName)
     )
 end)
 
--- In-flight mutex per source (RESEARCH_ARCHIVE.md#contraband-search §4A). Set
+-- In-flight mutex per source (DEVELOPER_REFERENCE.md#contraband-search §4A). Set
 -- synchronously, BEFORE any yielding work, checked immediately after the
 -- cheap validation steps (payload shape, feature flag, access) and before
 -- any cooldown/entity-resolution work, cleared on EVERY exit path
 -- (success, failure, AND error) so a thrown error inside the ox_inventory
 -- call doesn't permanently wedge that source out of ever searching again.
 --
--- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `SearchInFlight`
+-- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled `SearchInFlight`
 -- boolean table, now a NewMutex() instance (server/cooldowns.lua) — same
 -- per-source key, same "reject outright" semantics (TryAcquire combines
 -- the old table's check-then-set into one atomic call), same
@@ -283,13 +283,13 @@ local SearchMutex = NewMutex()
 SearchMutex.RegisterPlayerDropped()
 
 -- Flat per-source cooldown — BLOCKING per
--- RESEARCH_ARCHIVE.md#contraband-search §2 ("nothing stops a single
+-- DEVELOPER_REFERENCE.md#contraband-search §2 ("nothing stops a single
 -- source from searching many different targets back-to-back with zero
 -- delay"). Sized around Config.SearchZones.sniffAnimDurationMs (that
 -- finding's own suggestion). Mirrors BARK_COOLDOWN_MS/lastBarkAt's exact
 -- shape in server/main.lua. Cleared on playerDropped.
 --
--- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastSearchAt`
+-- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled `lastSearchAt`
 -- table, now a NewCooldown() instance — same per-source key, same
 -- playerDropped-based cleanup. NOTE the stamp for this cooldown still
 -- happens inside HandleSearchTarget (via :Touch, alongside the per-target
@@ -302,15 +302,15 @@ SearchCooldown.RegisterPlayerDropped()
 
 -- Per-resolved-target cooldown backing Config.SearchZones.searchCooldownMs
 -- — keyed on the RESOLVED, STABLE identity (plate for vehicles; citizenid
--- for persons, per RESEARCH_ARCHIVE.md#contraband-search §7's "survives a
+-- for persons, per DEVELOPER_REFERENCE.md#contraband-search §7's "survives a
 -- ped-recreation edge case" note), NOT the raw client-supplied
--- `targetNetId` (recyclable/spoofable-adjacent, RESEARCH_ARCHIVE.md#contraband-search
+-- `targetNetId` (recyclable/spoofable-adjacent, DEVELOPER_REFERENCE.md#contraband-search
 -- §4B). Outlives any single player's connection (a plate persists after
 -- the searching officer disconnects), so — unlike SearchCooldown/SearchMutex
 -- above — this table needs its OWN independent TTL-based sweep instead of
 -- playerDropped-based cleanup, see the :StartSweep call below.
 --
--- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastTargetSearchAt`
+-- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled `lastTargetSearchAt`
 -- table + `PruneTargetSearchCooldowns` sweep thread, now a NewCooldown()
 -- instance with :StartSweep (server/cooldowns.lua) — same resolved-identity
 -- string key, same staleness rule/interval, behavior unchanged.
@@ -325,7 +325,7 @@ for _, itemName in ipairs(Config.SearchContrabandItems) do
     ContrabandItemSet[itemName] = true
 end
 
--- Container recursion depth cap (RESEARCH_ARCHIVE.md#contraband-search §2 —
+-- Container recursion depth cap (DEVELOPER_REFERENCE.md#contraband-search §2 —
 -- "an explicitly chosen max depth (e.g. 3) — not unbounded, and not
 -- skipped"). Deliberately a LOCAL implementation constant, not a
 -- Config.* field — recursion depth is an internal defensive bound of this
@@ -334,7 +334,7 @@ local MAX_CONTAINER_RECURSION_DEPTH = 3
 
 --- Recursively sums the weight of every slot (top-level + nested
 --- containers, up to MAX_CONTAINER_RECURSION_DEPTH) in `items` whose
---- `.name` is a configured contraband item (RESEARCH_ARCHIVE.md#contraband-search
+--- `.name` is a configured contraband item (DEVELOPER_REFERENCE.md#contraband-search
 --- §2 — "must-handle, not optional polish": a naive top-level-only scan
 --- will not match a bag's OWN item name against Config.SearchContrabandItems,
 --- so "put the drugs in a bag" would otherwise be a trivial, fully-defeating
@@ -420,7 +420,7 @@ function GetContrabandAlertTier(totalWeight)
     return ResolveAlertTier(totalWeight)
 end
 
---- BLOCKING per RESEARCH_ARCHIVE.md#contraband-search §1: iterates
+--- BLOCKING per DEVELOPER_REFERENCE.md#contraband-search §1: iterates
 --- connected players and only notifies those within
 --- Config.SearchZones.alertBroadcastRadius of the TARGET's own live
 --- coordinates — NEVER a global TriggerClientEvent(-1, ...) like
@@ -448,7 +448,7 @@ local function BroadcastContrabandAlert(targetCoords, targetNetId, alertTierName
 end
 
 -- An entry older than its own cooldown window is by definition no longer
--- doing any rate-limiting work and is safe to drop (RESEARCH_ARCHIVE.md#contraband-search
+-- doing any rate-limiting work and is safe to drop (DEVELOPER_REFERENCE.md#contraband-search
 -- §4). Not the same table/schedule as server/tracking.lua's TrackableLog
 -- prune pass — unrelated tables, unrelated reasons, do not merge the
 -- threads.
@@ -655,7 +655,7 @@ local CONTRABAND_XP_MINT_COOLDOWN_MS = 60000
 -- server/progression.lua caps the TOTAL across mechanics.
 
 -- ==========================================================================
--- COOPERATIVE SEARCH BONUS -- FEATURE_IDEAS.md Part B §10 (coder-backend,
+-- COOPERATIVE SEARCH BONUS -- DEVELOPER_REFERENCE.md Part B §10 (coder-backend,
 -- this pass). When a search's own AwardXP('searchContrabandFound') actually
 -- fires (i.e. already passed every existing gate below: HasK9Access,
 -- proximity, TargetSearchCooldown, the weight-changed check, and
@@ -851,7 +851,7 @@ end
 -- function (see its own extensive "DELIBERATE IMPLEMENTATION CHOICE" doc
 -- comment, now preserved verbatim on server/entities.lua's copy). It was
 -- extracted to server/entities.lua as a resource-global per
--- REFACTOR_ROADMAP.md item 2b once server/inventory.lua and
+-- DEVELOPER_REFERENCE.md item 2b once server/inventory.lua and
 -- server/combat.lua independently hand-copied the exact same function —
 -- three byte-identical copies, none sharing an implementation. This file
 -- now calls that shared global below (HandleSearchTarget's 'person'
@@ -956,7 +956,7 @@ end
 --- reported as `{ ok = false, reason = 'search_failed' }`.
 ---
 --- Validation order — cheapest/most-defensive checks first, expensive/
---- leaky ones last (RESEARCH_ARCHIVE.md#contraband-search §3's own framing;
+--- leaky ones last (DEVELOPER_REFERENCE.md#contraband-search §3's own framing;
 --- reordering "for convenience," e.g. moving the inventory read before
 --- the proximity check, silently reopens the map-wide oracle this
 --- ordering exists to prevent):
@@ -969,7 +969,7 @@ end
 ---      For 'person', additionally confirms the ped resolves to a REAL,
 ---      currently-connected player (never an NPC) via
 ---      ResolveConnectedPlayerFromPed above — Phase 2's "person" search is
----      player-only per SPEC.md §11.3's own scoping note.
+---      player-only per DEVELOPER_REFERENCE.md §11.3's own scoping note.
 ---   3. MANDATORY, FIRST-CLASS live proximity check, run BEFORE any
 ---      ox_inventory query, unconditionally (contract doc §3 step 8 / §6:
 ---      without this, a modified client could supply the netId of ANY
@@ -1055,7 +1055,7 @@ end
 --- @param requestedAt number -- GetGameTimer() at the moment the flat cooldown check passed, reused as the single timestamp for both cooldown stamps
 --- @return table result
 local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
-    -- REFACTOR_ROADMAP.md near-term item 2: was
+    -- DEVELOPER_REFERENCE.md near-term item 2: was
     -- `NetworkGetEntityFromNetworkId(targetNetId)` + a bare `entity == 0`
     -- check, no DoesEntityExist call. Now server/entities.lua's shared
     -- ResolveNetworkEntity(), called WITHOUT expectedEntityType — the
@@ -1126,7 +1126,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
             return { ok = false, reason = 'invalid_target' }
         end
         -- Confirmed against the real overextended/ox_inventory source
-        -- (RESEARCH_ARCHIVE.md#contraband-search §1): a vehicle trunk's inventory
+        -- (DEVELOPER_REFERENCE.md#contraband-search §1): a vehicle trunk's inventory
         -- id is literally 'trunk' .. plate.
         inventoryId = ('trunk%s'):format(plate)
         cooldownKey = 'vehicle:' .. plate
@@ -1157,7 +1157,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- Query contents (recursively via SumContrabandWeight below), pcall-
     -- wrapped — a lazily-loaded vehicle inventory can error on edge-case
     -- vehicle classes/timing. LOAD-BEARING DETAIL, confirmed against the
-    -- real overextended/ox_inventory source (RESEARCH_ARCHIVE.md#contraband-search
+    -- real overextended/ox_inventory source (DEVELOPER_REFERENCE.md#contraband-search
     -- §1, re-verified by tech-scout): for an uncached vehicle trunk,
     -- ox_inventory's own loadInventoryData awaits
     -- lib.callback.await('ox_inventory:getVehicleData', source, netid)
@@ -1320,7 +1320,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     LogSearchAttempt(source, targetType, plate, citizenid, contrabandFound and 'found' or 'clean', totalWeight, alertTier.alert)
 
     -- PHASE 4 ADDITION (QA fix, this pass): Config.XP.awards.searchContrabandFound
-    -- (PHASE4_SPEC.md §13.4.1). config.lua's own comment on this award key
+    -- (DEVELOPER_REFERENCE.md §13.4.1). config.lua's own comment on this award key
     -- already documented this exact call site ("at the point
     -- contrabandFound == true is already known") but the actual AwardXP
     -- call was never wired up here despite that comment claiming it was.
@@ -1411,8 +1411,8 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     }
 end
 
---- SPEC.md §11.4 item 2 / RESEARCH_ARCHIVE.md#contraband-search §3. THE
---- security-critical callback of Phase 2 (SPEC.md §11.1 sub-phase 2b).
+--- DEVELOPER_REFERENCE.md §11.4 item 2 / DEVELOPER_REFERENCE.md#contraband-search §3. THE
+--- security-critical callback of Phase 2 (DEVELOPER_REFERENCE.md §11.1 sub-phase 2b).
 lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetType, targetNetId)
     if type(targetType) ~= 'string' or (targetType ~= 'vehicle' and targetType ~= 'person') or type(targetNetId) ~= 'number' then
         return { ok = false, reason = 'invalid_target' } -- defensive: never trust client payload shape
@@ -1427,7 +1427,7 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     end
 
     -- Set the in-flight mutex synchronously, BEFORE any further work that
-    -- could yield (RESEARCH_ARCHIVE.md#contraband-search §4A) — cleared on EVERY
+    -- could yield (DEVELOPER_REFERENCE.md#contraband-search §4A) — cleared on EVERY
     -- exit path below. TryAcquire combines the original table's
     -- check-then-set into one atomic call: false means already held, so
     -- reject outright, never queue/race a concurrent call from the same
@@ -1439,12 +1439,12 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     local requestedAt = GetGameTimer()
 
     -- Flat per-source cooldown (ANY target) — BLOCKING per
-    -- RESEARCH_ARCHIVE.md#contraband-search §2, not present in SPEC.md
+    -- DEVELOPER_REFERENCE.md#contraband-search §2, not present in DEVELOPER_REFERENCE.md
     -- §11.4's original text (which describes a per-(source, target)
     -- cooldown — CORRECTION, config audit this pass: what actually shipped
     -- as TargetSearchCooldown below is per-TARGET ONLY, no searcher
     -- dimension at all, a divergence from that original spec text worth
-    -- flagging to whoever owns SPEC.md, not something this file's comments
+    -- flagging to whoever owns DEVELOPER_REFERENCE.md, not something this file's comments
     -- should keep restating as fact). Closes the "sweep every vehicle in a
     -- parking lot with zero delay" flood vector a per-target-only cooldown
     -- leaves open, since TargetSearchCooldown alone never limits how many
@@ -1456,7 +1456,7 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
 
     local ok, result = pcall(HandleSearchTarget, source, targetType, targetNetId, requestedAt)
 
-    SearchMutex.Release(source) -- ALWAYS clear, success or error (RESEARCH_ARCHIVE.md#contraband-search §4A "finally")
+    SearchMutex.Release(source) -- ALWAYS clear, success or error (DEVELOPER_REFERENCE.md#contraband-search §4A "finally")
 
     if not ok then
         print(('[qbx_k9unit] searchTarget error for source %s: %s'):format(source, tostring(result)))
@@ -1466,7 +1466,7 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     return result
 end)
 
--- REFACTOR_ROADMAP.md item 1: SearchMutex/SearchCooldown each already
+-- DEVELOPER_REFERENCE.md item 1: SearchMutex/SearchCooldown each already
 -- registered their OWN independent `playerDropped` handler via
 -- :RegisterPlayerDropped() at their own declaration above — same net
 -- effect as the dedicated handler this file used to have (clears each

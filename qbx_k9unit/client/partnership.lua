@@ -326,7 +326,7 @@ function RequestPartnerUp(targetServerId)
     -- it is false for EVERY officer-role player by construction (an
     -- officer is never modeled as a K9), regardless of that officer's own
     -- department membership. Unlike leash (where this same shape is only
-    -- reached from a K9-only radial "self actions" menu per SPEC.md's own
+    -- reached from a K9-only radial "self actions" menu per DEVELOPER_REFERENCE.md's own
     -- item on that submenu, so the officer-initiated direction goes
     -- through a different code path there), this file's RequestPartnerUp()
     -- is the ONE AND ONLY entry point for the "Partner Up" ox_target

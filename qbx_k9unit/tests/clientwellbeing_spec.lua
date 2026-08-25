@@ -614,14 +614,14 @@ end)
 -- findable only in clientsearch_spec.lua/main_spec.lua): every test below
 -- pins what THIS FILE'S CODE does for a given `source` value. None of
 -- them settle, and none should be read as settling, this project's open
--- decision D3 (PROJECT_STATUS.md) -- whether FiveM's real client runtime
+-- decision D3 (DEVELOPER_REFERENCE.md) -- whether FiveM's real client runtime
 -- can ever be made to deliver a forged local trigger carrying a stale or
 -- incorrect `source` left over from an earlier genuine server-sent event
 -- on the same connection. Independent attempts to close D3 by reading the
 -- engine's own source code have repeatedly hit the same wall (four, per
--- PROJECT_STATUS.md's own count as of this session; five per this task's
+-- DEVELOPER_REFERENCE.md's own count as of this session; five per this task's
 -- own brief -- neither count is something a Lua-level sandbox test can
--- move). PROJECT_STATUS.md's own words: "Do not settle this by reading
+-- move). DEVELOPER_REFERENCE.md's own words: "Do not settle this by reading
 -- more code -- only the live test settles it." A green result below is
 -- necessary, not sufficient, evidence that the mitigation works.
 -- ----------------------------------------------------------------------

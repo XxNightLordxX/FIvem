@@ -4,7 +4,7 @@
     In-game admin/audit surface over the tables this resource already
     writes but, until now, only ever exposed as a raw SQL query an admin ran
     by hand (README.md's own documented "admin listing" queries;
-    FEATURE_IDEAS.md Part B top-3 item 2 / §9 -- formerly COMPLEMENTARY_FEATURES.md,
+    DEVELOPER_REFERENCE.md Part B top-3 item 2 / §9 -- formerly COMPLEMENTARY_FEATURES.md,
     merged 2026-08-25): `k9_certifications`
     (server/certifications.lua), `k9_partnerships` (server/partnership.lua),
     `k9_search_log` (server/search.lua), `k9_progression`
@@ -75,7 +75,7 @@
     ======================================================================
     ACCESS MODEL — REVISED (project-owner-directed design change, this
     pass): this surface was originally the first ACE-gated action in this
-    resource (FEATURE_IDEAS.md Part B §9's own "precedent-setting choice,
+    resource (DEVELOPER_REFERENCE.md Part B §9's own "precedent-setting choice,
     not a blocker" flag), on the reasoning that "can this connected
     principal read the search/cert/partnership audit trail" is
     SERVER-OPERATOR tooling, unrelated to department membership or K9
@@ -441,7 +441,7 @@ local ROWS_PER_NOTIFY_CHUNK = 5
 -- value that reaches SQL text directly.
 local VALID_SEARCH_LOG_MODES = { officer = true, plate = true, person = true, recent = true }
 
--- REFACTOR_ROADMAP.md item 1 convention (server/cooldowns.lua): shared
+-- DEVELOPER_REFERENCE.md item 1 convention (server/cooldowns.lua): shared
 -- constructor, not a hand-rolled table. One instance covers all three
 -- commands in this file, keyed by the CALLING admin's own source — see
 -- this file's header "RATE LIMITING" section. No default threshold baked

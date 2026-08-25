@@ -188,7 +188,7 @@ AddEventHandler('playerDropped', function()
     ActiveHunts[source] = nil
 end)
 
--- REFACTOR_ROADMAP.md item 1 convention: server/cooldowns.lua's NewCooldown,
+-- DEVELOPER_REFERENCE.md item 1 convention: server/cooldowns.lua's NewCooldown,
 -- same as every other per-source start-side cooldown in this resource.
 -- Constructor default validated by that file's own AssertValidDefaultThreshold
 -- -- a non-positive Config.ScentTrailHunt.startCooldownMs errors loudly at

@@ -1,7 +1,7 @@
 --[[
     tests/coopsearchbonus_spec.lua
 
-    Tests for server/search.lua's TryAwardCoopSearchBonus -- FEATURE_IDEAS.md
+    Tests for server/search.lua's TryAwardCoopSearchBonus -- DEVELOPER_REFERENCE.md
     Part B §10 (see that function's own declaration comment, and the
     "COOPERATIVE SEARCH BONUS" section header immediately above it, for the
     full spec definition and the anti-farm arithmetic this file proves by

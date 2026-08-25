@@ -143,7 +143,7 @@
        [RegisterNetEvent, server -> this caller's client only]
     Both server->client pushes carry the standard TRUST-BOUNDARY ORIGIN
     GUARD (`source ~= 65535` -- FiveM's documented sentinel for "this event
-    genuinely came from the server," phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary,
+    genuinely came from the server," DEVELOPER_REFERENCE.md#trust-boundary,
     the exact same convention client/screenfx.lua and client/scenttrail.lua
     already apply to their own server->client pushes). Forging either
     grants no real advantage here (worst case: a spurious notification/

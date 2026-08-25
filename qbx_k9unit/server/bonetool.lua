@@ -399,7 +399,7 @@ local function IsAuthorizedBoneSweepDevTool(source)
     return type(IsHighCommand) == 'function' and IsHighCommand(source)
 end
 
--- REFACTOR_ROADMAP.md item 1 convention: per-source rate limit on running
+-- DEVELOPER_REFERENCE.md item 1 convention: per-source rate limit on running
 -- this command at all — spam/abuse guard only (this is an admin-only tool,
 -- but a misbehaving or scripted client is still worth throttling, same
 -- reasoning as server/admin.lua's own AuditCooldown).

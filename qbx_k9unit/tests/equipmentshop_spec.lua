@@ -1,7 +1,7 @@
 --[[
     tests/equipmentshop_spec.lua
 
-    Tests for server/equipmentshop.lua -- FEATURE_IDEAS.md Part B §6 (the K9
+    Tests for server/equipmentshop.lua -- DEVELOPER_REFERENCE.md Part B §6 (the K9
     equipment shop). Loads the REAL, unmodified production file into an
     isolated sandbox and drives its onResourceStart handler directly --
     same style as tests/wellbeing_spec.lua's own "STARTUP VALIDATION"

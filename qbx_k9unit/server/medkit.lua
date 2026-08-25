@@ -2,9 +2,9 @@
     qbx_k9unit/server/medkit.lua
 
     Phase 4 implementation (coder-backend). Owns Config.Features.K9Medkit
-    (PHASE4_SPEC.md §13.4.4): the `qbx_k9unit:server:useK9Medkit` callback —
+    (DEVELOPER_REFERENCE.md §13.4.4): the `qbx_k9unit:server:useK9Medkit` callback —
     server-authoritative "use a medkit item on a nearby K9-model player"
-    action. New, small file pair with client/medkit.lua, per PHASE4_SPEC.md
+    action. New, small file pair with client/medkit.lua, per DEVELOPER_REFERENCE.md
     §13.3's file plan ("real ox_inventory capability grant deserves the
     certification-file's level of scrutiny" — same reasoning
     server/search.lua's own header already gives for its trust-model split).
@@ -20,13 +20,13 @@
     client-reported "I used it" is never sufficient), and a TOCTOU-safe
     cooldown stamped BEFORE the mutating work, using server/cooldowns.lua's
     shared NewCooldown/NewMutex constructors (never a hand-rolled table,
-    per REFACTOR_ROADMAP.md item 1's established convention).
+    per DEVELOPER_REFERENCE.md item 1's established convention).
 
     ======================================================================
     OX_INVENTORY EXPORT SIGNATURES — CONFIRMED AGAINST THE REAL SOURCE THIS
     SESSION (github.com/overextended/ox_inventory @ main, fetched and read
     directly, not remembered/guessed — same methodology
-    phase2_notes/RESEARCH_ARCHIVE.md#contraband-search already used to confirm
+    DEVELOPER_REFERENCE.md#contraband-search already used to confirm
     GetInventoryItems/GetContainerFromSlot for server/search.lua):
         exports.ox_inventory:GetItemCount(inv, itemName, metadata?, strict?) -> number
             (modules/inventory/server.lua, Inventory.GetItemCount, exported
@@ -51,7 +51,7 @@
     this codebase's established discipline and to stay correct if a future
     ox_inventory version ever makes one of these calls yield.
 
-    DELIBERATE DESIGN CHOICE — resolves PHASE4_SPEC.md §13.4.4 open
+    DELIBERATE DESIGN CHOICE — resolves DEVELOPER_REFERENCE.md §13.4.4 open
     question 2 (exact ox_inventory useable-item registration API) BY
     SIDESTEPPING IT rather than guessing at data/items.lua's
     client.export/server.export shape or the explicitly-`@deprecated`
@@ -96,7 +96,7 @@
 
     Client events (RegisterNetEvent, server->client):
     2. 'qbx_k9unit:client:applyMedkitHeal' (newHealth: number)
-       [client/medkit.lua, TARGET K9 ONLY] — per PHASE4_SPEC.md §13.4.4's
+       [client/medkit.lua, TARGET K9 ONLY] — per DEVELOPER_REFERENCE.md §13.4.4's
        own open question 1: `SetEntityHealth`'s reliability when called
        server-side against a REMOTE-OWNED networked ped was not
        independently verified this session either way, so this file takes
@@ -106,7 +106,7 @@
        READ (reads are not the flagged uncertainty — only the cross-owner
        WRITE native is), mirroring every other "client self-applies to its
        own entity" pattern already established in this codebase (movement-
-       rate modifiers, sprint/jump input blocks, PHASE4_SPEC.md §13.0
+       rate modifiers, sprint/jump input blocks, DEVELOPER_REFERENCE.md §13.0
        Decision 3). The server still decides the real restored amount; the
        client only ever writes the exact number the server already computed
        and clamped — it cannot inflate or ignore the restore amount to gain
@@ -130,10 +130,10 @@
     - Calls `RestoreInjury(citizenid, amount)`, resource-global from
       server/wellbeing.lua, ONLY IF THAT FUNCTION EXISTS
       (`type(RestoreInjury) == 'function'` guard) — server/wellbeing.lua
-      (PHASE4_SPEC.md §13.1 sub-phase 4c/4d, the Injury wellbeing stat)
+      (DEVELOPER_REFERENCE.md §13.1 sub-phase 4c/4d, the Injury wellbeing stat)
       has NOT been implemented as of this file being written (confirmed:
       no such file exists in this resource's server/ directory at the time
-      of this pass — PHASE4_SPEC.md §13.1 itself documents K9Medkit, 4g, as
+      of this pass — DEVELOPER_REFERENCE.md §13.1 itself documents K9Medkit, 4g, as
       depending on 4c/4d landing first). This is forward-compatible by
       design: once server/wellbeing.lua ships that accessor, this line
       activates with zero change needed here. Until then, K9Medkit restores
@@ -141,7 +141,7 @@
       health restore on a not-yet-built subsystem.
     - Owns `MedkitCooldown` and `MedkitMutex` below as file-local state,
       each a server/cooldowns.lua tracker instance (NewCooldown/NewMutex)
-      — REFACTOR_ROADMAP.md item 1's convention, no hand-rolled table.
+      — DEVELOPER_REFERENCE.md item 1's convention, no hand-rolled table.
     - Exposes NO resource-global functions of its own.
 
     ======================================================================
@@ -415,7 +415,7 @@ local function IsMedkitUserAuthorized(source)
         return true
     end
 
-    -- Optional forward-looking override hook (PHASE4_SPEC.md §13.4.4 open
+    -- Optional forward-looking override hook (DEVELOPER_REFERENCE.md §13.4.4 open
     -- question 3) — pcall-wrapped so a misbehaving server-owner-supplied
     -- function can never crash this callback; a thrown error is treated as
     -- "not authorized", never as "authorized" (fail closed).
@@ -428,7 +428,7 @@ local function IsMedkitUserAuthorized(source)
 end
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
 -- implementation -- see that file's own header for the extraction writeup.
 -- Every call site below is unchanged: this file never passed a custom
@@ -488,7 +488,7 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- a modified client could supply the server id of ANY connected K9
     -- player anywhere on the map and heal/consume-item against them
     -- remotely — the same "map-wide oracle" risk
-    -- RESEARCH_ARCHIVE.md#contraband-search §3 step 8 flags for search, applied
+    -- DEVELOPER_REFERENCE.md#contraband-search §3 step 8 flags for search, applied
     -- here to a mutation instead of a read.
     local dist = #(GetEntityCoords(usingPed) - GetEntityCoords(targetPed))
     if dist > Config.K9Medkit.range then
@@ -675,7 +675,7 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
     return result
 end
 
---- PHASE4_SPEC.md §13.4.4. Server-authoritative "use a K9 medkit" callback.
+--- DEVELOPER_REFERENCE.md §13.4.4. Server-authoritative "use a K9 medkit" callback.
 lib.callback.register('qbx_k9unit:server:useK9Medkit', function(source, targetServerId)
     if type(targetServerId) ~= 'number' then
         return { ok = false, reason = 'invalid_target' } -- defensive: never trust client payload shape

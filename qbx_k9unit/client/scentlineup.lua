@@ -28,7 +28,7 @@
     byte-for-byte (same dialog API, same labels, same origin guard).
 
     SOURCE-ORIGIN GUARD: `source ~= 65535` is this handler's first
-    statement, per phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary's
+    statement, per DEVELOPER_REFERENCE.md#trust-boundary's
     documented pattern (FiveM's own "the server sends net id 65535" rule)
     already applied identically by client/partnership.lua/
     client/screenfx.lua in this resource. Forging this event locally would

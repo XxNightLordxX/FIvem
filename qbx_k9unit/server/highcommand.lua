@@ -137,7 +137,7 @@
 
     TARGET RESOLUTION -- K9 vs. handler, THE GENUINE DESIGN QUESTION this
     task's own brief calls out by name: '/k9givexp [server id] [amount]'
-    takes a CONNECTED PLAYER's server id (per SPEC.md, a K9 is a player's
+    takes a CONNECTED PLAYER's server id (per DEVELOPER_REFERENCE.md, a K9 is a player's
     own persistent character, not an NPC -- so both "the K9" and "the
     handler" are real, separately-controlled connected players, each with
     their own citizenid). Given that server id resolves to `directCitizenid`:
@@ -414,7 +414,7 @@ end
 -- cooldown, audit).
 -- ======================================================================
 
--- REFACTOR_ROADMAP.md item 1 convention: shared constructor, not a
+-- DEVELOPER_REFERENCE.md item 1 convention: shared constructor, not a
 -- hand-rolled table. One instance, keyed by the GRANTER's own source,
 -- mirroring server/admin.lua's AuditCooldown / server/certifications.lua's
 -- CertifyActionCooldown shape (no constructor default -- the threshold is

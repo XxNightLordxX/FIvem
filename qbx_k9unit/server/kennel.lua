@@ -2,7 +2,7 @@
     qbx_k9unit/server/kennel.lua
 
     Phase 5 R&D scaffold (coder-architect structural pass).
-    Config.Features.DeployableKennel (phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research
+    Config.Features.DeployableKennel (DEVELOPER_REFERENCE.md#phase-5-research
     §5): "a certified handler can place a world object (the kennel prop)
     near themselves... server-authoritative validation (proximity,
     certification, one-per-handler limit), with cleanup on resource stop/
@@ -11,7 +11,7 @@
     NEW FILE PAIR (this file + client/kennel.lua), not folded into
     server/main.lua or server/certifications.lua — same "one responsibility
     per file, don't let it balloon into an everything-file" convention
-    those two files' own headers already establish. PHASE4_SPEC.md's own
+    those two files' own headers already establish. DEVELOPER_REFERENCE.md's own
     file-layout table reaches the identical conclusion for the structurally
     similar K9Inventory feature ("a real ... capability grant deserves the
     certification-file's level of scrutiny... new pair, not folded into an
@@ -49,7 +49,7 @@
        instructs the SAME client to actually create the object (event 5).
        CreateObject/PlaceObjectOnGroundProperly/FreezeEntityPosition are
        native-only, client-side operations per
-       phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §5's confirmed natives —
+       DEVELOPER_REFERENCE.md#phase-5-research §5's confirmed natives —
        this file never attempts to create the object itself.
     2. 'qbx_k9unit:server:confirmKennelPlaced' (netId: number) [THIS FILE]
        Client reports the network id of the object it actually created, in
@@ -179,7 +179,7 @@
     - THIS FILE calls `HasK9Access(source)`, exposed by
       server/certifications.lua — do not re-derive the job/cert check here.
     - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)`,
-      exposed by server/entities.lua (REFACTOR_ROADMAP.md item 2) — do not
+      exposed by server/entities.lua (DEVELOPER_REFERENCE.md item 2) — do not
       re-implement the resolve/existence-guard sequence here.
       RemoveKennelForCitizenid, confirmKennelPlaced, and the onResourceStop
       sweep all previously hand-rolled their own
@@ -212,7 +212,7 @@
          resource's first spatial-radius-scan-based limit.
       2. A per-area limit needs a defined "area" (a zone list? a radius
          around every existing kennel? around each station?) that
-         SPEC.md/PHASE4_SPEC.md/the Phase 5 research doc never define for
+         DEVELOPER_REFERENCE.md/DEVELOPER_REFERENCE.md/the Phase 5 research doc never define for
          this feature — inventing one here would be a real, undocumented
          design decision dressed up as a structural default.
       3. A per-handler cap already prevents the concrete abuse this limit
@@ -237,7 +237,7 @@
     medium-high confidence per that convention, but NOT independently
     re-verified against this exact FXServer version's native behavior this
     session (no live server was reachable to test against, same sandbox
-    limitation phase2_notes/RESEARCH_ARCHIVE.md's native-reference tables
+    limitation DEVELOPER_REFERENCE.md's native-reference tables
     already document elsewhere). The broadcast to 'qbx_k9unit:client:removeKennel' (-1)
     immediately below it is a deliberate backstop, not redundant
     belt-and-suspenders for its own sake: if server-side DeleteEntity turns
@@ -261,7 +261,7 @@ local Kennels = {}
 -- file should read it directly.
 local PendingKennelPlacements = {}
 
--- REFACTOR_ROADMAP.md item 1 convention (server/cooldowns.lua): per-source
+-- DEVELOPER_REFERENCE.md item 1 convention (server/cooldowns.lua): per-source
 -- rate limit on requesting a NEW placement — spam defense only, distinct
 -- from the one-active-kennel-per-citizenid limit enforced separately below.
 --
@@ -291,7 +291,7 @@ local KennelModelHashes = {
 }
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
 -- implementation -- see that file's own header for the extraction writeup.
 -- Every call site below is unchanged: this file never passed a custom
@@ -314,7 +314,7 @@ local function RemoveKennelForCitizenid(citizenid)
     -- exact (feature, ownerId) pair never held the claim.
     ReleaseNetworkEntity(kennel.netId, 'kennel', citizenid)
 
-    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this file's
+    -- DEVELOPER_REFERENCE.md item 2 (Revision 5 migration): was this file's
     -- own inline `NetworkDoesEntityExistWithNetworkId` / `NetworkGetEntityFromNetworkId`
     -- / `DoesEntityExist` sequence. No entity-type restriction is needed
     -- here (a kennel is being deleted by its own recorded netId, not
@@ -496,7 +496,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     end
     PendingKennelPlacements[citizenid] = nil -- consumed either way, success or rejected below
 
-    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this file's
+    -- DEVELOPER_REFERENCE.md item 2 (Revision 5 migration): was this file's
     -- own `NetworkDoesEntityExistWithNetworkId` existence guard followed by
     -- a SEPARATE `GetEntityType(entity) ~= 3` check further down — both
     -- are now server/entities.lua's shared ResolveNetworkEntity(), called
@@ -837,7 +837,7 @@ AddEventHandler('playerDropped', function(_reason)
     end
 
     -- DeployCooldown already registered its own playerDropped handler via
-    -- :RegisterPlayerDropped() above — REFACTOR_ROADMAP.md item 1
+    -- :RegisterPlayerDropped() above — DEVELOPER_REFERENCE.md item 1
     -- convention, nothing to do for it here.
 end)
 
@@ -853,7 +853,7 @@ end)
 AddEventHandler('onResourceStop', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
-    -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this file's
+    -- DEVELOPER_REFERENCE.md item 2 (Revision 5 migration): was this file's
     -- own inline existence-check sequence, same as RemoveKennelForCitizenid
     -- above (no expectedEntityType needed here either).
     for _, kennel in pairs(Kennels) do

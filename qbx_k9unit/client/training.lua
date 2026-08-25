@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/training.lua
 
-    Client half of Training Mode -- FEATURE_IDEAS.md Part A Tier B §6. See
+    Client half of Training Mode -- DEVELOPER_REFERENCE.md Part A Tier B §6. See
     server/training.lua's own header for the full contract, the XP
     decision, and the "unmistakably distinct from live duty" reasoning;
     this file is deliberately thin on top of it -- every real gate (access,

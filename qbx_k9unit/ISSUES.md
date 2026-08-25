@@ -90,6 +90,12 @@ need action.
 
 Not issues — work in flight. Listed so nothing looks finished that is not.
 
+**Document consolidation is now FINISHED.** Twenty markdown files down to
+nine. Everything technical lives in one `DEVELOPER_REFERENCE.md`; what is
+left besides it is the licence, the changelog, this file, the ideas list,
+the audio credits, and the three you actually read — README, player guide,
+operator runbook.
+
 **Running without a database is now FINISHED.** `Config.Database = false`
 genuinely stops all SQL — verified, zero direct database calls remain
 outside the one accessor layer, and exactly one place in the entire
@@ -106,8 +112,7 @@ our tables — not that you can remove oxmysql.*
   handler on a human body can leash, partner, carry, be treated and be
   attached to. Jump and crouch are deliberately kept — see the decision
   above.
-- **Document consolidation.** Twenty files down to about seven. Interrupted
-  by a session limit partway through; needs restarting.
+
 - **Connecting the compat adapters.** The translation layer for other
   targeting and inventory scripts is written but not yet called, so today
   everything still goes through `ox_target` and `ox_inventory` directly.

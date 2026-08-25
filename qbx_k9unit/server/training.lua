@@ -2,7 +2,7 @@
     qbx_k9unit/server/training.lua
 
     Training-mode / practice sandbox, distinct from live duty --
-    FEATURE_IDEAS.md Part A Tier B §6. A certified handler/K9 who is
+    DEVELOPER_REFERENCE.md Part A Tier B §6. A certified handler/K9 who is
     PHYSICALLY inside a configured `Config.TrainingZones` entry can turn on
     Training Mode and rehearse the search / bite-and-hold interaction FLOW
     against a scripted, fake server response -- never a real target, never

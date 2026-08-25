@@ -1,15 +1,15 @@
 --[[
     qbx_k9unit/config.lua
 
-    Transcribed verbatim from SPEC.md §5 ("Config schema (concrete shape)"),
+    Transcribed verbatim from DEVELOPER_REFERENCE.md §5 ("Config schema (concrete shape)"),
     which is unchanged by the post-draft correction (§1/§2/§4.4/§4.5) — no
-    additions or removals beyond what's noted inline below. If SPEC.md §5
+    additions or removals beyond what's noted inline below. If DEVELOPER_REFERENCE.md §5
     is revised again, re-diff this file against it before trusting it as
     still in sync.
 
     HISTORY: an earlier draft of this file added a Config.K9DespawnGraceSeconds
     field for a handler->K9 spawn-registry grace timer. That concept was
-    removed entirely once SPEC.md's post-draft correction established the
+    removed entirely once DEVELOPER_REFERENCE.md's post-draft correction established the
     K9 is a player's own persistent character with no spawn/despawn/registry
     at all (see the NOTE further down where that field used to live).
 ]]
@@ -197,7 +197,7 @@ Config.Features = {
     PropDragging         = true,
     AgilityAdvanced      = true, -- fence/window vault approximation
 
-    -- server/recall.lua + client/recall.lua (PHASE3_SPEC.md §12.5.1's
+    -- server/recall.lua + client/recall.lua (DEVELOPER_REFERENCE.md §12.5.1's
     -- "Recall actor"). The handler's escape hatch: ends whatever active
     -- effect their partnered K9 currently holds (bite/takedown/drag alike --
     -- deliberately generalised beyond §12.5.1's bite-only text, since
@@ -207,14 +207,14 @@ Config.Features = {
     -- a decertified handler must still be able to call their dog off.
     Recall               = true,
 
-    -- PHASE3_SPEC.md §12.0 item 7 (Revision 5, coder-architect) /
+    -- DEVELOPER_REFERENCE.md §12.0 item 7 (Revision 5, coder-architect) /
     -- server/partnership.lua (coder-backend, this pass). Gates the
     -- mutually-consented "Partner Up" registry ONLY -- HandlerDownDefense
     -- and BiteAndHold's Recall actor (the two features this registry
     -- unblocks) are each STILL independently gated by their OWN flags
     -- above and remain unimplemented as of this pass regardless of this
     -- flag's value; flipping this on by itself does not enable either.
-    -- DEFAULT DIVERGES FROM PHASE3_SPEC.md §12.0 item 7 point 5's OWN
+    -- DEFAULT DIVERGES FROM DEVELOPER_REFERENCE.md §12.0 item 7 point 5's OWN
     -- "recommended default true" text -- deliberate, not an oversight: that
     -- recommendation predates any real code existing, and this resource's
     -- actual shipped convention for every other Phase 3 mechanic (see the
@@ -227,7 +227,7 @@ Config.Features = {
     -- isn't independently verified.
     HandlerPartnership   = true,
 
-    -- server/tenure.lua (FEATURE_IDEAS.md Part B §7). Grants a one-time,
+    -- server/tenure.lua (DEVELOPER_REFERENCE.md Part B §7). Grants a one-time,
     -- flat XP bonus to the K9-role party when a partnership's CONTINUOUS
     -- tenure crosses a configured threshold -- the first gameplay
     -- consequence wired to the HandlerPartnership registry, which landed as
@@ -257,7 +257,7 @@ Config.Features = {
     -- over the three tables this resource already writes (k9_certifications,
     -- k9_partnerships, k9_search_log) -- five commands, nine hardcoded SQL
     -- templates, zero mutation paths of any kind. Replaces "documented raw
-    -- SQL an admin runs by hand" (FEATURE_IDEAS.md Part B item 2). This one
+    -- SQL an admin runs by hand" (DEVELOPER_REFERENCE.md Part B item 2). This one
     -- exposes WHO SEARCHED WHOM, so it is a privacy boundary as well as a
     -- security one: set `auditGrade` on each Config.Departments entry below
     -- deliberately. There is no ACE permission to grant -- that gate was
@@ -988,7 +988,7 @@ Config.LeashMaxDistance = 8.0
 -- ======================================================================
 -- NOTE (coder-architect, Phase 1 rewrite): Config.K9DespawnGraceSeconds
 -- was added in the first scaffolding pass for a handler->K9 netId
--- registry that no longer exists — SPEC.md's post-draft correction
+-- registry that no longer exists — DEVELOPER_REFERENCE.md's post-draft correction
 -- established the K9 is a player's own persistent character (§1, §4.5),
 -- with no spawn/despawn/registry concept at all. Removed; do not re-add
 -- without a new documented reason, since nothing currently consumes it.
@@ -1062,11 +1062,11 @@ Config.XPTiers = {
 -- PHASE 4 — XP PROGRESSION (Config.Features.XPProgression, server/progression.lua).
 -- Per-action award VALUES that accumulate toward Config.XPTiers' thresholds
 -- above (that table was drafted early and sat unused until this pass).
--- PHASE4_SPEC.md §13.4.1 — the exact award-action list (searchContrabandFound/
+-- DEVELOPER_REFERENCE.md §13.4.1 — the exact award-action list (searchContrabandFound/
 -- trackSourceResolved/biteHoldSuccess/takedownSuccess) is taken verbatim from
 -- that section, not invented here. Every value below is an unreviewed
 -- placeholder pending economy-balance-agent/config-validator review
--- (SPEC.md §9 item 4), same status Config.XPTiers itself already carries.
+-- (DEVELOPER_REFERENCE.md §9 item 4), same status Config.XPTiers itself already carries.
 -- ======================================================================
 Config.XP = {
     -- Whether an NPC bite-hold or takedown target MINTS XP. Defaults false.
@@ -1093,21 +1093,21 @@ Config.XP = {
         searchContrabandFound = 25,
         -- server/tracking.lua's findTrackableSource resolving `found = true`
         -- is NOT, by itself, the award trigger — see trackArrivalRadius/
-        -- trackArrivalTTLMs below. PHASE4_SPEC.md §13.4.1 open question 3
+        -- trackArrivalTTLMs below. DEVELOPER_REFERENCE.md §13.4.1 open question 3
         -- explicitly flags that awarding on `found = true` alone lets a K9
         -- farm XP by repeatedly triggering a search without ever completing
         -- it; this implementation closes that by requiring the K9's own
         -- client to subsequently arrive within trackArrivalRadius of the
         -- SERVER's resolved coordinate before this amount is granted.
         trackSourceResolved   = 10,
-        -- server/combat.lua's requestBiteHold success (PHASE3_SPEC.md
+        -- server/combat.lua's requestBiteHold success (DEVELOPER_REFERENCE.md
         -- §12.5.1). WIRED. The note that stood here -- "NOT YET WIRED:
         -- server/combat.lua does not exist in this codebase" -- predated
         -- Phase 3 combat landing and had gone stale; that file exists and
         -- calls AwardXP(citizenid, 'biteHoldSuccess') from its success
         -- path. See server/progression.lua's header for the call contract.
         biteHoldSuccess       = 20,
-        -- server/combat.lua's requestTakedown success (PHASE3_SPEC.md
+        -- server/combat.lua's requestTakedown success (DEVELOPER_REFERENCE.md
         -- §12.5.2) -- same stale-note correction as biteHoldSuccess above;
         -- this one is wired too.
         takedownSuccess       = 30,
@@ -1151,18 +1151,18 @@ Config.XP = {
         partnershipTenure30Day = 100, -- 30 days
     },
 
-    -- 'citizenid' (default, per PHASE4_SPEC.md §13.2's own default and
-    -- phase2_notes/RESEARCH_ARCHIVE.md#xp-schema §4's schema sketch, which
+    -- 'citizenid' (default, per DEVELOPER_REFERENCE.md §13.2's own default and
+    -- DEVELOPER_REFERENCE.md#xp-schema §4's schema sketch, which
     -- assumes this): XP belongs to the K9 character itself and is portable
     -- across a department change (k9_progression is keyed by citizenid
     -- alone, no job column). 'job' would need a composite (citizenid, job)
     -- primary key instead, mirroring k9_certifications — NOT implemented by
-    -- this pass; PHASE4_SPEC.md §13.6 item 2 flags this as a genuinely open
+    -- this pass; DEVELOPER_REFERENCE.md §13.6 item 2 flags this as a genuinely open
     -- product call still needing explicit sign-off. Left at the documented
     -- default rather than silently guessed differently.
     scopePerCitizenidOrJob = 'citizenid',
 
-    -- EXTENSION beyond PHASE4_SPEC.md §13.2's own sketch (that section only
+    -- EXTENSION beyond DEVELOPER_REFERENCE.md §13.2's own sketch (that section only
     -- specified `awards`/`scopePerCitizenidOrJob`) — added to actually
     -- resolve open question 3 above rather than leave the farm exploit it
     -- flags unresolved. The `findTrackableSource` reveal itself stays
@@ -1182,7 +1182,7 @@ Config.XP = {
 -- Order matters: server/search.lua walks this list and keeps the LAST tier
 -- whose minWeight the total contraband weight meets or exceeds, so entries
 -- must stay sorted ascending by minWeight. The 'clean' baseline is
--- mandatory (SPEC.md §11.4) so a zero-contraband result always resolves to
+-- mandatory (DEVELOPER_REFERENCE.md §11.4) so a zero-contraband result always resolves to
 -- a real tier instead of falling through unhandled.
 -- ======================================================================
 Config.ContrabandAlertTiers = {
@@ -1239,7 +1239,7 @@ Config.FindAlerts = {
 Config.Tracking = {
     Scent = {
         maxRange         = 40.0,  -- max distance from the K9's current position to a valid scent source at search time
-        maxAgeSeconds    = 900,   -- how long a dropped item stays trackable as a scent source (§9 item 17 close-out, 2026-08-23). Deliberately longer than Blood/Gunpowder's 300s/120s -- a physical dropped item sitting on the ground doesn't decay the way a damage/gunfire event does. Judgment call, not independently confirmed against real gameplay balance -- phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution §4 flags this as worth a product-manager/config-validator/economy-balance-agent pass; revisit if playtesting says otherwise.
+        maxAgeSeconds    = 900,   -- how long a dropped item stays trackable as a scent source (§9 item 17 close-out, 2026-08-23). Deliberately longer than Blood/Gunpowder's 300s/120s -- a physical dropped item sitting on the ground doesn't decay the way a damage/gunfire event does. Judgment call, not independently confirmed against real gameplay balance -- DEVELOPER_REFERENCE.md#scent-source-resolution §4 flags this as worth a product-manager/config-validator/economy-balance-agent pass; revisit if playtesting says otherwise.
         markerSpacing    = 3.0,   -- meters between rendered trail markers/checkpoints
         searchCooldownMs = 5000,  -- per-player cooldown on re-issuing a "search" command of this type
         relayCooldownMs  = 1000,  -- per-dropping-player cap on how often the ox_inventory 'swapItems' hook (server/tracking.lua) logs a new scent-source entry. UNLIKE Blood/Gunpowder's field of the same name, this is NOT closing an anti-forgery gap -- the hook is server-to-server, so `payload.source` cannot be spoofed to claim a drop that didn't happen. It's defense-in-depth against a rapid drop/pickup/drop loop growing the server-side scent log unbounded between prune passes. Placeholder pending tuning.
@@ -1315,7 +1315,7 @@ Config.DoorInteraction = {
 -- ======================================================================
 -- PHASE 2 — VISION (thermal / night). Both are native-toggle keybinds, no
 -- custom shader/asset -- see §11.6 for the exact natives confirmed/refined
--- against SPEC.md §7's original claim.
+-- against DEVELOPER_REFERENCE.md §7's original claim.
 -- ======================================================================
 Config.Vision = {
     Thermal = { toggleKey = 'K' }, -- drives SetSeethrough(true/false) -- see §11.6
@@ -1323,9 +1323,9 @@ Config.Vision = {
 }
 
 -- ======================================================================
--- PHASE 3 — COMBAT & ADVANCED AGILITY (PHASE3_SPEC.md §12.2).
+-- PHASE 3 — COMBAT & ADVANCED AGILITY (DEVELOPER_REFERENCE.md §12.2).
 --
--- UPDATE (coder-security, this pass): PHASE3_SPEC.md §12.0 item 8 (the
+-- UPDATE (coder-security, this pass): DEVELOPER_REFERENCE.md §12.0 item 8 (the
 -- client-relay/non-cooperating-target-client architecture question) is now
 -- RESOLVED (Revision 4) — see that item's own "ship it, with binding
 -- guardrails" verdict. `BiteAndHold` and `NonLethalTakedown` (including
@@ -1342,7 +1342,7 @@ Config.Vision = {
 --     implemented) — its config entries stay absent rather than added as
 --     dead placeholders. It shares item 8's Category B relay exposure for
 --     its drag-speed-limit half (see item 8's own write-up) and ADDITIONALLY
---     needs PHASE3_SPEC.md §12.0 item 6's downed-check contract for a
+--     needs DEVELOPER_REFERENCE.md §12.0 item 6's downed-check contract for a
 --     player target, so it is not simply "the same pattern, one more
 --     feature" — left for whoever picks it up next to design/implement
 --     against item 8's already-resolved guardrails directly.
@@ -1353,7 +1353,7 @@ Config.Vision = {
 --         plus client/combat.lua and server/combat.lua.
 --       * HandlerDownDefense shipped -- see Config.Combat.HandlerDownDefense
 --         below, plus server/defense.lua and client/defense.lua. Its stated
---         blocker (PHASE3_SPEC.md §12.0 item 7, "who is this K9's handler")
+--         blocker (DEVELOPER_REFERENCE.md §12.0 item 7, "who is this K9's handler")
 --         was resolved by the HandlerPartnership registry landing.
 --         NOTE, because the spec was WRONG about this and a future editor
 --         will otherwise re-derive it: §12.3 assumed HandlerDownDefense
@@ -1365,18 +1365,18 @@ Config.Vision = {
 --         scratch by ValidateCombatRequest.
 --     Both features still ship `false`, per this resource's convention that
 --     a newly-landed mechanic stays off until its own go-live review.
--- Re-diff this block against PHASE3_SPEC.md §12.2 in full if either of the
+-- Re-diff this block against DEVELOPER_REFERENCE.md §12.2 in full if either of the
 -- above is picked up later, rather than assuming this copy stays in sync.
 -- ======================================================================
 Config.Combat = {
     -- Applies to BiteAndHold and NonLethalTakedown's player-target paths
     -- below (and would apply to PropDragging's, if/when that's built).
-    -- PHASE3_SPEC.md §12.0 item 5 — RESOLVED, secure-by-default.
+    -- DEVELOPER_REFERENCE.md §12.0 item 5 — RESOLVED, secure-by-default.
     RequireWantedStatus = true, -- a K9 may only target a PLAYER who is flagged wanted/suspect. Does NOT affect NPC targets (a "wanted" concept doesn't apply to an NPC this resource has no reason to protect from griefing).
 
     -- function(playerId: number) -> boolean, OPTIONAL, nil by default.
     -- Expected to be the NORMAL path for a real server, not the exceptional
-    -- one — PHASE3_SPEC.md §12.0 item 5's own fragmentation note flags the
+    -- one — DEVELOPER_REFERENCE.md §12.0 item 5's own fragmentation note flags the
     -- default metadata guess below as LOWER CONFIDENCE than
     -- PropDragging's equivalent (`IsPlayerDownedOverride`, not yet added —
     -- see this file's PropDragging note above), because there is no single
@@ -1395,7 +1395,7 @@ Config.Combat = {
     -- relying on this in production — most real servers are expected to
     -- supply the override instead.
 
-    -- PHASE3_SPEC.md §12.0 item 8 — DETECTION ONLY, NEVER ENFORCEMENT (see
+    -- DEVELOPER_REFERENCE.md §12.0 item 8 — DETECTION ONLY, NEVER ENFORCEMENT (see
     -- that item's guardrail 3: no server-authoritative consequence may ever
     -- be conditioned on one of these signals firing). Real, implemented
     -- sampling in `server/combat.lua`, not a sketch — see that file's own
@@ -1428,7 +1428,7 @@ Config.Combat = {
         -- speed-based thresholds above BY DESIGN: a drag's compliance
         -- signal compares the target's live position against the DRAGGING
         -- K9's own live position, not against an absolute speed ceiling,
-        -- because PHASE3_SPEC.md §12.0 item 8's corollary is that a hostile
+        -- because DEVELOPER_REFERENCE.md §12.0 item 8's corollary is that a hostile
         -- target can simply self-detach (DetachEntity is very likely not
         -- ownership-gated). A target that has broken free reads as a
         -- growing gap, which an absolute speed ceiling would miss entirely.
@@ -1439,7 +1439,7 @@ Config.Combat = {
         dragComplianceSlackMeters = 4.0,
     },
 
-    -- PHASE3_SPEC.md §12.5.4. MIXED Category A/B per §12.0 item 8, and the
+    -- DEVELOPER_REFERENCE.md §12.5.4. MIXED Category A/B per §12.0 item 8, and the
     -- only Phase 3 mechanic that is: the ATTACH is Category A (server-side
     -- authoritative, robust against a hostile target client) while the
     -- SPEED LIMIT is Category B (SetPedMoveRateOverride is local-only, so a
@@ -1454,7 +1454,7 @@ Config.Combat = {
         maxDragDurationMs  = 20000,  -- hard timeout if never manually released, same role as BiteAndHold's maxDurationMs
         dragSpeedMultiplier = 0.4,   -- Category B: applied to the TARGET's move rate while dragged. A modified client may ignore this; that is disclosed, not solved.
         -- function(targetServerId: number) -> boolean|nil, OPTIONAL.
-        -- PHASE3_SPEC.md §12.0 item 6 made this a REQUIRED active config
+        -- DEVELOPER_REFERENCE.md §12.0 item 6 made this a REQUIRED active config
         -- surface rather than a commented-out placeholder, because the
         -- native-only fallback is genuinely unreliable for players:
         -- IsPedDeadOrDying/IsPedRagdoll measure raw physics state, not a
@@ -1469,7 +1469,7 @@ Config.Combat = {
         IsPlayerDownedOverride = nil,
     },
 
-    -- PHASE3_SPEC.md §12.5.3, implemented in server/defense.lua +
+    -- DEVELOPER_REFERENCE.md §12.5.3, implemented in server/defense.lua +
     -- client/defense.lua. Per §12.0 item 2 this is a UI/auto-targeting
     -- CONVENIENCE, never an AI takeover — the K9 never acts on its own; a
     -- prompt is surfaced faster and the player still confirms.
@@ -1502,7 +1502,7 @@ Config.Combat = {
 
     BiteAndHold = {
         range         = 2.5,    -- meters, self-initiated trigger range
-        maxDurationMs = 15000,  -- hard timeout if never manually released — THIS IS the "no unbounded trap" guarantee for a non-consensual mechanic, PHASE3_SPEC.md §12.0 item 4. Never remove without an equally-hard replacement cap.
+        maxDurationMs = 15000,  -- hard timeout if never manually released — THIS IS the "no unbounded trap" guarantee for a non-consensual mechanic, DEVELOPER_REFERENCE.md §12.0 item 4. Never remove without an equally-hard replacement cap.
         cooldownMs    = 20000,  -- per-K9 cooldown between attempts
         -- Per-target cooldown, mirroring NonLethalTakedown.targetCooldownMs
         -- below. Without it the per-K9 cooldown is the only bound, and the
@@ -1531,14 +1531,14 @@ Config.Combat = {
         range               = 3.0,
         minTargetSpeed      = 4.0,   -- m/s, SERVER-COMPUTED from a short position-sample window at request time (see server/combat.lua's own note on why this is a bounded two-sample measurement, not a continuously-running per-ped tracker) — never a client-claimed "I am sprinting" flag. Applies identically whether the target is an NPC or a player.
         speedSampleWindowMs = 250,   -- how long the server waits between its two position samples to compute the target's speed for the check above — UNTUNED, and itself re-validates everything (existence, proximity, already-held, eligibility) again after the wait, same TOCTOU discipline as this resource's other yielding server calls.
-        ragdollDurationMs   = 4000,  -- hard cap on BOTH the forced-ragdoll hold and the SetEntityCanBeDamaged(false) bracket — THIS IS the "no unbounded trap" guarantee for this mechanic, PHASE3_SPEC.md §12.0 item 4 (named there explicitly as "the ragdoll/damage-suppression window in NonLethalTakedown"). UNTUNED.
+        ragdollDurationMs   = 4000,  -- hard cap on BOTH the forced-ragdoll hold and the SetEntityCanBeDamaged(false) bracket — THIS IS the "no unbounded trap" guarantee for this mechanic, DEVELOPER_REFERENCE.md §12.0 item 4 (named there explicitly as "the ragdoll/damage-suppression window in NonLethalTakedown"). UNTUNED.
         cooldownMs          = 25000, -- per-K9 cooldown
         targetCooldownMs    = 30000, -- per-target cooldown -- stops repeat takedowns of the same already-downed target by multiple K9s in quick succession
         healthFloor         = 100,   -- backstop only, NOT the primary non-lethal mechanism -- primary mechanism is the SetEntityCanBeDamaged bracket above
     },
 
     AgilityAdvanced = {
-        -- DECIDED (PHASE3_SPEC.md §12.0 item 3, Revision 2, unaffected by
+        -- DECIDED (DEVELOPER_REFERENCE.md §12.0 item 3, Revision 2, unaffected by
         -- the Revision 3 PvP reversal): multi-height capsule-sweep raycast
         -- is the Phase 3 default. 'taggedProp' remains a documented,
         -- theoretical per-server override shape but has NO implementation
@@ -1546,14 +1546,14 @@ Config.Combat = {
         -- resource start if this is ever set to anything other than
         -- 'raycast', rather than silently no-op'ing.
         detectionMethod = 'raycast',
-        maxVaultHeight  = 1.2,   -- meters -- PHASE3_SPEC.md §12.2 sketch value, UNTUNED (see client/movement.lua's own tuning-constants note: PHASE3_SPEC.md §12.5.5 lists exact height bands/capsule radius/forward distance as in-engine tuning work, not a design fork)
+        maxVaultHeight  = 1.2,   -- meters -- DEVELOPER_REFERENCE.md §12.2 sketch value, UNTUNED (see client/movement.lua's own tuning-constants note: DEVELOPER_REFERENCE.md §12.5.5 lists exact height bands/capsule radius/forward distance as in-engine tuning work, not a design fork)
         vaultCooldownMs = 2000,  -- ms, UNTUNED placeholder, same status as above
     },
 }
 
 -- ======================================================================
 -- PHASE 3 — HANDLER/K9 PARTNERSHIP REGISTRY (Config.Features.HandlerPartnership,
--- server/partnership.lua + client/partnership.lua). PHASE3_SPEC.md §12.0
+-- server/partnership.lua + client/partnership.lua). DEVELOPER_REFERENCE.md §12.0
 -- item 7 (Revision 5, coder-architect) / §12.3's file-plan entry.
 --
 -- OWN TOP-LEVEL BLOCK, DELIBERATELY NOT NESTED UNDER Config.Combat: this
@@ -1569,7 +1569,7 @@ Config.Combat = {
 --
 -- This registry started as a FOUNDATION ONLY, with no combat consequence
 -- wired to it. That is no longer true, and this note is kept only so the
--- progression is legible: both mechanics PHASE3_SPEC.md 12.0 item 7 named as
+-- progression is legible: both mechanics DEVELOPER_REFERENCE.md 12.0 item 7 named as
 -- blocked on this registry existing are now built and consuming it --
 -- HandlerDownDefense's trigger (server/defense.lua) and the Recall actor
 -- (server/recall.lua, Config.Recall below). Both call
@@ -1579,7 +1579,7 @@ Config.Combat = {
 -- server/tenure.lua, reads the same registry for the tenure bonus.
 -- ======================================================================
 Config.Partnership = {
-    -- PHASE3_SPEC.md §12.0 item 7 point 1 explicitly leaves "reuse
+    -- DEVELOPER_REFERENCE.md §12.0 item 7 point 1 explicitly leaves "reuse
     -- Config.CertifyProximityMeters or a dedicated
     -- Config.Combat.PartnerProximityMeters" as an implementer's call, not a
     -- design fork. A DEDICATED constant is used here (not a direct reuse of
@@ -1596,7 +1596,7 @@ Config.Partnership = {
     -- exactly (same "a request nobody answers shouldn't linger indefinitely
     -- available for a stale accept" / "stop UI-harassment via repeat
     -- prompts" reasoning as the leash consent handshake this mechanic
-    -- deliberately mirrors — PHASE3_SPEC.md §12.0 item 7 point 1).
+    -- deliberately mirrors — DEVELOPER_REFERENCE.md §12.0 item 7 point 1).
     RequestTTLMs      = 30000,
     RequestCooldownMs = 1000,
 
@@ -1627,7 +1627,7 @@ Config.Partnership = {
 
 -- ======================================================================
 -- RECALL (Config.Features.Recall) -- server/recall.lua, client/recall.lua.
--- PHASE3_SPEC.md 12.5.1's "Recall actor": the handler's escape hatch for
+-- DEVELOPER_REFERENCE.md 12.5.1's "Recall actor": the handler's escape hatch for
 -- ending whatever active effect their partnered K9 is holding.
 --
 -- READ THIS BEFORE TUNING: Recall is this resource's PRIMARY TERMINATION
@@ -1672,7 +1672,7 @@ Config.ContrabandScreenFX = {
     -- the logs to say why.
     modifierName = 'drug_wobbly',
 
-    -- Deliberately well below PHASE4_SPEC.md 13.2's 8000ms sketch: this is
+    -- Deliberately well below DEVELOPER_REFERENCE.md 13.2's 8000ms sketch: this is
     -- meant to be feedback, not a screen-blocking penalty, and the
     -- modifier family is a disorienting one. client/screenfx.lua clamps its
     -- own effective ceiling to 4000ms regardless of what is set here.
@@ -1721,14 +1721,14 @@ Config.AdminAudit = {
 -- ======================================================================
 -- PHASE 5 (R&D) — DEPLOYABLE KENNEL (Config.Features.DeployableKennel,
 -- still `false` by default — see this block's own note on that below).
--- phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §5: "handler places a world...
+-- DEVELOPER_REFERENCE.md#phase-5-research §5: "handler places a world...
 -- kennel object... server-authoritative validation (proximity,
 -- certification, one-per-handler limit), with cleanup on resource stop/
 -- handler disconnect." See client/kennel.lua and server/kennel.lua for the
 -- full implementation and their own file-header contracts.
 --
 -- PROP MODEL CONFIDENCE — read before changing `propModel` below:
--- `RESEARCH_ARCHIVE.md#phase-5-research` §5 found exactly ONE lead for a real
+-- `DEVELOPER_REFERENCE.md#phase-5-research` §5 found exactly ONE lead for a real
 -- vanilla GTA doghouse/kennel prop name (`prop_doghouse_01`, sourced from
 -- a DIFFERENT, unrelated FiveM resource's config default —
 -- `fruitmob/murderface-pets`), and explicitly could NOT cross-verify it
@@ -1780,7 +1780,7 @@ Config.DeployableKennel = {
     -- (server/kennel.lua computes this from GetEntityForwardVector, never
     -- a client-claimed coordinate — see that file's header) where the
     -- kennel spawns before PlaceObjectOnGroundProperly snaps it to the
-    -- ground. UNTUNED placeholder, same status as PHASE3_SPEC.md's own
+    -- ground. UNTUNED placeholder, same status as DEVELOPER_REFERENCE.md's own
     -- vault-tuning constants (client/movement.lua) — a reasonable-looking
     -- default, not a playtested value.
     placementForwardOffsetMeters = 2.0,
@@ -1818,16 +1818,16 @@ Config.DeployableKennel = {
 -- still `false` by default — layered on top of Config.Features.BasicBarkSounds
 -- per this resource's existing Phase-5-on-Phase-1 convention, see
 -- client/radial.lua's Bark item for the enforcement of that layering).
--- SPEC.md §6.7 names the variant set explicitly: "Radial bark options
+-- DEVELOPER_REFERENCE.md §6.7 names the variant set explicitly: "Radial bark options
 -- (aggressive/alert/calm) each play a distinct sound asset attached to the
 -- K9 entity" — that's the exact set shipped here, not an arbitrary pick
--- (phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research §1 confirms no other count is
+-- (DEVELOPER_REFERENCE.md#phase-5-research §1 confirms no other count is
 -- named anywhere in the spec).
 --
 -- `sound` is still the SAME placeholder posture as client/main.lua's
 -- BARK_SOUND_NAME/K9_SOUND_SET (see that file's header comment in full) —
 -- none of these resolve to real, distinct authored audio yet.
--- RESEARCH_ARCHIVE.md#phase-5-research §1 confirms a real per-variant soundset needs
+-- DEVELOPER_REFERENCE.md#phase-5-research §1 confirms a real per-variant soundset needs
 -- authored `.awc`/`dat151`/`dat54` RAGE-audio-bank assets, not just a
 -- different string here — this table only carries the plumbing (which
 -- placeholder name maps to which radial item/barkType), not the asset
@@ -1853,21 +1853,21 @@ Config.AdvancedBarkRadial = {
 -- PHASE 4 — K9 INVENTORY (ox_inventory stash). Backs
 -- Config.Features.K9Inventory (still `false` above, per this resource's
 -- "ship disabled until acceptance criteria are fully met" convention).
--- See PHASE4_SPEC.md §13.4.2 for the full security-critical integration
+-- See DEVELOPER_REFERENCE.md §13.4.2 for the full security-critical integration
 -- writeup this table backs, and server/inventory.lua's own header for the
 -- concrete implementation (RegisterStash owner/groups derivation,
 -- confidence-graded ox_inventory export notes). Transcribed from
--- PHASE4_SPEC.md §13.2's sketch, with `accessScope`'s Open Question (§13.4.2
+-- DEVELOPER_REFERENCE.md §13.2's sketch, with `accessScope`'s Open Question (§13.4.2
 -- item 1 / §13.6 item 3) RESOLVED below rather than left as a placeholder.
 -- Every numeric value is still an unreviewed placeholder pending a
--- config-validator/economy-balance-agent pass (SPEC.md §9 item 4,
--- PHASE4_SPEC.md §13.5), same status every other Phase 3/4 sketch table in
+-- config-validator/economy-balance-agent pass (DEVELOPER_REFERENCE.md §9 item 4,
+-- DEVELOPER_REFERENCE.md §13.5), same status every other Phase 3/4 sketch table in
 -- this file carries — do not default Config.Features.K9Inventory to `true`
 -- before that pass happens.
 -- ======================================================================
 Config.K9Inventory = {
     slots         = 5,
-    maxWeight     = 8000,  -- grams-equivalent, same units ox_inventory's own item .weight fields use (unit convention confirmed: phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §1)
+    maxWeight     = 8000,  -- grams-equivalent, same units ox_inventory's own item .weight fields use (unit convention confirmed: DEVELOPER_REFERENCE.md#contraband-search §1)
     interactRange = 2.0,
 
     -- 'department' is the ONLY supported value (coder-security finding,
@@ -1916,23 +1916,23 @@ Config.K9Inventory = {
 
 -- ======================================================================
 -- PHASE 4 — K9 MEDKIT (Config.Features.K9Medkit, still `false` by default).
--- PHASE4_SPEC.md §13.4.4/§13.2. Item consumption + heal validation live in
+-- DEVELOPER_REFERENCE.md §13.4.4/§13.2. Item consumption + heal validation live in
 -- server/medkit.lua; see that file's header for the full security-critical
 -- writeup (mirrors server/search.lua's contraband-search trust boundary,
 -- per that document's own explicit direction to reuse it as the template).
 -- ALL NUMERIC VALUES BELOW ARE UNREVIEWED PLACEHOLDERS pending a
--- config-validator/economy-balance-agent pass (SPEC.md §9 item 4's scope,
--- widened by PHASE4_SPEC.md §13.5) — do not flip Config.Features.K9Medkit
+-- config-validator/economy-balance-agent pass (DEVELOPER_REFERENCE.md §9 item 4's scope,
+-- widened by DEVELOPER_REFERENCE.md §13.5) — do not flip Config.Features.K9Medkit
 -- to `true` on a live server before that review happens.
 -- ======================================================================
 Config.K9Medkit = {
     itemName      = 'k9_medkit', -- PLACEHOLDER item name — must exist in the target server's ox_inventory items table; NOT registered as a hotbar-"useable" item by this resource, see server/medkit.lua's header for why
     healthRestore = 50,          -- native health units restored to the K9's REAL ped health, clamped to GetEntityMaxHealth server-side, never allowed to overheal
-    injuryRestore = 40,          -- restores Config.Wellbeing.Injury's tracked value once server/wellbeing.lua (PHASE4_SPEC.md §13.1 sub-phase 4c/4d) exists — a no-op today, see server/medkit.lua's header
+    injuryRestore = 40,          -- restores Config.Wellbeing.Injury's tracked value once server/wellbeing.lua (DEVELOPER_REFERENCE.md §13.1 sub-phase 4c/4d) exists — a no-op today, see server/medkit.lua's header
     range         = 2.0,         -- meters — server-enforced max distance between the using player and the target K9's own live positions, checked BEFORE any item consumption or health mutation
     cooldownMs    = 60000,       -- per-target (K9 citizenid) cooldown, prevents repeated instant-heal spam against the same K9
     -- Job names, in addition to any job ∈ Config.Departments, allowed to use
-    -- this item on a K9 — mirrors PHASE3_SPEC.md §12.0 item 4's resolved
+    -- this item on a K9 — mirrors DEVELOPER_REFERENCE.md §12.0 item 4's resolved
     -- "default metadata/job convention + override hook" pattern for the
     -- identical class of external-EMS-integration problem.
     emsJobs       = { 'ambulance' },
@@ -1947,14 +1947,14 @@ Config.K9Medkit = {
 -- ======================================================================
 -- PHASE 4 — K9 WELLBEING (Config.Features.FatigueSystem / MoodSystem /
 -- FearStressSystem / DistractionSystem / InjuryLimping — ALL still `false`
--- by default). PHASE4_SPEC.md §13.0 Decision 1 / §13.2 / §13.4.3: ONE
+-- by default). DEVELOPER_REFERENCE.md §13.0 Decision 1 / §13.2 / §13.4.3: ONE
 -- shared config table, ONE shared server/wellbeing.lua + client/wellbeing.lua
 -- pair, ONE shared per-citizenid stat store and tick loop backing all five
 -- independently-gated stats — mirrors Config.Tracking's existing
 -- Scent/Blood/Gunpowder precedent (three independently-toggleable flags,
 -- one shared file pair). ALL NUMERIC VALUES BELOW ARE UNREVIEWED
 -- PLACEHOLDERS pending a config-validator/economy-balance-agent pass
--- (SPEC.md §9 item 4's scope, widened by PHASE4_SPEC.md §13.5) — do not
+-- (DEVELOPER_REFERENCE.md §9 item 4's scope, widened by DEVELOPER_REFERENCE.md §13.5) — do not
 -- flip any of the five owning Config.Features flags to `true` on a live
 -- server before that review happens.
 -- ======================================================================
@@ -1986,11 +1986,11 @@ Config.Wellbeing = {
         -- Three independently-reviewed "mild" penalties compounded into half
         -- speed because nobody reviewed them together. New worst case ~0.684.
         speedPenaltyMultiplier  = 0.90, -- fed into RecomputeK9MoveRate() (client/movement.lua, K9MoveRateModifiers.fatigue), never a standalone SetPedMoveRateOverride call
-        -- NOT in PHASE4_SPEC.md §13.2's sketch verbatim -- added here
+        -- NOT in DEVELOPER_REFERENCE.md §13.2's sketch verbatim -- added here
         -- because "sprinting" needs a concrete speed cutoff to classify
         -- from a server-side rolling position-sample (meters travelled per
         -- tick / tickIntervalMs). This file's own independent
-        -- implementation of the general technique PHASE3_SPEC.md §12.5.2
+        -- implementation of the general technique DEVELOPER_REFERENCE.md §12.5.2
         -- describes for NonLethalTakedown's speed gate (that document was
         -- not re-read this pass, per this session's file-scope boundary --
         -- reconcile against server/combat.lua's real implementation once
@@ -2014,7 +2014,7 @@ Config.Wellbeing = {
         -- (instant 10/20) clearly worth doing.
         passiveRegenPerTick          = 1.0,
         performancePenaltyThreshold  = 25,
-        performancePenaltyMultiplier = 0.95, -- RAISED 0.9 -> 0.95, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.mood) -- resolves PHASE4_SPEC.md §13.4.3.2 open question 1 by taking reading (a), the document's own tentative recommendation (a movement-speed multiplier via the shared composer, not a success-chance penalty on a security-critical callback)
+        performancePenaltyMultiplier = 0.95, -- RAISED 0.9 -> 0.95, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.mood) -- resolves DEVELOPER_REFERENCE.md §13.4.3.2 open question 1 by taking reading (a), the document's own tentative recommendation (a movement-speed multiplier via the shared composer, not a success-chance penalty on a security-critical callback)
     },
     FearStress = {
         max                      = 100,
@@ -2086,7 +2086,7 @@ Config.Wellbeing = {
     },
     Injury = {
         max                     = 100,
-        sprintBlockThreshold    = 30, -- below this, sprint input is blocked (client-local, see PHASE4_SPEC.md §13.0 Decision 3's disclosed bounded limitation)
+        sprintBlockThreshold    = 30, -- below this, sprint input is blocked (client-local, see DEVELOPER_REFERENCE.md §13.0 Decision 3's disclosed bounded limitation)
         jumpBlockThreshold      = 20, -- below this, jump input is blocked
         speedPenaltyMultiplier  = 0.80, -- RAISED 0.7 -> 0.80, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.injury)
         damageDecayAmount       = 10, -- flat decrement per logged damage event -- independent value from Mood's own damageDecayAmount, same detection source

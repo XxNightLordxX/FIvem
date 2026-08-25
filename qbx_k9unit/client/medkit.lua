@@ -43,7 +43,7 @@
     session, not assumed from memory.
 
     FILE-TO-FILE CONTRACT:
-    - Calls client/main.lua's `IsEntityModelK9(entity)` (REFACTOR_ROADMAP.md
+    - Calls client/main.lua's `IsEntityModelK9(entity)` (DEVELOPER_REFERENCE.md
       item 3) as its client-side display filter — deliberately NOT calling
       any server-global (`IsConfiguredK9Model` is server-only), since
       server/medkit.lua re-derives the target's real model server-side
@@ -52,7 +52,7 @@
       comment in client/main.lua for the full "5 independent copies"
       finding this consolidation closes).
     - Calls client/main.lua's `ResolvePlayerServerIdFromPed(entity)`
-      (REFACTOR_ROADMAP.md item 2b) in the "Treat K9" onSelect handler
+      (DEVELOPER_REFERENCE.md item 2b) in the "Treat K9" onSelect handler
       below — used to be a local copy of this file's own; extracted once
       client/wellbeing.lua's "Pet K9"/"Feed K9" handlers turned out to be
       hand-copying the identical function.
