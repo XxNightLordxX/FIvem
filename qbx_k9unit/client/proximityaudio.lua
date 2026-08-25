@@ -193,40 +193,40 @@ local ProximityAudioFXConfig = Config.ProximityAudioFX or {}
 local PROXIMITY_SCAN_INTERVAL_MS = ProximityAudioFXConfig.scanIntervalMs or 2500
 
 -- Meters. A candidate K9 ped beyond this distance never gets a loop started
--- at all -- this MUST stay <= client/audio.lua's own private
--- AUDIO_MAX_DISTANCE constant (30.0 as of this pass) or a started loop
--- would sit at a permanent, wasted gain of 0.0 (an active AudioBufferSource
--- + a 500ms poll thread producing no audible effect at all). Kept as this
--- file's own independent constant rather than importing audio.lua's private
--- one, matching this codebase's "file-local tuning constants" convention
--- (audio.lua's own header).
+-- at all -- this MUST stay <= client/audio.lua's own real falloff ceiling
+-- or a started loop would sit at a permanent, wasted gain of 0.0 (an active
+-- AudioBufferSource + a 500ms poll thread producing no audible effect at
+-- all).
 --
--- FOUND THIS PASS: the comment above used to say "HAND-SYNC REQUIRED if
--- audio.lua's AUDIO_MAX_DISTANCE is ever retuned below this value" and left
--- it at that -- a documented hazard with NOTHING actually enforcing it. If
--- Config.ProximityAudioFX.triggerDistance is ever configured (or defaulted)
--- above audio.lua's real ceiling, every ambient loop this file starts would
--- silently sit at gain 0.0 forever, with no error and no console output --
--- exactly the failure mode this resource's own audio header warns is easy
--- to ship unnoticed.
+-- FOUND EARLIER THIS PASS: this used to be an unenforced hand-sync
+-- requirement against a private constant in another file (the comment here
+-- literally said "HAND-SYNC REQUIRED if audio.lua's AUDIO_MAX_DISTANCE is
+-- ever retuned below this value" and did nothing about it) -- if
+-- Config.ProximityAudioFX.triggerDistance was ever configured (or
+-- defaulted) above audio.lua's real ceiling, every ambient loop this file
+-- starts would silently sit at gain 0.0 forever, with no error and no
+-- console output.
 --
--- Clamped below against a LOCAL copy of audio.lua's current 30.0 ceiling
--- (AUDIO_MAX_DISTANCE_CEILING), not a live cross-file read of it: a real
--- accessor (client/audio.lua exposing e.g. GetK9AudioMaxDistance()) would
--- need a new entry in this repo's root .luacheckrc `globals` list, which
--- this pass's author does not own (see this resource's own "DO NOT EDIT
--- .luacheckrc" convention) -- requested separately, not silently worked
--- around with a suppression. This local copy at least defends the ACTUAL
--- realistic misconfiguration path (an operator/owner raising
--- Config.ProximityAudioFX.triggerDistance without knowing about
--- audio.lua's ceiling) -- it does NOT defend the other direction (audio.lua's
--- own AUDIO_MAX_DISTANCE being lowered below this copy's value) -- that
--- half of the hazard remains a hand-sync requirement until the accessor
--- above can ship. HAND-SYNC REQUIRED, still, for that direction only.
-local AUDIO_MAX_DISTANCE_CEILING = 30.0 -- MUST match client/audio.lua's own private AUDIO_MAX_DISTANCE
+-- CLOSED IN BOTH DIRECTIONS, now that client/audio.lua exposes
+-- GetK9AudioMaxDistance() (added this pass specifically for this, allowed
+-- into the root .luacheckrc `globals` list for exactly this cross-file
+-- read): the clamp below reads that live value every time this file loads,
+-- so it can never sit inconsistent with whatever audio.lua's own
+-- AUDIO_MAX_DISTANCE actually is, in either direction, without a code
+-- change forcing a re-evaluation of both. Falls back to a hardcoded 25.0
+-- (this file's own historical default, safely under audio.lua's
+-- documented 30.0 as of this pass) if GetK9AudioMaxDistance does not exist
+-- as a global at all -- this resource's own "runtime existence guard, not
+-- a load-order assumption" convention (client/audio.lua does not define
+-- this function while Config.Features.BasicBarkSounds is false, regardless
+-- of what fxmanifest.lua's load order promises).
+local FALLBACK_TRIGGER_DISTANCE_METERS = 25.0
+local audioMaxDistance = type(GetK9AudioMaxDistance) == 'function'
+    and GetK9AudioMaxDistance()
+    or FALLBACK_TRIGGER_DISTANCE_METERS
 local PROXIMITY_TRIGGER_DISTANCE_METERS = math.min(
-    ProximityAudioFXConfig.triggerDistance or 25.0,
-    AUDIO_MAX_DISTANCE_CEILING
+    ProximityAudioFXConfig.triggerDistance or FALLBACK_TRIGGER_DISTANCE_METERS,
+    audioMaxDistance
 )
 
 -- RAGE-audio-style placeholder sound name, translated by client/audio.lua's

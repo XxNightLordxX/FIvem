@@ -408,6 +408,34 @@ local CERTIFY_ACTION_COOLDOWN_MS = 1500
 local CertifyActionCooldown = NewCooldown(CERTIFY_ACTION_COOLDOWN_MS)
 CertifyActionCooldown.RegisterPlayerDropped()
 
+-- SECURITY FIX (dedicated K9 pass, 2026-08-25): closes GrantCertification's
+-- check-then-act TOCTOU on ITS OWN TERMS, independent of whether
+-- `uq_one_active_cert_per_job` (SQL migration 0004) has actually been
+-- applied to this install. GrantCertification's existingId-pre-check-then-
+-- INSERT sequence awaits two separate MySQL round trips; each `.await`
+-- yields this handler's coroutine and lets FXServer resume/process other
+-- queued server events — including another GrantCertification call — before
+-- it comes back. On an install that HAS run migration 0004, a second
+-- concurrent grant for the SAME (citizenid, job) landing in that window is
+-- still caught, by the DB's own unique index (see IsDuplicateKeyError
+-- below). On an install that has NOT run it, there is neither that index
+-- nor the `active_cert_key` column, and nothing previously stopped two
+-- concurrent certify actions for the same target/department (e.g. two
+-- different certifier-grade officers certifying the same target within the
+-- same network round trip) from both observing `existingId == nil` and both
+-- successfully INSERTing an active row — silently violating the "at most
+-- one active row per (citizenid, job)" invariant this file's revoke paths
+-- rely on ("No LIMIT needed -- uq_one_active_cert_per_job guarantees at
+-- most one row matches"). This in-memory lock, keyed "citizenid:job" (the
+-- invariant is scoped per department), makes that invariant hold at the
+-- application level UNCONDITIONALLY. It is not a substitute for running
+-- migration 0004 (which also backfills `active_cert_key` for unrelated
+-- reasons) -- it is defense-in-depth that does not depend on the DB
+-- constraint's presence. Always released in GrantCertification, even if an
+-- unexpected error is thrown mid-flight (pcall-wrapped there), so a thrown
+-- error can never leave a target permanently stuck un-grantable.
+local GrantInFlight = {}
+
 --- @param granterSrc number
 --- @return boolean onCooldown
 local function IsCertifyActionOnCooldown(granterSrc)
@@ -500,61 +528,95 @@ local function GrantCertification(granterSrc, targetServerId)
     local targetCitizenid = targetPlayer.PlayerData.citizenid
     local jobName = targetJob.name
 
-    -- App-level pre-check (§4.3 invariant: at most one active row per
-    -- (citizenid, job)) — backstopped below by the DB's unique index in
-    -- case of a check-then-act race.
-    local existingId = MySQL.scalar.await('SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
-        targetCitizenid, jobName,
-    })
-    if existingId then
+    -- SECURITY FIX (dedicated K9 pass, 2026-08-25): see GrantInFlight's own
+    -- doc comment above for the full writeup. Reject outright (rather than
+    -- queue/retry) if a grant for this exact (citizenid, job) is already in
+    -- flight on this server — the in-flight attempt will resolve to success
+    -- or failure on its own, and this caller's own click can simply be
+    -- retried if it turns out to have lost the race.
+    local lockKey = targetCitizenid .. ':' .. jobName
+    if GrantInFlight[lockKey] then
         NotifyPlayer(granterSrc, locale('certifications.target_already_certified'), 'inform')
         return
     end
+    GrantInFlight[lockKey] = true
 
-    local granterCitizenid = ResolveGranterCitizenId(granterSrc)
-    if not granterCitizenid then return end
-
-    local insertOk, insertResultOrErr = pcall(MySQL.insert.await, 'INSERT INTO k9_certifications (citizenid, job, granted_by) VALUES (?, ?, ?)', {
-        targetCitizenid, jobName, granterCitizenid,
-    })
-
-    if not insertOk then
-        if IsDuplicateKeyError(insertResultOrErr) then
-            -- Another request won the check-then-act race between the
-            -- pre-check above and this INSERT (SPEC.md §4.3 DB-level
-            -- backstop, `uq_one_active_cert_per_job`) — treat identically
-            -- to the normal "already certified" no-op, not as an
-            -- unhandled error.
-            RefreshCertificationCache(targetCitizenid, jobName)
+    -- Everything from here down is the actual DB critical section this lock
+    -- protects — wrapped in its own closure so it can be pcall'd as a unit
+    -- below, guaranteeing GrantInFlight[lockKey] is released on EVERY exit
+    -- path, including an unexpected thrown error, not just the normal
+    -- early-return paths.
+    local function doGrantInsert()
+        -- App-level pre-check (§4.3 invariant: at most one active row per
+        -- (citizenid, job)) — now protected at the application level
+        -- unconditionally by GrantInFlight above, and further backstopped
+        -- below by the DB's unique index in case that constraint is present
+        -- on this install (see IsDuplicateKeyError).
+        local existingId = MySQL.scalar.await('SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
+            targetCitizenid, jobName,
+        })
+        if existingId then
             NotifyPlayer(granterSrc, locale('certifications.target_already_certified'), 'inform')
             return
         end
 
-        print(('[qbx_k9unit] GrantCertification INSERT failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(insertResultOrErr)))
-        NotifyPlayer(granterSrc, locale('certifications.grant_error'), 'error')
-        return
+        local granterCitizenid = ResolveGranterCitizenId(granterSrc)
+        if not granterCitizenid then return end
+
+        local insertOk, insertResultOrErr = pcall(MySQL.insert.await, 'INSERT INTO k9_certifications (citizenid, job, granted_by) VALUES (?, ?, ?)', {
+            targetCitizenid, jobName, granterCitizenid,
+        })
+
+        if not insertOk then
+            if IsDuplicateKeyError(insertResultOrErr) then
+                -- Another request won the check-then-act race between the
+                -- pre-check above and this INSERT DESPITE GrantInFlight above
+                -- — only possible if this install predates GrantInFlight ever
+                -- having been held for the other request too (e.g. a very
+                -- unlucky reload) or the DB already held a pre-existing
+                -- duplicate from before this lock existed; the DB's own
+                -- unique index (`uq_one_active_cert_per_job`, if present on
+                -- this install) is what actually caught it here. Treat
+                -- identically to the normal "already certified" no-op, not as
+                -- an unhandled error.
+                RefreshCertificationCache(targetCitizenid, jobName)
+                NotifyPlayer(granterSrc, locale('certifications.target_already_certified'), 'inform')
+                return
+            end
+
+            print(('[qbx_k9unit] GrantCertification INSERT failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(insertResultOrErr)))
+            NotifyPlayer(granterSrc, locale('certifications.grant_error'), 'error')
+            return
+        end
+
+        RefreshCertificationCache(targetCitizenid, jobName)
+
+        -- Outbound integration event (server/exports.lua's EVENT CONTRACT §1) —
+        -- fired here, after the cache refresh that itself follows the committed
+        -- INSERT, so any consumer reacting to this has already-committed,
+        -- server-authoritative state to query back against (HasK9Access/
+        -- GetActivePartnerCitizenId/etc.) if it wants to. Not gated on any
+        -- Config.Features flag: certification is this resource's core access
+        -- gate (SPEC.md §4.1), not a phase-numbered toggle, matching this same
+        -- reasoning already applied to HasK9Access itself in server/exports.lua's
+        -- header.
+        FireOutboundEvent('qbx_k9unit:events:certificationGranted', targetCitizenid, jobName, granterCitizenid)
+
+        -- Read-only mirror for client HUD display ONLY (SPEC.md §4.3) — NEVER
+        -- read by any server-side authorization check. Do not add a read of
+        -- this field to HasK9Access or any other gate.
+        targetPlayer.Functions.SetMetaData('k9certified', true)
+
+        NotifyPlayer(granterSrc, locale('certifications.grant_success_granter'), 'success')
+        NotifyPlayer(targetServerId, locale('certifications.grant_success_target'), 'success')
     end
 
-    RefreshCertificationCache(targetCitizenid, jobName)
-
-    -- Outbound integration event (server/exports.lua's EVENT CONTRACT §1) —
-    -- fired here, after the cache refresh that itself follows the committed
-    -- INSERT, so any consumer reacting to this has already-committed,
-    -- server-authoritative state to query back against (HasK9Access/
-    -- GetActivePartnerCitizenId/etc.) if it wants to. Not gated on any
-    -- Config.Features flag: certification is this resource's core access
-    -- gate (SPEC.md §4.1), not a phase-numbered toggle, matching this same
-    -- reasoning already applied to HasK9Access itself in server/exports.lua's
-    -- header.
-    FireOutboundEvent('qbx_k9unit:events:certificationGranted', targetCitizenid, jobName, granterCitizenid)
-
-    -- Read-only mirror for client HUD display ONLY (SPEC.md §4.3) — NEVER
-    -- read by any server-side authorization check. Do not add a read of
-    -- this field to HasK9Access or any other gate.
-    targetPlayer.Functions.SetMetaData('k9certified', true)
-
-    NotifyPlayer(granterSrc, locale('certifications.grant_success_granter'), 'success')
-    NotifyPlayer(targetServerId, locale('certifications.grant_success_target'), 'success')
+    local grantOk, grantErr = pcall(doGrantInsert)
+    GrantInFlight[lockKey] = nil
+    if not grantOk then
+        print(('[qbx_k9unit] GrantCertification unexpected error for %s/%s: %s'):format(targetCitizenid, jobName, tostring(grantErr)))
+        NotifyPlayer(granterSrc, locale('certifications.grant_error'), 'error')
+    end
 end
 
 --- SPEC.md §4.2/§4.3 revoke flow (manual). Called by both event 3 and

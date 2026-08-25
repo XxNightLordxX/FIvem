@@ -479,28 +479,47 @@ end)
 -- it onto the cooldown constructors" reasoning server/cooldowns.lua's own
 -- header already gives, almost verbatim, for server/tracking.lua's
 -- TrackableLog (an aged/scanned log, not a `key -> lastTouchedAtMs` map).
--- Pruned below on its own long-lived sweep — deliberately far longer than
--- TargetSearchCooldown's own ~20s (searchCooldownMs * 2) staleness window,
--- so a target revisited at the exploited ~10-15s cadence above NEVER sees
--- its cache entry evicted mid-farm (which would otherwise silently
--- re-open a fresh XP award every eviction cycle); only a target genuinely
--- untouched for the FULL 30 minutes is forgotten, purely for long-running-
--- server memory hygiene, far too slow a cycle to farm meaningfully at.
-local ContrabandXpState = {} -- [cooldownKey] = { weight = number, awardedAt = <GetGameTimer() ms> }
-local CONTRABAND_XP_STATE_TTL_MS = 30 * 60 * 1000 -- 30 minutes — see comment above for why this must comfortably outlive TargetSearchCooldown's own staleness window
-local CONTRABAND_XP_STATE_SWEEP_INTERVAL_MS = 5 * 60 * 1000 -- 5 minutes — a memory-hygiene pass only; unrelated to any anti-farm timing above
-
-CreateThread(function()
-    while true do
-        Wait(CONTRABAND_XP_STATE_SWEEP_INTERVAL_MS)
-        local now = GetGameTimer()
-        for cooldownKey, state in pairs(ContrabandXpState) do
-            if (now - state.awardedAt) > CONTRABAND_XP_STATE_TTL_MS then
-                ContrabandXpState[cooldownKey] = nil
-            end
-        end
-    end
-end)
+--
+-- FOURTH XP-FARM FIX (coder-backend, this pass — the "assume a fourth
+-- farm exists" audit): this table used to be pruned by its own periodic
+-- sweep, evicting any entry whose `awardedAt` was more than
+-- CONTRABAND_XP_STATE_TTL_MS (30 minutes) old. That sweep silently
+-- reopened the exact farm this table exists to close: `awardedAt` is only
+-- ever refreshed by an actual NEW award, never by a re-search that found
+-- the SAME unchanged weight (that case intentionally never writes to this
+-- table at all — see `contrabandChangedSinceLastAward` at this table's
+-- read/write site below, which only assigns a fresh entry when it's true).
+-- So a farmer who planted one stash, got paid once, and then did
+-- ABSOLUTELY NOTHING to it for 30 minutes caused their own entry to
+-- silently expire — the very next re-search of that still-untouched stash
+-- then read as brand new (`not priorAwardState`) and paid again, forever
+-- repeatable on a ~30-minute cadence with zero re-work, zero risk, and any
+-- number of parallel stashes. That flatly contradicts this fix's own
+-- stated guarantee ("Re-searching the SAME untouched stash — however many
+-- times, however fast — pays zero additional XP" / "cannot re-earn from it
+-- no matter... how tight the request cadence is" above) — the guarantee
+-- was never actually "no matter the cadence," only "no faster than once
+-- per 30 minutes," and that was never disclosed as the real, much weaker
+-- shape of the protection.
+--
+-- FIX: no time-based eviction at all. An entry, once created, is kept for
+-- this resource's entire uptime — the "have we ever paid XP for this exact
+-- target at this exact weight" fact this table exists to remember must
+-- never silently reset itself, or the farm it closes reopens on whatever
+-- cadence the eviction window allows, no matter how that window is sized.
+-- Memory growth is bounded by genuine distinct-contraband-catch cardinality,
+-- not attacker-inflatable for free: an entry is only ever created from
+-- inside HandleSearchTarget's own `contrabandFound == true` branch below,
+-- which already required a real HasK9Access(source) officer, a real
+-- proximity-checked search, and a real non-empty ox_inventory read to
+-- reach — the same "real work required per entry" property sql/install.sql's
+-- own permanent, never-pruned `k9_search_log` audit table already accepts
+-- for the exact same reason. Re-searching the SAME target, however many
+-- times, adds nothing further to this table's size (it either updates the
+-- one existing entry in place or touches nothing) — table growth is capped
+-- by how many DIFFERENT real targets have ever been caught with contraband
+-- on this server, not by how many times any of them is re-checked.
+local ContrabandXpState = {} -- [cooldownKey] = { weight = number, awardedAt = <GetGameTimer() ms> } — permanent for this resource's uptime, see comment above for why it must never be time-evicted
 
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a local
 -- function (see its own extensive "DELIBERATE IMPLEMENTATION CHOICE" doc
@@ -977,12 +996,17 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- no load-order assumption on server/progression.lua either way.
     if contrabandFound and Config.Features.XPProgression and type(AwardXP) == 'function' then
         -- ECONOMY-AUDIT FIX (this pass) — see ContrabandXpState's own
-        -- declaration comment above for the full writeup. Only pays XP if
-        -- this exact resolved target's contraband weight differs from
-        -- whatever it was the last time XP was paid for it (no prior state
-        -- counts as "differs" — the first-ever find for a target always
-        -- pays). `cooldownKey` is the same stable, server-resolved target
-        -- identity TargetSearchCooldown already uses above — never
+        -- declaration comment above for the full writeup, INCLUDING the
+        -- FOURTH XP-FARM FIX (coder-backend, this pass) correcting this
+        -- table's earlier time-based eviction: an entry created below is
+        -- never evicted by age, only ever left in place or overwritten by a
+        -- later genuine weight change, so this "differs from last paid
+        -- weight" check below can never be reset by simply waiting. Only
+        -- pays XP if this exact resolved target's contraband weight differs
+        -- from whatever it was the last time XP was paid for it (no prior
+        -- state counts as "differs" — the first-ever find for a target
+        -- always pays). `cooldownKey` is the same stable, server-resolved
+        -- target identity TargetSearchCooldown already uses above — never
         -- anything client-supplied.
         local priorAwardState = ContrabandXpState[cooldownKey]
         local contrabandChangedSinceLastAward = not priorAwardState or priorAwardState.weight ~= totalWeight

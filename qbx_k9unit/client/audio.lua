@@ -166,6 +166,24 @@ if not Config.Features.BasicBarkSounds then return end
 -- it any at all.
 local AUDIO_MAX_DISTANCE = 30.0
 
+--- Read-only accessor for this file's private AUDIO_MAX_DISTANCE, so a
+--- caller in another file (client/proximityaudio.lua's own
+--- PROXIMITY_TRIGGER_DISTANCE_METERS clamp) can stay live-consistent with
+--- this file's actual falloff cutoff instead of hand-syncing a duplicate
+--- constant of its own. Added this pass specifically for that consumer,
+--- after the root .luacheckrc `globals` list was extended to allow it (see
+--- that file's own comment on this entry). Every caller MUST still guard
+--- with `type(GetK9AudioMaxDistance) == 'function'` before calling this --
+--- this resource's own "runtime existence guard, not a load-order
+--- assumption" convention (config.lua's globals comment on RestoreInjury/
+--- AwardXP/GetXPTier is the precedent) -- this file does not define this
+--- function at all while Config.Features.BasicBarkSounds is false, no
+--- matter what fxmanifest.lua's own load order promises.
+--- @return number meters
+function GetK9AudioMaxDistance()
+    return AUDIO_MAX_DISTANCE
+end
+
 -- How often a LOOPING sound's gain gets recomputed against its source
 -- entity's live position (see PlayK9Sound's `opts.loop`). Only relevant to
 -- loop=true playback — client/proximityaudio.lua's continuous ambient

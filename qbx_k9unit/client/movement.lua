@@ -362,12 +362,47 @@ end
 --- the pairing actually activates, after the target accepts.
 --- @param targetPlayerServerId number
 function RequestLeashAttach(targetPlayerServerId)
-    -- Re-check, don't trust that the caller (ox_target predicate or
-    -- radial item) already verified this — cheap client-side sanity check
-    -- before bothering the server (which re-validates authoritatively
-    -- regardless, see server/main.lua's CheckLeashEligibility).
-    if not CanShowK9UI() then
-        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
+    -- BUG FIX (this pass, cross-checked against a real bug of the exact
+    -- same shape client/partnership.lua's RequestPartnerUp() found and
+    -- fixed in itself -- see that function's own doc comment for the full
+    -- writeup this one mirrors). This used to be an unconditional
+    -- `if not CanShowK9UI() then` -- correct for client/radial.lua's
+    -- "Attach/Detach Leash" item (a genuinely K9-only self-actions
+    -- submenu, SPEC.md's own radial item list), but WRONG for this
+    -- function's OTHER, equally-real caller: the "Attach Leash" ox_target
+    -- option registered below, whose own canInteract predicate
+    -- (`IsOwnModelK9() or IsEntityModelK9(entity)`) already permits an
+    -- OFFICER to target a nearby K9 and select it, and SPEC.md's own
+    -- wording ("Either the K9 or a nearby officer initiates 'Attach
+    -- Leash' (ox_target) on the other") requires exactly that to work.
+    -- CanShowK9UI() == IsOwnModelK9() and HasK9Access(), which is false
+    -- for every officer-role player by construction (an officer is never
+    -- modeled as a K9) -- so the unconditional gate silently denied every
+    -- officer-initiated "Attach Leash" attempt with a "you cannot use K9
+    -- features right now" notice before the request ever reached the
+    -- server. Confirmed this pass that the server side was never the
+    -- blocker: server/main.lua's CheckLeashEligibility determines the
+    -- K9/officer role purely from each party's LIVE ped model, never from
+    -- who initiated -- an officer-initiated request is accepted or
+    -- rejected there on exactly the same terms as a K9-initiated one.
+    -- Never a security hole (the server was always the real authority
+    -- either way), but a real, total functional break of half the
+    -- documented consent handshake.
+    --
+    -- FIX: only apply the K9-shaped CanShowK9UI() pre-check when the LOCAL
+    -- player would actually be the prospective K9-role party
+    -- (IsOwnModelK9() true) -- mirrors CheckLeashEligibility's own
+    -- role-via-live-model design and RequestPartnerUp()'s identical fix.
+    -- An officer-role initiator has no cheap client-side
+    -- Config.Departments-membership equivalent exposed as a
+    -- resource-global to pre-check locally -- same "no cheap client-side
+    -- equivalent, let the server answer with a specific reason" tradeoff
+    -- this file's own "Certify K9 Handler" ox_target option already
+    -- documents for IsEligibleCertifier -- so this simply defers that
+    -- branch to the server's own CheckLeashEligibility, which notifies the
+    -- caller either way (LeashRejectReasonMessage).
+    if IsOwnModelK9() and not CanShowK9UI() then
+        DenyK9UIAccess()
         return
     end
 
