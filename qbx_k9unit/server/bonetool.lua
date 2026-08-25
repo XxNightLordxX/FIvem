@@ -31,70 +31,140 @@
     question a human still needs to answer.
 
     ======================================================================
-    ACE GATE RECONSIDERED, AND CONFIRMED, NOT CARRIED OVER BY DEFAULT (this
-    pass, alongside server/admin.lua's ACE->police-job-rank rewrite): the
-    project owner's reasoning for moving admin.lua's audit surface off ACE
-    was that IT is a police-oversight function, so the right people to
-    trust with it are senior officers in-game, not console/permissions-file
-    holders. That reasoning does NOT transfer to this file. This tool is a
-    DEV-SERVER-ONLY diagnostic (see this file's own header opening
-    paragraph) with no relationship to police work at all — it exists to
-    let a human find a bone INDEX on a quadruped skeleton, nothing about
-    "senior enough in Config.Departments" bears on who should be trusted to
-    spawn/attach test props on a dev box. Concretely, a job-rank gate would
-    be WORSE here on both sides of the population it would (mis)select:
-      - a developer/QA tester on a dev server may have no police job at all
-        (a fresh/test character), so a job-rank gate could lock out the
-        exact people this tool is FOR;
-      - a genuinely senior police officer with no development/server-owner
-        role has no legitimate reason to spawn/attach props on command, so
-        a job-rank gate would hand this out far too widely relative to its
-        actual blast radius (real CreateObject + AttachEntityToEntity
-        calls, see this file's own "test" subcommand).
-    This IS "server-operator tooling" in the sense the admin.lua file used
-    to describe itself, before this pass's reasoning changed for THAT file
-    specifically — an out-of-game, console/permissions-file trust boundary
-    remains the correct primitive here, which is exactly what ACE already
-    is. Kept UNCHANGED: same two-factor gate this task's own brief requires
-    (explicit config flag AND an ACE permission check), following
-    server/admin.lua's ORIGINAL precedent (this file predates and is
-    unaffected by that file's own subsequent rewrite — read admin.lua's
-    current "ACCESS MODEL" header section for why THAT file changed and why
-    the same reasoning does not apply here):
-      1. Config.Features.BoneSweepDevTool must be `true` — checked AT
-         COMMAND-REGISTRATION TIME in the onResourceStart block below, not
-         merely inside the handler. If it's not `true`, the '/k9bonetool'
-         command is never registered at all, matching this resource's
-         established "flag off means genuinely inert" convention.
-      2. IsPlayerAceAllowed(tostring(source), Config.BoneSweepTool.AcePermission)
-         — re-checked on EVERY invocation, inside the handler, exactly like
-         server/admin.lua's IsAuthorizedAdmin.
-    Both must hold. Neither alone is sufficient — a server owner who
-    accidentally leaves the flag on must still have never granted the ACE
-    to anyone for this to do anything, and vice versa.
+    ACCESS MODEL — TWO INDEPENDENT LAYERS. BOTH must hold; neither alone is
+    sufficient. A server owner who leaves the flag on must still have never
+    set the convar for this to do anything, and vice versa; separately, a
+    server that DOES opt in at the registration layer still requires a
+    per-invocation, in-game authorization check on every single command.
+
+    LAYER 1 — REGISTRATION-TIME, OUT-OF-GAME (coder-security, this pass —
+    see SECOND, EXPLICIT OPT-IN below for the full "why a convar on top of
+    the flag" reasoning): Config.Features.BoneSweepDevTool must be `true`
+    AND the convar `qbx_k9unit_enable_bone_dev_tool` must read as `1` via
+    GetConvarInt — BOTH checked ONCE, in the onResourceStart block below,
+    before '/k9bonetool' is ever RegisterCommand'd. If either is not
+    satisfied, the command is never registered at all, matching this
+    resource's established "flag off means genuinely inert" convention —
+    extended here to "flag-on-but-not-opted-in also means genuinely inert."
+
+    LAYER 2 — PER-INVOCATION, IN-GAME, JOB-RANK GATED (coder-security, this
+    pass — ACE -> police-job-rank conversion, at the project owner's
+    explicit direction to convert every remaining ACE-gated action in this
+    resource; this file's `IsPlayerAceAllowed(...,
+    Config.BoneSweepTool.AcePermission)` gate was the last of exactly two,
+    the other being server/admin.lua's, already converted in a prior pass):
+    IsAuthorizedBoneSweepDevTool(source), re-checked on EVERY invocation
+    inside the handler, mirroring server/admin.lua's IsAuthorizedAdmin
+    shape — fail closed on every unresolvable player/job shape, never
+    throw. Read that function's own doc comment (below) and admin.lua's
+    IsAuthorizedAdmin before touching either.
+
+    DELIBERATELY NOT THE SAME THRESHOLD AS IsAuthorizedAdmin: that function
+    grants on `job.isboss OR job.grade.level >= Config.Departments[...].
+    auditGrade`. IsAuthorizedBoneSweepDevTool below grants on `job.isboss`
+    ONLY — no numeric-grade branch, and deliberately no new per-department
+    config field added to give it one:
+      1. config.lua's own comment on the AcePermission field this replaces
+         already draws the line this threshold must not cross: "A SEPARATE
+         principal from Config.AdminAudit.AcePermission on purpose.
+         Granting someone read-only audit access should not also hand them
+         a tool that spawns and attaches props to peds." Reusing
+         `auditGrade` here — the only numeric per-department threshold
+         config.lua already defines — would collapse exactly that
+         deliberately-kept separation the moment the ACE gate is removed:
+         every senior officer trusted to review search/cert/partnership
+         history would, with no further action by anyone, also become
+         trusted to spawn and attach props on command. That is a
+         materially different capability than read-only audit access, and
+         this resource's own config comment already says so.
+      2. This tool's actual intended population (see this file's own
+         opening paragraph) is developers/QA testers sweeping bone indices
+         on a dev box, not police officers doing police work. A job-rank
+         gate is a poor population selector for it on BOTH sides — it can
+         lock out a fresh/test character with no police job at all (the
+         exact person this tool is FOR), and it can hand real
+         CreateObject+AttachEntityToEntity capability to a genuinely senior
+         officer with no development/server-owner role (a person this tool
+         was never FOR). Converting anyway, per direction, at the
+         NARROWEST threshold this resource's existing job shape already
+         offers (isboss, no configurable grade) is this pass's attempt to
+         minimize that mismatch rather than pretend it away: a dev-server
+         operator can trivially grant their own test character boss status
+         on their own box, and `job.isboss` needs no new config key that
+         could quietly widen this later. LAYER 1's convar — not this
+         in-game threshold — is what actually keeps this tool off a
+         production server.
 
     OPERATIONAL CAVEAT (task requirement — also stated in config.lua's own
     Config.Features.BoneSweepDevTool comment; restated here because THIS
-    file is the one that actually acts on it): the flag above is read ONCE,
-    in the onResourceStart block below, to decide whether to
-    RegisterCommand '/k9bonetool' at all. Flipping
-    Config.Features.BoneSweepDevTool from true back to false WITHOUT a
-    resource restart does NOT unregister the command — it stays reachable
-    (still gated by the ACE check inside the handler, re-checked on every
+    file is the one that actually acts on it): both LAYER 1 checks
+    (Config.Features.BoneSweepDevTool and the convar) are read ONCE, in the
+    onResourceStart block below, to decide whether to RegisterCommand
+    '/k9bonetool' at all. Changing either — flipping the flag back to
+    false, or unsetting/changing the convar — WITHOUT a resource restart
+    does NOT unregister the command; it stays reachable (still gated by
+    IsAuthorizedBoneSweepDevTool inside the handler, re-checked on every
     invocation) until the next restart. client/bonetool.lua's own
     registration gate has the identical property for its event
-    handler/draw thread. Never treat "I turned the flag off" as sufficient
-    by itself to consider this tool inert on a server where it was ever
-    turned on, without also restarting the resource.
+    handler/draw thread, and now checks the SAME convar (see that file's
+    own header) rather than the flag alone. Never treat "I changed the
+    flag/convar" as sufficient by itself to consider this tool inert on a
+    server where it was ever registered, without also restarting the
+    resource.
 
     CONSOLE (source == 0) IS DELIBERATELY NOT SUPPORTED, UNLIKE
-    server/admin.lua's own console carve-out: every subcommand this tool
-    exposes acts on "your own current ped" (see EVENT CONTRACT below) —
-    the server console has no client and no ped for that concept to apply
-    to. This is a narrower, simpler answer than admin.lua's own
-    read-only-query carve-out needed, not an oversight; flagged explicitly
-    per this resource's own "disclose access-model judgment calls, don't
-    decide them silently" convention.
+    server/admin.lua's own console carve-out (Config.AdminAudit.TrustConsole):
+    every subcommand this tool exposes acts on "your own current ped" (see
+    EVENT CONTRACT below) — the server console has no client and no ped for
+    that concept to apply to, and — now that LAYER 2 is a job-rank check,
+    not an ACE grant — the console has no Player/PlayerData/job for
+    IsAuthorizedBoneSweepDevTool to consult either way. This is a narrower,
+    simpler answer than admin.lua's own read-only-query carve-out needed,
+    not an oversight; flagged explicitly per this resource's own "disclose
+    access-model judgment calls, don't decide them silently" convention.
+
+    ======================================================================
+    SECOND, EXPLICIT OPT-IN (coder-security, this pass) — WHY A CONVAR ON
+    TOP OF THE FEATURE FLAG: this resource ships 40 independent
+    Config.Features.* toggles, meant to be flippable together (a server
+    owner reviewing/enabling "all features"). This is the one flag whose
+    own config.lua comment says the opposite of what a blanket "all
+    features on" pass just did to it — "NEVER enable this on a production
+    server" — and a real FXServer run confirms it: with the flag alone set
+    true, this tool registers live at startup. A boolean that reads
+    identically to 39 other, genuinely-safe-to-bulk-enable flags is not a
+    strong enough signal that enabling THIS one was a deliberate, standalone
+    decision, because on the evidence available it demonstrably was not.
+
+    `qbx_k9unit_enable_bone_dev_tool` is a second gate a bulk flag-flip
+    cannot satisfy by construction: it must be set BY NAME, as its own line
+    in server.cfg, by whoever operates the box, and setting it alone does
+    nothing (Config.Features.BoneSweepDevTool must ALSO still be true) — an
+    operator who wants this tool has to touch two independent places, not
+    one. Use `setr` (set + REPLICATE), not a plain `set`, specifically so
+    client/bonetool.lua's own registration gate can read the exact same
+    value the server used, rather than this file needing to export it over
+    a bespoke event just for that purpose:
+
+        setr qbx_k9unit_enable_bone_dev_tool 1
+
+    Read via GetConvarInt (both here and in client/bonetool.lua) — `1`
+    means on; anything else, INCLUDING the convar never being set at all
+    (which reads back as this call's own default of `0`), means off.
+
+    WARNING, NOT ASSERT — same posture as server/combat.lua's own
+    PropDragging/IsPlayerDownedOverride resource-start warning (matched
+    deliberately; read that file's own comment block before changing this
+    one). This is a WEAKER guard than an assert on purpose: the "fix" here
+    is "the operator did not opt in," a state this resource must tolerate
+    gracefully (leave the tool unregistered, resource still starts) rather
+    than a misconfiguration worth crashing resource start over — this task's
+    own brief is explicit that this must never become an assert/error.  The
+    printed warning below is the loud, actionable line that makes "the tool
+    did not register" legible in server console output instead of a silent,
+    unexplained absence — printed ONLY when Config.Features.BoneSweepDevTool
+    is true, so a default install with the flag off (most installs) prints
+    nothing extra at all.
 
     GETPEDBONEINDEX — CONFIRMED AGAINST PRIMARY SOURCE THIS PASS, AND THE
     CONCLUSION ON WHETHER THIS TOOL SHOULD CONVERT THROUGH IT (task item 3
@@ -212,7 +282,6 @@
     pass's own hand-off note for the exact blocks needed):
       Config.Features.BoneSweepDevTool : boolean (NEW; default false; MUST
                                           stay false on any production server)
-      Config.BoneSweepTool.AcePermission     : string
       Config.BoneSweepTool.TestPropModel     : string  -- only used by the 'test' subcommand; the 'goto'/'next'/'prev' preview needs no model at all (pure position query)
       Config.BoneSweepTool.MaxBoneIndex      : integer >= 0
       Config.BoneSweepTool.TestOffsetX/Y/Z   : number
@@ -224,7 +293,34 @@
                                           -- permanently on cooldown after one
                                           use -- rather than meaning "no
                                           cooldown")
+      Config.Departments                     : table -- shared with server/admin.lua/server/certifications.lua; IsAuthorizedBoneSweepDevTool below reads Config.Departments[job.name] to decide whether the caller's job is a configured K9 department at all (job.isboss is still additionally required — see LAYER 2 above).
+      Config.BoneSweepTool.AcePermission is NO LONGER READ by this file (this
+      pass's ACE -> job-rank conversion, see LAYER 2 above) — it is DEAD
+      CONFIG as of this pass, same as Config.AdminAudit.AcePermission before
+      it; flagged to the config owner for removal, along with this file's own
+      two now-stale comments that reference it (config.lua's
+      Config.Features.BoneSweepDevTool and Config.BoneSweepTool.AcePermission
+      comments).
+
+      NOT A Config.* FIELD, so not listed above as one, but equally REQUIRED
+      for this tool to ever register (LAYER 1 — see SECOND, EXPLICIT OPT-IN
+      above): the convar `qbx_k9unit_enable_bone_dev_tool`, read via
+      GetConvarInt, must be `1`. Set via `setr qbx_k9unit_enable_bone_dev_tool 1`
+      in server.cfg.
 ]]
+
+-- SECOND, EXPLICIT OPT-IN (coder-security, this pass) — see this file's
+-- header SECOND, EXPLICIT OPT-IN section for the full "why" writeup. Read
+-- via GetConvarInt at onResourceStart below; `1` means opted in, anything
+-- else (including never being set, which reads back as GetConvarInt's own
+-- default of `0`) means not opted in. A plain local constant, not a Config
+-- field, per this file's own established "tiny constant, private per file"
+-- convention (see REQUEST_MODEL_TIMEOUT_MS's identical duplication note in
+-- client/propattachment.lua) — client/bonetool.lua duplicates this exact
+-- literal for its own registration gate rather than sharing a resource
+-- global, since the two files must each independently decide whether to
+-- register regardless of the other's load order.
+local BONE_DEV_TOOL_ENABLE_CONVAR = 'qbx_k9unit_enable_bone_dev_tool'
 
 -- NOTE: 'goto' is a reserved word in Lua 5.4, so its key must be bracketed
 -- (['goto'] = true) rather than the bare `goto = true` shorthand every
@@ -258,6 +354,30 @@ local function NotifyPlayer(target, description, notifyType)
     _G.NotifyPlayer(target, description, notifyType, 'K9 Unit — Bone Tool')
 end
 
+--- LAYER 2 authorization check — see this file's header ACCESS MODEL
+--- section for the full "why job-rank, why boss-only, why not
+--- IsAuthorizedAdmin's threshold" writeup. Mirrors server/admin.lua's
+--- IsAuthorizedAdmin shape exactly for every resolvable-shape check: fails
+--- CLOSED (returns false, never throws) on a missing player record, a
+--- missing job, or a job whose name is not a configured Config.Departments
+--- key. UNLIKE IsAuthorizedAdmin, there is no numeric-grade branch at all —
+--- only `job.isboss` qualifies (see header for why reusing
+--- Config.Departments[...].auditGrade here would be a real regression, not
+--- a convenience). No console carve-out either: this is only ever called
+--- for `src ~= 0` (see the RegisterCommand handler below, which already
+--- rejects source == 0 before this function is ever reached).
+--- @param source number
+--- @return boolean
+local function IsAuthorizedBoneSweepDevTool(source)
+    local Player = exports.qbx_core:GetPlayer(source)
+    if not Player or not Player.PlayerData then return false end
+
+    local job = Player.PlayerData.job
+    if not job or not Config.Departments or not Config.Departments[job.name] then return false end
+
+    return job.isboss == true
+end
+
 -- REFACTOR_ROADMAP.md item 1 convention: per-source rate limit on running
 -- this command at all — spam/abuse guard only (this is an admin-only tool,
 -- but a misbehaving or scripted client is still worth throttling, same
@@ -272,8 +392,30 @@ AddEventHandler('onResourceStart', function(resourceName)
         return -- feature disabled (or not yet configured) — the command is never registered at all
     end
 
+    -- LAYER 1, SECOND HALF (coder-security, this pass) — see header SECOND,
+    -- EXPLICIT OPT-IN section. Checked AFTER the feature-flag return above
+    -- on purpose: a default install with the flag off (the overwhelming
+    -- majority of installs) must print nothing extra at all, only a server
+    -- that has ALREADY opted in at the flag layer gets this warning, so the
+    -- signal stays meaningful rather than becoming console noise every
+    -- install sees. WARNING, NOT ASSERT — see header for why this must
+    -- never become a hard failure of resource start.
+    if GetConvarInt(BONE_DEV_TOOL_ENABLE_CONVAR, 0) ~= 1 then
+        print(
+            ('[qbx_k9unit] WARNING: Config.Features.BoneSweepDevTool is true, but /k9bonetool was NOT ' ..
+             'registered. This dev-only tool spawns and attaches real props on command, and this ' ..
+             'resource requires a SECOND, explicit opt-in on top of the feature flag before it will ' ..
+             'ever run -- so flipping every Config.Features flag on at once (or shipping this one true ' ..
+             'by default/mistake) can never expose it by itself. To enable it on a server you control ' ..
+             "and intend to use for bone-index research, set `setr %s 1` in server.cfg (a REPLICATED " ..
+             'convar, so client/bonetool.lua sees the same value) and restart this resource. NEVER set ' ..
+             "this on a production server -- see this file's own header ACCESS MODEL section."):format(BONE_DEV_TOOL_ENABLE_CONVAR)
+        )
+        return
+    end
+
     assert(type(Config.BoneSweepTool) == 'table', '[qbx_k9unit] Config.Features.BoneSweepDevTool is true but Config.BoneSweepTool is missing.')
-    assert(type(Config.BoneSweepTool.AcePermission) == 'string' and Config.BoneSweepTool.AcePermission ~= '', '[qbx_k9unit] Config.BoneSweepTool.AcePermission must be a non-empty string.')
+    assert(type(Config.Departments) == 'table', '[qbx_k9unit] Config.Features.BoneSweepDevTool is true but Config.Departments is missing -- IsAuthorizedBoneSweepDevTool requires it to resolve the caller\'s own job.')
     assert(type(Config.BoneSweepTool.TestPropModel) == 'string' and Config.BoneSweepTool.TestPropModel ~= '', '[qbx_k9unit] Config.BoneSweepTool.TestPropModel must be a non-empty string.')
     assert(type(Config.BoneSweepTool.MaxBoneIndex) == 'number' and Config.BoneSweepTool.MaxBoneIndex >= 0, '[qbx_k9unit] Config.BoneSweepTool.MaxBoneIndex must be a number >= 0.')
     for _, key in ipairs({ 'TestOffsetX', 'TestOffsetY', 'TestOffsetZ' }) do
@@ -302,7 +444,33 @@ AddEventHandler('onResourceStart', function(resourceName)
             return
         end
 
-        if not IsPlayerAceAllowed(tostring(src), Config.BoneSweepTool.AcePermission) then
+        local sub = args[1]
+
+        -- NO UNBOUNDED TRAP (coder-security, this pass) — 'stop' is this
+        -- tool's ONLY termination/cleanup path (removes the preview marker
+        -- AND any attached test object, see EVENT CONTRACT above) and MUST
+        -- stay reachable even for a caller whose IsAuthorizedBoneSweepDevTool
+        -- grant is revoked mid-session (a job change, a demotion, a boss
+        -- toggling someone's isboss flag off) — mirroring this resource's
+        -- own Recall design (config.lua's Config.Recall header: "a handler
+        -- whose certification is revoked mid-bite must still be able to
+        -- call their dog off. Do NOT add an access check... to this path").
+        -- Deliberately checked and dispatched BEFORE the authorization gate
+        -- below, not merely exempted from it after the fact, so no future
+        -- edit can accidentally reorder an authorization check back in
+        -- front of it. The per-source cooldown still applies (same as
+        -- Recall's own RequestCooldownMs) — this is anti-spam, not
+        -- authorization, and only ever delays a repeat call briefly, never
+        -- denies it outright.
+        if sub == 'stop' then
+            if not BoneToolCooldown.Consume(src, Config.BoneSweepTool.CommandCooldownMs) then
+                return -- silent no-op: rate-limited, matches this resource's own bark/leash-request/certify-action convention
+            end
+            TriggerClientEvent('qbx_k9unit:client:boneToolCommand', src, 'stop', nil)
+            return
+        end
+
+        if not IsAuthorizedBoneSweepDevTool(src) then
             NotifyPlayer(src, locale('bonetool.not_authorized'), 'error')
             return
         end
@@ -311,7 +479,6 @@ AddEventHandler('onResourceStart', function(resourceName)
             return -- silent no-op: rate-limited, matches this resource's own bark/leash-request/certify-action convention
         end
 
-        local sub = args[1]
         if not VALID_SUBCOMMAND_SET[sub] then
             NotifyPlayer(src, BONE_TOOL_USAGE, 'error')
             return
@@ -348,7 +515,9 @@ AddEventHandler('onResourceStart', function(resourceName)
             end
             TriggerClientEvent('qbx_k9unit:client:boneToolCommand', src, sub, step)
         else
-            -- 'test' / 'stop' / 'known' — no argument of any kind.
+            -- 'test' / 'known' — no argument of any kind. ('stop' is
+            -- handled earlier, above, before the authorization check — see
+            -- the NO UNBOUNDED TRAP comment there.)
             TriggerClientEvent('qbx_k9unit:client:boneToolCommand', src, sub, nil)
         end
     end, false)

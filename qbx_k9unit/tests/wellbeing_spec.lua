@@ -1016,4 +1016,423 @@ t.test('relayWeaponFire: the ingest cooldown is PER SOURCE -- a second, differen
     t.equals(snap.fearStress, 6.0, 'two distinct reporting sources within the same tick must both count -- risePerNearbyShotPerTick(3.0) * 2')
 end)
 
+-- ========================================================================
+-- STUCK-K9 SOFTLOCK FIX (this task) -- three points, verified against a QA
+-- finding: (A) the recommended Injury.passiveRegenPerTick raise reaches
+-- both hard-block thresholds in a bounded, asserted number of ticks;
+-- (B) the new death/respawn reset actually fires, only on a genuine
+-- transition, and respects the configured amount (including a configured
+-- "disabled"); (C) the new resource-start item-existence validation warns
+-- (and never throws) on a missing placeholder item, covering all four
+-- single-item-name placeholders this resource depends on
+-- (Config.K9Medkit.itemName included, even though that field belongs to
+-- server/medkit.lua -- see server/wellbeing.lua's own header for why that
+-- check lives here).
+-- ========================================================================
+
+--- Wires one online, K9-modeled, connected player with InjuryLimping's own
+--- default alive health (200) at the origin. Shared setup for every test in
+--- this section that only cares about Injury/TickWellbeing, not Mood/Fatigue/
+--- FearStress/Distraction.
+--- @param f table
+--- @param src number?
+--- @return number ped
+local function wireOnlineInjuryK9(f, src)
+    src = src or 1
+    local ped = src * 100
+    f.setOnline({ src })
+    f.setPlayer(src, 'K9-CID-' .. src)
+    f.setPed(src, ped)
+    f.setModel(ped, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(ped, 0, 0, 0)
+    return ped
+end
+
+--- Drops Injury by exactly `amount` via repeated relayDamageEvent hits
+--- (Config.Wellbeing.Injury.damageDecayAmount = 10 per accepted hit in
+--- every fixture below), advancing past Config.Tracking.Blood
+--- .relayCooldownMs (500) between each so none are dropped by the ingest
+--- cooldown. `amount` must be an exact multiple of 10.
+--- @param f table
+--- @param src number
+--- @param amount number
+local function dropInjuryBy(f, src, amount)
+    assert(amount % 10 == 0, 'test helper only supports exact multiples of damageDecayAmount(10)')
+    for _ = 1, amount / 10 do
+        f.dispatchNetEvent('qbx_k9unit:server:relayDamageEvent', src)
+        f.advance(501)
+    end
+end
+
+-- ------------------------------------------------------------------------
+-- POINT A: the RECOMMENDED regen rate (passiveRegenPerTick 0.1 -> 1.0,
+-- baked into baselineWellbeingConfig() above -- see that table's own
+-- comment) reaches both hard-block thresholds, and a full recovery, in a
+-- bounded, exactly-asserted number of ticks.
+-- ------------------------------------------------------------------------
+
+t.test('NEW RATE (1.0/tick): from Injury=0, jumpBlockThreshold(20) is still NOT cleared after 19 ticks, and IS cleared at exactly tick 20 (100s, ~1.67 real minutes -- not the reported ~16.7 minutes)', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 100) -- Injury: 100 -> 0
+
+    for tick = 1, 19 do
+        f.advance(5000)
+        f.runOneTick()
+        local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+        t.isTrue(snap.injury < 20, ('tick %d: jumpBlockThreshold must not have cleared yet (injury=%s)'):format(tick, tostring(snap.injury)))
+    end
+
+    f.advance(5000)
+    f.runOneTick() -- tick 20
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.injury, 20, 'tick 20: injury must be exactly 20 (20 ticks * 1.0/tick)')
+    t.isTrue(snap.injury >= 20, 'jumpBlockThreshold(20) must be cleared -- client/wellbeing.lua blocks jump only while injury < jumpBlockThreshold')
+end)
+
+t.test('NEW RATE (1.0/tick): from Injury=0, sprintBlockThreshold(30) clears at exactly tick 30 (150s, 2.5 real minutes -- not the reported ~25 minutes)', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 100)
+
+    for _ = 1, 29 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local snapBefore = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.isTrue(snapBefore.injury < 30, 'one tick before threshold, sprintBlockThreshold must not have cleared yet')
+
+    f.advance(5000)
+    f.runOneTick() -- tick 30
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.injury, 30, 'tick 30: injury must be exactly 30 (30 ticks * 1.0/tick)')
+end)
+
+t.test('NEW RATE (1.0/tick): a full 0 -> Injury.max(100) recovery takes exactly 100 ticks (500s, ~8.33 minutes) -- identical to Mood.passiveRegenPerTick\'s own already-adopted 1.0/tick number, closing the 10x gap between the two', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 100)
+
+    for _ = 1, 99 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local snapBefore = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapBefore.injury, 99, 'tick 99: one point short of a full recovery')
+
+    f.advance(5000)
+    f.runOneTick() -- tick 100
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.injury, 100, 'tick 100: fully recovered, clamped at Injury.max, never overshooting')
+end)
+
+t.test('DOCUMENTED BUG, CURRENTLY-SHIPPED 0.1/tick RATE: from Injury=0, jumpBlockThreshold(20) takes exactly 200 ticks (1000s = 16.67 real minutes) and sprintBlockThreshold(30) takes exactly 300 ticks (1500s = 25 real minutes) -- pins the QA-reported arithmetic exactly, so this test starts FAILING (a deliberate tripwire) the day config.lua actually ships the recommended 1.0 rate and this documentation test should be deleted', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Injury.passiveRegenPerTick = 0.1 -- the value config.lua ships as of this pass -- see that field's own comment above
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true }, wellbeingCfg = cfg })
+    local src = 1
+    wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 100)
+
+    for _ = 1, 199 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local snapAt199 = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.isTrue(snapAt199.injury < 20, 'tick 199: still below jumpBlockThreshold at the currently-shipped rate')
+
+    f.advance(5000)
+    f.runOneTick() -- tick 200
+    local snapAt200 = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.isTrue(snapAt200.injury >= 20, 'tick 200 (1000s = 16.67 min): jumpBlockThreshold finally clears -- exactly the QA-reported figure')
+
+    for _ = 1, 99 do -- ticks 201..299
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local snapAt299 = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.isTrue(snapAt299.injury < 30, 'tick 299: still below sprintBlockThreshold at the currently-shipped rate')
+
+    f.advance(5000)
+    f.runOneTick() -- tick 300
+    local snapAt300 = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.isTrue(snapAt300.injury >= 30, 'tick 300 (1500s = 25 min): sprintBlockThreshold finally clears -- exactly the QA-reported figure')
+end)
+
+-- ------------------------------------------------------------------------
+-- POINT B: death/respawn reset. GetEntityHealth(ped) <= 100
+-- (PED_DEAD_HEALTH_THRESHOLD, a local constant in server/wellbeing.lua,
+-- mirroring server/combat.lua's/server/medkit.lua's own identical constant)
+-- is the death signal -- IsEntityDead has no FXServer server registration
+-- (see server/wellbeing.lua's own header for the citation), so this
+-- fixture's GetEntityHealth stub (default 200, set via f.setHealth) is what
+-- actually drives this behavior, not a separate IsEntityDead stub.
+-- ------------------------------------------------------------------------
+
+t.test('DEATH/RESPAWN: a K9 observed dead (health<=100) then alive again (health>100) on the NEXT tick has Injury restored by deathRespawnRestoreAmount(100), clamped to max, and passive regen resumes the SAME tick', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src, ped = 1, 100
+    wireOnlineInjuryK9(f, src) -- ped defaults to src*100 = 100
+    dropInjuryBy(f, src, 50) -- Injury: 100 -> 50
+
+    f.setHealth(ped, 50) -- <= PED_DEAD_HEALTH_THRESHOLD(100): dead
+    f.advance(5000)
+    f.runOneTick()
+    local snapDead = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapDead.injury, 50, 'no passive regen while genuinely dead -- Injury must not have moved')
+
+    f.setHealth(ped, 200) -- alive again (revived/respawned)
+    f.advance(5000)
+    f.runOneTick()
+    local snapRevived = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapRevived.injury, 100, '50 + deathRespawnRestoreAmount(100), clamped to max(100), THEN +passiveRegenPerTick(1.0) also clamped to 100 the same tick')
+end)
+
+t.test('DEATH/RESPAWN: staying observed-dead across MULTIPLE ticks does not repeat the restore -- it fires exactly once, on the genuine dead->alive transition', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src, ped = 1, 100
+    wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 70) -- Injury: 100 -> 30
+
+    f.setHealth(ped, 50) -- dead
+    for _ = 1, 5 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local snapStillDead = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapStillDead.injury, 30, 'five ticks spent dead must not have moved Injury at all -- no repeated/partial restore while merely staying dead')
+
+    f.setHealth(ped, 200) -- alive again, once
+    f.advance(5000)
+    f.runOneTick()
+    local snapRevived = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapRevived.injury, 100, '30 + 100 (deathRespawnRestoreAmount), clamped to max -- restored exactly once on the real transition')
+
+    -- Continuing to stay alive must not re-apply the restore a second time.
+    f.advance(5000)
+    f.runOneTick()
+    local snapStillAlive = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapStillAlive.injury, 100, 'still clamped to max via ordinary passive regen -- the restore itself must not re-fire without a fresh death')
+end)
+
+t.test('DEATH/RESPAWN: a SECOND death-then-revival cycle restores again -- this is a genuine per-transition mechanism, not a one-time-ever flag', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src, ped = 1, 100
+    wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 90) -- Injury: 100 -> 10
+
+    f.setHealth(ped, 50) -- death #1
+    f.advance(5000)
+    f.runOneTick()
+    f.setHealth(ped, 200) -- revival #1
+    f.advance(5000)
+    f.runOneTick()
+    local snapAfterFirst = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapAfterFirst.injury, 100, '10 + 100, clamped -- first restore landed')
+
+    dropInjuryBy(f, src, 90) -- Injury: 100 -> 10 again, a second real firefight
+    f.setHealth(ped, 50) -- death #2
+    f.advance(5000)
+    f.runOneTick()
+    f.setHealth(ped, 200) -- revival #2
+    f.advance(5000)
+    f.runOneTick()
+    local snapAfterSecond = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapAfterSecond.injury, 100, 'a second, independent death/revival cycle must restore again -- not suppressed by the first one already having fired')
+end)
+
+t.test('DEATH/RESPAWN: Config.Wellbeing.Injury.deathRespawnRestoreAmount respects a PARTIAL (non-max) configured value -- proves the amount itself is applied, not just "snap to max"', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Injury.deathRespawnRestoreAmount = 25
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true }, wellbeingCfg = cfg })
+    local src, ped = 1, 100
+    wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 90) -- Injury: 100 -> 10
+
+    f.setHealth(ped, 50)
+    f.advance(5000)
+    f.runOneTick()
+    f.setHealth(ped, 200)
+    f.advance(5000)
+    f.runOneTick()
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.injury, 36, '10 + 25 (the configured partial amount) + 1.0 (passive regen, same tick) = 36 -- never snaps straight to max')
+end)
+
+t.test('DEATH/RESPAWN: Config.Wellbeing.Injury.deathRespawnRestoreAmount = 0 is a genuine, supported "disabled" -- an operator preferring lingering post-respawn injury for realism', function()
+    local cfg = baselineWellbeingConfig()
+    cfg.Injury.deathRespawnRestoreAmount = 0
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true }, wellbeingCfg = cfg })
+    local src, ped = 1, 100
+    wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 90) -- Injury: 100 -> 10
+
+    f.setHealth(ped, 50)
+    f.advance(5000)
+    f.runOneTick()
+    f.setHealth(ped, 200)
+    f.advance(5000)
+    f.runOneTick()
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.injury, 11, '10 + 0 (restore disabled) + 1.0 (ordinary passive regen resuming) = 11 -- respawn grants NO special relief, exactly as configured')
+end)
+
+t.test('DEATH/RESPAWN: a K9 that never dies at all is entirely unaffected -- the flag never fires a spurious restore', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    wireOnlineInjuryK9(f, src) -- default health 200 (alive) for every tick
+    dropInjuryBy(f, src, 40) -- Injury: 100 -> 60
+
+    for _ = 1, 5 do
+        f.advance(5000)
+        f.runOneTick()
+    end
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.injury, 65, '60 + 5 ticks * 1.0 ordinary passive regen -- no restore ever applied since health never dropped to/below 100')
+end)
+
+t.test('DEATH/RESPAWN: with InjuryLimping OFF, GetEntityHealth-driven death tracking never engages -- Injury stays untouched regardless of health, and no crash', function()
+    local f = newWellbeingFixture() -- InjuryLimping false (and every other flag false)
+    local src, ped = 1, 100
+    wireOnlineInjuryK9(f, src)
+
+    f.setHealth(ped, 50) -- would be "dead" if InjuryLimping were on
+    local ok = pcall(f.runOneTick)
+    t.isTrue(ok, 'a disabled InjuryLimping must never crash on a dead ped')
+    t.equals(#f.clientEvents, 0, 'TickWellbeing itself never even runs when every wellbeing flag is off')
+end)
+
+-- ------------------------------------------------------------------------
+-- POINT C: startup validation for every placeholder ox_inventory item name
+-- this resource depends on (Config.K9Medkit.itemName included -- see
+-- server/wellbeing.lua's own header for why that check lives here despite
+-- belonging, in spirit, to server/medkit.lua).
+-- ------------------------------------------------------------------------
+
+t.test('STARTUP VALIDATION: K9Medkit enabled + k9_medkit NOT registered in ox_inventory -- exactly one warning naming the item and the config path, and onResourceStart does not throw', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = false } })
+    f.config.Features.K9Medkit = true
+    f.config.K9Medkit = { itemName = 'k9_medkit' }
+    -- k9_medkit deliberately never registered via f.registerInventoryItem
+
+    local ok = pcall(f.fireResourceStart)
+    t.isTrue(ok, 'a missing item must produce a WARNING, never a thrown error')
+
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('k9_medkit', 1, true) and line:find('Config.K9Medkit.itemName', 1, true) then
+            found = true
+        end
+    end
+    t.isTrue(found, 'expected a warning naming both the missing item and the exact config path an operator needs to fix')
+end)
+
+t.test('STARTUP VALIDATION: K9Medkit enabled + k9_medkit IS registered in ox_inventory -- no warning at all', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = false } })
+    f.config.Features.K9Medkit = true
+    f.config.K9Medkit = { itemName = 'k9_medkit' }
+    f.registerInventoryItem('k9_medkit')
+
+    f.fireResourceStart()
+    for _, line in ipairs(f.printedLines) do
+        t.isFalse(line:find('k9_medkit', 1, true) ~= nil, 'a correctly-registered item must never be warned about')
+    end
+end)
+
+t.test('STARTUP VALIDATION: K9Medkit disabled -- the item is never even checked, missing or not (read-at-point-of-activation discipline)', function()
+    local f = newWellbeingFixture()
+    f.config.Features.K9Medkit = false
+    f.config.K9Medkit = { itemName = 'k9_medkit' }
+
+    f.fireResourceStart()
+    for _, line in ipairs(f.printedLines) do
+        t.isFalse(line:find('k9_medkit', 1, true) ~= nil, 'a disabled feature must never be checked at all')
+    end
+end)
+
+t.test('STARTUP VALIDATION: MoodSystem enabled + k9_treat missing -- warns naming Config.Wellbeing.Mood.feedItemName', function()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } })
+    -- k9_treat (baselineWellbeingConfig's own Mood.feedItemName) never registered
+
+    f.fireResourceStart()
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('k9_treat', 1, true) and line:find('Config.Wellbeing.Mood.feedItemName', 1, true) then
+            found = true
+        end
+    end
+    t.isTrue(found)
+end)
+
+t.test('STARTUP VALIDATION: DistractionSystem enabled + BOTH k9_meat_bait and k9_ultrasonic_whistle missing -- two SEPARATE warnings, one per item', function()
+    local f = newWellbeingFixture({ featuresOverride = { DistractionSystem = true } })
+
+    f.fireResourceStart()
+    local foundBait, foundWhistle = false, false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('k9_meat_bait', 1, true) then foundBait = true end
+        if line:find('WARNING', 1, true) and line:find('k9_ultrasonic_whistle', 1, true) then foundWhistle = true end
+    end
+    t.isTrue(foundBait, 'meat bait must be warned about')
+    t.isTrue(foundWhistle, 'the whistle must ALSO be warned about -- not just the first of the two')
+end)
+
+t.test('STARTUP VALIDATION: DistractionSystem enabled + only ONE of the two items registered -- exactly one warning, for the still-missing item only', function()
+    local f = newWellbeingFixture({ featuresOverride = { DistractionSystem = true } })
+    f.registerInventoryItem('k9_meat_bait')
+
+    f.fireResourceStart()
+    local foundBait, foundWhistle = false, false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('k9_meat_bait', 1, true) then foundBait = true end
+        if line:find('k9_ultrasonic_whistle', 1, true) then foundWhistle = true end
+    end
+    t.isFalse(foundBait, 'the registered item must not be warned about')
+    t.isTrue(foundWhistle, 'the still-missing item must still be warned about')
+end)
+
+t.test('STARTUP VALIDATION: exports.ox_inventory:Items() itself erroring is caught -- a distinct warning is printed and onResourceStart does not throw', function()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true } })
+    f.setThrowOnItemsExport(true)
+
+    local ok = pcall(f.fireResourceStart)
+    t.isTrue(ok, 'an ox_inventory export error must never crash resource start')
+
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('errored', 1, true) then found = true end
+    end
+    t.isTrue(found, 'an export failure must still produce SOME loud, distinct warning, not silence')
+end)
+
+t.test('STARTUP VALIDATION: onResourceStart fired for a DIFFERENT resource entirely is ignored -- mirrors server/combat.lua\'s own GetCurrentResourceName() guard verbatim, no warnings at all', function()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true, DistractionSystem = true } })
+    f.config.Features.K9Medkit = true
+    f.config.K9Medkit = { itemName = 'k9_medkit' }
+    -- Nothing registered -- every one of the four items is missing.
+
+    f.fireResourceStart('some_other_resource')
+    t.equals(#f.printedLines, 0, 'a foreign resourceName must produce zero output -- this handler only ever acts on its OWN resource starting')
+end)
+
+t.test('STARTUP VALIDATION: all four placeholder items missing at once (a fresh, unconfigured install with every dependent feature on) produces four distinct warnings, one per item, in a single onResourceStart pass', function()
+    local f = newWellbeingFixture({ featuresOverride = { MoodSystem = true, DistractionSystem = true } })
+    f.config.Features.K9Medkit = true
+    f.config.K9Medkit = { itemName = 'k9_medkit' }
+
+    f.fireResourceStart()
+    local names = { 'k9_medkit', 'k9_treat', 'k9_meat_bait', 'k9_ultrasonic_whistle' }
+    for _, name in ipairs(names) do
+        local found = false
+        for _, line in ipairs(f.printedLines) do
+            if line:find('WARNING', 1, true) and line:find(name, 1, true) then found = true end
+        end
+        t.isTrue(found, ('expected a distinct warning for %s'):format(name))
+    end
+end)
+
 os.exit(t.summary())

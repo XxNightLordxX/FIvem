@@ -230,6 +230,25 @@ if Config.Features.AgilityAdvanced then
 
     local lastVaultAt = -math.huge -- GetGameTimer()-scale; never on cooldown for the very first attempt
 
+    -- Bug fix (this pass, qa-tester finding): TryVault() had no re-entrancy
+    -- guard around its own async obstacle-detection sweep. DetectVaultableObstacleHeight
+    -- below can yield at Wait(0) one or more times (whenever GET_SHAPE_TEST_RESULT
+    -- reports "still processing" -- see that function's own comment: this is not
+    -- guaranteed synchronous even for a short capsule sweep). `lastVaultAt` was
+    -- only ever updated AFTER that async sweep returned, so a SECOND TryVault()
+    -- invocation reaching this function while the FIRST one's sweep was still
+    -- in flight (a keybind double-press/auto-repeat, or two inputs landing in
+    -- the same or adjacent frame) passed the cooldown check against the
+    -- STILL-STALE `lastVaultAt` and ran its own independent, fully overlapping
+    -- detection sweep. If both calls detected the same obstacle, both called
+    -- SetEntityVelocity, stacking a second re-launch impulse on top of the
+    -- first from what the player experienced as a single vault attempt (and
+    -- doubling the shape-test native call volume for that press). This flag
+    -- closes that window: a second call arriving while a sweep is already in
+    -- flight is rejected outright, silently, same posture as the cooldown/
+    -- no-obstacle branches above and below.
+    local vaultInProgress = false
+
     --- Shared implementation behind the vault keybind below. Re-checks
     --- access/cooldown/obstacle every call -- there is no separate
     --- "canInteract"-style predicate for a keybind the way ox_target
@@ -251,8 +270,14 @@ if Config.Features.AgilityAdvanced then
             return -- nothing to vault over while seated/tucked, same exclusion client/movement.lua's leash pull-back thread and door-interaction options already apply for this exact state
         end
 
+        if vaultInProgress then
+            return -- a previous TryVault() call's own async obstacle-detection sweep (see vaultInProgress's own comment above) hasn't finished yet -- silent, same posture as every other rejection branch here
+        end
+        vaultInProgress = true
+
         local obstacleHeight = DetectVaultableObstacleHeight(ped)
         if obstacleHeight <= 0.0 or obstacleHeight > agilityCfg.maxVaultHeight then
+            vaultInProgress = false
             return -- nothing vaultable detected in range, or it's taller than configured -- silent, same reasoning as the cooldown branch above
         end
 
@@ -277,6 +302,8 @@ if Config.Features.AgilityAdvanced then
         local verticalSpeed = 4.0 + obstacleHeight * 2.0 -- taller obstacle -> slightly higher arc
         local forwardSpeed = 3.5
         SetEntityVelocity(ped, forward.x * forwardSpeed, forward.y * forwardSpeed, verticalSpeed)
+
+        vaultInProgress = false
     end
 
     RegisterCommand('qbx_k9unit:vault', function()

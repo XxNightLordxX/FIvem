@@ -777,6 +777,98 @@ t.test('RevokeCertification: not certifier-eligible is rejected', function()
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.not_authorized_to_revoke'), 'error'))
 end)
 
+-- ----------------------------------------------------------------------
+-- REGRESSION (dependency-verification pass): oxmysql's `.await` funnels
+-- every query through one shared `await(fn, query, parameters)` whose
+-- callback does `if error then return p:reject(error) end`, and a
+-- REJECTED promise raises via `error(promise.value, 2)` inside
+-- `Citizen.Await` -- a real DB error (bad connection, deadlock, schema
+-- drift) THROWS out of a bare `.await` call, it does not return nil. This
+-- file's revoke paths now pcall every `.await` (see RevokeCertification's
+-- own doc comment above the UPDATE). The two cases below drive an
+-- `error(...)`-throwing MySQL.update.await stub through the real,
+-- unmodified production handler and assert: (1) the thrown error never
+-- propagates out of the event handler, (2) the granter gets a sensible
+-- notification either way, and (3) the in-memory Certifications cache
+-- never diverges from what actually happened in the DB.
+-- ----------------------------------------------------------------------
+
+t.test('RevokeCertification: REGRESSION -- a throwing UPDATE that genuinely never committed (reconciliation confirms still active) never propagates, notifies revoke_error, and leaves the cert/leash/outbound state completely untouched', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end -- seed an active cert first
+    f.env.RefreshCertificationCache('REVOKEE', 'police')
+    t.isTrue(f.env.HasK9Access(20), 'sanity: really certified before the simulated outage')
+
+    f.mysql.update.await = function() error('simulated connection drop mid-UPDATE') end
+    -- Reconciliation SELECT (IsCertRowConfirmedActive) confirms the row is
+    -- STILL active -- the UPDATE genuinely never committed.
+    f.mysql.scalar.await = function() return 5 end
+
+    f.setSource(10)
+    local ok, err = pcall(f.events['qbx_k9unit:server:revokeHandler'], 20)
+    t.isTrue(ok, 'the event handler must never propagate a thrown DB error: ' .. tostring(err))
+
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.revoke_error'), 'error'), 'the granter must see a sensible error notification, not silence')
+    t.isNil(lastNotifyFor(f, 20), 'the target must NOT be told their cert was revoked -- it genuinely was not')
+    t.isTrue(f.env.HasK9Access(20), 'NO PARTIAL STATE: the cache must still report the cert active, matching the DB (the UPDATE never committed)')
+    t.equals(#f.leashDetachCalls, 0, 'no leash teardown must run for a revoke that never actually happened')
+    t.equals(#f.outboundEvents, 0, 'no outbound certificationRevoked event for a revoke that never actually happened')
+end)
+
+t.test('RevokeCertification: REGRESSION -- a throwing UPDATE that ACTUALLY committed (ack lost after a real commit) is confirmed via reconciliation and reported as the genuine success it was, never left diverging from the DB', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    local target = f.registerPlayer(20, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('REVOKEE', 'police')
+    t.isTrue(f.env.HasK9Access(20))
+
+    f.mysql.update.await = function() error('simulated ack lost after a real commit') end
+    -- Every scalar.await call after the throwing UPDATE (the
+    -- IsCertRowConfirmedActive reconciliation read, and then
+    -- RefreshCertificationCache's own re-query on the fall-through success
+    -- path) now sees the row as inactive -- confirming the UPDATE actually
+    -- committed despite the client-side error.
+    f.mysql.scalar.await = function() return nil end
+
+    f.setSource(10)
+    local ok, err = pcall(f.events['qbx_k9unit:server:revokeHandler'], 20)
+    t.isTrue(ok, 'must not propagate: ' .. tostring(err))
+
+    t.isFalse(f.env.HasK9Access(20), 'the cache must reflect the CONFIRMED true outcome (revoked), never the failed client-side call alone')
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.revoked_notice_online'), 'error'), 'the target must be told their cert was actually revoked, since it genuinely was')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.revoke_success'), 'success'), 'the granter must see a real success, not an error, once reconciliation confirms the DB truth')
+    t.equals(target._metaWrites[#target._metaWrites].value, false)
+    t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], 20)
+end)
+
+t.test('RevokeCertification: REGRESSION -- the reconciliation read ITSELF also failing (true outcome unknown) still degrades safely, never propagates, and never claims success it cannot confirm', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('REVOKEE', 'police')
+
+    f.mysql.update.await = function() error('simulated connection drop mid-UPDATE') end
+    f.mysql.scalar.await = function() error('simulated: DB still unreachable for the reconciliation read too') end
+
+    f.setSource(10)
+    local ok, err = pcall(f.events['qbx_k9unit:server:revokeHandler'], 20)
+    t.isTrue(ok, 'must not propagate even when BOTH the UPDATE and the reconciliation read throw: ' .. tostring(err))
+
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.revoke_error'), 'error'), 'an unconfirmable outcome must still notify an honest error, never silence')
+    t.isTrue(f.env.HasK9Access(20), 'an unconfirmed outcome must never flip the cache toward "revoked" on a guess')
+    t.equals(#f.outboundEvents, 0)
+end)
+
 -- ======================================================================
 -- RevokeCertificationOffline -- the ONLY path reachable, per the file's own
 -- header, through the '/k9decertifyoffline [citizenid] [job]' command (no
@@ -841,6 +933,32 @@ t.test('RevokeCertificationOffline: a missing job argument is rejected with the 
     f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
     f.commands['k9decertifyoffline'].fn(10, { 'SOMEONE' }) -- args[2] missing
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.usage_decertify_offline'), 'error'))
+end)
+
+t.test('RevokeCertificationOffline: REGRESSION -- a throwing UPDATE degrades safely (reconciliation confirms still active), never propagates, notifies revoke_error, and leaves the cert untouched', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    -- Seed the cache as actively certified for REVOKEE (citizenid-keyed,
+    -- independent of being online -- REVOKEE is intentionally never
+    -- registered here, exactly like the offline success test above).
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('REVOKEE', 'police')
+
+    f.mysql.update.await = function() error('simulated connection drop mid-UPDATE') end
+    -- Reconciliation (IsCertRowConfirmedActive) confirms the row is STILL
+    -- active -- the UPDATE genuinely never committed.
+    f.mysql.scalar.await = function() return 5 end
+
+    local ok, err = pcall(f.commands['k9decertifyoffline'].fn, 10, { 'REVOKEE', 'police' })
+    t.isTrue(ok, 'the command handler must never propagate a thrown DB error: ' .. tostring(err))
+
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.revoke_error'), 'error'))
+    t.equals(#f.outboundEvents, 0, 'no outbound certificationRevoked event for a revoke that never actually happened')
+
+    -- NO PARTIAL STATE: REVOKEE's certification cache must still be
+    -- observably active for their real, current job.
+    f.registerPlayer(21, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+    t.isTrue(f.env.HasK9Access(21), 'the cache must still report the cert active, matching the DB (the UPDATE never committed)')
 end)
 
 -- ======================================================================
@@ -958,6 +1076,57 @@ t.test('OnJobUpdate: the runtime existence guard genuinely tolerates ForceBreakP
     -- try to call a nonexistent global.
     fireJobUpdate(f, 80, { name = 'taxi', grade = { level = 1 } })
     t.equals(f.officerLeashDetachCalls[#f.officerLeashDetachCalls][1], 80, 'the rest of the handler must still run normally when this one optional global is absent')
+end)
+
+t.test('OnJobUpdate: REGRESSION -- a throwing auto-revoke UPDATE (reconciliation confirms still active) never propagates out of the AddEventHandler and runs ZERO side effects, leaving the cert intact', function()
+    local f = newFixture()
+    f.registerPlayer(40, 'CIT40', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 9 end
+    f.env.RefreshCertificationCache('CIT40', 'police')
+    t.isTrue(f.env.HasK9Access(40))
+
+    f.mysql.update.await = function() error('simulated connection drop mid-UPDATE') end
+    -- Reconciliation confirms the OLD job's row is STILL active.
+    f.mysql.scalar.await = function() return 9 end
+
+    local ok, err = pcall(fireJobUpdate, f, 40, { name = 'sheriff', grade = { level = 1 } })
+    t.isTrue(ok, 'the AddEventHandler callback must never propagate a thrown DB error: ' .. tostring(err))
+
+    t.equals(#f.notifyLog, 0, 'no accurate notification can be given for an outcome that was never confirmed')
+    t.equals(#f.leashDetachCalls, 0)
+    t.equals(#f.partnershipBreakCalls, 0)
+    t.equals(#f.outboundEvents, 0)
+
+    -- NO PARTIAL STATE: re-register under the SAME (unchanged, per this
+    -- test) job to confirm the cache still reports the original cert active.
+    f.registerPlayer(40, 'CIT40', { name = 'police', grade = { level = 1 } })
+    t.isTrue(f.env.HasK9Access(40), 'the cache must still report the cert active for the OLD job -- it was never actually revoked')
+end)
+
+t.test('OnJobUpdate: REGRESSION -- a throwing auto-revoke UPDATE that ACTUALLY committed (ack lost after a real commit) is confirmed via reconciliation and the normal revoke side effects still run against that confirmed truth', function()
+    local f = newFixture()
+    local player = f.registerPlayer(41, 'CIT41', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 9 end
+    f.env.RefreshCertificationCache('CIT41', 'police')
+    t.isTrue(f.env.HasK9Access(41))
+
+    f.mysql.update.await = function() error('simulated ack lost after a real commit') end
+    -- Reconciliation, and the later RefreshCertificationCache re-query for
+    -- the new job, both see the OLD job's row as inactive.
+    f.mysql.scalar.await = function() return nil end
+
+    local ok, err = pcall(fireJobUpdate, f, 41, { name = 'sheriff', grade = { level = 1 } })
+    t.isTrue(ok, 'must not propagate: ' .. tostring(err))
+
+    t.isTrue(notifiedExactly(f, 41, Sandbox.locale('certifications.revoked_notice_job_change', 'Police Department'), 'error'))
+    t.equals(player._metaWrites[#player._metaWrites].value, false)
+    t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], 41)
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:certificationRevoked' and ev[2] == 'CIT41' and ev[3] == 'police' and ev[4] == 'job_changed' then fired = true end
+    end
+    t.isTrue(fired)
 end)
 
 -- ======================================================================

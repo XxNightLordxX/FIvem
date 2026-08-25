@@ -51,6 +51,7 @@
     "not_authorized_to_certify": "You are not authorized to certify K9 handlers.",
     "not_authorized_to_revoke": "You are not authorized to revoke K9 certifications.",
     "offline_target_not_certified": "That citizen does not hold an active certification for that department.",
+    "revoke_error": "An error occurred while revoking the certification. Nothing was changed.",
     "revoke_success": "K9 certification revoked.",
     "revoked_notice_job_change": "Your K9 certification has been revoked — you are no longer employed by %s.",
     "revoked_notice_online": "Your K9 certification has been revoked.",
@@ -71,6 +72,7 @@
   },
   "combat": {
     "already_held": "That target is already held by another K9.",
+    "blocked_by_vehicle": "Not available while your K9 is loaded into a vehicle.",
     "bite_hold_attempted": "Bite and hold attempted — restraint is not guaranteed against an uncooperative target.",
     "distracted": "Your K9 is distracted and not responding to commands.",
     "drag_attempted": "Attempting to drag the target — this is not guaranteed against an uncooperative target.",
@@ -317,6 +319,8 @@
   "vehicle": {
     "no_vehicle_nearby": "No K9 vehicle nearby.",
     "already_in_vehicle": "You can't do that while already sitting in a vehicle.",
+    "blocked_by_bite_hold": "You can't load into a vehicle while your K9 has a target held.",
+    "blocked_by_drag": "You can't load into a vehicle while your K9 is dragging someone.",
     "loaded": "Loaded into the vehicle.",
     "released": "Released from the vehicle.",
     "vehicle_lost": "Lost contact with the vehicle — released.",
