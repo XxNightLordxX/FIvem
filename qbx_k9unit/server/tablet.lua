@@ -358,54 +358,18 @@ end
 -- SMALL, GENERAL HELPERS
 -- ======================================================================
 
---- Fail-closed SELECT wrapper -- pcall around MySQL.query.await, matching
---- every other file in this resource's identical SafeQuery convention
---- (server/permissions.lua, server/admin.lua): a failed read returns zero
---- rows, never a raw Lua error out of a lib.callback handler (which would
---- otherwise hang the NUI's fetch() promise -- see client/tablet.lua's own
---- AwaitServerCallback doc comment for why an uninvoked callback is never
---- acceptable here).
----
---- K9STORE MIGRATION NOTE (this pass): this file's other two direct-SQL
---- reads (QueryHasAnyActiveCertification, QueryActivePermissionSet) have now
---- moved onto K9Store.Cert_GetActiveIdAnyJob / K9Store.Perm_GetActiveForCitizen
---- below (see SafeStoreCall), so Config.Database.enabled = false now actually
---- takes effect for those two. SafeQuery itself STAYS, calling MySQL.*
---- directly, for the two remaining call sites below (BuildCertificationsArray,
---- tabletRequestRoster's per-department fetch) -- neither has a clean 1:1
---- K9Store accessor today: BuildCertificationsArray needs "every active cert
---- row for one citizenid across ALL departments, columns job+granted_by,
---- unordered" and no K9Store function returns that shape (the closest,
---- Cert_GetActiveIdAnyJob, is a scalar id-existence check only); the roster
---- fetch needs the SAME per-job columns WITHOUT an ORDER BY (see this file's
---- header "ROSTER QUERY -- PERFORMANCE" for why that omission is deliberate),
---- while K9Store.Cert_GetActiveRosterByJob adds `ORDER BY granted_at DESC`
---- (admin.lua's own shape) -- swapping onto it would reintroduce the exact
---- filesort this file's header documents avoiding. Reported to main/
---- coder-architect rather than reshaped here or fixed by adding a new
---- K9Store function unilaterally (server/datastore.lua is shared by all five
---- of this pass's coders).
---- @param sql string
---- @param params table
---- @return table rows
-local function SafeQuery(sql, params)
-    local ok, rowsOrErr = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] tablet.lua query failed: %s'):format(tostring(rowsOrErr)))
-        return {}
-    end
-    return rowsOrErr or {}
-end
-
---- Fail-closed K9Store-accessor wrapper -- pcall around a K9Store.* function,
---- mirroring SafeQuery's own contract exactly (a failed read returns zero
---- rows/false, never a raw Lua error out of a lib.callback handler).
---- server/datastore.lua's own K9Store.* functions mirror oxmysql's RAW,
---- un-pcalled MySQL.query.await/MySQL.scalar.await contract in their DB-mode
---- branch by design (see that file's header "CONTRACT DISCIPLINE") -- this
---- file still needs "never throws" for its own callback handlers regardless
---- of which backend K9Store is running against, so the pcall stays here, at
---- this file's own call sites, exactly the same shape as SafeQuery above.
+--- Fail-closed K9Store-accessor wrapper -- pcall around a K9Store.* function
+--- (a failed read returns zero rows/false, never a raw Lua error out of a
+--- lib.callback handler). server/datastore.lua's own K9Store.* functions
+--- that mirror a RAW oxmysql method (MySQL.scalar/single/query.await) do so
+--- un-pcalled in their DB-mode branch, by design (see that file's header
+--- "CONTRACT DISCIPLINE") -- this file still needs "never throws" for its
+--- own callback handlers regardless of which backend K9Store is running
+--- against, so the pcall stays here, at every one of this file's own
+--- K9Store call sites, even the ones (like Cert_GetActiveJobsForCitizen/
+--- Cert_GetActiveRosterByJobUnordered below) that already never throw on
+--- their own -- consistent double-wrapping over a call-site-by-call-site
+--- judgment call about which K9Store functions "need" it.
 --- @param fn function -- a K9Store.* accessor
 --- @return any result -- rowsOrErr on success, or the caller's own documented
 --- fallback (nil/false/{}) on failure -- see each call site.
@@ -465,16 +429,14 @@ end
 --- as a citizenid-prefix scan (no LIMIT needed: bounded by the number of
 --- configured departments, a small fixed set -- at most one active row per
 --- department per this schema's own uq_one_active_cert_per_job invariant).
---- NOT YET MIGRATED onto K9Store -- see SafeQuery's own doc comment above
---- ("K9STORE MIGRATION NOTE") for why: no existing K9Store accessor returns
---- this exact shape (every active cert for one citizenid across ALL
---- departments, columns job+granted_by). Still calls MySQL.* directly via
---- SafeQuery, so Config.Database.enabled = false does not yet help this one
---- read -- flagged to main/coder-architect rather than papered over here.
+--- Migrated onto K9Store.Cert_GetActiveJobsForCitizen this pass (identical
+--- SQL/index, now behind the DatabaseEnabled() switch) -- see that
+--- accessor's own doc comment in server/datastore.lua for why it needed to
+--- be added rather than reused from an existing one.
 --- @param citizenid string
 --- @return table -- array of { departmentKey, departmentLabel, active, grantedBy }
 local function BuildCertificationsArray(citizenid)
-    local rows = SafeQuery('SELECT job, granted_by FROM k9_certifications WHERE citizenid = ? AND active = 1', { citizenid })
+    local rows = SafeStoreCall(K9Store.Cert_GetActiveJobsForCitizen, citizenid) or {}
     local grantedByJob = {}
     for _, row in ipairs(rows) do
         grantedByJob[row.job] = row.granted_by
@@ -854,27 +816,24 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
 
     -- BOUNDED, INDEXED fetch -- one query PER CONFIGURED DEPARTMENT (a
     -- small, fixed set), each an idx_job_active index seek with a hard,
-    -- server-produced integer LIMIT embedded via string.format (never
-    -- bound as a `?` placeholder -- matches server/admin.lua's own
-    -- disclosed reasoning: an already-clamped Lua integer in this position
-    -- is not an injection vector, and oxmysql's LIMIT-placeholder
-    -- compatibility was never independently confirmed in this codebase).
-    -- NO ORDER BY -- see this file's header for the filesort this
-    -- deliberately avoids repeating. NOT YET MIGRATED onto K9Store for the
-    -- same reason: K9Store.Cert_GetActiveRosterByJob (server/datastore.lua)
-    -- mirrors server/admin.lua's ORDERED shape, not this one -- swapping
-    -- onto it would silently reintroduce the filesort this loop exists to
-    -- avoid. See SafeQuery's own doc comment above for the full note; this
-    -- is the second of the two direct-MySQL call sites flagged to main/
-    -- coder-architect rather than papered over here.
+    -- server-produced integer LIMIT (never a client-influenced one). NO
+    -- ORDER BY -- see this file's header for the filesort this
+    -- deliberately avoids repeating. Migrated onto
+    -- K9Store.Cert_GetActiveRosterByJobUnordered this pass -- a NEW
+    -- accessor added specifically for this call site: the existing
+    -- K9Store.Cert_GetActiveRosterByJob (server/datastore.lua) mirrors
+    -- server/admin.lua's ORDERED shape (`ORDER BY granted_at DESC`), and
+    -- swapping onto it would silently reintroduce the exact filesort this
+    -- loop exists to avoid -- see that new accessor's own doc comment for
+    -- the full reasoning. The LIMIT integer itself is still an
+    -- already-clamped, server-computed Lua integer embedded via
+    -- string.format inside that accessor's own DB-mode branch, never a
+    -- client-influenced value.
     local candidates = {}
     local hitFetchCap = false
     if type(Config.Departments) == 'table' then
         for jobKey, dept in pairs(Config.Departments) do
-            local rows = SafeQuery(
-                ('SELECT citizenid, granted_by FROM k9_certifications WHERE job = ? AND active = 1 LIMIT %d'):format(fetchCapPerDept),
-                { jobKey }
-            )
+            local rows = SafeStoreCall(K9Store.Cert_GetActiveRosterByJobUnordered, jobKey, fetchCapPerDept) or {}
             if #rows >= fetchCapPerDept then hitFetchCap = true end
             local departmentLabel = (type(dept) == 'table' and type(dept.label) == 'string') and dept.label or jobKey
             for _, row in ipairs(rows) do

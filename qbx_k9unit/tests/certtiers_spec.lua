@@ -150,6 +150,36 @@ local function boot(opts)
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
+
+    -- server/datastore.lua -- REAL, unmodified, loaded alongside (that
+    -- file's own header: "the ONLY place in this resource that may name a
+    -- `k9_*` table or call `MySQL.*` directly" -- server/certtiers.lua's
+    -- own local SafeQuery/SafeWrite helpers, plus its one raw
+    -- `MySQL.scalar.await` reference-count read, are gone; every read/write
+    -- below now goes through K9Store.Tier_*/TierCap_*/TierAudit_Append/
+    -- Cert_CountByTier instead). Config.Database is deliberately absent
+    -- from this fixture's `config`/`defaultConfig` tables above --
+    -- K9Store's own DatabaseEnabled() fails safe to `true` (real-DB mode)
+    -- on a missing Config.Database, which is exactly what makes every
+    -- K9Store call below run the SAME MySQL.query.await/MySQL.scalar.await
+    -- call (against this file's own makeQueryAwait(world)/
+    -- makeScalarAwait(world) stubs, assigned as env.MySQL above) that this
+    -- file's removed SafeQuery/SafeWrite/raw-scalar call sites issued
+    -- directly before this migration -- so every existing SQL-substring
+    -- dispatch branch in makeQueryAwait/makeScalarAwait above keeps
+    -- matching, unchanged, since every new K9Store accessor mirrors that
+    -- exact SQL text verbatim (see server/datastore.lua's own new
+    -- "k9_certification_tiers / ..." section for the byte-for-byte
+    -- comparison).
+    --
+    -- Discard anything server/datastore.lua printed on its way up before
+    -- loading the file under test -- that file legitimately prints ONE
+    -- boot line saying which backend it is using, which is not
+    -- server/certtiers.lua's own output (mirrors tests/equipmentshop_spec.lua's
+    -- own identical precedent).
+    Sandbox.loadInto('../server/datastore.lua', env)
+    for i = #printedLines, 1, -1 do printedLines[i] = nil end
+
     Sandbox.loadInto('../server/certtiers.lua', env)
 
     for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do

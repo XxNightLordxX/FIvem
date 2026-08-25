@@ -456,37 +456,6 @@ local function BuildCatalogFromConfigDefaults()
     return map
 end
 
---- Fail-closed query wrapper -- pcall around MySQL.query.await, matching
---- server/runtimecontrol.lua's/server/admin.lua's own SafeQuery. A failed
---- read returns an empty table, never a raw Lua error.
---- @param sql string
---- @param params table
---- @return table rows
-local function SafeQuery(sql, params)
-    local ok, rowsOrErr = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] certtiers.lua query failed: %s'):format(tostring(rowsOrErr)))
-        return {}
-    end
-    return rowsOrErr or {}
-end
-
---- pcall-wrapped write helper -- returns true/false rather than throwing,
---- prints on failure. Every write in this file is a plain
---- INSERT/UPDATE/DELETE with `?`-bound parameters only, never a
---- caller-controlled fragment.
---- @param sql string
---- @param params table
---- @return boolean ok
-local function SafeWrite(sql, params)
-    local ok, err = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] certtiers.lua write failed: %s'):format(tostring(err)))
-        return false
-    end
-    return true
-end
-
 --- Rebuilds `TierByKey`/`TierOrder` from Config.CertificationTiers merged
 --- with the current `k9_certification_tiers` /
 --- `k9_certification_tier_capabilities` database state -- THE DATABASE
@@ -498,7 +467,7 @@ end
 local function RefreshCertificationTierCatalog()
     local merged = BuildCatalogFromConfigDefaults()
 
-    local overrideRows = SafeQuery('SELECT tier_key, label, ordinal, deleted FROM k9_certification_tiers', {})
+    local overrideRows = K9Store.Tier_GetAllRows()
     for _, row in ipairs(overrideRows) do
         if row.deleted == 1 or row.deleted == true then
             -- TOMBSTONE: exclude entirely, whether this key originated in
@@ -518,7 +487,7 @@ local function RefreshCertificationTierCatalog()
     -- Capability rows for an already-excluded (tombstoned) tier_key are
     -- simply never attached to anything here -- inert dead weight, not
     -- cleaned up, per migration 0010's own header.
-    local capRows = SafeQuery('SELECT tier_key, capability_key FROM k9_certification_tier_capabilities', {})
+    local capRows = K9Store.TierCap_GetAllRows()
     for _, row in ipairs(capRows) do
         local entry = merged[row.tier_key]
         if entry and CAPABILITY_CATALOG[row.capability_key] then
@@ -688,10 +657,7 @@ CertTierActionCooldown.RegisterPlayerDropped()
 --- @param detail string
 --- @param changedBy string
 local function WriteTierAudit(action, tierKey, detail, changedBy)
-    SafeWrite(
-        'INSERT INTO k9_certification_tier_audit (action, tier_key, detail, changed_by) VALUES (?, ?, ?, ?)',
-        { action, tierKey, detail, changedBy or 'unknown' }
-    )
+    K9Store.TierAudit_Append(action, tierKey, detail, changedBy or 'unknown')
 end
 
 -- ======================================================================
@@ -842,14 +808,9 @@ lib.callback.register('qbx_k9unit:server:certTiersUpsert', function(source, payl
         ordinal = existing.ordinal
     end
 
-    local priorRow = SafeQuery('SELECT deleted FROM k9_certification_tiers WHERE tier_key = ?', { key })[1]
+    local priorRow = K9Store.Tier_GetDeletedFlagByKey(key)[1]
 
-    local wrote = SafeWrite(
-        'INSERT INTO k9_certification_tiers (tier_key, label, ordinal, deleted, updated_by) VALUES (?, ?, ?, 0, ?) ' ..
-        'ON DUPLICATE KEY UPDATE label = VALUES(label), ordinal = VALUES(ordinal), deleted = 0, ' ..
-        'updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
-        { key, payload.label, ordinal, citizenid or 'unknown' }
-    )
+    local wrote = K9Store.Tier_Upsert(key, payload.label, ordinal, citizenid or 'unknown')
     if not wrote then
         TierEditMutex.Release(key)
         return { ok = false, reason = 'db_error' }
@@ -860,7 +821,7 @@ lib.callback.register('qbx_k9unit:server:certTiersUpsert', function(source, payl
     -- TierEditMutex is held for this key for this entire critical
     -- section, so nothing else touching THIS key's capability rows can
     -- have interleaved since this callback started.
-    local currentCapRows = SafeQuery('SELECT capability_key FROM k9_certification_tier_capabilities WHERE tier_key = ?', { key })
+    local currentCapRows = K9Store.TierCap_GetForTier(key)
     local currentCapSet = {}
     for _, row in ipairs(currentCapRows) do currentCapSet[row.capability_key] = true end
 
@@ -868,14 +829,13 @@ lib.callback.register('qbx_k9unit:server:certTiersUpsert', function(source, payl
     for capKey in pairs(capsSet) do
         if not currentCapSet[capKey] then
             added[#added + 1] = capKey
-            SafeWrite('INSERT INTO k9_certification_tier_capabilities (tier_key, capability_key, granted_by) VALUES (?, ?, ?)',
-                { key, capKey, citizenid or 'unknown' })
+            K9Store.TierCap_Insert(key, capKey, citizenid or 'unknown')
         end
     end
     for capKey in pairs(currentCapSet) do
         if not capsSet[capKey] then
             removed[#removed + 1] = capKey
-            SafeWrite('DELETE FROM k9_certification_tier_capabilities WHERE tier_key = ? AND capability_key = ?', { key, capKey })
+            K9Store.TierCap_Delete(key, capKey)
         end
     end
 
@@ -949,12 +909,12 @@ lib.callback.register('qbx_k9unit:server:certTiersReorder', function(source, ord
         -- (its ordinal is left unchanged) rather than blocking the rest
         -- of the reorder.
         if TierEditMutex.TryAcquire(key) then
-            SafeWrite(
-                'INSERT INTO k9_certification_tiers (tier_key, label, ordinal, deleted, updated_by) VALUES (?, ?, ?, 0, ?) ' ..
-                'ON DUPLICATE KEY UPDATE ordinal = VALUES(ordinal), deleted = 0, updated_by = VALUES(updated_by), ' ..
-                'updated_at = CURRENT_TIMESTAMP',
-                { key, TierByKey[key].label, index, citizenid or 'unknown' }
-            )
+            -- K9Store.Tier_UpdateOrdinal, NOT K9Store.Tier_Upsert -- see
+            -- that accessor's own doc comment (server/datastore.lua) for
+            -- exactly why this write must never touch `label`, even though
+            -- TierByKey[key].label is passed through (used only if this
+            -- key has no row in k9_certification_tiers yet at all).
+            K9Store.Tier_UpdateOrdinal(key, TierByKey[key].label, index, citizenid or 'unknown')
             TierEditMutex.Release(key)
         else
             print(('[qbx_k9unit] certtiers ReorderTiers: tier %s busy (concurrent edit) -- its ordinal was left unchanged this pass'):format(key))
@@ -1000,7 +960,7 @@ lib.callback.register('qbx_k9unit:server:certTiersDelete', function(source, key)
         return { ok = false, reason = 'busy' }
     end
 
-    local countOk, refCountOrErr = pcall(MySQL.scalar.await, 'SELECT COUNT(*) FROM k9_certifications WHERE tier = ?', { key })
+    local countOk, refCountOrErr = pcall(K9Store.Cert_CountByTier, key)
     if not countOk then
         TierEditMutex.Release(key)
         print(('[qbx_k9unit] certtiers DeleteTier reference-count read failed for %s: %s'):format(key, tostring(refCountOrErr)))
@@ -1014,11 +974,7 @@ lib.callback.register('qbx_k9unit:server:certTiersDelete', function(source, key)
     end
 
     local entry = TierByKey[key]
-    local wrote = SafeWrite(
-        'INSERT INTO k9_certification_tiers (tier_key, label, ordinal, deleted, updated_by) VALUES (?, ?, ?, 1, ?) ' ..
-        'ON DUPLICATE KEY UPDATE deleted = 1, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
-        { key, entry.label, entry.ordinal, citizenid or 'unknown' }
-    )
+    local wrote = K9Store.Tier_Tombstone(key, entry.label, entry.ordinal, citizenid or 'unknown')
     TierEditMutex.Release(key)
 
     if not wrote then

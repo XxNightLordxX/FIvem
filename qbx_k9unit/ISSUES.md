@@ -90,14 +90,18 @@ need action.
 
 Not issues — work in flight. Listed so nothing looks finished that is not.
 
-- **Running without a database.** Down to the last 4 database calls out of
-  an original 71, in two files, both being finished now. Until they land,
-  leave `Config.Database` on `true` — the setting does not yet fully do
-  what it says.
-  *Note: even when finished, you still need `oxmysql` installed as a
-  resource. FiveM refuses to start this script without it, and that check
-  happens before your config is ever read. "No SQL" means you never import
-  our tables, not that you can remove oxmysql.*
+**Running without a database is now FINISHED.** `Config.Database = false`
+genuinely stops all SQL — verified, zero direct database calls remain
+outside the one accessor layer, and exactly one place in the entire
+resource reads that setting. Everything still works; it simply forgets
+everything on restart, and writes no audit trail.
+
+*One caveat that is not obvious: you still need `oxmysql` installed as a
+resource. FiveM refuses to start this script without it, and that check
+happens before your config is ever read. "No SQL" means you never import
+our tables — not that you can remove oxmysql.*
+
+
 - **Works with any ped.** Done, apart from final verification. A certified
   handler on a human body can leash, partner, carry, be treated and be
   attached to. Jump and crouch are deliberately kept — see the decision

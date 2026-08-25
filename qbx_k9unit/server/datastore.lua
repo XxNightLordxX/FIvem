@@ -380,6 +380,91 @@ function K9Store.Cert_GetActiveRosterByJob(job, limit)
     return out
 end
 
+--- Mirrors the SafeQuery contract server/tablet.lua's own
+--- BuildCertificationsArray uses -- every ACTIVE cert row for ONE
+--- citizenid across ALL configured departments, columns job+granted_by,
+--- UNORDERED (the caller re-keys this by job itself against a small,
+--- fixed-size Config.Departments map, so no ordering is ever needed on
+--- this side). Added THIS pass specifically because no existing accessor
+--- returns this shape -- Cert_GetActiveIdAnyJob (above) is a scalar
+--- existence check only, and every OTHER Cert_* accessor is scoped to one
+--- (citizenid, job) pair, not "every job for one citizenid" -- see
+--- server/tablet.lua's own "K9STORE MIGRATION NOTE" (on that file's former
+--- SafeQuery) for the full context this accessor closes out.
+--- @return table rows -- always a table, empty on failure
+function K9Store.Cert_GetActiveJobsForCitizen(citizenid)
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT job, granted_by FROM k9_certifications WHERE citizenid = ? AND active = 1', { citizenid })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Cert_GetActiveJobsForCitizen query failed for %s: %s'):format(citizenid, tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for _, row in ipairs(CertRows) do
+        if row.active == 1 and row.citizenid == citizenid then
+            out[#out + 1] = { job = row.job, granted_by = row.granted_by }
+        end
+    end
+    return out
+end
+
+--- Mirrors the SafeQuery contract server/tablet.lua's own
+--- tabletRequestRoster per-department fetch uses -- active certs for ONE
+--- job, columns citizenid+granted_by, LIMIT applied, DELIBERATELY NO
+--- ORDER BY. NOT a duplicate of Cert_GetActiveRosterByJob above -- that
+--- one adds `ORDER BY granted_at DESC` (server/admin.lua's own shape),
+--- which a real EXPLAIN pass server/tablet.lua's own header documents
+--- turns this exact query into a filesort; this accessor exists
+--- specifically so server/tablet.lua's roster fetch can stay on the
+--- filesort-free plan that same header measured. Added THIS pass; do not
+--- collapse it back onto Cert_GetActiveRosterByJob.
+--- @return table rows -- always a table, empty on failure, NOT sorted
+function K9Store.Cert_GetActiveRosterByJobUnordered(job, limit)
+    if DatabaseEnabled() then
+        local sql = ('SELECT citizenid, granted_by FROM k9_certifications WHERE job = ? AND active = 1 LIMIT %d'):format(limit)
+        local ok, rowsOrErr = pcall(MySQL.query.await, sql, { job })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Cert_GetActiveRosterByJobUnordered query failed for job=%s: %s'):format(tostring(job), tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for _, row in ipairs(CertRows) do
+        if row.job == job and row.active == 1 then
+            out[#out + 1] = { citizenid = row.citizenid, granted_by = row.granted_by }
+            if #out >= limit then break end
+        end
+    end
+    return out
+end
+
+--- Mirrors MySQL.scalar.await DIRECTLY (NOT the SafeQuery/SafeWrite
+--- bespoke contract) -- matches server/certtiers.lua's own DeleteTier call
+--- site, which pcalls this exactly like a raw `MySQL.scalar.await` today
+--- (that function never routed this one through its own local SafeQuery/
+--- SafeWrite helpers), so this keeps the SAME "throws on a real DB error,
+--- pcall'd by the CALLER" contract every other scalar-mirroring Cert_*
+--- function above already has -- see this file's header "CONTRACT
+--- DISCIPLINE". DELIBERATELY counts EVERY row (active OR inactive/
+--- historical) -- no `active = 1` filter, matching server/certtiers.lua's
+--- own header "HAZARD 2" reasoning: "an inactive row still holds a real,
+--- audit-trail-relevant tier value that must not start pointing at
+--- nothing".
+--- @return number count
+function K9Store.Cert_CountByTier(tier)
+    if DatabaseEnabled() then
+        return MySQL.scalar.await('SELECT COUNT(*) FROM k9_certifications WHERE tier = ?', { tier })
+    end
+    local count = 0
+    for _, row in ipairs(CertRows) do
+        if row.tier == tier then count = count + 1 end
+    end
+    return count
+end
+
 -- ======================================================================
 -- k9_certification_specializations
 --
@@ -1435,6 +1520,296 @@ function K9Store.ShopLocationAudit_Insert(locationId, action, x, y, z, heading, 
     }
     while #ShopLocationAuditRows > SHOP_LOCATION_AUDIT_MEMORY_CAP do
         table.remove(ShopLocationAuditRows, 1)
+    end
+    return true
+end
+
+-- ======================================================================
+-- k9_certification_tiers / k9_certification_tier_capabilities /
+-- k9_certification_tier_audit
+--
+-- Mirrored from server/certtiers.lua (the owner-directed "high command can
+-- edit K9 cert tiers at runtime" pass) -- RefreshCertificationTierCatalog's
+-- two catalog reads, certTiersUpsert/certTiersReorder/certTiersDelete's
+-- own writes, and WriteTierAudit. That file's local SafeQuery/SafeWrite
+-- helpers are gone; every read/write below goes through these K9Store.
+-- Tier_*/TierCap_*/TierAudit_Append accessors instead, mirroring the exact
+-- SafeQuery/SafeWrite bespoke contract (never throws) those two local
+-- helpers already had -- see this file's header "CONTRACT DISCIPLINE".
+--
+-- k9_certification_tiers / k9_certification_tier_capabilities are BOTH
+-- current-state tables (one row per tier_key / per (tier_key,
+-- capability_key) pair, a real PRIMARY KEY per migration 0010's own
+-- header, no generated-key uniqueness engine needed) -- their memory
+-- mirrors are plain keyed maps, same shape as OverrideRows/ShopLocationRows
+-- above. k9_certification_tier_audit is append-only, same bounded-in-
+-- memory-mode ring-buffer treatment as every other rare/admin-gated audit
+-- table in this file (k9_runtime_override_audit, k9_tablet_theme_audit,
+-- k9_equipment_shop_locations_audit) -- this surface is high-command-gated,
+-- not ordinary gameplay volume, per migration 0010's own header.
+-- ======================================================================
+local TierRows = {}    -- tier_key -> { tier_key, label, ordinal, deleted, updated_by, updated_at, created_at_unix }
+local TierCapRows = {} -- tier_key -> { [capability_key] = { granted_by, granted_at } }
+local TIER_AUDIT_MEMORY_CAP = 200
+local TierAuditRows = {}
+
+--- Mirrors the SafeQuery contract. Replaces RefreshCertificationTierCatalog's
+--- own `SELECT tier_key, label, ordinal, deleted FROM k9_certification_tiers`
+--- -- every tier row EVER touched by a high-command edit, including
+--- tombstoned ones (the `deleted` column is what RefreshCertificationTierCatalog
+--- itself filters on, not this accessor).
+--- @return table rows
+function K9Store.Tier_GetAllRows()
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT tier_key, label, ordinal, deleted FROM k9_certification_tiers', {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: Tier_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for tierKey, row in pairs(TierRows) do
+        out[#out + 1] = { tier_key = tierKey, label = row.label, ordinal = row.ordinal, deleted = row.deleted }
+    end
+    return out
+end
+
+--- Mirrors the SafeQuery contract. Replaces certTiersUpsert's own
+--- `SELECT deleted FROM k9_certification_tiers WHERE tier_key = ?`
+--- pre-write read (used only to distinguish a 'tier_create' from a
+--- 'tier_restore' for the audit trail -- see that callback's own comment).
+--- @return table rows -- 0 or 1 rows, `{ { deleted = 0|1 } }` or `{}`
+function K9Store.Tier_GetDeletedFlagByKey(tierKey)
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT deleted FROM k9_certification_tiers WHERE tier_key = ?', { tierKey })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Tier_GetDeletedFlagByKey query failed for %s: %s'):format(tostring(tierKey), tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local row = TierRows[tierKey]
+    if not row then return {} end
+    return { { deleted = row.deleted } }
+end
+
+--- Mirrors the SafeWrite contract. Replaces certTiersUpsert's own
+--- `INSERT ... VALUES (?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE label =
+--- VALUES(label), ordinal = VALUES(ordinal), deleted = 0, updated_by =
+--- VALUES(updated_by), updated_at = CURRENT_TIMESTAMP` -- always
+--- un-tombstones the row (`deleted = 0`) and sets BOTH label and ordinal,
+--- whether this is a brand-new key, a restore, or a rename/re-ordinal of
+--- an already-live one. NOT the same function as Tier_UpdateOrdinal below
+--- -- see that one's own doc comment for exactly why certTiersReorder
+--- must never call this one instead.
+--- @return boolean ok
+function K9Store.Tier_Upsert(tierKey, label, ordinal, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_certification_tiers (tier_key, label, ordinal, deleted, updated_by) VALUES (?, ?, ?, 0, ?) ' ..
+            'ON DUPLICATE KEY UPDATE label = VALUES(label), ordinal = VALUES(ordinal), deleted = 0, ' ..
+            'updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
+            { tierKey, label, ordinal, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Tier_Upsert write failed for %s: %s'):format(tostring(tierKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = TierRows[tierKey]
+    TierRows[tierKey] = {
+        tier_key = tierKey, label = label, ordinal = ordinal, deleted = 0,
+        updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()),
+        created_at_unix = existing and existing.created_at_unix or NowUnix(),
+    }
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces certTiersReorder's own per-key
+--- `INSERT ... VALUES (?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE ordinal =
+--- VALUES(ordinal), deleted = 0, updated_by = VALUES(updated_by),
+--- updated_at = CURRENT_TIMESTAMP` -- DELIBERATELY DOES NOT TOUCH `label`
+--- ON CONFLICT, matching the real SQL's own ON DUPLICATE KEY UPDATE clause
+--- exactly (which never mentions that column) -- `label` here is used
+--- ONLY for the brand-new-row INSERT branch (a config-only default key,
+--- e.g. trainee/senior, that has never had a row in this table before a
+--- reorder touches it for the first time).
+---
+--- NOT INTERCHANGEABLE WITH Tier_Upsert ABOVE, ON PURPOSE (found while
+--- migrating, not merely preserved by copy-paste): reusing Tier_Upsert
+--- here would let a reorder silently OVERWRITE a label with a STALE
+--- in-memory snapshot if it raced a concurrent rename for the SAME key,
+--- landing in the narrow window between that rename's own TierEditMutex
+--- release and its own RefreshCertificationTierCatalog call (which is
+--- what actually refreshes the in-memory label this reorder loop reads).
+--- The real SQL closes that hazard structurally, by never writing to
+--- `label` at all on this path -- this accessor preserves that exact
+--- property; Tier_Upsert's memory-mode branch would not.
+--- @return boolean ok
+function K9Store.Tier_UpdateOrdinal(tierKey, label, ordinal, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_certification_tiers (tier_key, label, ordinal, deleted, updated_by) VALUES (?, ?, ?, 0, ?) ' ..
+            'ON DUPLICATE KEY UPDATE ordinal = VALUES(ordinal), deleted = 0, updated_by = VALUES(updated_by), ' ..
+            'updated_at = CURRENT_TIMESTAMP',
+            { tierKey, label, ordinal, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Tier_UpdateOrdinal write failed for %s: %s'):format(tostring(tierKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = TierRows[tierKey]
+    if existing then
+        existing.ordinal, existing.deleted, existing.updated_by, existing.updated_at = ordinal, 0, updatedBy, FormatDateTime(NowUnix())
+    else
+        TierRows[tierKey] = {
+            tier_key = tierKey, label = label, ordinal = ordinal, deleted = 0,
+            updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()), created_at_unix = NowUnix(),
+        }
+    end
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces certTiersDelete's own
+--- `INSERT ... VALUES (?, ?, ?, 1, ?) ON DUPLICATE KEY UPDATE deleted = 1,
+--- updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP` --
+--- TOMBSTONES a row (see that file's header "HAZARD 2"), leaving an
+--- ALREADY-EXISTING row's label/ordinal untouched, exactly like
+--- Tier_UpdateOrdinal above and for the identical reason (the real SQL's
+--- own ON DUPLICATE KEY UPDATE clause never mentions those two columns) --
+--- `label`/`ordinal` here are used ONLY for the brand-new-row INSERT case
+--- (a tier_key that has never had a row in this table before, e.g. a
+--- legacy config-only key being tombstoned for the very first time).
+--- @return boolean ok
+function K9Store.Tier_Tombstone(tierKey, label, ordinal, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_certification_tiers (tier_key, label, ordinal, deleted, updated_by) VALUES (?, ?, ?, 1, ?) ' ..
+            'ON DUPLICATE KEY UPDATE deleted = 1, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
+            { tierKey, label, ordinal, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Tier_Tombstone write failed for %s: %s'):format(tostring(tierKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = TierRows[tierKey]
+    if existing then
+        existing.deleted, existing.updated_by, existing.updated_at = 1, updatedBy, FormatDateTime(NowUnix())
+    else
+        TierRows[tierKey] = {
+            tier_key = tierKey, label = label, ordinal = ordinal, deleted = 1,
+            updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()), created_at_unix = NowUnix(),
+        }
+    end
+    return true
+end
+
+--- Mirrors the SafeQuery contract. Replaces RefreshCertificationTierCatalog's
+--- own `SELECT tier_key, capability_key FROM k9_certification_tier_capabilities`
+--- -- every currently-granted tier/capability pair, across every tier.
+--- @return table rows
+function K9Store.TierCap_GetAllRows()
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT tier_key, capability_key FROM k9_certification_tier_capabilities', {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: TierCap_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for tierKey, caps in pairs(TierCapRows) do
+        for capKey in pairs(caps) do
+            out[#out + 1] = { tier_key = tierKey, capability_key = capKey }
+        end
+    end
+    return out
+end
+
+--- Mirrors the SafeQuery contract. Replaces certTiersUpsert's own
+--- `SELECT capability_key FROM k9_certification_tier_capabilities WHERE
+--- tier_key = ?` reconciliation read (the capability set ONE tier
+--- currently holds, before diffing against the requested set).
+--- @return table rows
+function K9Store.TierCap_GetForTier(tierKey)
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT capability_key FROM k9_certification_tier_capabilities WHERE tier_key = ?', { tierKey })
+        if not ok then
+            print(('[qbx_k9unit] datastore: TierCap_GetForTier query failed for %s: %s'):format(tostring(tierKey), tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    local caps = TierCapRows[tierKey]
+    if caps then
+        for capKey in pairs(caps) do out[#out + 1] = { capability_key = capKey } end
+    end
+    return out
+end
+
+--- Mirrors the SafeWrite contract. Replaces certTiersUpsert's own
+--- `INSERT INTO k9_certification_tier_capabilities (tier_key,
+--- capability_key, granted_by) VALUES (?, ?, ?)` (one row per newly-added
+--- capability, called once per capability inside that callback's own
+--- reconciliation loop).
+--- @return boolean ok
+function K9Store.TierCap_Insert(tierKey, capabilityKey, grantedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_certification_tier_capabilities (tier_key, capability_key, granted_by) VALUES (?, ?, ?)',
+            { tierKey, capabilityKey, grantedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: TierCap_Insert write failed for %s/%s: %s'):format(tostring(tierKey), tostring(capabilityKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    TierCapRows[tierKey] = TierCapRows[tierKey] or {}
+    TierCapRows[tierKey][capabilityKey] = { granted_by = grantedBy, granted_at = FormatDateTime(NowUnix()) }
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces certTiersUpsert's own
+--- `DELETE FROM k9_certification_tier_capabilities WHERE tier_key = ? AND
+--- capability_key = ?` (one row per newly-removed capability, called once
+--- per capability inside that same reconciliation loop).
+--- @return boolean ok
+function K9Store.TierCap_Delete(tierKey, capabilityKey)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await, 'DELETE FROM k9_certification_tier_capabilities WHERE tier_key = ? AND capability_key = ?', { tierKey, capabilityKey })
+        if not ok then
+            print(('[qbx_k9unit] datastore: TierCap_Delete write failed for %s/%s: %s'):format(tostring(tierKey), tostring(capabilityKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    if TierCapRows[tierKey] then TierCapRows[tierKey][capabilityKey] = nil end
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces WriteTierAudit's own `INSERT
+--- INTO k9_certification_tier_audit (action, tier_key, detail, changed_by)
+--- VALUES (?, ?, ?, ?)` -- append-only, bounded in memory mode like every
+--- other rare/admin-gated audit table in this file (see header above).
+--- @return boolean ok
+function K9Store.TierAudit_Append(action, tierKey, detail, changedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_certification_tier_audit (action, tier_key, detail, changed_by) VALUES (?, ?, ?, ?)',
+            { action, tierKey, detail, changedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: TierAudit_Append write failed: %s'):format(tostring(err)))
+            return false
+        end
+        return true
+    end
+    TierAuditRows[#TierAuditRows + 1] = { action = action, tier_key = tierKey, detail = detail, changed_by = changedBy, changed_at = FormatDateTime(NowUnix()) }
+    while #TierAuditRows > TIER_AUDIT_MEMORY_CAP do
+        table.remove(TierAuditRows, 1)
     end
     return true
 end
