@@ -281,8 +281,11 @@
     ox_inventory hooks (exports.ox_inventory:registerHook, ox_inventory ->
     this file, NOT a client-reachable event at all):
     2. 'swapItems' — registered conditionally at THIS resource's own
-       onResourceStart (see the `K9InventoryItemFilterHook`-registering
-       block below), gated on Config.Features.K9Inventory AND a non-nil
+       onResourceStart AND, so a later independent ox_inventory restart
+       cannot silently disable enforcement for the rest of this resource's
+       uptime, at ox_inventory's OWN onResourceStart too (see
+       `RegisterK9InventoryItemFilterHook`/the `AddEventHandler` dispatching
+       to it below), gated on Config.Features.K9Inventory AND a non-nil
        Config.K9Inventory.allowedItems AND IsOxInventoryHookCapable()
        (mirrors server/tracking.lua's identical ScentTracking gating
        shape/reasoning for the same export — see this file's header
@@ -482,22 +485,47 @@ end
 --- honest-soft-disable posture this task requires and server/tracking.lua's
 --- ScentTracking block already established for this exact export.
 ---
---- Wrapped in `onResourceStart` (THIS resource's own start, per the
---- `GetCurrentResourceName() ~= resourceName` guard) for the same reasons
---- server/tracking.lua's identical block documents: ox_inventory is a hard
---- `fxmanifest.lua` dependency, so by the time THIS resource's own
---- onResourceStart fires, ox_inventory is already running (or knowably
---- not) — no player-facing stash interaction can occur before this
---- resource itself has finished starting anyway.
+--- Invoked from `onResourceStart` on TWO triggers (see the `AddEventHandler`
+--- below this function's body for the dispatch), not just THIS resource's
+--- own start: ox_inventory is a hard `fxmanifest.lua` dependency, so by the
+--- time THIS resource's own onResourceStart fires, ox_inventory is already
+--- running (or knowably not) — no player-facing stash interaction can occur
+--- before this resource itself has finished starting anyway — but a bare
+--- `restart ox_inventory` later in the same session wipes ox_inventory's own
+--- hook table clean without touching this resource at all, so this function
+--- must ALSO re-run on ox_inventory's own onResourceStart or the whitelist
+--- goes silently unenforced for the rest of this resource's uptime. See the
+--- `local function RegisterK9InventoryItemFilterHook()` line just below for
+--- the full writeup of this lifecycle fix.
 ---
 --- See this file's header for the full verified mechanism (why returning
 --- `false` from this hook is a real pre-mutation veto, why only
 --- `payload.fromSlot` against a `'k9inv-'`-prefixed, differing
 --- `payload.toInventory` is ever inspected, and why that scope can never
 --- trap an item already inside a K9 stash).
-AddEventHandler('onResourceStart', function(resourceName)
-    if GetCurrentResourceName() ~= resourceName then return end
-
+---
+--- PULLED OUT TO A NAMED FUNCTION (this pass, LIFECYCLE FIX): so it can be
+--- invoked from BOTH lifecycle points registered below it -- THIS resource's
+--- own onResourceStart (the original, only call site before this pass) and,
+--- NEW this pass, ox_inventory's OWN onResourceStart. Mirrors
+--- server/tracking.lua's RegisterScentInventoryHook fix for the identical
+--- gap against the identical export -- see that function's own doc comment
+--- for the full source-verified "ox_inventory's `eventHooks` table is a
+--- plain file-local Lua variable, re-initialized empty on every ox_inventory
+--- (re)load, with no symmetric mechanism to ask a still-running OTHER
+--- resource to re-register after ox_inventory itself restarts" writeup (not
+--- re-derived here). Without the second trigger, a bare `restart
+--- ox_inventory` (a normal ops action, e.g. after an ox_inventory update)
+--- that does not also restart qbx_k9unit would leave allowedItems
+--- enforcement silently, permanently disabled for the rest of qbx_k9unit's
+--- uptime -- worse than the already-accepted "silently inert, loudly warned
+--- ONCE" posture below, since in that specific case no warning would ever
+--- print either (nothing about THIS resource changed to trigger one).
+--- Idempotent to call repeatedly across however many times either resource
+--- restarts, for the same reason RegisterScentInventoryHook is: each
+--- ox_inventory restart already wiped its own hook table clean first, so
+--- there is never anything stale here to duplicate.
+local function RegisterK9InventoryItemFilterHook()
     if not Config.Features.K9Inventory then return end -- nothing to gate for; do not probe/warn about a disabled-by-default feature
     if not K9InventoryAllowedItemSet then return end -- no whitelist configured -- Config.K9Inventory.allowedItems' own documented `nil` meaning; inert by config choice, not by missing capability, so no warning either
 
@@ -546,6 +574,19 @@ AddEventHandler('onResourceStart', function(resourceName)
             return false -- REJECT: not on Config.K9Inventory.allowedItems -- verified pre-mutation veto (see header)
         end
     end)
+end
+
+-- LIFECYCLE FIX (this pass): dispatches to RegisterK9InventoryItemFilterHook()
+-- above on TWO distinct triggers, not just one -- see that function's own doc
+-- comment for the full writeup of why the second branch is required (mirrors
+-- server/tracking.lua's identical fix for the identical export/gap).
+--
+-- Branch 1 (original, unchanged behavior): THIS resource's own start.
+-- Branch 2 (NEW this pass -- closes a real gap): ox_inventory's OWN start.
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_inventory' then
+        RegisterK9InventoryItemFilterHook()
+    end
 end)
 
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a small

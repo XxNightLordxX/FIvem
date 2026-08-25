@@ -1090,6 +1090,52 @@ if Config.Features.NonLethalTakedown then
 
         SetEntityCanBeDamaged(npcPed, false)
 
+        -- HEALTH-FLOOR TOP-UP (this pass) — closes a gap the server/combat.lua
+        -- owner found and removed the dead half of: `HandleTakedownRequest`'s
+        -- NPC-branch server-side `SetEntityHealth(targetPed, healthFloor)`
+        -- "backstop" was a silent no-op, because SET_ENTITY_HEALTH has NO
+        -- FXServer server-side registration at all (confirmed: no
+        -- ext/native-decls page for it — 404, checked directly — and
+        -- `ServerGameState_Scripting.cpp`, the file that DOES register
+        -- GET_ENTITY_HEALTH/GET_ENTITY_MAX_HEALTH as apiset:server, has no
+        -- SET_ENTITY_HEALTH/SET_PED_HEALTH registration anywhere). That 404
+        -- is expected and is NOT evidence against CLIENT-side validity —
+        -- SET_ENTITY_HEALTH is a genuine base GTA native (verified against
+        -- the primary CitizenFX native database at
+        -- https://runtime.fivem.net/doc/natives.json, ENTITY namespace, hash
+        -- 0x6B76DC1F3AE6E6A3, real params `(Entity entity, int health)`) —
+        -- and this exact native is ALREADY called client-side elsewhere in
+        -- this very codebase (client/medkit.lua's applyMedkitHeal, self-
+        -- applied to the calling client's own ped) with no reported issue.
+        -- This call differs from that precedent only in TARGET (an NPC this
+        -- client doesn't inherently own, not its own ped) — the same
+        -- ownership caveat as every other native in this handler, which is
+        -- why NetworkRequestControlOfEntity above already precedes it,
+        -- best-effort, same as it does for SetEntityCanBeDamaged/
+        -- SetPedToRagdollWithFall below (see header "NETWORK OWNERSHIP OF
+        -- THE TARGET PED" for the full, honest caveat — this call inherits
+        -- it, not a new one).
+        --
+        -- ORDERING: BEFORE the ragdoll task below, matching this handler's
+        -- own already-documented "damage-bracket + health floor BEFORE the
+        -- ragdoll task, never after" convention (see this RegisterNetEvent
+        -- group's own header comment above, and forceRagdoll's identical
+        -- ordering for the player-target path — that path has no equivalent
+        -- top-up because server/combat.lua never attempted a player-target
+        -- SetEntityHealth call in the first place, only the NPC branch did).
+        --
+        -- SEVERITY: defense in depth, not the primary protection — the
+        -- damage-bracket (SetEntityCanBeDamaged above) and the ragdoll
+        -- (below) are what actually protect this NPC for the duration of
+        -- the takedown window, and both are already live. This is a
+        -- ONE-TIME top-up for an NPC that was ALREADY below the configured
+        -- floor the instant the ragdoll opens (e.g. it took lethal damage
+        -- getting here) — never a repeated/per-tick heal, and never raises
+        -- an NPC above the floor if it's already at or above it.
+        if GetEntityHealth(npcPed) < Config.Combat.NonLethalTakedown.healthFloor then
+            SetEntityHealth(npcPed, Config.Combat.NonLethalTakedown.healthFloor)
+        end
+
         -- Unlike forceRagdoll above (player target, falls back to the
         -- TARGET's own forward vector — see header "RAGDOLL FALL-DIRECTION"),
         -- this handler runs directly on the K9's OWN client, so the REAL K9

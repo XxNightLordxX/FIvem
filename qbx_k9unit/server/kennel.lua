@@ -66,13 +66,22 @@
        instead of a genuine new kennel. ALSO rejects a netId already
        recorded against a DIFFERENT citizenid's Kennels entry (closes a
        same-tolerance-radius ownership-hijack path found this pass — see
-       that check's own comment at its call site), and on the
-       too-far-from-spawn rejection specifically (only reachable once the
-       model+type checks above it already passed) cleans up the real,
-       already-verified kennel entity itself rather than leaving it
-       orphaned in the world forever (see that branch's own comment for
-       why the wrong-model rejection branch deliberately does NOT do the
-       same).
+       that check's own comment at its call site). On the too-far-from-spawn
+       rejection AND on every re-validation rejection below it (TTL expiry,
+       a feature-flag toggle or certification revoke landing mid-flight, or
+       a race with another kennel already occupying the citizenid's slot) —
+       all reachable only once the client has already created a real
+       networked object in response to event 5 — cleans that entity up via
+       CleanupUnclaimedKennelEntity (resolve + model-verify + delete +
+       broadcast) rather than leaving it orphaned in the world forever, and
+       ALWAYS notifies the player their placement was rejected (a prior pass
+       left three of these re-validation branches fully silent with no
+       cleanup at all — the same "confirm-failure branch returns silently,
+       leaving a real networked object nothing will reclaim" shape flagged
+       this pass in server/fetch.lua and server/propattachment.lua). The one
+       deliberate exception is the wrong-model rejection (see that branch's
+       own comment for why it does NOT clean up: at that point `entity`
+       might not be the genuine kennel at all).
     3. 'qbx_k9unit:server:cancelKennelPlacement' () [THIS FILE]
        Client reports its own placement attempt failed (model never
        loaded, PlaceObjectOnGroundProperly returned false) so the pending
@@ -355,6 +364,39 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
     TriggerClientEvent('qbx_k9unit:client:deployKennelAt', src, spawnX, spawnY, spawnZ)
 end)
 
+--- Attempts to reclaim a real, client-created kennel object after a LATE
+--- re-validation failure in confirmKennelPlaced below (feature-flag toggle,
+--- certification revoke, a race with another kennel already landing, or the
+--- pending placement's own TTL expiring) — added THIS PASS. By the time any
+--- of confirmKennelPlaced's callers below reach this, the client has already
+--- executed 'qbx_k9unit:client:deployKennelAt' and created a genuine
+--- networked object; previously, each of these rejection branches returned
+--- (some silently, some with a notification) WITHOUT ever resolving or
+--- touching that object — since a rejected placement never enters `Kennels`,
+--- nothing else in this file would ever ResolveNetworkEntity/DeleteEntity it
+--- (RemoveKennelForCitizenid, the playerDropped handler, and the
+--- onResourceStop sweep all only loop over `Kennels`' actual entries), so
+--- the object sat in the world forever — the identical "confirm-failure
+--- branch returns silently, leaving a real networked object nothing will
+--- reclaim" shape flagged this pass in server/fetch.lua and
+--- server/propattachment.lua.
+--- Mirrors the too-far branch's own resolve-then-model-verify-before-delete
+--- discipline (see that branch's comment) rather than deleting by netId
+--- alone: a netId that does NOT resolve to a genuine, correctly-modeled
+--- kennel is left completely untouched (fails closed to "do nothing" rather
+--- than becoming an arbitrary-entity-deletion primitive for an unverified
+--- client-supplied netId) — same reasoning the wrong-model branch below
+--- already documents for why IT deliberately does not delete.
+--- @param netId number
+local function CleanupUnclaimedKennelEntity(netId)
+    local entity = ResolveNetworkEntity(netId, 3)
+    if not entity then return end
+    if not KennelModelHashes[GetEntityModel(entity)] then return end
+
+    DeleteEntity(entity)
+    TriggerClientEvent('qbx_k9unit:client:removeKennel', -1, netId)
+end
+
 --- Step 2: client reports the network id of the object it actually
 --- created. Re-validates everything from step 1 plus the entity itself —
 --- see this file's header EVENT/CALLBACK CONTRACT item 2 for the full
@@ -377,15 +419,41 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
 
     if GetGameTimer() > pending.expiresAt then
         NotifyPlayer(src, locale('kennel.placement_timed_out'), 'error')
+        -- CLEANUP FIX, ADDED THIS PASS: see CleanupUnclaimedKennelEntity's
+        -- own doc comment — this branch fires strictly after the client has
+        -- already created a real object; previously nothing here ever
+        -- reclaimed it.
+        CleanupUnclaimedKennelEntity(netId)
         return
     end
 
     -- Re-validate — a certification revoke, a feature-flag toggle, or
     -- (shouldn't be reachable, but never trust an invariant alone) a
     -- second kennel landing could have happened during the round trip.
-    if not Config.Features.DeployableKennel then return end
-    if not HasK9Access(src) then return end
-    if Kennels[citizenid] then return end
+    --
+    -- CLEANUP FIX, ADDED THIS PASS: all three of these previously returned
+    -- SILENTLY — no NotifyPlayer at all, on top of the same orphaned-object
+    -- gap CleanupUnclaimedKennelEntity's own doc comment describes. A
+    -- rejection this deep in the flow (past the pending/src/TTL checks
+    -- above) is never an unsolicited or forged confirm — it's a genuine
+    -- client honestly reporting a placement it was just instructed to make,
+    -- so the player must always be told, and the object it created must
+    -- always be reclaimed.
+    if not Config.Features.DeployableKennel then
+        NotifyPlayer(src, locale('kennel.placement_failed_unconfirmed'), 'error')
+        CleanupUnclaimedKennelEntity(netId)
+        return
+    end
+    if not HasK9Access(src) then
+        NotifyPlayer(src, locale('kennel.placement_failed_unconfirmed'), 'error')
+        CleanupUnclaimedKennelEntity(netId)
+        return
+    end
+    if Kennels[citizenid] then
+        NotifyPlayer(src, locale('kennel.placement_failed_unconfirmed'), 'error')
+        CleanupUnclaimedKennelEntity(netId)
+        return
+    end
 
     -- REFACTOR_ROADMAP.md item 2 (Revision 5 migration): was this file's
     -- own `NetworkDoesEntityExistWithNetworkId` existence guard followed by
