@@ -313,8 +313,28 @@ function HasK9Access(source)
 
     -- Opt-in bypass, defaults to nil/disabled per shipped config — do not
     -- change the default.
+    --
+    -- SECURITY FIX (coder-security, authorization-root runtime-nil review):
+    -- `job.grade.level` was previously only checked for truthiness, not
+    -- type — a non-nil, non-number `level` (a job object shaped
+    -- differently than qbx_core's documented `{ name, level: number }`
+    -- schema, e.g. a legacy/foreign job source) would reach
+    -- `job.grade.level >= dept.autoAccessGrade` and throw an UNCAUGHT
+    -- "attempt to compare number with <type>" error instead of failing
+    -- closed. `dept.autoAccessGrade`'s own type is already guaranteed by
+    -- the file-load-time assert above (`type(dept.autoAccessGrade) ==
+    -- 'number'`, checked first via short-circuit `and`), so `type(job.grade
+    -- .level) == 'number'` is the only remaining guard this comparison
+    -- needs. An explicit type check, not a pcall: a pcall around this would
+    -- convert a loud bug (a job object with the wrong shape reaching the
+    -- access gate) into exactly the silent no-op this authorization path
+    -- must never produce for the wrong reason. FAILS CLOSED — a
+    -- non-number `level` makes this bypass evaluate to false (no access
+    -- granted via this branch), never true; it does not touch the
+    -- cert-cache branch above, so a real cached cert still grants access
+    -- through that path regardless.
     local dept = Config.Departments[job.name]
-    if type(dept.autoAccessGrade) == 'number' and job.grade and job.grade.level and job.grade.level >= dept.autoAccessGrade then
+    if type(dept.autoAccessGrade) == 'number' and job.grade and type(job.grade.level) == 'number' and job.grade.level >= dept.autoAccessGrade then
         return true
     end
 
@@ -377,8 +397,34 @@ local function IsEligibleCertifier(source)
     -- threshold.
     if job.isboss then return true end
 
+    -- SECURITY FIX (coder-security, authorization-root runtime-nil review):
+    -- verified against tests/certifications_spec.lua's own file-header
+    -- note (which assumed a nil/non-number `dept.certifierGrade` makes this
+    -- comparison "simply always false") — that assumption held for a nil
+    -- `certifierGrade` only by accident of Lua's `>=` on two nils never
+    -- being reached (the old code never got that far without erroring
+    -- first for a NUMBER `job.grade.level` compared against a nil/string
+    -- `certifierGrade`). `dept.certifierGrade` itself is now guaranteed to
+    -- be a number by the file-load-time assert above and is never mutated
+    -- after load (Config is a shared_script, read-only from every file in
+    -- this resource — grepped, nothing writes Config.Departments[...] at
+    -- runtime), so that operand can no longer be the problem. The
+    -- remaining, still-open gap is the OTHER operand: `job.grade.level` was
+    -- only ever checked for nil-ness, not type — a job object shaped
+    -- differently than qbx_core's documented `{ name, level: number }`
+    -- schema (a non-number `level`) reaches the `>=` below and throws an
+    -- UNCAUGHT comparison error instead of failing closed. Explicit type
+    -- check, not a pcall, for the same reason given on the autoAccessGrade
+    -- branch in HasK9Access above: a pcall here would swallow a real
+    -- shape-mismatch bug and turn it into exactly the silent "certifier who
+    -- can never certify anyone" no-op this file's own asserts above exist
+    -- to stop happening quietly. FAILS CLOSED — a non-number `level` makes
+    -- this whole function return false (not eligible), never true; the
+    -- `job.isboss` early-return above is unaffected and still grants
+    -- eligibility for a boss regardless of grade shape, matching SPEC.md's
+    -- documented "isboss always qualifies" rule.
     local dept = Config.Departments[job.name]
-    return job.grade ~= nil and job.grade.level ~= nil and job.grade.level >= dept.certifierGrade
+    return job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept.certifierGrade
 end
 
 --- QA/coder-security finding (leash subsystem gap): losing K9 certification
