@@ -2833,7 +2833,7 @@ disagree, the code wins):
 |---|---|---|
 | `inventory` | `client` | `OpenStash`, `OpenShop`, `UseItem`, `ItemExists` |
 | `inventory` | `server` | `GetInventoryItems`, `GetContainerFromSlot`, `GetItemCount`, `RemoveItem`, `RegisterStash`, `RegisterShop`, `RegisterHook` |
-| `target` | `client` | `AddGlobalPlayer`, `AddGlobalVehicle`, `AddGlobalObject`, `AddModel`, `AddSphereZone`, `Remove` |
+| `target` | `client` | `AddGlobalPlayer`, `AddGlobalVehicle`, `AddGlobalObject`, `AddModel`, `AddSphereZone`, `Remove`, `AddLocalEntity`, `RemoveLocalEntity` |
 | `target` | `server` | *(none)* |
 | `framework` | `client` | `GetPlayerData` |
 | `framework` | `server` | `GetPlayer`, `GetPlayerByCitizenId`, `GetCitizenId`, `GetJob` |
@@ -2847,6 +2847,35 @@ this layer — `core.lua` is generic plumbing that only knows method names.
 Match the calling convention of the reference resource for that system
 (`ox_inventory`, `ox_target`, `qbx_core`) so every adapter stays
 interchangeable.
+
+**`AddLocalEntity`/`RemoveLocalEntity` (added after the fact — read this
+before adding a ninth):** `client/equipmentshop.lua`'s shop-attendant ped
+called `exports.ox_target:addLocalEntity`/`removeLocalEntity` directly for
+two release cycles because that feature was built *after* this table was
+first written, and nothing forced a re-check of the contract against every
+call site actually being made. A required-method table does not get told
+about a new call site on its own — the only defence is auditing call sites
+against it deliberately, the same discipline this resource's own SQL
+migration history already learned the hard way (migrations 0010/0011 landing
+without a corresponding safety-script/database-layer update). If you add a
+new third-party call anywhere in this resource, check it against this table
+first, in both directions: does the method you need already exist here, and
+does calling the third party directly instead mean this table is now
+incomplete for someone else's adapter.
+
+`AddLocalEntity(entity, options)` targets one specific, already-spawned
+local (non-networked) entity handle — as opposed to `AddModel`, which
+targets *every* entity of a given model. `RemoveLocalEntity(handle)` takes
+exactly what `AddLocalEntity` returned and removes every option this
+resource itself registered for that entity (a full teardown, never a
+partial one — no real call site needs partial removal, so no adapter here
+exposes it). Confirmed real per-adapter: `ox_target` (own export), `qb-target`
+(`AddTargetEntity`/`RemoveTargetEntity`, keyed by the raw entity handle for a
+non-networked entity), `sleepless_interact` (own export, byte-identical
+shape to ox_target's). See `shared/compat/target.lua`'s own per-factory
+comments for exactly what was confirmed and against what source — an
+adapter that cannot get a confirmed answer returns `nil` from its factory
+entirely rather than guessing, per this whole layer's research discipline.
 
 **Resolution order (highest priority first):** `custom` (if it verifies) →
 `override` (if the named resource is started and verifies) → `.candidates`

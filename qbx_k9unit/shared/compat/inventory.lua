@@ -443,32 +443,41 @@ local function BuildOxInventoryServer()
         --- ox_inventory's own real event fires ('swapItems', 'buyItem',
         --- 'useItem', 'createItem', ...), unmodified.
         ---
-        --- HONEST CONFIDENCE NOTE on the underlying `registerHook` export
-        --- itself (disclosed here rather than silently assumed airtight):
-        --- this session's read of the CURRENT overextended/ox_inventory
-        --- `main` branch (modules/hooks/server.lua) shows
+        --- RESOLVED 2026-08-25 -- this note used to disclose an unresolved
+        --- worry, and the worry was wrong. It is kept, rather than deleted,
+        --- because the reason it was wrong is a trap anyone reading this
+        --- file could fall into next.
+        ---
+        --- The worry: ox_inventory's current `main` shows
         --- `exports('registerHook', function(event, ref, options) ...
-        --- ref.resource = resource ... end)` unconditionally assigning a
-        --- FIELD onto `ref` whenever `ref` is truthy -- which, empirically
-        --- reproduced this session against a plain lua5.4 interpreter,
-        --- throws "attempt to index a function value" for an ordinary Lua
-        --- closure (the calling convention server/tracking.lua's and
-        --- server/inventory.lua's OWN already-shipped, already-tested code
-        --- in THIS resource both use, and the near-universal documented
-        --- convention across the wider ox_inventory ecosystem). This could
-        --- mean the fetched `main` branch is genuinely mid-refactor toward
-        --- a callable-table hook object and not yet the version most live
-        --- servers run, or that some other current mechanism escaped this
-        --- session's reading of the file. Rather than silently switch this
-        --- resource's calling convention against its own established,
-        --- tested precedent on the strength of one anomalous read, this
-        --- wrapper keeps the plain-function convention every other file in
-        --- this resource already relies on, AND relies on SafeExportCall's
-        --- pcall to turn a genuine incompatibility into a caught, reported
-        --- registration failure (`false`, one console warning) instead of
-        --- an uncaught error -- the safe outcome either way, without this
-        --- file having to resolve the discrepancy itself. Flagged for
-        --- whoever next has a live ox_inventory install handy to confirm.
+        --- ref.resource = resource ... end)`, assigning a FIELD onto `ref`
+        --- unconditionally. Tested in a standalone lua5.4 interpreter that
+        --- throws "attempt to index a function value" for a plain closure --
+        --- which is exactly the convention this resource uses everywhere.
+        ---
+        --- Why it does not throw in reality: a standalone interpreter is the
+        --- wrong test bench. Confirmed against CitizenFX's own runtime
+        --- (data/shared/citizen/scripting/lua/scheduler.lua), any Lua
+        --- function crossing a resource-export boundary is msgpack-packed as
+        --- EXT_FUNCREF and arrives on the far side as a callable TABLE with a
+        --- `funcref_mt` metatable -- never as a raw function value. This
+        --- happens even between two server-side resources in one FXServer
+        --- process, because `exports.x:y(...)` is not a same-VM call. So by
+        --- the time `registerHook`'s body runs, `ref` is a table,
+        --- `ref.resource = resource` is an ordinary field write, and calling
+        --- it still works through `__call`.
+        ---
+        --- The plain-function convention is therefore correct, and is the
+        --- only one that has ever worked -- by design of the runtime, not in
+        --- spite of it. server/tracking.lua and server/inventory.lua need no
+        --- change. SafeExportCall's pcall stays as ordinary defence in
+        --- depth; it is simply no longer guarding a real threat.
+        ---
+        --- THE TRANSFERABLE LESSON: reading a dependency's source in
+        --- isolation tells you what the code says, not what the runtime
+        --- does to its arguments before it gets there. When a read suggests
+        --- that the entire ecosystem's documented convention is broken, the
+        --- convention is rarely what is wrong.
         ---
         --- @param eventName string -- any real ox_inventory registerHook event name, e.g. 'swapItems'
         --- @param callback fun(payload: table): boolean|nil
@@ -842,14 +851,49 @@ K9Compat.RegisterAdapter('inventory', 'origen_inventory', function(_realm)
 end)
 
 K9Compat.RegisterAdapter('inventory', 'codem-inventory', function(_realm)
-    WarnUnconfirmedOnce('codem-inventory', 'no public source repository could be located this session ' ..
-        '(likely a closed-source/marketplace script) to confirm its real export names and argument shapes against.')
+    -- Researched twice. There is genuinely no public source repository --
+    -- this is a paid, Tebex-distributed script -- and while its real
+    -- documentation does exist (codem.gitbook.io), it was unreachable from
+    -- the network the research ran on, so nothing could be read verbatim.
+    --
+    -- ONE LEAD FOR WHOEVER PICKS THIS UP, worth more than the absence: a
+    -- third-party integrator's own merged fix (jim_bridge PR #38) ABANDONED
+    -- the obvious client export `exports[codem]:OpenStash(...)` and replaced
+    -- it with a server event, `codem-inventory:server:openstash`, saying
+    -- that is what makes stashes actually work. So the intuitive
+    -- client-export shape is likely the wrong one. That is third-party
+    -- integration code rather than this script's own source, which is
+    -- exactly why it is recorded here as a lead and NOT wired into an
+    -- adapter -- but it is real evidence against the guess someone would
+    -- otherwise make first.
+    WarnUnconfirmedOnce('codem-inventory', 'it is a paid script with no public source repository, and its own ' ..
+        'documentation could not be reached to confirm real export names and argument shapes. See this file for ' ..
+        'the one concrete lead found (a third-party bridge uses a SERVER EVENT for stashes, not a client export).')
     return nil
 end)
 
 K9Compat.RegisterAdapter('inventory', 'core_inventory', function(_realm)
-    WarnUnconfirmedOnce('core_inventory', 'no public source repository could be located this session ' ..
-        '(likely a closed-source/marketplace script) to confirm its real export names and argument shapes against.')
+    -- Researched twice. Paid script, no public source repository, and its
+    -- documentation (docs.c8re.store) was unreachable from the network the
+    -- research ran on.
+    --
+    -- THE FINDING WORTH KEEPING is what happened when the researcher fell
+    -- back on web search: two separate queries for the SAME export returned
+    -- two different, mutually incompatible signatures. Neither was shipped.
+    -- That contradiction is the most useful thing learned here, because it
+    -- is direct evidence that a search-engine paraphrase of this particular
+    -- site cannot be trusted for an exact signature -- and a wrong
+    -- signature would detect as working and then silently do nothing, which
+    -- is the single most expensive bug class this codebase has.
+    --
+    -- One correction to a natural assumption, for whoever follows up: this
+    -- inventory DOES appear to have real nested containers (backpacks,
+    -- cases). So "no container concept", which is the true answer for
+    -- qb-inventory, would be the WRONG answer here. Confirm, do not
+    -- transplant.
+    WarnUnconfirmedOnce('core_inventory', 'it is a paid script with no public source repository, and its own ' ..
+        'documentation could not be reached. Web-search results for its exports contradicted each other across ' ..
+        'queries, so no signature was trusted. Confirm against a live install rather than searching.')
     return nil
 end)
 

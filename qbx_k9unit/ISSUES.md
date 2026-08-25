@@ -81,8 +81,8 @@ need action.
 | Find alerts on trails | Covered — the reaction no longer depends on the XP system being switched on. |
 | Partnership survives disconnect | On purpose. Partnerships are meant to last across a shift; leashes are not. |
 | Audio near clustered K9s | Several K9s standing together each track the others, so the cost grows faster than the number of dogs. Fine at normal play; the thing to watch if resmon ever creeps. |
+| Inventories we cannot support | Five of the eight inventories in the compat list are paid scripts with no readable source. They are listed but stay inert, and say why in the console rather than pretending. Confirming one needs a live install, not more searching. |
 | Tenure database check | Runs one small indexed query every five minutes per fully-tenured pair rather than skipping it. Deliberate, documented and tested — do not "fix" it. |
-| One inventory hook unverified | The contraband-drop hook is written against `ox_inventory`'s documented shape but has never been run against a live install. It is wrapped so a mismatch logs a line rather than breaking anything. |
 
 ---
 

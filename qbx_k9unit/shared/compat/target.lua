@@ -528,48 +528,42 @@ local function QbTargetFactory(realm)
 end
 
 -- ======================================================================
--- qtarget -- CONFIRMED, but via a secondary rather than primary source: the
--- standalone original qtarget resource's own repository could not be
--- located this session (github.com search and the api.github.com repo
--- search endpoint were both blocked by this session's egress policy; a set
--- of plausible raw.githubusercontent.com repo-path guesses all 404'd).
--- What this IS confirmed against, fetched directly this session
--- (2026-08-25): overextended/ox_target's own `client/compat/qtarget.lua`
--- drop-in compatibility shim, whose entire purpose is byte-exact export
--- parity with real qtarget (ox_target's fxmanifest.lua declares
--- `provide 'qtarget'` specifically so resources written against qtarget's
--- exports work unmodified). Cross-checked against a real, independent
--- qtarget call site quoted verbatim in a forum.cfx.re post
--- (topic 5211333: `exports.qtarget:AddTargetModel(peed, { options = {
--- { event = "...", icon = ... } } })`), which matches the shim's expected
--- shape. Treated as CONFIRMED on that combined basis, with the one
--- disclosed gap below.
+-- qtarget -- CONFIRMED against overextended/qtarget's OWN live `main`
+-- branch, `client.lua` + `init.lua`, fetched and read directly this session
+-- (2026-08-25) -- this REPLACES an earlier revision of this section that
+-- inferred qtarget's shape from ox_target's own `client/compat/qtarget.lua`
+-- drop-in shim rather than qtarget's real source (that shim is written to
+-- imitate qtarget for OTHER resources' benefit; reading it tells you what
+-- ox_target normalizes qtarget's calling convention INTO, not what qtarget
+-- itself actually does -- exactly the gap that made the earlier revision's
+-- `canInteract` handling wrong, see below).
 --
--- Real qtarget's export names (per the shim): Player/RemovePlayer,
--- Vehicle/RemoveVehicle, Object/RemoveObject, AddTargetModel/
+-- Real qtarget's export names (CONFIRMED, `client.lua`): Player/
+-- RemovePlayer, Vehicle/RemoveVehicle, Object/RemoveObject, AddTargetModel/
 -- RemoveTargetModel(models, labels), AddCircleZone(name, center, radius,
--- options, targetoptions)/RemoveZone(id). Call shape per option:
--- `{ distance = N, options = { {...} } }` (outer distance is a fallback
--- only -- `v.distance = v.distance or distance` -- never a clamp, unlike
--- qb-target). Field renames confirmed by the shim's own `convert()`:
--- `onSelect` -> real qtarget's `action` (same single-argument call
--- convention, not reshaped -- the shim does a bare field rename with no
--- wrapper function, so real qtarget's `action` receives the exact same
--- argument ox_target's `onSelect` would), and `job` -> ox_target's
--- `groups` (so the REVERSE rename, `groups` -> `job`, is what this
--- adapter needs, same shape as qb-target's `.job` above).
+-- options, targetoptions), a SINGLE SHARED RemoveZone(name) (not typed per
+-- zone kind), and AddTargetEntity(entities, parameters)/RemoveTargetEntity
+-- (entities, labels) -- same names/shapes as qb-target's own (see that
+-- factory's header), labels optional on removal, omitting them clears
+-- everything. Call shape per option: `{ distance = N, options = { {...} }
+-- }` (outer distance is a fallback only, never a clamp, unlike qb-target).
+-- Field renames: `onSelect` -> `action` (straight pass-through, one
+-- argument, the entity handle), `groups` -> `job` (same shape as
+-- qb-target's `.job` above).
 --
--- DISCLOSED GAP: whether real qtarget supports a `canInteract` predicate
--- at all, and under what signature, could not be independently confirmed
--- -- the shim's `convert()` does not rename or wrap it, which is
--- consistent with either "real qtarget already uses ox_target's
--- `(entity, distance, coords, name)` convention" or "real qtarget has no
--- such concept and silently ignores an unrecognised field". This adapter
--- passes `canInteract` through unchanged (the same signature this
--- resource already writes it against) on the STRICTLY WEAKER assumption:
--- if real qtarget ignores it, the option simply always shows (a
--- convenience-only regression, never a security one, per this resource's
--- "server is always authoritative" rule); it is never silently dropped.
+-- THE BUG THE SHIM COULD NOT HAVE CAUGHT, FOUND AND FIXED THIS PASS:
+-- `canInteract` is invoked by real qtarget as `data.canInteract(entity,
+-- distance, data)` -- THREE arguments, `data` being the OPTION TABLE
+-- ITSELF, the SAME convention as qb-target and NOT ox_target's own
+-- `(entity, distance, coords, name)` this resource's every `canInteract` is
+-- actually written against. An earlier revision of this adapter passed
+-- `canInteract` through unchanged on the (reasonable-looking, but WRONG)
+-- theory that the ox_target compat shim's silence on the field meant qtarget
+-- either used ox_target's own convention or ignored the field entirely --
+-- neither was true. Fixed identically to `QbTargetFactory`'s own bridge
+-- below: re-derive `coords` via `GetEntityCoords(entity)` and `name` from
+-- the option's own name/label, then call the ORIGINAL predicate with the
+-- signature it was actually written against.
 -- ======================================================================
 local function QtargetFactory(realm)
     local RESOURCE = 'qtarget'
@@ -580,11 +574,18 @@ local function QtargetFactory(realm)
     local REQUIRED_EXPORTS = {
         'Player', 'Vehicle', 'Object', 'AddTargetModel', 'AddCircleZone',
         'RemovePlayer', 'RemoveVehicle', 'RemoveObject', 'RemoveTargetModel', 'RemoveZone',
+        'AddTargetEntity', 'RemoveTargetEntity',
     }
     for i = 1, #REQUIRED_EXPORTS do
         if not IsExportCapable(RESOURCE, REQUIRED_EXPORTS[i]) then return nil end
     end
 
+    --- Translates ONE ox_target-shaped option into a real-qtarget-shaped
+    --- one. See this factory's header for exactly what changes and why --
+    --- in particular the `canInteract` bridge, CONFIRMED necessary against
+    --- qtarget's own source this session (not inferred from the ox_target
+    --- shim, which normalizes this away and so cannot be used to confirm
+    --- qtarget's own real calling convention).
     --- @param option table
     --- @return table
     local function TranslateOption(option)
@@ -598,6 +599,16 @@ local function QtargetFactory(realm)
         if option.groups then
             translated.job = option.groups
             translated.groups = nil
+        end
+
+        if option.canInteract then
+            local original = option.canInteract
+            local optionName = option.name or option.label
+            translated.canInteract = function(entity, distance, _qtargetOptionData)
+                local coords = entity and GetEntityCoords(entity) or nil
+                local ok, result = pcall(original, entity, distance, coords, optionName)
+                return ok and result or false
+            end
         end
 
         if option.onSelect then
@@ -677,21 +688,48 @@ local function QtargetFactory(realm)
                 SafeCall(RESOURCE, 'RemoveZone', handle.id)
             end
         end,
+
+        --- CONFIRMED against overextended/qtarget's own `main` branch
+        --- (`AddTargetEntity(entities, parameters)`, this session's fetch):
+        --- same name and `{ distance, options }` shape as qb-target's own
+        --- (see that factory's header) -- reuses the same
+        --- `TranslateOptions`/`MaxDistance` helpers unchanged.
+        --- @param entity number
+        --- @param options table
+        --- @return table|nil handle
+        AddLocalEntity = function(entity, options)
+            local normalized = NormalizeOptions(options)
+            local ok = SafeCall(RESOURCE, 'AddTargetEntity', entity,
+                { distance = MaxDistance(normalized), options = TranslateOptions(normalized) })
+            if not ok then return nil end
+            return { kind = 'entity', entity = entity, names = ExtractNames(normalized) }
+        end,
+
+        --- CONFIRMED (`RemoveTargetEntity(entities, labels)`): `labels` is
+        --- OPTIONAL, omitting it clears the entity's entire options entry --
+        --- same DELIBERATE choice as `QbTargetFactory`'s identical method:
+        --- this adapter's one real caller
+        --- (client/equipmentshop.lua) owns the entity outright and always
+        --- tears it down completely on despawn.
+        --- @param handle table -- exactly what AddLocalEntity returned
+        RemoveLocalEntity = function(handle)
+            if type(handle) ~= 'table' then return end
+            SafeCall(RESOURCE, 'RemoveTargetEntity', handle.entity)
+        end,
     }
 end
 
 -- ======================================================================
--- interact -- UNCONFIRMED. This session could not locate a real, currently
--- maintained resource published under the bare name "interact" through any
--- reachable primary source: github.com's web UI and the api.github.com
--- repository-search endpoint both returned policy-blocked responses under
--- this session's egress configuration (not a "does not exist" signal --
--- see /root/.ccr/README.md's "403 / 407 from the proxy" section), and a
--- forum.cfx.re search turned up only an unrelated image filename
--- ("interact - frame at 0m6s", a video-thumbnail artifact from a
--- sleepless_interact release post, not a distinct resource) plus several
--- differently-named "interaction system" releases, none published under
--- the exact export namespace `interact`.
+-- interact -- UNCONFIRMED AS A TARGET SYSTEM, AND CONFIRMED NOT TO BE
+-- sleepless_interact UNDER ANOTHER NAME. Re-verified this pass (2026-08-25):
+-- the resource actually published under the bare export namespace `interact`
+-- is a small, unrelated project with a completely different API surface
+-- (its own `addNewTarget()`-shaped exports, nothing resembling
+-- addGlobalPlayer/addLocalEntity/etc) -- it is NOT a rename or fork of
+-- sleepless_interact, and this file's two candidates are correctly kept
+-- separate rather than merged or aliased. Its real API could not be
+-- confirmed as a genuine targeting-system match worth building an adapter
+-- against.
 --
 -- Per this task's explicit instruction, a candidate that cannot be
 -- confirmed against a primary source returns nil unconditionally here --
@@ -754,6 +792,7 @@ local function SleeplessInteractFactory(realm)
     local REQUIRED_EXPORTS = {
         'addGlobalPlayer', 'addGlobalVehicle', 'addGlobalObject', 'addModel', 'addCoords',
         'removeGlobalPlayer', 'removeGlobalVehicle', 'removeGlobalObject', 'removeModel', 'removeCoords',
+        'addLocalEntity', 'removeLocalEntity',
     }
     for i = 1, #REQUIRED_EXPORTS do
         if not IsExportCapable(RESOURCE, REQUIRED_EXPORTS[i]) then return nil end
@@ -809,6 +848,36 @@ local function SleeplessInteractFactory(realm)
             elseif handle.kind == 'coords' then
                 SafeCall(RESOURCE, 'removeCoords', handle.id)
             end
+        end,
+
+        --- CONFIRMED against Sleepless-Development/sleepless_interact's
+        --- live `main` branch, `client/api.lua` (`interact.addLocalEntity
+        --- (entityIds, options)`, this session's fetch, lines 484-498):
+        --- byte-for-byte the same shape as ox_target's own addLocalEntity --
+        --- a raw (non-networked) entity handle plus the same option array
+        --- this factory's other Add* methods already pass through
+        --- unmodified. No translation needed.
+        --- @param entity number
+        --- @param options table
+        --- @return table|nil handle
+        AddLocalEntity = function(entity, options)
+            local ok = SafeCall(RESOURCE, 'addLocalEntity', entity, options)
+            if not ok then return nil end
+            return { kind = 'localEntity', entity = entity }
+        end,
+
+        --- CONFIRMED (`interact.removeLocalEntity(entityIds, remove)`,
+        --- lines 503-529): `remove` is OPTIONAL -- "a single option name or
+        --- array of names to remove, or nil to remove all for the resource"
+        --- (the function's own doc comment, quoted verbatim). Called here
+        --- with NO `remove` argument, matching this factory's other Remove
+        --- methods and this adapter's one real caller
+        --- (client/equipmentshop.lua), which owns the entity outright and
+        --- always tears it down completely on despawn.
+        --- @param handle table -- exactly what AddLocalEntity returned
+        RemoveLocalEntity = function(handle)
+            if type(handle) ~= 'table' then return end
+            SafeCall(RESOURCE, 'removeLocalEntity', handle.entity)
         end,
     }
 end
