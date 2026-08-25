@@ -152,10 +152,29 @@ if not Config.Features.Recall then return end
 -- off.
 local RECALL_COOLDOWN_FALLBACK_MS = 2000
 local recallCfg = Config.Recall
-local recallCooldownMs = (type(recallCfg) == 'table' and type(recallCfg.RequestCooldownMs) == 'number'
-    and recallCfg.RequestCooldownMs) or RECALL_COOLDOWN_FALLBACK_MS
+local configuredCooldownMs = type(recallCfg) == 'table' and recallCfg.RequestCooldownMs or nil
+-- SECOND DEFENSIVE READ, same "must never fail closed" motivation as the
+-- missing-table guard above, closing a DIFFERENT hole: server/cooldowns.lua's
+-- own NewCooldown (see that file's IsOnCooldown doc comment, "FAIL CLOSED")
+-- deliberately treats a threshold <= 0 as ALWAYS on cooldown -- correct for
+-- every one of its other 10 call sites (a misconfigured 0 there just means
+-- "that feature's spam-guard is broken," never "a trapped player has no way
+-- out"), but exactly backwards for Recall: an operator who sets
+-- RequestCooldownMs = 0 meaning "no cooldown, never block a recall" would
+-- instead get EVERY recall request permanently rate-limited from the very
+-- first call, silently (`RecallCooldown.Consume` returning false is this
+-- file's own designated NO-NOTIFY path -- see the event handler below), i.e.
+-- the escape hatch would look like it exists but never actually fire, for
+-- every handler, forever, with no error printed anywhere to explain why.
+-- Reject any non-positive (or non-numeric) configured value the same way the
+-- missing-table branch already does, rather than passing it through to
+-- NewCooldown unchecked.
+local recallCooldownMs = (type(configuredCooldownMs) == 'number' and configuredCooldownMs > 0)
+    and configuredCooldownMs or RECALL_COOLDOWN_FALLBACK_MS
 if type(recallCfg) ~= 'table' then
     print(('[qbx_k9unit] Config.Recall is missing; Recall is using a built-in %dms cooldown. Add the Config.Recall block from config.lua.'):format(RECALL_COOLDOWN_FALLBACK_MS))
+elseif type(configuredCooldownMs) ~= 'number' or configuredCooldownMs <= 0 then
+    print(('[qbx_k9unit] Config.Recall.RequestCooldownMs (%s) is missing or not a positive number; Recall is using a built-in %dms cooldown instead. A non-positive value here would otherwise permanently block EVERY recall request (NewCooldown treats a <=0 threshold as always-on-cooldown, never as "no cooldown") -- the opposite of what this file requires.'):format(tostring(configuredCooldownMs), RECALL_COOLDOWN_FALLBACK_MS))
 end
 
 local RecallCooldown = NewCooldown(recallCooldownMs)
