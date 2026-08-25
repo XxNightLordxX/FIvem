@@ -284,6 +284,32 @@ end
 --- duplicated between this file's playBark handler and
 --- client/search.lua's contraband-alert handler; the resolve half is now
 --- ResolveNetworkEntity() above (REFACTOR_ROADMAP.md near-term item 2).
+---
+--- Two playback paths run back-to-back, not either/or: the original
+--- PlaySoundFromEntity native call stays exactly as it was (a harmless
+--- no-op today against this resource's placeholder K9_SOUND_SET, ready to
+--- start doing something the moment an operator ships a real RAGE audio
+--- bank under that soundset name — see BARK_SOUND_NAME's own comment
+--- above), immediately followed by client/audio.lua's PlayK9Sound NUI
+--- bridge, which is the one that can actually make sound today if an
+--- operator has dropped a matching .ogg into html/sounds/ (see that
+--- file's header). PlayK9Sound is guarded with a `type(...) == 'function'`
+--- existence check rather than called unconditionally: client/audio.lua
+--- returns without defining it at all when Config.Features.
+--- BasicBarkSounds is false, so the global genuinely may not exist (same
+--- runtime-existence-guard convention config.lua's globals comment already
+--- documents for RestoreInjury/AwardXP/GetXPTier). soundName here is
+--- always either BARK_SOUND_NAME or a Config.AdvancedBarkRadial-authored
+--- entry from BarkTypeSoundNames below — never a raw caller-supplied
+--- string — so this passes PlayK9Sound the exact same trusted,
+--- table-lookup-only value already trusted to reach PlaySoundFromEntity,
+--- and PlayK9Sound's own ToAudioFileKey() never turns that into anything
+--- more than a lookup/best-effort-transform of that already-trusted
+--- string, not an arbitrary filename from player input. If no matching
+--- .ogg has been shipped (true for every default install today, per this
+--- resource's html/sounds/CREDITS.md), client/audio.lua's own contract
+--- guarantees this degrades to a silent, zero-console-output no-op end to
+--- end, same as the native call it sits beside.
 --- @param netId number
 --- @param soundName string
 function PlaySoundOnNetworkEntity(netId, soundName)
@@ -291,6 +317,10 @@ function PlaySoundOnNetworkEntity(netId, soundName)
     if not entity then return end
 
     PlaySoundFromEntity(-1, soundName, entity, K9_SOUND_SET, false, 0)
+
+    if type(PlayK9Sound) == 'function' then
+        PlayK9Sound(netId, soundName)
+    end
 end
 
 --- Plays a bark on the K9 identified by netId, for any client that has it
