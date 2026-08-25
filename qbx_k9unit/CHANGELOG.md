@@ -7,6 +7,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Locale migration finished; a real bug closed in the (still disabled) K9
+vest feature; test suite nearly doubled — 2026-08-25 (later this session),
+measured against commit `9808e56`.** Covers the 13 commits that landed
+after the addendum below (which stopped at commit `d8dac12`). Every item
+was checked against the actual code change, not just its one-line commit
+description.
+
+**Action required: none.** No database changes. No config changes. Nothing
+below changes behavior on a default install. The one thing worth knowing:
+this resource's in-game text lives in one file, `locales/en.json`, so it
+can be translated. That file grew from 275 entries to 306 in this batch. If
+you run it as shipped, there's nothing to do. If you keep your own edited
+copy of it, add the new entries, or players will occasionally see a raw
+key name (like `propattachment.attach_failed_already_tracked`) instead of
+real text.
+
+### Fixed
+
+- **Closed a real bug in the K9 vest-attachment feature — only relevant if
+  you've turned on `PropAttachments`, a feature flag (an on/off switch in
+  `config.lua`) that ships off by default and stays off after this
+  update.** If it's off, this could never have affected you. If it's on:
+  two players standing near each other could end up both "owning" the same
+  vest object in the server's own records. Player A attaches a vest to
+  their K9; Player B, standing close enough, could report that same object
+  as their own attachment, and the server accepted it because every other
+  check (right kind of object, close enough to their own K9) happened to
+  pass too. Nobody gained an ability they shouldn't have — this was never a
+  way to steal, spy on, or take control of anything belonging to another
+  player. But the server ended up with two records pointing at one object,
+  and if either player removed it, the other player's record was left
+  pointing at nothing — a data-corruption and griefing bug (a way to mess
+  with someone's stuff or game state), not a security hole. It's fixed now:
+  the server checks whether an incoming report already belongs to someone
+  else before accepting it, the same protection an older feature
+  (fetch-the-ball) already had. A smaller companion bug in the same feature
+  is also fixed: if a player disconnected mid-attach, the server used to do
+  nothing at all, not even log it; it now properly rejects that attempt
+  instead. No message is shown for that one — there's no one left to show
+  it to.
+- **The certification system (`server/certifications.lua` — decides whether
+  a player is allowed to use K9 features at all) now safely denies access
+  instead of crashing on bad data.** This was never something a player
+  could trigger. The only way to hit it was for your own job/rank system
+  (`qbx_core`) to hand back a rank value in an unexpected shape, in which
+  case the server used to throw an error instead of just saying "access
+  denied." This is a robustness fix, not a security fix — no permission
+  check could ever be bypassed by this, before or after.
+- **Using a K9 medkit successfully no longer shows the "treated" success
+  message twice.** It shows once now. Every failure message (wrong item,
+  target already dead, on cooldown — a required wait before you can use it
+  again — etc.) is unchanged.
+
+### Added
+
+- **New read-only admin command: `/k9auditdept <job> [limit]`.** Only
+  relevant if you've turned on `AdminAuditCommands` (an admin-only audit
+  toolkit, off by default). Lists every currently-certified K9 handler in
+  one department (for example, `police`), most recently certified first.
+  It only reads from the database — it cannot change or delete anything.
+  It reuses a database lookup shortcut that has existed in this project's
+  database since early on but that nothing was actually using, so this
+  finally gets value out of something you've been quietly paying a small
+  write-performance cost for all along.
+
+### Changed
+
+- **The in-game text migration is complete.** Every single piece of text a
+  player can see now goes through the shared translation file
+  (`locales/en.json`) instead of being hardcoded inside individual files.
+  The last two holdout files — `server/combat.lua` and a developer-only
+  tool, `server/bonetool.lua` — were migrated this pass. This changes
+  nothing about what players see in English; it only matters if you want
+  to translate this resource into another language, which is now possible
+  for every string in it. Four leftover copy-pasted error messages (in
+  `client/agility.lua` and `client/movement.lua`) were also merged into an
+  existing shared function — again, no visible change.
+- **Automated test suite grew from 12 files (about 434 checks) to 17 files
+  (698 checks), all passing**, covering combat, K9 wellbeing (mood, fatigue,
+  stress), inventory restrictions, fetch-the-ball, and vest attachment. This
+  isn't something you'll notice in-game — it's insurance against future
+  regressions. Two real bugs were found by writing these tests (the vest
+  ownership bug and the disconnect-mid-attach bug, both above); both were
+  fixed rather than just written down. The client-side test file was also
+  finished (38 more checks). One of those checks locks in exactly how the
+  code behaves today around a security check that stops a player's own game
+  from faking a message that's supposed to come only from the server — but
+  a test like this can only confirm what the code does, not whether the
+  actual game engine could be tricked into skipping that check in the first
+  place. That's exactly why decision D3 below still needs a live test on a
+  real server, not more test-writing.
+
+### Documented, not yet shipped
+
+- **The K9 bark sound.** `BasicBarkSounds` (a feature flag that ships **on**
+  by default) has never actually played a sound — there has never been a
+  sound file behind it, so it fails silently. This is intentional, not a
+  crash, but it does mean K9s have been "barking" without any actual audio
+  since this feature shipped. This pass wrote up exactly where a properly
+  licensed bark sound can be sourced (`AUDIO_SOURCING.md`) and corrected an
+  earlier mistake: a good candidate sound had been wrongly rejected as
+  unusable. Its actual license only requires crediting the creator by name
+  in a text file — no fee, no restriction on your server, nothing else
+  required. As of this entry, no sound file has been committed to this
+  resource; `html/sounds/` contains documentation only.
+- **Two decisions that need a human, not more code.** Two previously-known
+  open questions about the still-disabled combat features were re-checked
+  line by line against the current code (nothing changed either answer),
+  and one new one was found. All three are recorded in full in
+  `DECISIONS_NEEDED.md`. See `PROJECT_STATUS.md` for what each one means in
+  plain terms, and why code alone can't close them.
+
 ### Addendum — landed after this entry was written
 
 This entry was compiled against HEAD `6391e54`. Four further commits
