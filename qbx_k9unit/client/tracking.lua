@@ -110,15 +110,33 @@
 
 --- Local-only view of the CURRENT tracking session, if any. Set by a
 --- successful Start*Track() call below, cleared by StopTracking() or by
---- the render thread's own water-break bookkeeping.
+--- the state/compute thread's own water-break/own-death bookkeeping below.
 --- Not exposed directly — always go through IsTracking()/StopTracking().
 --- `arrivalReported` (PHASE 4 addition): set true the first tick this
 --- session's live distance to `coords` drops to/below
 --- Config.XP.trackArrivalRadius, so 'qbx_k9unit:server:reportTrackSourceArrival'
 --- fires exactly once per resolved source — see this file's header EVENT/
---- CALLBACK CONTRACT item 4 and the render thread below.
+--- CALLBACK CONTRACT item 4 and the state/compute thread below.
 --- @type { trackType: 'scent'|'blood'|'gunpowder', coords: vector3, breaksAtWater: boolean, brokenByWater: boolean, arrivalReported: boolean } | nil
 local trackingState = nil
+
+--- CORRECTNESS FIX (coder-frontend, this pass): cached snapshot of the
+--- current tick's trail markers, `{ coords: vector3, underwater: boolean }[]`,
+--- or nil when nothing should currently be rendered. Populated by the
+--- state/compute thread below every TRACK_TICK_MS, then drawn EVERY FRAME by
+--- a separate, lightweight render thread further below. This split exists
+--- because DrawMarker (like every GTA "draw this frame" native) only stays
+--- visible for the single frame it's called on — the previous single-thread
+--- implementation called DrawMarker only once per TRACK_TICK_MS (250ms,
+--- ~15 frames at 60fps), so the trail was actually only ever visible for 1
+--- out of every ~15 rendered frames: a hard strobe/flicker, not a rendered
+--- trail, despite the old code's own header comment already flagging that
+--- "DrawMarker itself needs calling every frame it should be visible."
+--- Cleared to nil (never left stale) by StopTracking() and by the
+--- state/compute thread itself the moment there is nothing left to draw
+--- (not tracking, water-broken, or already arrived at the source).
+--- @type { coords: vector3, underwater: boolean }[] | nil
+local currentTrailMarkers = nil
 
 --- @return boolean
 function IsTracking()
@@ -268,23 +286,36 @@ function StopTracking()
     -- declaration comment (qa-tester finding, this pass) for the full race.
     trackRequestGeneration = trackRequestGeneration + 1
     trackingState = nil
-    -- The render thread below naturally stops drawing once IsTracking() is
-    -- false, mirroring how client/movement.lua's DetachLeash() comment
-    -- describes its own elastic thread "naturally stopping" once
-    -- IsLeashed() is false — no separate thread-teardown call needed.
+    -- Explicitly cleared here (not left for the state thread to notice on
+    -- its own next tick) so the separate per-frame render thread stops
+    -- drawing the instant this is called, rather than up to one
+    -- TRACK_TICK_MS late — a stale trail rendering for up to 250ms after an
+    -- explicit stop would be exactly the "half-started/leftover trail" this
+    -- file is required to avoid.
+    currentTrailMarkers = nil
+    -- The state thread below naturally idles once IsTracking() is false,
+    -- mirroring how client/movement.lua's DetachLeash() comment describes
+    -- its own elastic thread "naturally stopping" once IsLeashed() is
+    -- false — no separate thread-teardown call needed.
 end
 
--- Trail-rendering / water-crossing thread. Reuses the exact idle/active
--- tick-rate-switch pattern client/movement.lua's leash pull-back thread
--- already establishes (its LEASH_TICK_MS / LEASH_IDLE_TICK_MS constants) —
--- sleeps long while IsTracking() is false, switches to a short tick only
--- while a session is active. Flagging the exact tick rate for
--- resource-performance-profiler once this is reviewed, per
--- phase2_notes/scent_blood_tracking.md §2.2 (DrawMarker itself needs
--- calling every frame it should be visible, but the recompute/water-sample
--- half of the loop doesn't need to run that often — kept on the same
--- interval here for simplicity; split further only if profiling shows a
--- real cost).
+-- State/compute thread. Reuses the exact idle/active tick-rate-switch
+-- pattern client/movement.lua's leash pull-back thread already establishes
+-- (its LEASH_TICK_MS / LEASH_IDLE_TICK_MS constants) — sleeps long while
+-- IsTracking() is false, switches to a short tick only while a session is
+-- active. CORRECTNESS FIX (coder-frontend, this pass): this thread now only
+-- RECOMPUTES the trail (distance, water-crossing sampling, arrival check)
+-- at this cadence and writes the result into `currentTrailMarkers` above —
+-- it no longer calls DrawMarker directly. The old single-thread version
+-- called DrawMarker only once per TRACK_TICK_MS (250ms, ~15 frames at
+-- 60fps), which — despite this exact comment already flagging that
+-- "DrawMarker itself needs calling every frame it should be visible" —
+-- meant the trail was only ever actually visible for 1 out of every ~15
+-- rendered frames: a hard strobe, not a rendered trail. The dedicated
+-- per-frame render thread further below now owns calling DrawMarker every
+-- frame from the cached snapshot this thread produces, so the recompute
+-- cost stays at this cheap interval while the visual is actually
+-- continuous.
 local TRACK_TICK_MS = 250
 local TRACK_IDLE_TICK_MS = 1000
 
@@ -380,118 +411,190 @@ CreateThread(function()
         local sleepMs = TRACK_IDLE_TICK_MS
 
         if IsTracking() and not trackingState.brokenByWater then
-            sleepMs = TRACK_TICK_MS
-
             local myPed = PlayerPedId()
-            local myCoords = GetEntityCoords(myPed)
-            local sourceCoords = trackingState.coords
 
-            -- Recomputed fresh every tick from the K9's LIVE position
-            -- toward the fixed resolved source coordinate — NOT a one-time
-            -- snapshot (phase2_notes/water_gunpowder_tracking.md §1.2: the
-            -- K9's position moves every tick, the resolved source
-            -- coordinate does not, for the lifetime of one Start*Track()
-            -- call).
-            local totalDist = #(sourceCoords - myCoords)
+            -- OWN-DEATH EXIT PATH (coder-frontend correctness pass, this
+            -- session — not previously handled): mirrors this codebase's own
+            -- established "own ped death forces an active perception/render
+            -- feature to end" precedent (client/vision.lua's maintenance
+            -- thread, client/propattachment.lua's "OWN-DEATH AUTO-DETACH").
+            -- Continuing to recompute/render a scent/blood/gunpowder trail
+            -- from a dead ped's position is narratively nonsensical and, on
+            -- respawn, would silently resume rendering a "trail" from
+            -- whatever coordinate the player respawns at — unrelated to the
+            -- K9's actual path to the resolved source. StopTracking() clears
+            -- trackingState AND currentTrailMarkers together and bumps
+            -- trackRequestGeneration defensively, same as an explicit manual
+            -- stop — a fresh "Track <Type>" is required after respawning,
+            -- matching this file's existing "no self-service silent resume"
+            -- precedent already established for the water-break case below.
+            if IsEntityDead(myPed) then
+                StopTracking()
+            else
+                sleepMs = TRACK_TICK_MS
 
-            -- PHASE 4 ADDITION (Config.Features.XPProgression,
-            -- Config.XP.awards.trackSourceResolved) — see this file's header
-            -- EVENT/CALLBACK CONTRACT item 4. Fired the FIRST tick our own
-            -- live distance to the resolved source drops to/below
-            -- Config.XP.trackArrivalRadius, gated by `arrivalReported` so a
-            -- sustained standstill at the source doesn't retrigger this
-            -- every tick — this is a TRIGGER only, the server re-measures
-            -- its OWN live distance against its OWN stored coordinate before
-            -- awarding anything (server/tracking.lua's
-            -- reportTrackSourceArrival handler never trusts this call as a
-            -- claim of arrival). Checked unconditionally (not nested inside
-            -- the `totalDist > 0.1` marker-drawing branch below) so arriving
-            -- close enough that totalDist itself falls under 0.1 still
-            -- reports — that branch only guards drawing markers along a
-            -- remaining line, not this check.
-            if Config.Features.XPProgression and not trackingState.arrivalReported
-                and totalDist <= Config.XP.trackArrivalRadius then
-                trackingState.arrivalReported = true
-                TriggerServerEvent('qbx_k9unit:server:reportTrackSourceArrival')
-            end
+                local myCoords = GetEntityCoords(myPed)
+                local sourceCoords = trackingState.coords
 
-            if totalDist > 0.1 then
-                local trackingConfig = TRACKING_STATE_CONFIG[trackingState.trackType]
-                local dir = (sourceCoords - myCoords) / totalDist
+                -- Recomputed fresh every tick from the K9's LIVE position
+                -- toward the fixed resolved source coordinate — NOT a
+                -- one-time snapshot (phase2_notes/water_gunpowder_tracking.md
+                -- §1.2: the K9's position moves every tick, the resolved
+                -- source coordinate does not, for the lifetime of one
+                -- Start*Track() call).
+                local totalDist = #(sourceCoords - myCoords)
 
-                -- OPEN QUESTION, not resolved by SPEC.md §11 either way
-                -- (phase2_notes/scent_blood_tracking.md §2.3, §5 item 1):
-                -- reveal the WHOLE remaining line at once, or only a capped
-                -- preview window near the player? This implementation
-                -- reveals the whole remaining line — simpler, and matches
-                -- "a trail of markers toward the nearest source" read
-                -- literally — flagged per that note's own recommendation to
-                -- confirm with product-manager/feature-ideation before this
-                -- is treated as final, not silently asserted as the only
-                -- right answer.
-                local waterCrossingDist = nil
-                if Config.Features.WaterTrackingDecay then
-                    waterCrossingDist = FindWaterCrossingDistance(myCoords, sourceCoords)
-
-                    if waterCrossingDist and trackingState.breaksAtWater then
-                        -- Hard break: stop drawing markers past the
-                        -- crossing point, mark broken, notify, and do NOT
-                        -- auto-resume — per §11.5's explicit "does not
-                        -- silently resume" bullet, a fresh Start*Track()
-                        -- call (subject to that type's own
-                        -- searchCooldownMs) is required to re-acquire.
-                        trackingState.brokenByWater = true
-                        lib.notify({
-                            title = 'K9 Unit',
-                            description = 'The trail is lost at the water\'s edge.',
-                            type = 'error',
-                        })
-                    end
+                -- PHASE 4 ADDITION (Config.Features.XPProgression,
+                -- Config.XP.awards.trackSourceResolved) — see this file's
+                -- header EVENT/CALLBACK CONTRACT item 4. Fired the FIRST
+                -- tick our own live distance to the resolved source drops
+                -- to/below Config.XP.trackArrivalRadius, gated by
+                -- `arrivalReported` so a sustained standstill at the source
+                -- doesn't retrigger this every tick — this is a TRIGGER
+                -- only, the server re-measures its OWN live distance against
+                -- its OWN stored coordinate before awarding anything
+                -- (server/tracking.lua's reportTrackSourceArrival handler
+                -- never trusts this call as a claim of arrival). Checked
+                -- unconditionally (not nested inside the `totalDist > 0.1`
+                -- marker-collection branch below) so arriving close enough
+                -- that totalDist itself falls under 0.1 still reports — that
+                -- branch only guards collecting markers along a remaining
+                -- line, not this check.
+                if Config.Features.XPProgression and not trackingState.arrivalReported
+                    and totalDist <= Config.XP.trackArrivalRadius then
+                    trackingState.arrivalReported = true
+                    TriggerServerEvent('qbx_k9unit:server:reportTrackSourceArrival')
                 end
 
-                -- Deliberately NOT gated on `not trackingState.brokenByWater`
-                -- here — the outer `IsTracking() and not trackingState.
-                -- brokenByWater` check (top of this tick's block) already
-                -- stops FUTURE ticks once broken, and the break condition
-                -- two lines below already cuts the line off exactly at
-                -- waterCrossingDist. Gating this loop on brokenByWater too
-                -- was a real bug: brokenByWater gets set to true a few
-                -- lines above in THIS SAME tick the instant water is first
-                -- detected anywhere on the remaining path, so the old code
-                -- skipped drawing anything at all that tick — the whole
-                -- trail (including the already-walked near-bank portion)
-                -- vanished instantly instead of rendering up to the
-                -- water's edge as §11.5 requires. Running this loop
-                -- unconditionally lets the current tick still draw the
-                -- partial line before the broken state takes effect next
-                -- tick (qa-tester/correctness-overseer finding).
-                -- Clamped defensively, same rationale/precedent as
-                -- FindWaterCrossingDistance's own `step` clamp above: a
-                -- misconfigured Config.Tracking.<Type>.markerSpacing of 0
-                -- (or negative) would otherwise spin this while loop
-                -- forever with no Wait() inside it (qa-tester finding).
-                local markerStep = math.max(trackingConfig.markerSpacing, 0.1)
-                local traveled = 0.0
-                while traveled < totalDist do
-                    -- If breaksTrail, stop rendering past the crossing
-                    -- point entirely. If not breaksTrail (soft fade),
-                    -- keep rendering past it at reduced alpha — the
-                    -- sampling logic runs identically either way, only
-                    -- the marker-drawing parameter changes (§11.5).
-                    if waterCrossingDist and trackingState.breaksAtWater and traveled >= waterCrossingDist then
-                        break
+                if totalDist > 0.1 then
+                    local trackingConfig = TRACKING_STATE_CONFIG[trackingState.trackType]
+                    local dir = (sourceCoords - myCoords) / totalDist
+
+                    -- OPEN QUESTION, not resolved by SPEC.md §11 either way
+                    -- (phase2_notes/scent_blood_tracking.md §2.3, §5 item 1):
+                    -- reveal the WHOLE remaining line at once, or only a
+                    -- capped preview window near the player? This
+                    -- implementation reveals the whole remaining line —
+                    -- simpler, and matches "a trail of markers toward the
+                    -- nearest source" read literally — flagged per that
+                    -- note's own recommendation to confirm with
+                    -- product-manager/feature-ideation before this is
+                    -- treated as final, not silently asserted as the only
+                    -- right answer.
+                    local waterCrossingDist = nil
+                    if Config.Features.WaterTrackingDecay then
+                        waterCrossingDist = FindWaterCrossingDistance(myCoords, sourceCoords)
+
+                        if waterCrossingDist and trackingState.breaksAtWater then
+                            -- Hard break: stop rendering markers past the
+                            -- crossing point, mark broken, notify, and do NOT
+                            -- auto-resume — per §11.5's explicit "does not
+                            -- silently resume" bullet, a fresh Start*Track()
+                            -- call (subject to that type's own
+                            -- searchCooldownMs) is required to re-acquire.
+                            trackingState.brokenByWater = true
+                            lib.notify({
+                                title = 'K9 Unit',
+                                description = 'The trail is lost at the water\'s edge.',
+                                type = 'error',
+                            })
+                        end
                     end
 
-                    local markerCoords = myCoords + dir * traveled
-                    local underwater = waterCrossingDist ~= nil and traveled >= waterCrossingDist
-                    DrawTrailMarker(markerCoords, underwater)
+                    -- Deliberately NOT gated on `not trackingState.
+                    -- brokenByWater` here — the outer `IsTracking() and not
+                    -- trackingState.brokenByWater` check (top of this tick's
+                    -- block) already stops FUTURE ticks once broken, and the
+                    -- break condition two lines above already cuts the line
+                    -- off exactly at waterCrossingDist. Gating this loop on
+                    -- brokenByWater too was a real bug: brokenByWater gets
+                    -- set to true a few lines above in THIS SAME tick the
+                    -- instant water is first detected anywhere on the
+                    -- remaining path, so the old code skipped collecting
+                    -- anything at all that tick — the whole trail (including
+                    -- the already-walked near-bank portion) vanished
+                    -- instantly instead of rendering up to the water's edge
+                    -- as §11.5 requires. Running this loop unconditionally
+                    -- lets the current tick still render the partial line
+                    -- before the broken state takes effect next tick
+                    -- (qa-tester/correctness-overseer finding).
+                    -- Clamped defensively, same rationale/precedent as
+                    -- FindWaterCrossingDistance's own `step` clamp above: a
+                    -- misconfigured Config.Tracking.<Type>.markerSpacing of 0
+                    -- (or negative) would otherwise spin this while loop
+                    -- forever with no Wait() inside it (qa-tester finding).
+                    local markerStep = math.max(trackingConfig.markerSpacing, 0.1)
+                    local traveled = 0.0
+                    local markers = {}
+                    while traveled < totalDist do
+                        -- If breaksTrail, stop rendering past the crossing
+                        -- point entirely. If not breaksTrail (soft fade),
+                        -- keep rendering past it at reduced alpha — the
+                        -- sampling logic runs identically either way, only
+                        -- the marker-drawing parameter changes (§11.5).
+                        if waterCrossingDist and trackingState.breaksAtWater and traveled >= waterCrossingDist then
+                            break
+                        end
 
-                    traveled = traveled + markerStep
+                        local markerCoords = myCoords + dir * traveled
+                        local underwater = waterCrossingDist ~= nil and traveled >= waterCrossingDist
+                        markers[#markers + 1] = { coords = markerCoords, underwater = underwater }
+
+                        traveled = traveled + markerStep
+                    end
+
+                    -- Handed off to the dedicated per-frame render thread
+                    -- below — see currentTrailMarkers' own declaration
+                    -- comment for why DrawMarker itself must not be called
+                    -- from this (only-every-TRACK_TICK_MS) thread directly.
+                    currentTrailMarkers = markers
+                else
+                    -- Already at (or within 0.1m of) the resolved source —
+                    -- nothing left to render.
+                    currentTrailMarkers = nil
                 end
             end
+        else
+            -- Not tracking, or the trail just broke at water (that break's
+            -- own final partial-line snapshot was already produced by the
+            -- branch above on the exact tick the break was first detected —
+            -- see the comment on that branch). Cleared explicitly here on
+            -- every subsequent idle tick, rather than left for the render
+            -- thread to infer on its own, so a stopped/broken trail's last
+            -- rendered frame does not keep rendering forever — exactly the
+            -- kind of indefinite, self-inflicted "stuck visual" this file is
+            -- required to avoid.
+            currentTrailMarkers = nil
         end
 
         Wait(sleepMs)
+    end
+end)
+
+-- Per-frame render thread (CORRECTNESS FIX, coder-frontend, this pass) —
+-- see currentTrailMarkers' own declaration comment above for the full
+-- writeup of the bug this closes (DrawMarker previously only being invoked
+-- once per TRACK_TICK_MS, causing a visible strobe instead of a rendered
+-- trail). Runs at Wait(0) ONLY while there is something to draw; idles at
+-- TRACK_RENDER_IDLE_TICK_MS the rest of the time (the overwhelming majority
+-- of a normal session, since tracking is opt-in and short-lived) — mirrors
+-- this file's own idle/active tick-rate-switch convention
+-- (TRACK_TICK_MS/TRACK_IDLE_TICK_MS above), applied to the render half
+-- specifically because that half — unlike the state/compute half above —
+-- genuinely does need per-frame execution to actually be visible.
+local TRACK_RENDER_IDLE_TICK_MS = 250
+
+CreateThread(function()
+    while true do
+        if currentTrailMarkers then
+            for i = 1, #currentTrailMarkers do
+                local marker = currentTrailMarkers[i]
+                DrawTrailMarker(marker.coords, marker.underwater)
+            end
+            Wait(0)
+        else
+            Wait(TRACK_RENDER_IDLE_TICK_MS)
+        end
     end
 end)
 
