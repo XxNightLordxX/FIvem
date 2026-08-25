@@ -45,6 +45,15 @@ Config.Features = {
     -- detection dog's "trained final response") and barks. The text message
     -- you already get is unchanged; this is on top of it, not instead of it.
     FindAlerts           = true,
+
+    -- client/scenttrail.lua + server/scenttrail.lua (K9_IDEAS.md §2,
+    -- "follow your nose"). Turns a search into a hunt: the K9 sets off
+    -- after a hidden spot somewhere near them, guided ONLY by a growl that
+    -- pulses faster as they get warmer. No marker, no blip, and -- this is
+    -- the part that makes it honest -- the hiding place's coordinates are
+    -- never sent to the player's game at all, only a distance. Nobody can
+    -- read the answer out of their own client. Awards no XP.
+    ScentTrailHunt       = true,
     ThermalVision        = true,
     NightVision          = true,
     DoorInteraction      = true, -- nudge-open / scratch-to-alert
@@ -597,6 +606,12 @@ Config.FeatureControl = {
         -- reason the original four were chosen, not as a rule limiting what
         -- may appear here.
         FindAlerts        = true,
+        -- Listed for a different reason than the four above: not because it
+        -- acts on another player (it does not), but so high command can
+        -- phase the hunt in per person -- reserve it for K9s who have
+        -- finished search training, or stage a rollout -- instead of only
+        -- being able to flip it for the whole server at once.
+        ScentTrailHunt    = true,
     },
 
     -- Whether a handler/K9 may open the tablet and see what they hold.
@@ -2328,4 +2343,39 @@ Config.K9EquipmentShop = {
         { name = 'k9_meat_bait',          price = 40 },
         { name = 'k9_ultrasonic_whistle', price = 150 },
     },
+}
+
+-- ======================================================================
+-- SCENT TRAIL HUNT (Config.Features.ScentTrailHunt) -- K9_IDEAS.md §2.
+-- client/scenttrail.lua + server/scenttrail.lua.
+--
+-- Different from the scent tracking above, and deliberately so: that one
+-- reveals a location and draws a trail to it. This one reveals NOTHING.
+-- The hiding spot's coordinates never leave the server -- the player's
+-- game is only ever told how far away they are, which is what paces the
+-- growl. So there is nothing in the player's game to read the answer out
+-- of. It awards no XP either.
+-- ======================================================================
+Config.ScentTrailHunt = {
+    -- How far from the K9 the hidden spot can be, in meters.
+    minRadius         = 10.0,
+    maxRadius         = 30.0,
+
+    -- How close counts as finding it. Measured flat, ignoring height.
+    arrivalRadius     = 3.0,
+
+    -- How often the growl checks distance when far away, in milliseconds.
+    -- Close in, it speeds up to a fixed rate that is not configurable.
+    pollIntervalMs    = 2000,
+
+    -- Minimum gap between one hunt and the next, per player, in
+    -- milliseconds. MUST BE POSITIVE -- a non-positive value here does NOT
+    -- mean "no cooldown"; the shared cooldown helper treats it as
+    -- PERMANENTLY ON and the feature locks out for everyone, forever.
+    startCooldownMs   = 8000,
+
+    -- A hunt nobody finishes gives up after this long, in milliseconds
+    -- (five minutes). This is what stops a forgotten hunt lasting all
+    -- session.
+    maxHuntDurationMs = 300000,
 }

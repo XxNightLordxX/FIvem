@@ -57,11 +57,11 @@ shared_scripts {
     -- config.lua, since it reads Config.Compat. Order AMONG the five
     -- adapters does not matter.
     'shared/compat/core.lua',
-    'shared/compat/inventory.lua',
-    'shared/compat/target.lua',
-    'shared/compat/framework.lua',
-    'shared/compat/dispatch.lua',
-    'shared/compat/ambulance.lua',
+    -- 'shared/compat/inventory.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
+    -- 'shared/compat/target.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
+    -- 'shared/compat/framework.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
+    -- 'shared/compat/dispatch.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
+    -- 'shared/compat/ambulance.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
 }
 
 -- Phase 4: first NUI surface this resource has ever had (the passive
@@ -149,6 +149,7 @@ client_scripts {
     'client/tablet.lua',
     'client/vehicle.lua',
     'client/tracking.lua', -- Phase 2
+    'client/scenttrail.lua', -- K9_IDEAS.md §2 "follow your nose" (ScentTrailHunt), client half. No load-order dependency: CanShowK9UI/DenyK9UIAccess/K9Sit/PlayK9Sound are all reached behind type() guards.
     'client/search.lua',   -- Phase 2
     'client/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), client half. Reuses client/main.lua's PlaySoundOnNetworkEntity at runtime only, so no load-order requirement beyond that file existing.
     'client/vision.lua',   -- Phase 2
@@ -239,6 +240,15 @@ server_scripts {
     'server/permissions.lua',
     'server/main.lua',
     'server/certifications.lua',
+    -- K9 COMMAND TABLET, server half. This is high command's actual control
+    -- surface: the roster read side, plus tabletAssignK9Role and
+    -- tabletRevertK9Ped -- assigning someone the K9 role and stripping it
+    -- back to a human. It was written and never registered, so every one of
+    -- those callbacks silently never answered. Loaded after
+    -- server/permissions.lua and server/certifications.lua, whose
+    -- IsHighCommand/HasPermission/HasK9Access it consults (21 call sites,
+    -- all at runtime, so this is convention rather than a hard requirement).
+    'server/tablet.lua',
     -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7
     -- Revision 5/§12.3) -- loaded after server/cooldowns.lua (NewCooldown/
     -- NewMutex at this file's own file-load time) and server/certifications.lua
@@ -262,6 +272,7 @@ server_scripts {
     -- GetActivePartnerCitizenId, server-side only, never a client claim.
     'server/defense.lua',
     'server/tracking.lua', -- Phase 2
+    'server/scenttrail.lua', -- K9_IDEAS.md §2 "follow your nose" (ScentTrailHunt), server half. HARD load-order dependency on server/cooldowns.lua -- NewCooldown at this file's own file-load time -- already satisfied here. Holds the hidden coordinate and never sends it to a client; only a distance goes over the wire.
     'server/search.lua',   -- Phase 2
     'server/findalert.lua', -- K9_IDEAS.md §1 (FindAlerts), server half. An ADDITIONAL consumer of server/search.lua's searchCompleted and client/tracking.lua's reportTrackSourceArrival events -- it adds no detection logic of its own, which is why it needs no ordering against either. It DOES call NewCooldown at its own file-load time, so server/cooldowns.lua before it is a hard requirement; HasK9Access is runtime-only.
     'server/inventory.lua', -- Phase 4 (K9Inventory, PHASE4_SPEC.md §13.4.2)
