@@ -17,6 +17,22 @@
     FILE-TO-FILE CONTRACT, so -- exactly like entities_spec.lua -- no
     RegisterCommand/callback indirection is needed to reach them.
 
+    EXTENDED (this pass) to close out the three functions the original
+    draft of this file explicitly scoped out as a SCOPE boundary, not a
+    difficulty one (see that draft's own "NATIVES DELIBERATELY NOT
+    STUBBED, AND WHY" comment, now removed below since it no longer
+    describes this file): ResolvePlayerServerIdFromPed
+    (NetworkGetPlayerIndexFromPed + GetPlayerServerId), PlaySoundOnNetworkEntity
+    (PlaySoundFromEntity + the PlayK9Sound resource-global, which may not
+    exist at all -- see that section's own comment), and the
+    RegisterNetEvent('qbx_k9unit:client:playBark', ...) handler, including
+    its `source ~= 65535` origin guard. All four of that guard's natives
+    (NetworkGetPlayerIndexFromPed, GetPlayerServerId, PlaySoundFromEntity,
+    RegisterNetEvent's own capturing stub) are now stubbed in
+    newMainFixture() below -- every native client/main.lua's load-time and
+    runtime paths touch is now covered; nothing in this file remains
+    unstubbed by choice.
+
     LOAD ORDER: the real config.lua (for the REAL Config.Peds model list --
     the task this spec was written for explicitly asked for this, not a
     fabricated stand-in) is loaded into the sandbox FIRST, then the real
@@ -42,23 +58,25 @@
     GetEntityModel stub to agree on what hash a given model name maps to,
     never the real native's exact bit pattern.
 
-    NATIVES DELIBERATELY NOT STUBBED, AND WHY (scope, not a stubbing
-    hardship -- see this spec's own report for the same disclosure):
-    client/main.lua also defines ResolvePlayerServerIdFromPed,
-    PlaySoundOnNetworkEntity, and a RegisterNetEvent('qbx_k9unit:client:playBark', ...)
-    handler below the functions this spec targets. None of their natives
-    (NetworkGetPlayerIndexFromPed, GetPlayerServerId, PlaySoundFromEntity,
-    PlayK9Sound) are stubbed here, and none of those three are exercised --
-    the task this spec was written for explicitly scoped it to
-    IsEntityModelK9/HasK9Access/CanShowK9UI/DenyK9UIAccess plus
-    ResolveNetworkEntity "if you can reach it" (reached below), and
-    explicitly kept movement.lua/combat.lua-style heavy native surfaces out
-    of scope. Because Lua only executes a function's BODY when it's
-    called -- never at definition time -- loading the whole file with only
-    the target functions' own natives stubbed does not error: RegisterNetEvent
-    itself (a load-time CALL, not a deferred one) is the one exception, and
-    IS stubbed below (a trivial capturing stub, not "disproportionate"
-    stubbing) purely so the file finishes loading at all.
+    PlaySoundOnNetworkEntity / playBark's source-origin guard -- WHAT THIS
+    SPEC DOES AND DOES NOT PROVE: client/main.lua's playBark handler carries
+    a `if source ~= 65535 then return end` guard (see that file's own
+    "SOURCE-ORIGIN GUARD" comment and phase2_notes/client_event_trust_boundary.md).
+    This spec's sandbox models `source` as an ordinary Lua global the
+    handler reads via `_ENV` -- exactly like every other stubbed native
+    here -- and every test below sets it explicitly before invoking the
+    captured handler. That is sufficient to pin what THE CODE does: a
+    65535-sourced call is processed, anything else is rejected before doing
+    any work. It is NOT sufficient, and is not claimed to be sufficient, to
+    settle whether FiveM's real client runtime always/reliably repopulates
+    `source` this way on every dispatch, or whether it can fail open via a
+    stale carry-over from a prior genuine server-sent event landing on a
+    since-forged local trigger -- phase2_notes/client_event_trust_boundary.md
+    §1.2 already grades that engine-level question MEDIUM-HIGH, not
+    certain, and flags it as unresolved after three independent passes.
+    Every test in the playBark section below repeats this in its own
+    comment rather than relying on this header alone, so a reader landing
+    mid-file via a failure report still sees the caveat.
 ]]
 
 local t = dofile('testkit.lua')
@@ -89,6 +107,25 @@ local REAL_K9_MODELS = { 'a_c_shepherd', 'a_c_rottweiler', 'a_c_husky', 'a_c_cho
 local NON_K9_MODEL = 'a_c_pug'
 
 local HAS_K9_ACCESS_CACHE_TTL_MS = 1000 -- must match client/main.lua's own HAS_K9_ACCESS_CACHE_TTL_MS
+
+-- client/main.lua's own placeholder sound-bank literals (client/main.lua:202,
+-- :208), transcribed here ONLY for readable assertions below -- every test
+-- that uses these drives the REAL BARK_SOUND_NAME/K9_SOUND_SET-shaped calls
+-- the real PlaySoundOnNetworkEntity/playBark handler makes, never a
+-- reimplementation of either constant.
+local BARK_SOUND_NAME = 'Bark'
+local K9_SOUND_SET = 'qbx_k9unit_sounds'
+
+-- config.lua's REAL Config.AdvancedBarkRadial table (config.lua:963-967),
+-- transcribed the same way as REAL_K9_MODELS above -- one real entry, used
+-- to prove playBark's barkType -> soundName lookup resolves a RECOGNIZED
+-- barkType to its own distinct sound rather than always falling back to
+-- BARK_SOUND_NAME. Built unconditionally by client/main.lua regardless of
+-- Config.Features.AdvancedBarkRadial's value (that file's own
+-- BarkTypeSoundNames comment), so this is reachable even though that
+-- feature flag defaults to false.
+local REAL_ADVANCED_BARK_TYPE = 'bark_alert'
+local REAL_ADVANCED_BARK_SOUND = 'Bark_Alert'
 
 -- ----------------------------------------------------------------------
 -- Sandbox setup
@@ -133,11 +170,43 @@ local function newMainFixture()
     local existingEntities = {} -- entity handle -> true
     local function DoesEntityExist(entity) return existingEntities[entity] == true end
 
+    -- ResolvePlayerServerIdFromPed's two natives. playerIndexByPed defaults
+    -- to -1 (the real native's own "not a player ped" sentinel) for any
+    -- entity never explicitly registered -- `playerIndexByPed[entity] or -1`
+    -- is safe even when a test registers index 0 for an entity, since 0 is
+    -- truthy in Lua (only nil/false are falsy), so it is never mistaken for
+    -- "unset". serverIdByPlayerIndex intentionally has NO such default: an
+    -- unregistered index reads back as bare nil, modeling GetPlayerServerId
+    -- returning nothing for an index this fixture was never told about.
+    local playerIndexByPed = {} -- entity -> playerIndex
+    local function NetworkGetPlayerIndexFromPed(entity) return playerIndexByPed[entity] or -1 end
+    local serverIdByPlayerIndex = {} -- playerIndex -> serverId (or explicitly 0/nil, set per test)
+    local getPlayerServerIdCallLog = {} -- proves ResolvePlayerServerIdFromPed short-circuits on index == -1 without even calling this
+    local function GetPlayerServerId(playerIndex)
+        getPlayerServerIdCallLog[#getPlayerServerIdCallLog + 1] = playerIndex
+        return serverIdByPlayerIndex[playerIndex]
+    end
+
+    -- PlaySoundOnNetworkEntity's native half -- a call log, not a real
+    -- audio-playing stub, so a test can assert exactly what args reached it
+    -- (or that it was never called at all, e.g. behind playBark's origin
+    -- guard or a stale/unresolvable netId).
+    local playSoundFromEntityCalls = {}
+    local function PlaySoundFromEntity(networkId, soundName, entity, soundSet, isNetworkSynced, flags)
+        playSoundFromEntityCalls[#playSoundFromEntityCalls + 1] = {
+            networkId = networkId, soundName = soundName, entity = entity,
+            soundSet = soundSet, isNetworkSynced = isNetworkSynced, flags = flags,
+        }
+    end
+
     -- RegisterNetEvent is called once at client/main.lua's own load time
-    -- (the playBark handler, out of this spec's scope -- see header) --
-    -- stubbed as a pure no-op only so the file finishes loading; nothing
-    -- below ever needs to invoke the handler it would otherwise capture.
-    local function RegisterNetEvent(_eventName, _handler) end
+    -- (the playBark handler). Capturing stub, keyed by event name, so this
+    -- fixture's triggerPlayBark() below can invoke the REAL captured
+    -- handler body -- not a reimplementation of it -- exactly the same
+    -- capturing-stub convention kennel_spec.lua/certifications_spec.lua
+    -- already use for their own RegisterNetEvent/RegisterCommand handlers.
+    local netEventHandlers = {}
+    local function RegisterNetEvent(eventName, handler) netEventHandlers[eventName] = handler end
 
     local env = Sandbox.newEnv({
         GetHashKey = GetHashKey,
@@ -148,6 +217,9 @@ local function newMainFixture()
         NetworkDoesEntityExistWithNetworkId = NetworkDoesEntityExistWithNetworkId,
         NetworkGetEntityFromNetworkId = NetworkGetEntityFromNetworkId,
         DoesEntityExist = DoesEntityExist,
+        NetworkGetPlayerIndexFromPed = NetworkGetPlayerIndexFromPed,
+        GetPlayerServerId = GetPlayerServerId,
+        PlaySoundFromEntity = PlaySoundFromEntity,
         RegisterNetEvent = RegisterNetEvent,
     })
 
@@ -168,6 +240,24 @@ local function newMainFixture()
         registerEntity = function(netId, handle, exists)
             networkEntities[netId] = handle
             existingEntities[handle] = exists ~= false
+        end,
+        setPlayerIndexForPed = function(entity, playerIndex) playerIndexByPed[entity] = playerIndex end,
+        setServerIdForPlayerIndex = function(playerIndex, serverId) serverIdByPlayerIndex[playerIndex] = serverId end,
+        getPlayerServerIdCallCount = function() return #getPlayerServerIdCallLog end,
+        playSoundFromEntityCalls = playSoundFromEntityCalls,
+        -- Invokes the REAL captured 'qbx_k9unit:client:playBark' handler
+        -- body with `source` set to `sourceValue` immediately beforehand --
+        -- modeling the handler reading the ambient `source` global via
+        -- _ENV, same convention certifications_spec.lua's own setSource
+        -- uses for its server-side net events. Errors loudly (rather than
+        -- silently no-op'ing) if client/main.lua ever stops registering
+        -- this exact event name, so a rename there fails this spec instead
+        -- of quietly testing nothing.
+        triggerPlayBark = function(sourceValue, netId, barkType)
+            local handler = assert(netEventHandlers['qbx_k9unit:client:playBark'],
+                'client/main.lua did not register a qbx_k9unit:client:playBark handler')
+            env.source = sourceValue
+            handler(netId, barkType)
         end,
     }
 end
@@ -407,6 +497,172 @@ t.test('ResolveNetworkEntity: a live, currently-streamed-in entity resolves succ
     local f = newMainFixture()
     f.registerEntity(100, 5000, true)
     t.equals(f.env.ResolveNetworkEntity(100), 5000)
+end)
+
+-- ----------------------------------------------------------------------
+-- ResolvePlayerServerIdFromPed -- NetworkGetPlayerIndexFromPed + GetPlayerServerId.
+-- Priority per this pass's task: the DEGENERATE inputs (a ped that maps to
+-- no player at all, and the zero sentinel) matter most -- both are exercised
+-- below, alongside the happy path for contrast and the "round trip came
+-- back with nothing" case the same `if not targetServerId or ... == 0`
+-- guard also covers.
+-- ----------------------------------------------------------------------
+
+t.test('ResolvePlayerServerIdFromPed: a ped that maps to no player (NetworkGetPlayerIndexFromPed == -1) resolves to nil, and GetPlayerServerId is never even called', function()
+    local f = newMainFixture()
+    local entity = 700
+    -- Never registered via setPlayerIndexForPed -- NetworkGetPlayerIndexFromPed
+    -- stub returns its default -1, the real native's own "not a player ped" sentinel.
+    t.isNil(f.env.ResolvePlayerServerIdFromPed(entity))
+    t.equals(f.getPlayerServerIdCallCount(), 0, 'the -1 guard must short-circuit BEFORE calling GetPlayerServerId at all')
+end)
+
+t.test('ResolvePlayerServerIdFromPed: the zero sentinel (GetPlayerServerId returns 0) resolves to nil, never the literal 0', function()
+    local f = newMainFixture()
+    local entity = 701
+    f.setPlayerIndexForPed(entity, 3)
+    f.setServerIdForPlayerIndex(3, 0)
+    t.isNil(f.env.ResolvePlayerServerIdFromPed(entity), 'server id 0 is never a real player -- must be treated the same as "no player", not returned as-is')
+end)
+
+t.test('ResolvePlayerServerIdFromPed: GetPlayerServerId returning nothing at all (nil) also resolves to nil, not an error', function()
+    local f = newMainFixture()
+    local entity = 702
+    f.setPlayerIndexForPed(entity, 4)
+    -- setServerIdForPlayerIndex deliberately not called for index 4 -- GetPlayerServerId(4) reads back bare nil.
+    t.isNil(f.env.ResolvePlayerServerIdFromPed(entity))
+end)
+
+t.test('ResolvePlayerServerIdFromPed: a real player ped resolves to that player\'s real, nonzero server id', function()
+    local f = newMainFixture()
+    local entity = 703
+    f.setPlayerIndexForPed(entity, 0) -- playerIndex 0 is itself a valid index, not a sentinel -- must not be confused with "unset"
+    f.setServerIdForPlayerIndex(0, 42)
+    t.equals(f.env.ResolvePlayerServerIdFromPed(entity), 42)
+end)
+
+-- ----------------------------------------------------------------------
+-- PlaySoundOnNetworkEntity -- ResolveNetworkEntity + PlaySoundFromEntity,
+-- THEN (this pass's priority #2) the PlayK9Sound resource-global, which
+-- genuinely may not exist as a global at all when
+-- Config.Features.BasicBarkSounds is false (client/audio.lua returns
+-- without ever defining it) -- client/main.lua's own contract for that case
+-- is a runtime `type(PlayK9Sound) == 'function'` guard, not a load-order
+-- assumption, and the whole point of the cases below is proving the absent
+-- path degrades cleanly rather than erroring.
+-- ----------------------------------------------------------------------
+
+t.test('PlaySoundOnNetworkEntity: a netId that does not resolve to a live entity is a clean no-op -- no PlaySoundFromEntity call at all', function()
+    local f = newMainFixture()
+    f.env.PlaySoundOnNetworkEntity(999999, BARK_SOUND_NAME)
+    t.equals(#f.playSoundFromEntityCalls, 0)
+end)
+
+t.test('PlaySoundOnNetworkEntity: a stale (despawned) network entity is also a clean no-op', function()
+    local f = newMainFixture()
+    f.registerEntity(100, 5000, false) -- recognized netId, but the local entity handle no longer exists
+    f.env.PlaySoundOnNetworkEntity(100, BARK_SOUND_NAME)
+    t.equals(#f.playSoundFromEntityCalls, 0)
+end)
+
+-- THE priority-#2 case: PlayK9Sound genuinely absent as a global (this
+-- fixture's sandbox never defines it, modeling Config.Features.BasicBarkSounds
+-- == false -- client/audio.lua's own contract for that case, per
+-- client/main.lua's own comment on this exact guard).
+t.test('PlaySoundOnNetworkEntity: PlayK9Sound entirely absent as a global degrades cleanly -- PlaySoundFromEntity still fires, no error is thrown', function()
+    local f = newMainFixture()
+    f.registerEntity(100, 5000, true)
+    t.isNil(f.env.PlayK9Sound, 'sanity: this sandbox genuinely does not define PlayK9Sound, same as a real client with BasicBarkSounds == false')
+
+    -- pcall, not a bare call: if `type(PlayK9Sound) == 'function'` were ever
+    -- missing/wrong in client/main.lua, calling a nil global would throw --
+    -- this proves it does not, rather than merely asserting the visible
+    -- side effect and hoping nothing errored along the way.
+    local ok, err = pcall(f.env.PlaySoundOnNetworkEntity, 100, BARK_SOUND_NAME)
+    t.isTrue(ok, 'PlaySoundOnNetworkEntity must not error when PlayK9Sound does not exist: ' .. tostring(err))
+
+    t.equals(#f.playSoundFromEntityCalls, 1)
+    t.equals(f.playSoundFromEntityCalls[1].networkId, -1)
+    t.equals(f.playSoundFromEntityCalls[1].soundName, BARK_SOUND_NAME)
+    t.equals(f.playSoundFromEntityCalls[1].entity, 5000)
+    t.equals(f.playSoundFromEntityCalls[1].soundSet, K9_SOUND_SET)
+    t.equals(f.playSoundFromEntityCalls[1].isNetworkSynced, false)
+    t.equals(f.playSoundFromEntityCalls[1].flags, 0)
+end)
+
+t.test('PlaySoundOnNetworkEntity: when PlayK9Sound DOES exist as a function, it is also called, alongside (not instead of) PlaySoundFromEntity', function()
+    local f = newMainFixture()
+    f.registerEntity(100, 5000, true)
+    local playK9SoundCalls = {}
+    f.env.PlayK9Sound = function(netId, soundName)
+        playK9SoundCalls[#playK9SoundCalls + 1] = { netId = netId, soundName = soundName }
+    end
+
+    f.env.PlaySoundOnNetworkEntity(100, BARK_SOUND_NAME)
+
+    t.equals(#f.playSoundFromEntityCalls, 1, 'the native call must still fire even when PlayK9Sound also exists')
+    t.equals(#playK9SoundCalls, 1)
+    t.equals(playK9SoundCalls[1].netId, 100)
+    t.equals(playK9SoundCalls[1].soundName, BARK_SOUND_NAME)
+end)
+
+-- ----------------------------------------------------------------------
+-- RegisterNetEvent('qbx_k9unit:client:playBark', ...) handler --
+-- this pass's #1 priority: the `source ~= 65535` origin guard.
+--
+-- IMPORTANT SCOPE NOTE, repeated from this file's header (deliberately not
+-- left to be found only there): every test in this section pins what
+-- CLIENT/MAIN.LUA'S CODE does when `source` holds a given value at call
+-- time. None of them settle, and none should be read as settling, FiveM's
+-- own real-engine question of whether `source` is reliably repopulated
+-- on every dispatch or can fail open via a stale carry-over from an
+-- earlier genuine server event -- phase2_notes/client_event_trust_boundary.md
+-- §1.2 already grades that MEDIUM-HIGH/unresolved after three prior
+-- passes, and nothing in a Lua-level sandbox test can raise or lower that
+-- grade. This section is worth having regardless: it proves the guard as
+-- WRITTEN does reject a non-65535 `source`, which is a necessary (not
+-- sufficient) condition for the mitigation to work at all.
+-- ----------------------------------------------------------------------
+
+t.test('client/main.lua registers exactly the qbx_k9unit:client:playBark event name (sanity for every test below)', function()
+    local f = newMainFixture()
+    -- triggerPlayBark() itself asserts the handler was captured -- this
+    -- test just exercises that assertion path directly, with a harmless
+    -- unresolvable netId, so a rename shows up here first with a clear name.
+    f.triggerPlayBark(65535, 999999, 'bark')
+end)
+
+t.test('playBark: source == 65535 (the documented genuine-server sentinel) is processed -- an unrecognized barkType falls back to the generic BARK_SOUND_NAME', function()
+    local f = newMainFixture()
+    f.registerEntity(200, 6000, true)
+    f.triggerPlayBark(65535, 200, 'bark') -- Phase 1's literal, per client/main.lua's own comment -- not in BarkTypeSoundNames
+    t.equals(#f.playSoundFromEntityCalls, 1, 'a genuinely server-sourced call must be processed, not rejected')
+    t.equals(f.playSoundFromEntityCalls[1].soundName, BARK_SOUND_NAME)
+    t.equals(f.playSoundFromEntityCalls[1].entity, 6000)
+    t.equals(f.playSoundFromEntityCalls[1].soundSet, K9_SOUND_SET)
+end)
+
+t.test('playBark: source == 65535 with a barkType recognized in Config.AdvancedBarkRadial resolves to ITS OWN distinct sound, not the generic fallback', function()
+    local f = newMainFixture()
+    f.registerEntity(201, 6001, true)
+    f.triggerPlayBark(65535, 201, REAL_ADVANCED_BARK_TYPE)
+    t.equals(#f.playSoundFromEntityCalls, 1)
+    t.equals(f.playSoundFromEntityCalls[1].soundName, REAL_ADVANCED_BARK_SOUND,
+        'a recognized barkType must map through BarkTypeSoundNames, built from the real config.lua Config.AdvancedBarkRadial regardless of the AdvancedBarkRadial feature flag')
+end)
+
+t.test('playBark: a forged local trigger with an arbitrary non-65535 numeric source is rejected -- no sound is played at all', function()
+    local f = newMainFixture()
+    f.registerEntity(202, 6002, true) -- deliberately resolvable, so a bypassed guard WOULD produce a visible call
+    f.triggerPlayBark(1, 202, 'bark') -- forged source: some other player's server id, not the server sentinel
+    t.equals(#f.playSoundFromEntityCalls, 0, 'source ~= 65535 must reject before PlaySoundOnNetworkEntity ever runs -- pins the CODE\'s behavior only, see this section\'s header note on the open engine-level question')
+end)
+
+t.test('playBark: source left unset (nil) -- modeling a bare local TriggerEvent() call, which carries no origin parameter at all -- is also rejected', function()
+    local f = newMainFixture()
+    f.registerEntity(203, 6003, true)
+    f.triggerPlayBark(nil, 203, 'bark')
+    t.equals(#f.playSoundFromEntityCalls, 0, 'nil ~= 65535 in Lua, so this must reject exactly like any other non-sentinel value -- same open-engine-question caveat as above')
 end)
 
 os.exit(t.summary())
