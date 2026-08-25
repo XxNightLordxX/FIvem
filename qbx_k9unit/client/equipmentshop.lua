@@ -77,9 +77,18 @@ CreateThread(function()
 
     local label = (type(shopConfig.label) == 'string' and shopConfig.label ~= '') and shopConfig.label or 'K9 Supply'
 
-    for _, coords in ipairs(shopConfig.locations) do
+    for i, entry in ipairs(shopConfig.locations) do
+        -- config.lua stores these as plain { x, y, z } tables rather than
+        -- live vector3() calls, matching Config.TrainingZones' own
+        -- convention: config.lua must stay loadable outside the game, and a
+        -- vector3() call at its top level is not. The conversion belongs
+        -- here, at the one place the value is actually handed to a native.
+        if type(entry) ~= 'table' or type(entry.x) ~= 'number' or type(entry.y) ~= 'number' or type(entry.z) ~= 'number' then
+            print(('[qbx_k9unit] equipmentshop (client): Config.K9EquipmentShop.locations[%d] is not a { x = , y = , z = } table of numbers -- skipped. No walk-up point is created for it.'):format(i))
+            goto continue
+        end
         exports.ox_target:addSphereZone({
-            coords = coords,
+            coords = vector3(entry.x, entry.y, entry.z),
             radius = 1.5,
             debug = false,
             options = {
@@ -93,5 +102,6 @@ CreateThread(function()
                 },
             },
         })
+        ::continue::
     end
 end)

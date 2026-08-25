@@ -108,6 +108,12 @@ read_globals = {
     -- it for Config.K9EquipmentShop.locations, since ox_target's
     -- addSphereZone takes a vector3 for `coords`.
     "vector3", "vector2", "vector4", "quat",
+    --   IsDuplicityVersion -- ext/native-decls/IsDuplicityVersion.md
+    --   returns HTTP 200, apiset: shared, "Gets whether or not this is the
+    --   CitizenFX server". shared/compat/core.lua uses it for realm
+    --   detection, which is load-bearing: get it wrong and every adapter is
+    --   built for the wrong VM and silently does nothing.
+    "IsDuplicityVersion",
     -- ExecuteCommand -- verified 2026-08-25, HTTP 200, ns: CFX,
     -- apiset: shared. client/tablet.lua uses it to route a tablet action
     -- through the SAME RegisterCommand handler a player typing the command
@@ -420,8 +426,24 @@ globals = {
     -- client-side answer here may make a menu option appear; the server
     -- re-checks on the action, so it must never make the action succeed.
     "IsK9Role", "IsK9RoleForPlayer",
+    -- shared/compat/core.lua -- the resource auto-detection registry.
+    -- Assigned in core.lua, read by the five sibling adapter files and by
+    -- any future consumer. Same "global helper, per-file private state"
+    -- convention as Config/IsHighCommand/NotifyPlayer above.
+    "K9Compat",
     "HasK9Role", "GetAssignedK9Model", "ApplyK9PedRole",
     "ApplyK9AppearanceOnGrant", "MaybeRevertK9Appearance",
+    -- ForceRevertK9Appearance -- PENDING, and listed here deliberately
+    -- rather than left to redden lint for everyone: server/tablet.lua
+    -- already calls it (lines 250/967/971) so high command can strip
+    -- someone's K9 ped and put them back to a human from the tablet, but
+    -- server/appearance.lua has not defined it yet. The call site guards
+    -- with `type(fn) == 'function'` and fails closed, so today it is a
+    -- clean no-op rather than an error. REMOVE THIS ENTRY if the function
+    -- is ever abandoned -- an allowlisted name that nothing defines is how
+    -- a missing function stops being visible, which is the failure class
+    -- this project keeps finding.
+    "ForceRevertK9Appearance",
     -- server/main.lua
     "ForceDetachLeashForSource", "ForceDetachOfficerLeashForSource",
     -- client/main.lua

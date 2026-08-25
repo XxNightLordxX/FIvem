@@ -2313,8 +2313,11 @@ Config.K9EquipmentShop = {
     currencyItem = 'money',
 
     -- Where the walk-up point goes. PLACEHOLDER -- see the note above.
+    -- Plain x/y/z tables, exactly like Config.TrainingZones above, so this
+    -- file stays readable as data and loadable outside the game. The game
+    -- side turns these into real coordinates where they are used.
     locations = {
-        vector3(452.1, -980.1, 30.7),
+        { x = 452.1, y = -980.1, z = 30.7 },
     },
 
     -- Prices are in whatever `currencyItem` is. Tune freely; these are

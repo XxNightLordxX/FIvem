@@ -46,6 +46,22 @@ shared_scripts {
     '@ox_lib/init.lua',
     '@qbx_core/modules/lib.lua',
     'config.lua',
+    -- RESOURCE AUTO-DETECTION (Config.Compat). shared_scripts, not
+    -- client_scripts/server_scripts, because every one of these files runs
+    -- on BOTH Lua VMs from the same source: core.lua works out its own
+    -- realm via IsDuplicityVersion() and hands 'client' or 'server' to each
+    -- adapter's factory, so one registration serves both sides.
+    -- HARD ORDER: core.lua before all five adapters -- they call
+    -- K9Compat.RegisterAdapter at their own file-load time, so core being
+    -- later is a nil-index at start, not a degraded feature. core.lua after
+    -- config.lua, since it reads Config.Compat. Order AMONG the five
+    -- adapters does not matter.
+    'shared/compat/core.lua',
+    'shared/compat/inventory.lua',
+    'shared/compat/target.lua',
+    'shared/compat/framework.lua',
+    'shared/compat/dispatch.lua',
+    'shared/compat/ambulance.lua',
 }
 
 -- Phase 4: first NUI surface this resource has ever had (the passive
@@ -113,6 +129,7 @@ files {
 client_scripts {
     '@qbx_core/modules/playerdata.lua',
     'client/main.lua',
+    'client/appearance.lua', -- K9 role client half (IsK9Role/IsK9RoleForPlayer). Loaded after client/main.lua because CanShowK9UI() consults IsK9Role() -- resolution is at CALL time, so this is convention rather than a hard requirement, but keep the order.
     'client/movement.lua',
     'client/agility.lua', -- AgilityAdvanced (fence/window vault), extracted from client/movement.lua. Self-contained: no shared local state with its old home, and nothing else in the resource read its locals. No load-order dependency -- calls CanShowK9UI()/IsOwnModelK9() at call time only.
     'client/radial.lua',
@@ -207,6 +224,18 @@ server_scripts {
     -- the per-person feature grants and blocks, which share that table keyed
     -- feature.<Name> and block.<Name> so they inherit its audit trail and
     -- its one-active-row-per-key guarantee for free.
+    -- K9 ROLE / PED ASSIGNMENT. This is what makes "everything works with
+    -- any ped" true: the K9 role is a stored assignment, not a model
+    -- lookup, so a role-holder on a custom streamed ped, a ped absent from
+    -- Config.Peds, or a plain human model still gets K9 features. Exposes
+    -- HasK9Role/GetAssignedK9Model/ApplyK9PedRole/ApplyK9AppearanceOnGrant/
+    -- MaybeRevertK9Appearance.
+    -- HARD load-order requirement on server/cooldowns.lua: NewCooldown is
+    -- called at this file's own file-load time (line 156), not lazily.
+    -- Placed before server/permissions.lua because that file calls two of
+    -- these functions -- through a type(fn) == 'function' guard, so it is a
+    -- soft dependency, but there is no reason to make the guard do that job.
+    'server/appearance.lua',
     'server/permissions.lua',
     'server/main.lua',
     'server/certifications.lua',
