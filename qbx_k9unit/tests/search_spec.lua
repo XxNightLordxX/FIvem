@@ -127,6 +127,199 @@ t.test('GetContrabandAlertTier: a negative totalWeight (defensive input) still r
     t.equals(tier.alert, 'clean')
 end)
 
+-- ----------------------------------------------------------------------
+-- HandleSearchTarget / searchTarget callback -- full end-to-end drive,
+-- ContrabandXpMintCooldown gate (coder-backend, XP-farm-audit pass).
+--
+-- Everything above this point only ever exercised the pure
+-- GetContrabandAlertTier seam. This section additionally stubs every
+-- native/export HandleSearchTarget's own VEHICLE branch touches
+-- (ResolveNetworkEntity's own natives via server/entities.lua, already
+-- loaded above; GetVehicleNumberPlateText; GetPlayerPed/GetEntityCoords,
+-- backed by a minimal vector3-with-metatables so `#(a - b)` behaves exactly
+-- like the real FXServer vector3 type for the purposes of the proximity
+-- check; exports.ox_inventory.GetInventoryItems; exports.qbx_core.GetPlayer;
+-- MySQL.insert; TriggerEvent/TriggerClientEvent; AwardXP) so the REAL
+-- 'qbx_k9unit:server:searchTarget' callback captured above can be invoked
+-- end-to-end, never a re-implementation of its logic. Only the 'vehicle'
+-- targetType is driven (the 'person' branch's extra
+-- ResolveConnectedPlayerFromPed step is orthogonal to the XP-mint gate this
+-- section tests and adds no coverage value here).
+-- ----------------------------------------------------------------------
+
+local function vec3(x, y, z)
+    local v = { x = x, y = y, z = z }
+    return setmetatable(v, {
+        __sub = function(a, b) return vec3(a.x - b.x, a.y - b.y, a.z - b.z) end,
+        __len = function(self) return math.sqrt(self.x * self.x + self.y * self.y + self.z * self.z) end,
+    })
+end
+local ZERO_VEC = vec3(0, 0, 0)
+
+local awardCalls = {}
+local mysqlInsertCount = 0
+local triggerEventCount = 0
+local triggerClientEventCount = 0
+local currentItemsByInvId = {}
+
+env.HasK9Access = function() return true end
+env.NetworkGetEntityFromNetworkId = function(netId) return netId end -- identity mapping: this section's fake "entity handle" IS the netId
+env.DoesEntityExist = function(entity) return entity ~= 0 end
+env.GetEntityType = function(_entity) return 2 end -- every entity in this section is a vehicle
+env.GetVehicleNumberPlateText = function(entity) return 'PLATE' .. tostring(entity) end
+env.GetPlayerPed = function(_source) return 42 end -- fixed nonzero ped handle for every source; irrelevant to the proximity math below since GetEntityCoords is constant for every handle
+env.GetEntityCoords = function(_entity) return ZERO_VEC end -- every entity (requester ped AND searched vehicle) reports the same coords -- proximity distance is always 0, well under any maxDistance/alertBroadcastRadius configured below
+env.GetPlayers = function() return { '501' } end -- one fixed bystander id for BroadcastContrabandAlert's own loop, resolved via the same fixed GetPlayerPed stub above
+env.TriggerEvent = function(_eventName, ...) triggerEventCount = triggerEventCount + 1 end -- FireOutboundEvent's outbound 'qbx_k9unit:events:searchCompleted'
+env.TriggerClientEvent = function(eventName, _playerId, ...)
+    if eventName == 'qbx_k9unit:client:playContrabandAlert' then
+        triggerClientEventCount = triggerClientEventCount + 1
+    end
+end
+env.MySQL = { insert = function(...) mysqlInsertCount = mysqlInsertCount + 1 end }
+env.AwardXP = function(citizenid, actionKey) awardCalls[#awardCalls + 1] = { citizenid = citizenid, actionKey = actionKey } end
+
+local exportsStub = env.exports
+exportsStub.ox_inventory.GetInventoryItems = function(_self, invOrId)
+    local invId = type(invOrId) == 'table' and invOrId.id or invOrId
+    return currentItemsByInvId[invId] or {}
+end
+exportsStub.qbx_core = {
+    GetPlayer = function(_self, source)
+        return { PlayerData = { citizenid = 'CITIZEN' .. tostring(source), job = { name = 'police' } } }
+    end,
+}
+
+-- Config for this section only -- overrides/extends the shared Config table
+-- above. Values chosen to make TargetSearchCooldown/SearchCooldown (both
+-- 10ms) trivially clearable by advancing `fakeNow` a little, so the ONLY
+-- meaningful throttle left in play across this section's test timeline is
+-- CONTRABAND_XP_MINT_COOLDOWN_MS (60000ms, a server/search.lua file-local
+-- constant, never read from Config -- see that constant's own declaration
+-- comment for why).
+Config.Features.SearchZones = true
+Config.Features.XPProgression = true
+Config.Features.ContrabandAlerts = true -- so this section can also assert the alert broadcast keeps firing independently of the XP-mint gate below
+Config.SearchZones.sniffAnimDurationMs = 10
+Config.SearchZones.searchCooldownMs = 10 -- overrides the 5000 set above -- this section's own per-target cooldown, not the XP mint gate
+Config.SearchZones.vehicleSearchDistance = 100.0
+Config.SearchZones.personSearchDistance = 100.0
+Config.XP = { awards = { searchContrabandFound = 25 } }
+
+local searchTargetCallback = registeredCallbacks['qbx_k9unit:server:searchTarget']
+
+--- Drives one full 'vehicle' searchTarget call. `netId` doubles as this
+--- section's fake resolved entity handle (see NetworkGetEntityFromNetworkId
+--- stub above) and feeds GetVehicleNumberPlateText's stub, so each distinct
+--- netId is a distinct, independently-cooldown-tracked vehicle identity.
+--- @param source number
+--- @param netId number
+--- @param weight number -- 0/nil = an empty trunk (contrabandFound = false); > 0 = one 'weed_baggy' slot of exactly this weight
+--- @return table result -- the real HandleSearchTarget return value
+local function searchVehicle(source, netId, weight)
+    local invId = 'trunkPLATE' .. tostring(netId)
+    if weight and weight > 0 then
+        currentItemsByInvId[invId] = { { name = 'weed_baggy', weight = weight, slot = 1 } }
+    else
+        currentItemsByInvId[invId] = {}
+    end
+    return searchTargetCallback(source, 'vehicle', netId)
+end
+
+t.test('a fresh target always pays on its first find, and the search/audit/alert side effects all fire', function()
+    fakeNow = 0
+    local mysqlBefore, triggerBefore, alertBefore = mysqlInsertCount, triggerEventCount, triggerClientEventCount
+    local result = searchVehicle(501, 1001, 10)
+    t.isTrue(result.ok, 'a valid, in-range, first-ever search of this target must succeed')
+    t.isTrue(result.contrabandFound)
+    t.equals(result.totalWeight, 10, 'the requester must see the real, current weight')
+    t.equals(#awardCalls, 1)
+    t.equals(awardCalls[1].actionKey, 'searchContrabandFound')
+    t.equals(mysqlInsertCount, mysqlBefore + 1, 'k9_search_log audit row must be written')
+    t.equals(triggerEventCount, triggerBefore + 1, 'the qbx_k9unit:events:searchCompleted outbound event must fire')
+    t.equals(triggerClientEventCount, alertBefore + 1, 'the contraband alert broadcast must fire for a non-clean tier')
+end)
+
+t.test('CONSTRAINT CHECK: toggling the weight while the mint cooldown is still active still returns a fully normal search/alert/audit -- only the XP mint is withheld', function()
+    fakeNow = 1000 -- clears the 10ms sniff/target cooldowns; nowhere near the 60000ms mint cooldown armed at fakeNow=0 by the previous test
+    local mysqlBefore, triggerBefore, alertBefore, awardsBefore = mysqlInsertCount, triggerEventCount, triggerClientEventCount, #awardCalls
+    local result = searchVehicle(501, 1001, 20) -- toggled: weight changed 10 -> 20, exactly the solo-farm exploit shape this gate closes
+    t.isTrue(result.ok, 'search itself must keep succeeding while the XP mint is on cooldown')
+    t.isTrue(result.contrabandFound, 'contraband must still be reported to the requester')
+    t.equals(result.totalWeight, 20, 'the requester must still see the real, current (changed) weight -- never withheld alongside the XP')
+    t.equals(#awardCalls, awardsBefore, 'no additional AwardXP call: the per-searcher mint cooldown blocks a second real weight-changed find inside its window')
+    t.equals(mysqlInsertCount, mysqlBefore + 1, 'the k9_search_log audit row must still be written for this attempt even though XP was withheld')
+    t.equals(triggerEventCount, triggerBefore + 1, 'the outbound searchCompleted event must still fire')
+    t.equals(triggerClientEventCount, alertBefore + 1, 'the contraband alert broadcast must still fire -- this gate must never touch it')
+end)
+
+t.test('past the mint cooldown window, the still-differing weight now pays -- the earlier skipped attempt was never silently treated as paid', function()
+    fakeNow = 61000 -- 61s after the FIRST award at fakeNow=0, past CONTRABAND_XP_MINT_COOLDOWN_MS (60000ms)
+    local awardsBefore = #awardCalls
+    local result = searchVehicle(501, 1001, 20) -- same weight as the BLOCKED attempt above (20), but still differs from the last PAID weight (10)
+    t.isTrue(result.ok)
+    t.equals(result.totalWeight, 20)
+    t.equals(#awardCalls, awardsBefore + 1, 'ContrabandXpState was correctly left unupdated by the skipped attempt, so this still reads as "changed since last PAID weight" and pays once the mint cooldown allows')
+end)
+
+t.test('immediately toggling again right after that payout is blocked by the freshly re-armed mint cooldown', function()
+    fakeNow = 61010
+    local awardsBefore = #awardCalls
+    local result = searchVehicle(501, 1001, 30)
+    t.isTrue(result.ok)
+    t.equals(result.totalWeight, 30)
+    t.equals(#awardCalls, awardsBefore, 'freshly re-armed at fakeNow=61000 by the previous payout; another payout this soon must be blocked again')
+end)
+
+t.test('an unchanged-weight repeat never spends the mint budget: a later real change still pays at exactly the ORIGINAL cooldown expiry, not a later one', function()
+    fakeNow = 0
+    local netId = 2002
+    local awardsBefore = #awardCalls
+    local first = searchVehicle(502, netId, 5)
+    t.isTrue(first.ok)
+    t.equals(#awardCalls, awardsBefore + 1, 'first-ever find on this fresh target pays')
+
+    -- Three unchanged-weight re-searches at various points inside the mint
+    -- cooldown window the award above just opened. None of these should pay
+    -- (weight never changed since the last PAID weight) -- and, if the
+    -- ordering in server/search.lua's AwardXP block is correct (weight-
+    -- changed check BEFORE ContrabandXpMintCooldown.Consume), none of them
+    -- should re-arm/extend that cooldown either.
+    fakeNow = 50
+    searchVehicle(502, netId, 5)
+    fakeNow = 100
+    searchVehicle(502, netId, 5)
+    fakeNow = 59000
+    searchVehicle(502, netId, 5)
+    t.equals(#awardCalls, awardsBefore + 1, 'no unchanged-weight repeat may ever pay')
+
+    -- Exactly one tick past the ORIGINAL mint cooldown (armed at fakeNow=0,
+    -- +60000ms), a real weight change arrives. If any of the three no-op
+    -- searches above had incorrectly re-touched the mint cooldown, this
+    -- would still read as blocked (not expiring until 59000+60000=119000).
+    -- It must instead have expired at exactly fakeNow=60000.
+    fakeNow = 60001
+    local changed = searchVehicle(502, netId, 15)
+    t.isTrue(changed.ok)
+    t.equals(changed.totalWeight, 15)
+    t.equals(#awardCalls, awardsBefore + 2,
+        'a real weight change must pay exactly when the cooldown opened by the FIRST award expires -- proves the unchanged-weight repeats above never extended it')
+end)
+
+t.test("the mint cooldown is keyed by the SEARCHER, not the target: a second, different officer is never blocked by the first officer's own budget", function()
+    fakeNow = 0
+    local netId = 5005
+    local awardsBefore = #awardCalls
+    local resultA = searchVehicle(701, netId, 8) -- officer 701's first paid find on this fresh target
+    t.isTrue(resultA.ok)
+    t.equals(#awardCalls, awardsBefore + 1)
+
+    fakeNow = 20 -- clears the 10ms target/sniff cooldowns; nowhere near officer 701's own 60000ms mint cooldown
+    local resultB = searchVehicle(702, netId, 9) -- a DIFFERENT officer, weight genuinely changed since the last PAID weight (8 -> 9)
+    t.isTrue(resultB.ok)
+    t.equals(#awardCalls, awardsBefore + 2, "a second, different officer must not be blocked by the first officer's own per-searcher mint cooldown")
+end)
+
 t.test('GetContrabandAlertTier: never leaks a mutable reference that corrupts Config.ContrabandAlertTiers on write', function()
     -- Unlike server/progression.lua's AwardXP (which defensively copies the
     -- outbound event payload via CopyTier), this wrapper returns the SAME

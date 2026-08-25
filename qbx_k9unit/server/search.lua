@@ -166,6 +166,18 @@
       deliberately NOT a server/cooldowns.lua tracker instance despite the
       "always use NewCooldown" convention every OTHER piece of file-local
       state in this file follows.
+    - FIFTH XP-FARM FIX (coder-backend, this pass — solo weight-toggle farm
+      closure): THIS FILE also owns `ContrabandXpMintCooldown` below — a
+      real server/cooldowns.lua NewCooldown() instance this time (unlike
+      ContrabandXpState just above), ported from server/tracking.lua's own
+      `TrackTicketMintCooldown`. A flat, per-SEARCHER cooldown on the XP
+      MINT itself, required IN ADDITION TO (never instead of)
+      ContrabandXpState's own weight-changed check, before AwardXP is ever
+      called. See that tracker's own declaration comment, right after
+      ContrabandXpState, and the CORRECTION note on ContrabandXpState's own
+      declaration comment, for the exact farm this closes and why
+      TargetSearchCooldown's per-target-only, no-searcher-dimension shape
+      could never have closed it alone.
     ======================================================================
 ]]
 
@@ -472,6 +484,45 @@ end)
 -- touches their own planted stash cannot re-earn from it no matter how many
 -- stashes they rotate across or how tight the request cadence is.
 --
+-- CORRECTION (economy-audit finding, this pass — the paragraph above
+-- overstated what a weight-changed check alone can guarantee): "no matter
+-- how tight the request cadence is" was never true for a farmer who DOES
+-- touch their own stash — a profile the paragraph's own final clause
+-- ("a farmer who never actually touches...") already implicitly excluded,
+-- but the surrounding sentence reads as a blanket cadence-proof guarantee
+-- and was fed into a review brief as exactly that. A farmer who moves one
+-- contraband item in or out of their own controlled vehicle trunk/stash
+-- BETWEEN searches changes totalWeight on every single cycle, satisfying
+-- `contrabandChangedSinceLastAward` below every time — and
+-- TargetSearchCooldown above (Config.SearchZones.searchCooldownMs, 10s
+-- shipped) is the ONLY other throttle in play, is keyed purely on the
+-- resolved TARGET identity with no searcher dimension at all (shared
+-- across every source, per this file's header CORRECTION note on that
+-- table), and was never an XP throttle to begin with (see this table's own
+-- opening paragraph above). Net effect: a single officer, alone, toggling
+-- one item roughly every 10 seconds, cleared a fresh "changed since last
+-- paid weight" reading on every search — Config.XP.awards.searchContrabandFound
+-- (25 shipped) about six times a minute, ~9,000 XP/hr, roughly 7.5x
+-- server/tracking.lua's own correctly-capped trackSourceResolved ceiling
+-- (its TrackTicketMintCooldown, 30s @ 10 XP = 1,200 XP/hr) — solo, with no
+-- collusion and no risk, at any cadence the officer cared to use.
+--
+-- FIFTH XP-FARM FIX (coder-backend, this pass): closed by
+-- `ContrabandXpMintCooldown` below, ported from tracking.lua's own
+-- TrackTicketMintCooldown shape — a flat, per-SEARCHER cooldown on the MINT
+-- itself, required IN ADDITION TO (never instead of) this table's own
+-- weight-changed check, gating only the AwardXP call inside
+-- HandleSearchTarget's award block below (search success, the contraband
+-- alert, ContrabandScreenFX, and the k9_search_log audit row are all
+-- computed/fired earlier in that function and are entirely unaffected by
+-- this cooldown). The NOW-ACCURATE claim, restated: a farmer cannot re-earn
+-- from a given target faster than once per
+-- CONTRABAND_XP_MINT_COOLDOWN_MS-worth of real time has passed for THAT
+-- SEARCHER, regardless of how many stashes they rotate across, how tight
+-- the request cadence is, or whether they touch the stash at all — see
+-- ContrabandXpMintCooldown's own declaration comment, right after this
+-- table, for the full mechanism.
+--
 -- Deliberately a plain per-target `{ weight, awardedAt }` cache, NOT a
 -- NewCooldown/NewNestedCooldown instance from server/cooldowns.lua — this
 -- is not a "has enough time elapsed" check, it's a "did the underlying fact
@@ -520,6 +571,63 @@ end)
 -- by how many DIFFERENT real targets have ever been caught with contraband
 -- on this server, not by how many times any of them is re-checked.
 local ContrabandXpState = {} -- [cooldownKey] = { weight = number, awardedAt = <GetGameTimer() ms> } — permanent for this resource's uptime, see comment above for why it must never be time-evicted
+
+-- FIFTH XP-FARM FIX (coder-backend, this pass) — see the CORRECTION note on
+-- ContrabandXpState's own declaration comment immediately above for the
+-- full exploit writeup this closes. Ported from server/tracking.lua's
+-- TrackTicketMintCooldown (see that file's own declaration comment for the
+-- near-identical-shape economy-audit finding this mirrors): a flat,
+-- per-SEARCHER (never per-target — that dimension is exactly what
+-- TargetSearchCooldown above already covers, and exactly the dimension a
+-- self-toggling or colluding searcher does not need to vary at all) cooldown
+-- on ticket-MINTING itself, independent of how cheaply a fresh
+-- weight-changed reading can be produced. Unlike ContrabandXpState above,
+-- this really IS a flat "has enough time elapsed" check (not a "did the
+-- underlying fact change" cache), so it gets the standard NewCooldown()
+-- constructor like every other timing tracker in this file, rather than
+-- ContrabandXpState's bespoke shape.
+--
+-- CONSUMED, not just checked, at the exact point a real award is about to
+-- happen (see the call site inside HandleSearchTarget's AwardXP block
+-- below) — deliberately ordered AFTER `contrabandChangedSinceLastAward` is
+-- known to be true, mirroring TrackTicketMintCooldown's own "ordered after
+-- not nearestEntry.ticketIssued" placement for the identical reason: a
+-- re-search that finds the SAME unchanged weight was never going to pay
+-- anything regardless, so it must never spend this per-searcher budget for
+-- nothing. When a weight-changed search arrives while this budget is still
+-- spent, it is NOT queued or retried — it simply doesn't pay THIS time, and
+-- ContrabandXpState above is deliberately left UNUPDATED for that skipped
+-- award (the write into ContrabandXpState and the AwardXP call share one
+-- `if` condition at that call site) — so the next weight-changed search,
+-- however much later, still correctly reads as "changed since the last PAID
+-- weight" and pays once this cooldown allows, rather than the skipped
+-- attempt being silently treated as though it had already been paid.
+--
+-- CONTRABAND_XP_MINT_COOLDOWN_MS is a LOCAL implementation constant, not a
+-- Config.* field — same "internal defensive bound, not a server-owner
+-- tuning knob" posture MAX_CONTAINER_RECURSION_DEPTH above already
+-- establishes for this file, and the exact choice tracking.lua's own
+-- TRACK_TICKET_MINT_COOLDOWN_MS makes for the identical reasoning: this is
+-- an anti-farm floor on the economy, not a legitimate per-server tuning
+-- preference the way e.g. searchCooldownMs's UX-harassment threshold is. An
+-- operator being able to self-service this back down to an unsafe value (or
+-- to 0, which server/cooldowns.lua's own NewCooldown documents as "fails
+-- CLOSED, not disabled" — never a safe operator escape hatch) would reopen
+-- exactly the farm this constant exists to close, with no assertion able to
+-- catch a merely-too-low-but-still-positive value the way
+-- AssertValidDefaultThreshold catches a non-positive one. Sized at 60000
+-- (60s) per this pass's own balance recommendation: at
+-- Config.XP.awards.searchContrabandFound's shipped value of 25, this caps
+-- the award at 1,500 XP/hr per searcher — the same order of magnitude as
+-- server/tracking.lua's own trackSourceResolved ceiling (TrackTicketMintCooldown
+-- @ 30s / 10 XP = 1,200 XP/hr), with headroom justified by contraband
+-- search requiring genuine live proximity to a real target and a real
+-- ox_inventory read on every single attempt (never true of a pure
+-- resolve-then-arrive reveal), while landing nowhere close to the ~9,000
+-- XP/hr this closes.
+local ContrabandXpMintCooldown = NewCooldown()
+ContrabandXpMintCooldown.RegisterPlayerDropped()
+local CONTRABAND_XP_MINT_COOLDOWN_MS = 60000
 
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a local
 -- function (see its own extensive "DELIBERATE IMPLEMENTATION CHOICE" doc
@@ -1010,7 +1118,29 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
         -- anything client-supplied.
         local priorAwardState = ContrabandXpState[cooldownKey]
         local contrabandChangedSinceLastAward = not priorAwardState or priorAwardState.weight ~= totalWeight
-        if contrabandChangedSinceLastAward then
+
+        -- FIFTH XP-FARM FIX (coder-backend, this pass) — see
+        -- ContrabandXpMintCooldown's own declaration comment above for the
+        -- full writeup this closes. Checked, and (iff BOTH conditions hold)
+        -- CONSUMED, only once `contrabandChangedSinceLastAward` is already
+        -- known true — an unchanged-weight re-search was never going to pay
+        -- anything and must never spend this per-searcher budget for
+        -- nothing, the same ordering discipline server/tracking.lua's own
+        -- TrackTicketMintCooldown.Consume call site already establishes for
+        -- the identical reason. REQUIRED IN ADDITION TO, never instead of,
+        -- the weight-changed check above — this closes the "toggle one item
+        -- in/out between searches" solo farm ContrabandXpState's own
+        -- CORRECTION note now documents, without weakening that table's
+        -- pre-existing "the same unchanged stash pays nothing, ever, however
+        -- many times re-searched" guarantee. Gates ONLY this AwardXP call —
+        -- search success/contrabandFound/totalWeight/alertTier (already
+        -- computed and returned to the caller regardless), the contraband
+        -- alert broadcast, ContrabandScreenFX, and the k9_search_log audit
+        -- row (LogSearchAttempt, already called above) are entirely
+        -- unaffected by this cooldown: an officer whose mint budget is spent
+        -- still gets a fully normal search, just no XP for this one.
+        if contrabandChangedSinceLastAward
+            and ContrabandXpMintCooldown.Consume(source, CONTRABAND_XP_MINT_COOLDOWN_MS, GetGameTimer()) then
             ContrabandXpState[cooldownKey] = { weight = totalWeight, awardedAt = GetGameTimer() }
             local searcherPlayer = exports.qbx_core:GetPlayer(source)
             local searcherCitizenid = searcherPlayer and searcherPlayer.PlayerData and searcherPlayer.PlayerData.citizenid
