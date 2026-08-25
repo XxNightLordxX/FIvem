@@ -261,10 +261,28 @@ Config.XPTiers = {
     -- Base tier is 1.00 = no bonus, so a base-tier K9's range is byte-identical
     -- to today's behaviour. Only a value > 1.0 does anything.
     -- Pure balance placeholders -- tune freely.
+    -- RETUNED 2026-08-25 from 500/1500/3500, on measured extraction rates
+    -- rather than feel. The old top tier was reachable in about 49 minutes
+    -- of nonstop optimal play once the combat awards ship, and in roughly
+    -- 2.3 hours using only what is closest to shippable today -- an
+    -- evening, not the weeks of K9 duty the progression is meant to
+    -- represent.
+    --
+    -- New thresholds keep the old proportions (14% / 44% / 100% of top).
+    -- At a realistic legitimate rate of ~500 XP/hr, Elite takes about 18
+    -- hours total, or roughly 2 to 2.5 weeks at an hour or so a day. At the
+    -- worst-case farmable ceiling of 4320 XP/hr -- both combat awards
+    -- enabled, two NPC targets, perfect cooldown cycling, no real police
+    -- work -- Elite still costs over 2 hours of deliberate grinding rather
+    -- than happening by accident.
+    --
+    -- Deliberately NOT the order-of-magnitude raise floated earlier. That
+    -- figure was anchored to the ~9000 XP/hr contraband farm, which is now
+    -- closed; reapplying it against the corrected ceiling would overshoot.
     { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
-    { xp = 500,  label = 'Trained K9', speedMultiplier = 1.05, scentRangeMultiplier = 1.05 },
-    { xp = 1500, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10 },
-    { xp = 3500, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20 },
+    { xp = 1250, label = 'Trained K9', speedMultiplier = 1.05, scentRangeMultiplier = 1.05 },
+    { xp = 4000, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10 },
+    { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20 },
 }
 
 -- ======================================================================
@@ -417,7 +435,17 @@ Config.SearchZones = {
     vehicleSearchDistance = 2.0,   -- ox_target zone radius for "Search Vehicle"
     personSearchDistance  = 2.0,   -- ox_target zone radius for "Search Person"
     sniffAnimDurationMs   = 4000,  -- how long the sniff interaction takes before the result is revealed
-    searchCooldownMs      = 10000, -- per-(K9, target) cooldown -- prevents repeat-search spam against the same vehicle/person to fish for a different roll or just to harass
+    -- CORRECTED: this is a per-TARGET cooldown, SHARED ACROSS EVERY
+    -- SEARCHER. It has no K9/searcher dimension at all -- see
+    -- server/search.lua's TargetSearchCooldown, which keys only on the
+    -- resolved plate or citizenid. The old comment here claimed
+    -- "per-(K9, target)", which is what made the contraband XP farm look
+    -- bounded when it was not: two officers alternating never wait, and one
+    -- officer toggling a stash they control was throttled only by this.
+    -- The XP award is now separately gated by a per-searcher mint cooldown
+    -- in server/search.lua. Contrast Config.Wellbeing.Mood.petCooldownMs,
+    -- whose "per-(interactor, target)" claim IS accurate.
+    searchCooldownMs      = 10000, -- prevents repeat-search spam against the same vehicle/person to fish for a different roll or just to harass
     alertBroadcastRadius  = 15.0,  -- max distance from the searched target's own live coordinates for a bystander to receive the ContrabandAlerts sound/reaction broadcast. Deliberately NOT a global TriggerClientEvent(-1, ...) like relayBark -- unlike a bark, this payload identifies a specific vehicle/person just flagged for contraband, so broadcasting it map-wide would leak that fact to an accomplice anywhere on the server. server/search.lua must iterate connected players and filter by this radius before sending.
 }
 
