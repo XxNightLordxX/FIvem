@@ -54,8 +54,22 @@
 
     ======================================================================
     STATE MACHINE — FetchBalls[throwerCitizenId] = {
-        netId: number?,       -- nil only during the brief 'attach'-mode
-                               -- pickup transition (see PendingFetchCarries)
+        netId: number,        -- during the brief 'attach'-mode pickup
+                               -- transition (see PendingFetchCarries) this is
+                               -- STALE: it still names the OLD, already-
+                               -- client-deleted entity until
+                               -- confirmFetchBallCarried overwrites it with
+                               -- the new mouth-attached replacement's netId.
+                               -- It is NEVER actually nil'd out for this
+                               -- window (see requestPickupFetchBall's own
+                               -- comment) — `PendingFetchCarries[carrierSrc]`
+                               -- being present is the ONLY correct way to
+                               -- test "still mid-transition, nothing real
+                               -- confirmed yet"; do not use `not ball.netId`
+                               -- as a proxy for that (a prior version of the
+                               -- playerDropped handler did exactly that and
+                               -- it was dead code — see that handler's own
+                               -- comment).
         state: 'thrown' | 'carried' | 'dropped',
         throwerSrc: number,
         carrierSrc: number?, carrierCitizenId: string?, mode: 'attach'|'fake'|nil,
@@ -500,11 +514,17 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
         -- The carrier's client deletes the old (thrown/dropped) entity and
         -- must report the freshly attached replacement's netId before this
         -- is fully confirmed. `ball.netId` is left pointing at the OLD,
-        -- about-to-be-deleted entity in the meantime — harmless: nothing
-        -- else acts on a 'carried'-state ball's netId until this resolves
-        -- (see the maintenance thread's own `ball.state ~= 'carried'`
-        -- despawn-check guard), and a stale resolve degrades to a no-op via
-        -- ResolveNetworkEntity's own existence guard if something ever does.
+        -- about-to-be-deleted entity in the meantime, and is NEVER nil'd out
+        -- for this window — the maintenance thread's own
+        -- `ball.state ~= 'carried'` despawn-check guard correctly leaves a
+        -- 'carried' ball's stale netId untouched during this window, and a
+        -- stale resolve elsewhere degrades to a no-op via
+        -- ResolveNetworkEntity's own existence guard. The one place that DID
+        -- need to distinguish "confirmed" from "still transitioning" here —
+        -- the playerDropped disconnect handler below — must test
+        -- `PendingFetchCarries[src]`, not netId nilness, for exactly that
+        -- reason (see this file's header STATE MACHINE note and that
+        -- handler's own comment).
         PendingFetchCarries[src] = {
             throwerCitizenId = ownerCitizenId,
             expiresAt = GetGameTimer() + Config.FetchMechanic.pendingThrowTtlMs,
@@ -818,14 +838,33 @@ AddEventHandler('playerDropped', function(_reason)
     -- behind, and only the now-disconnecting client could ever recreate it)
     -- — see EndFetchCycle's own carrier-loss framing for the identical
     -- reasoning applied to a death report instead of a disconnect.
+    --
+    -- TWO-PHASE 'attach' TRANSITION FIX (audit finding): the discriminator
+    -- for "was this attach-mode pickup ever actually confirmed" must be
+    -- `PendingFetchCarries[src]` (captured BELOW before it's cleared), never
+    -- `not ball.netId` — `ball.netId` is NEVER nil'd during that transition
+    -- (see this file's header STATE MACHINE note), so a prior `not
+    -- ball.netId` check here was dead code that always took the "degrade to
+    -- dropped" branch, even for a carrier that disconnects mid-transition
+    -- (old entity already client-deleted, new mouth-attached entity maybe
+    -- never even created, confirm never sent). Left uncorrected, that stale
+    -- STILL-'attach'-mode ball would sit in the registry as 'dropped'
+    -- pointing at an already-deleted netId — masked in practice only by the
+    -- maintenance thread's own despawn re-check (ResolveNetworkEntity
+    -- failing on that stale id) picking it up on its next sweep, which is a
+    -- coincidental backstop, not correct-by-construction — so this is fixed
+    -- at the source instead, exactly like cancelFetchCarryAttach's own
+    -- "nothing tangible survives this failure" reasoning for the identical
+    -- unconfirmed-transition case.
     local ownerCitizenId = CarrierIndex[src]
     if ownerCitizenId then
         CarrierIndex[src] = nil
+        local wasPendingCarryAttach = PendingFetchCarries[src] ~= nil
         PendingFetchCarries[src] = nil
         PendingFetchDrops[src] = nil
         local ball = FetchBalls[ownerCitizenId]
         if ball and ball.carrierSrc == src then
-            if ball.mode == 'fake' or not ball.netId then
+            if ball.mode == 'fake' or wasPendingCarryAttach then
                 EndFetchCycle(ownerCitizenId, ball)
             else
                 ball.state = 'dropped'
