@@ -11,6 +11,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Documentation accuracy pass — 2026-08-25 (later this session).** No code
+changed. This pass corrected several places where the docs had drifted
+behind concurrent code/config changes, verified directly against
+`config.lua`/`fxmanifest.lua`/the actual `.lua` files rather than against
+other docs:
+
+- **`/k9bonetool` is no longer described as ACE-gated anywhere** (README.md,
+  OPERATOR_RUNBOOK.md, PROJECT_STATUS.md, PLAYER_GUIDE.md). It's now gated
+  on being a department boss plus a separate opt-in convar,
+  `setr qbx_k9unit_enable_bone_dev_tool 1` — `config.lua`'s own
+  `Config.BoneSweepTool` comment already said so; the docs hadn't caught up.
+  `fxmanifest.lua`'s own `server/admin.lua` load-order comment still says
+  "ACE-gated" and needs the same correction by whoever owns that file.
+- **Bark/ambient audio is documented as shipped, not as a licensing
+  decision still pending.** All five `.ogg` files (`bark`, `bark_alert`,
+  `bark_aggressive`, `bark_calm`, `growl_ambient`) exist under
+  `html/sounds/`, are listed in `fxmanifest.lua`, and are credited in
+  `html/sounds/CREDITS.md`. README.md, OPERATOR_RUNBOOK.md,
+  PROJECT_STATUS.md, and PLAYER_GUIDE.md previously told the reader to go
+  source or license this audio themselves; that's no longer true.
+- **`GetXPTier`/`GetCurrentXPTier`'s documented return shape corrected**
+  from `scentRange` to `scentRangeMultiplier` (README.md) — the field was
+  simply misnamed in the docs; `Config.XPTiers` has always used
+  `scentRangeMultiplier`.
+- **Locale migration status corrected** in README.md (was still claiming
+  "3 of ~48 files migrated"; the migration finished a while ago — 311 keys,
+  0 missing, 0 unused, all 47 files checked) and the key-count refreshed in
+  `locales/README.md` (306 -> 311).
+- **`PD High Command` documented as config-only, not a working feature**
+  (README.md, PROJECT_STATUS.md, OPERATOR_RUNBOOK.md): `Config.Features.HighCommand`
+  and `Config.HighCommand` exist in `config.lua` and the flag is `true`,
+  but `server/highcommand.lua` does not exist yet and isn't loaded by
+  `fxmanifest.lua`, so `/k9givexp` isn't a real command today.
+- **`DECISIONS_NEEDED.md`/`COMPLEMENTARY_FEATURES.md`/`REFACTOR_ROADMAP_2.md`/
+  `AUDIO_SOURCING.md`, the four redirect stubs the original consolidation
+  pass couldn't delete itself, are confirmed gone from the working tree** as
+  of this pass (not deleted by this pass — already removed by whoever had
+  shell access in between). `DOCS_INDEX.md` updated to stop describing them
+  as stubs still waiting on someone to remove them.
+- **`phase2_notes/` (now 24 files, up from 14) re-examined file-by-file**
+  rather than re-inheriting the earlier "nothing to merge" verdict: every
+  file was checked for a real citation from either a live `.lua` comment or
+  one of the phase spec documents. All 24 are cited by at least one of
+  those; none were deleted. One (`native_verification_pass.md`) has no
+  citation anywhere and got a short status banner instead, since one of its
+  findings (a correction to `server/combat.lua`'s "no `apiset` entry means
+  client-only" reasoning) hasn't been folded into that file's header yet.
+
 **All 40 `Config.Features` flags switched to `true`, at the operator's
 request — 2026-08-25.** This is a config-only change (`config.lua`), not a
 code change — every flag named below was already fully implemented and
