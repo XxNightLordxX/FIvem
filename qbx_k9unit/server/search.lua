@@ -178,6 +178,16 @@
       declaration comment, for the exact farm this closes and why
       TargetSearchCooldown's per-target-only, no-searcher-dimension shape
       could never have closed it alone.
+    - COOPERATIVE SEARCH BONUS (coder-backend, this pass, FEATURE_IDEAS.md
+      Part B §10): THIS FILE also owns `CoopSearchXpMintCooldown` (see its
+      own declaration comment, right after the EIGHTH-XP-FARM-FIX
+      cross-file pointer above, for the full spec/arithmetic) and calls two
+      MORE resource-globals via `type(...) == 'function'` runtime existence
+      guards, same soft-dependency convention as AwardXP/GetXPTier already
+      established above: `GetActivePartnerCitizenId(citizenid)`
+      (server/partnership.lua) and `GetXPTier(citizenid)`
+      (server/progression.lua, already a dependency of this file). No new
+      load-order requirement either way.
     ======================================================================
 ]]
 
@@ -643,6 +653,199 @@ local CONTRABAND_XP_MINT_COOLDOWN_MS = 60000
 -- already goes through. ContrabandXpMintCooldown above is KEPT, unchanged
 -- -- it still shapes how often THIS mechanic can mint; the shared budget in
 -- server/progression.lua caps the TOTAL across mechanics.
+
+-- ==========================================================================
+-- COOPERATIVE SEARCH BONUS -- FEATURE_IDEAS.md Part B §10 (coder-backend,
+-- this pass). When a search's own AwardXP('searchContrabandFound') actually
+-- fires (i.e. already passed every existing gate below: HasK9Access,
+-- proximity, TargetSearchCooldown, the weight-changed check, and
+-- ContrabandXpMintCooldown), and the searcher currently has an ACTIVE
+-- partner (server/partnership.lua's GetActivePartnerCitizenId) who is
+-- ONLINE, PHYSICALLY PRESENT at the search scene, and TRAINED-TIER-OR-ABOVE
+-- (server/progression.lua's GetXPTier -- SAME as the searcher, see the
+-- SPEC DEFINITION below) -- award that partner a smaller bonus via a
+-- SEPARATE actionKey, through the SAME AwardXP chokepoint everything else in
+-- this file already uses. Never a new subsystem: reuses the partnership
+-- registry, the XP award path, and this file's own existing success branch,
+-- exactly as the doc's own "Needs" section describes.
+--
+-- SPEC DEFINITION, an explicit judgment call on the doc's own open question
+-- ("same search, same session, physically both present?" -- worth a short
+-- spec pass, not a design fork): "cooperative" here means ALL of --
+--   1. an ACTIVE partnership (server/partnership.lua) between the searcher
+--      and the receiving citizenid, at the moment of the find;
+--   2. the partner currently ONLINE (co-op is real-time cooperation, not "I
+--      have a partner registered somewhere");
+--   3. the partner's live ped within COOP_SEARCH_PARTNER_PROXIMITY_METERS of
+--      the SEARCHED TARGET's own live coords (contract_search's own
+--      `targetCoords`, already resolved and validated by the time this
+--      runs) -- "physically both present at the scene," not "anywhere on
+--      the map";
+--   4. BOTH the searcher and the partner at Trained tier or above
+--      (Config.XPTiers[1].xp == 0 is the mandatory base-tier baseline per
+--      server/progression.lua's own onResourceStart guard, so `tier.xp > 0`
+--      correctly means "at or above the second tier" without hardcoding a
+--      label or index) -- this pass's own Part B §8 Trained-tier unlock
+--      (server/progression.lua's own "XP TIER UNLOCKS" section), reserving
+--      cooperative work for K9 teams who have each independently earned
+--      past the base tier, not brand-new accounts.
+-- Deliberately NOT extended to server/tracking.lua's own award (out of
+-- scope for this pass's ownership and for the doc's own narrower "Needs"
+-- text, which names server/search.lua specifically) -- no edit needed
+-- there.
+--
+-- WHY THIS CANNOT BECOME A NEW, EASIER-TO-HIDE FARM (this task's own
+-- explicit risk, restated and answered with the arithmetic it asked for):
+--
+--   UNCAPPED TAP RATE, if this bonus existed OUTSIDE the shared budget:
+--     Config.XP.awards.coopSearchBonus (10 XP, reported to config.lua's
+--     owner -- see this pass's own report) is paid at most once per
+--     CoopSearchXpMintCooldown's own 60,000ms window, PER RECEIVING
+--     PARTNER (keyed by the partner's own citizenid, independent of which
+--     partner is doing the searching) -- an uncapped ceiling of
+--     3,600,000ms / 60,000ms * 10 XP = 60 * 10 = 600 XP/hr for ONE partner
+--     continuously receiving the bonus from ONE actively-searching partner.
+--   COMBINED WITH THE EXISTING UNCAPPED BASELINE: this project's own EIGHTH
+--     XP-FARM FIX (server/progression.lua) already established the four
+--     existing mechanics sum to 5,700 XP/hr uncapped for a single citizenid
+--     round-robining all of them. A citizenid who ALSO receives this new
+--     600 XP/hr tap (e.g. by having their partner search on their behalf
+--     while they themselves grind everything else) reaches
+--     5,700 + 600 = 6,300 XP/hr UNCAPPED -- comfortably over the existing
+--     3,600 XP/hr shared budget ceiling. Per this task's own instruction,
+--     that means it MUST be routed through the same budget, not around it.
+--   ROUTED THROUGH THE SAME BUDGET, NOT AROUND IT: the payout below is
+--     minted via AwardXP(partnerCitizenid, 'coopSearchBonus') -- the exact
+--     same, single, resource-wide chokepoint every other actionKey already
+--     goes through, with no special case. server/progression.lua's shared
+--     XP_MINT_BUDGET_CAP_XP/XP_MINT_BUDGET_WINDOW_MS token bucket is keyed
+--     PER CITIZENID, across EVERY actionKey -- it does not know or care
+--     which mechanic is asking. Its own realized-throughput property (see
+--     that file's own "Re-verified by direct simulation" note: continuous
+--     max-rate draw from FOUR competing mechanics already converges to the
+--     bucket's fixed REFILL rate, ~3,600 XP/hr, once aggregate demand
+--     exceeds that supply -- which it already did at 5,700 XP/hr, before
+--     this feature existed) means adding a FIFTH competing draw (this
+--     bonus) cannot raise that ceiling: a supply-bound resource's payout
+--     rate is set by its own refill rate, not by how many demand sources
+--     compete for it. The receiving partner's TOTAL realized XP/hr (their
+--     own actions plus every coop bonus they receive) therefore remains
+--     bounded at the SAME ~3,600 XP/hr this citizenid's bucket already
+--     enforced before this feature shipped, and the previously-verified,
+--     test-locked Elite-tier timing (~2h27m) is unaffected by this addition
+--     -- proven by direct simulation in tests/coopsearchbonus_spec.lua
+--     (extends the exact round-robin technique tests/progression_spec.lua's
+--     own EIGHTH-XP-FARM-FIX section uses, with this bonus added as a fifth
+--     competing draw against the SAME real, unmodified AwardXP), not
+--     asserted on reasoning alone.
+--   QUALITATIVE HARDENING, on top of the numeric ceiling above, specifically
+--     against "a two-player farm is harder to detect than a solo one"
+--     (this task's own stated concern -- the numeric ceiling alone answers
+--     "does it exceed the budget," not "is it as easy to run/hide as a
+--     solo farm," which needs its own answer): the physical-proximity
+--     requirement (item 3 above) means the receiving partner cannot farm
+--     remotely or AFK-adjacent -- they must be logged in, at the search
+--     scene, for as long as the searcher keeps searching, which is a
+--     REAL, sustained two-account coordination cost strictly higher than a
+--     single AFK-adjacent solo farmer's. The bonus is gated INSIDE the
+--     searcher's own `contrabandChangedSinceLastAward and
+--     ContrabandXpMintCooldown.Consume(...)` branch below (never a
+--     separate, independently-triggerable code path), so it inherits EVERY
+--     existing anti-farm property of the searcher's own leg for free: the
+--     FOURTH-XP-FARM-FIX permanent weight-changed memory (a farmer's own
+--     untouched, unchanging stash pays the partner nothing either, no
+--     matter how many times re-searched) and the FIFTH-XP-FARM-FIX
+--     per-searcher mint cooldown (the partner cannot be paid more often
+--     than the searcher's own contraband XP itself can be minted).
+-- ==========================================================================
+
+-- Per-mechanic mint cooldown for the coop bonus's own payout -- see the
+-- section header above for the full arithmetic. Keyed by the RECEIVING
+-- partner's citizenid (not the searcher's, and not a (searcher, partner)
+-- pair) -- this bounds how often ANY partner can receive this specific
+-- bonus, from ANY searching partner, matching the "flat per-actor ceiling"
+-- shape every other mint cooldown in this codebase already uses.
+--
+-- Citizenid-keyed, like TargetSearchCooldown above -- NOT
+-- :RegisterPlayerDropped() (that clears by numeric `source`, which would
+-- never match a citizenid key) -- bounded instead by its own independent
+-- TTL sweep below, same reasoning as TargetSearchCooldown's own comment.
+local CoopSearchXpMintCooldown = NewCooldown()
+local COOP_SEARCH_XP_MINT_COOLDOWN_MS = 60000
+
+CoopSearchXpMintCooldown.StartSweep(COOP_SEARCH_XP_MINT_COOLDOWN_MS, function(now, loggedAt)
+    return (now - loggedAt) > (COOP_SEARCH_XP_MINT_COOLDOWN_MS * 2)
+end)
+
+-- Anti-farm-floor implementation constant, not a Config.* field -- same
+-- "internal defensive bound, not a server-owner tuning knob" posture
+-- MAX_CONTAINER_RECURSION_DEPTH/CONTRABAND_XP_MINT_COOLDOWN_MS above already
+-- establish for this file. Generous enough to cover a real, shared search
+-- scene (a K9 working a vehicle while their handler stands a few paces
+-- back) without being large enough to reward "somewhere on the same block."
+local COOP_SEARCH_PARTNER_PROXIMITY_METERS = 15.0
+
+--- Awards `searcherCitizenid`'s current active partner (if any) a smaller
+--- bonus XP amount for a contraband find that has ALREADY, independently,
+--- earned the searcher their own XP -- see the section header above for the
+--- full "cooperative" definition and the anti-farm arithmetic. Called ONLY
+--- from inside HandleSearchTarget's own award block below, immediately
+--- after the searcher's own AwardXP('searchContrabandFound') call, itself
+--- pcall-wrapped at that call site so a bug in here can NEVER turn an
+--- already-successful search into a reported failure for the officer (see
+--- that call site's own comment).
+---
+--- Soft-dependency on server/partnership.lua and server/progression.lua via
+--- `type(...) == 'function'` runtime existence guards throughout, matching
+--- this file's own existing convention for AwardXP/GetXPTier -- neither
+--- file's absence (or either feature flag being off) may ever error this
+--- function, only make it a silent no-op.
+--- @param searcherCitizenid string
+--- @param targetCoords vector3 -- the searched target's own live coords (already resolved/validated by the caller)
+local function TryAwardCoopSearchBonus(searcherCitizenid, targetCoords)
+    if not (Config.Features and Config.Features.HandlerPartnership == true) then return end
+    if type(GetActivePartnerCitizenId) ~= 'function' then return end
+    if type(AwardXP) ~= 'function' or type(GetXPTier) ~= 'function' then return end
+
+    local partnerCitizenid = GetActivePartnerCitizenId(searcherCitizenid)
+    if not partnerCitizenid then return end
+
+    -- SPEC ITEM 4: both parties Trained-tier or above. Checked before the
+    -- (cheap) online/proximity resolution below purely as a fast early-out
+    -- -- order has no security consequence either way, since none of these
+    -- checks have side effects until the final AwardXP call.
+    if GetXPTier(searcherCitizenid).xp <= 0 or GetXPTier(partnerCitizenid).xp <= 0 then return end
+
+    -- SPEC ITEM 2: the partner must be ONLINE right now -- there is no live
+    -- ped to proximity-check for an offline citizenid, and co-op is
+    -- real-time cooperation, not a standing registration.
+    local partnerPlayer = exports.qbx_core:GetPlayerByCitizenId(partnerCitizenid)
+    local partnerSrc = partnerPlayer and partnerPlayer.PlayerData and partnerPlayer.PlayerData.source
+    if type(partnerSrc) ~= 'number' then return end
+
+    local partnerPed = GetPlayerPed(partnerSrc)
+    if partnerPed == 0 then return end
+
+    -- SPEC ITEM 3: physically present at the SEARCH SCENE (the target's own
+    -- coords), never the searcher's own position -- a searcher and their
+    -- partner could otherwise be far apart from EACH OTHER but both near
+    -- the target (e.g. two officers converging on the same vehicle from
+    -- different directions), which is exactly the "helping search the same
+    -- scene" case this feature means to reward.
+    local dist = #(GetEntityCoords(partnerPed) - targetCoords)
+    if dist > COOP_SEARCH_PARTNER_PROXIMITY_METERS then return end
+
+    -- Per-mechanic mint cooldown -- see this constant's own declaration
+    -- comment above for the full arithmetic this bounds. CONSUMED, not just
+    -- checked, exactly at the point a real payout is about to happen,
+    -- mirroring every other mint cooldown's own Consume-at-point-of-payout
+    -- placement in this file.
+    if not CoopSearchXpMintCooldown.Consume(partnerCitizenid, COOP_SEARCH_XP_MINT_COOLDOWN_MS, GetGameTimer()) then
+        return
+    end
+
+    AwardXP(partnerCitizenid, 'coopSearchBonus')
+end
 
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a local
 -- function (see its own extensive "DELIBERATE IMPLEMENTATION CHOICE" doc
@@ -1193,6 +1396,20 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
             local searcherCitizenid = searcherPlayer and searcherPlayer.PlayerData and searcherPlayer.PlayerData.citizenid
             if searcherCitizenid then
                 AwardXP(searcherCitizenid, 'searchContrabandFound')
+
+                -- COOPERATIVE SEARCH BONUS (Part B §10) -- see
+                -- TryAwardCoopSearchBonus's own declaration comment (and the
+                -- section header above it) for the full spec/arithmetic.
+                -- pcall-wrapped so a bug in this NEW code can NEVER turn an
+                -- already-successful, already-awarded search into a
+                -- reported 'search_failed' for the officer -- the search,
+                -- the searcher's own XP, the audit row and the alert
+                -- broadcast have all already committed by this point
+                -- regardless of what happens here.
+                local coopOk, coopErr = pcall(TryAwardCoopSearchBonus, searcherCitizenid, GetEntityCoords(entity))
+                if not coopOk then
+                    print(('[qbx_k9unit] search: TryAwardCoopSearchBonus errored for searcher %s: %s'):format(searcherCitizenid, tostring(coopErr)))
+                end
             end
         end
     end

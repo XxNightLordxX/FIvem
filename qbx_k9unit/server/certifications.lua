@@ -161,14 +161,254 @@
       the cache also tracks job. Decision: store `{ active, job }` instead
       of a bare boolean; it's a strict superset of what §4.3 asked for and
       avoids a second parallel cache that could drift out of sync.
+
+    ======================================================================
+    CERTIFICATION DEPTH (this pass) — FEATURE_IDEAS.md Part A §2 (revoke
+    reason), §5 (tiered certification), §9 (expiry/recertification), and
+    Part B §11 (specializations). These four are ONE coherent change: they
+    all reshape "certified" from a boolean into something with a level
+    (tier), a scope (specializations), and a lifetime (expiry), on top of
+    an unchanged deeper audit trail (revoke_reason). Schema: migration
+    0006 (sql/migrations/0006_add_k9_certification_lifecycle.sql) adds
+    `tier`/`revoke_reason`/`expires_at` to `k9_certifications` and a new
+    sibling table `k9_certification_specializations` — see that file's own
+    header for the full compatibility story; summarized here for anyone
+    reading only this file.
+
+    COMPATIBILITY (the hard requirement this pass is built around): an
+    existing certified handler stays certified and fully functional with
+    NO operator action. `tier` defaults to 'certified' for every existing
+    row (the migration's DEFAULT, not code here) — 'certified' is chosen,
+    not 'trainee', because it is the ordinal tier that preserves today's
+    actual capability (everything Phase 1/2/3 already gates behind plain
+    HasK9Access). `expires_at` stays NULL for every pre-existing row
+    forever unless a certifier explicitly renews it — a certification
+    never silently starts a countdown it didn't have before. The whole
+    expiry mechanism is additionally gated behind
+    `Config.Features.CertificationExpiry` (default false, off until an
+    operator opts in).
+
+    TIER (§5): a fixed, HARDCODED 3-step ordinal — trainee < certified <
+    senior (TIER_RANK below) — deliberately NOT a Config table. Real K9
+    tiering is a small, fixed vocabulary; making it configurable would let
+    an operator invent tier names no future Phase 2/3 gate could rank
+    against, for no real benefit — "an operator can hold the model in
+    their head" (this task's own instruction) argued directly against an
+    open-ended list here. HasK9Access (base access — leash/radial/basic
+    locomotion) is UNCHANGED by tier: every tier, including 'trainee',
+    passes it, matching §5's own framing ("trainee gets... basic
+    locomotion only" — i.e. still has *some* K9 access). Tier only gates
+    which HIGHER capability a future Phase 2/3 file chooses to check via
+    the new `GetCertificationTier`/`MeetsTierRequirement` accessors below
+    — this file does not itself gate any Phase 2/3 mechanic on tier; that
+    wiring belongs to whichever file owns that mechanic (search.lua,
+    combat.lua, defense.lua), reported separately rather than reached into
+    here. Tier is changed via the new `SetCertificationTier` action, kept
+    DELIBERATELY SEPARATE from GrantCertification (which still always
+    creates a plain 'certified' row exactly as before, so its own,
+    extensively tested INSERT/signature never changes) — a certifier who
+    wants a different initial tier calls SetCertificationTier immediately
+    after granting.
+
+    REVOKE REASON (§2): an OPTIONAL third argument on RevokeCertification/
+    RevokeCertificationOffline and their net-event/command entry points —
+    fully backward compatible (nil/omitted behaves exactly as before: a
+    NULL `revoke_reason`, same as every historical row). Validated against
+    a fixed vocabulary (VALID_REVOKE_REASONS below: retired, reassigned,
+    disciplinary, performance, other) — a small fixed set was chosen over
+    free text for the same "tablet can render it, operator can hold it in
+    their head" reason tier used a fixed set. The automatic
+    QBCore:Server:OnJobUpdate auto-revoke path always records
+    'reassigned' — an accurate, non-punitive category for "this handler
+    changed department," distinct from the mechanism tag ('job_changed')
+    already carried on the outbound event.
+
+    EXPIRY (§9) — LIVE-BEHAVIOUR DESIGN CHOICES, STATED EXPLICITLY per
+    this task's own instruction:
+      1. A certification does NOT force-detach an active leash / interrupt
+         an in-progress ability the instant it lapses. Manual revoke keeps
+         its existing "immediately" teardown (a human made a deliberate
+         right-now decision) — passive time-based expiry is a paperwork
+         lapse, not a disciplinary action, and forcibly ripping a K9 off
+         an active pairing over an expired form is exactly the harsh
+         "silently lapsing mid-shift" experience this task warned against.
+         HasK9Access simply stops granting NEW access once expired; an
+         already-formed leash/partnership/in-progress action is untouched
+         by this file.
+      2. Warned ahead of time. An online handler within
+         Config.CertificationExpiryWarningDays of their expiry gets a
+         one-per-session ox_lib notice (`certifications.expiry_warning`).
+         The moment expiry is actually crossed, an online handler gets a
+         second, one-time notice (`certifications.expiry_lapsed_notice`)
+         PROACTIVELY — not left to discover it only when an ability stops
+         working. Both are driven by TickCertificationExpiryWarnings, a
+         background sweep (Config.CertificationExpiryCheckIntervalMs,
+         same config-driven-interval + fallback-on-misconfiguration
+         pattern as server/tenure.lua's own tick loop) over currently
+         connected players' cached state — never a live per-access SQL
+         query.
+      3. Wall-clock arithmetic happens IN SQL, never in Lua. Consistent
+         with this resource's own established convention
+         (server/tenure.lua's `TIMESTAMPDIFF(SECOND, established_at,
+         NOW())`) — RefreshCertificationCache reads
+         `UNIX_TIMESTAMP(expires_at)` as a plain number once, at refresh
+         time; GrantCertification/RenewCertification write
+         `DATE_ADD(NOW(), INTERVAL ? DAY)`. The ONLY Lua-side wall-clock
+         read is the global `os.time()` (NOT a FiveM native — ordinary
+         Lua 5.4 stdlib; FXServer's server runtime is understood to expose
+         it, same MEDIUM-HIGH-confidence, not-independently-verified-live
+         posture this file's own PlayerLoaded-event-name note already
+         discloses), used only to compare against that one cached number.
+         If `os.time` were ever unavailable, this file FAILS TOWARD
+         AVAILABILITY, not toward lockout — see IsExpiredUnix's own doc
+         comment: an optional, off-by-default feature's primitive going
+         missing should make that feature silently inert, never lock out
+         every certified handler server-wide.
+
+    SPECIALIZATIONS (Part B §11): a SIBLING TABLE
+    (`k9_certification_specializations`), not a column, because a
+    citizenid may hold MULTIPLE simultaneously-active specializations for
+    the same (citizenid, job) — narcotics AND explosives at once is a
+    real, ordinary case, which a single column/CSV/JSON convention this
+    table's own append-mostly-audit-log design deliberately avoids
+    elsewhere. AUTHORIZATION: reuses IsEligibleCertifier UNCHANGED (the
+    exact same rank/high-command/`k9.certify`-permission gate as the base
+    certification) rather than a new permission key — see "WHY THIS DOES
+    NOT REUSE k9_permissions" below for the full reasoning either way.
+    Requires an ACTIVE base certification for the same (citizenid, job) to
+    already exist (checked against the live Certifications cache, since
+    grant requires the target online exactly like GrantCertification) —
+    a specialization with no underlying certification is meaningless.
+    Revoking/lapsing the BASE certification cascades: every active
+    specialization for that (citizenid, job) is bulk-revoked at every one
+    of the THREE existing base-revoke call sites (RevokeCertification's
+    online branch, RevokeCertificationOffline, and the
+    QBCore:Server:OnJobUpdate auto-revoke handler's both branches) via
+    RevokeAllSpecializationsForCitizenJob below — mirrors the leash/
+    partnership teardown call sites already at each of those exact three
+    places.
+
+    WHY THIS DOES NOT REUSE server/permissions.lua's k9_permissions FOR
+    SPECIALIZATIONS (argued, not defaulted, per this task's own
+    instruction): k9_permissions grants a named capability GLOBALLY per
+    citizenid, callable ONLY by high command (IsHighCommand, unconditionally
+    — GrantPermission has no lower rank tier at all), with no per-department
+    scoping. A specialization is the opposite shape on every one of those
+    three axes: it is scoped to one (citizenid, job) pair (a narcotics K9
+    in the police department is not automatically narcotics-cleared if
+    they later move to sheriff), it should be grantable by an ORDINARY
+    certifying officer (the same rank that already grants the base cert —
+    requiring every specialization grant to go all the way up to high
+    command would make specializations far less usable than the base
+    certification they extend), and it is meaningless without an existing
+    base certification row to attach to (k9_permissions grants are
+    standalone; nothing in that file requires a citizenid to hold anything
+    else first). Building specializations on k9_permissions would therefore
+    mean either (a) loosening k9_permissions' own high-command-only
+    authorization model specifically to accommodate this one new use
+    (widening a file this task does not own, for a fit that's still wrong
+    on the other two axes), or (b) keeping it high-command-gated and
+    shipping a materially less useful feature than the one asked for. Both
+    are worse than extending the SAME certifier-grade mechanism the base
+    certification itself already uses. `IsEligibleCertifier` is reused
+    UNCHANGED (not duplicated) specifically so a citizenid holding the
+    'k9.certify' permission grant already gets specialization-granting
+    power for free, with no new permission key and no edit to
+    permissions.lua at all — this is the one place the two systems DO
+    compose, without either becoming a parallel copy of the other.
+
+    CACHE SHAPE, EXTENDED: `Certifications[citizenid]` is now
+    `{ active, job, tier, expiresAtUnix, expired }` — see
+    RefreshCertificationCache's own doc comment for exactly how/when each
+    field is populated. `expiresAtUnix`/`expired` are nil/false
+    respectively for a citizenid whose row has no expiry set, which is
+    every row on a server that has never turned
+    `Config.Features.CertificationExpiry` on, and every pre-existing row
+    everywhere else — the identical "additive, does nothing until
+    explicitly used" posture as every other extension in this section.
+    Specializations get their OWN small cache, `Specializations[citizenid]
+    = { [job] = { [specializationKey] = true, ... } }`, populated
+    alongside Certifications at the same refresh points (grant/revoke/
+    PlayerLoaded/OnJobUpdate) and evicted on `playerDropped` identically.
+
+    CONFIG THIS FILE ASSUMES MAY EXIST (reported to whoever owns
+    config.lua for this pass; every read below is defensive — a missing
+    key degrades the relevant feature to a clean no-op, never a crash,
+    matching this whole section's "must not break an install with none of
+    this configured yet" posture):
+      Config.Features.CertificationExpiry : boolean (default false)
+      Config.CertificationExpiryDays : number (default 90)
+      Config.CertificationExpiryWarningDays : number (default 7)
+      Config.CertificationExpiryCheckIntervalMs : number (default 300000)
+      Config.K9Specializations : table<string, { label: string }>
+        (default catalog: narcotics / explosives / patrol)
 ]]
 
--- Certifications[citizenid] = { active = boolean, job = string }
+-- Certifications[citizenid] = { active = boolean, job = string,
+--   tier = string ('trainee'|'certified'|'senior'),
+--   expiresAtUnix = number? (epoch seconds; nil = never expires),
+--   expired = boolean (true once now >= expiresAtUnix; always false when
+--     expiresAtUnix is nil) }
 -- `job` is whichever department this cached result was scoped to (the
 -- player's job at the time of the last refresh). Local: nothing outside
--- this file should read it directly — always go through HasK9Access(source)
--- or RefreshCertificationCache(citizenid, jobName).
+-- this file should read it directly — always go through HasK9Access(source),
+-- RefreshCertificationCache(citizenid, jobName), or the read-only
+-- GetCertificationTier/MeetsTierRequirement accessors below.
 local Certifications = {}
+
+-- Specializations[citizenid] = { [job] = { [specializationKey] = true, ... } }
+-- Mirrors Certifications' own lifecycle (refreshed at the same points,
+-- evicted on playerDropped) — see "SPECIALIZATIONS" above. Local: go
+-- through HasSpecialization/QueryActiveSpecializations below.
+local Specializations = {}
+
+-- Fixed, ordinal tier vocabulary — see "TIER" above for why this is
+-- hardcoded rather than a Config table. Higher number = more capability.
+local TIER_RANK = { trainee = 1, certified = 2, senior = 3 }
+
+-- The tier every row had, implicitly, before this pass — migration 0006's
+-- own DEFAULT for existing rows, and GrantCertification's own INSERT
+-- column list still relies on this same DB default for every NEW grant
+-- too (GrantCertification is deliberately NOT changed to accept a tier
+-- argument — see "TIER" above). Referenced here only for the defensive
+-- fallback in RefreshCertificationCache below (an unreadable/unexpected
+-- tier value defaults to this, never to the least-privileged 'trainee' —
+-- consistent with this whole section's "never silently reduce an existing
+-- grant's capability" posture).
+local DEFAULT_TIER = 'certified'
+
+-- Fixed revoke-reason vocabulary — see "REVOKE REASON" above.
+local VALID_REVOKE_REASONS = { retired = true, reassigned = true, disciplinary = true, performance = true, other = true }
+
+--- Real, current Unix time in whole seconds, or nil if unavailable. See
+--- "EXPIRY" item 3 above for the full CONFIDENCE NOTE on `os.time`.
+--- @return number?
+local function NowUnix()
+    if type(os) == 'table' and type(os.time) == 'function' then
+        return os.time()
+    end
+    return nil
+end
+
+--- @param expiresAtUnix number?
+--- @return boolean
+--- FAILS TOWARD AVAILABILITY, not toward lockout — deliberately the
+--- OPPOSITE failure direction from this file's own authorization-root
+--- "fail closed" doctrine (HasK9Access/RefreshCertificationCache on a
+--- genuine DB read failure). Those fail closed because an unreadable cert
+--- row IS the real, unknown authorization state. A missing `os.time` is
+--- not that: it is an environment anomaly unrelated to whether this
+--- citizenid's certification is genuinely still valid, and this whole
+--- expiry mechanism is opt-in (Config.Features.CertificationExpiry). The
+--- safe failure mode for an optional feature's own primitive going
+--- missing is "the feature silently does nothing," never "every
+--- certified handler on the server loses access."
+local function IsExpiredUnix(expiresAtUnix)
+    if expiresAtUnix == nil then return false end
+    local now = NowUnix()
+    if now == nil then return false end
+    return now >= expiresAtUnix
+end
 
 -- ======================================================================
 -- CONFIG-SAFETY GUARD (coder-backend, this pass) — every sibling server
@@ -335,8 +575,20 @@ function HasK9Access(source)
     -- The `cached.job == job.name` re-check matters right around a job
     -- change, before RefreshCertificationCache has run for the new job —
     -- don't trust a stale cache entry scoped to an old job.
+    --
+    -- CERTIFICATION DEPTH (this pass, Part A §9): `not cached.expired` is
+    -- the ONLY change to this branch. An expired cert does not hard-fail
+    -- this whole function — it simply does not satisfy THIS branch, so
+    -- control falls through to the autoAccessGrade bypass below exactly
+    -- as it already does for `cached.active == false`; an expired
+    -- handler who separately qualifies via autoAccessGrade (or the
+    -- permission-grant/high-command bypasses already checked above this
+    -- branch) is unaffected. Deliberately does NOT force-detach anything
+    -- or mutate `active` in the DB — see this file's header "EXPIRY" item
+    -- 1 for why a passive, time-based lapse gets a softer landing than a
+    -- manual revoke's "immediately" teardown.
     local cached = Certifications[Player.PlayerData.citizenid]
-    if cached and cached.active and cached.job == job.name then
+    if cached and cached.active and cached.job == job.name and not cached.expired then
         return true
     end
 
@@ -403,12 +655,88 @@ function RefreshCertificationCache(citizenid, jobName)
         -- FAIL CLOSED: an unreadable cert row must never be treated as an
         -- active grant — see doc comment above.
         Certifications[citizenid] = { active = false, job = jobName }
+        Specializations[citizenid] = nil
         return false
     end
 
     local active = activeIdOrErr ~= nil
-    Certifications[citizenid] = { active = active, job = jobName }
-    return active
+    if not active then
+        Certifications[citizenid] = { active = false, job = jobName }
+        Specializations[citizenid] = nil
+        return false
+    end
+
+    -- CERTIFICATION DEPTH (this pass, Part A §5/§9) — tier/expiry
+    -- metadata, read via a SEPARATE query from the existence check above,
+    -- DELIBERATELY: this file's own regression tests sequence exact call
+    -- counts against the ORIGINAL `MySQL.scalar.await` existence-check
+    -- call (e.g. the GrantInFlight concurrency test's
+    -- `scalarCallCount == 2` assertion) — changing that call's own
+    -- SQL/shape would be a needless, high-blast-radius edit to already
+    -- passing coverage for no behavioral gain. Only run once an active
+    -- row is already confirmed to exist above.
+    --
+    -- `UNIX_TIMESTAMP(expires_at)` does the date arithmetic in SQL, never
+    -- in Lua — see this file's header "EXPIRY" item 3. Returns NULL
+    -- (-> Lua nil) when `expires_at` itself is NULL, i.e. "never expires".
+    local tier, expiresAtUnix = DEFAULT_TIER, nil
+    local metaOk, metaRowOrErr = pcall(MySQL.single.await,
+        'SELECT tier, UNIX_TIMESTAMP(expires_at) AS expires_at_unix FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
+            citizenid, jobName,
+        })
+    if not metaOk then
+        -- Degrades to the DEFAULT_TIER / never-expires fallback, never to
+        -- a hard error and never to a MORE restrictive state than the
+        -- existence check above already confirmed — this file's "never
+        -- silently reduce an existing grant's capability" posture (see
+        -- header) applies to a query failure exactly like it applies to a
+        -- pre-migration database that has the base columns but not yet
+        -- these new ones.
+        print(('[qbx_k9unit] RefreshCertificationCache tier/expiry metadata query failed for %s/%s: %s -- defaulting to tier=%s, no expiry'):format(citizenid, jobName, tostring(metaRowOrErr), DEFAULT_TIER))
+    elseif metaRowOrErr then
+        if type(metaRowOrErr.tier) == 'string' and TIER_RANK[metaRowOrErr.tier] then
+            tier = metaRowOrErr.tier
+        end
+        expiresAtUnix = tonumber(metaRowOrErr.expires_at_unix)
+    end
+
+    Certifications[citizenid] = {
+        active = true,
+        job = jobName,
+        tier = tier,
+        expiresAtUnix = expiresAtUnix,
+        expired = IsExpiredUnix(expiresAtUnix),
+    }
+    RefreshSpecializationCache(citizenid, jobName)
+    return true
+end
+
+--- Re-queries every ACTIVE specialization row for (citizenid, jobName) and
+--- replaces that job's slice of `Specializations[citizenid]` wholesale.
+--- Fails CLOSED on a thrown read (an unreadable citizenid/job's
+--- specialization set is treated as empty, never as "whatever it was
+--- before") — same posture as RefreshCertificationCache. Called from
+--- RefreshCertificationCache itself (every point that already refreshes
+--- the base cert cache also keeps this in sync) — never called standalone
+--- from outside this file.
+--- @param citizenid string
+--- @param jobName string
+local function RefreshSpecializationCache(citizenid, jobName)
+    local ok, rowsOrErr = pcall(MySQL.query.await,
+        'SELECT specialization FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND active = 1', {
+            citizenid, jobName,
+        })
+    Specializations[citizenid] = Specializations[citizenid] or {}
+    if not ok then
+        print(('[qbx_k9unit] RefreshSpecializationCache query failed for %s/%s: %s'):format(citizenid, jobName, tostring(rowsOrErr)))
+        Specializations[citizenid][jobName] = {}
+        return
+    end
+    local set = {}
+    for _, row in ipairs(rowsOrErr or {}) do
+        set[row.specialization] = true
+    end
+    Specializations[citizenid][jobName] = set
 end
 
 --- Re-checks a SPECIFIC (citizenid, job) row's `active` column directly

@@ -108,6 +108,15 @@
             need (PHASE4_SPEC.md §13.4.1's own "additive read, not a new
             authorization surface" framing) rather than re-deriving a
             second cache elsewhere.
+
+    XP TIER UNLOCKS ADDITION (this pass, FEATURE_IDEAS.md Part B §8) — one
+    more resource-global, documented in full at its own declaration below
+    (search this file for "GetXPTierMedkitCooldownMs") rather than repeated
+    here: GetXPTierMedkitCooldownMs(citizenid, baseCooldownMs) -> number. See
+    the dedicated "XP TIER UNLOCKS" section further down this file for the
+    full design (which three tiers unlock what, and why every rejected
+    candidate was rejected — both on farmability grounds and on composition
+    with server/permissions.lua's grant/block resolution order).
     THIS FILE calls `HasK9Access`... it does NOT — AwardXP is only ever
     invoked from a caller that has already independently re-verified
     HasK9Access for the acting player at its own call site (server/search.lua,
@@ -730,6 +739,159 @@ end
 --- @return number
 function GetXP(citizenid)
     return K9XP[citizenid] or 0
+end
+
+-- ==========================================================================
+-- XP TIER UNLOCKS -- FEATURE_IDEAS.md Part B §8 (coder-backend, this pass).
+-- Config.XPTiers previously only ever changed speedMultiplier/
+-- scentRangeMultiplier -- two numbers invisible to the player except as "a
+-- slightly faster dog." This section connects tiers to real, checkable
+-- capability by reusing systems that already exist (the doc's own framing:
+-- "connects them instead of adding a new subsystem"), NOT a new
+-- authorization layer of its own.
+--
+-- THREE UNLOCKS SHIPPED, ONE PER NON-BASE TIER:
+--   Trained (1,250 XP) -- eligibility for the cooperative search bonus
+--     (server/search.lua, Part B §10): BOTH the searcher and their currently
+--     active partner must be Trained+ (`GetXPTier(citizenid).xp > 0` on both
+--     citizenids -- never by label/index, so this stays correct even if the
+--     tier table is retuned later). Lives entirely in server/search.lua's
+--     TryAwardCoopSearchBonus; nothing else needed here beyond the
+--     already-existing GetXPTier this reuses completely unchanged.
+--   Veteran (4,000 XP) -- a reduced server/medkit.lua K9Medkit cooldown, via
+--     GetXPTierMedkitCooldownMs below. See that function's own doc comment
+--     for the exact contract, and this pass's own report for why the
+--     one-line medkit.lua call site is REPORTED, not wired here -- that file
+--     has a live owner this session.
+--   Elite (9,000 XP) -- a cosmetic HUD tier badge. NO CODE CHANGE in this
+--     file: PushTierSnapshot/CopyTier already forward EVERY field present on
+--     a Config.XPTiers[n] row to the client verbatim (CopyTier's own
+--     `for key, value in pairs(tier) do copy[key] = value end`), so a
+--     reported `badge` field added to config.lua's Elite row is sufficient
+--     on its own -- client/hud.lua/html/app.js (coder-ui) render it once
+--     added. See this pass's own report for the exact field/asset needs.
+--
+-- COMPOSITION WITH THE PERMISSION/FEATURE-CONTROL LAYER (server/
+-- permissions.lua's HasPermission, config.lua's Config.FeatureControl
+-- resolution order -- this task's own explicit requirement). That order is
+-- FOUR steps long ("Config.Features.<Name> false -> deny always; an
+-- explicit BLOCK -> deny; RequireGrant -> needs a grant; otherwise ->
+-- allow"), and reaching an XP tier is not, and must never become, a fifth.
+-- None of the three unlocks above adds one:
+--   * GetXPTierMedkitCooldownMs returns a NUMBER, never a boolean, and is
+--     documented to be consulted ONLY AFTER the caller's own
+--     Config.Features.K9Medkit / HasK9Access / department / proximity /
+--     item gate has already allowed the action. If K9Medkit is off, blocked
+--     for that citizenid, or they are not certified, medkit.lua's own
+--     existing gate denies BEFORE this function is ever reached, tier or no
+--     tier -- there is nothing this function could do to "silently
+--     re-enable" a block, because it never participates in the allow/deny
+--     decision at all. It only ever adjusts a duration for an action that
+--     was already independently authorized.
+--   * The coop-search-bonus tier gate (server/search.lua) only ever
+--     WITHHOLDS a bonus XP amount. Reaching Trained tier cannot make anyone
+--     able to search who couldn't already -- HasK9Access is re-checked,
+--     unchanged, at the top of the real searchTarget callback, exactly as
+--     before this pass.
+--   * The HUD badge is pure display. It grants no capability at all, so
+--     there is nothing for a block to conflict with.
+-- REJECTED ON THIS EXACT BASIS -- composing badly with the block/grant
+-- layer, not merely "not chosen": auto-granting BiteAndHold/
+-- NonLethalTakedown/PropDragging (Config.FeatureControl.RequireGrant), or
+-- the 'k9.access'/'k9.certify'/'k9.audit'/'k9.givexp' permissions
+-- (Config.Permissions), via a tier threshold. All five are EXPLICITLY the
+-- capabilities those two tables exist to put behind a deliberate, named,
+-- revocable, AUDITED human decision (config.lua's own words: "this hands it
+-- to one specific person," "every use is logged"). A tier-based auto-unlock
+-- of any of them would be a SECOND, ungoverned path to the exact same
+-- capability -- reachable purely by grinding, with no grant, no audit row,
+-- and, specifically, no way for a human BLOCK to ever catch up to it, since
+-- a block only stops the grant/rank path, never an XP total.
+--
+-- TIERS ARE REACHABLE BY FARMING -- REJECTED UNLOCKS ON THAT BASIS ALONE,
+-- separate from the composition concern above (an unlock can fail this test
+-- even with zero permission/block interaction). This project has closed
+-- eight XP farms; the current, closed, TESTED ceiling is 3,600 XP/hr shared
+-- per citizenid (XP_MINT_BUDGET_CAP_XP/XP_MINT_BUDGET_WINDOW_MS above),
+-- reaching Elite (9,000 XP) in ~2h27m of deliberate, maximal grinding, not
+-- incidental play. Considered and rejected as unsafe in the hands of a
+-- citizenid who did nothing but grind for it:
+--   * Any reduction of a per-mechanic MINT cooldown (BiteHoldXpMintCooldown/
+--     TakedownXpMintCooldown/ContrabandXpMintCooldown/
+--     TrackTicketMintCooldown/the new CoopSearchXpMintCooldown), or of
+--     XP_MINT_BUDGET_CAP_XP/XP_MINT_BUDGET_WINDOW_MS themselves, or a raised
+--     Config.XP.awards value. Every one of these IS the anti-farm floor the
+--     EIGHTH-XP-FARM-FIX section above documents at length -- making any of
+--     them tier-dependent would let a farmer's OWN grinding progressively
+--     widen the exact ceiling meant to bound that same grinding, a
+--     compounding/runaway shape strictly worse than a static farm.
+--   * A reduced NonLethalTakedown/BiteAndHold ACTION cooldown (
+--     Config.Combat.NonLethalTakedown.targetCooldownMs and its bite-hold
+--     equivalent -- the cooldown on the ABILITY itself, not on its XP
+--     mint). K9 combat is player-vs-player (a settled decision) -- a faster
+--     action cooldown is a genuine PvP re-engagement advantage, not a
+--     cosmetic or economy concern, and handing one to whoever ground the
+--     longest is exactly the "harmful in the hands of a farmer" case this
+--     task named explicitly.
+--   * A raised wellbeing stat MAX (Fatigue/Mood/FearStress/Injury) via
+--     tier -- the doc's own suggested example. Investigated this pass:
+--     every single Clamp(...) call site in server/wellbeing.lua's tick loop
+--     reads Config.Wellbeing.<Stat>.max directly, as one GLOBAL constant --
+--     there is no per-citizenid cap composer to add one more input to, the
+--     way client/movement.lua's K9MoveRateModifiers already composes the
+--     speed/scent tier bonus. Making the cap per-citizenid would mean
+--     threading a new parameter through dozens of call sites in a
+--     security/balance-reviewed file this pass does not own -- a real,
+--     invasive refactor, not the "small-moderate, mostly reads" effort the
+--     doc estimated. Rejected on cost/ownership grounds, not a farmability
+--     concern -- flagged here so a future pass with wellbeing.lua ownership
+--     does not have to rediscover this from scratch.
+-- ==========================================================================
+
+--- Resource-global — Part B §8 XP TIER UNLOCKS (see the section header
+--- immediately above for the full "why this is safe" writeup). Returns the
+--- EFFECTIVE K9Medkit cooldown for `citizenid`'s own tier given the
+--- feature's own configured `baseCooldownMs` — never a boolean, never an
+--- access decision. A pass-through-with-clamping over an OPTIONAL
+--- `medkitCooldownMultiplier` field on the citizenid's current
+--- Config.XPTiers row (reported to config.lua's owner; not present on any
+--- shipped row today, so this defensively returns `baseCooldownMs`
+--- UNCHANGED until that field is added — a clean no-op, never an error, on
+--- an unmodified config).
+---
+--- CALLER CONTRACT (server/medkit.lua — reported, not wired, this pass; see
+--- this pass's own report for the exact one-line call-site snippet):
+--- consult this ONLY AFTER every one of that file's own existing gates
+--- (Config.Features.K9Medkit, the proximity/item/department checks) has
+--- already allowed the action. This function performs NONE of those checks
+--- itself and must never be treated as one — it is a pure numeric modifier
+--- for an action the caller has already independently authorized, the same
+--- "modifier, never a gate" role speedMultiplier/scentRangeMultiplier
+--- already play for movement/tracking.
+---
+--- DEFENSIVE BOUNDS, never trust the config value blindly: a multiplier
+--- that is missing, non-numeric, NaN, <= 0, or > 1 returns `baseCooldownMs`
+--- UNCHANGED rather than applying it — this is an UNLOCK (only ever a
+--- reduction), never a way to lengthen a cooldown, and a <= 0 result would
+--- hand server/cooldowns.lua's IsOnCooldown a non-positive threshold, which
+--- that file's own header documents as PERMANENTLY ON — the opposite of a
+--- Veteran-tier reward, and exactly the kind of footgun this guard exists
+--- to prevent.
+--- @param citizenid string
+--- @param baseCooldownMs number
+--- @return number effectiveCooldownMs
+function GetXPTierMedkitCooldownMs(citizenid, baseCooldownMs)
+    if type(baseCooldownMs) ~= 'number' or baseCooldownMs ~= baseCooldownMs or baseCooldownMs <= 0 then
+        return baseCooldownMs
+    end
+
+    local tier = GetXPTier(citizenid)
+    local multiplier = tier.medkitCooldownMultiplier
+    if type(multiplier) ~= 'number' or multiplier ~= multiplier or multiplier <= 0 or multiplier > 1 then
+        return baseCooldownMs
+    end
+
+    return math.max(1, math.floor(baseCooldownMs * multiplier))
 end
 
 --- Loads a citizenid's real XP total from k9_progression into the K9XP

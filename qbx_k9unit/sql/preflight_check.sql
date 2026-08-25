@@ -20,7 +20,7 @@
 
 
 -- ---------------------------------------------------------------------
--- CHECK 1: does anything already own one of our five table names?
+-- CHECK 1: does anything already own one of our six table names?
 --
 -- `install.sql` uses CREATE TABLE IF NOT EXISTS, so it will never
 -- overwrite or damage a table that is already there -- but that also
@@ -66,6 +66,10 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'
          AND COLUMN_NAME IN ('citizenid','permission','granted_by','granted_at','revoked_by','revoked_at','active'))
+    UNION ALL SELECT 'k9_certification_specializations', 8,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'
+         AND COLUMN_NAME IN ('citizenid','job','specialization','granted_by','granted_at','revoked_by','revoked_at','active'))
 ) x
 ORDER BY x.table_name;
 
@@ -111,7 +115,7 @@ SELECT
 SELECT TABLE_NAME AS `our_table`, TABLE_ROWS AS `approx_rows`
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions')
+  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations')
 ORDER BY TABLE_NAME;
 
 

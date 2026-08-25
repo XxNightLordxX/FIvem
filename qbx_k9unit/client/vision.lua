@@ -19,11 +19,11 @@
 
     Supplementary implementation detail cited in the TODOs below
     (non-authoritative — SPEC.md §11 is the source of truth if anything
-    here drifts from it): phase2_notes/thermal_night_vision.md (the
+    here drifts from it): phase2_notes/RESEARCH_ARCHIVE.md#vision (the
     revised, §11-reconciled pass — read its own header before trusting
     anything in it that contradicts SPEC.md §11.5/§11.6 directly) and
-    phase2_notes/thermal_night_vision_natives.md /
-    phase2_notes/water_gunpowder_natives.md §3 (two independent native
+    phase2_notes/RESEARCH_ARCHIVE.md#vision /
+    phase2_notes/RESEARCH_ARCHIVE.md#tracking §3 (two independent native
     confirmation passes, both agreeing on the same hashes).
 
     ======================================================================
@@ -41,8 +41,8 @@
     FILE-TO-FILE CONTRACT (client side):
     - THIS FILE will expose four resource-global (no `local`) functions.
       These names are already settled — SPEC.md §11 left this an open
-      naming slot, phase2_notes/thermal_night_vision.md §7 filled it, and
-      phase2_notes/EXPORT_TRACKING.md's "Batch 2" validation pass
+      naming slot, phase2_notes/RESEARCH_ARCHIVE.md#vision §7 filled it, and
+      README.md's "Public API (exports)" section's "Batch 2" validation pass
       confirmed no other design note proposed a competing name for the
       same slot:
         ToggleThermalVision()
@@ -50,11 +50,11 @@
         IsThermalVisionActive()
         IsNightVisionActive()
       No other Phase 2 file currently needs to call into these (§1 of
-      phase2_notes/thermal_night_vision.md: "no radial item; no other
+      phase2_notes/RESEARCH_ARCHIVE.md#vision: "no radial item; no other
       Phase 2 file's design references vision toggling") — exposed as
       resource-globals anyway, per this codebase's established convention
       that every toggle/action function is a resource-global (see
-      phase2_notes/EXPORT_TRACKING.md's Phase 1 contract table), in case a
+      README.md's "Public API (exports)" section's Phase 1 contract table), in case a
       later phase wants to call in from outside this file.
     - THIS FILE calls client/main.lua's IsOwnModelK9() — see the RESOLVED
       ACCESS-GATING DECISION section immediately below for why this is
@@ -74,7 +74,7 @@
 
     HISTORY WORTH KNOWING (not a live disagreement — recorded so nobody
     re-opens this by reading stale material out of order): the FIRST
-    draft of phase2_notes/thermal_night_vision.md picked the OPPOSITE
+    draft of phase2_notes/RESEARCH_ARCHIVE.md#vision picked the OPPOSITE
     answer (CanShowK9UI()), reasoning by analogy to ScentTracking/
     BloodTracking being certified-K9 capabilities. That note's OWN
     revised pass (§3) explicitly corrects itself once SPEC.md §11.5
@@ -92,11 +92,11 @@
 --- Thin wrapper over the native's OWN getter — the native is the source
 --- of truth for "is thermal vision currently on," not a separately
 --- tracked local boolean that could desync from it (per SPEC.md §11.6 /
---- phase2_notes/thermal_night_vision.md §7: "the native's own getter is
+--- phase2_notes/RESEARCH_ARCHIVE.md#vision §7: "the native's own getter is
 --- the source of truth, not a separately-tracked local boolean"). Real
 --- IsSeethroughActive() native, confirmed to exist alongside its setter
 --- by native-api-assistant (SPEC.md §11.6) and independently by
---- phase2_notes/water_gunpowder_natives.md §3.
+--- phase2_notes/RESEARCH_ARCHIVE.md#tracking §3.
 --- @return boolean
 function IsThermalVisionActive()
     return IsSeethroughActive() == true
@@ -115,7 +115,7 @@ end
 --- given both are full-screen post-effects that would otherwise visually
 --- conflict." One small shared helper here rather than duplicating the
 --- check-and-turn-off logic once per toggle function below, per
---- phase2_notes/thermal_night_vision.md §4's explicit implementation-shape
+--- phase2_notes/RESEARCH_ARCHIVE.md#vision §4's explicit implementation-shape
 --- recommendation.
 --- @param keepingActive 'thermal'|'night'  -- the effect about to be turned ON; turn OFF whichever of the two this is NOT
 local function EnsureOnlyOneVisionEffectActive(keepingActive)
@@ -219,7 +219,7 @@ function ToggleThermalVision()
 
     local turningOn = not IsThermalVisionActive()
     -- Mutual exclusion happens BEFORE flipping this effect on, per
-    -- phase2_notes/thermal_night_vision.md §4's ordering.
+    -- phase2_notes/RESEARCH_ARCHIVE.md#vision §4's ordering.
     if turningOn then
         EnsureOnlyOneVisionEffectActive('thermal')
     end
@@ -266,7 +266,7 @@ end
 
 -- Config-gated command + keybind registration for BOTH toggles — SPEC.md
 -- §11.2's Config.Vision schema,
--- phase2_notes/thermal_night_vision.md §1's "Config-gated registration,
+-- phase2_notes/RESEARCH_ARCHIVE.md#vision §1's "Config-gated registration,
 -- not just config-gated behavior" requirement. THIS IS THE ONE PLACE
 -- this file DELIBERATELY diverges from ToggleK9Camera()'s exact
 -- precedent, not just mirrors it: client/movement.lua's
@@ -309,7 +309,7 @@ end
 -- regardless of which (if either) was actually on this session: both
 -- natives are idempotent boolean toggles, not stacking counters, so
 -- calling SetSeethrough(false)/SetNightvision(false) when an effect was
--- never on this session is a harmless no-op (phase2_notes/thermal_night_vision.md
+-- never on this session is a harmless no-op (phase2_notes/RESEARCH_ARCHIVE.md#vision
 -- §6 item 2). Also covers disconnect per that note's §6 item 3 (FiveM
 -- stops every currently-loaded resource, firing this same handler, as
 -- part of a player disconnecting) — high confidence per that note's own

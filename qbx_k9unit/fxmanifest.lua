@@ -2,8 +2,14 @@ fx_version 'cerulean'
 game 'gta5'
 
 name 'qbx_k9unit'
-description 'Player-controlled K9 unit for Qbox police/security departments (Phase 1 vertical slice)'
+author 'John Allday'
+description 'Player-controlled K9 unit for Qbox police/security departments'
 version '0.1.0'
+
+-- Built by John Allday. Proprietary -- not open source. See LICENSE.md for
+-- the full terms; the short version is that this is licensed for use on the
+-- purchaser's own server and may not be redistributed, resold, shared or
+-- published, in whole or in part.
 
 -- ----------------------------------------------------------------------
 -- Manifest convention note (coder-architect, Phase 1 scaffold):
@@ -293,6 +299,11 @@ server_scripts {
     -- `server_exports` manifest key is needed. Loaded last so every wrapped
     -- internal function is already defined, though each call is guarded
     -- anyway.
+    -- External-system integration surface. Fires 'qbx_k9unit:events:k9Down'
+    -- from a self-contained health-poll thread. Loaded after cooldowns.lua
+    -- (NewCooldown at file-load time) and certifications.lua (HasK9Access
+    -- and IsConfiguredK9Model, called at runtime).
+    'server/integrations.lua',
     'server/exports.lua',
 }
 

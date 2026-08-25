@@ -31,17 +31,17 @@
        ox_inventory hook as unconfirmed is SUPERSEDED by item 9 below —
        kept here verbatim rather than edited so the historical reasoning
        trail stays intact.
-    3. phase2_notes/scent_blood_tracking.md — client-logic-lens refinement
+    3. phase2_notes/RESEARCH_ARCHIVE.md#tracking — client-logic-lens refinement
        of §11.4 items 1/3, plus two explicit "flag for coder-security"
        notes worth restating here since THIS file is where they land:
        (a) `findTrackableSource`'s signature must never grow a
        client-supplied coordinate parameter, (b) `relayDamageEvent` trusts
        the FACT of damage but never the reported location.
-    4. phase2_notes/scent_blood_natives.md — confirms the
+    4. phase2_notes/RESEARCH_ARCHIVE.md#tracking — confirms the
        `CEventNetworkEntityDamage` relay pattern is real and sound, but
        flags that it does NOT fire for script-applied damage (only organic
        gameplay damage) — a real, documented gap, not a bug to fix here.
-    5. phase2_notes/water_gunpowder_tracking.md / water_gunpowder_natives.md
+    5. phase2_notes/RESEARCH_ARCHIVE.md#tracking / water_gunpowder_natives.md
        — confirms `IsPedShooting` debounce is the right client-side
        trigger for gunpowder (this file only ever receives the resulting
        relay event, it does no shooting-detection itself), and that the
@@ -64,7 +64,7 @@
     8. exploit-tester finding (2026-08-23, red-team pass against the
        finished client files) + coordinator decision, same day — see
        "FORGED TRAIL DECISION" below.
-    9. phase2_notes/scent_source_resolution.md (tech-scout pass, same day)
+    9. phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution (tech-scout pass, same day)
        + this pass's implementation (coder-backend, 2026-08-23) — CONFIRMS
        and CLOSES items 2/6's "scent's ox_inventory hook is unconfirmed"
        framing. A real, first-party `ox_inventory` server-side hook,
@@ -99,7 +99,7 @@
     real false-negative risk against legitimate reports (armor can absorb
     all health loss from a genuine hit; weapon switches/reloads would need
     their own extra state) for a feature SPEC.md §11.6 and
-    phase2_notes/scent_blood_tracking.md §3 item 2 already explicitly frame
+    phase2_notes/RESEARCH_ARCHIVE.md#tracking §3 item 2 already explicitly frame
     as acceptable-risk: tracking grants no real capability (SPEC.md §11.6),
     and "a false report just plants a harmless phantom blood-trail
     location" (scent_blood_tracking.md §3 item 2's own words, written
@@ -206,14 +206,14 @@
        OWN live position via GetEntityCoords(GetPlayerPed(source)) —
        NEVER a client-supplied coordinate (the signature deliberately
        takes only `trackType`, no coords parameter — do not add one
-       later, see phase2_notes/scent_blood_tracking.md §3 item 1).
+       later, see phase2_notes/RESEARCH_ARCHIVE.md#tracking §3 item 1).
        Enforces Config.Tracking.<Type>.searchCooldownMs per caller.
 
     Server events (RegisterNetEvent, client->server):
     2. 'qbx_k9unit:server:relayDamageEvent' () [THIS FILE]
        Triggered by a client's own `gameEventTriggered('CEventNetworkEntityDamage', ...)`
        handler when the LOCAL PLAYER IS THE VICTIM (confirmed real pattern,
-       phase2_notes/scent_blood_natives.md §0). Takes no meaningful
+       phase2_notes/RESEARCH_ARCHIVE.md#tracking §0). Takes no meaningful
        payload — the server logs the reporting client's own live
        coordinates, never a client-supplied position, exactly like
        server/main.lua's relayBark "resolve the sender's own ped, don't
@@ -249,7 +249,7 @@
 
     ox_inventory hooks (exports.ox_inventory:registerHook, ox_inventory ->
     THIS FILE, server-to-server — added this pass, SPEC.md §9 items 11/17,
-    phase2_notes/scent_source_resolution.md):
+    phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution):
     5. 'swapItems' [THIS FILE]
        ADDENDUM (coordinator decision, 2026-08-24): registration is now
        GATED on a runtime capability check (`IsOxInventoryHookCapable()`,
@@ -313,7 +313,7 @@
       this file calls into it directly — client/tracking.lua interacts
       with it exclusively through the callback/events documented above.
       Do not add exported globals here without updating this contract
-      block and phase2_notes/EXPORT_TRACKING.md's function-name table.
+      block and README.md's "Public API (exports)" section's function-name table.
     - THIS FILE also CONSUMES one export from ox_inventory (a dependency
       per fxmanifest.lua, already running by the time this file's file-load
       code executes) — `exports.ox_inventory:registerHook('swapItems', ...)`
@@ -341,11 +341,11 @@
       `findTrackableSource` below). This supersedes the OLDER version of
       this note (visible in history/diff) that said scent intentionally had
       no entry here pending a live-query design — that plan was superseded
-      by phase2_notes/scent_source_resolution.md's confirmed
+      by phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution's confirmed
       registerHook-based design (see item 9 in this file's header
       AUTHORITATIVE SOURCES list) before it was ever built.
     - SCENT BRANCH STATUS, UPDATED THIS PASS: the ox_inventory
-      `swapItems` hook is now confirmed (phase2_notes/scent_source_resolution.md,
+      `swapItems` hook is now confirmed (phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution,
       tech-scout pass, 2026-08-23 — HIGH confidence on the hook name/payload
       shape from direct source-reading, see that note's §6 confidence table)
       and wired up below. `findTrackableSource`'s 'scent' branch no longer
@@ -361,7 +361,7 @@
 
 -- Ephemeral, in-memory only per-type event log backing Scent/Blood/
 -- Gunpowder tracking (SPEC.md §11.3, §11.4 items 3/4; scent's entry added
--- this pass per phase2_notes/scent_source_resolution.md — see the
+-- this pass per phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution — see the
 -- FILE-TO-FILE CONTRACT "STRUCTURAL NOTE, UPDATED THIS PASS" above for why
 -- it's now structurally identical to blood/gunpowder rather than absent) —
 -- NOT persisted, mirrors server/main.lua's `LeashPairs` precedent (SPEC.md
@@ -586,7 +586,7 @@ local TRACK_TICKET_MINT_COOLDOWN_MS = 30000
 -- server/progression.lua caps the TOTAL across mechanics.
 
 -- Per-source rate limit on the 'swapItems' ox_inventory hook below (added
--- this pass, SPEC.md §9 items 11/17, phase2_notes/scent_source_resolution.md).
+-- this pass, SPEC.md §9 items 11/17, phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution).
 -- UNLIKE DamageRelayCooldown/WeaponFireRelayCooldown above, this is NOT
 -- closing an anti-forgery gap — the hook is server-to-server, so
 -- `payload.source` cannot be relabeled by a client to claim a drop that
@@ -670,13 +670,13 @@ end)
 --- SPEC.md §11.4 item 3. Triggered by a client's own `gameEventTriggered`
 --- ('CEventNetworkEntityDamage') handler, filtered CLIENT-SIDE to "local
 --- player is the victim" (confirmed real pattern,
---- phase2_notes/scent_blood_natives.md §0 — `data[1]` is the
+--- phase2_notes/RESEARCH_ARCHIVE.md#tracking §0 — `data[1]` is the
 --- cross-source-corroborated victim entity handle). Takes no meaningful
 --- payload by design — do not add a coordinate argument later (see this
---- file's header FILE-TO-FILE CONTRACT / phase2_notes/scent_blood_tracking.md
+--- file's header FILE-TO-FILE CONTRACT / phase2_notes/RESEARCH_ARCHIVE.md#tracking
 --- §3 item 2's explicit warning that this is an easy regression).
 ---
---- CAVEAT (phase2_notes/scent_blood_natives.md §0): `CEventNetworkEntityDamage`
+--- CAVEAT (phase2_notes/RESEARCH_ARCHIVE.md#tracking §0): `CEventNetworkEntityDamage`
 --- does NOT fire for script-applied damage (only organic gameplay damage —
 --- real weapon hits, falls, vehicle impacts, melee). Not a bug to fix here,
 --- just a documented gap worth this comment so a future "why didn't blood
@@ -712,13 +712,13 @@ end)
 
 --- SPEC.md §11.4 item 4. Triggered by a client on a debounced local
 --- false->true transition of IsPedShooting(PlayerPedId()) (confirmed
---- real, stable native — phase2_notes/scent_blood_natives.md §0 "adjacent
---- check", phase2_notes/water_gunpowder_natives.md §2 Option A). Takes no
+--- real, stable native — phase2_notes/RESEARCH_ARCHIVE.md#tracking §0 "adjacent
+--- check", phase2_notes/RESEARCH_ARCHIVE.md#tracking §2 Option A). Takes no
 --- meaningful payload — same "never trust a client-supplied coordinate"
 --- rule as relayDamageEvent above.
 ---
 --- NOTE: `IsPedShooting`'s exact per-round vs. per-burst semantics are
---- UNCONFIRMED this session (phase2_notes/water_gunpowder_tracking.md
+--- UNCONFIRMED this session (phase2_notes/RESEARCH_ARCHIVE.md#tracking
 --- §2.3) — a high-fire-rate weapon could generate many debounced
 --- transitions in a short window even with client-side debouncing, so this
 --- server-side rate limit does not assume the client-side debounce alone
@@ -863,7 +863,7 @@ end
 --- capability/config is missing -> loud warning, not a hard stop" reasoning.
 ---
 --- Confirmed real mechanism otherwise unchanged from the original
---- implementation, phase2_notes/scent_source_resolution.md §2/§4
+--- implementation, phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution §2/§4
 --- (tech-scout pass, 2026-08-23): `swapItems` fires SERVER-SIDE,
 --- synchronously, on every slot-to-slot item move ox_inventory processes
 --- (trunk/stash transfers, giving an item to another player, AND dropping
@@ -885,7 +885,7 @@ end
 ---
 --- CONFIDENCE NOTE (honest grading, not independently re-verified against a
 --- live ox_inventory install this session — full breakdown in
---- phase2_notes/scent_source_resolution.md §2/§6): HIGH confidence the hook
+--- phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution §2/§6): HIGH confidence the hook
 --- name/payload shape (`source`, `toType`, `dropId`) is real and current —
 --- corroborated two independent ways this session (direct read of
 --- `modules/inventory/server.lua`'s `dropItem` function's own
@@ -986,7 +986,7 @@ end)
 --- SPEC.md §11.4 item 1. Resolves the nearest trackable source of
 --- `trackType` for the CALLING K9's own live server-side position.
 --- Validation order (cheapest/most-defensive checks first, same discipline
---- phase2_notes/contraband_search_contract.md §3 establishes for the
+--- phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §3 establishes for the
 --- higher-stakes searchTarget callback in server/search.lua — applied here
 --- too even though the stakes are lower, since this reveal is
 --- client-cosmetic only, no real capability granted, per SPEC.md §11.6's
@@ -1007,14 +1007,14 @@ end)
 --- STILL-OPEN, NOT DECIDED BY THIS FILE (flag before finalizing elsewhere):
 ---   - §11 doesn't specify a distinguishing `reason` field for WHY
 ---     `found = false` (no source in range vs. on cooldown vs. no access) —
----     phase2_notes/scent_blood_tracking.md §2.4 flags this as a small,
+---     phase2_notes/RESEARCH_ARCHIVE.md#tracking §2.4 flags this as a small,
 ---     genuinely open UX question, not decided here. This implementation
 ---     collapses all three into a bare `{ found = false }`, matching the
 ---     signature SPEC.md §11.4 item 1 actually specifies.
 ---   - Whether an in-progress tracking session should auto-cancel on
 ---     mid-session loss of K9 access (mirroring
 ---     ForceDetachLeashForSource's precedent for leash) —
----     phase2_notes/scent_blood_tracking.md §5 item 4 flags this as
+---     phase2_notes/RESEARCH_ARCHIVE.md#tracking §5 item 4 flags this as
 ---     lower-stakes than leash (cosmetic only) but explicitly undecided;
 ---     not implemented here since a client re-polling this callback next
 ---     "Track" attempt already re-verifies access on its own.
@@ -1094,7 +1094,7 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
 
     -- 'scent' / 'blood' / 'gunpowder': nearest still-fresh logged entry
     -- within maxRange. UPDATED THIS PASS (SPEC.md §9 items 11/17,
-    -- phase2_notes/scent_source_resolution.md §4): 'scent' no longer
+    -- phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution §4): 'scent' no longer
     -- special-cases `sourceCoords = nil` — TrackableLog.scent is now fed by
     -- the 'swapItems' ox_inventory hook above, so it is scanned by this
     -- exact same loop, identically to blood/gunpowder. Discards entries
@@ -1183,7 +1183,7 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     return {
         found = true,
         coords = sourceCoords,
-        -- Informational only (phase2_notes/water_gunpowder_tracking.md
+        -- Informational only (phase2_notes/RESEARCH_ARCHIVE.md#tracking
         -- §1.2) — config.lua is a shared_script so the client can already
         -- read Config.WaterTrackingDecay.breaksTrail directly; populate it
         -- anyway for future-proofing (e.g. a later per-type override).

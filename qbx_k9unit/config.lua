@@ -114,6 +114,16 @@ Config.Features = {
     -- removed on 2026-08-25.
     AdminAuditCommands   = true,
 
+    -- server/integrations.lua. Announces a K9 going down so YOUR dispatch
+    -- can react to it. Read-only detection -- it fires a generic
+    -- 'qbx_k9unit:events:k9Down' event and nothing more.
+    -- Deliberately NOT tied to any particular dispatch resource: this
+    -- resource never calls into a named third party, it announces a fact
+    -- and anything listening can act on it. A server with no dispatch at
+    -- all sees a clean no-op, no errors, no log spam. That is what makes it
+    -- work with a custom dispatch as readily as an off-the-shelf one.
+    K9DownDispatch       = true,
+
     -- server/highcommand.lua. A senior-rank tier, defined per department by
     -- `highCommandGrade` in Config.Departments, that is exempt from EVERY
     -- other rank check in this resource and can mint XP directly via
@@ -202,10 +212,48 @@ Config.Features = {
     -- feed exists, which it does not. Flip it to true only in the same
     -- change that adds the code, never before.
     CameraFeedPiP        = false,
+
+    -- server/certifications.lua. Opt-in periodic recertification: new
+    -- grants get an expiry date and lapse unless renewed. OFF by default,
+    -- and deliberately so -- switching it on retroactively starts a clock
+    -- on every existing certification, which is a real policy decision
+    -- rather than a convenience. Handlers get warned ahead of expiry;
+    -- nobody should find out by an ability silently refusing to work.
+    CertificationExpiry  = false,
+
+    -- server/runtimecontrol.lua. Lets high command switch features on and
+    -- off SERVER-WIDE from the tablet, and tune numbers live, without
+    -- editing config.lua or restarting.
+    -- READ THE ASYMMETRY BEFORE ENABLING, because it is a genuine engine
+    -- constraint and not a bug: every feature in this resource gates its
+    -- RegisterCommand and RegisterNetEvent calls ONCE, at load time. That
+    -- is what makes a disabled feature genuinely inert instead of merely
+    -- hidden. The consequence is that a runtime toggle can reliably turn a
+    -- feature OFF (handlers re-check the live value and refuse), but
+    -- turning one back ON cannot retroactively register handlers that were
+    -- never registered at start -- that needs a restart. The tablet says
+    -- so plainly rather than pretending otherwise.
+    RuntimeFeatureControl = true,
+
+    -- Lets high command restyle the tablet -- colours, density, header
+    -- text -- from inside the tablet itself, saved server-side and applied
+    -- for everyone. Cosmetic only: theming can never change what anyone is
+    -- authorized to do or see.
+    TabletTheming        = true,
 }
 
 -- ======================================================================
 -- PED ROSTER — extensible, no code changes needed to add a streamed model.
+--
+-- ANY ped model works here. Nothing in this resource assumes a dog: every
+-- check is a hash lookup against this list, so a custom streamed model --
+-- a K9 pig, a bear, whatever your server streams -- is as valid as
+-- a_c_shepherd. The ONLY requirement is that the model actually exists on
+-- your server, streamed by some resource, before someone is assigned it.
+--
+-- Each entry may carry an optional `label`, which is what an officer sees
+-- in the K9 Command Tablet when choosing a model. Without one the tablet
+-- shows the raw model name, which is functional but ugly for a custom ped.
 -- ======================================================================
 Config.Peds = {
     { model = 'a_c_shepherd' },
@@ -215,7 +263,89 @@ Config.Peds = {
     -- Example custom streamed model (requires the model to exist in a
     -- streamed resource elsewhere on the server; adding this line is the
     -- *only* change needed to make it selectable):
-    -- { model = 'a_c_k9_malinois' },
+    -- { model = 'a_c_k9_malinois', label = 'Belgian Malinois' },
+    --
+    -- A custom model does not have to be a dog. This is a real, supported
+    -- configuration -- the resource never checks the species:
+    -- { model = 'a_c_pig', label = 'K9 Pig' },
+}
+
+-- ======================================================================
+-- K9 APPEARANCE — what happens to a player's own character when they are
+-- made a K9.
+--
+-- Until now this resource only ever DETECTED whether someone was already
+-- playing a K9 model; it never set one. With this on, certifying someone
+-- (or granting them k9.access) actually turns their character INTO the
+-- ped, and revoking turns them back.
+--
+-- THIS CHANGES A PLAYER'S CHARACTER, so it is worth understanding before
+-- switching it on:
+--   * The change is server-authoritative. A client cannot make itself a
+--     K9; it asks, and the server decides from the same certification and
+--     permission checks everything else in this resource uses.
+--   * It persists. The assignment is stored against the citizenid, so a
+--     relog, a crash or a server restart brings them back as the K9 --
+--     otherwise every K9 would silently turn back into a person on the
+--     next disconnect.
+--   * The player's ORIGINAL appearance is recorded before the swap, so
+--     revoking restores what they actually looked like rather than a
+--     default. If that record is missing (an install where someone was
+--     already a K9 before this feature existed), revoking falls back to a
+--     configured model rather than leaving them stuck as an animal.
+-- ======================================================================
+Config.K9Appearance = {
+    -- Master switch. With this false the resource behaves exactly as it did
+    -- before: it detects K9 models but never assigns one, and an operator
+    -- handles appearance through whatever character system they already run.
+    applyPedModelOnCertify = true,
+
+    -- DOES HOLDING THE K9 ROLE REQUIRE BEING A K9 MODEL?
+    --
+    -- false (the default) decouples the two completely: the K9 ROLE is an
+    -- assignment the server holds against a citizenid, and the ped model is
+    -- just what that character happens to look like. Someone on a model
+    -- that is not in Config.Peds -- including an ordinary human ped, or a
+    -- custom one you never listed -- can still be given the K9 role and use
+    -- every K9 ability.
+    --
+    -- Why this is the default: the model check was only ever a convenience,
+    -- and tying a role to an appearance breaks the moment someone uses a
+    -- character system this resource does not control, streams a model that
+    -- was not on the list, or is mid-swap when a check runs. The role is
+    -- the fact; the model is cosmetic.
+    --
+    -- true restores the older, stricter behaviour: only a configured K9
+    -- model may hold the role. Use it if you want the appearance to be the
+    -- enforcement, and accept that anyone on an unlisted model is locked
+    -- out until you add it to Config.Peds.
+    --
+    -- Either way this is a CONVENIENCE gate, never a security one. Every
+    -- server-side action re-checks certification and permissions
+    -- independently of what anyone looks like.
+    requireK9ModelForRole = false,
+
+    -- Whether the assignment survives a relog. Almost always true -- with
+    -- it false a K9 reverts to their normal character on every disconnect,
+    -- which reads as the feature being broken.
+    persistAcrossSessions = true,
+
+    -- Whether revoking a certification restores the player's previous
+    -- appearance. Leaving this false strands them as an animal with no way
+    -- back, so turn it off only if your own character system takes over
+    -- that job.
+    restoreOriginalPedOnRevoke = true,
+
+    -- Fallback model used ONLY when someone's original appearance was never
+    -- recorded and cannot be restored. Set it to something harmless that
+    -- definitely exists on your server.
+    fallbackHumanModel = 'a_m_m_business_01',
+
+    -- How long to wait for a model to stream in before giving up, in ms.
+    -- A custom addon ped can be slower to load than a vanilla one. On
+    -- timeout the swap is abandoned and the player is left as they were --
+    -- never half-applied, and never stuck invisible.
+    modelLoadTimeoutMs = 10000,
 }
 
 -- ======================================================================
@@ -473,6 +603,74 @@ Config.CommandTablet = {
     -- non-positive or non-number value falls back to the default rather
     -- than meaning "unlimited".
     maxRosterRows = 100,
+}
+
+-- ======================================================================
+-- CERTIFICATION DEPTH -- tiers, expiry and specializations.
+--
+-- Tiers (trainee / certified / senior) are deliberately HARDCODED in
+-- server/certifications.lua rather than configured here. A fixed, ordinal
+-- three-step vocabulary cannot be misconfigured into something the gate
+-- code is unable to rank, and an operator can hold the whole model in
+-- their head. If you want finer-grained distinctions, use specializations
+-- below -- that is what they are for.
+-- ======================================================================
+
+-- Days from grant or renewal until a certification is treated as expired.
+-- Only consulted when Config.Features.CertificationExpiry is true. A
+-- non-positive or non-number value disables expiry-setting rather than
+-- meaning "immediately" or "never" -- this resource's usual fail-safe
+-- convention for a boundary value.
+Config.CertificationExpiryDays = 90
+
+-- How many days ahead of expiry an online handler starts getting a
+-- one-per-session warning. Nobody should discover their certification
+-- lapsed by an ability silently refusing to work.
+Config.CertificationExpiryWarningDays = 7
+
+-- How often the background sweep re-checks online handlers for an
+-- upcoming or just-passed expiry. NOT the enforcement point: HasK9Access
+-- and RefreshCertificationCache always compute the true state fresh on
+-- login, grant and revoke regardless of this interval. This only drives
+-- the courtesy notifications.
+Config.CertificationExpiryCheckIntervalMs = 300000
+
+-- Named K9 training specializations a certifier can grant on top of an
+-- existing active certification. Add freely -- but the keys are stored in
+-- the database, so never RENAME one that has already been granted; add a
+-- new key and migrate, the same rule Config.Permissions carries.
+Config.K9Specializations = {
+    narcotics  = { label = 'Narcotics detection' },
+    explosives = { label = 'Explosives detection' },
+    patrol     = { label = 'Patrol / apprehension' },
+}
+
+-- ======================================================================
+-- K9 DOWN ALERT (Config.Features.K9DownDispatch) -- server/integrations.lua.
+-- Tuning for OUR OWN detection of a K9 going down. This is not an
+-- integration surface: there is nothing here naming another resource,
+-- because the alert is a broadcast event any system can listen for.
+-- ======================================================================
+Config.K9DownDispatch = {
+    -- Health at or below which a K9 counts as down. Mirrors the same
+    -- threshold server/wellbeing.lua uses. Raise it to get an earlier
+    -- "going critical" warning instead of an "already down" one.
+    healthThreshold  = 100,
+
+    -- How long they must stay down before the alert fires, in ms. This is
+    -- the debounce: without it, a momentary dip through the threshold
+    -- during an ordinary firefight would page dispatch. 0 disables it.
+    minDurationMs    = 3000,
+
+    -- Background poll interval, in ms.
+    pollIntervalMs   = 2000,
+
+    -- Minimum gap between two alerts for the SAME K9, in ms. Stops a
+    -- handler bleeding out from generating a stream of alerts. Must be
+    -- positive -- a non-positive value here is caught by cooldowns.lua's
+    -- own guard, which treats it as permanently on rather than "no
+    -- cooldown". A suppressed episode is DEFERRED, not dropped.
+    reFireCooldownMs = 30000,
 }
 
 Config.AllowSelfCertification = true   -- see §4.1

@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 #
-# qbx_k9unit :: back up this resource's five database tables
+# qbx_k9unit :: back up this resource's six database tables
 # =====================================================================
 #
 # RUN THIS BEFORE ANY ROLLBACK OR UNINSTALL. It is the only way back.
 #
-# It saves a copy of the five tables qbx_k9unit owns:
+# It saves a copy of the six tables qbx_k9unit owns:
 #     k9_certifications   who is certified, granted/revoked by whom
 #     k9_search_log       every contraband search ever performed
 #     k9_partnerships     every K9/handler partnership, past and present
 #     k9_progression      every player's accumulated K9 XP
 #     k9_permissions      every named permission grant/revoke, and by whom
+#     k9_certification_specializations
+#                         every K9 specialization grant/revoke, and by whom
 #
 # ...into a single timestamped .sql file, and prints the one command that
 # puts it all back. It touches nothing else in your database, and it makes
@@ -97,10 +99,10 @@ if ! "$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e "SELECT 1" "$DB" >/d
     exit 4
 fi
 
-# --- work out which of the five tables actually exist -------------------
+# --- work out which of the six tables actually exist --------------------
 # Dumping a table that does not exist makes mysqldump fail outright, so a
 # database that only ever ran part of the install still backs up cleanly.
-ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_permissions)
+ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_permissions k9_certification_specializations)
 PRESENT=()
 MISSING=()
 for t in "${ALL_TABLES[@]}"; do
@@ -110,7 +112,7 @@ for t in "${ALL_TABLES[@]}"; do
 done
 
 if [ "${#PRESENT[@]}" -eq 0 ]; then
-    echo "ERROR: none of the five qbx_k9unit tables exist in database '$DB'." >&2
+    echo "ERROR: none of the qbx_k9unit tables exist in database '$DB'." >&2
     echo "       There is nothing to back up. Check you named the right database." >&2
     exit 5
 fi
@@ -118,6 +120,22 @@ fi
 mkdir -p "$OUTDIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 OUTFILE="$OUTDIR/qbx_k9unit-backup-${DB}-${STAMP}.sql"
+
+# NEVER overwrite an existing backup. The timestamp above only has
+# one-second resolution, so running this script twice in quick succession
+# -- which people do, e.g. when the first run looks like it hung, or just
+# to be sure they have a copy -- would otherwise silently replace the
+# backup taken moments earlier with a new one. For a file whose entire job
+# is to be the last way back, quietly destroying a previous copy is the
+# one behaviour that must never happen, so if the name is taken we add
+# -2, -3, ... until it is free. Both backups are then kept.
+if [ -e "$OUTFILE" ]; then
+    n=2
+    while [ -e "$OUTDIR/qbx_k9unit-backup-${DB}-${STAMP}-${n}.sql" ]; do
+        n=$((n + 1))
+    done
+    OUTFILE="$OUTDIR/qbx_k9unit-backup-${DB}-${STAMP}-${n}.sql"
+fi
 
 echo "Backing up ${#PRESENT[@]} table(s) from '$DB': ${PRESENT[*]}"
 if [ "${#MISSING[@]}" -gt 0 ]; then
@@ -187,7 +205,7 @@ else
 fi
 echo ""
 echo " (It will ask for the same password you just typed. Restoring REPLACES"
-echo "  the five tables with the versions saved in this file.)"
+echo "  these tables with the versions saved in this file.)"
 echo ""
 echo " Keep this file somewhere safe -- copy it off the server if you can."
 echo "======================================================================"

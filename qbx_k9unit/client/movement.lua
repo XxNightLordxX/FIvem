@@ -93,11 +93,16 @@
       (client/combat.lua) to use once that lands:
         K9MoveRateModifiers (table)  -- named multiplier contributions, one
             key per contributing system (`fatigue`, `injury`, `mood`,
-            `xpTier`, `dragging`), each defaulting to 1.0 (no effect).
+            `xpTier`, `dragging`, `breed`), each defaulting to 1.0 (no effect).
             Callers set their OWN key directly (e.g.
             `K9MoveRateModifiers.fatigue = 0.85`) and then call
             RecomputeK9MoveRate() — never call SetPedMoveRateOverride
-            directly from any other file.
+            directly from any other file. `breed` is the one exception to
+            "callers set their own key": THIS FILE writes it itself, inside
+            RecomputeK9MoveRate(), from Config.Peds[n].speedMultiplier for
+            the ped's CURRENT model — see the "BREED MOVE-RATE WEIGHT"
+            block near that function's own definition for the full
+            reasoning (FEATURE_IDEAS.md Part A §4).
         RecomputeK9MoveRate() -- composes every present modifier
             multiplicatively, clamps to [0.1, 2.0], and makes the single
             real SetPedMoveRateOverride call for the K9's own ped. Safe to
@@ -177,8 +182,9 @@
     DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT + NUDGE-OPEN. SPEC.md
     §11.1 sub-phase 2a/2b, §11.3's file/module plan (this file's row), §11.4
     items 5/6, §11.5's door-interaction acceptance criteria;
-    phase2_notes/door_interaction.md, phase2_notes/door_interaction_natives.md,
-    and phase2_notes/door_interaction_security_review.md (all read in full
+    phase2_notes/RESEARCH_ARCHIVE.md#door-interaction (the design note,
+    native verification, and security review that used to be three separate
+    files are now merged into this one section; all three were read in full
     before this section was written — the security review in particular was
     written pre-implementation against server/main.lua's ALREADY-SHIPPED
     relayDoorScratch handler, so this file is built to that handler's exact,
@@ -190,8 +196,8 @@
     native door-lock/CDoor system, by design), and which of the two
     design-note-flagged implementation paths was actually taken (the
     zero-gating cosmetic-only fallback, since a real "already passable"
-    detection method was never confirmed to exist in any of the three
-    phase2_notes documents).
+    detection method was never confirmed to exist anywhere in
+    phase2_notes/RESEARCH_ARCHIVE.md#door-interaction).
 
     Nudge-open has NO server event of its own — it is 100% client-local
     (ZERO TriggerServerEvent, ZERO callback, nothing server-authoritative
@@ -942,7 +948,7 @@ end
 -- this codebase's own convention (see client/hud.lua's "STAMINA NATIVE --
 -- CONFIDENCE NOTE" for the standard this follows): the native's
 -- NAME/existence as a real, callable FiveM ped native is HIGH confidence
--- (linked from phase2_notes/phase3_combat_natives.md's own
+-- (linked from phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat's own
 -- natives-to-verify list, and independently named by both
 -- PHASE3_SPEC.md §12.5.4 and PHASE4_SPEC.md §13.0 as the intended
 -- mechanism for exactly this class of effect -- multiple independent
@@ -988,8 +994,12 @@ end
 --- an arbitrary target entity; (2) every modifier key in this table is
 --- itself only ever written by a caller when THAT SAME client is playing a
 --- K9 character (client/wellbeing.lua and client/progression.lua both scope
---- their writes to a K9 model first) -- there is no modifier here that
---- would ever mean anything on a human ped in the first place. A caller
+--- their writes to a K9 model first; `breed`, added this pass, is written by
+--- THIS FILE itself, from INSIDE RecomputeK9MoveRate() after its own
+--- `IsOwnModelK9()` check above has already passed -- see "BREED MOVE-RATE
+--- WEIGHT" near K9MoveRateModifiers' own declaration) -- there is no
+--- modifier here that would ever mean anything on a human ped in the first
+--- place. A caller
 --- that genuinely needs to set a DIFFERENT (non-K9, or not-necessarily-K9)
 --- ped's move rate cannot route through this composer at all -- it must
 --- call SetPedMoveRateOverride directly on that ped instead. This already
@@ -1012,7 +1022,96 @@ K9MoveRateModifiers = {
     mood = 1.0,     -- client/wellbeing.lua, Config.Features.MoodSystem
     xpTier = 1.0,   -- client/progression.lua, Config.Features.XPProgression
     dragging = 1.0, -- RESERVED for Phase 3's PropDragging (client/combat.lua, PHASE3_SPEC.md §12.5.4) -- not yet a real contributor; present so that file's eventual composer write has a ready slot without needing to edit this table.
+    breed = 1.0,    -- THIS FILE's own contribution -- see "BREED MOVE-RATE WEIGHT" below. Recomputed fresh on every RecomputeK9MoveRate() call from the CALLING client's own current ped model, never left stale across a model change the way a server-pushed modifier (xpTier) could be.
 }
+
+-- ======================================================================
+-- BREED MOVE-RATE WEIGHT (FEATURE_IDEAS.md Part A §4 -- "give Config.Peds'
+-- breed data actual mechanical weight"). Config.Peds entries carry no
+-- per-model stat today (README.md: every recognized K9 model is
+-- mechanically identical). This section gives ONE stat -- base move
+-- speed -- real, live weight, through this composer's own `breed` slot
+-- above, per this task's explicit instruction: "if breed affects movement,
+-- it MUST go through that composer and reserve its own slot; do not call
+-- SetPedMoveRateOverride directly, and do not stack a second clamp." This
+-- section does neither -- it only ever writes K9MoveRateModifiers.breed
+-- and relies entirely on RecomputeK9MoveRate()'s own single
+-- SetPedMoveRateOverride call and single [0.1, 2.0] clamp below.
+--
+-- CONFIG FIELD, NOT YET IN config.lua (this pass does not own that file --
+-- reported separately): `Config.Peds[n].speedMultiplier` (number, optional).
+-- Read defensively below (`type(...) == 'number'` guard) so this is a
+-- SAFE NO-OP (every breed resolves to the neutral 1.0 default) against
+-- TODAY's real, unmodified config.lua, which has no such field on any
+-- entry yet -- this composer slot only starts differentiating breeds once
+-- that field is actually added.
+--
+-- PRECOMPUTED ONCE AT FILE LOAD, keyed by GetHashKey(pedEntry.model) --
+-- mirrors client/main.lua's own K9ModelHashes construction loop exactly
+-- (same source table, same per-entry GetHashKey call), but this is NOT a
+-- second copy of that file's consolidated "is this a recognized K9 model"
+-- boolean set (REFACTOR_ROADMAP.md item 3, IsEntityModelK9/K9ModelHashes --
+-- six prior duplicates of THAT specific check were found and deleted; see
+-- client/main.lua's own header). This table answers a genuinely different
+-- question no existing table in this resource answers -- "what breed-
+-- specific speed MULTIPLIER does this recognized model carry" -- so it is
+-- additive, not a regression of that consolidation. Kept as its own local
+-- copy rather than reusing client/main.lua's K9ModelHashes (a plain
+-- hash->true set has no multiplier value to read out of it).
+--
+-- SPREAD, AND WHY IT STAYS SMALL: this is a flavor/identity axis, not a
+-- second progression system -- Config.XPTiers' OWN speedMultiplier already
+-- spans 1.00 -> 1.15 (a full session-to-session progression arc) and
+-- composes multiplicatively with this one. A breed axis anywhere near that
+-- size would let breed choice alone rival hours of earned progression,
+-- and a large spread on a single axis structurally means whichever breed
+-- sits at the top of it is the unconditionally fastest pick -- there is no
+-- second axis for a small spread to trade off against. Proposed values
+-- (report to config.lua's owner, not applied by this pass) span only
+-- 0.98 - 1.03 (5 percentage points total): Husky 1.03 (bred for
+-- endurance/speed), Shepherd 1.00 (baseline -- see this section's own
+-- "OTHER STATS" note below for why its specialty is elsewhere), Chop 1.00
+-- (the roster's generic/mascot entry -- deliberately neutral), Rottweiler
+-- 0.98 (bulkier gait). See "OTHER STATS" below for why Rottweiler being
+-- slowest here is a trade-off, not a flaw.
+--
+-- OTHER STATS CONSIDERED, AND WHY ONLY SPEED IS WIRED THIS PASS: scent
+-- range (server/tracking.lua's findTrackableSource, which already applies
+-- Config.XPTiers' own scentRangeMultiplier) and bite-and-hold effectiveness
+-- (server/combat.lua) are the two other mechanics this resource's own
+-- multiplier conventions could plausibly extend to a breed. Both live in
+-- files this pass does not own (concurrently owned by another agent this
+-- session) -- reported as a precise, ready-to-apply follow-up rather than
+-- edited here (see this pass's own report for the exact proposed
+-- Config.Peds.scentRangeMultiplier/biteMultiplier values and the small
+-- tracking.lua diff this would need), specifically so that ONCE wired, no
+-- single breed ends up strictly dominant across all three axes: Husky
+-- trades scent for speed, Rottweiler trades speed for (future) bite power,
+-- Shepherd trades (future) bite power for scent, and Chop stays neutral
+-- across all three -- every pairwise comparison has at least one axis each
+-- breed wins, by construction (verified by hand this pass, not asserted).
+-- ======================================================================
+-- DEFENSIVE READ on Config.Peds itself (`type(...) == 'table'` guard, not a
+-- bare `ipairs(Config.Peds)`): this loop runs at THIS FILE's own load time,
+-- same as client/main.lua's K9ModelHashes loop -- a missing/malformed
+-- Config.Peds would otherwise throw here and take the whole client resource
+-- down before a single line of gameplay code ever ran. server/certifications.lua
+-- already asserts Config.Peds is a real, non-empty array at SERVER resource
+-- start, but that assert cannot protect a CLIENT file's own independent
+-- load, and does not run at all inside this suite's sandbox (tests/fixtures/
+-- sandbox.lua loads this file directly, with whatever minimal Config fixture
+-- each spec supplies -- several existing specs for this file supply no
+-- `Config.Peds` at all, since they predate this addition).
+local K9BreedSpeedMultiplierByModelHash = {}
+if type(Config.Peds) == 'table' then
+    for _, pedEntry in ipairs(Config.Peds) do
+        if type(pedEntry) == 'table' and type(pedEntry.model) == 'string' then
+            local multiplier = pedEntry.speedMultiplier
+            K9BreedSpeedMultiplierByModelHash[GetHashKey(pedEntry.model)] =
+                (type(multiplier) == 'number' and multiplier > 0) and multiplier or 1.0
+        end
+    end
+end
 
 local MOVE_RATE_MIN = 0.1 -- see this section's header comment for the full clamp-range justification
 local MOVE_RATE_MAX = 2.0
@@ -1052,6 +1151,16 @@ function RecomputeK9MoveRate()
         end
         return
     end
+
+    -- BREED MOVE-RATE WEIGHT -- see this table's own declaration/header
+    -- above for the full reasoning. Recomputed from the CURRENT model on
+    -- every call (never cached across a model change) -- cheap (a single
+    -- table lookup keyed by a hash this line already needs to read once),
+    -- and correct regardless of whether this composer happens to run
+    -- again before or after a K9-to-K9 model swap (there is no such swap
+    -- in this resource today, but nothing here assumes there cannot be
+    -- one later).
+    K9MoveRateModifiers.breed = K9BreedSpeedMultiplierByModelHash[GetEntityModel(ped)] or 1.0
 
     local effective = 1.0
     for _, modifier in pairs(K9MoveRateModifiers) do
@@ -1144,8 +1253,8 @@ end
 -- NUDGE-OPEN — DESIGN PATH TAKEN (read this before touching NudgeDoor()):
 --
 -- The hard, non-negotiable constraint (SPEC.md §11.5/§11.6,
--- phase2_notes/door_interaction_natives.md §0.5/§4,
--- phase2_notes/door_interaction_security_review.md Finding 3): nudge-open
+-- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §0.5/§4,
+-- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction Finding 3): nudge-open
 -- must NEVER consult GTA's native door-lock/CDoor system
 -- (DoorSystemGetDoorState / IsDoorClosed / GetStateOfClosestDoorOfType /
 -- etc.) as a safety check. An unregistered door — the common case, since
@@ -1167,10 +1276,11 @@ end
 -- to itself) — same reasoning, applied to a door instead of a vehicle seat.
 --
 -- WHICH FALLBACK WAS ACTUALLY TAKEN — flagged explicitly per this task's
--- own instruction, for exploit-tester to verify against: none of the three
--- phase2_notes documents ever settled on a confirmed "is this door already
--- passable" detection method beyond distance.
---   - door_interaction.md §7/§8 explicitly leaves "the exact model-hash
+-- own instruction, for exploit-tester to verify against: nothing in
+-- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction ever settled on a
+-- confirmed "is this door already passable" detection method beyond
+-- distance.
+--   - The design note (§7/§8 in its original form) explicitly leaves "the exact model-hash
 --     list (or alternative detection method)" as "a real implementation
 --     task, not a design-note-level decision" — i.e. still open, not
 --     resolved.
@@ -1223,13 +1333,13 @@ end
 --- applies to IsEntityModelK9() for the leash/certify options above.
 ---
 --- No generic "is this entity a door" native/predicate exists (confirmed by
---- phase2_notes/door_interaction_natives.md — GTA's native door SYSTEM only
+--- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction — GTA's native door SYSTEM only
 --- covers doors explicitly registered via AddDoorToSystem/IPL data, a small
 --- fraction of visible door props on a typical interior-heavy server, and
 --- is unsuitable here anyway since Scratch-to-alert must work "on any door
 --- ... regardless of lock state" per SPEC.md §11.5, i.e. registered or not).
 --- Rather than hand-maintain a model-hash allow-list of specific door prop
---- names (phase2_notes/door_interaction.md §3.1's "Option 1" — flagged
+--- names (phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §3.1's "Option 1" — flagged
 --- there as LOW-MEDIUM confidence and something that would need updating
 --- for every interior/MLO a server adds), this checks the entity's own
 --- model name STRING for the substring "door", via GetEntityArchetypeName —
@@ -1241,7 +1351,7 @@ end
 --- string) — not independently re-confirmed against a live client this
 --- session; LOW-MEDIUM that the substring check covers "most doors a player
 --- would expect this to work on" for the same reason
---- phase2_notes/door_interaction.md §3.1 grades its own model-list approach
+--- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §3.1 grades its own model-list approach
 --- LOW-MEDIUM (door prop naming isn't fully standardized across the base
 --- map). If this predicate turns out to under/over-match badly in
 --- real-world testing, that's the first place to revisit — ideally with
@@ -1259,7 +1369,7 @@ end
 --- action's local visual cue on the K9 itself, built the exact same way
 --- K9_SIT_SCENARIO_BY_MODEL_HASH is above. No "dog scratches at a door"
 --- scenario has been confirmed to exist anywhere this session —
---- phase2_notes/door_interaction.md §4.2/§7 flags this explicitly ("no ...
+--- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2/§7 flags this explicitly ("no ...
 --- scenario/clipset name ... has been confirmed to exist at all this
 --- session — treat as unconfirmed, not assumed absent, same caveat
 --- movement.lua's Sit-action header already applies to its own scenario
@@ -1340,7 +1450,7 @@ local function ScratchAtDoor(entity)
     local doorNetId = NetworkGetNetworkIdFromEntity(entity)
 
     -- Local visual/audio feedback cue on the ACTING player's own K9,
-    -- per phase2_notes/door_interaction.md §4.2 ("Play a scratch/paw
+    -- per phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2 ("Play a scratch/paw
     -- animation + sound cue locally on the K9 ... TriggerServerEvent(...)").
     -- This plays immediately and unconditionally (unlike client/radial.lua's
     -- Bark item, which plays no local cue at all and relies entirely on the
@@ -1368,7 +1478,7 @@ end
 local DOOR_NUDGE_SOUND_NAME = 'DoorNudge'
 
 -- Feel/tuning knob for the cosmetic push impulse below — NOT a structural
--- decision (phase2_notes/door_interaction.md §8 explicitly lists "the exact
+-- decision (phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §8 explicitly lists "the exact
 -- push-force magnitude/direction tuning for a convincing nudge animation"
 -- as a tuning knob, not a design-level choice) and has zero bearing on this
 -- function's safety properties either way, since it only ever scales a
@@ -1403,8 +1513,9 @@ local NUDGE_IMPULSE_FORCE = 2.0
 ---   field below, Config.DoorInteraction.interactDistance) and
 ---   CanShowK9UI() — no reachability/"already passable" check of any kind.
 ---   This is the explicit fallback this file's header comment names: none
----   of the three phase2_notes documents (door_interaction.md §7/§8,
----   door_interaction_natives.md §7) ever settled on a confirmed method for
+---   of what used to be three separate phase2_notes documents (now merged
+---   into phase2_notes/RESEARCH_ARCHIVE.md#door-interaction) ever settled on
+---   a confirmed method for
 ---   detecting "is this specific door object already passable" beyond the
 ---   conceptual framing itself, so there is nothing concrete to gate on
 ---   instead — and a self-only cosmetic impulse cannot grant any capability
@@ -1419,7 +1530,7 @@ local NUDGE_IMPULSE_FORCE = 2.0
 --- (a very commonly used FiveM native with a well-established call shape in
 --- community scripts, but not independently re-verified against
 --- raw.githubusercontent.com/citizenfx/natives this session the way
---- phase2_notes/door_interaction_natives.md verified the door-system
+--- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction verified the door-system
 --- natives) — worth a native-api-assistant pass before shipping if the feel
 --- is off in testing, same standard this file's own K9Sit()/ScratchAtDoor()
 --- scenario-name comments already apply to themselves. This has NO bearing
@@ -1505,7 +1616,7 @@ end
 local function RegisterDoorInteractionOxTargetOptions()
     if Config.Features.DoorInteraction then
         -- Config.DoorInteraction.nudgeRequiresUnlocked "applied as a config
-        -- gate" (Finding 3, phase2_notes/door_interaction_security_review.md):
+        -- gate" (Finding 3, phase2_notes/RESEARCH_ARCHIVE.md#door-interaction):
         -- per this file's "NUDGE-OPEN — DESIGN PATH TAKEN" header comment
         -- above, NudgeDoor() has no real lock-state read anywhere to build a
         -- runtime branch off this flag with — doing so would require exactly
@@ -1525,7 +1636,7 @@ local function RegisterDoorInteractionOxTargetOptions()
             'system, see this file\'s "NUDGE-OPEN" header comment) -- this ' ..
             'assertion exists solely to fail loudly if this field is ever ' ..
             'repurposed as a real gate without a reviewed code change. See ' ..
-            'phase2_notes/door_interaction_security_review.md Finding 3.')
+            'phase2_notes/RESEARCH_ARCHIVE.md#door-interaction Finding 3.')
 
         exports.ox_target:addGlobalObject({
             {

@@ -208,6 +208,15 @@
        event there (not at each call site) covers all of them at once and
        guarantees the event payload can never drift from what actually
        lands in the `k9_search_log` audit row.
+       RECOMMENDED, NOT YET APPLIED (server/integrations.lua's own header,
+       2026-08-25 pass): extend this payload with the two target-identity
+       fields (`plateOrNil`, `targetCitizenidOrNil`) already in scope at
+       this exact call site — an MDT/evidence integration cannot attach a
+       `found` result to a real case record without knowing WHAT was
+       searched, only who searched it. Additive (MINOR), not applied here
+       since server/search.lua's ownership this session belongs to a
+       different agent — see server/integrations.lua's header for the full
+       writeup.
 
     6. 'qbx_k9unit:events:xpTierReached'
        (citizenid: string, newTier: table, oldTier: table — both COPIES,

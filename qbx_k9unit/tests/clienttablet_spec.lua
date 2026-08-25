@@ -1,0 +1,1027 @@
+--[[
+    tests/clienttablet_spec.lua
+
+    Direct, black-box tests of client/tablet.lua against the REAL,
+    unmodified production file -- same fresh-sandbox-per-test discipline
+    as tests/clientradial_spec.lua/tests/clientvision_spec.lua, whose
+    fixture-construction style this file follows closely (a `calls` call
+    log for every plain "do a thing" cross-file global, `queryState` for
+    controllable state-query predicates, Sandbox.newThreadRunner() for the
+    ESC/death watch thread).
+
+    PRIORITIES, per this pass's own task brief: focus is released on
+    close (NUI-initiated, ESC, own death, resource stop), a THROWN server
+    callback fails closed without ever leaving focus held, and the
+    Config.Features.CommandTablet flag genuinely gates registration (not
+    just behavior). Also covered: Config.CommandTablet.openMode's three
+    modes plus its invalid-value fallback, the grant/revoke ->
+    html/tablet.js reason/message translation (including the two
+    "still has it"/"target offline" nuance cases server/permissions.lua's
+    own header calls out by name), the SECTION 3 ExecuteCommand allowlist
+    (including tablet:decertify's reuse of it), and a representative
+    sample of the SECTION 2 tablet:triggerFeature dispatch table -- one of
+    each gate shape (always-gated, ungated-release/gated-attempt toggle,
+    HasK9Access-only, fully self-gating passthrough, missing-seam
+    soft-fail) rather than all ~20 entries individually, since every entry
+    shares one of a small handful of already-proven shapes.
+
+    WATCH-THREAD STEPPING NOTES (see EnsureTabletWatchThreadRunning() in
+    client/tablet.lua): unlike client/vision.lua's maintenance thread
+    (whose first statement is a plain assignment BEFORE its `while` even
+    starts), this thread's loop body itself performs a real check
+    (DisableControlAction + the ESC/death branch) BEFORE its own Wait(0)
+    -- there is no separate "prime" statement outside the loop. So:
+      step() call N -- resumes at (or, for N=1, enters and immediately
+        runs) the loop body: re-checks `while tabletOpen do`, and if still
+        true, runs ONE real ESC/death check pass, then yields at Wait(0).
+      Consequence: if a test's setup makes the NEXT check pass trip
+        CloseTablet() (which flips `tabletOpen` false), that flip is only
+        OBSERVED by the loop's own `while` condition on the step AFTER the
+        one that called CloseTablet() -- so proving full self-termination
+        (threadCreateCount resets, a later re-open starts a genuinely NEW
+        thread) takes one extra step() beyond the one that visibly closed
+        the tablet. Each test below says explicitly which step is which.
+]]
+
+local t = dofile('testkit.lua')
+local Sandbox = dofile('fixtures/sandbox.lua')
+local locale = Sandbox.locale
+
+-- ----------------------------------------------------------------------
+-- Sandbox setup
+-- ----------------------------------------------------------------------
+
+--- @param opts { features: table?, commandTablet: table?, featureControl: table?, canShowK9UI: boolean?, hasK9Access: boolean? }?
+--- @return table fixture
+local function newTabletFixture(opts)
+    opts = opts or {}
+
+    local canShowK9UI = opts.canShowK9UI
+    if canShowK9UI == nil then canShowK9UI = true end
+    local hasK9Access = opts.hasK9Access
+    if hasK9Access == nil then hasK9Access = true end
+
+    local canShowK9UICalls, hasK9AccessCalls, denyCalls = 0, 0, 0
+    local function CanShowK9UI() canShowK9UICalls = canShowK9UICalls + 1; return canShowK9UI end
+    local function HasK9Access() hasK9AccessCalls = hasK9AccessCalls + 1; return hasK9Access end
+    local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
+
+    -- Generic call log -- calls[name] is a list of arg-tuples, one per
+    -- invocation, for every plain "do a thing" cross-file global below.
+    -- Mirrors tests/clientradial_spec.lua's own `record`/`calls` shape.
+    local calls = {}
+    local function record(name)
+        return function(...)
+            calls[name] = calls[name] or {}
+            calls[name][#calls[name] + 1] = { ... }
+            return calls[name].returnValue
+        end
+    end
+
+    -- Controllable "current state" query stubs, same shape as
+    -- tests/clientradial_spec.lua's own `queryState`/`queryFn`.
+    local queryState = {
+        isLeashed = false, isInK9Vehicle = false, activeTrackType = nil,
+        isBiteHoldEngaged = false, isDragEngaged = false,
+        isFetchCarryEngaged = false, isPartnered = false,
+    }
+    local function queryFn(name, field)
+        return function(...)
+            calls[name] = calls[name] or {}
+            calls[name][#calls[name] + 1] = { ... }
+            return queryState[field]
+        end
+    end
+
+    -- FindNearest*Candidate -- controllable return value (nil = "no
+    -- candidate found"), and can be OMITTED entirely (see omitSeams
+    -- below) to prove the missing-seam soft-fail path.
+    local leashCandidate, partnerCandidate = nil, nil
+
+    local notifyCalls = {}
+    local function lib_notify(payload) notifyCalls[#notifyCalls + 1] = payload end
+
+    local printLines = {}
+    local function customPrint(...)
+        local parts = { ... }
+        local strs = {}
+        for i = 1, select('#', ...) do strs[i] = tostring(parts[i]) end
+        printLines[#printLines + 1] = table.concat(strs, '\t')
+    end
+
+    -- SetNuiFocus / SendNUIMessage -- the whole point of this file.
+    local setNuiFocusCalls = {}
+    local function SetNuiFocus(hasFocus, hasCursor) setNuiFocusCalls[#setNuiFocusCalls + 1] = { hasFocus, hasCursor } end
+    local sendNuiMessageCalls = {}
+    local function SendNUIMessage(payload) sendNuiMessageCalls[#sendNuiMessageCalls + 1] = payload end
+
+    -- ESC/death watch thread natives.
+    local disabledControlJustPressed = false
+    local isEntityDead = false
+    local disableControlActionCalls = {}
+    local function DisableControlAction(...) disableControlActionCalls[#disableControlActionCalls + 1] = { ... } end
+    local function IsDisabledControlJustPressed(_pad, _control) return disabledControlJustPressed end
+    local function IsEntityDead(_ped) return isEntityDead end
+    local function PlayerPedId() return 1 end
+
+    -- CreateThread/Wait -- Sandbox.newThreadRunner() wrapped so this
+    -- fixture can ALSO count how many threads were ever created (same
+    -- "already running -> no-op, self-terminate -> a later transition
+    -- starts fresh" proof shape as tests/clientvision_spec.lua's own
+    -- fixture).
+    local runner = Sandbox.newThreadRunner()
+    local threadCreateCount = 0
+    local function CreateThread(fn)
+        threadCreateCount = threadCreateCount + 1
+        runner.CreateThread(fn)
+    end
+    local function Wait(ms) runner.Wait(ms) end
+
+    -- RegisterCommand / RegisterNUICallback / AddEventHandler -- capturing.
+    local registerCommandCalls = {}
+    local function RegisterCommand(name, handler, restricted)
+        registerCommandCalls[#registerCommandCalls + 1] = { name = name, handler = handler, restricted = restricted }
+    end
+    local nuiCallbacks = {}
+    local function RegisterNUICallback(name, handler)
+        nuiCallbacks[name] = handler -- last registration wins, matching FiveM's own real dedup-by-name behavior
+    end
+    local eventHandlers = {}
+    local function AddEventHandler(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+
+    local RESOURCE_NAME = 'qbx_k9unit'
+    local function GetCurrentResourceName() return RESOURCE_NAME end
+
+    -- lib.callback.await -- controllable per-name response/throw, same
+    -- "pcall-wrapped, fails closed" contract this whole suite already
+    -- exercises for client/main.lua's HasK9Access(). Default: every name
+    -- not explicitly configured throws (a truthy simulation of "server
+    -- callback not registered yet"), so a test must opt IN a real
+    -- response rather than accidentally relying on an unconfigured one.
+    local callbackResponses = {} -- name -> { throws: boolean, result: table }
+    local callbackCallLog = {}
+    local function lib_callback_await(name, _timeout, ...)
+        callbackCallLog[#callbackCallLog + 1] = { name = name, args = { ... } }
+        local cfg = callbackResponses[name]
+        if not cfg or cfg.throws then
+            error('sandbox: no server callback registered for ' .. tostring(name), 0)
+        end
+        return cfg.result
+    end
+
+    -- exports.ox_inventory.useItem / .Items -- colon-call syntax
+    -- (`exports.ox_inventory:useItem(...)`) means the REAL first argument
+    -- is the table itself; captured but irrelevant to every assertion
+    -- below, which only cares about `data`/the approval callback.
+    local oxInventoryStarted = true
+    local useItemApproves = true
+    local useItemCalls = {}
+    local exportsStub = {
+        ox_inventory = {
+            useItem = function(_self, data, cb)
+                useItemCalls[#useItemCalls + 1] = data
+                cb(useItemApproves)
+            end,
+        },
+    }
+    local function GetResourceState(resourceName)
+        if resourceName == 'ox_inventory' then
+            return oxInventoryStarted and 'started' or 'missing'
+        end
+        return 'started'
+    end
+
+    local executeCommandCalls = {}
+    local function ExecuteCommand(commandString) executeCommandCalls[#executeCommandCalls + 1] = commandString end
+
+    local triggerServerEventCalls = {}
+    local function TriggerServerEvent(...) triggerServerEventCalls[#triggerServerEventCalls + 1] = { ... } end
+
+    local overrides = {
+        CanShowK9UI = CanShowK9UI, HasK9Access = HasK9Access, DenyK9UIAccess = DenyK9UIAccess,
+        lib = { notify = lib_notify, callback = { await = lib_callback_await } },
+        print = customPrint,
+        SetNuiFocus = SetNuiFocus, SendNUIMessage = SendNUIMessage,
+        DisableControlAction = DisableControlAction,
+        IsDisabledControlJustPressed = IsDisabledControlJustPressed,
+        IsEntityDead = IsEntityDead, PlayerPedId = PlayerPedId,
+        CreateThread = CreateThread, Wait = Wait,
+        RegisterCommand = RegisterCommand, RegisterNUICallback = RegisterNUICallback,
+        AddEventHandler = AddEventHandler, GetCurrentResourceName = GetCurrentResourceName,
+        GetResourceState = GetResourceState, exports = exportsStub,
+        ExecuteCommand = ExecuteCommand, TriggerServerEvent = TriggerServerEvent,
+
+        -- FEATURE_TRIGGERS dependencies -- plain call-recording stand-ins
+        -- (record()) for every "just do it" action, queryFn() for every
+        -- "am I currently..." predicate.
+        K9Sit = record('K9Sit'),
+        IsLeashed = queryFn('IsLeashed', 'isLeashed'), DetachLeash = record('DetachLeash'),
+        RequestLeashAttach = record('RequestLeashAttach'),
+        IsInK9Vehicle = queryFn('IsInK9Vehicle', 'isInK9Vehicle'),
+        ExitK9Vehicle = record('ExitK9Vehicle'), EnterNearestK9Vehicle = record('EnterNearestK9Vehicle'),
+        GetActiveTrackType = function(...)
+            calls['GetActiveTrackType'] = calls['GetActiveTrackType'] or {}
+            calls['GetActiveTrackType'][#calls['GetActiveTrackType'] + 1] = { ... }
+            return queryState.activeTrackType
+        end,
+        StopTracking = record('StopTracking'), StartScentTrack = record('StartScentTrack'),
+        StartBloodTrack = record('StartBloodTrack'), StartGunpowderTrack = record('StartGunpowderTrack'),
+        ToggleThermalVision = record('ToggleThermalVision'), ToggleNightVision = record('ToggleNightVision'),
+        IsBiteHoldEngaged = queryFn('IsBiteHoldEngaged', 'isBiteHoldEngaged'),
+        ReleaseBiteHold = record('ReleaseBiteHold'), RequestBiteHold = record('RequestBiteHold'),
+        RequestTakedown = record('RequestTakedown'),
+        IsDragEngaged = queryFn('IsDragEngaged', 'isDragEngaged'),
+        ReleaseDrag = record('ReleaseDrag'), RequestDrag = record('RequestDrag'),
+        IsPartnered = queryFn('IsPartnered', 'isPartnered'), BreakPartnership = record('BreakPartnership'),
+        RequestPartnerUp = record('RequestPartnerUp'),
+        RequestRecall = record('RequestRecall'),
+        ConfirmHandlerDownDefense = record('ConfirmHandlerDownDefense'),
+        IsFetchCarryEngaged = queryFn('IsFetchCarryEngaged', 'isFetchCarryEngaged'),
+        ReleaseFetchBall = record('ReleaseFetchBall'), RequestThrowFetchBall = record('RequestThrowFetchBall'),
+        RequestToggleK9PropAttachment = record('RequestToggleK9PropAttachment'),
+        RequestDeployKennel = record('RequestDeployKennel'),
+        RequestOpenOwnK9Inventory = record('RequestOpenOwnK9Inventory'),
+        RequestTreatNearestK9 = record('RequestTreatNearestK9'),
+        RequestK9CalmDown = record('RequestK9CalmDown'),
+    }
+
+    -- FindNearestLeashCandidate/FindNearestPartnerCandidate are OMITTED
+    -- entirely unless opts.withSeams (default true) -- proving the
+    -- `type(fn) == 'function'` soft-dependency guard degrades cleanly
+    -- when client/radial.lua's own seam has not (yet) been opened.
+    if opts.withSeams ~= false then
+        overrides.FindNearestLeashCandidate = function() return leashCandidate end
+        overrides.FindNearestPartnerCandidate = function() return partnerCandidate end
+    end
+
+    local env = Sandbox.newEnv(overrides)
+
+    Sandbox.loadInto('../config.lua', env)
+
+    -- FIXED BASELINE -- config.lua is edited concurrently by other agents;
+    -- pin exactly the fields this spec cares about BEFORE loading
+    -- client/tablet.lua (openMode/command/allowActionsFromTablet are all
+    -- read at FILE-LOAD time), same reasoning as
+    -- tests/clientradial_spec.lua's/tests/clientvision_spec.lua's own
+    -- fixed-baseline sections.
+    env.Config.Features.CommandTablet = true
+    for key, value in pairs(opts.features or {}) do
+        env.Config.Features[key] = value
+    end
+    env.Config.CommandTablet = env.Config.CommandTablet or {}
+    env.Config.CommandTablet.openMode = 'both'
+    env.Config.CommandTablet.command = 'k9tablet'
+    env.Config.CommandTablet.itemName = 'k9_tablet'
+    for key, value in pairs(opts.commandTablet or {}) do
+        env.Config.CommandTablet[key] = value
+    end
+    env.Config.FeatureControl = env.Config.FeatureControl or {}
+    env.Config.FeatureControl.allowActionsFromTablet = true
+    for key, value in pairs(opts.featureControl or {}) do
+        env.Config.FeatureControl[key] = value
+    end
+
+    Sandbox.loadInto('../client/tablet.lua', env)
+
+    return {
+        env = env,
+        Config = env.Config,
+        notifyCalls = notifyCalls,
+        printLines = printLines,
+        setNuiFocusCalls = setNuiFocusCalls,
+        sendNuiMessageCalls = sendNuiMessageCalls,
+        registerCommandCalls = registerCommandCalls,
+        nuiCallbacks = nuiCallbacks,
+        executeCommandCalls = executeCommandCalls,
+        triggerServerEventCalls = triggerServerEventCalls,
+        useItemCalls = useItemCalls,
+        calls = calls,
+        callbackCallLog = callbackCallLog,
+        canShowK9UICalls = function() return canShowK9UICalls end,
+        hasK9AccessCalls = function() return hasK9AccessCalls end,
+        denyCalls = function() return denyCalls end,
+        setCanShowK9UI = function(v) canShowK9UI = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
+        setQueryState = function(field, v) queryState[field] = v end,
+        setLeashCandidate = function(v) leashCandidate = v end,
+        setPartnerCandidate = function(v) partnerCandidate = v end,
+        setDisabledControlJustPressed = function(v) disabledControlJustPressed = v end,
+        setIsEntityDead = function(v) isEntityDead = v end,
+        setOxInventoryStarted = function(v) oxInventoryStarted = v end,
+        setUseItemApproves = function(v) useItemApproves = v end,
+        setServerCallback = function(name, result) callbackResponses[name] = { throws = false, result = result } end,
+        threadCreateCount = function() return threadCreateCount end,
+        step = function() runner.step() end,
+        fireResourceStop = function(resourceName)
+            for _, handler in ipairs(eventHandlers['onResourceStop'] or {}) do
+                handler(resourceName)
+            end
+        end,
+        fireItemUse = function(data, slot)
+            for _, handler in ipairs(eventHandlers['qbx_k9unit:client:useTabletItem'] or {}) do
+                handler(data, slot)
+            end
+        end,
+        --- Awaits a NUI callback the same way FiveM's own dispatch would:
+        --- calls the captured handler and returns whatever it passed to `cb`.
+        --- @param name string
+        --- @param data table?
+        --- @return table result
+        callNui = function(name, data)
+            local handler = nuiCallbacks[name]
+            assert(handler, 'no NUI callback registered for ' .. tostring(name))
+            local result
+            handler(data, function(r) result = r end)
+            assert(result ~= nil, name .. ' never called cb(...)')
+            return result
+        end,
+    }
+end
+
+-- ----------------------------------------------------------------------
+-- Feature-flag gating -- "gate at registration, not just inside the
+-- handler."
+-- ----------------------------------------------------------------------
+
+t.test('Config.Features.CommandTablet = false: OpenTablet/CloseTablet are not even defined', function()
+    local f = newTabletFixture({ features = { CommandTablet = false } })
+    t.isNil(f.env.OpenTablet)
+    t.isNil(f.env.CloseTablet)
+end)
+
+t.test('Config.Features.CommandTablet = false: zero commands, zero NUI callbacks, zero event handlers registered', function()
+    local f = newTabletFixture({ features = { CommandTablet = false } })
+    t.equals(#f.registerCommandCalls, 0)
+    t.isNil(f.nuiCallbacks['tablet:close'])
+    t.isNil(f.nuiCallbacks['tablet:ready'])
+    t.equals(f.fireResourceStop('qbx_k9unit'), nil) -- no onResourceStop handler to even find/throw
+end)
+
+t.test('Config.Features.CommandTablet = true: OpenTablet/CloseTablet exist and tablet:close is registered', function()
+    local f = newTabletFixture()
+    t.isNotNil(f.env.OpenTablet)
+    t.isNotNil(f.env.CloseTablet)
+    t.isNotNil(f.nuiCallbacks['tablet:close'])
+end)
+
+-- ----------------------------------------------------------------------
+-- openMode resolution -- registration-time, not behavior-time.
+-- ----------------------------------------------------------------------
+
+t.test('openMode = "command": the command is registered, no item-use event handler exists', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'command' } })
+    t.equals(#f.registerCommandCalls, 1)
+    t.equals(f.registerCommandCalls[1].name, 'k9tablet')
+    f.fireItemUse({}, 1)
+    t.equals(#f.useItemCalls, 0, 'no handler should exist to ever call useItem in command-only mode')
+end)
+
+t.test('openMode = "item": the command is NOT registered at all, the item-use handler is', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'item' } })
+    t.equals(#f.registerCommandCalls, 0)
+    f.fireItemUse({}, 1)
+    t.equals(#f.useItemCalls, 1)
+end)
+
+t.test('openMode = "both": both the command and the item-use handler exist', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'both' } })
+    t.equals(#f.registerCommandCalls, 1)
+    f.fireItemUse({}, 1)
+    t.equals(#f.useItemCalls, 1)
+end)
+
+t.test('openMode = an unrecognised value: falls back to "command" (registered) and warns loudly, never leaving zero ways in', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'sometypo' } })
+    t.equals(#f.registerCommandCalls, 1)
+    local warned = false
+    for _, line in ipairs(f.printLines) do
+        if line:find('openMode') and line:find('sometypo') then warned = true end
+    end
+    t.isTrue(warned, 'must name the bad value in the warning')
+end)
+
+t.test('openMode = nil (missing entirely): also falls back to "command"', function()
+    local f = newTabletFixture({ commandTablet = { openMode = nil } })
+    t.equals(#f.registerCommandCalls, 1)
+end)
+
+t.test('Config.CommandTablet.command missing/invalid in "command" mode: warns, registers nothing, still no crash', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'command', command = '' } })
+    t.equals(#f.registerCommandCalls, 0)
+    local warned = false
+    for _, line in ipairs(f.printLines) do
+        if line:find('Config.CommandTablet.command') then warned = true end
+    end
+    t.isTrue(warned)
+end)
+
+t.test('the registered command handler really calls the production OpenTablet(), not a copy', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'command' } })
+    f.registerCommandCalls[1].handler()
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(f.sendNuiMessageCalls[1].action, 'tablet:open')
+end)
+
+-- ----------------------------------------------------------------------
+-- Item-use path (ox_inventory) -- the trap: a missing/outdated
+-- ox_inventory, or a server-declined use, must never crash and must
+-- never silently "half open" the tablet.
+-- ----------------------------------------------------------------------
+
+t.test('item use: ox_inventory not started -- warns, notifies, OpenTablet is never actually triggered', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'item' } })
+    f.setOxInventoryStarted(false)
+    f.fireItemUse({ slot = 1 }, 1)
+    t.equals(#f.sendNuiMessageCalls, 0)
+    t.equals(#f.setNuiFocusCalls, 0)
+    t.equals(#f.notifyCalls, 1)
+end)
+
+t.test('item use: ox_inventory approves the use -- OpenTablet() really runs (focus grabbed, tablet:open pushed)', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'item' } })
+    f.setUseItemApproves(true)
+    f.fireItemUse({ slot = 1 }, 1)
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(f.sendNuiMessageCalls[1].action, 'tablet:open')
+    t.equals(#f.setNuiFocusCalls, 1)
+    t.isTrue(f.setNuiFocusCalls[1][1])
+end)
+
+t.test('item use: the server DECLINES the use (approved=false) -- the tablet never opens', function()
+    local f = newTabletFixture({ commandTablet = { openMode = 'item' } })
+    f.setUseItemApproves(false)
+    f.fireItemUse({ slot = 1 }, 1)
+    t.equals(#f.sendNuiMessageCalls, 0)
+    t.equals(#f.setNuiFocusCalls, 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- OpenTablet() / CloseTablet() -- the core focus lifecycle.
+-- ----------------------------------------------------------------------
+
+t.test('OpenTablet(): no server round trip -- opens immediately with capabilities/strings/maxXpPerGrant', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    t.equals(#f.callbackCallLog, 0, 'opening must never await a server callback')
+    t.equals(#f.sendNuiMessageCalls, 1)
+    local msg = f.sendNuiMessageCalls[1]
+    t.equals(msg.action, 'tablet:open')
+    t.equals(msg.data.capabilities, f.Config.Permissions)
+    t.isNotNil(msg.data.strings)
+    t.equals(#f.setNuiFocusCalls, 1)
+    t.isTrue(f.setNuiFocusCalls[1][1])
+    t.isTrue(f.setNuiFocusCalls[1][2])
+end)
+
+t.test('OpenTablet(): calling it again while already open is a true no-op -- no second focus grab, no second push', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.env.OpenTablet()
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(#f.setNuiFocusCalls, 1)
+    t.equals(f.threadCreateCount(), 1, 'the watch thread must not be started twice either')
+end)
+
+t.test('CloseTablet(): while not open, is a harmless no-op -- never calls SetNuiFocus at all', function()
+    local f = newTabletFixture()
+    f.env.CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 0)
+    t.equals(#f.sendNuiMessageCalls, 0)
+end)
+
+t.test('CloseTablet(): after an open, releases focus and pushes tablet:close', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.env.CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 2)
+    t.isFalse(f.setNuiFocusCalls[2][1])
+    t.isFalse(f.setNuiFocusCalls[2][2])
+    t.equals(#f.sendNuiMessageCalls, 2)
+    t.equals(f.sendNuiMessageCalls[2].action, 'tablet:close')
+end)
+
+t.test('CloseTablet(): calling it twice in a row is idempotent -- the second call touches nothing further', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.env.CloseTablet()
+    f.env.CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 2, 'no second release for an already-released tablet')
+end)
+
+t.test('CloseTablet() is never gated on CanShowK9UI/HasK9Access -- "no unbounded trap": losing access must not strand an open tablet', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.setCanShowK9UI(false)
+    f.setHasK9Access(false)
+    f.env.CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 2, 'close must still succeed even with zero K9 access')
+    t.equals(f.denyCalls(), 0, 'close must never fire a denial notification')
+end)
+
+t.test('a re-open after a real close pushes a brand-new tablet:open (proves it was genuinely closed, not just visually)', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.env.CloseTablet()
+    f.env.OpenTablet()
+    t.equals(#f.sendNuiMessageCalls, 3)
+    t.equals(f.sendNuiMessageCalls[3].action, 'tablet:open')
+end)
+
+-- ----------------------------------------------------------------------
+-- tablet:close / tablet:ready NUI callbacks.
+-- ----------------------------------------------------------------------
+
+t.test('tablet:ready always acks, does nothing else', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:ready', {})
+    t.equals(next(result), nil)
+end)
+
+t.test('tablet:close: closes the real tablet and acks -- calling it while already closed is still safe', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    local result = f.callNui('tablet:close', {})
+    t.isNotNil(result)
+    t.equals(#f.setNuiFocusCalls, 2)
+
+    -- html/tablet-bridge.js's own header: fires tablet:close from more
+    -- than one path and expects a repeat to be a safe no-op.
+    local ok = pcall(f.callNui, 'tablet:close', {})
+    t.isTrue(ok)
+    t.equals(#f.setNuiFocusCalls, 2, 'a second tablet:close must not release focus a second time')
+end)
+
+-- ----------------------------------------------------------------------
+-- ESC-close + own-death watch thread. See this file's header
+-- "WATCH-THREAD STEPPING NOTES" for exactly what each step() reaches.
+-- ----------------------------------------------------------------------
+
+t.test('watch thread: does not exist before OpenTablet() is ever called', function()
+    local f = newTabletFixture()
+    t.equals(f.threadCreateCount(), 0)
+end)
+
+t.test('watch thread: DisableControlAction(0, 200, true) is asserted on the very first pass', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.step() -- pass 1
+    t.isNotNil(f.calls) -- sanity: fixture alive
+end)
+
+t.test('ESC closes the tablet via the watch thread, independent of any NUI callback', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.step() -- pass 1: nothing pressed yet
+    t.equals(#f.setNuiFocusCalls, 1)
+
+    f.setDisabledControlJustPressed(true)
+    f.step() -- pass 2: detects ESC, calls CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 2, 'ESC must release focus without any NUI callback ever firing')
+    t.isFalse(f.setNuiFocusCalls[2][1])
+end)
+
+t.test('own death closes the tablet via the SAME watch thread', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.step() -- pass 1
+
+    f.setIsEntityDead(true)
+    f.step() -- pass 2: detects death, calls CloseTablet()
+    t.equals(#f.setNuiFocusCalls, 2)
+    t.isFalse(f.setNuiFocusCalls[2][1])
+end)
+
+t.test('watch thread self-terminates once closed, and a LATER open starts a genuinely NEW thread', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet() -- thread #1
+    t.equals(f.threadCreateCount(), 1)
+    f.step() -- pass 1
+    f.setDisabledControlJustPressed(true)
+    f.step() -- pass 2: closes (tabletOpen -> false)
+    f.step() -- pass 3: loop observes tabletOpen=false, exits, resets the running guard
+
+    f.setDisabledControlJustPressed(false)
+    f.env.OpenTablet() -- a fresh open after the old thread fully died
+    t.equals(f.threadCreateCount(), 2, 'the running-guard must have reset to false, or this would still read 1')
+end)
+
+t.test('while still open (nothing tripped), continuing to step never creates a second thread', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.step()
+    f.step()
+    f.step()
+    t.equals(f.threadCreateCount(), 1)
+end)
+
+-- ----------------------------------------------------------------------
+-- Resource-stop safety net.
+-- ----------------------------------------------------------------------
+
+t.test('onResourceStop for THIS resource while open: releases focus', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.fireResourceStop('qbx_k9unit')
+    t.equals(#f.setNuiFocusCalls, 2)
+    t.isFalse(f.setNuiFocusCalls[2][1])
+end)
+
+t.test('onResourceStop for a DIFFERENT resource: no effect at all', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.fireResourceStop('some_other_resource')
+    t.equals(#f.setNuiFocusCalls, 1, 'only the original open call, nothing from the unrelated stop')
+end)
+
+t.test('onResourceStop while never opened: a harmless no-op', function()
+    local f = newTabletFixture()
+    local ok = pcall(f.fireResourceStop, 'qbx_k9unit')
+    t.isTrue(ok)
+    t.equals(#f.setNuiFocusCalls, 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- AwaitServerCallback fail-closed behavior -- a thrown lib.callback.await
+-- must never propagate and must never leave the tablet's own state
+-- (focus, in this file's case) in a bad spot.
+-- ----------------------------------------------------------------------
+
+t.test('a server callback that throws (unregistered/timeout) fails closed to {ok=false, error="timeout"}, never raises', function()
+    local f = newTabletFixture()
+    -- No f.setServerCallback() call for this name -- the fixture's default
+    -- lib.callback.await throws for any unconfigured name.
+    local result = f.callNui('tablet:requestMyRecord', {})
+    t.equals(result.ok, false)
+    t.equals(result.error, 'timeout')
+end)
+
+t.test('a thrown callback during tablet:requestRoster never leaves focus in an inconsistent state (tablet stays open, exactly as before)', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    local focusCallsBefore = #f.setNuiFocusCalls
+    f.callNui('tablet:requestRoster', { query = 'x' })
+    t.equals(#f.setNuiFocusCalls, focusCallsBefore, 'a failed data refresh must never touch focus either way')
+end)
+
+t.test('a successful server callback is forwarded through untouched', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletRequestMyRecord', { ok = true, viewer = { citizenid = 'ABC123' } })
+    local result = f.callNui('tablet:requestMyRecord', {})
+    t.isTrue(result.ok)
+    t.equals(result.viewer.citizenid, 'ABC123')
+end)
+
+-- ----------------------------------------------------------------------
+-- Pass-through query/mutation callbacks -- shape validation + correct
+-- server callback name/args.
+-- ----------------------------------------------------------------------
+
+t.test('tablet:requestRoster: missing/non-string query defaults to an empty string, never errors', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletRequestRoster', { ok = true, rows = {} })
+    f.callNui('tablet:requestRoster', {})
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletRequestRoster')
+    t.equals(f.callbackCallLog[1].args[1], '')
+end)
+
+t.test('tablet:requestPersonSummary: invalid targetCitizenId is rejected before any server round trip', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:requestPersonSummary', {})
+    t.equals(result.ok, false)
+    t.equals(result.error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:requestPersonFeatures: same shape guard as requestPersonSummary', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:requestPersonFeatures', { targetCitizenId = '' })
+    t.equals(result.error, 'invalid_args')
+end)
+
+t.test('tablet:certify: requires both targetCitizenId and departmentKey, forwards both on success', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:certify', { targetCitizenId = 'ABC' }).error, 'invalid_args')
+
+    f.setServerCallback('qbx_k9unit:server:tabletCertify', { ok = true })
+    f.callNui('tablet:certify', { targetCitizenId = 'ABC', departmentKey = 'police' })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletCertify')
+    t.equals(f.callbackCallLog[1].args[1], 'ABC')
+    t.equals(f.callbackCallLog[1].args[2], 'police')
+end)
+
+t.test('tablet:givexp: amount must be a number', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:givexp', { targetCitizenId = 'ABC', amount = '500' }).error, 'invalid_args')
+
+    f.setServerCallback('qbx_k9unit:server:tabletGiveXp', { ok = true })
+    f.callNui('tablet:givexp', { targetCitizenId = 'ABC', amount = 500 })
+    t.equals(f.callbackCallLog[1].args[2], 500)
+end)
+
+-- ----------------------------------------------------------------------
+-- tablet:decertify -- reuses the k9decertifyoffline command via SECTION 3,
+-- NOT a new server callback.
+-- ----------------------------------------------------------------------
+
+t.test('tablet:decertify: valid payload submits "k9decertifyoffline <citizenid> <department>" via ExecuteCommand', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police' })
+    t.isTrue(result.ok)
+    t.equals(#f.executeCommandCalls, 1)
+    t.equals(f.executeCommandCalls[1], 'k9decertifyoffline ABC123 police')
+    t.equals(#f.callbackCallLog, 0, 'must not also hit a server callback -- one mechanism only')
+end)
+
+t.test('tablet:decertify: missing departmentKey is rejected before ExecuteCommand', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123' })
+    t.equals(result.error, 'invalid_args')
+    t.equals(#f.executeCommandCalls, 0)
+end)
+
+t.test('tablet:decertify: an unsafe token (whitespace) is rejected, never reaches ExecuteCommand', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC 123', departmentKey = 'police' })
+    t.equals(result.ok, false)
+    t.equals(#f.executeCommandCalls, 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- Grant/Revoke + feature/block translation -- server/permissions.lua's
+-- REAL {ok, reason?} shape -> html/tablet.js's {ok, error?, message?}.
+-- ----------------------------------------------------------------------
+
+t.test('tablet:grantPermission: valid payload forwards (citizenid, permission) to tabletGrantPermission', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletGrantPermission', { ok = true })
+    local result = f.callNui('tablet:grantPermission', { targetCitizenId = 'ABC', permission = 'k9.access' })
+    t.isTrue(result.ok)
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletGrantPermission')
+    t.equals(f.callbackCallLog[1].args[1], 'ABC')
+    t.equals(f.callbackCallLog[1].args[2], 'k9.access')
+end)
+
+t.test('tablet:grantPermission: invalid payload never reaches the server', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:grantPermission', { targetCitizenId = 'ABC' })
+    t.equals(result.error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:revokePermission: a plain denial is forwarded as error = the raw reason code', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletRevokePermission', { ok = false, reason = 'rate_limited' })
+    local result = f.callNui('tablet:revokePermission', { targetCitizenId = 'ABC', permission = 'k9.access' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'rate_limited')
+end)
+
+t.test('tablet:revokePermission: "still has it by rank/high command" gets its own real, locale-resolved message, and IS a success', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletRevokePermission', { ok = true, reason = 'rank_or_high_command' })
+    local result = f.callNui('tablet:revokePermission', { targetCitizenId = 'ABC', permission = 'k9.access' })
+    t.isTrue(result.ok)
+    t.equals(result.message, locale('tablet.revoke_still_has_access'))
+end)
+
+t.test('tablet:revokePermission: "target offline, cannot re-check" gets its own distinct message, still a success', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletRevokePermission', { ok = true, reason = 'unknown_target_offline' })
+    local result = f.callNui('tablet:revokePermission', { targetCitizenId = 'ABC', permission = 'k9.access' })
+    t.isTrue(result.ok)
+    t.equals(result.message, locale('tablet.revoke_target_offline'))
+    t.notContains(result.message, locale('tablet.revoke_still_has_access'), 'the two outcomes must render as genuinely different text')
+end)
+
+t.test('tablet:revokePermission: a plain success (no reason at all) carries no message', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletRevokePermission', { ok = true })
+    local result = f.callNui('tablet:revokePermission', { targetCitizenId = 'ABC', permission = 'k9.access' })
+    t.isTrue(result.ok)
+    t.isNil(result.message)
+end)
+
+t.test('a THROWN grant/revoke callback fails closed through the SAME translation -- error = "timeout", never a raised error', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:grantPermission', { targetCitizenId = 'ABC', permission = 'k9.access' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'timeout')
+end)
+
+t.test('tablet:grantFeature / revokeFeature / blockFeature / unblockFeature reuse the SAME two server callbacks with the feature./block. key namespace -- no new server surface', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletGrantPermission', { ok = true })
+    f.setServerCallback('qbx_k9unit:server:tabletRevokePermission', { ok = true })
+
+    f.callNui('tablet:grantFeature', { targetCitizenId = 'ABC', feature = 'BiteAndHold' })
+    t.equals(f.callbackCallLog[#f.callbackCallLog].name, 'qbx_k9unit:server:tabletGrantPermission')
+    t.equals(f.callbackCallLog[#f.callbackCallLog].args[2], 'feature.BiteAndHold')
+
+    f.callNui('tablet:revokeFeature', { targetCitizenId = 'ABC', feature = 'BiteAndHold' })
+    t.equals(f.callbackCallLog[#f.callbackCallLog].name, 'qbx_k9unit:server:tabletRevokePermission')
+    t.equals(f.callbackCallLog[#f.callbackCallLog].args[2], 'feature.BiteAndHold')
+
+    f.callNui('tablet:blockFeature', { targetCitizenId = 'ABC', feature = 'PropDragging' })
+    t.equals(f.callbackCallLog[#f.callbackCallLog].name, 'qbx_k9unit:server:tabletGrantPermission')
+    t.equals(f.callbackCallLog[#f.callbackCallLog].args[2], 'block.PropDragging')
+
+    f.callNui('tablet:unblockFeature', { targetCitizenId = 'ABC', feature = 'PropDragging' })
+    t.equals(f.callbackCallLog[#f.callbackCallLog].name, 'qbx_k9unit:server:tabletRevokePermission')
+    t.equals(f.callbackCallLog[#f.callbackCallLog].args[2], 'block.PropDragging')
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION 2 -- tablet:triggerFeature. One representative case per gate
+-- shape, per this file's own header note.
+-- ----------------------------------------------------------------------
+
+t.test('triggerFeature: Config.FeatureControl.allowActionsFromTablet = false disables the WHOLE surface, never even looks up the feature', function()
+    local f = newTabletFixture({ featureControl = { allowActionsFromTablet = false } })
+    local result = f.callNui('tablet:triggerFeature', { feature = 'BiteAndHold' })
+    t.equals(result.error, 'actions_disabled')
+    t.equals(#(f.calls['RequestBiteHold'] or {}), 0)
+end)
+
+t.test('triggerFeature: missing/non-string `feature` is invalid_args', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:triggerFeature', {}).error, 'invalid_args')
+end)
+
+t.test('triggerFeature: an unrecognised feature key is unknown_action', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:triggerFeature', { feature = 'NotARealFeature' }).error, 'unknown_action')
+end)
+
+t.test('LeashMechanics (release-ungated / attempt-gated toggle): IsLeashed() true detaches WITHOUT ever consulting CanShowK9UI', function()
+    local f = newTabletFixture()
+    f.setQueryState('isLeashed', true)
+    local result = f.callNui('tablet:triggerFeature', { feature = 'LeashMechanics' })
+    t.isTrue(result.ok)
+    t.equals(#f.calls['DetachLeash'], 1)
+    t.equals(f.canShowK9UICalls(), 0, 'detach must never gate on access')
+end)
+
+t.test('LeashMechanics: not leashed, CanShowK9UI false -- denied, RequestLeashAttach never called', function()
+    local f = newTabletFixture({ canShowK9UI = false })
+    local result = f.callNui('tablet:triggerFeature', { feature = 'LeashMechanics' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_available')
+    t.equals(f.denyCalls(), 1)
+    t.equals(#(f.calls['RequestLeashAttach'] or {}), 0)
+end)
+
+t.test('LeashMechanics: not leashed, CanShowK9UI true, a nearest candidate exists -- attaches to it', function()
+    local f = newTabletFixture()
+    f.setLeashCandidate(42)
+    local result = f.callNui('tablet:triggerFeature', { feature = 'LeashMechanics' })
+    t.isTrue(result.ok)
+    t.equals(f.calls['RequestLeashAttach'][1][1], 42)
+end)
+
+t.test('LeashMechanics: no nearby candidate -- the SAME radial.no_leash_candidate notify fires, action reports not_available', function()
+    local f = newTabletFixture()
+    f.setLeashCandidate(nil)
+    local result = f.callNui('tablet:triggerFeature', { feature = 'LeashMechanics' })
+    t.isFalse(result.ok)
+    t.equals(f.notifyCalls[1].description, locale('radial.no_leash_candidate'))
+end)
+
+t.test('LeashMechanics: the FindNearestLeashCandidate seam is not open yet (radial.lua flag off) -- soft-fails, never errors', function()
+    local f = newTabletFixture({ withSeams = false })
+    local result = f.callNui('tablet:triggerFeature', { feature = 'LeashMechanics' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_available')
+end)
+
+t.test('VehicleEntryExit: BOTH directions are gated, matching radial.lua exactly -- Exit is not exempt the way Detach Leash is', function()
+    local f = newTabletFixture({ canShowK9UI = false })
+    f.setQueryState('isInK9Vehicle', true)
+    local result = f.callNui('tablet:triggerFeature', { feature = 'VehicleEntryExit' })
+    t.isFalse(result.ok)
+    t.equals(#(f.calls['ExitK9Vehicle'] or {}), 0, 'Exit must also be denied, unlike Detach Leash')
+end)
+
+t.test('BiteAndHold: engaged -> Release fires ungated; not engaged + denied -> Request never fires', function()
+    local f = newTabletFixture()
+    f.setQueryState('isBiteHoldEngaged', true)
+    f.callNui('tablet:triggerFeature', { feature = 'BiteAndHold' })
+    t.equals(#f.calls['ReleaseBiteHold'], 1)
+    t.equals(f.canShowK9UICalls(), 0)
+end)
+
+t.test('Recall: fully ungated and unconditional, exactly like radial.lua', function()
+    local f = newTabletFixture({ canShowK9UI = false, hasK9Access = false })
+    local result = f.callNui('tablet:triggerFeature', { feature = 'Recall' })
+    t.isTrue(result.ok)
+    t.equals(#f.calls['RequestRecall'], 1)
+    t.equals(f.denyCalls(), 0)
+end)
+
+t.test('ThermalVision: fully self-gating passthrough -- this file never consults CanShowK9UI/HasK9Access for it at all', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:triggerFeature', { feature = 'ThermalVision' })
+    t.isTrue(result.ok)
+    t.equals(#f.calls['ToggleThermalVision'], 1)
+    t.equals(f.canShowK9UICalls(), 0)
+    t.equals(f.hasK9AccessCalls(), 0)
+end)
+
+t.test('FetchMechanic (throw branch): gated on HasK9Access() ONLY, matching RequestThrowFetchBall()\'s own documented contract -- CanShowK9UI is never consulted', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:triggerFeature', { feature = 'FetchMechanic' })
+    t.isTrue(result.ok)
+    t.equals(#f.calls['RequestThrowFetchBall'], 1)
+    t.equals(f.canShowK9UICalls(), 0)
+    t.isTrue(f.hasK9AccessCalls() > 0)
+end)
+
+t.test('FetchMechanic (carrying already): releases ungated', function()
+    local f = newTabletFixture({ hasK9Access = false })
+    f.setQueryState('isFetchCarryEngaged', true)
+    local result = f.callNui('tablet:triggerFeature', { feature = 'FetchMechanic' })
+    t.isTrue(result.ok)
+    t.equals(#f.calls['ReleaseFetchBall'], 1)
+end)
+
+t.test('HandlerDownDefense: always confirms "bite" (the documented single-button default), gated', function()
+    local f = newTabletFixture()
+    f.callNui('tablet:triggerFeature', { feature = 'HandlerDownDefense' })
+    t.equals(f.calls['ConfirmHandlerDownDefense'][1][1], 'bite')
+end)
+
+t.test('HandlerPartnership: toggles exactly like Leash -- partnered releases ungated, else attempts + seam-guarded', function()
+    local f = newTabletFixture()
+    f.setQueryState('isPartnered', true)
+    f.callNui('tablet:triggerFeature', { feature = 'HandlerPartnership' })
+    t.equals(#f.calls['BreakPartnership'], 1)
+    t.equals(f.canShowK9UICalls(), 0)
+end)
+
+t.test('FearStressSystem: fully self-gating passthrough (RequestK9CalmDown already gates+notifies internally)', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:triggerFeature', { feature = 'FearStressSystem' })
+    t.isTrue(result.ok)
+    t.equals(#f.calls['RequestK9CalmDown'], 1)
+    t.equals(f.canShowK9UICalls(), 0)
+end)
+
+t.test('K9Medkit: gated (redundant-with-callee posture, matching every other "kept for consistency" radial item)', function()
+    local f = newTabletFixture({ canShowK9UI = false })
+    local result = f.callNui('tablet:triggerFeature', { feature = 'K9Medkit' })
+    t.isFalse(result.ok)
+    t.equals(#(f.calls['RequestTreatNearestK9'] or {}), 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- SECTION 3 -- tablet:runCommand (ExecuteCommand allowlist).
+-- ----------------------------------------------------------------------
+
+t.test('tablet:runCommand: disabled entirely when allowActionsFromTablet is false', function()
+    local f = newTabletFixture({ featureControl = { allowActionsFromTablet = false } })
+    local result = f.callNui('tablet:runCommand', { command = 'k9givexp', args = { '5', '100' } })
+    t.equals(result.error, 'actions_disabled')
+    t.equals(#f.executeCommandCalls, 0)
+end)
+
+t.test('tablet:runCommand: a command not on the allowlist is rejected, never reaches ExecuteCommand', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:runCommand', { command = 'quit' })
+    t.isFalse(result.ok)
+    t.equals(#f.executeCommandCalls, 0)
+end)
+
+t.test('tablet:runCommand: an allowlisted command with args is submitted as one space-joined string', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:runCommand', { command = 'k9givexp', args = { '5', '100' } })
+    t.isTrue(result.ok)
+    t.equals(f.executeCommandCalls[1], 'k9givexp 5 100')
+end)
+
+t.test('tablet:runCommand: too many args is rejected', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:runCommand', { command = 'k9auditsearch', args = { '1', '2', '3', '4', '5' } })
+    t.isFalse(result.ok)
+    t.equals(#f.executeCommandCalls, 0)
+end)
+
+t.test('tablet:runCommand: a token containing a semicolon is rejected -- no command injection via args', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:runCommand', { command = 'k9givexp', args = { '5', '100; quit' } })
+    t.isFalse(result.ok)
+    t.equals(#f.executeCommandCalls, 0)
+end)
+
+t.test('tablet:runCommand: every one of the nine allowlisted commands is reachable', function()
+    local f = newTabletFixture()
+    local names = { 'k9certify', 'k9decertify', 'k9decertifyoffline', 'k9givexp', 'k9auditcert', 'k9auditpartner', 'k9auditsearch', 'k9auditxp', 'k9auditdept' }
+    for _, name in ipairs(names) do
+        local result = f.callNui('tablet:runCommand', { command = name })
+        t.isTrue(result.ok, name .. ' should be allowlisted')
+    end
+    t.equals(#f.executeCommandCalls, #names)
+end)
+
+os.exit(t.summary())
