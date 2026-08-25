@@ -36,11 +36,25 @@ end
 
 local threadRunner = Sandbox.newThreadRunner()
 
+-- print stub: captures every line cooldowns.lua prints (the one-time-per-
+-- tracker "bad call-time threshold" warning added this pass) so specs can
+-- assert on it without spamming test output, same convention as
+-- admin_spec.lua's printStub.
+local capturedPrints = {}
+local function printStub(...)
+    local parts = {}
+    for i = 1, select('#', ...) do
+        parts[i] = tostring(select(i, ...))
+    end
+    capturedPrints[#capturedPrints + 1] = table.concat(parts, '\t')
+end
+
 local env = Sandbox.newEnv({
     GetGameTimer = GetGameTimer,
     AddEventHandler = AddEventHandler,
     CreateThread = threadRunner.CreateThread,
     Wait = threadRunner.Wait,
+    print = printStub,
 })
 
 Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -127,6 +141,70 @@ t.test('NewCooldown: an untouched key ignores a bad threshold (still not on cool
     local c = NewCooldown()
     t.isFalse(c.IsOnCooldown('never-touched', 0))
     t.isFalse(c.IsOnCooldown('never-touched', -1))
+end)
+
+-- ----------------------------------------------------------------------
+-- FAIL-CLOSED THRESHOLD VALIDATION (this pass) -- see server/cooldowns.lua's
+-- own header "FAIL-CLOSED THRESHOLD HANDLING" section for the full
+-- reasoning. The two backstops: (1) a non-nil, invalid CONSTRUCTOR default
+-- now errors immediately, at construction time; (2) a bad threshold reached
+-- only through a per-call override still fails closed (return value
+-- unchanged, covered by the tests above) but now also prints exactly one
+-- loud warning per tracker instance instead of nothing at all.
+-- ----------------------------------------------------------------------
+
+t.test('NewCooldown: a non-nil, non-positive constructor default (0) errors at construction, not at first call', function()
+    local ok, err = pcall(NewCooldown, 0)
+    t.isFalse(ok, 'NewCooldown(0) must error immediately')
+    t.contains(tostring(err), 'NewCooldown')
+end)
+
+t.test('NewCooldown: a negative constructor default errors at construction', function()
+    local ok = pcall(NewCooldown, -100)
+    t.isFalse(ok, 'NewCooldown(-100) must error immediately')
+end)
+
+t.test('NewCooldown: a NaN constructor default errors at construction', function()
+    local nan = 0 / 0
+    local ok = pcall(NewCooldown, nan)
+    t.isFalse(ok, 'NewCooldown(NaN) must error immediately -- NaN <= 0 is false, so a naive check would miss this')
+end)
+
+t.test('NewCooldown: a nil constructor default is still perfectly legal (no error)', function()
+    local ok = pcall(NewCooldown, nil)
+    t.isTrue(ok, 'NewCooldown() / NewCooldown(nil) must not error -- several real call sites rely on per-call-only overrides')
+end)
+
+t.test('NewCooldown: construction succeeds for any positive number', function()
+    local ok = pcall(NewCooldown, 1)
+    t.isTrue(ok)
+end)
+
+t.test('NewCooldown: a bad CALL-TIME threshold still fails closed (return value unchanged) AND now prints exactly one loud warning for that tracker', function()
+    capturedPrints = {}
+    fakeNow = 0
+    local c = NewCooldown() -- legal: nil default, per-call override required
+    c.Touch('ivan', fakeNow)
+    fakeNow = 999999
+
+    t.isTrue(c.IsOnCooldown('ivan', 0, fakeNow), 'still fails closed -- behavior must not change for existing callers')
+    t.equals(#capturedPrints, 1, 'exactly one warning printed for the first bad-threshold hit')
+    t.contains(capturedPrints[1], 'ivan')
+    t.contains(capturedPrints[1], 'PERMANENTLY on cooldown')
+
+    -- A second bad-threshold hit against the SAME tracker must not print again.
+    t.isTrue(c.IsOnCooldown('ivan', 0, fakeNow))
+    t.equals(#capturedPrints, 1, 'no repeat warning for the same tracker instance')
+end)
+
+t.test('NewCooldown: a NaN CALL-TIME threshold also fails closed, never fails open', function()
+    fakeNow = 0
+    local c = NewCooldown()
+    c.Touch('judy', fakeNow)
+    fakeNow = 999999
+    local nan = 0 / 0
+    t.isTrue(c.IsOnCooldown('judy', nan, fakeNow),
+        'a NaN threshold must fail closed -- `elapsed < NaN` is always false, so a naive check would fail OPEN (unlimited spam) instead')
 end)
 
 t.test('NewCooldown: Clear evicts the entry outright', function()
@@ -248,6 +326,33 @@ t.test('NewNestedCooldown: FAILS CLOSED on a missing/non-positive threshold', fu
     fakeNow = 999999
     t.isTrue(nc.IsOnCooldown('src1', 'scent', nil, fakeNow))
     t.isTrue(nc.IsOnCooldown('src1', 'scent', 0, fakeNow))
+end)
+
+t.test('NewNestedCooldown: a non-nil, non-positive constructor default errors at construction', function()
+    local ok, err = pcall(NewNestedCooldown, 0)
+    t.isFalse(ok, 'NewNestedCooldown(0) must error immediately')
+    t.contains(tostring(err), 'NewNestedCooldown')
+end)
+
+t.test('NewNestedCooldown: a nil constructor default is still perfectly legal (no error)', function()
+    local ok = pcall(NewNestedCooldown, nil)
+    t.isTrue(ok)
+end)
+
+t.test('NewNestedCooldown: a bad CALL-TIME threshold still fails closed AND prints exactly one loud warning for that tracker', function()
+    capturedPrints = {}
+    fakeNow = 0
+    local nc = NewNestedCooldown()
+    nc.Touch('src9', 'scent', fakeNow)
+    fakeNow = 999999
+
+    t.isTrue(nc.IsOnCooldown('src9', 'scent', 0, fakeNow))
+    t.equals(#capturedPrints, 1)
+    t.contains(capturedPrints[1], 'src9')
+    t.contains(capturedPrints[1], 'scent')
+
+    t.isTrue(nc.IsOnCooldown('src9', 'scent', 0, fakeNow))
+    t.equals(#capturedPrints, 1, 'no repeat warning for the same tracker instance')
 end)
 
 -- ----------------------------------------------------------------------

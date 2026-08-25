@@ -126,15 +126,146 @@
     NewMutex only exposes :TryAcquire(key), :Release(key), :IsHeld(key), and
     :RegisterPlayerDropped() — no threshold-based methods, per the "not a
     cooldown pretending to have no expiry" reasoning above.
+
+    ======================================================================
+    FAIL-CLOSED THRESHOLD HANDLING — SETTLED THIS PASS (coder-backend,
+    following a Phase 5 review that found the live consequence of this in
+    server/fetch.lua's releaseFetchBall, fixed separately in that file):
+    IsOnCooldown/Consume on BOTH constructors below have always treated a
+    missing/non-positive threshold as "permanently on cooldown" (fail
+    closed), never as "no cooldown" — correct for this file's own stated
+    goal (never let a bad threshold turn into unlimited spam), but entirely
+    SILENT, which is exactly how server/fetch.lua's bug went unnoticed: a
+    `Config.X = 0` intended by an operator/author to mean "no throttle" reads
+    as truthy in Lua (`0 or 500` evaluates to `0`, not `500`), so it reaches
+    this file as a real, accepted, wrong default with no signal anything was
+    off until a player got permanently stuck.
+
+    Two independent backstops now close that silence, matching what each
+    call SHAPE actually allows this file to catch:
+      1. CONSTRUCTOR TIME (AssertValidDefaultThreshold, used by both
+         NewCooldown and NewNestedCooldown): a non-nil defaultThresholdMs
+         that isn't a valid threshold now ERRORS immediately, at resource
+         start, before any player ever reaches the guarded action — this is
+         the majority call shape in this resource (a Config value captured
+         once as the constructor's own default, e.g.
+         `NewCooldown(Config.FetchMechanic.pickupCooldownMs or 500)`), and
+         turns a fetch.lua-shaped mistake into a startup crash naming the
+         exact constructor, not a report filed weeks later. Verified against
+         EVERY current NewCooldown/NewNestedCooldown call site in this
+         resource before landing this (grep of every call site + every
+         corresponding config.lua default, this pass's own report) — every
+         shipped default is already a positive number, so this is a new
+         backstop against FUTURE misconfiguration, not a behavior change for
+         anything currently deployed.
+      2. CALL TIME (inside :IsOnCooldown itself, both constructors): a
+         per-call `thresholdMs` override read fresh from Config on every
+         invocation (the OTHER real shape in this resource — e.g.
+         server/wellbeing.lua's `IsOnCooldown(src,
+         Config.Tracking.Blood.relayCooldownMs)`, never captured as a
+         constructor default) cannot be validated at construction time at
+         all, since the constructor never sees it. The RETURN VALUE here is
+         UNCHANGED (still fails closed, still `true`) — every existing
+         caller and this file's own tests keep working exactly as before —
+         but the first time any given tracker instance hits this branch, it
+         now prints one unmissable console line naming the key and the bad
+         threshold, instead of failing silently forever. Printed once per
+         tracker instance (not once per call) so an already-broken config
+         under real traffic produces one line, not a flood.
+    Neither backstop changes IsValidThreshold's actual verdict (still
+    rejects nil/non-number/zero/negative) — NaN is now also explicitly
+    rejected (`value == value` is Lua's standard NaN test; `value <= 0`
+    alone does NOT catch NaN, since every comparison against NaN is false,
+    which would otherwise slip through as "looks positive" and then make
+    every later `elapsed < threshold` comparison ALSO always false —
+    fail OPEN, unlimited spam, the one outcome this whole file exists to
+    prevent). See IsValidThreshold's own doc comment below for the full
+    reasoning.
+
+    NOT CHANGED, DELIBERATELY: the GetGameTimer() wraparound caveat
+    documented on both IsOnCooldown implementations below is a SEPARATE,
+    already-disclosed issue (a ~24.85-day int32 wrap, not a
+    threshold-validity question) and still needs the coordinated,
+    reported pass its own comment already calls for — not folded into this
+    pass.
+    ======================================================================
 ]]
+
+--- Shared validity test for any threshold this file ever compares elapsed
+--- time against — a threshold is valid iff it is a finite, positive Lua
+--- number. Centralized so NewCooldown/NewNestedCooldown's constructor guard
+--- and their :IsOnCooldown call-time guard can never drift apart on what
+--- counts as "bad". Rejects, in one pass:
+---   - nil / non-number (the "no threshold supplied at all" case),
+---   - 0 or negative (see FOOTGUN below — never a valid "disabled" signal),
+---   - NaN (`t ~= t` is Lua's standard NaN test — `t <= 0` alone does NOT
+---     catch this, since EVERY comparison against NaN is false; an
+---     uncaught NaN would silently fall through as "looks positive" and
+---     then make every later `elapsed < threshold` comparison ALSO false
+---     forever, i.e. fail OPEN — unlimited spam — the one direction this
+---     whole file exists to prevent).
+---
+--- FOOTGUN THIS EXISTS TO CATCH (found for real in server/fetch.lua's
+--- releaseFetchBall, a path documented as "always let go", by a Phase 5
+--- review — coder-architect/coder-backend, this pass): an operator setting
+--- a cooldown Config field to `0` meaning "no throttle" instead silently
+--- got "blocked forever", because `0 or 500`-style fallback idioms treat 0
+--- as present (0 is truthy in Lua) and this file's own :IsOnCooldown then
+--- fails closed on it. server/recall.lua already worked around this
+--- independently for Config.Recall.RequestCooldownMs (falls back to a
+--- built-in constant and prints a warning rather than trusting a raw
+--- non-positive config read) — this constructor-time guard below makes
+--- that same class of mistake loud AT RESOURCE START for the common
+--- "NewCooldown(Config.X.cooldownMs)" shape (verified: every current
+--- NewCooldown/NewNestedCooldown call site's shipped config.lua default is
+--- a positive number — see this pass's own report — so this is a new
+--- backstop, not a behavior change for any currently-shipped config), and
+--- :IsOnCooldown's own call-time branch below now prints a one-time loud
+--- warning (never silent) for the remaining shape this can't catch at
+--- construction: a per-call threshold read fresh from Config on every
+--- invocation rather than captured as a constructor default.
+--- @param value any
+--- @return boolean
+local function IsValidThreshold(value)
+    return type(value) == 'number' and value == value and value > 0
+end
+
+--- Fails loudly (error, not a silent accept) if `defaultThresholdMs` was
+--- supplied (non-nil) and is not a valid threshold per IsValidThreshold
+--- above. A nil default is always fine — it just means every call to this
+--- tracker must supply its own per-call override (several real call sites
+--- in this resource construct exactly this way, e.g. AuditCooldown in
+--- server/admin.lua). Only a NON-nil-but-invalid default is a caller bug,
+--- and this is the one shape this file CAN catch at resource-start time,
+--- before any player ever reaches the guarded action — see IsValidThreshold
+--- above for why this matters and what it can't catch (per-call-only
+--- thresholds, guarded separately at call time below).
+--- @param defaultThresholdMs any
+--- @param constructorName string
+local function AssertValidDefaultThreshold(defaultThresholdMs, constructorName)
+    if defaultThresholdMs ~= nil and not IsValidThreshold(defaultThresholdMs) then
+        error(
+            ('[qbx_k9unit] %s called with a non-positive/invalid defaultThresholdMs (%s). ' ..
+             '0 or a negative number here does NOT mean "no cooldown" -- this file\'s ' ..
+             'IsOnCooldown fails CLOSED on a non-positive threshold (permanently blocks the ' ..
+             'guarded action instead), which is almost never the intent. Pass nil instead if ' ..
+             'no default is wanted, or fix the Config value this was read from.')
+                :format(constructorName, tostring(defaultThresholdMs)),
+            3 -- blame the constructor call site, not this line
+        )
+    end
+end
 
 --- Flat, single-level `key -> lastTouchedAtMs` cooldown tracker. See this
 --- file's header for the full list of the 9 real call sites this covers.
---- @param defaultThresholdMs number? -- used by :IsOnCooldown/:Consume when no per-call override is given; several call sites (e.g. door-scratch, per-target search) read a Config value that could differ per invocation, so this is a convenience default, not a hard requirement.
+--- @param defaultThresholdMs number? -- used by :IsOnCooldown/:Consume when no per-call override is given; several call sites (e.g. door-scratch, per-target search) read a Config value that could differ per invocation, so this is a convenience default, not a hard requirement. Validated by AssertValidDefaultThreshold above when non-nil — see that function's doc comment.
 --- @return table tracker
 function NewCooldown(defaultThresholdMs)
+    AssertValidDefaultThreshold(defaultThresholdMs, 'NewCooldown')
+
     local store = {}
     local tracker = {}
+    local warnedBadCallTimeThreshold = false
 
     --- Check-only — never stamps/mutates anything. Mirrors every existing
     --- call site's own `if store[key] and (now - store[key]) < threshold`
@@ -147,15 +278,37 @@ function NewCooldown(defaultThresholdMs)
         local lastAt = store[key]
         if not lastAt then return false end
         local threshold = thresholdMs or defaultThresholdMs
-        if not threshold or threshold <= 0 then
+        if not IsValidThreshold(threshold) then
             -- FAIL CLOSED: an absent (no per-call override AND no
-            -- constructor default) or non-positive (0/negative) threshold
-            -- is always a caller bug (nil arithmetic, a misconfigured
-            -- Config value, a future call site forgetting its override) —
-            -- `elapsed < 0` is never true, so treating it as a normal
-            -- threshold would silently and permanently disable this
+            -- constructor default) or non-positive/NaN (0/negative/NaN)
+            -- threshold is always a caller bug (nil arithmetic, a
+            -- misconfigured Config value, a future call site forgetting its
+            -- override) — `elapsed < 0` is never true, so treating it as a
+            -- normal threshold would silently and permanently disable this
             -- cooldown for every already-touched key instead of erroring
             -- loudly. Never let a bad threshold turn into unlimited spam.
+            --
+            -- NOT SILENT ANYMORE (this pass): a non-nil `thresholdMs`
+            -- override reaching this branch could not be caught by
+            -- AssertValidDefaultThreshold above (that only validates the
+            -- CONSTRUCTOR's default) — this is the per-call-Config-read
+            -- shape (e.g. a file calling `.IsOnCooldown(key,
+            -- Config.X.cooldownMs)` fresh every invocation). Printed once
+            -- per tracker instance, not once per call, so a live server
+            -- under normal call volume against an already-broken config
+            -- gets exactly one unmissable line instead of a flood.
+            if not warnedBadCallTimeThreshold then
+                warnedBadCallTimeThreshold = true
+                print(
+                    ('[qbx_k9unit] cooldowns.lua: IsOnCooldown/Consume called with a missing or ' ..
+                     'non-positive/invalid threshold (key=%s, thresholdMs=%s, constructor default=%s). ' ..
+                     'This key is now PERMANENTLY on cooldown (fail-closed) until this resource ' ..
+                     'restarts with a fixed config -- 0/negative/nil never means "no cooldown" in ' ..
+                     'this API. Find the Config field this threshold was read from and set it to a ' ..
+                     'positive number.')
+                        :format(tostring(key), tostring(thresholdMs), tostring(defaultThresholdMs))
+                )
+            end
             return true
         end
         -- CAVEAT, not fixed here (documentation only — see this pass's own
@@ -251,11 +404,14 @@ end
 --- tracker. Exactly one real call site needs this shape — see this file's
 --- header for why it's a separate constructor rather than a composite
 --- string key into NewCooldown.
---- @param defaultThresholdMs number?
+--- @param defaultThresholdMs number? -- validated by AssertValidDefaultThreshold when non-nil, same as NewCooldown.
 --- @return table tracker
 function NewNestedCooldown(defaultThresholdMs)
+    AssertValidDefaultThreshold(defaultThresholdMs, 'NewNestedCooldown')
+
     local store = {}
     local tracker = {}
+    local warnedBadCallTimeThreshold = false
 
     --- @param primaryKey any
     --- @param secondaryKey any
@@ -267,10 +423,25 @@ function NewNestedCooldown(defaultThresholdMs)
         local lastAt = bucket and bucket[secondaryKey]
         if not lastAt then return false end
         local threshold = thresholdMs or defaultThresholdMs
-        if not threshold or threshold <= 0 then
+        if not IsValidThreshold(threshold) then
             -- FAIL CLOSED — see NewCooldown's IsOnCooldown for the full
             -- reasoning: a bad/missing threshold must never silently
-            -- disable this cooldown.
+            -- disable this cooldown. NOT SILENT ANYMORE (this pass) — same
+            -- one-time-per-tracker loud warning as NewCooldown's
+            -- IsOnCooldown above, for the same reason (a per-call
+            -- threshold read fresh from Config can't be caught by
+            -- AssertValidDefaultThreshold at construction time).
+            if not warnedBadCallTimeThreshold then
+                warnedBadCallTimeThreshold = true
+                print(
+                    ('[qbx_k9unit] cooldowns.lua: NewNestedCooldown IsOnCooldown/Consume called with a ' ..
+                     'missing or non-positive/invalid threshold (primaryKey=%s, secondaryKey=%s, ' ..
+                     'thresholdMs=%s, constructor default=%s). This (primaryKey, secondaryKey) pair is ' ..
+                     'now PERMANENTLY on cooldown (fail-closed) until this resource restarts with a ' ..
+                     'fixed config -- 0/negative/nil never means "no cooldown" in this API.')
+                        :format(tostring(primaryKey), tostring(secondaryKey), tostring(thresholdMs), tostring(defaultThresholdMs))
+                )
+            end
             return true
         end
         -- Same GetGameTimer() wraparound caveat as NewCooldown's
