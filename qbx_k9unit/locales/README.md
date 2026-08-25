@@ -250,18 +250,20 @@ specific language.
 
 ## What's left (honest count)
 
-As of this pass, **3 of roughly 48 Lua files** in this resource's
+As of this (third) pass, **7 of roughly 48 Lua files** in this resource's
 `client/` + `server/` trees have actually needed a `locale()` migration —
-`client/vision.lua`, `client/vehicle.lua`, and now `client/kennel.lua`.
-Four more files (`client/screenfx.lua`, `client/audio.lua`,
-`client/proximityaudio.lua`, `client/recall.lua`) were checked this pass
-and confirmed to have **no player-facing strings at all**, so they need no
-`locale()` calls — don't re-check them again from scratch, but do
-re-check if you add new player-facing UI to any of them later.
+`client/vision.lua`, `client/vehicle.lua`, `client/kennel.lua`, and now
+`client/main.lua`, `client/movement.lua`, `client/agility.lua`, and
+`client/inventory.lua`. Four more files (`client/screenfx.lua`,
+`client/audio.lua`, `client/proximityaudio.lua`, `client/recall.lua`) were
+checked in the second pass and confirmed to have **no player-facing
+strings at all**, so they need no `locale()` calls — don't re-check them
+again from scratch, but do re-check if you add new player-facing UI to any
+of them later. That's 11 of ~48 files actually checked one way or the
+other.
 
-Every other file — `client/main.lua`, `client/movement.lua`,
-`client/radial.lua`, `client/tracking.lua`, `client/search.lua`,
-`client/hud.lua`, `client/inventory.lua`, `client/medkit.lua`,
+Every other file — `client/radial.lua`, `client/tracking.lua`,
+`client/search.lua`, `client/hud.lua`, `client/medkit.lua`,
 `client/wellbeing.lua`, `client/progression.lua`, `client/combat.lua`,
 `client/partnership.lua`, `client/defense.lua`,
 `client/propattachment.lua`, `client/bonetool.lua`, `client/fetch.lua`,
@@ -272,6 +274,12 @@ via `lib.notify`/`exports.qbx_core:Notify`/similar are just as in scope as
 client-side ones; only `print()`/comments are out of scope). This file
 establishes the pattern and the shared `common.*` keys; it does not claim
 to have finished the job.
+
+**Note for whoever migrates `client/tracking.lua`:** confirmed by grep
+during the third pass, that file also hardcodes `'You cannot use K9
+features right now.'` verbatim — point it at `common.no_k9_access` (now a
+real, migrated key — see "The `common.no_k9_access` promotion" above)
+rather than minting a duplicate.
 
 **Note for whoever migrates `server/kennel.lua`:** that file has its own
 `NotifyPlayer(src, '...', 'error')` strings ("Kennel placement failed —
@@ -287,19 +295,19 @@ server-side ones their own `kennel.*` keys (or a `server_kennel.*` group,
 your call) rather than reusing `kennel.placement_failed` for a different
 sentence.
 
-## Manifest change needed (not made here — `fxmanifest.lua` is out of
-scope for this change)
+## Manifest status (`fxmanifest.lua` is out of scope for this file's own
+changes, but its state is worth recording accurately here)
 
-`fxmanifest.lua` already has `ox_lib 'locale'` and
-`'@ox_lib/init.lua'` in `shared_scripts`, which is all that's needed for
-the bare `locale()` global to work. The one thing still missing is
-listing the new JSON file(s) in the `files {}` block so the client
-actually downloads `locales/en.json` (client-side `LoadResourceFile` reads
-only files a resource has declared, and the JSON is read from BOTH client
-and server contexts since `imports/locale/shared.lua` is shared). Add this
-line inside the existing `files { ... }` block (which currently only lists
-`html/index.html`, `html/style.css`, `html/app.js`):
-
-```
-'locales/*.json',
-```
+DONE, as of some pass before this one (this section used to say the
+opposite — "not made here," describing a gap — which was true when
+written and is exactly the kind of stale doc this project's own convention
+warns against carrying forward silently). `fxmanifest.lua` already has
+`ox_lib 'locale'` and `'@ox_lib/init.lua'` in `shared_scripts` (needed for
+the bare `locale()` global to work), AND already lists `'locales/en.json'`
+explicitly in its `files { ... }` block (listed by exact name, not a
+`'locales/*.json'` glob — see that file's own inline comment on why: a
+`files{}` glob was found to behave recursively, which is the subject of an
+open upstream replacement proposal, so every entry in that manifest is
+explicit instead). Whoever adds a SECOND locale file (e.g. `es.json`) must
+add its own explicit `'locales/es.json'` line to that same block — it will
+NOT be picked up automatically by the existing `'locales/en.json'` entry.

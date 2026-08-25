@@ -200,6 +200,15 @@ globals = {
     "EndActiveEffectForHolder",
     -- client/recall.lua -- the handler's escape hatch.
     "RequestRecall",
+    -- Seams opened so other files can reach logic that was previously locked
+    -- inside an ox_target closure or a `local`. Each verified defined before
+    -- being declared here: client/inventory.lua:195, client/medkit.lua:181,
+    -- server/search.lua:397.
+    -- GetContrabandAlertTier exposes the PURE tier calculation only -- it is a
+    -- testability seam, and must never become a path that reaches inventory
+    -- contents while skipping the access, proximity and cooldown checks the
+    -- real search callback enforces.
+    "RequestOpenOwnK9Inventory", "RequestTreatNearestK9", "GetContrabandAlertTier",
     -- client/propattachment.lua + client/fetch.lua (PropAttachments,
     -- FetchMechanic). Both features are REGISTERED in fxmanifest.lua and load
     -- on every server; their flags ship `false`. The note that stood here --

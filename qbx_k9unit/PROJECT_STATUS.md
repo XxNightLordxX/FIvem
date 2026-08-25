@@ -1,5 +1,53 @@
 # qbx_k9unit — Whole-Project Status Assessment
 
+> **Documentation sync correction, 2026-08-25.** This document is dated
+> 2026-08-24 and roughly a dozen commits have landed since, resolving the
+> single biggest risk it identified. Read the numbers and narrative below as
+> a snapshot of that date, not current fact, with these specific corrections:
+>
+> - **§2's "uncommitted work" risk is resolved.** Every file this section
+>   listed as uncommitted (`client/recall.lua`/`server/recall.lua`,
+>   `client/audio.lua`, `client/exports.lua`/`server/exports.lua`,
+>   `server/admin.lua`, `server/tenure.lua`, the SQL migrations) is present
+>   in `fxmanifest.lua`'s script lists today and documented as shipped in
+>   `CHANGELOG.md` — direct evidence the working tree this section worried
+>   about losing was not lost. This pass could not independently run `git
+>   status`/`git log` to confirm the commit history itself (no shell access
+>   from this documentation-only pass), so treat "resolved" as
+>   file-state-verified, not git-history-verified — worth a `git log`
+>   glance before fully retiring this as a concern.
+> - **The flag count in §0 (39) undercounts by one.** A direct read of
+>   `config.lua`'s `Config.Features` table (not a regex — a naive
+>   alphanumeric regex misses names containing a digit, like `K9Inventory`/
+>   `K9Medkit`, which is exactly how this document's own predecessor drafts
+>   mis-counted before) gives **40** flags: 5 `true`, 35 `false`.
+> - **Genuinely new since this pass**: `Config.K9Inventory.allowedItems` is
+>   now really enforced via an `ox_inventory` `registerHook` veto (§4/§7
+>   below described it as having no effect — that was accurate when
+>   written); a real (partial) flashbang-immunity accessor exists for
+>   `DistractionSystem`; `FatigueSystem`'s rest-source regen is wired; six
+>   radial menu entries (Partner Up, Recall K9, Handler-Down Response,
+>   Fetch, Toggle K9 Vest, Deploy Kennel) closed the last "implemented but
+>   only reachable by command" gaps this document's §1 table implicitly
+>   assumed still existed; a TOCTOU window in `HandlerPartnership`'s accept
+>   flow was closed; two K9 Medkit defects (a dead-K9 healing gate, a mutex
+>   permanently locking on a hypothetical uncaught error) and one
+>   `FetchMechanic` carrier-disconnect state bug were fixed; the NUI audio
+>   bridge (`client/audio.lua`) now has a real caller from `client/main.lua`;
+>   the client export surface bumped to `1.1.0` (server stays `1.0.0`); and
+>   the bark-audio licensing question this document's §5 left open has
+>   sharpened from "unverified leads" to "real candidates exist, none are
+>   public domain" (CC BY-SA or OGA-BY) — see `CHANGELOG.md`'s `[Unreleased]`
+>   section for the full, verified detail on all of the above.
+> - Everything else below was **not** re-verified line-by-line in this pass
+>   (this was a documentation-reconciliation pass scoped to the six landed
+>   items above, not a full re-audit) — in particular, §7 item 6's call to
+>   re-run the flag-off-safety sweep against `defense.lua`/`recall.lua`/
+>   `screenfx.lua`/`audio.lua`/`admin.lua`/`exports.lua`/`tenure.lua`, and
+>   §5's D5-equivalent XP-farm-composition risk, were **not** independently
+>   re-checked here and should still be treated as open exactly as this
+>   document originally left them.
+
 Author: project-lead pass (read-only on code), 2026-08-24.
 Scope: cross-phase assessment of the entire resource as it stands on
 `claude/code-improver-subagent-qlt3bn`, cross-checked against git history,

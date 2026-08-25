@@ -7,7 +7,142 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
+**Documentation sync pass, 2026-08-25** — reconciling this file (and
+`README.md`/`SPEC.md`/`PROJECT_STATUS.md`/`REFACTOR_ROADMAP.md`) against
+roughly a dozen commits that landed after the `0.2.0` narrative below was
+last written. Every item below was verified directly against current
+source, not copied from a commit message. This resource's own recurring
+failure mode — a doc that was accurate when written going stale the moment
+something underneath it changes — hit three claims in this same file (see
+the inline corrections added above, on `allowedItems`, `flashbangImmune`,
+and the Phase 5 manifest-registration status); this entry exists so the
+next reader doesn't have to rediscover that the hard way.
+
+### Added
+
+- **`Config.K9Inventory.allowedItems` is now genuinely enforced**
+  (`server/inventory.lua`). Previously documented in this file as having
+  "no effect even if set." It now registers a real, pre-mutation
+  `exports.ox_inventory:registerHook('swapItems', ...)` veto — traced
+  against `ox_inventory`'s own source this pass: returning `false` from the
+  hook stops the item write before it ever lands in the destination
+  inventory, across every `swapItems`-routed action (drag-drop swap/stack/
+  move, and drop-to-ground), not merely an advisory/after-the-fact undo.
+  Prints one warning and disables the whitelist alone (not the whole stash)
+  if the target `ox_inventory` build lacks `registerHook`.
+- **Fatigue rest-source regen is now wired**
+  (`Config.Wellbeing.Fatigue.restRegenPerTick`/`.restRadius`/`.restSources`,
+  `server/wellbeing.lua`). A K9 idling within `restRadius` of a configured
+  rest-source model (hashed once at load, matched every tick against
+  `GetAllObjects()`/`GetAllVehicles()` — server-authoritative, never a
+  client-claimed "I'm near one" position) now regenerates Fatigue at
+  `restRegenPerTick` instead of the flat `idleRegenPerTick`. Extensible to
+  any object/vehicle model, not hardcoded to a water bowl — Phase 5's
+  deployable kennel can be added to `restSources` with a one-line config
+  change, no code change.
+- **A real, callable half of flashbang immunity now exists**
+  (`Config.Wellbeing.Distraction.flashbangImmune`, `server/wellbeing.lua`).
+  `IsFlashbangImmune(citizenid)` is a genuine resource-global accessor —
+  self-only lookup, type-checked, gated on `Config.Features.DistractionSystem`
+  — mirroring `IsHesitating`/`IsDistracted`'s established contract. The
+  *consumer* side remains genuinely unimplemented, not glossed over: no
+  confirmed third-party flashbang/stun resource's event name/payload shape
+  exists for this codebase to listen for and suppress. A companion resource
+  wanting to honor immunity calls `IsFlashbangImmune(citizenid)`, guarded by
+  the same `type(...) == 'function'` pattern this resource uses for every
+  other genuine cross-resource dependency with no consumer yet.
+- **Six radial menu entries closed the last "implemented but only reachable
+  by command" gaps**: "Partner Up" and "Break Partnership"
+  (`HandlerPartnership`), "Recall K9" (`Recall`), "Handler-Down Response"
+  (`HandlerDownDefense` — a pre-selected-target confirm prompt, not an
+  auto-fire), "Fetch" (Throw/Drop and Recall Fetch Ball, `FetchMechanic`),
+  "Toggle K9 Vest" (`PropAttachments`), and "Deploy Kennel"
+  (`DeployableKennel`, alongside the pre-existing `/k9deploykennel`
+  command). Each is gated on `CanShowK9UI()` in `client/radial.lua` in
+  addition to the callee's own internal re-check, matching this resource's
+  established "check here too, even though the callee already checks"
+  posture, and each item's *registration* is gated on its own still-`false`
+  `Config.Features` flag.
+- **The NUI audio bridge (`client/audio.lua`) has a real caller.**
+  Previously documented as loaded but inert — "nothing in this resource
+  calls either function yet." `client/main.lua`'s `PlaySoundOnNetworkEntity`
+  (the shared function every bark, Phase 1 and `AdvancedBarkRadial` alike,
+  routes through) now calls `PlayK9Sound` immediately after its existing
+  native `PlaySoundFromEntity` call, guarded by the same
+  `type(PlayK9Sound) == 'function'` existence check this resource uses for
+  every soft cross-file dependency. `client/proximityaudio.lua` remains a
+  second, independent consumer for `ProximityAudioFX`. Both paths still
+  degrade to a silent no-op until real `.ogg` files are supplied — see
+  Known Limitations, unchanged on that point.
+- **Client export surface bumped to `1.1.0`** (`client/exports.lua`;
+  server-side `server/exports.lua` stays `1.0.0` — the two were never meant
+  to move in lockstep, and an earlier internal note implying otherwise has
+  been corrected in that file). Three new exports, all read-only local UI
+  state per this resource's existing export conventions:
+  `HasFreshDefensePrompt()` (is a `HandlerDownDefense` prompt currently
+  fresh for the local player's own K9), `GetDefenseSuggestedTargetNetId()`
+  (the server-suggested hostile netId attached to that prompt, if any), and
+  `IsFetchCarryEngaged()` (is the local K9 currently mid-fetch-carry).
+- **Locale migration is now at 3 of roughly 48 files**, up from 2:
+  `client/kennel.lua` joins `client/vision.lua`/`client/vehicle.lua` as a
+  reference migration (new `kennel.*` locale group). Still a pattern, not a
+  finished migration — see `locales/README.md`'s own honest count of what's
+  left, and do not assume any other file has been touched.
+
+### Fixed
+
+- **Closed a MEDIUM-severity TOCTOU window in `HandlerPartnership`'s accept
+  flow** (`server/partnership.lua`). The eligibility re-check on accept
+  (`HasK9Access`/department membership) previously ran *before* the
+  "already partnered" existence checks and the establish-mutex acquisition
+  — both of which are further suspension points a concurrent certification
+  revoke could complete underneath. Concretely: `RevokeCertification`'s
+  online branch commits its `UPDATE`, refreshes its own cache, and calls
+  `ForceBreakPartnershipForCitizenId` — and that call's own `SELECT` could
+  run, find no partnership row yet (there isn't one until this flow's
+  `INSERT` lands), no-op, and let the `INSERT` proceed anyway, establishing
+  a partnership for a citizenid that had just been decertified a moment
+  earlier. Since a partnership's role is frozen at establishment and never
+  re-derived afterward, a race landing this way would have stood
+  indefinitely. Fixed by re-ordering: `HasK9Access`/department membership
+  (both synchronous, non-yielding, in-memory reads) now run as the *last*
+  checks immediately before the `INSERT`, with nothing else in that
+  coroutine yielding in between — the only remaining window is the
+  `INSERT`'s own await, already covered by the existing DB-level unique-key
+  backstop. Same fix shape as `server/search.lua`'s own re-check-after-yield
+  discipline.
+- **Two K9 Medkit defects fixed** (`server/medkit.lua`,
+  `client/medkit.lua`): (1) nothing previously stopped using a medkit on a
+  K9 whose ped was already dead — a scripted laststand/EMS "dead" state is
+  a different thing from a raw health bump, and this resource's own
+  `ValidateCombatRequest` precedent already treats reviving a player as the
+  job of a real laststand/EMS flow, never a side effect of an unrelated
+  item. Both `HandleUseK9Medkit` (server) and `applyMedkitHeal` (client, for
+  the network-latency window where the K9 could die between the server's
+  decision and the client applying it) now reject a dead target rather than
+  healing it. (2) the per-target `MedkitMutex` was only released via the
+  success/failure wrapper's own `return` paths — a hypothetical uncaught
+  error from a future edit inside the mutex-held region would have skipped
+  every one of those `return`s and left that citizenid permanently locked
+  out of ever being treated again, with no sweep/TTL to recover it (a
+  mutex is acquire/release, not a cooldown). Fixed by moving the mutex-held
+  mutation into its own function wrapped in a `pcall` whose very next line
+  unconditionally releases the mutex, regardless of outcome.
+- **Fixed a stale-ball state bug in `FetchMechanic`'s carrier-disconnect
+  handling** (`server/fetch.lua`). The `playerDropped` handler used to
+  decide whether an in-progress 'attach'-mode carry had ever actually been
+  confirmed by checking `not ball.netId` — but `ball.netId` is never
+  `nil`'d during that two-phase pickup transition, so this check always
+  took the "degrade to a natural 'dropped' state" branch, even for a
+  carrier disconnecting mid-transition (the old entity already
+  client-deleted, the new mouth-attached one possibly never created, no
+  confirm ever sent). Left uncorrected, the stale ball would sit in the
+  registry pointing at an already-deleted netId, masked only by the
+  maintenance thread's own despawn re-check picking it up on its next
+  sweep — a coincidental backstop, not a fix. Now discriminates on whether
+  the carry attach was ever confirmed (`PendingFetchCarries[src]`, captured
+  before it's cleared) instead, ending the cycle outright for an
+  unconfirmed transition rather than leaving a phantom entry behind.
 
 ## [0.2.0] - 2026-08-24
 
@@ -499,9 +634,14 @@ integration that did not actually exist in code until this pass). Everything bel
   thresholds). Every stat is only ever ticked, read, or gated behind its own
   feature flag — a disabled stat idles at its healthy default and costs
   nothing. Flashbang immunity for Distraction
-  (`Config.Wellbeing.Distraction.flashbangImmune`) is aspirational config
-  only, **not implemented** — it depends on an unconfirmed third-party
-  flashbang/stun resource's own event shape.
+  (`Config.Wellbeing.Distraction.flashbangImmune`) was aspirational config
+  only at this point, **not implemented**. **Correction, later pass:** the
+  real, callable half now exists — `IsFlashbangImmune(citizenid)`, a
+  resource-global accessor with the same contract as `IsHesitating`/
+  `IsDistracted`. What remains unimplemented is only the *consumer* side: no
+  confirmed third-party flashbang/stun resource's event shape exists for
+  this codebase to listen for and suppress, so nothing calls the new
+  accessor yet — see "Added — landed after the entries above" below.
 - **XP / progression (`Config.Features.XPProgression`, still `false`)** —
   server-authoritative XP accumulates per K9 citizenid, persisted in the
   `k9_progression` table (survives a department change). **That table was
@@ -1178,7 +1318,18 @@ sweep the third round's own entry flagged as still open:
   with no audio rather than erroring, but a server owner who enables either
   flag should not expect to hear anything until real audio assets are
   sourced and wired in. See `SPEC.md` §7 for the full asset-vs-native-only
-  breakdown.
+  breakdown. **Update, licence-verification pass, 2026-08-25:** the earlier
+  sourcing brief's candidate leads have since been checked directly against
+  each asset's own page/API rather than a search snippet. Nothing usable
+  turned out to be public domain: the Wikimedia Commons files previously
+  described as public domain are actually CC BY-SA 3.0/4.0 (attribution
+  *and* share-alike), and the OpenGameArt file previously described as CC0
+  is actually OGA-BY 3.0 (attribution only) — it sits in a collection
+  literally named "CC0 Audio," which is how the original claim went wrong
+  on a quick text search. Still no files added; this is now a licensing
+  decision for the resource owner (accept OGA-BY, accept CC BY-SA, or
+  commission/record original audio) rather than an open research question.
+  See `html/sounds/CREDITS.md`'s 2026-08-25 section for the full trace.
 - **Every numeric value in this batch's new `Config.K9Inventory`,
   `Config.K9Medkit`, `Config.Wellbeing`, `Config.XP`,
   `Config.DeployableKennel`, `Config.Combat`, and `Config.Partnership`

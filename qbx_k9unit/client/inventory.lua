@@ -13,21 +13,21 @@
     'qbx_k9unit:server:openK9Inventory' callback contract (THIS FILE is its
     only client-side caller).
 
-    KNOWN GAP, flagged rather than silently omitted: PHASE4_SPEC.md §13.4.2
-    describes the ox_target option appearing "on the K9 player's own ped,"
-    which server/inventory.lua's contract supports for BOTH a nearby
-    department officer AND the K9 player accessing their own stash (see
-    IsAuthorizedForK9Inventory's `isSelf` branch there). This file only
-    wires the ox_target entry point below — a self-service "Open My Gear"
-    RADIAL menu item (client/radial.lua) would be the natural UX for the K9
-    player's own access (self-targeting via ox_target is awkward/unusual
-    UX), but client/radial.lua is locked to another actively-refactoring
-    session as of this pass and is explicitly out of scope here. The
-    server-side capability already supports self-access today (a K9 player
-    CAN use the ox_target option on their own ped if ox_target permits
-    self-targeting on the live install; this was not verified this
-    session) — adding the radial entry is a follow-up once that file's lock
-    clears, not a redesign.
+    RESOLVED (was a KNOWN GAP flagged here; closed this pass, not left
+    stale): PHASE4_SPEC.md §13.4.2 describes the ox_target option appearing
+    "on the K9 player's own ped," which server/inventory.lua's contract
+    supports for BOTH a nearby department officer AND the K9 player
+    accessing their own stash (see IsAuthorizedForK9Inventory's `isSelf`
+    branch there — confirmed self-access still requires the acting
+    player's own HasK9Access, same as every other path into this
+    callback). This file previously only wired the ox_target entry point
+    below, with self-targeting via ox_target being awkward/unusual UX and
+    no global exposed for a radial item to call instead. Now closed:
+    RequestOpenOwnK9Inventory() below is that self-service entry point —
+    see its own doc comment for the full contract. A future
+    client/radial.lua "Open My Gear" item can call it directly without
+    reaching into ox_inventory itself, per this file's own established
+    "radial calls a global, never the export directly" split.
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls the server's 'qbx_k9unit:server:openK9Inventory'
@@ -43,6 +43,15 @@
       client/partnership.lua's own established pattern for the same call.
       NOT a security check either way — the server independently
       re-verifies the real model via IsConfiguredK9Model.
+    - THIS FILE exposes one resource-global function for a radial entry
+      point: `RequestOpenOwnK9Inventory()` — see its own doc comment near
+      the bottom of this file. It is the ONLY caller-facing seam into this
+      file's request/response + exports.ox_inventory:openInventory
+      sequence; a caller (a future client/radial.lua item) never needs its
+      own exports.ox_inventory:openInventory call, matching this
+      resource's convention (see client/movement.lua's/client/fetch.lua's
+      own resource-global exports) that a radial item calls a thin global
+      here, never a third-party export directly.
     ======================================================================
 
     CONFIDENCE NOTE: `exports.ox_inventory:openInventory('stash', stashId)`
@@ -78,6 +87,41 @@ local K9_INVENTORY_REASON_MESSAGES = {
     not_authorized    = locale('inventory.reason_not_authorized'),
     stash_failed      = locale('inventory.reason_stash_failed'),
 }
+
+--- Shared "ask the server to open this stash, then open it client-side"
+--- implementation — called by both the ox_target `onSelect` below (netId
+--- resolved from the interacted ped) and RequestOpenOwnK9Inventory()
+--- further down (netId resolved from the local player's own ped). Kept as
+--- the ONE place that awaits the callback, interprets its `reason`, and
+--- calls exports.ox_inventory:openInventory — so a future reason value, or
+--- the ox_inventory open call itself, only needs updating here, and no
+--- caller of RequestOpenOwnK9Inventory ever needs its own
+--- exports.ox_inventory:openInventory call (this file's header's own
+--- "radial calls a global, never the export directly" contract).
+--- @param netId number
+local function OpenK9InventoryForNetId(netId)
+    local result = lib.callback.await('qbx_k9unit:server:openK9Inventory', false, netId)
+
+    if not result or not result.ok then
+        local reason = result and result.reason
+        -- 'on_cooldown'/'request_in_progress' are routine, expected
+        -- traffic (a double-click, a hovering re-trigger) — same
+        -- silent-no-op treatment contraband_search_contract.md §4's
+        -- "Rejection UX note" already recommends for search's
+        -- identical on_cooldown case, applied here to this file's
+        -- two analogous reasons.
+        if reason and reason ~= 'on_cooldown' and reason ~= 'request_in_progress' then
+            lib.notify({
+                title = locale('common.notify_title'),
+                description = K9_INVENTORY_REASON_MESSAGES[reason] or locale('inventory.unable_to_open_generic'),
+                type = 'error',
+            })
+        end
+        return
+    end
+
+    exports.ox_inventory:openInventory('stash', result.stashId)
+end
 
 --- Register the "Open K9 Gear" ox_target option on nearby player peds whose
 --- live model is (plausibly, client-side) a configured K9 model. Display
@@ -125,27 +169,44 @@ exports.ox_target:addGlobalPlayer({
         end,
         onSelect = function(data)
             local netId = NetworkGetNetworkIdFromEntity(data.entity)
-            local result = lib.callback.await('qbx_k9unit:server:openK9Inventory', false, netId)
-
-            if not result or not result.ok then
-                local reason = result and result.reason
-                -- 'on_cooldown'/'request_in_progress' are routine, expected
-                -- traffic (a double-click, a hovering re-trigger) — same
-                -- silent-no-op treatment contraband_search_contract.md §4's
-                -- "Rejection UX note" already recommends for search's
-                -- identical on_cooldown case, applied here to this file's
-                -- two analogous reasons.
-                if reason and reason ~= 'on_cooldown' and reason ~= 'request_in_progress' then
-                    lib.notify({
-                        title = locale('common.notify_title'),
-                        description = K9_INVENTORY_REASON_MESSAGES[reason] or locale('inventory.unable_to_open_generic'),
-                        type = 'error',
-                    })
-                end
-                return
-            end
-
-            exports.ox_inventory:openInventory('stash', result.stashId)
+            OpenK9InventoryForNetId(netId)
         end,
     },
 })
+
+--- Resource-global — radial self-service entry point (see FILE-TO-FILE
+--- CONTRACT above and this file's own now-RESOLVED header note). Mirrors
+--- client/movement.lua's RequestLeashAttach() / client/medkit.lua's
+--- RequestTreatNearestK9() shape: re-checks CanShowK9UI() itself rather
+--- than trusting that a caller (a future client/radial.lua item) already
+--- did, per this codebase's "must not be triggerable by a modified
+--- client" spirit — the server re-validates independently regardless
+--- (server/inventory.lua's HandleOpenK9Inventory, including its own
+--- HasK9Access(targetServerId) check, which for a self-request means
+--- `targetServerId == source`, i.e. the requester's OWN certification is
+--- what gates this, exactly matching CanShowK9UI()'s own
+--- IsOwnModelK9()-and-HasK9Access() gate below rather than being a looser
+--- client-side check). This is an INITIATION action (starts an open-stash
+--- request against the local player's own ped), not a release/termination
+--- one, so — unlike a termination path — it is gated, not exempted, per
+--- this resource's established initiation-vs-termination gating split.
+--- No nearest-candidate scan needed (unlike RequestTreatNearestK9()): the
+--- target is always the local player's own, already-known ped.
+function RequestOpenOwnK9Inventory()
+    if not CanShowK9UI() then
+        DenyK9UIAccess()
+        return
+    end
+
+    if not Config.Features.K9Inventory then
+        lib.notify({
+            title = locale('common.notify_title'),
+            description = K9_INVENTORY_REASON_MESSAGES.feature_disabled,
+            type = 'error',
+        })
+        return
+    end
+
+    local netId = NetworkGetNetworkIdFromEntity(PlayerPedId())
+    OpenK9InventoryForNetId(netId)
+end
