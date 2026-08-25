@@ -60,6 +60,25 @@ local function IsPlayerAceAllowed(sourceIdStr, _ace)
     return aceGrants[sourceIdStr] == true
 end
 
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl) --
+-- HasPermission stub, mirrors tests/combat_spec.lua's/tests/pursuitsprint_spec.lua's
+-- own identical `[citizenid][key] = true/false` grant store shape exactly.
+-- Present in THIS file's sandbox from the start (unlike combat_spec.lua's
+-- opt-in default-absent convention) because admin_spec.lua uses ONE shared
+-- module-level env for every test, not a per-test fixture -- Config.FeatureControl.RequireGrant
+-- defaults to an EMPTY table (see Config below), so every one of this
+-- file's OTHER, pre-existing tests (none of which ever call grantPermission)
+-- falls straight through IsAdminFeaturePermittedForCitizenId's step 4
+-- (default allow) exactly as before that check existed.
+local permissionGrants = {}
+local function HasPermissionStub(citizenid, key)
+    return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+end
+local function grantPermission(citizenid, key, value)
+    permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+    permissionGrants[citizenid][key] = value
+end
+
 -- exports.qbx_core:GetPlayer(source) stub -- used only by LogAuditInvocation
 -- to resolve a citizenid for the console log line; nil is a valid/expected
 -- "unresolved source" response.
@@ -128,6 +147,14 @@ local Config = {
     Departments = {
         police = { label = 'Los Santos Police Department', certifierGrade = 4, auditGrade = 4, autoAccessGrade = nil },
     },
+    -- PER-PERSON FEATURE CONTROL -- empty by default so every pre-existing
+    -- test in this file (none of which pass through grantPermission) keeps
+    -- falling through to step 4 (default allow), same reasoning
+    -- tests/combat_spec.lua's own Config.FeatureControl doc comment gives.
+    -- Individual tests below flip RequireGrant.AdminAuditCommands on/off
+    -- around their own assertions and restore it afterward, same convention
+    -- the TrustConsole tests above already established.
+    FeatureControl = { RequireGrant = {} },
 }
 
 local env = Sandbox.newEnv({
@@ -136,6 +163,7 @@ local env = Sandbox.newEnv({
     AddEventHandler = AddEventHandler,
     GetCurrentResourceName = GetCurrentResourceName,
     IsPlayerAceAllowed = IsPlayerAceAllowed,
+    HasPermission = HasPermissionStub,
     exports = exportsStub,
     MySQL = MySQLStub,
     NotifyPlayer = NotifyPlayerStub,
@@ -473,6 +501,106 @@ t.test('IsAuthorizedAdmin: a player record with no job at all fails CLOSED', fun
     t.equals(#capturedQueries, 0)
     t.equals(#capturedNotifications, 1)
     t.contains(capturedNotifications[1].description, 'not authorized')
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL -- config.lua's Config.FeatureControl, steps
+-- 2-4 of its documented "first match wins" resolution, layered ON TOP OF
+-- every qualification path above (job.isboss / k9.audit capability grant /
+-- high command / auditGrade rank) via IsAdminFeaturePermittedForCitizenId
+-- (this pass). This is the headline finding this pass exists to fix:
+-- server/permissions.lua's IsValidPermissionKey previously rejected EVERY
+-- 'feature.<Name>'/'block.<Name>' grant outright, so a block or a
+-- RequireGrant listing had ZERO real effect on who could run these
+-- commands, regardless of what the tablet displayed. These tests prove a
+-- block ACTUALLY blocks and a grant ACTUALLY grants at the real gate --
+-- specifically including the job.isboss bypass, since that path used to
+-- `return true` unconditionally and is the most likely place a narrowing
+-- change like this one could be accidentally dropped.
+-- ----------------------------------------------------------------------
+
+t.test('IsAuthorizedAdmin: RequireGrant.AdminAuditCommands = true + no grant held -- denied even for job.isboss', function()
+    resetCaptures()
+    Config.FeatureControl.RequireGrant.AdminAuditCommands = true
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITFC-BOSS-1',
+        job = { name = 'police', isboss = true, grade = { level = 0 } },
+    })
+    -- deliberately NOT granted
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 0)
+    t.contains(capturedNotifications[1].description, 'not authorized')
+    Config.FeatureControl.RequireGrant.AdminAuditCommands = nil -- restore for subsequent tests
+end)
+
+t.test('IsAuthorizedAdmin: RequireGrant.AdminAuditCommands = true + an active feature.AdminAuditCommands grant -- allowed (job.isboss path)', function()
+    resetCaptures()
+    Config.FeatureControl.RequireGrant.AdminAuditCommands = true
+    grantPermission('CITFC-BOSS-2', 'feature.AdminAuditCommands', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITFC-BOSS-2',
+        job = { name = 'police', isboss = true, grade = { level = 0 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 1)
+    Config.FeatureControl.RequireGrant.AdminAuditCommands = nil
+end)
+
+t.test('IsAuthorizedAdmin: BLOCK ALWAYS WINS -- an explicit block.AdminAuditCommands denies job.isboss even with an active feature.AdminAuditCommands grant', function()
+    resetCaptures()
+    Config.FeatureControl.RequireGrant.AdminAuditCommands = true
+    grantPermission('CITFC-BOSS-3', 'feature.AdminAuditCommands', true)
+    grantPermission('CITFC-BOSS-3', 'block.AdminAuditCommands', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITFC-BOSS-3',
+        job = { name = 'police', isboss = true, grade = { level = 0 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 0)
+    t.contains(capturedNotifications[1].description, 'not authorized')
+    Config.FeatureControl.RequireGrant.AdminAuditCommands = nil
+end)
+
+t.test('IsAuthorizedAdmin: BLOCK ALSO WINS against an ordinary rank-qualified officer (grade >= auditGrade, not a boss)', function()
+    resetCaptures()
+    -- NOT listed in RequireGrant this time (step 2 fires independently of
+    -- step 3 -- config.lua's own documented ordering) -- an ordinary
+    -- grade-4 officer would otherwise pass via the final auditGrade
+    -- comparison branch.
+    grantPermission('CITFC-RANK-1', 'block.AdminAuditCommands', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITFC-RANK-1',
+        job = { name = 'police', grade = { level = 4 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 0)
+    t.contains(capturedNotifications[1].description, 'not authorized')
+end)
+
+t.test('IsAuthorizedAdmin: RequireGrant.AdminAuditCommands not listed -- default ALLOW even with no grant (step 4, matches every pre-existing test in this file)', function()
+    resetCaptures()
+    -- Config.FeatureControl.RequireGrant.AdminAuditCommands is nil here
+    -- (restored by every test above) -- this is the SAME state every other
+    -- test in this file already runs under; asserted explicitly once so the
+    -- per-person feature control addition is proven non-regressive, not
+    -- merely assumed from the other tests passing.
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITFC-DEFAULT-1',
+        job = { name = 'police', grade = { level = 4 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 1)
+end)
+
+t.test('IsAuthorizedAdmin: a block on a DIFFERENT feature key does not affect AdminAuditCommands -- feature keys are independent', function()
+    resetCaptures()
+    grantPermission('CITFC-OTHERKEY-1', 'block.BiteAndHold', true)
+    local src = freshSourceWithPlayerData({
+        citizenid = 'CITFC-OTHERKEY-1',
+        job = { name = 'police', grade = { level = 4 } },
+    })
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    t.equals(#capturedQueries, 1, 'AdminAuditCommands must be unaffected by a block on a different feature key')
 end)
 
 -- ----------------------------------------------------------------------

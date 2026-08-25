@@ -39,7 +39,74 @@
 local t = dofile('testkit.lua')
 local Sandbox = dofile('fixtures/sandbox.lua')
 
---- @param opts table? -- { featureEnabled: boolean?, shopConfig: table?, departments: table?, registeredItems: table<string, boolean>?, throwOnRegisterShop: boolean? }
+-- ----------------------------------------------------------------------
+-- RUNTIME SHOP LOCATIONS fake database -- backs k9_equipment_shop_locations
+-- / k9_equipment_shop_locations_audit for the new callbacks this pass adds
+-- (equipmentShopGetLocations/AddLocation/MoveLocation/RemoveLocation).
+-- Same style as tests/runtimecontrol_spec.lua's own newWorld()/
+-- makeQueryAwait(): a fake in-memory table mutated by the REAL production
+-- callbacks exactly like a real database would be, so a "survives a
+-- restart" test can boot twice against the same world.
+-- ----------------------------------------------------------------------
+
+--- @return table world
+local function newWorld()
+    return {
+        locations = {}, -- [id] = { x, y, z, heading, model, scenario, label, created_by, updated_by }
+        audit = {},     -- array of { location_id, action, x, y, z, heading, model, scenario, label, changed_by }
+        nextId = 1,
+    }
+end
+
+--- @param world table
+--- @return fun(sql: string, params: table): table
+local function makeQueryAwait(world)
+    return function(sql, params)
+        if sql:find('SELECT id, x, y, z, heading, model, scenario, label FROM k9_equipment_shop_locations', 1, true) then
+            local out = {}
+            for id, row in pairs(world.locations) do
+                out[#out + 1] = { id = id, x = row.x, y = row.y, z = row.z, heading = row.heading, model = row.model, scenario = row.scenario, label = row.label }
+            end
+            return out
+        elseif sql:find('UPDATE k9_equipment_shop_locations SET', 1, true) then
+            local x, y, z, heading, model, scenario, label, updatedBy, id = params[1], params[2], params[3], params[4], params[5], params[6], params[7], params[8], params[9]
+            local row = world.locations[id]
+            if row then
+                row.x, row.y, row.z, row.heading, row.model, row.scenario, row.label, row.updated_by = x, y, z, heading, model, scenario, label, updatedBy
+            end
+            return {}
+        elseif sql:find('DELETE FROM k9_equipment_shop_locations WHERE id', 1, true) then
+            world.locations[params[1]] = nil
+            return {}
+        elseif sql:find('INSERT INTO k9_equipment_shop_locations_audit', 1, true) then
+            world.audit[#world.audit + 1] = {
+                location_id = params[1], action = params[2], x = params[3], y = params[4], z = params[5],
+                heading = params[6], model = params[7], scenario = params[8], label = params[9], changed_by = params[10],
+            }
+            return {}
+        end
+        error('equipmentshop_spec test stub: unhandled SQL (query.await): ' .. tostring(sql))
+    end
+end
+
+--- @param world table
+--- @return fun(sql: string, params: table): number
+local function makeInsertAwait(world)
+    return function(sql, params)
+        if sql:find('INSERT INTO k9_equipment_shop_locations (', 1, true) then
+            local id = world.nextId
+            world.nextId = id + 1
+            world.locations[id] = {
+                x = params[1], y = params[2], z = params[3], heading = params[4],
+                model = params[5], scenario = params[6], label = params[7], created_by = params[8],
+            }
+            return id
+        end
+        error('equipmentshop_spec test stub: unhandled SQL (insert.await): ' .. tostring(sql))
+    end
+end
+
+--- @param opts table? -- { featureEnabled: boolean?, shopConfig: table?, departments: table?, registeredItems: table<string, boolean>?, throwOnRegisterShop: boolean?, world: table?, isHighCommand: fun(source):boolean?, hasPermission: fun(citizenid, key):boolean?, playersBySource: table? }
 --- @return table fixture
 local function newFixture(opts)
     opts = opts or {}
@@ -76,6 +143,12 @@ local function newFixture(opts)
                 registerShopCalls[#registerShopCalls + 1] = { shopType = shopType, shopDetails = shopDetails }
             end,
         },
+        qbx_core = {
+            GetPlayer = function(_self, source)
+                local player = (opts.playersBySource or {})[source]
+                return player
+            end,
+        },
     }
 
     local Config = {
@@ -84,20 +157,58 @@ local function newFixture(opts)
         Departments = opts.departments,
     }
 
+    local world = opts.world or newWorld()
+    local callbacks = {}
+    local libStub = { callback = { register = function(name, handler) callbacks[name] = handler end } }
+
+    local broadcasts = {}
+    local function TriggerClientEventStub(eventName, target, payload)
+        broadcasts[#broadcasts + 1] = { eventName = eventName, target = target, payload = payload }
+    end
+
+    local isHighCommand = opts.isHighCommand or function() return false end
+    local hasPermission = opts.hasPermission -- nil unless a test wants the permission-grant escape hatch
+
+    -- server/cooldowns.lua's Consume falls back to GetGameTimer() whenever
+    -- a caller (every mutating callback below) omits the optional `now`
+    -- argument -- exactly what server/equipmentshop.lua's own call sites
+    -- do. A deterministic fake clock (same shape as
+    -- tests/runtimecontrol_spec.lua's own fakeNow) is what makes the
+    -- rate-limiting tests below controllable rather than flaky against
+    -- real wall-clock time.
+    local fakeNow = { value = 0 }
+
     local env = Sandbox.newEnv({
         GetCurrentResourceName = GetCurrentResourceName,
         AddEventHandler = AddEventHandler,
+        GetGameTimer = function() return fakeNow.value end,
         print = printStub,
         exports = exportsStub,
         Config = Config,
+        lib = libStub,
+        TriggerClientEvent = TriggerClientEventStub,
+        MySQL = { query = { await = makeQueryAwait(world) }, insert = { await = makeInsertAwait(world) } },
+        IsHighCommand = isHighCommand,
+        HasPermission = hasPermission,
     })
 
+    -- server/equipmentshop.lua's new runtime-locations section calls
+    -- NewCooldown at its own file-load time (EquipmentShopLocationActionCooldown)
+    -- -- load the REAL, unmodified server/cooldowns.lua first, exactly like
+    -- tests/runtimecontrol_spec.lua's own boot() does for the identical
+    -- reason, so this suite exercises the real cooldown behavior rather
+    -- than a hand-rolled stand-in.
+    Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/equipmentshop.lua', env)
 
     return {
         printedLines = printedLines,
         registerShopCalls = registerShopCalls,
         config = Config,
+        world = world,
+        callbacks = callbacks,
+        broadcasts = broadcasts,
+        fakeNow = fakeNow,
         --- @param resourceName string?
         fireResourceStart = function(resourceName)
             for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
@@ -106,6 +217,10 @@ local function newFixture(opts)
         end,
     }
 end
+
+local HC_SOURCE = 100
+local NON_HC_SOURCE = 200
+local HC_CITIZENID = 'HC001'
 
 --- @param printedLines string[]
 --- @param substring string

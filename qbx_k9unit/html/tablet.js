@@ -429,6 +429,30 @@
      * order would depend on whatever order the server happens to send. */
     var CAPABILITY_ORDER = ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'];
 
+    /** English fallback theme -- MUST be kept byte-identical to
+     * server/runtimecontrol.lua's own DEFAULT_THEME, so this page looks
+     * right even before tablet:getTheme's own response lands (or if it
+     * never does -- see loadTheme() below). Never itself sent anywhere;
+     * this is a local rendering fallback only, same posture as
+     * DEFAULT_STRINGS/DEFAULT_CAPABILITIES above.
+     * @type {{primaryColor:string,accentColor:string,backgroundColor:string,textColor:string,density:string,headerTitle:string}} */
+    var DEFAULT_THEME = {
+        primaryColor: '#2563eb',
+        accentColor: '#f59e0b',
+        backgroundColor: '#111827',
+        textColor: '#f9fafb',
+        density: 'comfortable',
+        headerTitle: 'K9 Command Tablet',
+    };
+
+    /** The exact, fixed density enum server/runtimecontrol.lua's own
+     * IsValidDensity accepts -- rendered as a `<select>`, never free text,
+     * matching that file's own "a fixed lookup table, never free text"
+     * comment. This page enforces the SAME set purely so the dropdown
+     * cannot even offer a value the server would reject -- the server's own
+     * re-check is still what actually matters (see THE SECURITY RULE). */
+    var THEME_DENSITY_OPTIONS = ['comfortable', 'compact'];
+
     // ------------------------------------------------------------------
     // STATE -- single source of truth. Every mutation calls render(),
     // which clears and rebuilds the ENTIRE visible screen from this object.
@@ -440,10 +464,12 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'my_record', // 'my_record' | 'console' | 'person'
+        screen: 'my_record', // 'my_record' | 'console' | 'person' | 'theme'
         strings: {},
         capabilities: {},
         maxXpPerGrant: null,
+        peds: [], // Config.Peds, verbatim -- see tablet:assignK9Role's own NUI contract note; display list only, server re-validates the chosen model regardless
+        themingEnabled: false, // Config.Features.TabletTheming -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
 
         viewer: null, // set once tablet:requestMyRecord resolves successfully
         myRecordLoading: false,
@@ -454,6 +480,7 @@
         rosterError: null,
         roster: null, // { rows, truncated, truncatedMessage }
         rosterQuery: '',
+        openByIdValue: '', // console screen's "open by exact citizen ID" box -- see buildConsoleScreen()
 
         person: null, // { citizenid, name } -- who the 'person' screen is currently showing
         personSummaryLoading: false,
@@ -463,6 +490,16 @@
         personFeaturesError: null,
         personFeatures: null, // { features }
         personFeatureQuery: '',
+        roleActionPending: false, // separate from pendingAction -- see buildRoleControl(); a role assign/revert in flight disables ONLY that section's own two buttons
+
+        // Tablet theming -- applied for EVERY viewer (theme itself is
+        // fetched once per open and again live on every
+        // qbx_k9unit:client:themeUpdated push, regardless of which screen
+        // is showing or whether this viewer is high command at all).
+        theme: null, // { primaryColor, accentColor, backgroundColor, textColor, density, headerTitle } -- null until the first tablet:getTheme resolves; DEFAULT_THEME is used to render/apply in the meantime, see applyThemeToDocument()
+        themeLoading: false,
+        themeError: null,
+        themeDraft: null, // a WORKING COPY of `theme` the theme-editor screen mutates locally before Save -- never sent anywhere until the operator presses Save, and always reset from the authoritative `theme` on load/open/push so a stale edit can never silently linger across a reopen
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit
         actionNotice: null, // { kind: 'ok'|'error', text: string } -- transient, cleared on next navigation/reload

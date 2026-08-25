@@ -376,7 +376,7 @@ t.test('RESTORE: re-adding a deleted (tombstoned) key un-deletes it, appended at
     local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'trainee', label = 'Trainee', capabilities = {} })
     t.isTrue(result.ok)
     t.isTrue(f.env.IsKnownCertificationTierKey('trainee'))
-    t.equals(f.env.GetCertificationTierOrdinal('trainee'), 3, 'a restore is appended at the end (after certified=2, senior=3), never reclaiming ordinal 1')
+    t.equals(f.env.GetCertificationTierOrdinal('trainee'), 4, 'a restore is appended after the current max (certified=2, senior=3 -- trainee itself is excluded while tombstoned, so max+1 = 4), never reclaiming its old ordinal 1')
 end)
 
 -- ============================================================================
@@ -426,7 +426,9 @@ t.test('PERSISTENCE: a tablet-added tier, a rename, and a delete all survive a r
     local world = newWorld()
     local first = boot({ world = world, isHighCommand = function(src) return src == HC_SOURCE end })
     first.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'master', label = 'Master', capabilities = { 'advanced_tracking' } })
+    first.fakeNow.value = first.fakeNow.value + 2000
     first.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'certified', label = 'Standard Handler', capabilities = {} })
+    first.fakeNow.value = first.fakeNow.value + 2000
     first.callbacks['qbx_k9unit:server:certTiersDelete'](HC_SOURCE, 'trainee')
 
     local second = boot({ world = world, isHighCommand = function(src) return src == HC_SOURCE end })
