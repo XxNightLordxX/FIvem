@@ -157,6 +157,15 @@ local function newFixture(opts)
 
     local function IsConfiguredK9Model(hash) return hash == K9_PED_HASH end
 
+    -- K9 role/model decoupling (server/appearance.lua) -- requestToggleK9PropAttachment
+    -- ORs this in alongside IsConfiguredK9Model(GetEntityModel(ped)) so a
+    -- role-holder on a non-K9 model can still attach a prop. Stubbed here
+    -- (not the real server/appearance.lua), same "this file's own logic
+    -- only" reasoning as HasK9Access/IsConfiguredK9Model above. Defaults
+    -- false.
+    local hasRoleBySource = {}
+    local function HasK9Role(src) return hasRoleBySource[src] == true end
+
     local playersBySource = {} -- source -> citizenid string, or nil = unresolved
     local exportsStub = {
         qbx_core = {
@@ -224,6 +233,7 @@ local function newFixture(opts)
         NotifyPlayer = NotifyPlayer,
         HasK9Access = HasK9Access,
         IsConfiguredK9Model = IsConfiguredK9Model,
+        HasK9Role = HasK9Role,
         exports = exportsStub,
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
@@ -251,6 +261,7 @@ local function newFixture(opts)
         netEventNames = netEvents,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
+        setK9Role = function(src, hasRole) hasRoleBySource[src] = hasRole end,
         setPlayer = function(src, citizenid) playersBySource[src] = citizenid end,
         setPed = function(src, pedHandle, coords, modelHash)
             pedBySource[src] = pedHandle
@@ -460,6 +471,20 @@ t.test('requestToggleK9PropAttachment: a non-K9 ped model is rejected', function
     f.setPed(1, 5001, { x = 0, y = 0, z = 0 }, NON_K9_PED_HASH)
     f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
     t.equals(f.notifyCalls[1].description, locale('propattachment.requires_k9_form'))
+end)
+
+-- K9 ROLE/MODEL DECOUPLING WIDENING -- "I also want everything to work with
+-- any ped". A caller who holds the decoupled K9 ROLE (HasK9Role) but is
+-- standing on a non-K9 model must still be able to attach a prop --
+-- previously this was unconditionally rejected as requires_k9_form.
+t.test('requestToggleK9PropAttachment: K9 ROLE/MODEL DECOUPLING -- a non-K9 ped model IS accepted when the caller holds the decoupled K9 role', function()
+    local f = newFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 }, NON_K9_PED_HASH)
+    f.setK9Role(1, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:attachK9Prop'), 1, 'a human/custom-modeled role-holder must be allowed to attach, not rejected as requires_k9_form')
 end)
 
 t.test('requestToggleK9PropAttachment: a second request while a confirm is already pending is a silent no-op (no second pending slot)', function()

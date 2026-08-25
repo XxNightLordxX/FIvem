@@ -297,6 +297,12 @@ local function newWellbeingFixture(opts)
     Sandbox.loadInto('../shared/compat/core.lua', env)
     Sandbox.loadInto('../shared/compat/target.lua', env)
 
+    -- IsK9RoleForPlayer lives here. client/wellbeing.lua's ox_target
+    -- predicates ask "is that OTHER player a K9", which the any-ped work
+    -- moved from a model check to a role check -- and the role answer is
+    -- defined in client/appearance.lua. The manifest loads both, so the
+    -- game is fine; a sandbox that loads only the file under test is not.
+    Sandbox.loadInto('../client/appearance.lua', env)
     Sandbox.loadInto('../client/wellbeing.lua', env)
 
     for _, fn in ipairs(resourceStartHandlers) do

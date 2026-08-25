@@ -235,8 +235,7 @@ end
 --- @param limit number
 --- @return table rows
 local function QueryTopXp(limit)
-    local sql = ('SELECT citizenid, xp FROM k9_progression ORDER BY xp DESC LIMIT %d'):format(limit)
-    local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
+    local ok, rowsOrErr = pcall(K9Store.XP_GetTop, limit)
     if not ok then
         print(('[qbx_k9unit] leaderboard: query failed: %s'):format(tostring(rowsOrErr)))
         return {}

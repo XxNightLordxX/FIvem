@@ -251,6 +251,15 @@ local function newMedkitFixture(opts)
     local k9Models = {}
     local function IsConfiguredK9Model(model) return k9Models[model] == true end
 
+    -- K9 role/model decoupling (server/appearance.lua) -- HandleUseK9Medkit
+    -- ORs this in alongside IsConfiguredK9Model(GetEntityModel(targetPed)) so
+    -- a role-holder on a non-K9 model can still be treated. Stubbed here
+    -- (not the real server/appearance.lua), same "this file's own logic
+    -- only" reasoning as HasK9Access/IsConfiguredK9Model elsewhere in this
+    -- suite. Keyed by targetServerId, defaults false.
+    local hasRoleBySource = {}
+    local function HasK9Role(src) return hasRoleBySource[src] == true end
+
     -- exports.ox_inventory:GetItemCount/RemoveItem -- keyed by source, then
     -- item name, same shape wellbeing_spec.lua's own stub already uses.
     local itemCounts = {}
@@ -302,6 +311,7 @@ local function newMedkitFixture(opts)
         GetEntityMaxHealth = GetEntityMaxHealth,
         GetEntityModel = GetEntityModel,
         IsConfiguredK9Model = IsConfiguredK9Model,
+        HasK9Role = HasK9Role,
         lib = libStub,
         Config = config,
     }
@@ -359,6 +369,7 @@ local function newMedkitFixture(opts)
         setMaxHealth = function(ped, hp) maxHealthByPed[ped] = hp end,
         setModel = function(ped, model) modelByPed[ped] = model end,
         setIsK9Model = function(model, isK9) k9Models[model] = isK9 end,
+        setK9Role = function(src, hasRole) hasRoleBySource[src] = hasRole end,
         setItemCount = function(src, itemName, n)
             itemCounts[src] = itemCounts[src] or {}
             itemCounts[src][itemName] = n
@@ -607,6 +618,31 @@ t.test('a live, connected target whose REAL ped model is not a configured K9 mod
     local f = newMedkitFixture()
     wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
     wireTargetK9(f, TARGET_SRC, { isK9Model = false })
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'invalid_target')
+end)
+
+-- K9 ROLE/MODEL DECOUPLING WIDENING -- "I also want everything to work with
+-- any ped". A target who holds the decoupled K9 ROLE (HasK9Role) but is not
+-- currently on a configured K9 model must still be treatable -- previously
+-- this was unconditionally rejected as invalid_target.
+t.test('K9 ROLE/MODEL DECOUPLING: a target on a non-K9 model IS treatable when they hold the decoupled K9 role', function()
+    local f = newMedkitFixture()
+    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
+    wireTargetK9(f, TARGET_SRC, { isK9Model = false, health = 150, maxHealth = 200 })
+    f.setK9Role(TARGET_SRC, true)
+    local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(result.ok, 'a human/custom-modeled role-holder must be treatable, not rejected as invalid_target')
+end)
+
+t.test('K9 ROLE/MODEL DECOUPLING: HasK9Role not being loaded at all (soft dependency absent) fails CLOSED to the pre-decoupling model-only check', function()
+    local f = newMedkitFixture()
+    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
+    wireTargetK9(f, TARGET_SRC, { isK9Model = false })
+    -- HasK9Role deliberately never set true here; default stub always
+    -- returns false, mirroring "role/appearance module absent or role never
+    -- granted" -- either way, the model-only rejection must still hold.
     local result = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
     t.isFalse(result.ok)
     t.equals(result.reason, 'invalid_target')

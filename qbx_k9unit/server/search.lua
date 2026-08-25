@@ -928,13 +928,8 @@ local function LogSearchAttempt(source, targetType, plateOrNil, targetCitizenidO
     -- callback: `.await` yields the coroutine it runs IN, so the coroutine
     -- that suspends is this write's own, never the caller's execution path.
     CreateThread(function()
-        local insertOk, insertErr = pcall(MySQL.insert.await, [[
-            INSERT INTO k9_search_log
-                (searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ]], {
-            searcherCitizenid, searcherJob, targetType, plateOrNil, targetCitizenidOrNil, result, totalWeightOrNil, alertTierOrNil,
-        })
+        local insertOk, insertErr = pcall(K9Store.SearchLog_Insert,
+            searcherCitizenid, searcherJob, targetType, plateOrNil, targetCitizenidOrNil, result, totalWeightOrNil, alertTierOrNil)
         if not insertOk then
             print(('[qbx_k9unit] search: k9_search_log audit INSERT failed for searcher %s (%s) targetType=%s result=%s -- this search WAS performed but is NOT recorded in the audit log: %s'):format(searcherCitizenid, searcherJob, tostring(targetType), tostring(result), tostring(insertErr)))
         end

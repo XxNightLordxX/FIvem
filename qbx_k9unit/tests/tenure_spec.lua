@@ -229,6 +229,30 @@ local function newTenureFixture(opts)
         Config = Config,
     })
 
+    -- server/datastore.lua -- REAL, unmodified, loaded alongside (this
+    -- file's own header: "the ONLY place in this resource that may name a
+    -- `k9_*` table or call `MySQL.*` directly" -- server/tenure.lua's own
+    -- CheckTenureMilestonesForK9 now reads/writes through
+    -- K9Store.Partner_GetTenureRow / K9Store.Partner_SetTenureTierCAS
+    -- rather than raw SQL). Config.Database is deliberately absent from
+    -- this fixture's Config table above -- K9Store's own
+    -- DatabaseEnabled() fails safe to `true` (real-DB mode) on a missing
+    -- Config.Database, which is exactly what makes those two K9Store
+    -- calls run the SAME MySQL.single.await/MySQL.update.await calls
+    -- (against this fixture's own MySQLStub/dbRows) that
+    -- CheckTenureMilestonesForK9 built directly before this migration, so
+    -- every existing assertion below keeps exercising the identical
+    -- SQL/params shape unchanged. See tests/admin_spec.lua for the
+    -- precedent this comment mirrors.
+    Sandbox.loadInto('../server/datastore.lua', env)
+    -- server/datastore.lua prints a one-time, load-time boot banner
+    -- ("Config.Database.enabled -- persisting to..."/"...running IN
+    -- MEMORY ONLY") through this SAME env.print stub. That banner is
+    -- load-time noise, not part of server/tenure.lua's own per-tick
+    -- checkIntervalMs warning behavior the tests below assert on -- clear
+    -- it here so `printedLines` starts empty for every fixture, exactly
+    -- as it did before this file's own K9Store migration.
+    for i = #printedLines, 1, -1 do printedLines[i] = nil end
     Sandbox.loadInto('../server/tenure.lua', env)
 
     return {

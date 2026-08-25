@@ -182,7 +182,9 @@ local function newFixture()
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
+    Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted into its own file; the manifest loads it in the real resource, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/progression.lua', env)
+    Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted into its own file; the manifest loads it in the real resource, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/search.lua', env)
     for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
         handler('qbx_k9unit')

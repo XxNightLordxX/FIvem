@@ -163,6 +163,15 @@ local function newFixture(opts)
     local function HasK9Access(src) return hasAccessBySource[src] == true end
     local function IsConfiguredK9Model(hash) return hash == K9_MODEL_HASH end
 
+    -- K9 role/model decoupling (server/appearance.lua) -- CheckPartnershipEligibility
+    -- ORs this in alongside IsConfiguredK9Model(GetEntityModel(...)) so a
+    -- role-holder on a non-K9 model still counts as "the K9 party". Stubbed
+    -- here (not the real server/appearance.lua), same "this file's own
+    -- logic only" reasoning as HasK9Access/IsConfiguredK9Model above.
+    -- Defaults false.
+    local hasRoleBySource = {}
+    local function HasK9Role(src) return hasRoleBySource[src] == true end
+
     local mysql = {
         single = { await = function(_sql, _params) return nil end }, -- RefreshPartnershipCache / DoBreakPartnership SELECT: default "no active row"
         scalar = { await = function(_sql, _params) return nil end }, -- establish critical section pre-INSERT checks: default "not already partnered"
@@ -197,7 +206,7 @@ local function newFixture(opts)
         Partnership = {
             ProximityMeters = PROXIMITY_METERS,
             RequestTTLMs = REQUEST_TTL_MS,
-            RequestCooldownMs = REQUEST_COOLDOWN_MS,
+            RequestCooldownMs = opts.requestCooldownMs or REQUEST_COOLDOWN_MS,
         },
     }
 
@@ -214,6 +223,7 @@ local function newFixture(opts)
         GetEntityModel = GetEntityModel,
         HasK9Access = HasK9Access,
         IsConfiguredK9Model = IsConfiguredK9Model,
+        HasK9Role = HasK9Role,
         MySQL = mysql,
         RegisterNetEvent = RegisterNetEvent,
         AddEventHandler = AddEventHandler,
@@ -273,6 +283,7 @@ local function newFixture(opts)
         disconnectPlayer = disconnectPlayer,
         setPed = setPed,
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
+        setK9Role = function(src, hasRole) hasRoleBySource[src] = hasRole end,
         addOnline = function(id) onlineIds[id] = true end,
         setSource = function(src) env.source = src end,
         advance = function(ms) state.now = state.now + ms end,
@@ -417,6 +428,53 @@ t.test('server/partnership.lua registers playerDropped, onResourceStart, and QBC
 end)
 
 -- ========================================================================
+-- REGRESSION (same class of bug QA reproduced against server/combat.lua):
+-- PartnerRequestCooldown = NewCooldown(Config.Partnership.RequestCooldownMs)
+-- used to hand a raw, operator-editable Config value straight to
+-- NewCooldown -- an uncaught non-positive/NaN value there would abort THIS
+-- FILE's own load from that line onward, taking every one of its 3 net
+-- events, its 1 callback, and -- critically -- ForceBreakPartnershipForCitizenId
+-- (the global termination path other files, e.g. decertification/tenure,
+-- depend on to unwind a partnership from outside this file) down with it.
+-- Fixed via ResolveConfiguredThresholdMs (server/cooldowns.lua) at this
+-- file's one raw Config-cooldown call site. Proves the fix at the exact
+-- level the bug was found: does the file still load, and is the
+-- termination path other files depend on still reachable, no matter what
+-- an operator puts in the config.
+-- ========================================================================
+
+t.test('REGRESSION: Config.Partnership.RequestCooldownMs = 0 no longer aborts this file\'s load -- clamps to the shipped 1000ms fallback, warns loudly (naming the exact key/value/substitute), and ForceBreakPartnershipForCitizenId stays defined', function()
+    local f = newFixture({ requestCooldownMs = 0 })
+
+    t.equals(type(f.env.ForceBreakPartnershipForCitizenId), 'function',
+        'the termination path other files depend on to unwind a partnership must remain reachable no matter what an operator puts in the config')
+
+    local count = 0
+    for name in pairs(f.events) do count = count + 1 end
+    t.equals(count, 3, 'every net event this file documents must still register, not just the ones textually above the bad value')
+    t.isTrue(type(f.callbacks['qbx_k9unit:server:getPartnershipState']) == 'function')
+    t.equals(#(f.eventHandlers['playerDropped'] or {}), 2)
+    t.equals(#(f.eventHandlers['onResourceStart'] or {}), 1)
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Partnership.RequestCooldownMs', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find('1000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted -- the operator must still find out')
+end)
+
+t.test('REGRESSION: Config.Partnership.RequestCooldownMs = NaN also no longer aborts this file\'s load', function()
+    local f = newFixture({ requestCooldownMs = 0 / 0 })
+    local count = 0
+    for name in pairs(f.events) do count = count + 1 end
+    t.equals(count, 3)
+end)
+
+-- ========================================================================
 -- CheckPartnershipEligibility, exercised via requestPartnerUp.
 -- ========================================================================
 
@@ -483,6 +541,22 @@ t.test('requestPartnerUp: neither party is a K9 model is no_k9_party', function(
     f.setPed(2, 200, vec3(0, 0, 0), false)
     f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
     t.isTrue(notifiedExactly(f, 1, locale('common.no_k9_party'), 'error'))
+end)
+
+-- K9 ROLE/MODEL DECOUPLING WIDENING -- "I also want everything to work with
+-- any ped". A role-holder standing on a non-K9 model (e.g. still in their
+-- human/officer model) must still be accepted as the K9 party -- previously
+-- this was unconditionally rejected as no_k9_party.
+t.test('requestPartnerUp: K9 ROLE/MODEL DECOUPLING -- a role-holder on a non-K9 model is still accepted as the K9 party, not no_k9_party', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'OFF1', { name = 'police' })
+    f.registerPlayer(2, 'OFF2', nil)
+    f.setPed(1, 100, vec3(0, 0, 0), false)
+    f.setPed(2, 200, vec3(0, 0, 0), false) -- target (2) is on a human/officer model, NOT a configured K9 model
+    f.setK9Role(2, true) -- but holds the decoupled K9 role
+    f.setAccess(2, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.partner_request_sent'), 'inform'), 'a human-modeled role-holder must be accepted as the K9 party, not rejected as no_k9_party')
 end)
 
 t.test('requestPartnerUp: the K9-role party lacking HasK9Access is not_certified', function()

@@ -86,7 +86,20 @@ local env = Sandbox.newEnv({
     Config = Config,
 })
 
+-- server/datastore.lua -- REAL, unmodified, loaded alongside (this file's
+-- own header: "the ONLY place in this resource that may name a `k9_*`
+-- table or call `MySQL.*` directly" -- server/leaderboard.lua's own
+-- QueryTopXp now reads through K9Store.XP_GetTop rather than a raw SQL
+-- string). Config.Database is deliberately absent from this fixture's
+-- Config table above -- K9Store's own DatabaseEnabled() fails safe to
+-- `true` (real-DB mode) on a missing Config.Database, which is exactly
+-- what makes XP_GetTop below run the SAME MySQL.query.await call (against
+-- this file's own MySQLStub) that QueryTopXp built directly before this
+-- migration, so every existing assertion below keeps exercising the
+-- identical SQL/params shape unchanged. See tests/admin_spec.lua for the
+-- precedent this comment mirrors.
 Sandbox.loadInto('../server/cooldowns.lua', env)
+Sandbox.loadInto('../server/datastore.lua', env)
 Sandbox.loadInto('../server/leaderboard.lua', env)
 
 t.isNotNil(registeredCommands.k9stats, 'server/leaderboard.lua must register /k9stats when Config.Features.K9Leaderboard is true')

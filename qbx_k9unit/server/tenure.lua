@@ -548,11 +548,7 @@ local function CheckTenureMilestonesForK9(k9Src, k9Citizenid)
     -- this file's header "WHY ONE NEW COLUMN IS UNAVOIDABLE") -- a missing
     -- column must degrade this whole feature to a silent no-op, never a
     -- console-spamming hard error on every tick.
-    local queryOk, row = pcall(
-        MySQL.single.await,
-        'SELECT id, k9_citizenid, handler_citizenid, tenure_bonus_tier_granted, TIMESTAMPDIFF(SECOND, established_at, NOW()) AS tenure_seconds FROM k9_partnerships WHERE active = 1 AND k9_citizenid = ? LIMIT 1',
-        { k9Citizenid }
-    )
+    local queryOk, row = pcall(K9Store.Partner_GetTenureRow, k9Citizenid)
     if not queryOk then
         print(('[qbx_k9unit] tenure: milestone query failed for k9=%s (schema migration for tenure_bonus_tier_granted may not be applied yet): %s'):format(k9Citizenid, tostring(row)))
         return
@@ -618,11 +614,7 @@ local function CheckTenureMilestonesForK9(k9Src, k9Citizenid)
     -- single-threaded Lua VM, but cheap to guard regardless, same "belt and
     -- suspenders" posture this resource applies elsewhere), only one would
     -- ever see affectedRows > 0.
-    local updateOk, affectedRows = pcall(
-        MySQL.update.await,
-        'UPDATE k9_partnerships SET tenure_bonus_tier_granted = ? WHERE id = ? AND active = 1 AND tenure_bonus_tier_granted = ?',
-        { targetTier, row.id, alreadyGranted }
-    )
+    local updateOk, affectedRows = pcall(K9Store.Partner_SetTenureTierCAS, row.id, targetTier, alreadyGranted)
     if not updateOk then
         print(('[qbx_k9unit] tenure: milestone UPDATE failed for partnership id=%s: %s'):format(tostring(row.id), tostring(affectedRows)))
         return
