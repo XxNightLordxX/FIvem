@@ -196,8 +196,8 @@ From what could be reached:
 
 ## Files actually added this pass
 
-None. Nothing below this line exists yet — when a real, licensed file is
-added, record it here in this format:
+`bark.ogg` was added in the 2026-08-25 "AUDIO SHIP PASS" below. Use this
+template for any future file added to `html/sounds/`:
 
 ```
 ### <filename>
@@ -211,6 +211,87 @@ added, record it here in this format:
 
 
 ---
+
+# AUDIO SHIP PASS — 2026-08-25
+
+Author: jlwood17190665@gmail.com. Downloaded and shipped the one file that
+gates default-on behavior (`bark.ogg`); the other four (`bark_alert.ogg`,
+`bark_aggressive.ogg`, `bark_calm.ogg`, `growl_ambient.ogg`) sit behind
+features that ship `false` and were left for a later pass, per
+`AUDIO_SOURCING.md`'s recommendation.
+
+## Re-verification of the licence, this pass, against the live page
+
+Fetched `https://opengameart.org/content/dog-barking-mono` directly with curl
+(HTTP 200) and read the page's own `field-name-field-art-licenses` block
+(the structured "License(s):" taxonomy field, not the "Collections:" field
+that carries collection titles like "CC0 Audio - Uploader: HaelDB").
+
+**Important correction to the record left by the prior two research passes
+(this file's own 2026-08-25 "LICENCE VERIFICATION PASS" section and the
+sibling `AUDIO_SOURCING.md`):** both describe the page's "CC0" string as
+appearing *only* as a collection name, with the actual License(s) field
+containing OGA-BY 3.0 alone. Reading the raw HTML directly, the License(s)
+field on this page in fact lists **two** field-items:
+
+```
+field-name-field-art-licenses ("License(s):")
+  1. <a href='http://opengameart.org/content/oga-by-30-faq'>  license-name: OGA-BY 3.0
+  2. <a href='http://creativecommons.org/publicdomain/zero/1.0/'>  license-name: CC0
+```
+
+The second entry links to the actual CC0 legal code, not to a collection
+page, and sits inside the same taxonomy field as the first — this is
+OpenGameArt's standard mechanism for an author offering a submission under
+either of two licenses (the downloader's choice), not a stray keyword. I
+confirmed this is a genuine structural difference (not a parsing artifact
+of mine) by fetching a second, unrelated OGA asset known to be single-licensed
+(`content/rpg-sound-pack`, CC0 only) as a control: its License(s) field
+contains exactly one `field-item`, where this page's contains two.
+
+This is recorded here for the next person who reads this file, but it does
+**not** change what's shipped below: the task constraint this file operates
+under only requires "verifiably CC0/public-domain **or** permissively-licensed
+(attribution-only)", and **OGA-BY 3.0 alone already clears that bar** —
+attribution-only, no share-alike, no NC. So this file is credited under
+OGA-BY 3.0, the license this pass can defend with full confidence regardless
+of how the CC0 field-item is ultimately read, and no attribution obligation
+is skipped by doing so. If a future pass wants to rely on the CC0 option
+instead (dropping the attribution requirement below), that reading of the
+page should be independently confirmed first, since it revises what two
+prior passes concluded.
+
+## `bark.ogg`
+
+- **Source URL:** https://opengameart.org/content/dog-barking-mono (submission page); direct file: https://opengameart.org/sites/default/files/dog_barking_mono.wav
+- **Author:** Brandon Morris (submitted by OpenGameArt user HaelDB)
+- **License:** OGA-BY 3.0 (attribution-only; see http://opengameart.org/content/oga-by-30-faq). Per the page's own License(s) field this asset is also offered under CC0 — see the correction note above — but this credit is made under OGA-BY 3.0 only, which requires the attribution line below regardless.
+- **Attribution text (as OGA-BY 3.0 requires):** "Dog barking mono" by Brandon Morris (HaelDB), https://opengameart.org/content/dog-barking-mono, licensed under OGA-BY 3.0.
+- **Date retrieved / verified:** 2026-08-25
+- **Verification commands run, and their output:**
+  - `curl -sS -L "https://opengameart.org/content/dog-barking-mono" -o oga_page.html -w "HTTP_CODE:%{http_code}\n"` -> `HTTP_CODE:200`; confirmed page identity via `<link rel="canonical" href="https://opengameart.org/content/dog-barking-mono" />` and `<title>Dog barking mono | OpenGameArt.org</title>`.
+  - `curl -sS -L "https://opengameart.org/sites/default/files/dog_barking_mono.wav" -o dog_barking_mono.wav -w "HTTP_CODE:%{http_code} SIZE:%{size_download}\n"` -> `HTTP_CODE:200 SIZE:179848`, matching the page's own `<a ... type="audio/x-wav; length=179848">` byte count exactly.
+  - `file dog_barking_mono.wav` -> `RIFF (little-endian) data, WAVE audio, Microsoft PCM, 16 bit, mono 44100 Hz` — confirms a real WAV container, mono as the page's own tags claim.
+  - `python3 -c "import wave; ..."` on the downloaded file -> `channels 1, sampwidth 2, framerate 44100, nframes 89902, duration_sec 2.0386`. The source file is the uploader's full "4 pitched barks" take (matching the page's own `4`/`barks`/`pitch` tags), not a single one-shot bark.
+  - `ffmpeg -i dog_barking_mono.wav -af silencedetect=noise=-30dB:d=0.05 -f null -` -> found four separate audible segments separated by silence, the first spanning ~0.000s-0.195s. **Trimmed to the first bark only** (`-ss 0 -t 0.35`, with a 50ms fade-out from 0.30s to avoid a hard cut) so the shipped one-shot file is actually one bark, matching how `client/audio.lua` plays it (`PlayK9Sound` with no `loop`, per `AUDIO_SOURCING.md`'s own table) — the full 4-bark take would not have been a faithful one-shot bark sound. This is a straightforward trim of an unmodified excerpt, permitted under an attribution-only license.
+  - `ffmpeg -y -i dog_barking_mono.wav -ss 0 -t 0.35 -af "afade=t=out:st=0.30:d=0.05" -c:a libvorbis -qscale:a 5 -ac 1 bark.ogg` -> encoded to Ogg Vorbis, mono, 44100 Hz.
+  - `head -c4 bark.ogg | od -c` -> `O g g S` (confirmed `OggS` magic bytes; genuinely Ogg container, not just `.ogg`-named).
+  - `ffprobe -v error -show_format -show_streams bark.ogg` -> `codec_name=vorbis`, `sample_rate=44100`, `channels=1`, `duration=0.350000`, `size=6951`, `probe_score=100`.
+- **Verified Ogg Vorbis (OggS magic bytes):** yes
+- **Duration:** 0.35 seconds (well under 2s)
+- **File size:** 6,951 bytes (well under 1 MB)
+- **Filename and path, derived from code (not assumed):** `html/sounds/bark.ogg`. `client/audio.lua`'s `SOUND_NAME_TO_FILE_KEY` maps sound name `'Bark'` (`client/main.lua`'s `BARK_SOUND_NAME`) to file key `'bark'`; `html/app.js`'s `loadSoundBuffer()` does `fetch('sounds/' + key + '.ogg')`, resolved relative to `html/index.html` — i.e. `html/sounds/bark.ogg`.
+
+## Outstanding follow-up (outside this file's scope — `html/sounds/` only)
+
+`fxmanifest.lua`'s `files{}` block does not yet list `html/sounds/bark.ogg`
+(verified by reading it directly this pass — only `html/index.html`,
+`html/style.css`, `html/app.js`, `locales/en.json` are listed). Per
+`AUDIO_SOURCING.md`'s own note, this resource's manifest convention is
+explicit entries, not globs. **The file will not actually reach clients
+until `'html/sounds/bark.ogg'` is added to that block** — flagged here for
+whoever owns `fxmanifest.lua`, since this pass's scope is `html/sounds/`
+only and does not touch it.
 
 # LICENCE VERIFICATION PASS — 2026-08-25
 

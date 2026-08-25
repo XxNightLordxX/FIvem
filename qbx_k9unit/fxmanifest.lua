@@ -55,11 +55,20 @@ files {
     'html/index.html',
     'html/style.css',
     'html/app.js',
+    -- The NUI audio layer fetches 'sounds/<key>.ogg' relative to
+    -- html/index.html, so every shipped sound needs its own entry here or it
+    -- 404s on the client and the loader degrades to silence -- which looks
+    -- exactly like the feature being off. Only bark.ogg exists so far; it is
+    -- the one that matters by default, since BasicBarkSounds ships true while
+    -- AdvancedBarkRadial and ProximityAudioFX (which gate the other four
+    -- sounds) ship false. Add each new sound by name as it is sourced.
+    'html/sounds/bark.ogg',
     -- ox_lib 'locale' has been declared at the top of this manifest since Phase
     -- 1, promising localisation that did not exist -- every player-facing
-    -- string was hardcoded English until now. locales/en.json is the first
-    -- real locale file; 2 of ~48 files are migrated, so this is a reference
-    -- pattern, not a finished migration (see locales/README.md).
+    -- string was hardcoded English until now. That migration is COMPLETE as of
+    -- 2026-08-25: 306 keys, every player-facing string in the resource routed
+    -- through locale(), cross-checked to zero missing and zero unused. The
+    -- earlier note here said 2 of ~48 files were migrated; that is long stale.
     -- Listed explicitly rather than as 'locales/*.json': research into the
     -- files{} glob found `*` currently behaves recursively and is itself the
     -- subject of an open upstream replacement proposal, and every other entry
