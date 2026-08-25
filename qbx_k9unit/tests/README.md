@@ -74,10 +74,14 @@ not silently worked around.
 | File | What's tested | How reached |
 |---|---|---|
 | `server/cooldowns.lua` | `NewCooldown`, `NewNestedCooldown`, `NewMutex` — check/stamp/consume/clear, the fail-closed behavior on a missing/zero/negative threshold, `RegisterPlayerDropped` per-source/per-primaryKey cleanup, `StartSweep`'s eviction predicate | Directly — all three are resource-globals (no `local`) |
-| `server/admin.lua` | `ClampLimit` (the flagged nan/inf/1e400/float/negative battery — see below), `IsValidCitizenId`, `NormalizePlateArg`, `IsAuthorizedAdmin` (ACE grant/deny, console `TrustConsole` on/off, auth-checked-before-argument-shape), the shared `AuditCooldown` rate limit, `MergeSortedByIdDesc` | Indirectly, via the real `RegisterCommand` handlers captured after firing `onResourceStart`, asserting on the real SQL text / query params / notification content the real code produces |
+| `server/admin.lua` | `ClampLimit` (the flagged nan/inf/1e400/float/negative battery — see below), `IsValidCitizenId`, `NormalizePlateArg`, `IsAuthorizedAdmin` (ACE grant/deny, console `TrustConsole` on/off, auth-checked-before-argument-shape), the shared `AuditCooldown` rate limit, `MergeSortedByIdDesc`, and (in `notify_spec.lua`) the local `NotifyPlayer` wrapper's `_G.NotifyPlayer(...)`-delegation to the real `server/notify.lua` | Indirectly, via the real `RegisterCommand` handlers captured after firing `onResourceStart`, asserting on the real SQL text / query params / notification content the real code produces |
 | `server/progression.lua` | `ResolveTier` boundary resolution against `Config.XPTiers` (`>=` at a threshold vs. one below it, multi-step accumulation, top-tier resolution), the uncached-citizenid base-tier fail-safe, `AwardXP`'s unknown-actionKey/malformed-citizenid/feature-flag guards, the per-`(citizenid, actionKey)` rate floor, `CopyTier`'s defensive copy on the outbound tier-crossing event, the `playerDropped` cache-eviction fix | Indirectly, via the real `AwardXP`/`GetXPTier`/`GetXP` resource-globals |
+| `server/entities.lua` | `ResolveNetworkEntity`'s full documented contract: non-number `netId` rejection, the `entity == 0 OR NOT DoesEntityExist` existence guard (including a stale-handle case), `expectedEntityType` match/omit/mismatch (mismatch is a hard `nil`, never advisory), and the documented "float/negative/huge netId fails via the existence check, not the type check" edge cases; `ResolveConnectedPlayerFromPed`'s scan-and-match, no-match, and malformed-`GetPlayers()`-entry cases | Directly — both are resource-globals (no `local`) |
+| `server/notify.lua` | `NotifyPlayer`'s arity (2/3/4-arg calls, explicit-`nil` positional args, title-only override, no state leak between sequential calls) against the real `TriggerClientEvent('ox_lib:notify', ...)` call; the `_G.`-delegating local shadows in `server/admin.lua` and `server/bonetool.lua` (each file's own distinct title reaches the real notify event with no infinite recursion) | Directly for the shared function; indirectly for the two local wrappers, via each file's real `RegisterCommand` handler with the real `server/notify.lua` loaded into the same sandbox (not stubbed) |
+| `server/tenure.lua` | `CheckTenureMilestonesForK9`/`TickPartnershipTenure`'s tier-boundary resolution (`>=` at `afterSeconds` vs. one second below), multi-milestone catch-up in a single tick, the persisted `tenure_bonus_tier_granted` column's optimistic-concurrency guard actually preventing a double grant (including across a simulated restart, i.e. a fresh in-memory cache), the full activity gate (handler offline / beyond `ProximityMeters` / at the boundary / failed `HasK9Access` re-check / handler not in a configured department), the K9-role-only pre-filter, and two no-schema-degradation paths (missing/empty `milestones` config, and an erroring `MySQL.single.await` simulating a pre-migration database) | Indirectly, via the real `CreateThread`/`Wait` sweep loop (stepped through `fixtures/sandbox.lua`'s coroutine thread runner), against a real `k9_partnerships`-shaped in-memory row store with real UPDATE...WHERE race-guard semantics, never a reimplementation of "should only grant once" |
+| `server/search.lua` | `GetContrabandAlertTier` (a test-seam wrapper over the file-local `ResolveAlertTier` that landed mid-pass — see "What's NOT covered" history below) — `Config.ContrabandAlertTiers` boundary resolution (`>=` at a threshold vs. one below it), the mandatory zero-weight `'clean'` baseline, top-tier resolution for a large weight, and a negative-weight defensive-input case; also pins the REAL current behavior that this wrapper returns the live `Config.ContrabandAlertTiers[n]` table reference, not a defensive copy (unlike `progression.lua`'s `CopyTier`) | Directly — resource-global (no `local`), added specifically as a test/inspection seam per that file's own FILE-TO-FILE CONTRACT |
 
-64 test cases total across 3 spec files, all currently passing against the
+118 test cases total across 7 spec files, all currently passing against the
 real, unmodified source.
 
 ### `ClampLimit`'s hostile-input battery, specifically
@@ -96,19 +100,29 @@ this suite fails loudly instead of the bug silently reappearing.
 
 ## What's NOT covered, and why
 
-- **`server/search.lua`'s `ResolveAlertTier`** (the contraband alert-tier
-  walk over `Config.ContrabandAlertTiers`, structurally identical to
-  `progression.lua`'s `ResolveTier`) is `local`, and — unlike `ClampLimit`
-  or `ResolveTier` — this file exposes **no** resource-global entry point
-  that reaches it without also driving the entire
-  `lib.callback.register('qbx_k9unit:server:searchTarget', ...)` handler:
-  entity/netId resolution, `exports.ox_inventory` recursive container
-  reads, `GetEntityCoords`, the search mutex/cooldowns, etc. Stubbing that
-  whole chain convincingly enough to trust the result would risk the test
-  asserting on the STUB's behavior rather than the real code's — worse than
-  no test. **Recommendation** (not acted on here — not this suite's file to
-  change): expose a thin resource-global wrapper the same way
-  `server/progression.lua` exposes `GetXPTier`, purely for testability.
+- **`server/search.lua`'s `ResolveAlertTier`** was `local` and uncovered
+  when this pass started (see this suite's own prior write-up, preserved in
+  git history) — a `GetContrabandAlertTier` test-seam wrapper landed mid-pass
+  (another agent, following the exact recommendation this README previously
+  made), re-verified directly against the current tree rather than assumed,
+  and is now covered by `search_spec.lua`. Recorded here as resolved, not
+  deleted outright, so a future reader can see this gap was real and was
+  closed, not merely forgotten about.
+- **`server/tenure.lua`'s `TenureFullyCollected` local cache** behaves
+  differently from its own header comment's stated purpose ("purely a
+  per-process, in-memory SKIP-CACHE to avoid re-running the SELECT below
+  every tick") — `tenure_spec.lua`'s own `DISCREPANCY:` test confirms the
+  real code runs the `MySQL.single.await` SELECT **every** tick regardless
+  of this cache's state, because the cache is keyed by `row.id`, which is
+  only known *after* that same SELECT returns it. This is disclosed as a
+  finding, not silently worked around: it costs one extra indexed SELECT
+  per online, fully-tenured K9 per `checkIntervalMs` tick forever (a minor,
+  bounded cost, not a correctness bug — the actual double-grant protection
+  is the persisted `tenure_bonus_tier_granted` column's optimistic-UPDATE
+  guard, which the same spec file separately confirms holds). Not this
+  suite's file to fix; flagged for whoever next touches `server/tenure.lua`
+  to either correct the header comment or make the cache actually skip the
+  query (e.g. by keying it on `k9Citizenid` instead of `row.id`).
 - **Client-side logic** (`client/*.lua`) is entirely untested here — every
   file in that directory calls real client-only natives
   (`GetEntityCoords`, `DisableControlAction`, ped/camera natives, NUI
