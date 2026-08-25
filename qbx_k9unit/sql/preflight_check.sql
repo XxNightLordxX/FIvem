@@ -111,8 +111,70 @@ FROM (
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'
          AND COLUMN_NAME IN ('citizenid','model','original_model_hash','active','applied_by','applied_at','revoked_at'))
+    -- migration 0010 (db-schema foolproofing pass, 2026-08-25): these three
+    -- were previously absent from this check entirely -- not "OK", not
+    -- "CONFLICT", just silently missing from the report, which meant a VIEW
+    -- squatting one of these three table names (or a different, incompatible
+    -- table already using one of these names) was invisible here and would
+    -- only surface later as a confusing runtime error. See uninstall_all.sql
+    -- and migration_status.sql, which had the identical exposure for the
+    -- same three tables, fixed in the same change.
+    UNION ALL SELECT 'k9_certification_tiers', 7,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers'
+         AND COLUMN_NAME IN ('tier_key','label','ordinal','deleted','created_at','updated_by','updated_at'))
+    UNION ALL SELECT 'k9_certification_tier_capabilities', 4,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities'
+         AND COLUMN_NAME IN ('tier_key','capability_key','granted_by','granted_at'))
+    UNION ALL SELECT 'k9_certification_tier_audit', 6,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit'
+         AND COLUMN_NAME IN ('id','action','tier_key','detail','changed_by','changed_at'))
 ) x
 ORDER BY x.table_name;
+
+
+-- ---------------------------------------------------------------------
+-- CHECK 1b: is there a k9_* table in this database that CHECK 1 above does
+-- not even know to look for?
+--
+-- CHECK 1 above can only report "OK"/"CONFLICT" for the table names it is
+-- explicitly told to check -- exactly the gap that let a VIEW squatting one
+-- of migration 0010's three table names go completely unreported for a
+-- time (see that check's own comment). This is the backstop for the NEXT
+-- table a future migration adds before this file is updated to match: it
+-- sweeps INFORMATION_SCHEMA by NAME PATTERN (`k9\_%`) instead of a
+-- hand-maintained list, so it needs no updating when a new migration lands
+-- -- unlike CHECK 1 itself, which cannot be pattern-swept without losing
+-- its own per-table expected-column signatures (see uninstall_all.sql's own
+-- "OWNED TABLE LIST" comment for the identical DROP-order / other-resources
+-- reasoning that applies here too).
+--
+-- WARN, never "!!": this file cannot tell "this file is out of date" apart
+-- from "a different K9 resource (e.g. k9_units) already shares this
+-- database", and the second case is common and legitimate -- so this never
+-- blocks an install by itself, the same posture CHECK 5 below already takes
+-- for its own genuinely ambiguous case.
+-- ---------------------------------------------------------------------
+SELECT
+    CASE WHEN COUNT(*) = 0
+        THEN 'OK - no k9_* table in this database is unknown to CHECK 1 above'
+        ELSE CONCAT('WARN - ', COUNT(*), ' k9_* table(s) exist that are not part of this resource''s current schema: ',
+                    GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME SEPARATOR ', '),
+                    '. If any of these belong to qbx_k9unit, CHECK 1 above is out of date -- report it before installing. If they belong to a different K9 resource sharing this database, this is expected and safe to ignore.')
+    END AS unrecognized_k9_tables_check
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME LIKE 'k9\_%'
+  AND TABLE_NAME NOT IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression',
+                          'k9_permissions','k9_certification_specializations',
+                          'k9_runtime_feature_overrides','k9_runtime_override_audit',
+                          'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments',
+                          'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit');
 
 
 -- ---------------------------------------------------------------------
@@ -156,7 +218,7 @@ SELECT
 SELECT TABLE_NAME AS `our_table`, TABLE_ROWS AS `approx_rows`
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations','k9_runtime_feature_overrides','k9_runtime_override_audit','k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments')
+  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations','k9_runtime_feature_overrides','k9_runtime_override_audit','k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments','k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit')
 ORDER BY TABLE_NAME;
 
 

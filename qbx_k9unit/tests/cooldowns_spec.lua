@@ -8,6 +8,17 @@
     dependency), and used by 16 other files per that file's own header --
     a regression here is high blast-radius.
 
+    ALSO COVERS (this pass, QA sandbox repro -- see this file's own header
+    ADDENDUM): ResolveConfiguredThresholdMs, the clamp-and-warn helper added
+    in response to a real, executed repro proving that
+    AssertValidDefaultThreshold's constructor-time hard error, when reached
+    through a raw Config value handed straight to NewCooldown, aborts the
+    CALLER's entire file from that line onward (concretely: it would have
+    made server/combat.lua's EndActiveEffectForHolder unreachable). The
+    tests below exercise ResolveConfiguredThresholdMs directly (this is the
+    ONE PLACE the fix lives); tests/combat_spec.lua separately proves the
+    full end-to-end claim against the real file that motivated it.
+
     Only FiveM natives this file touches are stubbed: GetGameTimer (a
     controllable fake clock), CreateThread/Wait (a cooperative coroutine
     runner, see fixtures/sandbox.lua), and AddEventHandler (captures
@@ -62,10 +73,12 @@ Sandbox.loadInto('../server/cooldowns.lua', env)
 local NewCooldown = env.NewCooldown
 local NewNestedCooldown = env.NewNestedCooldown
 local NewMutex = env.NewMutex
+local ResolveConfiguredThresholdMs = env.ResolveConfiguredThresholdMs
 
 t.isNotNil(NewCooldown, 'server/cooldowns.lua must define global NewCooldown')
 t.isNotNil(NewNestedCooldown, 'server/cooldowns.lua must define global NewNestedCooldown')
 t.isNotNil(NewMutex, 'server/cooldowns.lua must define global NewMutex')
+t.isNotNil(ResolveConfiguredThresholdMs, 'server/cooldowns.lua must define global ResolveConfiguredThresholdMs')
 
 -- ----------------------------------------------------------------------
 -- NewCooldown
@@ -393,6 +406,123 @@ t.test('NewMutex: RegisterPlayerDropped releases only the disconnecting source',
 
     t.isFalse(m.IsHeld(404), 'source 404 dropped, its mutex must be released')
     t.isTrue(m.IsHeld(505), 'source 505 never dropped, its mutex must remain held')
+end)
+
+-- ----------------------------------------------------------------------
+-- ResolveConfiguredThresholdMs -- QA sandbox repro regression (this pass).
+-- See this file's own header ADDENDUM for the full incident:
+-- AssertValidDefaultThreshold's constructor-time hard error, when reached
+-- from a raw `Config.X.yMs` value handed straight to NewCooldown/
+-- NewNestedCooldown, aborts the CALLER's entire file from that line onward
+-- -- proven concretely against server/combat.lua, where it would have taken
+-- EndActiveEffectForHolder (this codebase's termination primitive) down
+-- with it. ResolveConfiguredThresholdMs is the fix: clamp-and-warn instead
+-- of error-and-abort, applied at the call site BEFORE NewCooldown/
+-- NewNestedCooldown ever sees the value.
+-- ----------------------------------------------------------------------
+
+t.test('ResolveConfiguredThresholdMs: a valid configured value passes through unchanged', function()
+    t.equals(ResolveConfiguredThresholdMs(15000, 5000, 'Config.Test.x'), 15000)
+end)
+
+t.test('ResolveConfiguredThresholdMs: nil (missing Config field) falls back, warning names the exact key/found/substitute', function()
+    capturedPrints = {}
+    local resolved = ResolveConfiguredThresholdMs(nil, 5000, 'Config.Test.x')
+    t.equals(resolved, 5000)
+    t.equals(#capturedPrints, 1)
+    t.contains(capturedPrints[1], 'Config.Test.x')
+    t.contains(capturedPrints[1], 'found: nil')
+    t.contains(capturedPrints[1], '5000')
+end)
+
+t.test('ResolveConfiguredThresholdMs: 0 (the predictable "no cooldown" operator mistake) falls back and warns, never errors', function()
+    capturedPrints = {}
+    local ok, resolved = pcall(ResolveConfiguredThresholdMs, 0, 20000, 'Config.Combat.BiteAndHold.cooldownMs')
+    t.isTrue(ok, 'must never error -- this is exactly the shape that used to abort the caller\'s whole file')
+    t.equals(resolved, 20000)
+    t.equals(#capturedPrints, 1)
+    t.contains(capturedPrints[1], 'Config.Combat.BiteAndHold.cooldownMs')
+    t.contains(capturedPrints[1], 'found: 0')
+    t.contains(capturedPrints[1], '20000')
+end)
+
+t.test('ResolveConfiguredThresholdMs: a negative configured value falls back and warns', function()
+    capturedPrints = {}
+    local resolved = ResolveConfiguredThresholdMs(-100, 5000, 'Config.Test.x')
+    t.equals(resolved, 5000)
+    t.contains(capturedPrints[1], 'found: -100')
+end)
+
+t.test('ResolveConfiguredThresholdMs: NaN falls back and warns, never fails open', function()
+    capturedPrints = {}
+    local nan = 0 / 0
+    local resolved = ResolveConfiguredThresholdMs(nan, 5000, 'Config.Test.x')
+    t.equals(resolved, 5000)
+    t.equals(#capturedPrints, 1)
+end)
+
+t.test('ResolveConfiguredThresholdMs: a non-number configured value (e.g. a string) falls back and warns', function()
+    capturedPrints = {}
+    local resolved = ResolveConfiguredThresholdMs('not-a-number', 5000, 'Config.Test.x')
+    t.equals(resolved, 5000)
+    t.contains(capturedPrints[1], 'Config.Test.x')
+end)
+
+t.test('ResolveConfiguredThresholdMs: the returned fallback is always immediately valid -- feeding it straight into NewCooldown never errors', function()
+    local ok = pcall(NewCooldown, ResolveConfiguredThresholdMs(0, 20000, 'Config.Test.x'))
+    t.isTrue(ok, 'the whole point: NewCooldown must never see the bad raw value at all')
+end)
+
+t.test('ResolveConfiguredThresholdMs: an invalid fallbackMs is a CALL-SITE bug and still errors loudly (never silently accepted)', function()
+    local ok, err = pcall(ResolveConfiguredThresholdMs, 0, 0, 'Config.Test.x')
+    t.isFalse(ok, 'a broken fallback literal must never silently reintroduce the permanent fail-closed footgun one level down')
+    t.contains(tostring(err), 'ResolveConfiguredThresholdMs')
+end)
+
+t.test('ResolveConfiguredThresholdMs: a negative fallbackMs also errors', function()
+    local ok = pcall(ResolveConfiguredThresholdMs, 0, -50, 'Config.Test.x')
+    t.isFalse(ok)
+end)
+
+t.test('ResolveConfiguredThresholdMs: called once per bad value (not deduplicated across calls the way the call-time warning is) -- each call site gets its own warning', function()
+    capturedPrints = {}
+    ResolveConfiguredThresholdMs(0, 100, 'Config.A.x')
+    ResolveConfiguredThresholdMs(0, 200, 'Config.B.y')
+    t.equals(#capturedPrints, 2, 'two distinct misconfigured fields must each be named in their own warning')
+    t.contains(capturedPrints[1], 'Config.A.x')
+    t.contains(capturedPrints[2], 'Config.B.y')
+end)
+
+-- ----------------------------------------------------------------------
+-- REGRESSION: the bug existed precisely because nothing tested "does a
+-- non-positive Config-sourced cooldown still let the REST OF THE FILE load"
+-- -- this section proves it at the level cooldowns.lua itself can prove it
+-- (that ResolveConfiguredThresholdMs's output is always safe to construct
+-- with); tests/combat_spec.lua separately proves the full end-to-end claim
+-- against the real file that motivated this fix (server/combat.lua,
+-- EndActiveEffectForHolder).
+-- ----------------------------------------------------------------------
+
+t.test('REGRESSION: simulating this pass\'s 11 real call sites (a raw, invalid Config value wrapped in ResolveConfiguredThresholdMs before NewCooldown) never errors, for any of them', function()
+    local callSites = {
+        { value = 0, fallback = 20000, key = 'Config.Combat.BiteAndHold.cooldownMs' },
+        { value = 0, fallback = 25000, key = 'Config.Combat.NonLethalTakedown.cooldownMs' },
+        { value = -1, fallback = 30000, key = 'Config.Combat.NonLethalTakedown.targetCooldownMs' },
+        { value = 0 / 0, fallback = 35000, key = 'Config.Combat.BiteAndHold.targetCooldownMs' },
+        { value = 0, fallback = 500, key = 'Config.Combat.HandlerDownDefense.attackerReportCooldownMs' },
+        { value = -30000, fallback = 30000, key = 'Config.Combat.HandlerDownDefense.retriggerCooldownMs' },
+        { value = 0, fallback = 5000, key = 'Config.FetchMechanic.throwCooldownMs' },
+        { value = nil, fallback = 500, key = 'Config.FetchMechanic.pickupCooldownMs' },
+        { value = 0, fallback = 5000, key = 'Config.DeployableKennel.deployCooldownMs' },
+        { value = 0, fallback = 1000, key = 'Config.Partnership.RequestCooldownMs' },
+        { value = 0, fallback = 45000, key = 'Config.PursuitSprint.cooldownMs' },
+    }
+    for _, site in ipairs(callSites) do
+        local ok, cooldownOrErr = pcall(function()
+            return NewCooldown(ResolveConfiguredThresholdMs(site.value, site.fallback, site.key))
+        end)
+        t.isTrue(ok, site.key .. ' must never error, no matter what an operator puts in the config: ' .. tostring(cooldownOrErr))
+    end
 end)
 
 os.exit(t.summary())

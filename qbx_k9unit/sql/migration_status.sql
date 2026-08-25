@@ -78,12 +78,22 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit')
     UNION ALL SELECT 'k9_ped_assignments',
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments')
+    UNION ALL SELECT 'k9_certification_tiers',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers')
+    UNION ALL SELECT 'k9_certification_tier_capabilities',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities')
+    UNION ALL SELECT 'k9_certification_tier_audit',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit')
 ) t
 ORDER BY t.table_name;
--- NOTE: install.sql now converges with sql/migrations/0001-0009 (11 tables
--- total, including k9_progression's idx_xp) -- db-schema foolproofing
--- pass. If this comment and install.sql's real table count ever disagree
--- again, install.sql is out of date; report it rather than trust this file.
+-- NOTE: install.sql now converges with sql/migrations/0001-0010 (14 tables
+-- total, including k9_progression's idx_xp and migration 0010's three
+-- certification-tier tables) -- db-schema foolproofing pass. If this
+-- comment and install.sql's real table count ever disagree again,
+-- install.sql is out of date; report it rather than trust this file. (This
+-- comment previously said "0001-0009 / 11 tables" and did not mention
+-- migration 0010 at all -- the exact class of silent omission this note
+-- exists to flag, now fixed in this same change alongside PART 2 below.)
 
 
 -- ---------------------------------------------------------------------

@@ -422,24 +422,12 @@ end
 --- (dispatch/MDT/evidence integrations — see server/exports.lua's header
 --- "EVENT CONTRACT" section for the full documented contract this
 --- implements). Identical shape/reasoning to server/certifications.lua's
---- own `FireOutboundEvent` local helper of the same name (kept as its own
---- file-local copy rather than a shared cross-file global — this is a tiny,
---- self-contained utility, not domain state, so duplicating it costs less
---- than adding a new cross-file dependency for it): fired ONLY after the
---- DB write it reports on has already committed, and pcall-wrapped so a
---- misbehaving consumer's `AddEventHandler` throwing can never unwind back
---- into (and abort) the partnership flow that fired it. A pcall failure
---- here can only mean a consumer's own handler broke — never that this
---- file's own DB/cache state disagrees with what it just announced, since
---- nothing above this call is undone based on whether the fire succeeds.
---- @param eventName string
---- @param ... any
-local function FireOutboundEvent(eventName, ...)
-    local ok, err = pcall(TriggerEvent, eventName, ...)
-    if not ok then
-        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
-    end
-end
+--- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
+--- file's own `FireOutboundEvent` copy — byte-for-byte identical to the
+--- five other copies that existed alongside it — is now the single shared
+--- resource-global implementation in that file. See server/events.lua's
+--- header for the full extraction writeup. Every call site below is
+--- unchanged: same event names, arguments, order, and firing conditions.
 
 --- Re-queries the active-partnership row for `citizenid` (in EITHER role)
 --- and updates the in-memory cache. Exposed globally (no `local`) -- see

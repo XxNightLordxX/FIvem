@@ -223,18 +223,15 @@ assert(type(tuning.pollIntervalMs) == 'number' and tuning.pollIntervalMs > 0,
 -- nothing over letting the already-loud, already-tested existing guard do
 -- its job.
 
---- Fires a stable `qbx_k9unit:events:*` outbound event -- see this file's
---- header, DESIGN PRINCIPLE 2, for why this is a deliberate fifth copy of
---- the identical helper already in server/certifications.lua,
---- server/partnership.lua, server/progression.lua, and server/search.lua.
---- @param eventName string
---- @param ... any
-local function FireOutboundEvent(eventName, ...)
-    local ok, err = pcall(TriggerEvent, eventName, ...)
-    if not ok then
-        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
-    end
-end
+--- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
+--- file's header's own DESIGN PRINCIPLE 2 deferred this exact
+--- consolidation to "whoever next does a genuine cross-file cleanup pass";
+--- that pass has now happened. This file's own copy, byte-for-byte
+--- identical to the five others that existed alongside it, is now the
+--- single shared resource-global implementation in that file. See
+--- server/events.lua's header for the full extraction writeup. The one
+--- call site below is unchanged: same event name, arguments, and firing
+--- condition.
 
 -- Per-source candidate-episode state -- see this file's header "DETECTION
 -- SHAPE" for the episode/edge-trigger design this backs.

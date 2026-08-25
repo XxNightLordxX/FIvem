@@ -681,13 +681,33 @@ t.test('XP arrival trigger: fires reportTrackSourceArrival exactly once when liv
     t.equals(#f.triggerServerEventCalls, 1)
 end)
 
-t.test('XP arrival trigger: never fires at all when XPProgression is off, even well within the arrival radius', function()
+-- ASSERTION INVERTED, deliberately. This used to assert the arrival event
+-- "never fires at all when XPProgression is off", which pinned a real bug
+-- rather than a requirement. That event began life as this file's own XP
+-- trigger, so gating the SEND on the XP flag looked reasonable -- until it
+-- gained a second consumer. server/findalert.lua listens to the same event
+-- for its trail-arrival bark-and-sit reaction, so an operator who turned XP
+-- off silently lost that reaction while find alerts kept working for
+-- searches. It presented as "find alerts work for searches but not for
+-- tracking", with nothing connecting it to an XP setting.
+--
+-- The send is now unconditional and the gate lives where it belongs: on the
+-- thing being gated. server/tracking.lua's own handler returns early on
+-- Config.Features.XPProgression, so no XP is minted with the flag off --
+-- see tests/tracking_spec.lua for that half. The client's job is to report
+-- arrival; deciding what arrival is worth is the server's.
+t.test('XP arrival trigger: still fires with XPProgression off, because a second consumer (find alerts) needs it -- the XP decision belongs to the server, not to whether the event is sent', function()
     local f = newTrackingFixture({ xpProgression = false, waterTrackingDecay = false })
     f.setPedCoords(vec3(0, 0, 0))
     f.queueCallbackResponse({ found = true, coords = vec3(0.05, 0, 0), breaksAtWater = false })
     f.env.StartScentTrack()
     f.stepOne(1)
-    t.equals(#f.triggerServerEventCalls, 0)
+    t.equals(#f.triggerServerEventCalls, 1)
+    t.equals(f.triggerServerEventCalls[1].event, 'qbx_k9unit:server:reportTrackSourceArrival')
+    t.equals(#f.triggerServerEventCalls[1].args, 0, 'still a bare trigger -- never a claimed distance the server would have to trust')
+
+    f.stepOne(1) -- lingering inside the radius must still not refire
+    t.equals(#f.triggerServerEventCalls, 1)
 end)
 
 os.exit(t.summary())

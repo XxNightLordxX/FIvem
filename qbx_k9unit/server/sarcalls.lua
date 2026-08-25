@@ -341,22 +341,14 @@ assert(type(tuning.maxCallDurationMs) == 'number' and tuning.maxCallDurationMs >
 -- own CONFIG-SAFETY GUARD gives for its own reFireCooldownMs, and
 -- server/scenttrail.lua gives for its own startCooldownMs.
 
---- Fires a stable `qbx_k9unit:events:*` outbound event -- see server/
---- integrations.lua's header DESIGN PRINCIPLE 2 for why this is a
---- deliberate Nth copy of the identical six-line helper already in
---- server/certifications.lua, server/partnership.lua, server/progression.lua,
---- server/search.lua and server/integrations.lua, rather than a shared
---- extraction -- that decision belongs to whoever next does a genuine
---- cross-file cleanup pass, not to a single new-feature pass that does not
---- own any of those five existing files.
---- @param eventName string
---- @param ... any
-local function FireOutboundEvent(eventName, ...)
-    local ok, err = pcall(TriggerEvent, eventName, ...)
-    if not ok then
-        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
-    end
-end
+--- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
+--- was the "deliberate Nth copy" this comment used to defend -- that
+--- genuine cross-file cleanup pass it deferred to has now happened. This
+--- file's own copy, byte-for-byte identical to the five others that
+--- existed alongside it, is now the single shared resource-global
+--- implementation in that file. See server/events.lua's header for the
+--- full extraction writeup. Every call site below is unchanged: same event
+--- names, arguments, order, and firing conditions.
 
 -- Per-CITIZENID request cooldown -- see this file's header "WHY THIS FILE
 -- DIFFERS" item 3 for why this is keyed by citizenid rather than source,

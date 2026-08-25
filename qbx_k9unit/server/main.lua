@@ -650,9 +650,24 @@ local function CheckLeashEligibility(initiatorSrc, targetSrc)
         return false, nil, nil, 'too_far'
     end
 
-    -- Roles via live model check (never client-claimed).
+    -- Roles via live model check (never client-claimed), WIDENED (K9
+    -- role/model decoupling, server/appearance.lua) to also accept a party
+    -- who holds the decoupled K9 ROLE (HasK9Role) on a model
+    -- Config.Peds/IsConfiguredK9Model doesn't recognize -- a human, a
+    -- custom streamed ped, anything. Guarded with `type(...) == 'function'`
+    -- (this file's own established soft-dependency convention -- see
+    -- HasK9Access's own call sites above) rather than a load-order
+    -- assumption; fails CLOSED to the pre-decoupling model-only check if
+    -- server/appearance.lua is ever removed. Does not touch
+    -- IsConfiguredK9Model/IsEntityModelK9 themselves -- both stay pure
+    -- model predicates for the nine other authorization paths that read
+    -- them, one of which (GrantCertification's own requireK9ModelForRole
+    -- branch) is an operator's explicit opt-IN to a model check this
+    -- widening must never silently bypass.
     local initiatorIsK9 = IsConfiguredK9Model(GetEntityModel(initiatorPed))
+        or (type(HasK9Role) == 'function' and HasK9Role(initiatorSrc))
     local targetIsK9 = IsConfiguredK9Model(GetEntityModel(targetPed))
+        or (type(HasK9Role) == 'function' and HasK9Role(targetSrc))
 
     if not initiatorIsK9 and not targetIsK9 then
         return false, nil, nil, 'no_k9_party'

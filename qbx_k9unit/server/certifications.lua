@@ -593,10 +593,7 @@ end
 --- @param citizenid string
 --- @param jobName string
 local function RefreshSpecializationCache(citizenid, jobName)
-    local ok, rowsOrErr = pcall(MySQL.query.await,
-        'SELECT specialization FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND active = 1', {
-            citizenid, jobName,
-        })
+    local ok, rowsOrErr = pcall(K9Store.Spec_GetActiveKeys, citizenid, jobName)
     Specializations[citizenid] = Specializations[citizenid] or {}
     if not ok then
         print(('[qbx_k9unit] RefreshSpecializationCache query failed for %s/%s: %s'):format(citizenid, jobName, tostring(rowsOrErr)))
@@ -742,9 +739,7 @@ end
 --- local Certifications table below) don't need their own accessor just
 --- to resync a dependent value like the k9certified metadata mirror.
 function RefreshCertificationCache(citizenid, jobName)
-    local queryOk, activeIdOrErr = pcall(MySQL.scalar.await, 'SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
-        citizenid, jobName,
-    })
+    local queryOk, activeIdOrErr = pcall(K9Store.Cert_GetActiveId, citizenid, jobName)
 
     if not queryOk then
         print(('[qbx_k9unit] RefreshCertificationCache query failed for %s/%s: %s'):format(citizenid, jobName, tostring(activeIdOrErr)))
@@ -776,10 +771,7 @@ function RefreshCertificationCache(citizenid, jobName)
     -- in Lua — see this file's header "EXPIRY" item 3. Returns NULL
     -- (-> Lua nil) when `expires_at` itself is NULL, i.e. "never expires".
     local tier, expiresAtUnix = DEFAULT_TIER, nil
-    local metaOk, metaRowOrErr = pcall(MySQL.single.await,
-        'SELECT tier, UNIX_TIMESTAMP(expires_at) AS expires_at_unix FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
-            citizenid, jobName,
-        })
+    local metaOk, metaRowOrErr = pcall(K9Store.Cert_GetActiveMeta, citizenid, jobName)
     if not metaOk then
         -- Degrades to the DEFAULT_TIER / never-expires fallback, never to
         -- a hard error and never to a MORE restrictive state than the
@@ -831,9 +823,7 @@ end
 --- @param jobName string
 --- @return boolean? active -- true/false if confirmed against the DB, nil if the read itself failed
 local function IsCertRowConfirmedActive(citizenid, jobName)
-    local ok, activeIdOrErr = pcall(MySQL.scalar.await, 'SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
-        citizenid, jobName,
-    })
+    local ok, activeIdOrErr = pcall(K9Store.Cert_GetActiveId, citizenid, jobName)
     if not ok then
         print(('[qbx_k9unit] cert-row reconciliation read failed for %s/%s: %s'):format(citizenid, jobName, tostring(activeIdOrErr)))
         return nil
@@ -1030,10 +1020,7 @@ end
 --- @param revokedByCitizenidOrSentinel string -- citizenid, or 'system:job_change'
 --- @param reason string -- passed straight through to the outbound event, matching this file's existing certificationRevoked reason tagging ('certification_revoked' | 'department_changed' | 'job_changed')
 local function RevokeAllSpecializationsForCitizenJob(citizenid, jobName, revokedByCitizenidOrSentinel, reason)
-    local selectOk, rowsOrErr = pcall(MySQL.query.await,
-        'SELECT specialization FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND active = 1', {
-            citizenid, jobName,
-        })
+    local selectOk, rowsOrErr = pcall(K9Store.Spec_GetActiveKeys, citizenid, jobName)
     if not selectOk then
         print(('[qbx_k9unit] RevokeAllSpecializationsForCitizenJob pre-read failed for %s/%s: %s -- base certification revoke already committed; specialization rows may be stranded active'):format(citizenid, jobName, tostring(rowsOrErr)))
         return
@@ -1045,11 +1032,7 @@ local function RevokeAllSpecializationsForCitizenJob(citizenid, jobName, revoked
     end
     if #revokedKeys == 0 then return end -- nothing active to cascade -- common case, avoid a needless UPDATE
 
-    local updateOk, updateErr = pcall(
-        MySQL.update.await,
-        'UPDATE k9_certification_specializations SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
-        { revokedByCitizenidOrSentinel, citizenid, jobName }
-    )
+    local updateOk, updateErr = pcall(K9Store.Spec_RevokeAllForJob, citizenid, jobName, revokedByCitizenidOrSentinel)
 
     if not updateOk then
         print(('[qbx_k9unit] RevokeAllSpecializationsForCitizenJob UPDATE failed for %s/%s: %s -- base certification revoke already committed; specialization rows may be stranded active until the next refresh'):format(citizenid, jobName, tostring(updateErr)))
