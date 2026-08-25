@@ -58,12 +58,15 @@
         ReleaseFetchBall()      -- always available while carrying, no gate
         RequestRecallFetchBall() -- thrower's own early-interrupt
         IsFetchCarryEngaged() -> boolean
-      Deliberately NOT wired into client/radial.lua by this pass — that file
-      is concurrently being extended for PropAttachments by another agent
-      this same round; adding another item to it here risks a needless
-      merge conflict for zero functional benefit (RegisterCommand entries
-      below already give every action a real, working entry point).
-      '/k9throwfetchball', '/k9dropfetchball' (drop), '/k9recallfetchball'.
+      STALE-NOTE CORRECTION: this comment previously said these four
+      functions were deliberately left unwired from client/radial.lua to
+      avoid a merge conflict with a concurrent pass. That has since landed —
+      client/radial.lua now does call all four (behind its own
+      `type(fn) == 'function'` runtime existence guard, since none of them
+      exist when Config.Features.FetchMechanic is false and this whole file
+      returns early below). RegisterCommand entries below
+      ('/k9throwfetchball', '/k9dropfetchball' (drop), '/k9recallfetchball')
+      remain as an equally valid, independent entry point either way.
       "Pick Up Ball" and "Deliver to Handler" are ox_target options (both
       below).
 ]]
@@ -84,9 +87,39 @@ local ActiveFetchCarry = nil
 
 -- myThrownBallNetId: netId of a fetch-related object THIS client most
 -- recently created (a throw, or a 'fake'-mode drop recreate) and is still
--- tracked as active server-side — used only by onResourceStop below,
--- mirrors client/kennel.lua's myKennelNetId exactly.
+-- tracked as active server-side — read by onResourceStop below (mirrors
+-- client/kennel.lua's myKennelNetId exactly) AND by the CONFIRM-FAILURE
+-- BACKSTOP thread further down this file.
 local myThrownBallNetId = nil
+
+-- myThrownBallDeadlineAt: GetGameTimer() value at/after which the CONFIRM-
+-- FAILURE BACKSTOP thread below may reclaim myThrownBallNetId's entity even
+-- without ever hearing back from the server. Set alongside every
+-- myThrownBallNetId assignment; see that thread's own header comment for why
+-- this specific bound is always safe.
+local myThrownBallDeadlineAt = nil
+
+-- Margin added on top of Config.FetchMechanic.maxBallLifetimeMs before the
+-- CONFIRM-FAILURE BACKSTOP thread will act, purely to absorb round-trip/
+-- timer jitter around the server's own maintenance-sweep despawn of a
+-- legitimately-confirmed ball — never the actual reason a rejected confirm
+-- eventually gets cleaned up (that's maxBallLifetimeMs itself).
+local THROWN_BALL_BACKSTOP_MARGIN_MS = 15000
+
+--- Sets myThrownBallNetId and its matching backstop deadline together —
+--- every assignment site must go through this so the two never drift apart.
+--- @param netId number
+local function SetMyThrownBall(netId)
+    myThrownBallNetId = netId
+    myThrownBallDeadlineAt = GetGameTimer() + Config.FetchMechanic.maxBallLifetimeMs + THROWN_BALL_BACKSTOP_MARGIN_MS
+end
+
+--- Clears both together — every clear site must go through this for the
+--- same reason as SetMyThrownBall above.
+local function ClearMyThrownBall()
+    myThrownBallNetId = nil
+    myThrownBallDeadlineAt = nil
+end
 
 --- Duplicated per this resource's established "tiny helper, private per
 --- file" convention (see client/kennel.lua's own LoadModelWithTimeout,
@@ -110,6 +143,17 @@ local function LoadModelWithTimeout(modelName)
     end
 
     if not HasModelLoaded(modelHash) then
+        -- LEAK FIX (client/kennel.lua's own identical, previously-fixed
+        -- LEAK FIX precedent — "every RequestModel in this resource must
+        -- have a matching SetModelAsNoLongerNeeded on every exit path,
+        -- including this failure one"): RequestModel above already
+        -- incremented this model's streaming reference count; giving up on
+        -- the timeout without releasing it here leaves that reference held
+        -- forever, since neither of this function's two call sites (the
+        -- initial throw, the 'fake'-mode drop recreate) has any other
+        -- reason to know THIS particular request ever happened once it
+        -- returns nil.
+        SetModelAsNoLongerNeeded(modelHash)
         return nil
     end
     return modelHash
@@ -213,7 +257,7 @@ RegisterNetEvent('qbx_k9unit:client:throwFetchBallAt', function(spawnX, spawnY, 
     ApplyForceToEntity(obj, 3, forceX, forceY, forceZ, 0.0, 0.0, 0.0, 0, false, true, true, false, true)
 
     local netId = NetworkGetNetworkIdFromEntity(obj)
-    myThrownBallNetId = netId
+    SetMyThrownBall(netId)
     TriggerServerEvent('qbx_k9unit:server:confirmFetchBallThrown', netId)
 end)
 
@@ -293,14 +337,47 @@ RegisterNetEvent('qbx_k9unit:client:endFetchCarry', function(mode, terminal)
     local ped = PlayerPedId()
 
     if mode == 'attach' then
-        -- Detach only — DELETION on a terminal end is exclusively
-        -- 'qbx_k9unit:client:removeFetchBall's job below, broadcast by the
-        -- server to every client including this one, so there is exactly
-        -- one code path that ever deletes a fetch ball entity.
+        -- Non-terminal (a plain drop): detach only — the entity stays real
+        -- and pickup-able, deletion is never appropriate here.
+        --
+        -- Terminal: normally a no-op too, because 'qbx_k9unit:client:
+        -- removeFetchBall' (server/fetch.lua's EndFetchCycle, broadcast to
+        -- -1 including this client) already deletes the entity and clears
+        -- ActiveFetchCarry by matching netId BEFORE this event arrives, so
+        -- the `ActiveFetchCarry and ActiveFetchCarry.netId` guard below is
+        -- already false by the time this handler runs in that common case.
+        --
+        -- DEFENSE-IN-DEPTH, NOT REDUNDANT: server/fetch.lua's own
+        -- confirmFetchBallCarried deliberately leaves `ball.netId` pointing
+        -- at the OLD, pre-pickup entity for the whole 'attach' transition
+        -- window (that file's own requestPickupFetchBall comment: "left
+        -- pointing at the OLD, about-to-be-deleted entity ... and is NEVER
+        -- nil'd out for this window"). If confirmFetchBallCarried's own
+        -- validation then fails in that same window (entity not yet
+        -- resolvable, or the GLOBAL NETID-UNIQUENESS INVARIANT collision
+        -- check), EndFetchCycle broadcasts removeFetchBall using that STALE
+        -- old netId — which this client already deleted itself back in
+        -- 'qbx_k9unit:client:carryFetchBall' above — never the NEW netId
+        -- ActiveFetchCarry actually holds. That broadcast's own delete
+        -- degrades to a harmless no-op on the already-gone old entity, but
+        -- the real, physical, currently-attached NEW entity this client
+        -- just created is never addressed by it at all, and would otherwise
+        -- only be detached here, never deleted — a permanently orphaned,
+        -- untracked networked object left behind by a rejected confirm.
+        -- Deleting THIS client's own last-known handle directly (not by
+        -- re-resolving the broadcast's netId) closes that leak regardless
+        -- of which netId the corresponding removeFetchBall broadcast
+        -- carries, and is always safe: DetachAndDeleteProp is a DoesEntityExist-
+        -- guarded no-op if the entity is already gone (the common case
+        -- above).
         if ActiveFetchCarry and ActiveFetchCarry.netId then
             local entity = ResolveNetworkEntity(ActiveFetchCarry.netId)
             if entity then
-                DetachEntity(entity, true, false)
+                if terminal then
+                    DetachAndDeleteProp(entity)
+                else
+                    DetachEntity(entity, true, false)
+                end
             end
         end
     else -- 'fake'
@@ -317,7 +394,7 @@ RegisterNetEvent('qbx_k9unit:client:endFetchCarry', function(mode, terminal)
                 SetModelAsNoLongerNeeded(modelHash)
                 if DoesEntityExist(obj) then
                     local netId = NetworkGetNetworkIdFromEntity(obj)
-                    myThrownBallNetId = netId
+                    SetMyThrownBall(netId)
                     TriggerServerEvent('qbx_k9unit:server:confirmFetchBallDropped', netId)
                 end
             end
@@ -338,7 +415,7 @@ RegisterNetEvent('qbx_k9unit:client:removeFetchBall', function(netId)
     if type(netId) ~= 'number' then return end
 
     if myThrownBallNetId == netId then
-        myThrownBallNetId = nil
+        ClearMyThrownBall()
     end
     if ActiveFetchCarry and ActiveFetchCarry.netId == netId then
         ActiveFetchCarry = nil
@@ -459,6 +536,46 @@ CreateThread(function()
     end
 end)
 
+-- CONFIRM-FAILURE BACKSTOP (task requirement: a rejected throw/drop confirm
+-- must never leave its object behind forever). server/fetch.lua's
+-- confirmFetchBallThrown and confirmFetchBallDropped handlers both have
+-- failure branches (pending-TTL expiry, a stale HasK9Access re-check, an
+-- unresolvable/wrong-model entity, or the GLOBAL NETID-UNIQUENESS INVARIANT
+-- collision guard) that silently `return` on rejection — unlike
+-- confirmFetchBallCarried's own sibling failure paths (which at least call
+-- EndFetchCycle) or confirmPropAttached's dedicated rejectK9PropAttach
+-- event (client/propattachment.lua), NEITHER of those two handlers ever
+-- sends this client anything back on failure. This client's own
+-- CreateObject already ran and myThrownBallNetId already points at a real,
+-- physical, networked object before either confirm is even sent, so a
+-- silent rejection otherwise leaves it behind with literally nothing left
+-- to ever clean it up.
+--
+-- This thread is a bounded last resort, not a substitute for that missing
+-- signal (flagged back to server/fetch.lua's owner) — it never risks
+-- deleting a legitimately-confirmed, still-in-play ball: in the SUCCESS
+-- case this same netId is always eventually cleared well before this fires,
+-- via pickup (carryFetchBall), recall/delivery (removeFetchBall), or the
+-- server's own maintenance sweep despawning it at maxBallLifetimeMs — the
+-- exact ceiling (plus a jitter margin) this thread itself waits for before
+-- ever acting. A single flat 5s poll either way (mirrors
+-- client/propattachment.lua's own vest-death-poll thread, whose identical
+-- "no branch needed, the idle case is already this cheap" reasoning applies
+-- here just as well) — checking two locals costs nothing, and the actual
+-- native calls below only ever run in the rare deadline-reached branch.
+CreateThread(function()
+    while true do
+        Wait(5000)
+        if myThrownBallNetId and myThrownBallDeadlineAt and GetGameTimer() >= myThrownBallDeadlineAt then
+            local entity = ResolveNetworkEntity(myThrownBallNetId)
+            if entity then
+                DeleteEntity(entity)
+            end
+            ClearMyThrownBall()
+        end
+    end
+end)
+
 -- Resource-restart safety net (same class of fix as client/kennel.lua's own
 -- onResourceStop handler): if this client is mid-carry, or created a
 -- 'fake'-mode drop replacement, when the resource stops while still
@@ -484,6 +601,6 @@ AddEventHandler('onResourceStop', function(resourceName)
         if entity then
             DeleteEntity(entity)
         end
-        myThrownBallNetId = nil
+        ClearMyThrownBall()
     end
 end)

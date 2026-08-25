@@ -93,6 +93,18 @@ function AttachPropToOwnPed(modelName, boneIndex, offsetX, offsetY, offsetZ, rot
     end
 
     if not HasModelLoaded(modelHash) then
+        -- LEAK FIX (client/kennel.lua's own identical, previously-fixed
+        -- LEAK FIX precedent — "every RequestModel in this resource must
+        -- have a matching SetModelAsNoLongerNeeded on every exit path,
+        -- including this failure one"): RequestModel above already
+        -- incremented this model's streaming reference count; giving up on
+        -- the timeout without releasing it here leaves that reference held
+        -- forever — this function's callers (client/fetch.lua's own
+        -- 'attach'-mode carry, this file's attachK9Prop primary/fallback
+        -- attempt) only ever call SetModelAsNoLongerNeeded on a modelHash
+        -- they actually went on to CreateObject with, so a timed-out
+        -- request's own hash would otherwise never be released at all.
+        SetModelAsNoLongerNeeded(modelHash)
         return nil
     end
 
@@ -241,6 +253,31 @@ RegisterNetEvent('qbx_k9unit:client:attachK9Prop', function()
     -- gating convention in this resource (client/kennel.lua's
     -- deployKennelAt/removeKennel are the closest precedent).
     if not Config.Features.PropAttachments then return end
+
+    -- STALE-VEST GUARD (cross-boundary finding, flagged back to
+    -- server/propattachment.lua's owner rather than fixed there): several of
+    -- confirmPropAttached's own failure branches (a pending-confirm TTL
+    -- expiry, Config.Features.PropAttachments toggling off mid-round-trip, a
+    -- HasK9Access re-check failing, or a same-citizenid race) return WITHOUT
+    -- ever sending this client 'qbx_k9unit:client:rejectK9PropAttach' the
+    -- way its sibling model/position-check failure branches correctly do —
+    -- so myVestEntity from a first, silently-rejected attempt can survive
+    -- untouched into a second 'attachK9Prop' dispatch (e.g. the player
+    -- simply retries '/k9propattach' after the first attempt visibly did
+    -- nothing). Without this guard that second dispatch would create and
+    -- track a SECOND vest object while overwriting the only handle this
+    -- file had to the first one, permanently orphaning it (two visible
+    -- vests, only one ever cleanable again). This does not by itself close
+    -- every way that first vest could go untracked (a single failed attempt
+    -- the player never retries still has no client-observable failure
+    -- signal at all — that gap can only be closed by adding the missing
+    -- rejectK9PropAttach call to those branches server-side) but it does
+    -- guarantee THIS file never simultaneously tracks, or silently drops the
+    -- only handle to, more than one vest of its own creation.
+    if myVestEntity and DoesEntityExist(myVestEntity) then
+        DetachAndDeleteProp(myVestEntity)
+    end
+    myVestEntity = nil
 
     local cfg = Config.PropAttachments
     local obj = AttachPropToOwnPed(
