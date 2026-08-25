@@ -65,11 +65,59 @@
     the player is exactly as they were before this request arrived.
 
     ======================================================================
+    STATEBAG VS CACHED CALLBACK — THE DECISION ("I also want everything to
+    work with any ped" pass): ten ox_target canInteract predicates across
+    client/movement.lua, client/medkit.lua, client/wellbeing.lua and
+    client/partnership.lua need "does THAT OTHER player currently hold the
+    K9 role", not just IsK9Role()'s own "do I". An architecture pass floated
+    a replicated statebag (Player(source).state:set('isK9', bool, true) set
+    server-side at every role-transition point — grant, revoke, ped-swap
+    apply/revert/timeout, disconnect — read client-side via
+    Entity(ped).state.isK9) as the no-round-trip alternative.
+
+    DECISION: cached callback (IsK9RoleForPlayer below), NOT a statebag.
+    This resource has zero statebags today; introducing the pattern for
+    exactly one predicate-convenience question is not worth the blast
+    radius it would open — every one of the four bullet points above
+    becomes a NEW place a role-transition can be missed (an unset on
+    disconnect that never fires leaves a stale `true` broadcast to every
+    client forever, until that slot is reused and overwritten — worse than
+    a cached callback's own worst case, which self-heals within one TTL
+    window with no additional code path required). A statebag write is also
+    only reachable from server/appearance.lua (the one file that already
+    owns every role-transition point HasK9Role's own cache backs onto), so
+    the "four separate call sites, each must remember" risk is real, not
+    theoretical — server/appearance.lua's own header above already
+    documents ForceDetachLeashForSource-class cross-file coordination gaps
+    as the recurring hazard class in this resource.
+
+    The cached callback pays for this with an up-to-1000ms staleness window
+    and a real (rate-bounded) round trip per newly-hovered target — both
+    already true of every OTHER predicate in this resource that answers "is
+    THAT OTHER player currently X" (see client/main.lua's own HasK9Access()
+    TTL reasoning, identical shape), and per this file's own "A PREDICATE IS
+    A CONVENIENCE GATE" rule below: canInteract only decides whether an
+    ox_target OPTION is offered, never whether the resulting action
+    succeeds — every one of those ten predicates' own onSelect handlers
+    still triggers a server event/callback that independently re-derives
+    "does this target hold the K9 role" via HasK9Role/HasK9Access, exactly
+    as if the predicate had answered `true` for the wrong reason or a
+    forged/stale value. A staleness window here can make a menu OPTION
+    appear or vanish a beat late; it can never make the action itself
+    succeed against a target who does not actually hold the role. If a
+    future pass finds this round-trip volume actually costly in practice
+    (not hypothetically), the statebag above remains the documented
+    alternative — this decision is about NOT paying that cost today for a
+    convenience-only surface, not a claim the pattern is wrong for this
+    resource forever.
+
+    ======================================================================
     EVENT CONTRACT — see server/appearance.lua's header for the full
     picture; this file registers the client end and triggers the confirm:
       'qbx_k9unit:client:applyK9Ped' (requestId: string, modelNameOrHash: string|number) [THIS FILE, server->client]
       'qbx_k9unit:server:confirmK9PedSwap' (requestId: string, ok: boolean, reason: string?) [THIS FILE, client->server]
       'qbx_k9unit:server:hasK9Role' (lib.callback) () -> boolean [server/appearance.lua]
+      'qbx_k9unit:server:isK9RoleForTarget' (lib.callback) (targetServerId: number) -> boolean [server/appearance.lua] -- backs IsK9RoleForPlayer below
 ]]
 
 -- Same cache shape/TTL as client/main.lua's HasK9Access() — see that

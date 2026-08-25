@@ -618,8 +618,8 @@ t.test('REGRESSION: Config.Combat.BiteAndHold.cooldownMs = 0 (exact QA repro) no
     t.equals(type(f.env.EndActiveEffectForHolder), 'function',
         'the termination primitive server/recall.lua and server/training.lua depend on must remain reachable no matter what an operator puts in the config')
 
-    local names, count = {}, 0
-    for name in pairs(f.netEventNames) do names[name] = true; count = count + 1 end
+    local count = 0
+    for _ in pairs(f.netEventNames) do count = count + 1 end
     t.equals(count, 7, 'every net event this file documents must still register, not just the ones textually above the bad value')
     t.equals(f.eventHandlerCount('onResourceStart'), 1)
     t.equals(f.eventHandlerCount('playerDropped'), 6)
@@ -712,12 +712,19 @@ t.test('REGRESSION: Config.Combat.NonLethalTakedown.cooldownMs = 0 -- NonLethalT
     wireNpcTarget(f, 500, { x = 0, y = 0, z = 0 })
 
     -- Drive the fleeing-target speed sample: the target moves during the
-    -- Wait() window, same technique this file's own requestTakedown tests
-    -- already use.
+    -- Wait() window, same small-displacement technique this file's own
+    -- passing requestTakedown tests already use (e.g. "a target that moves
+    -- fast enough during the sample window succeeds" above) -- 1.2m over a
+    -- 250ms window = 4.8 m/s, comfortably above minTargetSpeed (4.0) while
+    -- staying well inside range (3.0m) of the stationary K9 at the origin.
+    -- A LARGE displacement here would fail the POST-YIELD range re-check
+    -- instead (ValidateCombatRequest's second call measures live distance
+    -- to the target's now-moved position), which is a test-authoring bug,
+    -- not a cooldown-fix bug -- caught while verifying this exact test.
     local function attemptTakedown(netId)
         f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { netId }, function()
             local ped = netId + 100000
-            f.setCoords(ped, 100, 0, 0) -- far enough to clear minTargetSpeed = 4.0 m/s over a 250ms window
+            f.setCoords(ped, 0, 1.2, 0)
         end)
     end
 

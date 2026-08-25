@@ -444,11 +444,7 @@ end
 function RefreshPartnershipCache(citizenid)
     if type(citizenid) ~= 'string' or citizenid == '' then return nil, nil end
 
-    local queryOk, rowOrErr = pcall(
-        MySQL.single.await,
-        'SELECT k9_citizenid, handler_citizenid FROM k9_partnerships WHERE active = 1 AND (k9_citizenid = ? OR handler_citizenid = ?) LIMIT 1',
-        { citizenid, citizenid }
-    )
+    local queryOk, rowOrErr = pcall(K9Store.Partner_GetActiveRowByParty, citizenid)
 
     if not queryOk then
         print(('[qbx_k9unit] RefreshPartnershipCache query failed for %s: %s'):format(citizenid, tostring(rowOrErr)))
@@ -855,16 +851,10 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         -- these two SELECTs are the only remaining `await` points before
         -- the INSERT, so the synchronous eligibility re-check must come
         -- AFTER them, not before, to sit truly adjacent to the INSERT.
-        local k9AlreadyPartnered = MySQL.scalar.await(
-            'SELECT id FROM k9_partnerships WHERE active = 1 AND (k9_citizenid = ? OR handler_citizenid = ?) LIMIT 1',
-            { k9Citizenid, k9Citizenid }
-        )
+        local k9AlreadyPartnered = K9Store.Partner_GetActiveIdByParty(k9Citizenid)
         if k9AlreadyPartnered then return 'already_partnered' end
 
-        local officerAlreadyPartnered = MySQL.scalar.await(
-            'SELECT id FROM k9_partnerships WHERE active = 1 AND (k9_citizenid = ? OR handler_citizenid = ?) LIMIT 1',
-            { officerCitizenid, officerCitizenid }
-        )
+        local officerAlreadyPartnered = K9Store.Partner_GetActiveIdByParty(officerCitizenid)
         if officerAlreadyPartnered then return 'already_partnered' end
 
         -- Genuinely last checks before the INSERT -- see the
@@ -884,11 +874,7 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         -- header "SCHEMA-TO-CODE MAPPING" for why.
         local initiatorCitizenid = (fromServerId == k9Src) and k9Citizenid or officerCitizenid
 
-        local insertOk, insertResultOrErr = pcall(
-            MySQL.insert.await,
-            'INSERT INTO k9_partnerships (k9_citizenid, handler_citizenid, established_by) VALUES (?, ?, ?)',
-            { k9Citizenid, officerCitizenid, initiatorCitizenid }
-        )
+        local insertOk, insertResultOrErr = pcall(K9Store.Partner_Insert, k9Citizenid, officerCitizenid, initiatorCitizenid)
 
         if not insertOk then
             if IsDuplicateKeyError(insertResultOrErr) then
@@ -978,11 +964,7 @@ local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
     -- is correct: nothing has been written yet at this point, so there is
     -- no state to reconcile -- the caller-level pcall already knows how to
     -- report "the break failed" to whichever audience it has.
-    local selectOk, rowOrErr = pcall(
-        MySQL.single.await,
-        'SELECT id, k9_citizenid, handler_citizenid FROM k9_partnerships WHERE active = 1 AND (k9_citizenid = ? OR handler_citizenid = ?) LIMIT 1',
-        { citizenid, citizenid }
-    )
+    local selectOk, rowOrErr = pcall(K9Store.Partner_GetActiveRowByParty, citizenid)
     if not selectOk then
         print(('[qbx_k9unit] DoBreakPartnership SELECT failed for %s: %s'):format(citizenid, tostring(rowOrErr)))
         error(rowOrErr, 0)
@@ -1017,11 +999,7 @@ local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
     -- says, so neither the in-memory cache nor any notification sent can
     -- ever diverge from the persisted row, no matter which way the
     -- ambiguous case actually landed.
-    local updateOk, affectedRowsOrErr = pcall(
-        MySQL.update.await,
-        'UPDATE k9_partnerships SET active = 0, ended_by = ?, ended_at = CURRENT_TIMESTAMP WHERE id = ? AND active = 1',
-        { endedByValue, row.id }
-    )
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Partner_EndById, row.id, endedByValue)
 
     if not updateOk then
         print(('[qbx_k9unit] DoBreakPartnership UPDATE failed for partnership id=%s (citizenid=%s): %s -- reconciling against a fresh read before reporting an outcome'):format(tostring(row.id), citizenid, tostring(affectedRowsOrErr)))
@@ -1033,7 +1011,7 @@ local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
         -- for the ACCESS-checking callers it normally serves but wrong
         -- here, where "confirmed ended" and "unknown" must be told apart
         -- before deciding whether to report success.
-        local reconcileOk, activeValueOrErr = pcall(MySQL.scalar.await, 'SELECT active FROM k9_partnerships WHERE id = ? LIMIT 1', { row.id })
+        local reconcileOk, activeValueOrErr = pcall(K9Store.Partner_GetActiveFlagById, row.id)
 
         if reconcileOk and activeValueOrErr == 0 then
             -- Confirmed against the DB itself: the UPDATE actually

@@ -203,6 +203,20 @@ local env = Sandbox.newEnv({
 -- needs the real constructor in scope at progression.lua's own load time --
 -- same load-order requirement as server/admin.lua.
 Sandbox.loadInto('../server/cooldowns.lua', env)
+-- server/datastore.lua -- REAL, unmodified, loaded alongside (this file's
+-- own header: "the ONLY place in this resource that may name a `k9_*`
+-- table or call `MySQL.*` directly" -- server/progression.lua's own
+-- LoadXPForCitizenid/AwardXP/AwardXPDirect now read/write through
+-- K9Store.XP_Get/K9Store.XP_UpsertAdd rather than raw SQL). Config.Database
+-- is deliberately absent from this fixture's Config table above --
+-- K9Store's own DatabaseEnabled() fails safe to `true` (real-DB mode) on a
+-- missing Config.Database, which is exactly what makes those K9Store
+-- calls run the SAME MySQL.scalar.await/MySQL.insert.await calls (against
+-- this fixture's own MySQLStub) built directly before this migration, so
+-- every existing assertion below keeps exercising the identical
+-- SQL/params shape unchanged. See tests/admin_spec.lua for the precedent
+-- this comment mirrors.
+Sandbox.loadInto('../server/datastore.lua', env)
 Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
 Sandbox.loadInto('../server/progression.lua', env)
 
@@ -534,6 +548,13 @@ local function newProgressionFixture()
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env2)
+    -- server/datastore.lua -- REAL, unmodified, loaded alongside (see this
+    -- file's own top-of-file loadInto comment above for the full
+    -- reasoning). Config2.Database is deliberately absent, so
+    -- DatabaseEnabled() fails safe to `true` and every K9Store.XP_* call
+    -- forwards straight through to MySQLStub2 exactly as before this
+    -- migration.
+    Sandbox.loadInto('../server/datastore.lua', env2)
     Sandbox.loadInto('../server/events.lua', env2) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/progression.lua', env2)
     for _, handler in ipairs(eventHandlers2['onResourceStart'] or {}) do

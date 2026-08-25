@@ -1263,6 +1263,21 @@ end)
 -- control mapping used throughout the FiveM ecosystem):
 --   22 = INPUT_JUMP
 --   36 = INPUT_DUCK (crouch)
+--
+-- OWNER'S CALL, NOT GUESSED (K9 role/model decoupling pass): this thread's
+-- gate below is IsOwnModelK9(), a RESTRICTION, not an access grant — it
+-- TAKES jump/crouch AWAY from whoever it applies to. IsOwnModelK9()'s own
+-- widening (client/main.lua: `Config.K9Appearance.requireK9ModelForRole ==
+-- false` makes it answer IsK9Role() instead of a pure model check) already
+-- swept this in: at the shipped default, a certified handler who holds the
+-- K9 role while still on a HUMAN model now also has jump/crouch suppressed
+-- here, despite never having had quadruped locomotion to restrict in the
+-- first place. Deliberately left AS-IS rather than "fixed" either
+-- direction — reasonable owners could want either answer, and nothing
+-- about this resource's own docs picks one. Reverting to model-only (jump/
+-- crouch suppression applies ONLY to an actual K9-modeled ped, never a
+-- human-modeled role-holder) is exactly a ONE-LINE change: replace
+-- `IsOwnModelK9()` on the very next line with `IsEntityModelK9(PlayerPedId())`.
 if not Config.Features.AgilityBasicJump then
     local INPUT_JUMP = 22
     local INPUT_DUCK = 36

@@ -106,6 +106,20 @@ local env = Sandbox.newEnv({
 
 Sandbox.loadInto('../server/cooldowns.lua', env)
 Sandbox.loadInto('../server/entities.lua', env) -- ResolveNetworkEntity/ResolveConnectedPlayerFromPed, read by search.lua per its own FILE-TO-FILE CONTRACT
+-- server/datastore.lua -- REAL, unmodified, loaded alongside (this file's
+-- own header: "the ONLY place in this resource that may name a `k9_*`
+-- table or call `MySQL.*` directly" -- server/search.lua's own audit-log
+-- write now reads through K9Store.SearchLog_Insert rather than a raw
+-- `MySQL.insert.await` call). Config.Database is deliberately absent from
+-- this fixture's Config table above -- K9Store's own DatabaseEnabled()
+-- fails safe to `true` (real-DB mode) on a missing Config.Database, which
+-- is exactly what makes SearchLog_Insert below run the SAME
+-- MySQL.insert.await call (against `env.MySQL`, assigned further down
+-- this file) that the audit write built directly before this migration,
+-- so every existing assertion below keeps exercising the identical
+-- SQL/params shape unchanged. See tests/admin_spec.lua for the precedent
+-- this comment mirrors.
+Sandbox.loadInto('../server/datastore.lua', env)
 Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
 Sandbox.loadInto('../server/search.lua', env)
 
@@ -501,6 +515,14 @@ local function newSearchPlusProgressionFixture()
 
     Sandbox.loadInto('../server/cooldowns.lua', env2)
     Sandbox.loadInto('../server/entities.lua', env2)
+    -- server/datastore.lua -- REAL, unmodified, loaded alongside (see this
+    -- file's own top-of-file loadInto comment above for the full
+    -- reasoning). server/progression.lua's own AwardXP/LoadXPForCitizenid
+    -- now read/write through K9Store.XP_Get/K9Store.XP_UpsertAdd rather
+    -- than raw SQL; Config2.Database is deliberately absent, so
+    -- DatabaseEnabled() fails safe to `true` and those calls forward
+    -- straight through to MySQLStub2 exactly as before this migration.
+    Sandbox.loadInto('../server/datastore.lua', env2)
     Sandbox.loadInto('../server/progression.lua', env2)
     Sandbox.loadInto('../server/events.lua', env2) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/search.lua', env2)

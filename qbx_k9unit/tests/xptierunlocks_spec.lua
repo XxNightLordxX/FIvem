@@ -125,6 +125,18 @@ local env = Sandbox.newEnv({
 })
 
 Sandbox.loadInto('../server/cooldowns.lua', env)
+-- server/datastore.lua -- REAL, unmodified, loaded alongside (this file's
+-- own header: "the ONLY place in this resource that may name a `k9_*`
+-- table or call `MySQL.*` directly" -- server/progression.lua's own
+-- LoadXPForCitizenid/AwardXP now read/write through K9Store.XP_Get/
+-- K9Store.XP_UpsertAdd rather than raw SQL). Config.Database is
+-- deliberately absent from this fixture's Config table above --
+-- K9Store's own DatabaseEnabled() fails safe to `true`, which is exactly
+-- what makes those K9Store calls run the SAME MySQL.scalar.await/
+-- MySQL.insert.await calls (against this fixture's own MySQLStub) built
+-- directly before this migration, so every existing assertion below
+-- keeps exercising the identical SQL/params shape unchanged.
+Sandbox.loadInto('../server/datastore.lua', env)
 Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted into its own file; the manifest loads it in the real resource, so a sandbox that omits it fails where the game would not
 Sandbox.loadInto('../server/progression.lua', env)
 for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do

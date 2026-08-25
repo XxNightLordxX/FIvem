@@ -60,7 +60,10 @@
 -- resource's own migrations directory already documents, always satisfies
 -- any real ordering requirement this resource's migrations have as a
 -- whole, even though this specific file has no dependency of its own on
--- any of the other ten.
+-- any of the others. (Deliberately not a number here -- a hardcoded
+-- table or migration count in a comment silently rots every time one is
+-- added, which has already happened repeatedly across this schema's own
+-- headers.)
 --
 -- Requires MySQL >= 5.7.8 or MariaDB >= 10.2, matching sql/install.sql --
 -- this migration's own tables do not individually need that floor (no

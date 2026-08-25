@@ -270,14 +270,14 @@ local function newKennelFixture(opts)
             coordsByHandle[pedHandle] = coords
             headingByHandle[pedHandle] = heading or 0.0
         end,
-        registerEntity = function(netId, handle, opts)
-            opts = opts or {}
+        registerEntity = function(netId, handle, entityOpts)
+            entityOpts = entityOpts or {}
             networkEntities[netId] = handle
-            existingEntities[handle] = opts.exists ~= false
-            entityTypes[handle] = opts.entityType or 3
-            entityModels[handle] = opts.model or PROP_HASH
-            entityOwners[handle] = opts.owner -- nil (no owner) unless the caller says otherwise -- see entityOwners' own declaration comment above
-            coordsByHandle[handle] = opts.coords or { x = 0, y = 0, z = 0 }
+            existingEntities[handle] = entityOpts.exists ~= false
+            entityTypes[handle] = entityOpts.entityType or 3
+            entityModels[handle] = entityOpts.model or PROP_HASH
+            entityOwners[handle] = entityOpts.owner -- nil (no owner) unless the caller says otherwise -- see entityOwners' own declaration comment above
+            coordsByHandle[handle] = entityOpts.coords or { x = 0, y = 0, z = 0 }
         end,
         setEntityOwner = function(handle, src) entityOwners[handle] = src end,
         removeExistence = function(handle) existingEntities[handle] = false end,

@@ -910,9 +910,7 @@ end
 --- @param citizenid string
 --- @return number xp -- the freshly-cached value
 local function LoadXPForCitizenid(citizenid)
-    local queryOk, xpOrErr = pcall(MySQL.scalar.await, 'SELECT xp FROM k9_progression WHERE citizenid = ? LIMIT 1', {
-        citizenid,
-    })
+    local queryOk, xpOrErr = pcall(K9Store.XP_Get, citizenid)
 
     if not queryOk then
         print(('[qbx_k9unit] progression: LoadXPForCitizenid query failed for %s: %s'):format(citizenid, tostring(xpOrErr)))
@@ -1122,10 +1120,7 @@ function AwardXP(citizenid, actionKey)
     -- write's own, never the search/tracking/combat/tenure call site's own
     -- execution path — AwardXP itself still returns immediately either way.
     CreateThread(function()
-        local insertOk, insertErr = pcall(MySQL.insert.await, [[
-            INSERT INTO k9_progression (citizenid, xp) VALUES (?, ?)
-              ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp), updated_at = CURRENT_TIMESTAMP
-        ]], { citizenid, amount })
+        local insertOk, insertErr = pcall(K9Store.XP_UpsertAdd, citizenid, amount)
         if not insertOk then
             print(('[qbx_k9unit] progression: AwardXP UPSERT failed for citizenid %s -- %d XP for actionKey %q was NOT persisted to k9_progression (in-memory tier/session effects already applied and are unaffected): %s'):format(citizenid, amount, actionKey, tostring(insertErr)))
         end
@@ -1207,10 +1202,7 @@ function AwardXPDirect(citizenid, amount, reason)
     -- DB error -- a pcall around a non-await MySQL call catches nothing,
     -- because the worker runs the query long after the pcall frame is gone).
     CreateThread(function()
-        local ok, err = pcall(MySQL.insert.await, [[
-            INSERT INTO k9_progression (citizenid, xp) VALUES (?, ?)
-              ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp), updated_at = CURRENT_TIMESTAMP
-        ]], { citizenid, amount })
+        local ok, err = pcall(K9Store.XP_UpsertAdd, citizenid, amount)
         if not ok then
             print(('[qbx_k9unit] progression: AwardXPDirect UPSERT failed for %s -- %d XP (%s) granted in memory but NOT persisted: %s')
                 :format(citizenid, amount, tostring(reason), tostring(err)))

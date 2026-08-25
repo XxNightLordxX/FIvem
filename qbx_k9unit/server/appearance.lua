@@ -46,6 +46,7 @@
     EVENT/CALLBACK CONTRACT:
     Callbacks (ox_lib lib.callback):
       'qbx_k9unit:server:hasK9Role' () -> boolean [THIS FILE]
+      'qbx_k9unit:server:isK9RoleForTarget' (targetServerId: number) -> boolean [THIS FILE -- backs client/appearance.lua's IsK9RoleForPlayer(), the "does THAT OTHER player hold the K9 role" primitive consumed by the ten ox_target canInteract predicates this pass's K9 role/model decoupling widening touches; see that file's own STATEBAG VS CACHED CALLBACK header section for why this is a cached callback, not a replicated statebag]
     Client events (RegisterNetEvent, server->client):
       'qbx_k9unit:client:applyK9Ped' (requestId: string, modelNameOrHash: string|number) [client/appearance.lua]
     Server events (RegisterNetEvent, client->server):

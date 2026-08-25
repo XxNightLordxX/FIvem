@@ -277,6 +277,24 @@ if Config.Features.InjuryLimping then
             -- change at all, and this was never a security boundary to
             -- begin with (this section's own header, and PHASE4_SPEC.md
             -- §13.0 Decision 3).
+            --
+            -- OWNER'S CALL, NOT GUESSED (K9 role/model decoupling pass):
+            -- IsOwnModelK9() below is a RESTRICTION gate, not an access
+            -- grant — it TAKES sprint/jump AWAY from whoever it applies to.
+            -- Its own widening (client/main.lua: answers IsK9Role() instead
+            -- of a pure model check when Config.K9Appearance
+            -- .requireK9ModelForRole is false, the shipped default) already
+            -- swept this in: a certified handler who holds the K9 role
+            -- while still on a HUMAN model now also has this injury-based
+            -- sprint/jump block applied, despite never having had
+            -- quadruped locomotion — or this Injury stat's own K9-specific
+            -- meaning — to restrict in the first place. Deliberately left
+            -- AS-IS, same "reasonable owners could want either answer"
+            -- reasoning as client/movement.lua's identical AgilityBasicJump
+            -- note. Reverting to model-only (this block applies ONLY to an
+            -- actual K9-modeled ped, never a human-modeled role-holder) is
+            -- exactly a ONE-LINE change: replace `IsOwnModelK9()` below
+            -- with `IsEntityModelK9(PlayerPedId())`.
             if IsOwnModelK9() and not IsEntityDead(PlayerPedId()) then
                 local sprintBlocked = lastStats.injury < Config.Wellbeing.Injury.sprintBlockThreshold
                 local jumpBlocked = lastStats.injury < Config.Wellbeing.Injury.jumpBlockThreshold

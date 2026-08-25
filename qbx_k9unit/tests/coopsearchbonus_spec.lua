@@ -182,6 +182,21 @@ local function newFixture()
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/entities.lua', env)
+    -- server/datastore.lua -- REAL, unmodified, loaded alongside (this
+    -- file's own header: "the ONLY place in this resource that may name a
+    -- `k9_*` table or call `MySQL.*` directly" -- server/search.lua's own
+    -- audit-log write now reads through K9Store.SearchLog_Insert rather
+    -- than a raw `MySQL.insert.await` call, and server/progression.lua's
+    -- own XP read/write is expected to do the same once migrated).
+    -- Config.Database is deliberately absent from this fixture's Config
+    -- table above -- K9Store's own DatabaseEnabled() fails safe to `true`
+    -- (real-DB mode) on a missing Config.Database, which is exactly what
+    -- makes those K9Store calls run the SAME MySQL.*.await calls (against
+    -- this fixture's own MySQLStub) built directly before migration, so
+    -- every existing assertion below keeps exercising the identical
+    -- SQL/params shape unchanged. See tests/admin_spec.lua for the
+    -- precedent this comment mirrors.
+    Sandbox.loadInto('../server/datastore.lua', env)
     Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted into its own file; the manifest loads it in the real resource, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/progression.lua', env)
     Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted into its own file; the manifest loads it in the real resource, so a sandbox that omits it fails where the game would not

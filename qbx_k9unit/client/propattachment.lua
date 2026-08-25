@@ -254,13 +254,24 @@ RegisterNetEvent('qbx_k9unit:client:attachK9Prop', function()
     -- deployKennelAt/removeKennel are the closest precedent).
     if not Config.Features.PropAttachments then return end
 
-    -- STALE-VEST GUARD (cross-boundary finding, flagged back to
-    -- server/propattachment.lua's owner rather than fixed there): several of
-    -- confirmPropAttached's own failure branches (a pending-confirm TTL
-    -- expiry, Config.Features.PropAttachments toggling off mid-round-trip, a
-    -- HasK9Access re-check failing, or a same-citizenid race) return WITHOUT
-    -- ever sending this client 'qbx_k9unit:client:rejectK9PropAttach' the
-    -- way its sibling model/position-check failure branches correctly do —
+    -- STALE-VEST GUARD. CORRECTED 2026-08-25: this comment used to describe
+    -- a LIVE cross-file gap -- that several of confirmPropAttached's failure
+    -- branches returned without ever sending
+    -- 'qbx_k9unit:client:rejectK9PropAttach'. That was true when written and
+    -- is no longer: server/propattachment.lua's confirmPropAttached now
+    -- sends the reject on EVERY failure branch after the TTL check (config
+    -- check, HasK9Access, already-active, ped == 0, entity-resolve failure,
+    -- model check, position check, ownership check, netid-uniqueness check),
+    -- fixed under its own ORPHANED-PROP / DISCONNECT-MID-FLIGHT headings.
+    -- Verified by reading that handler in full, not inferred from its
+    -- comments.
+    --
+    -- The guard below STAYS. It is belt-and-braces against a second vest on
+    -- retry, costs nothing, and would be the only thing standing between a
+    -- future regression and a duplicated prop. What changed is only the
+    -- claim above it: do not read this as evidence of a live gap, because a
+    -- stale "there is a bug over there" comment sends the next reader
+    -- hunting something already fixed —
     -- so myVestEntity from a first, silently-rejected attempt can survive
     -- untouched into a second 'attachK9Prop' dispatch (e.g. the player
     -- simply retries '/k9propattach' after the first attempt visibly did
