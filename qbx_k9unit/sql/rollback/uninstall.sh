@@ -161,7 +161,16 @@ echo ""
 # exactly as inert-by-default as ever for anyone who opens or runs it
 # directly.
 ARM_LINE="-- SET @K9_UNINSTALL_CONFIRM = 'YES-DELETE-ALL-MY-K9-DATA';"
-if ! grep -qF "$ARM_LINE" "$SCRIPT_DIR/uninstall_all.sql"; then
+# NOTE the `--` before the pattern. $ARM_LINE begins with "--", so without
+# it grep parses the pattern as an option string and exits 2 ("unrecognized
+# option") rather than 1 ("no match"). This `if ! grep` treats every nonzero
+# exit the same, so the wrapper took its own dead-man's-switch refusal branch
+# on EVERY run, on every database, even though the arming line was present and
+# byte-identical. The backup still ran first, so nothing was ever at risk --
+# but the uninstall could never proceed through this script, and the operator
+# was pushed to hand-edit uninstall_all.sql instead, which is exactly the
+# riskier path this wrapper exists to spare them.
+if ! grep -qF -- "$ARM_LINE" "$SCRIPT_DIR/uninstall_all.sql"; then
     echo "ERROR: this wrapper could not find the exact arming line it expects" >&2
     echo "       inside uninstall_all.sql -- that file must have changed shape." >&2
     echo "       Refusing to guess. Your backup is safe at:" >&2

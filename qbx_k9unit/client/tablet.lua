@@ -147,8 +147,8 @@
       tablet:getTheme {}                                          -> cb({ok,theme?,error?})     [Config.Features.TabletTheming -- server/runtimecontrol.lua]
       tablet:setTheme {primaryColor?,accentColor?,backgroundColor?,textColor?,density?,headerTitle?} -> cb({ok,theme?,error?,field?})  [high command]
       tablet:resetTheme {}                                        -> cb({ok,theme?,error?})     [high command]
-        All three forwarded through ThemeResultToJs (below), which only
-        renames server/runtimecontrol.lua's `reason` field to this
+        All three forwarded through TranslateReasonResult (below), which
+        only renames server/runtimecontrol.lua's `reason` field to this
         contract's `error` (and forwards `field`, set only on
         error='invalid_field', naming which of the six theme inputs failed)
         -- COSMETIC ONLY, see that file's own PART 2 header: nothing a
@@ -157,6 +157,27 @@
         authorization gate at all (applied for every viewer); setTheme/
         resetTheme re-check high command server-side regardless of what
         this page shows.
+      tablet:certTiersList {}                                     -> cb({ok,tiers?,capabilityCatalog?,error?})   [high command -- server/certtiers.lua]
+      tablet:certTiersUpsert {key,label,capabilities:string[]}    -> cb({ok,tiers?,capabilityCatalog?,error?})   [high command]
+      tablet:certTiersReorder {orderedKeys:string[]}              -> cb({ok,tiers?,warning?,error?})             [high command]
+      tablet:certTiersDelete {key}                                -> cb({ok,tiers?,error?,referenceCount?})      [high command]
+        All four forwarded through the SAME TranslateReasonResult --
+        server/certtiers.lua's own header states its response shape
+        "mirrors server/runtimecontrol.lua's own `{ ok, reason, ... }`
+        convention exactly", so it needs the identical `reason` -> `error`
+        bridge, done HERE (client-side), not in that file, so it can keep
+        matching its sibling's convention without also learning this
+        contract's `error`-keyed shape. `tiers` (every list/mutation
+        response) is the FULL, current, DYNAMIC catalog -- html/tablet.js
+        must never hardcode a tier list, see ListCertificationTiers's own
+        doc comment. A successful reorder's `warning` is non-optional and
+        MUST be surfaced prominently (server/certtiers.lua's own header
+        "HAZARD 3": a reorder re-ranks every citizenid already holding one
+        of the reordered tiers, retroactively). `tier_in_use`/
+        `protected_tier` on a failed delete are REFUSALS ("cannot, and
+        here is why" -- a referenced or protected tier), not failures in
+        the "something went wrong" sense; `referenceCount` (delete only)
+        names how many k9_certifications rows still reference the tier.
 
     Lua -> JS (SendNUIMessage):
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
@@ -940,30 +961,55 @@ end)
 -- command server-side regardless of what this page shows or hides.
 -- ----------------------------------------------------------------------
 
---- Translates server/runtimecontrol.lua's theme callback shape
---- (`{ok=true, theme=...}` | `{ok=false, reason=...,field=?}`) into
---- html/tablet.js's `{ok, error?, theme?, field?}` contract -- the same
---- `reason` -> `error` rename ReasonToJsResult performs above for
---- grant/revoke, kept as its OWN separate helper (not reused) since
---- theming has no locale-resolved special-cased reason to translate --
---- every reason this surface can return ('denied'/'rate_limited'/
---- 'invalid_payload'/'invalid_field'/'db_error'/'feature_disabled') is
---- already a plain, self-explanatory machine code the tablet can render
---- generically. `field` (set only alongside reason='invalid_field') is
---- forwarded so the tablet can highlight exactly which of the six theme
---- inputs failed server-side re-validation.
+--- SHARED translator for every tablet-facing surface that mirrors
+--- server/runtimecontrol.lua's own raw `{ok, reason?, ...}` response shape
+--- DIRECTLY, rather than this contract's own `{ok, error?, message?}`
+--- shape -- currently server/runtimecontrol.lua's own tabletGetTheme/
+--- tabletSetTheme/tabletResetTheme (Config.Features.TabletTheming) AND
+--- server/certtiers.lua's certTiersList/certTiersUpsert/certTiersReorder/
+--- certTiersDelete, whose OWN header says so explicitly: "Response shape
+--- mirrors server/runtimecontrol.lua's own `{ ok, reason, ... }` convention
+--- exactly, for consistency across this resource's tablet-facing surfaces."
+---
+--- THE ASYMMETRY THIS FIXES (flagged by the server side, bridged here --
+--- CLIENT/coder-ui owns this translation, not server/certtiers.lua, so
+--- that file's own response shape can keep matching its sibling
+--- server/runtimecontrol.lua's convention without also having to know
+--- anything about html/tablet.js's separate, older `error`-keyed
+--- contract): every OTHER tablet mutation in this resource already
+--- resolves to `{ok, error?, message?}` by the time it reaches
+--- html/tablet.js -- ReasonToJsResult above performs the identical
+--- `reason` -> `error` rename for server/permissions.lua's grant/revoke
+--- pair. Left unbridged, a rejected cert-tier/theme edit would arrive at
+--- the NUI as `{ok:false, reason:'...'}` with NO `error` key at all --
+--- html/tablet.js's own errorText()/generic failure-notice paths only ever
+--- read `.error`/`.message`, so the tablet would render nothing, the
+--- single worst outcome for an admin tool (a click that visibly does
+--- nothing is indistinguishable from a hang).
+---
+--- Deliberately GENERIC, not hand-listing each surface's own extra fields
+--- (theme/field/tiers/capabilityCatalog/warning/referenceCount, ...): every
+--- key from `serverResult` is forwarded verbatim except `reason` itself,
+--- which is renamed to `error` (only when `ok` is not `true`, and only if
+--- `error` was not already set some other way) and then removed, since the
+--- JS-facing contract has no `reason` field of its own to leave dangling
+--- alongside it. A future fifth surface built the same way needs no edit
+--- here at all.
 --- @param serverResult table
 --- @return table
-local function ThemeResultToJs(serverResult)
+local function TranslateReasonResult(serverResult)
     if type(serverResult) ~= 'table' then return { ok = false, error = 'server_error' } end
-    if serverResult.ok ~= true then
-        return { ok = false, error = serverResult.error or serverResult.reason or 'server_error', field = serverResult.field }
+    local out = {}
+    for k, v in pairs(serverResult) do out[k] = v end
+    if out.ok ~= true and out.error == nil then
+        out.error = out.reason or 'server_error'
     end
-    return { ok = true, theme = serverResult.theme }
+    out.reason = nil
+    return out
 end
 
 RegisterNUICallback('tablet:getTheme', function(_, cb)
-    cb(ThemeResultToJs(AwaitServerCallback('qbx_k9unit:server:tabletGetTheme')))
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:tabletGetTheme')))
 end)
 
 RegisterNUICallback('tablet:setTheme', function(data, cb)
@@ -978,11 +1024,56 @@ RegisterNUICallback('tablet:setTheme', function(data, cb)
         cb({ ok = false, error = 'invalid_args' })
         return
     end
-    cb(ThemeResultToJs(AwaitServerCallback('qbx_k9unit:server:tabletSetTheme', data)))
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:tabletSetTheme', data)))
 end)
 
 RegisterNUICallback('tablet:resetTheme', function(_, cb)
-    cb(ThemeResultToJs(AwaitServerCallback('qbx_k9unit:server:tabletResetTheme')))
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:tabletResetTheme')))
+end)
+
+-- ----------------------------------------------------------------------
+-- CERTIFICATION TIER EDITING -- server/certtiers.lua, high command only
+-- (CanManageCertTiers re-checked there on every call; this file adds no
+-- authorization of its own). Every payload shape below is forwarded
+-- EXACTLY as that file's own callbacks expect -- see its own header
+-- "CALLBACKS" section: certTiersUpsert takes the WHOLE {key,label,
+-- capabilities:string[]} table as one argument (mirrors tablet:setTheme's
+-- own whole-table forwarding just above), certTiersReorder takes a bare
+-- array of tier key strings, certTiersDelete takes a bare key string.
+-- ----------------------------------------------------------------------
+
+RegisterNUICallback('tablet:certTiersList', function(_, cb)
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:certTiersList')))
+end)
+
+RegisterNUICallback('tablet:certTiersUpsert', function(data, cb)
+    if type(data) ~= 'table' or type(data.key) ~= 'string' or data.key == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:certTiersUpsert', data)))
+end)
+
+RegisterNUICallback('tablet:certTiersReorder', function(data, cb)
+    if type(data) ~= 'table' or type(data.orderedKeys) ~= 'table' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:certTiersReorder', data.orderedKeys)))
+end)
+
+RegisterNUICallback('tablet:certTiersDelete', function(data, cb)
+    if type(data) ~= 'table' or type(data.key) ~= 'string' or data.key == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    -- 'tier_in_use'/'protected_tier' are REFUSALS ("cannot, and here is
+    -- why"), not errors -- forwarded through the SAME translation
+    -- regardless (TranslateReasonResult does not distinguish a refusal
+    -- from a failure; html/tablet.js's own certTierErrorText() is what
+    -- renders 'tier_in_use' with its own explanatory copy instead of a
+    -- generic failure message -- see that function for the full list).
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:certTiersDelete', data.key)))
 end)
 
 -- Lua-INITIATED push, NOT tied to this player's own tablet being open --

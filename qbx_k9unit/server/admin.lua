@@ -441,11 +441,6 @@ local ROWS_PER_NOTIFY_CHUNK = 5
 -- value that reaches SQL text directly.
 local VALID_SEARCH_LOG_MODES = { officer = true, plate = true, person = true, recent = true }
 
--- Column list shared by all four k9_search_log query shapes below — kept
--- as one constant so the four query functions can never drift out of sync
--- with each other on which columns they expose.
-local SEARCH_LOG_COLUMNS = 'searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at'
-
 -- REFACTOR_ROADMAP.md item 1 convention (server/cooldowns.lua): shared
 -- constructor, not a hand-rolled table. One instance covers all three
 -- commands in this file, keyed by the CALLING admin's own source — see
@@ -776,29 +771,6 @@ local function LogAuditInvocation(source, commandName, detail, outcome)
         whoLabel = citizenid and ('citizenid=' .. citizenid) or ('unresolved-source=' .. tostring(source))
     end
     print(('[qbx_k9unit] AUDIT: %s ran %s(%s) -> %s'):format(whoLabel, commandName, detail, outcome))
-end
-
---- Fail-closed SELECT wrapper — pcall around MySQL.query.await, matching
---- RefreshCertificationCache/RefreshPartnershipCache's own "an unreadable
---- row must never be treated as [something it isn't]" discipline, applied
---- here as "a failed audit query returns zero rows to the caller, never a
---- raw Lua error/stack trace." CONFIDENCE NOTE: MySQL.query.await is
---- oxmysql's documented all-matching-rows method, the natural counterpart
---- to MySQL.scalar/.single/.update/.insert — all four already called
---- successfully elsewhere in this codebase (server/certifications.lua,
---- server/search.lua, server/partnership.lua) — but MySQL.query
---- specifically was not independently exercised against a live oxmysql
---- install in this sandbox.
---- @param sql string -- already fully hardcoded per call site below, never a caller-controlled fragment
---- @param params table
---- @return table rows -- always a table, empty on failure
-local function SafeQuery(sql, params)
-    local ok, rowsOrErr = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] admin.lua query failed: %s'):format(tostring(rowsOrErr)))
-        return {}
-    end
-    return rowsOrErr or {}
 end
 
 --- Merges two already-LIMITed row sets (one per unique index — see

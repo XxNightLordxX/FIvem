@@ -28,6 +28,23 @@
     respectively, not in this file at all; certifications_spec.lua and
     highcommand_spec.lua are the right place for coverage of those two (see
     each file's own test additions this pass).
+
+    ROUND TRIP SECTION (added at coder-security's own request, following
+    their server/permissions.lua IsValidPermissionKey fix for the
+    'feature.<Name>'/'block.<Name>' namespace): a SEPARATE, INTEGRATION-level
+    newIntegrationFixture() below loads the REAL server/permissions.lua
+    (cooldowns.lua first, for NewCooldown at that file's own load time)
+    alongside the REAL server/tablet.lua in one shared env, backed by a
+    single real in-memory k9_permissions table both files read/write
+    against -- proving the full path end to end: a grant made through
+    tabletGrantPermission is a real, storable row that server/tablet.lua's
+    OWN QueryActivePermissionSet/ResolveFeatureState later reads back
+    correctly, not merely that each half independently believes it works.
+    IsHighCommand/HasK9Access remain test-controlled stubs here too (this is
+    still not a full production-topology test -- server/certifications.lua/
+    server/highcommand.lua are not loaded), matching this file's own
+    established UNIT-level convention for everything this round trip does
+    not need a real implementation of.
 ]]
 
 local t = dofile('testkit.lua')

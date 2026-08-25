@@ -104,25 +104,25 @@
     'feature.<key>' grant, same as anyone else. If that reading is wrong,
     it is a one-line change to ResolveFeatureState below, not a redesign.
 
-    A REAL, PRE-EXISTING GAP FOUND WHILE BUILDING THIS (reported, not fixed
-    here -- server/permissions.lua has no owner flagged for this task, and
-    this is a security-relevant change to that file's own validation, not a
-    read-only aggregation): server/permissions.lua's IsValidPermissionKey
-    only accepts an EXACT key already present in Config.Permissions (the
-    four admin capabilities). It has no special case for the
-    'feature.<Name>'/'block.<Name>' namespace client/tablet.lua's own
-    header (and server/permissions.lua's own header) both describe as
-    already working via GrantPermission/RevokePermission -- meaning
-    tablet:grantFeature/revokeFeature/blockFeature/unblockFeature currently
-    all fail with 'invalid_permission' the instant anyone tries to use
-    them, regardless of this file. This file's OWN reads of those exact
-    rows (QueryActivePermissionSet below) are unaffected -- reading directly
-    against k9_permissions, bypassing that write-path validator entirely,
-    the same way server/permissions.lua's own ListActivePermissionsForCitizenId/
+    RESOLVED, PREVIOUSLY A REAL GAP (coder-security, follow-up pass):
+    server/permissions.lua's IsValidPermissionKey originally only accepted
+    an EXACT key already present in Config.Permissions (the four admin
+    capabilities), with no case for the 'feature.<Name>'/'block.<Name>'
+    namespace -- meaning tablet:grantFeature/revokeFeature/blockFeature/
+    unblockFeature failed with 'invalid_permission' on every attempt. Now
+    fixed there: IsValidPermissionKey accepts 'feature.<Name>'/'block.<Name>'
+    when <Name> is validated against the real Config.Features table (never a
+    free-form string). This file's OWN reads (QueryActivePermissionSet
+    below) were never affected by that bug either way -- they read
+    k9_permissions directly, bypassing the write-path validator, the same
+    way server/permissions.lua's own ListActivePermissionsForCitizenId/
     ListPermissionRoster already do -- so 'blocked'/'requires_grant_missing'
-    resolve correctly today (as "never blocked, never granted", which is
-    the truth, since no such row can currently be created). See this pass's
-    own report for the exact IsValidPermissionKey fix proposed.
+    now reflect REAL, storable grant/block rows end to end, not merely "never
+    blocked, never granted by construction" as before this fix landed. See
+    the ROUND TRIP test in tests/tabletserver_spec.lua (added this pass, at
+    coder-security's own request) for proof of the full path: a grant made
+    through tabletGrantPermission is visible in this file's own
+    ResolveFeatureState output afterward.
     ======================================================================
 
     ======================================================================
@@ -391,10 +391,14 @@ end
 --- Every ACTIVE k9_permissions row for `citizenid`, as a set (presence of a
 --- key means "currently holds this permission string"). Covers all three
 --- shapes this file needs to check (the four admin capabilities,
---- 'feature.<Name>', 'block.<Name>') in ONE query -- see this file's header
---- "A REAL, PRE-EXISTING GAP" note for why this reads the table directly
---- rather than going through server/permissions.lua's HasPermission
---- (which would reject the 'feature.'/'block.' namespace outright).
+--- 'feature.<Name>', 'block.<Name>') in ONE query -- reads the table
+--- directly rather than going through server/permissions.lua's HasPermission,
+--- which is scoped to ONLINE citizenids only (see that file's own "CACHING"
+--- header section) -- this file needs the SAME read to work for an offline
+--- target too (tabletRequestPersonSummary/tabletRequestPersonFeatures), so a
+--- direct, DB-authoritative read is correct here regardless of
+--- IsValidPermissionKey's own now-fixed namespace acceptance (see this
+--- file's header "RESOLVED, PREVIOUSLY A REAL GAP").
 --- @param citizenid string
 --- @return table<string, boolean>
 local function QueryActivePermissionSet(citizenid)
