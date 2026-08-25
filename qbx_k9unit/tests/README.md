@@ -1,250 +1,136 @@
 # qbx_k9unit automated tests
 
-This directory is the first automated test suite for this resource. Before
-this, the entire safety net was `luac5.4 -p` (syntax) and `luacheck`
-(unused/undefined globals) — neither can catch a logic bug. Every logic bug
-found in the QA passes that led to this suite (XP farms, a remote-steal, a
-registry desync, a hesitation lockout) would have been caught by a test like
-the ones here.
+## What this is
 
-## Running
+This folder holds automated tests for qbx_k9unit's Lua code — mostly server-side code, plus one client-side file. An automated test is a small script that runs the real game-resource code and checks it behaves correctly, without needing a running FiveM server.
+
+To run them, open a terminal in this folder and run `./run.sh`. A passing run prints `[PASS]` next to every check and ends with `ALL SPEC FILES PASSED (17 file(s))`. Anything else — any `[FAIL]` line, or a message like `SPEC FILE(S) FAILED: ...` — needs attention. Before you assume the code is broken, though, read "Two false alarms" below: there are two specific situations that make this suite go red for reasons that have nothing to do with a bug.
+
+Before this suite existed, the only safety net for this resource was `luac5.4 -p` (checks the Lua is written correctly) and `luacheck` (flags unused/undefined variables). Neither one can catch a *logic* bug — code that runs without error but does the wrong thing. Several real bugs found in QA passes on this resource (players farming XP, a way to steal another player's networked item, a tracking-data bug, a bug that could lock a player out of an ability) would all have been caught by a test like the ones in this folder.
+
+## Terms used in this document
+
+- **Spec file** — one test file, always named `something_spec.lua`. Each spec file tests one production file (e.g. `admin_spec.lua` tests `server/admin.lua`).
+- **Sandbox** — a small fake FiveM environment that lets a real, unmodified production `.lua` file run under plain Lua, outside an actual game server. Explained in full below.
+- **Fixture** — a helper function that builds one ready-to-use sandbox for a test, so each test doesn't have to set one up from scratch.
+- **Stub** — a fake stand-in for something the real code calls, used when the test doesn't want that thing to actually happen. Example: a fake `TriggerClientEvent` that just records what it was called with, instead of really sending a network message.
+- **Locale key** — a short name, like `combat.no_target_in_range`, used to look up a real piece of player-facing text in `locales/en.json`. Full explanation in `locales/README.md`.
+
+## Running the tests
 
 ```sh
 cd qbx_k9unit/tests
 ./run.sh
 ```
 
-Requires `lua5.4` on `PATH` (the same runtime this resource ships against —
-see `.github/workflows/lua-check.yml`, which already installs it for the
-`luac5.4 -p` job). No other dependency. Set `LUA_BIN` to override the
-interpreter path/name.
+You need `lua5.4` installed and on your `PATH` — the same Lua version the real FXServer runs. If it's missing, `run.sh` tells you and stops; install Lua 5.4, or set `LUA_BIN=/path/to/your/lua5.4` to point at a specific binary. Nothing else needs installing — no framework, no package manager.
 
-**`run.sh` glob-discovers `*_spec.lua`, which means an incomplete spec file
-sitting in this directory turns the WHOLE suite red**, not just the file
-being written. This has happened during real work on this suite (two specs
-being authored concurrently briefly made a full `./run.sh` run look broken
-while every already-committed spec was fine). If you're mid-write on a new
-spec, don't treat a red `./run.sh` as a signal the committed suite regressed
-— run the committed files individually (`lua5.4 admin_spec.lua`, etc.) to
-check those, and only trust the full-suite total once your new file is
-finished and self-consistent.
+A passing run ends with:
+```
+ALL SPEC FILES PASSED (17 file(s))
+```
+A failing run instead prints `SPEC FILE(S) FAILED: <names>` and exits with a non-zero status, which is what a CI job checks for.
 
-## Why plain lua5.4 + a tiny runner, not busted
+### Two false alarms — read this before you panic at a red run
 
-`busted` is installed in this environment, but only for **Lua 5.1**
-(`luarocks list` shows it under `rocks-5.1`; `lua5.1`/`luac5.1` are not on
-`PATH` at all here, and this resource's own `.luacheckrc` pins
-`std = "lua54"` to match the real FXServer runtime). Installing a
-Lua-5.4-compatible busted was not possible in this sandbox (no working
-outbound luarocks install path was available for a second Lua version), and
-a test suite that only runs under a Lua version this resource doesn't
-actually target would be worse than not having one — it could pass while
-silently exercising different numeric/string semantics than the real
-runtime (this mattered concretely: see `admin_spec.lua`'s `ClampLimit`
-nan/inf tests, whose expected results depend on this exact Lua build's
-`tonumber` behavior).
+**1. A half-finished spec file turns the WHOLE suite red, not just that one file.**
 
-So: **zero dependencies, runs directly against the same `lua5.4` binary
-FXServer embeds.** `testkit.lua` is ~100 lines — `test(name, fn)` runs `fn`
-in its own `pcall` (one failing assertion fails only that test), a handful
-of `equals`/`isTrue`/`isNil`/`contains`/... assertions that `error()` with a
-readable message, and `summary()` prints a tally and returns an exit code.
-Every `*_spec.lua` file is a self-contained script that `dofile`s
-`testkit.lua`, runs its tests, and `os.exit()`s 0/1; `run.sh` just runs each
-one and aggregates the exit codes.
+`run.sh` runs every file in this folder matching `*_spec.lua`. If a new spec file is mid-write — a typo, a missing `end`, an unfinished test — `./run.sh` reports the ENTIRE suite as failed, even though every other, already-finished spec file is fine.
 
-## How production code gets under test without a FiveM runtime
+- **Symptom:** `./run.sh` reports a failure, but you haven't changed anything yourself.
+- **Cause:** some spec file in the folder (yours or someone else's) is mid-write.
+- **What to do:** run the files you actually care about one at a time instead of the whole suite, e.g. `lua5.4 admin_spec.lua`. Only trust a full `./run.sh` run once every file in the folder is finished. This is a normal side effect of several people editing this folder at once — not a sign the tested code regressed.
 
-FiveM natives (`GetGameTimer`, `TriggerClientEvent`, `MySQL.*`,
-`exports.*`, ...) don't exist under plain `lua5.4`. `fixtures/sandbox.lua`
-loads a **real, unmodified** `server/*.lua` file with `load(chunk, name,
-'t', env)`, where `env` is a table pre-populated with the small set of
-native/global stubs that specific file actually needs (built as a shallow
-copy of the real `_G`, so the standard library still works normally, plus
-whatever's overridden). Because Lua 5.2+ compiles every global read/write
-through the `_ENV` upvalue, this works with **zero changes to the
-production file**: a top-level `function NewCooldown() end` in
-`server/cooldowns.lua` becomes `env.NewCooldown`, callable from the test.
+**2. If `locales/en.json` is mid-write, tests fail with a "locale key missing" error — which can mean two different things.**
 
-This gets you the REAL production logic under test, not a reimplementation
-of it — the thing this task explicitly asked to avoid duplicating.
+Every test sandbox uses the REAL `locale()` function against the REAL `locales/en.json` file (explained in full below). If code being tested asks for a key that isn't in `en.json` yet, `locale()` raises an error and the test fails loudly, with a message like:
 
-### The sandbox's `locale()` is real, not a stub — every notify-path spec doubles as a locale-key check
+```
+locale key missing from locales/en.json: some.key
+```
 
-`Sandbox.newEnv` (see `fixtures/sandbox.lua`) wires a real `locale(key, ...)`
-into every sandboxed environment by default — it opens and parses the actual
-`../locales/en.json` (a small hand-rolled JSON reader good enough for that
-file's nested-object-of-strings shape, not a general parser) and looks up
-`group.leaf` exactly the way ox_lib's own `flattenDict` would. Unlike real
-ox_lib, which silently returns the key itself when a key is missing (so a
-missing key only ever shows up as odd text in-game), this sandbox's
-`locale()` **raises** on a missing/non-string key.
+- **Symptom:** that exact error message.
+- **Cause A (a concurrency artifact, not a bug):** `en.json` is being edited right now — someone is adding or renaming keys, and the file is momentarily incomplete.
+- **Cause B (a real bug — this has actually happened):** the production code asks for a locale key that was never added, or that was renamed/removed by mistake, and nobody noticed. This exact mechanism has already caught a real, shippable bug this way, not just a test artifact.
+- **What to do:** check whether `en.json` is currently being edited. If yes, that's Cause A — just re-run once the edit is finished. If `en.json` looks finished and the key genuinely isn't in it, that's Cause B — treat it as a real bug report and fix the mismatch (add the missing key, or fix the call site). Don't assume "it's just concurrency" without checking; that assumption is exactly how a real bug slips through.
 
-Practical consequence for anyone adding a spec: if the production file you're
-loading calls `locale('some.key')` on any code path your test exercises, that
-call is NOT stubbed away — it runs for real against `locales/en.json`. So
-every test that drives a `NotifyPlayer(..., locale('x.y'), ...)`-shaped call
-(or any other real `locale()` call) is *also*, for free, a regression check
-that `x.y` still exists in `en.json` with a string value. This has already
-caught real drift in this suite (a locale key referenced by production code
-but renamed/removed from `en.json` fails the test with `"locale key missing
-from locales/en.json: x.y"`, not a silent pass). `certifications_spec.lua`
-and `kennel_spec.lua` both call this out explicitly in their own header
-comments and build expected notification text by calling
-`Sandbox.locale(...)` themselves rather than hardcoding a copy of the English
-string, specifically so the spec can never drift from `en.json`'s actual
-wording while still asserting real content. Do the same in any new spec that
-asserts on notify text: call `Sandbox.locale(...)` for the expected value,
-don't hand-copy the English string from `en.json` into the spec file.
+## Why plain lua5.4, and not a framework like busted
 
-If a spec genuinely needs to test `locale()`-calling code WITHOUT this
-raise-on-missing behavior (e.g. deliberately testing a missing-key path),
-override `env.locale` with your own stub after `Sandbox.newEnv()` returns —
-the same "reassign after the fact" mechanic every other override in this
-suite already uses.
+`busted` (a common Lua test framework) is installed on this machine, but only for Lua 5.1. This resource runs on Lua 5.4 (its own `.luacheckrc` pins `std = "lua54"` to match the real FXServer), and a Lua-5.4-compatible `busted` couldn't be installed here. A test suite that runs under a different Lua version than the real server can pass while hiding a real bug — one test in `admin_spec.lua` (`ClampLimit`'s handling of NaN/infinity) depends on exactly how this specific Lua build's `tonumber` behaves, which could differ under Lua 5.1.
 
-**What this cannot do anything about:** a `local function` in a production
-file is only reachable from code in that same file, same as it would be
-from a real caller. Every spec below reaches such a local the same way a
-real caller does — through whatever resource-global entry point
-(`RegisterCommand` handler, `AddEventHandler` callback, exported accessor)
-the production file itself already wires it into — never by copying the
-local's logic into the test. Where no such entry point exists without
-disproportionate native stubbing, that's recorded as a coverage gap below,
-not silently worked around.
+So instead: this suite runs directly against the real `lua5.4` binary, with `testkit.lua` (about 100 lines) providing `test(name, fn)` plus a handful of checks (`equals`, `isTrue`, `isNil`, `contains`, and similar). Each spec file is a small, self-contained script: it loads `testkit.lua`, runs its own tests, and exits 0 (all passed) or 1 (something failed). `run.sh` just runs every spec file and reports whether any of them failed.
+
+## How production code gets tested without a real FiveM server
+
+FiveM-only functions — `GetGameTimer`, `TriggerClientEvent`, `MySQL.*`, `exports.*`, and so on — don't exist under plain Lua. `fixtures/sandbox.lua` solves this by loading a real, UNMODIFIED `server/*.lua` file into a sandbox: an environment pre-filled with small stand-in functions for just the handful of FiveM natives that specific file actually calls. This works without changing the production file at all — the real logic runs, for real, inside the test.
+
+### `locale()` inside the sandbox is real, not a stub
+
+Almost everything else in a sandbox is a stub (a fake). `locale()` is the one deliberate exception — it really reads and parses `locales/en.json`, the same way the real game does. Two consequences:
+
+- When a test runs code that calls `locale('some.key')`, that call really looks up `some.key` in the real `en.json` file.
+- Unlike the real game (which just quietly shows the key's name itself if the key is missing — the kind of bug a player might not even report), the sandbox's `locale()` throws a loud error on a missing key. See "Two false alarms" above for how to tell whether that error is a real bug or just `en.json` being mid-edit.
+
+Because of this, every test that checks a notification message is *also*, for free, a check that the locale key behind it still exists in `en.json`. When you write a new test that checks notification text, build the expected text by calling `Sandbox.locale('some.key')` yourself rather than typing the English sentence into the test by hand — that way the test can never silently drift from what `en.json` actually says.
+
+One real limit: a `local function` inside a production file can only be reached the same way a real caller reaches it — through something like a `RegisterCommand` handler or a registered event. Tests here never copy a local function's internal logic into the test itself. Where there's genuinely no real way in, that's written up as a gap in "What's NOT covered" below, not worked around.
 
 ## What's covered
 
-| File | What's tested | How reached |
+| File | What's tested | How it's reached |
 |---|---|---|
-| `server/cooldowns.lua` | `NewCooldown`, `NewNestedCooldown`, `NewMutex` — check/stamp/consume/clear, the fail-closed behavior on a missing/zero/negative threshold, `RegisterPlayerDropped` per-source/per-primaryKey cleanup, `StartSweep`'s eviction predicate | Directly — all three are resource-globals (no `local`) |
-| `server/admin.lua` | `ClampLimit` (the flagged nan/inf/1e400/float/negative battery — see below), `IsValidCitizenId`, `NormalizePlateArg`, `IsAuthorizedAdmin` (ACE grant/deny, console `TrustConsole` on/off, auth-checked-before-argument-shape), the shared `AuditCooldown` rate limit, `MergeSortedByIdDesc`, and (in `notify_spec.lua`) the local `NotifyPlayer` wrapper's `_G.NotifyPlayer(...)`-delegation to the real `server/notify.lua` | Indirectly, via the real `RegisterCommand` handlers captured after firing `onResourceStart`, asserting on the real SQL text / query params / notification content the real code produces |
-| `server/progression.lua` | `ResolveTier` boundary resolution against `Config.XPTiers` (`>=` at a threshold vs. one below it, multi-step accumulation, top-tier resolution), the uncached-citizenid base-tier fail-safe, `AwardXP`'s unknown-actionKey/malformed-citizenid/feature-flag guards, the per-`(citizenid, actionKey)` rate floor, `CopyTier`'s defensive copy on the outbound tier-crossing event, the `playerDropped` cache-eviction fix | Indirectly, via the real `AwardXP`/`GetXPTier`/`GetXP` resource-globals |
-| `server/entities.lua` | `ResolveNetworkEntity`'s full documented contract: non-number `netId` rejection, the `entity == 0 OR NOT DoesEntityExist` existence guard (including a stale-handle case), `expectedEntityType` match/omit/mismatch (mismatch is a hard `nil`, never advisory), and the documented "float/negative/huge netId fails via the existence check, not the type check" edge cases; `ResolveConnectedPlayerFromPed`'s scan-and-match, no-match, and malformed-`GetPlayers()`-entry cases | Directly — both are resource-globals (no `local`) |
-| `server/notify.lua` | `NotifyPlayer`'s arity (2/3/4-arg calls, explicit-`nil` positional args, title-only override, no state leak between sequential calls) against the real `TriggerClientEvent('ox_lib:notify', ...)` call; the `_G.`-delegating local shadows in `server/admin.lua` and `server/bonetool.lua` (each file's own distinct title reaches the real notify event with no infinite recursion) | Directly for the shared function; indirectly for the two local wrappers, via each file's real `RegisterCommand` handler with the real `server/notify.lua` loaded into the same sandbox (not stubbed) |
-| `server/tenure.lua` | `CheckTenureMilestonesForK9`/`TickPartnershipTenure`'s tier-boundary resolution (`>=` at `afterSeconds` vs. one second below), multi-milestone catch-up in a single tick, the persisted `tenure_bonus_tier_granted` column's optimistic-concurrency guard actually preventing a double grant (including across a simulated restart, i.e. a fresh in-memory cache), the full activity gate (handler offline / beyond `ProximityMeters` / at the boundary / failed `HasK9Access` re-check / handler not in a configured department), the K9-role-only pre-filter, and two no-schema-degradation paths (missing/empty `milestones` config, and an erroring `MySQL.single.await` simulating a pre-migration database) | Indirectly, via the real `CreateThread`/`Wait` sweep loop (stepped through `fixtures/sandbox.lua`'s coroutine thread runner), against a real `k9_partnerships`-shaped in-memory row store with real UPDATE...WHERE race-guard semantics, never a reimplementation of "should only grant once" |
-| `server/search.lua` | `GetContrabandAlertTier` (a test-seam wrapper over the file-local `ResolveAlertTier` that landed mid-pass — see "What's NOT covered" history below) — `Config.ContrabandAlertTiers` boundary resolution (`>=` at a threshold vs. one below it), the mandatory zero-weight `'clean'` baseline, top-tier resolution for a large weight, and a negative-weight defensive-input case; also pins the REAL current behavior that this wrapper returns the live `Config.ContrabandAlertTiers[n]` table reference, not a defensive copy (unlike `progression.lua`'s `CopyTier`) | Directly — resource-global (no `local`), added specifically as a test/inspection seam per that file's own FILE-TO-FILE CONTRACT |
-| `server/certifications.lua` | `HasK9Access`/`RefreshCertificationCache`/`IsConfiguredK9Model` directly; `GrantCertification`/`RevokeCertification`/`RevokeCertificationOffline`/the `QBCore:Server:OnJobUpdate` auto-revoke handler indirectly — the authorization root nearly every other feature in this resource gates on, previously at ZERO direct coverage. Also records a genuine finding: unlike `server/propattachment.lua`/`server/bonetool.lua`/`server/progression.lua`/`server/admin.lua`/`server/search.lua`, this file has no file-load-time `assert(...)` on `Config.Departments`/`Config.Peds`, so a malformed entry fails silently later rather than loudly at resource start | Directly for the three resource-globals; indirectly for the `local` functions, via the real captured `RegisterNetEvent`/`RegisterCommand`/`AddEventHandler`/`onResourceStart` entry points, same convention as `admin_spec.lua`/`progression_spec.lua`. Loads the real `server/cooldowns.lua` into the same env first for `CertifyActionCooldown` |
-| `server/kennel.lua` | All four `RegisterNetEvent` handlers (`requestDeployKennel`/`confirmKennelPlaced`/`cancelKennelPlacement`/`requestPickupKennel`) plus its `playerDropped`/`onResourceStop` cleanup, loaded alongside the real `server/cooldowns.lua` and `server/entities.lua` so `DeployCooldown` and every `ResolveNetworkEntity` call are the real primitives, not reimplementations. One fresh sandbox per test (never shared), since `Kennels`/`PendingKennelPlacements` are file-lifetime `local` upvalues that would otherwise leak state between unrelated cases. Its own header records a real bug caught live, mid-authorship, in a concurrently-edited version of the production file (three silent re-validation rejections inside `confirmKennelPlaced` that could strand a real networked object) — read there for the full account rather than assumed fixed here | Directly for the event handlers (captured registrations); `HasK9Access`/`NotifyPlayer` are stubbed, not loaded, since each is already covered by its own file's spec |
-| `server/exports.lua` + `client/exports.lua` | BOTH public cross-resource API surfaces this resource ships (9 server exports, 18 client exports) against the real, unmodified files — previously zero direct coverage despite being the only surface other resources actually call. Covers every documented export's happy path, the exact count of exports registered (no more, no fewer), and each of the three documented safety nets (argument type guard / wrapped-global existence guard / pcall) via hand-written controllable stubs for the wrapped globals (deliberately not the real `server/progression.lua` etc., which are already directly covered by their own specs — this file's job is testing the export wrappers' OWN guard behavior in isolation). Also records inline FINDINGS (not fixed here) where an export doesn't validate its wrapped global's return type against its own doc comment, unlike neighboring exports in the same file that do | Directly — every export under test is a captured registration (`exports(...)`/`exports.qbx_k9unit:...`-shaped stub) from the real file |
+| `server/cooldowns.lua` | The shared cooldown/mutex helpers (`NewCooldown`, `NewNestedCooldown`, `NewMutex`): checking, stamping, consuming, clearing, and failing safely if given a bad threshold. Also per-player cleanup on disconnect and the background sweep that evicts stale entries. | Directly — these are all globals in the file, so tests call them straight. |
+| `server/admin.lua` | `ClampLimit` (see the odd-number section below), citizen-ID and plate validation, admin-permission checks (ACE grants, console trust, checking permission before even looking at the arguments), the shared audit rate limit, and result-sorting. Also the file's own `NotifyPlayer` wrapper. | Mostly indirectly — through the real `RegisterCommand` handlers, checking the real SQL text and notification content they produce. |
+| `server/progression.lua` | XP-tier lookup at exact thresholds, awarding XP (including guards against unknown actions, bad citizen IDs, and disabled features), the per-player XP rate limit, and cache cleanup on disconnect. | Indirectly, through the real `AwardXP`/`GetXPTier`/`GetXP` functions. |
+| `server/entities.lua` | Resolving a network ID into a real entity safely — rejecting bad IDs, checking the entity still exists, and checking it's the expected type when asked. Also resolving which connected player owns a given ped. | Directly — both are file-level globals. |
+| `server/notify.lua` | The shared `NotifyPlayer` function across its different call shapes, and that two other files' own local wrappers around it correctly forward to the real notification event. | Directly for the shared function; indirectly for the two wrappers. |
+| `server/tenure.lua` | Partnership-tenure milestones — reaching a milestone at the right time, catching up on several missed milestones at once, never granting the same milestone twice (even across a simulated restart), and every condition that gates whether tenure ticks at all. | Indirectly, through the real background sweep loop, run against a fake in-memory database table. |
+| `server/search.lua` | Picking the right "contraband alert" level for a given weight, including the boundary cases and a defensive check against a negative weight. | Directly, through a small test-only wrapper the file itself provides for this purpose. |
+| `server/certifications.lua` | The core "is this player allowed to use K9 features" check, granting/revoking certification, revoking automatically on a job change, and the certification cache. This is the permission check almost every other feature in this resource depends on. | Directly for the plain functions; indirectly (through real event handlers) for the rest. |
+| `server/kennel.lua` | Deploying, placing, cancelling, and picking up a kennel, plus cleanup when a player disconnects. | Directly, through the real event handlers, with the real cooldown and entity-resolution code loaded alongside it. |
+| `server/combat.lua` | Bite-hold, takedown, and prop-dragging: the full request → confirm → end lifecycle, including a genuine mid-handler wait-then-recheck (so a target that moves away mid-check is caught for real, not simulated). Checks *what happened* (which event fired, to whom, with what data) rather than the exact wording of any notification, since this file's text was being rewritten to use `locale()` at the same time this test file was written. | Indirectly, through the real event handlers. |
+| `server/fetch.lua` | The full throw/pickup/carry/drop/deliver/recall lifecycle for the fetch-ball feature, and that every failure case correctly tells the client to clean up rather than leaving an orphaned networked object behind. Also checks a rejected action never affects a different player's own fetch ball. | Indirectly, through the real event handlers. |
+| `server/inventory.lua` | Three specific things: that only allowed items can go into a K9's gear stash, that the stash-protection hook can't accidentally end up registered twice, and that a bad config value for who can access a K9's gear fails loudly at startup instead of silently allowing too much access. | Indirectly, through real startup handlers and a fake `ox_inventory`. |
+| `server/propattachment.lua` | Attaching/removing a prop to a K9 (e.g. a vest), including that every rejection tells the client to clean up the object it already created, and that the feature can be fully turned off by config. | Indirectly, through the real event handlers. |
+| `server/wellbeing.lua` | Petting/feeding a K9 (and that pet+feed share one cooldown, not two separate ones), the periodic wellbeing "tick", what survives a disconnect versus what resets, and the cap that forces a K9 out of a stressed state after continuous danger. | Indirectly, through real callback and event handlers. |
+| `client/main.lua` | Whether a model counts as a K9, the "can this player use K9 features right now" check (including its short-term cache), and the client-side bark sound/network-entity helpers. This is currently the only client-side file with test coverage — see "What's NOT covered" for why. | Directly for the plain functions; indirectly for the one event handler. |
+| `server/exports.lua` + `client/exports.lua` | Every export this resource offers to other resources (9 server-side, 18 client-side): that each one works correctly, that the exact right number of exports gets registered, and that each one's safety checks (bad argument types, a missing dependency, an unexpected error) behave as documented. | Directly — every export tested is the real, registered one. |
 
-434 test cases total across 12 spec files, all currently passing against the
-real, unmodified source (from `tests/run.sh`'s own per-file "N passed, M
-failed" output, summed — see "A count you must run, not grep" below for why
-this number cannot be derived any other way). Per file: exports 135,
-defense 54, certifications 47, kennel 39, cooldowns 32, admin 28, main 25,
-entities 20, tenure 19, progression 14, search 12, notify 9.
+## The numbers below expire — here's how to re-check them
 
-NOTE ON THIS NUMBER: it was 355 across 10 files an hour before this line was
-written. `defense_spec.lua` (54) and `main_spec.lua` (25) landed in between.
-Re-run rather than trusting it; that is the whole point of the section
-below.
+This suite currently has **17 spec files** and **698 individual tests**, all passing. Both of those numbers will very likely be wrong by the time you read this, because several people work on this codebase at once and new spec files get added often — this exact number has already changed twice within a single working session. Treat any test count in this document as **probably stale**, and re-run the suite yourself before repeating a number from here to anyone else.
 
-### A count you must run, not grep
+Here is exactly how this number was produced, so you can reproduce it the same way:
 
-Counting `t.test(` occurrences in the `*_spec.lua` files understates the
-real number and should never be used as a substitute for running the suite.
-`exports_spec.lua` alone is the clearest case: its "13 zero-argument boolean
-exports" section is a single `for _, exportName in ipairs(CLIENT_BOOLEAN_EXPORTS)
-do ... end` loop wrapping 4 `t.test(...)` calls, so those 4 lines of source
-register 52 actual test cases (13 × 4) at runtime — a static grep sees 4.
-Across the whole suite, `run.sh`'s own per-file summary line (`testkit.lua`'s
-`summary()`, `"%d passed, %d failed"`) is the only source of truth for a case
-count; the table above and the total here were produced by actually running
-`tests/run.sh`, not by counting source lines.
+- **Commit it was measured at:** `9808e56` (full hash `9808e568809bdf96c60ea2716ad1b65b03ec9456`), made 2026-08-25 09:45:22 UTC, message "Guard prop attachment against cross-citizen netId collisions".
+- **Command used:** `cd qbx_k9unit/tests && ./run.sh`, then adding up each spec file's own `N passed, M failed` line by hand. `run.sh` itself only prints an overall pass/fail verdict, not one combined number, so the total has to be added up from the per-file lines.
+- **To check whether it's still current:** run `git rev-parse HEAD`. If that doesn't say `9808e56`, don't trust the numbers below — re-run `./run.sh` and re-add the per-file numbers yourself.
 
-### `ClampLimit`'s hostile-input battery, specifically
+Per-file counts from that run: exports 135, fetch 88, combat 69, defense 54, certifications 47, propattachment 45, kennel 39, main 38, cooldowns 32, wellbeing 32, admin 28, entities 20, tenure 19, inventory 17, progression 14, search 12, notify 9. (28+47+69+32+54+20+135+88+17+39+38+9+14+45+12+19+32 = 698.)
 
-`server/admin.lua`'s `ClampLimit` was flagged as a place a review found it
-could pass a non-integer to `string.format('%d')` and throw. `admin_spec.lua`
-locks in the real, currently-observed behavior for `nan`, `-nan`, `inf`,
-`1e400`, `-1e400`, plain floats, negatives, zero, and whitespace-padded
-numerics — driven through the actual `RegisterCommand` handler and the real
-`string.format('... LIMIT %d', limit)` call, not a reimplementation. One
-test's own comment documents the exact reason "nan"/"inf" are currently safe
-on this Lua build (`tonumber("nan")` returns `nil` here, so it falls back to
-the caller-supplied default rather than reaching `ClampLimit`'s numeric
-branches as a real NaN) — if a future Lua/libc combination ever changes that,
-this suite fails loudly instead of the bug silently reappearing.
+This total was 355 across 10 files, then 434 across 12 files, earlier in this same working session — each of those was accurate when written and stale within about an hour. That's expected here, not a sign of a problem.
+
+### Why you can't just search for `t.test(` and count instead
+
+It's tempting to search the spec files for the text `t.test(` and count the matches, instead of actually running the suite. Don't — it can undercount badly. For example, `exports_spec.lua` has one loop that runs 4 `t.test(...)` lines once for each of 13 exports. That's 4 lines of source code, but 52 real test cases at runtime (4 × 13). A text search would only find the 4 lines. The only trustworthy source for a test count is actually running `./run.sh` and reading what it prints.
+
+### `ClampLimit`'s odd-number tests, specifically
+
+`ClampLimit` (in `server/admin.lua`) turns a user-supplied limit into a safe number for a SQL `LIMIT` clause. A code review flagged that a strange input — `NaN`, infinity, a huge number like `1e400`, a negative number — could theoretically make it crash. `admin_spec.lua` locks in exactly what happens today for each of those inputs, run through the real command handler, so if a future change to this Lua build ever makes one of them behave differently, the test will fail loudly instead of the bug reappearing silently.
 
 ## What's NOT covered, and why
 
-- **`server/search.lua`'s `ResolveAlertTier`** was `local` and uncovered
-  when this pass started (see this suite's own prior write-up, preserved in
-  git history) — a `GetContrabandAlertTier` test-seam wrapper landed mid-pass
-  (another agent, following the exact recommendation this README previously
-  made), re-verified directly against the current tree rather than assumed,
-  and is now covered by `search_spec.lua`. Recorded here as resolved, not
-  deleted outright, so a future reader can see this gap was real and was
-  closed, not merely forgotten about.
-- **`server/tenure.lua`'s `TenureFullyCollected` local cache does not skip
-  the SELECT it might look like it exists to skip.** `tenure_spec.lua`'s own
-  `DISCREPANCY:` test confirms the real code runs the `MySQL.single.await`
-  SELECT **every** tick regardless of this cache's state, because the cache
-  is keyed by `row.id`, which is only known *after* that same SELECT returns
-  it — the cache can only short-circuit the (cheaper) tier-walk/UPDATE work
-  strictly after the SELECT, never the query itself. **Note for whoever next
-  reads this:** `server/tenure.lua`'s own header comment on that local used
-  to claim the opposite (that the cache exists "to avoid re-running the
-  SELECT below every tick") — that comment has SINCE BEEN CORRECTED in the
-  production file itself (it now says outright: "this does NOT skip the
-  SELECT below... despite an earlier revision of this comment claiming it
-  did", and explains why a pre-query skip isn't safely buildable without a
-  separate `k9Citizenid`-keyed cache this file doesn't have invalidation
-  hooks for). So this is no longer a doc-vs-code mismatch — the header and
-  the test now agree — but the underlying cost this test pins down is still
-  real: one extra indexed SELECT per online, fully-tenured K9 per
-  `checkIntervalMs` tick forever (a minor, bounded cost, not a correctness
-  bug — the actual double-grant protection is the persisted
-  `tenure_bonus_tier_granted` column's optimistic-UPDATE guard, which the
-  same spec file separately confirms holds). `tenure_spec.lua`'s own test
-  name/comments still narrate this as the header "claiming" the cache skips
-  the SELECT — that's now describing the header's PRE-correction wording, so
-  read it as "here's the behavior that was once mis-documented and no longer
-  is," not as an open contradiction. Kept here as a disclosed, regression-
-  guarded cost, not a bug to fix.
-- **Client-side logic** (`client/*.lua`) is entirely untested here — every
-  file in that directory calls real client-only natives
-  (`GetEntityCoords`, `DisableControlAction`, ped/camera natives, NUI
-  messaging) with no server-side equivalent to sandbox against, and several
-  also assume a live `QBX.PlayerData` cache populated by `@qbx_core/modules/
-  playerdata.lua`. Same call as above: doable with enough stubbing, but a
-  much larger lift than this pass's scope, and no client file currently has
-  anything as isolable as `NewCooldown` or `ResolveTier`.
-- **Anything requiring a real MySQL/oxmysql/ox_inventory/ox_lib round
-  trip** is out of scope by construction — every spec here stubs those at
-  the boundary and asserts on what the PRODUCTION code does with the
-  stubbed response (query text, params, branching), never on whether a real
-  database would accept that query. The CI `sql-table-existence` job
-  already covers the "does this table exist" cross-check textually; this
-  suite does not duplicate that.
-- **`server/cooldowns.lua`'s `StartSweep`** is tested for its eviction
-  predicate (see `fixtures/sandbox.lua`'s coroutine-based thread runner),
-  but not for real-world timing/interval accuracy — `Wait` is stubbed to
-  `coroutine.yield()`, not a real millisecond sleep, by design (a test
-  suite should never take wall-clock time to run).
+- **Almost all client-side code (`client/*.lua`) is untested**, except for `client/main.lua` (see the table above). Every other client file calls real client-only game functions (moving the camera, disabling controls, reading ped positions, sending data to the UI) that have no server-side equivalent to fake convincingly, and several also depend on a live player-data cache that only exists in a real game session. This is a real gap, not an oversight — it would take a much larger effort than building the sandboxes used for server code.
+- **`server/tenure.lua`'s "avoid re-running a database check" cache doesn't actually avoid it.** The test file itself proves that a certain database check runs on every tick regardless of this cache, because the cache can only be checked *after* that same database call already ran once. This is a minor, ongoing cost (one extra database read per online, fully-progressed K9 partnership per tick) — not a correctness bug. The actual protection against double-granting a reward is a separate, database-level check, which the same test confirms works.
+- **Nothing here talks to a real database, `ox_inventory`, or `ox_lib`.** Every test fakes those boundaries and checks what the production code does with a fake response (what query it would run, what it does with a given answer) — never whether a real database would actually accept that query.
+- **`server/cooldowns.lua`'s background sweep** is tested for picking the right entries to remove, but not for real-world timing accuracy — waiting is faked instantly in tests, on purpose, so the test suite doesn't take real time to run.
 
 ## Adding a new spec
 
-1. `dofile('testkit.lua')` and `dofile('fixtures/sandbox.lua')`.
-2. Build a stub table for exactly the natives/globals the target file
-   actually calls (start minimal; `lua5.4 spec.lua` will error with the
-   exact missing global's name if you miss one).
-3. `Sandbox.newEnv({...})`, then `Sandbox.loadInto('../server/whatever.lua',
-   env)` — load any of THAT file's own `server/cooldowns.lua`-style
-   dependencies into the same `env` first, in the same order
-   `fxmanifest.lua`'s `server_scripts` list already requires.
-4. Drive the file's real resource-global functions / captured
-   `RegisterCommand`/`AddEventHandler` callbacks; assert on observable
-   output (captured prints/notifications/queries/events), never on a
-   reimplementation of the logic under test. If you assert on notify text
-   that came from a `locale(...)` call, build the expected string by calling
-   `Sandbox.locale(...)` yourself, not by hand-copying the English string
-   from `en.json` — see "The sandbox's `locale()` is real" above for why
-   (that same real `locale()` will also raise loudly if the production code
-   references a key that doesn't exist in `en.json`, which is itself a
-   useful check to get for free).
-5. `os.exit(t.summary())` at the end of the file.
-6. Never edit the production file to make it more testable — if something
-   is unreachable, say so in this README's "What's NOT covered" section
-   instead.
+1. In your new spec file, load the two shared helpers: `dofile('testkit.lua')` and `dofile('fixtures/sandbox.lua')`.
+2. Build a small table of stand-ins (stubs) for exactly the FiveM functions your target file actually calls. Start with an empty table — running `lua5.4 yourspec.lua` will tell you the name of the first thing you're missing.
+3. Call `Sandbox.newEnv({...})` with your stubs, then `Sandbox.loadInto('../server/whatever.lua', env)`. If that file depends on another real file (e.g. `server/cooldowns.lua`), load that one into the same sandbox first, in the same order `fxmanifest.lua` already lists them.
+4. Drive the file through its real functions or real event/command handlers, and check the real, observable result (a fired event, a printed line, a notification) — never a rewritten copy of the logic you're testing. If you're checking notification text, build the expected text with `Sandbox.locale(...)` rather than typing the English sentence in by hand (see "`locale()` inside the sandbox is real" above).
+5. End the file with `os.exit(t.summary())`.
+6. Never change the production file just to make it easier to test. If something genuinely can't be reached, write that down in "What's NOT covered" above instead of working around it.
+7. **If you're updating the numbers in this README after adding a spec:** replace the whole "numbers below expire" section together — new commit hash, new timestamp, new counts, all from one fresh `git rev-parse HEAD` / `git log -1` / `./run.sh` run. Never hand-edit just the total while leaving the old commit hash in place; a number with a stale, mismatched commit hash looks trustworthy when it isn't, which is worse than an honestly-labeled old number.
