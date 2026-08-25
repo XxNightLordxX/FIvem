@@ -590,7 +590,22 @@ local TRACK_RENDER_IDLE_TICK_MS = 250
 
 CreateThread(function()
     while true do
-        if currentTrailMarkers then
+        -- CORRECTNESS FIX (coder-frontend, this pass): must check for a
+        -- non-EMPTY table, not merely a non-nil one. The state/compute
+        -- thread above can hand off `markers = {}` (present but empty) on
+        -- the exact tick a hard water-break is detected at traveled == 0
+        -- (the K9 is already standing in/at the water's edge the instant
+        -- Start*Track() resolves) — the break-condition guard there stops
+        -- the loop before it ever appends a marker, but still assigns the
+        -- (empty) table rather than nil. The old `if currentTrailMarkers
+        -- then` check treated that empty table as truthy, so this thread
+        -- spun at Wait(0) — a real per-frame cost — despite the for loop
+        -- below it having nothing to iterate and drawing nothing at all.
+        -- Bounded to at most one TRACK_TICK_MS (the compute thread clears
+        -- it to nil on its very next tick once brokenByWater is set), but
+        -- still a genuine "idle path doesn't actually idle" instance, not
+        -- just a cosmetic no-op.
+        if currentTrailMarkers and #currentTrailMarkers > 0 then
             for i = 1, #currentTrailMarkers do
                 local marker = currentTrailMarkers[i]
                 DrawTrailMarker(marker.coords, marker.underwater)

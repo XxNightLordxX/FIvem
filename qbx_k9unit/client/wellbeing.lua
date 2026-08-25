@@ -223,7 +223,24 @@ if Config.Features.InjuryLimping then
 
     CreateThread(function()
         while true do
-            if IsOwnModelK9() then
+            -- OWN-DEATH GUARD (coder-frontend correctness pass, this
+            -- session): mirrors this codebase's own established "own ped
+            -- death forces an active perception/effect feature to end"
+            -- precedent (client/vision.lua's maintenance thread,
+            -- client/propattachment.lua's "OWN-DEATH AUTO-DETACH",
+            -- client/tracking.lua's own equivalent guard on its
+            -- state/compute thread). A dead ped can neither sprint nor
+            -- jump anyway, so this block previously spinning at Wait(0)
+            -- and re-issuing DisableControlAction every single frame while
+            -- the K9 lay dead was pure wasted per-frame native-call cost
+            -- with zero gameplay effect — exactly the "thread left
+            -- spinning at full frequency while its feature is inactive"
+            -- case this file's own review criteria call out. Idles at the
+            -- same 1000ms as the "not currently K9" branch below while
+            -- dead, and resumes real per-frame blocking the instant the
+            -- ped is alive again (no separate respawn hook needed —
+            -- IsEntityDead() is polled fresh every loop iteration here).
+            if IsOwnModelK9() and not IsEntityDead(PlayerPedId()) then
                 if lastStats.injury < Config.Wellbeing.Injury.sprintBlockThreshold then
                     DisableControlAction(0, INPUT_SPRINT, true)
                 end
