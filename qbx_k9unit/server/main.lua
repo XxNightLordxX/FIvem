@@ -276,18 +276,27 @@ LeashRequestCooldown.RegisterPlayerDropped()
 -- just determined.
 -- CONFIG-SAFETY GUARD (config-validator finding): Config.DoorInteraction.
 -- nudgeRequiresUnlocked is documented, in config.lua's own inline comment
--- and README.md, as "a hard requirement, not a toggle" -- nudge-open (not
--- yet implemented anywhere in this resource) must never be allowed to
--- function as a lockpick bypass. But as shipped it was an ordinary editable
--- boolean with nothing anywhere actually enforcing that. This is harmless
--- today (nudge-open doesn't exist yet, so the flag is inert either way),
--- but the risk config-validator flagged is real: a server owner who long
--- ago flipped it to `false` for an unrelated reason (testing, a copied
--- "permissive" example config) would silently inherit an exploit the
--- moment someone eventually implements nudge-open against this flag,
+-- and README.md, as "a hard requirement, not a toggle" -- nudge-open must
+-- never be allowed to function as a lockpick bypass. When this guard was
+-- first written, nudge-open did not yet exist anywhere in this resource, so
+-- the flag was inert either way -- as shipped it was an ordinary editable
+-- boolean with nothing anywhere actually enforcing that.
+-- STALE-NOTE FIX (issue-closer sweep): nudge-open is now implemented
+-- (client/movement.lua's NudgeDoor()), and that file carries its OWN
+-- identical assert of this exact field -- see NudgeDoor()'s own header
+-- comment ("NUDGE-OPEN — DESIGN PATH TAKEN"). Both asserts stay in
+-- place, deliberately not deduplicated into one: nudge-open is fully
+-- client-local with zero server round trip (see that file's own header),
+-- so the server never gets another chance to catch a bad value once
+-- nudge-open actually runs -- this guard is the server's own independent
+-- check that config.lua (loaded identically on both sides) still holds a
+-- safe value, not a substitute for the client's own assert. The risk
+-- config-validator originally flagged is no longer hypothetical: a server
+-- owner who long ago flipped this to `false` for an unrelated reason
+-- (testing, a copied "permissive" example config) now inherits a real
+-- lockpick-bypass exploit the moment nudge-open runs against that value,
 -- without anyone having deliberately, reviewedly wired it that way. Fail
--- loudly at resource start instead of silently accepting an unsafe value —
--- cheap now, before nudge-open exists, rather than after.
+-- loudly at resource start instead of silently accepting an unsafe value.
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 

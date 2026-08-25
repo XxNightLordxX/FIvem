@@ -89,15 +89,15 @@
     checks in §4.2 and §4.3. The automatic revoke path (§4.4) is
     server-triggered and has no client-reachable entry point at all."
 
-    MINOR SPEC INCONSISTENCY FLAGGED (not fixed here — SPEC.md is not this
-    file's to edit): §4.1's access-rule paragraph still says access is
-    "checked server-side on every access point (menu open request *and*
-    the actual spawn request — not just once)" — "the actual spawn
-    request" is leftover text from the pre-correction draft; there is no
-    spawn request anymore. Read the intent as "every access point, not
-    just once" and disregard the stale "spawn request" clause. Flag this
-    to whoever next revises SPEC.md rather than silently patching the spec
-    from a coder-architect scaffold.
+    MINOR SPEC INCONSISTENCY, PREVIOUSLY FLAGGED, NOW CORRECTED (issue-closer
+    sweep): §4.1's access-rule paragraph used to say access is "checked
+    server-side on every access point (menu open request *and* the actual
+    spawn request — not just once)" — "the actual spawn request" was
+    leftover text from the pre-correction draft, since there is no spawn
+    request anymore. SPEC.md §4.1 has since been reworded ("checked
+    server-side on every gated action that grants a real capability ...
+    not cached client-side as a one-time pass") and no longer contains the
+    stale clause — nothing left to flag here.
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes three resource-global (no `local`) functions:
@@ -291,9 +291,11 @@ end
 --- Server-authoritative check: is `source` currently allowed to use K9
 --- features? SPEC.md §4.1 "Access rule": job.name in Config.Departments
 --- AND (active cert cached for that job OR configured autoAccessGrade
---- bypass). Deliberately does NOT check ped model (§4.5) — see the
---- contract block above for why that's intentional, not an oversight.
---- Exposed globally (no `local`) — server/main.lua calls this directly.
+--- bypass OR High Command — server/highcommand.lua's IsHighCommand,
+--- project-owner-directed this pass, see that file's own header for the
+--- full "run any command" contract). Deliberately does NOT check ped model
+--- (§4.5) — see the contract block above for why that's intentional, not
+--- an oversight. Exposed globally (no `local`) — server/main.lua calls this directly.
 --- @param source number
 --- @return boolean
 function HasK9Access(source)
@@ -302,6 +304,21 @@ function HasK9Access(source)
 
     local job = Player.PlayerData.job
     if not job or not Config.Departments[job.name] then return false end
+
+    -- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
+    -- project-owner-directed this pass) -- "the certification requirement
+    -- itself" is explicitly one of the gates a High Command officer must
+    -- bypass (see that file's own header PART 1 for the full contract).
+    -- Guarded by a `type(...) == 'function'` runtime existence check, this
+    -- resource's established soft-dependency convention (see
+    -- fxmanifest.lua's comment on server/medkit.lua's RestoreInjury reuse
+    -- for the precedent) -- this function still works exactly as before if
+    -- server/highcommand.lua is ever removed or Config.Features.HighCommand
+    -- is false (IsHighCommand re-checks that flag itself and returns false).
+    -- Checked BEFORE the cert-cache read below so a high-command officer
+    -- with no active cert of their own is granted access without needing
+    -- one -- this is a genuine bypass, not merely an alternate cache hit.
+    if type(IsHighCommand) == 'function' and IsHighCommand(source) then return true end
 
     -- The `cached.job == job.name` re-check matters right around a job
     -- change, before RefreshCertificationCache has run for the new job —
@@ -409,6 +426,11 @@ end
 
 --- SPEC.md §4.2 certifier eligibility check (granter side only — does not
 --- check the target or proximity, see GrantCertification/RevokeCertification).
+--- Also qualifies unconditionally for a High Command officer
+--- (server/highcommand.lua's IsHighCommand, project-owner-directed this
+--- pass — see that file's own header for the full "run any command"
+--- contract), guarded by a `type(...) == 'function'` runtime existence
+--- check inside the function body below.
 --- @param source number
 --- @return boolean
 local function IsEligibleCertifier(source)
@@ -421,6 +443,21 @@ local function IsEligibleCertifier(source)
     -- job.isboss always qualifies regardless of the configured numeric
     -- threshold.
     if job.isboss then return true end
+
+    -- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
+    -- project-owner-directed this pass) -- certifierGrade is explicitly one
+    -- of the gates a High Command officer must bypass (see that file's own
+    -- header PART 1 for the full contract). Guarded by a
+    -- `type(...) == 'function'` runtime existence check, this resource's
+    -- established soft-dependency convention -- this function still works
+    -- exactly as before if server/highcommand.lua is ever removed or
+    -- Config.Features.HighCommand is false (IsHighCommand re-checks that
+    -- flag itself and returns false). Placed here, right after the
+    -- job.isboss short-circuit and before the certifierGrade comparison,
+    -- mirroring the identical placement in server/admin.lua's
+    -- IsAuthorizedAdmin and server/bonetool.lua's
+    -- IsAuthorizedBoneSweepDevTool.
+    if type(IsHighCommand) == 'function' and IsHighCommand(source) then return true end
 
     -- SECURITY FIX (coder-security, authorization-root runtime-nil review):
     -- verified against tests/certifications_spec.lua's own file-header

@@ -136,6 +136,20 @@ server_scripts {
     -- and entities.lua, the resource's other shared-helper files, since its
     -- consumers span nearly every server file below.
     'server/notify.lua',
+    -- PD high command (Config.Features.HighCommand). Grouped with the shared
+    -- helpers above rather than with the feature files below, because it is
+    -- one: it exposes IsHighCommand(), which server/admin.lua,
+    -- server/certifications.lua and server/bonetool.lua all consult so high
+    -- command bypasses their own rank gates. Loading it before its consumers
+    -- is a consistency choice, not a hard requirement -- every consumer
+    -- guards the call with type(fn) == 'function', this resource's standard
+    -- soft-dependency convention, so they still work with the feature off.
+    -- It also owns /k9givexp and AwardXPDirect, the ONLY path in this
+    -- resource that mints a caller-specified XP amount. server/progression's
+    -- AwardXP deliberately takes a config-owned actionKey instead, so that
+    -- no ordinary caller can name an amount; this one is bounded by
+    -- Config.HighCommand.maxXpPerGrant and audited on every use.
+    'server/highcommand.lua',
     'server/main.lua',
     'server/certifications.lua',
     -- Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7

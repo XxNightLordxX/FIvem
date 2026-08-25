@@ -123,6 +123,20 @@ Config.Features = {
     -- that grants an in-game job rank write access to the XP economy.
     HighCommand          = true,
 
+    -- server/permissions.lua. Lets high command grant a NAMED capability
+    -- to one specific handler or K9, instead of everything being gated on
+    -- job rank alone. Purely additive: grants widen access, never narrow
+    -- it, so nothing that works on rank today stops working. See the
+    -- Config.Permissions block below for the capability list and the
+    -- exact resolution order.
+    PermissionGrants     = true,
+
+    -- client/tablet.lua + html/tablet.*. The in-game roster and control
+    -- UI for certifications, XP and permission grants. It is a VIEW only
+    -- -- every action is re-authorized server-side, so the tablet showing
+    -- a button never makes an action allowed.
+    CommandTablet        = true,
+
     -- server/bonetool.lua + client/bonetool.lua. A DEV-SERVER-ONLY sweep that
     -- attaches a marker prop to bone indices in sequence so a human can
     -- visually identify the right one for a quadruped skeleton -- the
@@ -236,6 +250,17 @@ Config.Departments = {
         -- "no such rank exists here", NEVER "everybody qualifies" -- the
         -- check fails closed on a nil, a non-number, or a malformed grade.
         highCommandGrade = 6,
+        -- job.grade.level required to RECEIVE non-compliance alerts (a K9's
+        -- target resisting or fleeing). Deliberately a separate, much lower
+        -- bar than auditGrade: an audit pull exposes who searched whom and
+        -- is a privacy boundary, whereas this alert carries no
+        -- citizen-identifying data at all -- just a source id and a speed or
+        -- displacement number. It is closer to a dispatch broadcast than to
+        -- a records lookup, so it defaults to 0, meaning every sworn member
+        -- of a configured department sees them. job.isboss always qualifies.
+        -- nil disables the alerts entirely for this department; it never
+        -- means "everybody".
+        nonComplianceAlertGrade = 0,
         autoAccessGrade = nil,  -- nil = no auto-bypass; set an integer to let that grade+ skip certification (see §4.1 assumption)
     },
     ['sheriff'] = {
@@ -243,6 +268,7 @@ Config.Departments = {
         certifierGrade  = 3,
         auditGrade      = 3,
         highCommandGrade = 5, -- see police.highCommandGrade above for what this unlocks
+        nonComplianceAlertGrade = 0, -- see police.nonComplianceAlertGrade above
         autoAccessGrade = nil,
     },
     ['bcso'] = {
@@ -250,6 +276,7 @@ Config.Departments = {
         certifierGrade  = 3,
         auditGrade      = 3,
         highCommandGrade = 5, -- see police.highCommandGrade above for what this unlocks
+        nonComplianceAlertGrade = 0, -- see police.nonComplianceAlertGrade above
         autoAccessGrade = nil,
     },
 }
@@ -295,6 +322,73 @@ Config.HighCommand = {
     -- because a self-grant is the one case with no second person in the
     -- audit trail, and keeping it off makes the log meaningful.
     allowSelfGrant = false,
+}
+
+-- ======================================================================
+-- GRANTABLE PERMISSIONS (Config.Features.PermissionGrants) --
+-- server/permissions.lua.
+--
+-- The problem this solves: until now every capability in this resource
+-- was gated on JOB RANK alone. That works for "all sergeants may certify"
+-- but not for "this one officer may certify, and nobody else at their
+-- rank may". High command can now grant a named permission to a specific
+-- person -- a handler OR a K9, since both are just citizenids -- and
+-- revoke it later, with the whole history recorded.
+--
+-- HOW A CAPABILITY CHECK RESOLVES, in order. First match wins:
+--   1. an active, explicitly granted permission for that citizenid  -> ALLOW
+--   2. the caller is high command (Config.Departments highCommandGrade) -> ALLOW
+--   3. the caller meets the legacy rank gate (certifierGrade etc.)   -> ALLOW
+--   4. otherwise                                                     -> DENY
+-- This is purely ADDITIVE. Nothing that works on rank today stops
+-- working; grants only ever widen access, never narrow it. If you want
+-- to take a capability away from someone who qualifies by RANK, change
+-- their rank -- revoking a grant they never had does nothing, and the
+-- UI says so rather than pretending it worked.
+--
+-- Keys are the capability names. Do not rename one after granting it:
+-- the grant rows store this string, so a rename silently orphans every
+-- existing grant. Add a new key and migrate instead.
+-- ======================================================================
+Config.Permissions = {
+    -- The label is what a non-technical officer sees in the tablet, so
+    -- write it as a sentence about what the person can DO.
+    ['k9.access']  = { label = 'Use K9 abilities',              description = 'Equivalent to holding a K9 certification. Grant this to let someone work as a K9 without going through a certifying officer.' },
+    ['k9.certify'] = { label = 'Certify and decertify others',  description = 'Grant and revoke K9 certifications. Normally requires a senior rank; this hands it to one specific person.' },
+    ['k9.audit']   = { label = 'View the audit records',        description = 'Run the read-only audit commands. PRIVACY-SENSITIVE: this reveals who searched whom, and when.' },
+    ['k9.givexp']  = { label = 'Grant XP',                      description = 'Award XP directly to a K9 or handler. This mints economy value -- every use is logged.' },
+}
+
+-- ======================================================================
+-- K9 COMMAND TABLET (Config.Features.CommandTablet) --
+-- client/tablet.lua + html/tablet.*. The in-game UI for everything
+-- above: a roster of handlers and K9s with their certifications, XP and
+-- granted permissions, and the controls to grant or revoke.
+--
+-- SECURITY NOTE, because a UI makes this easy to get wrong: the tablet
+-- is a VIEW. It decides nothing. Every action it offers is re-authorized
+-- server-side from the caller's own live job and grants, exactly as if
+-- they had typed the command -- a modified client can send any NUI
+-- callback it likes, so the tablet showing a button must never be what
+-- makes the action allowed. It only hides what you cannot do, as a
+-- convenience.
+-- ======================================================================
+Config.CommandTablet = {
+    -- Command that opens it. Also reachable from the K9 radial menu.
+    command = 'k9tablet',
+
+    -- Optional ox_inventory item that must be carried to open it. nil
+    -- disables the requirement entirely. If you set this, the item must
+    -- exist in YOUR ox_inventory items table -- this resource cannot
+    -- create it, and an unregistered name resolves to a count of zero
+    -- forever, which reads to a player as the tablet being broken. A
+    -- startup warning fires if it cannot be resolved.
+    requiredItem = nil,
+
+    -- Max roster rows returned in one query. Clamped server-side; a
+    -- non-positive or non-number value falls back to the default rather
+    -- than meaning "unlimited".
+    maxRosterRows = 100,
 }
 
 Config.AllowSelfCertification = true   -- see §4.1
@@ -1366,13 +1460,27 @@ Config.Wellbeing = {
         -- CONFIGURABLE: set to 0 to disable entirely (a supported no-op, for
         -- an operator who wants "still limping after respawn" for realism),
         -- or any value in [0, Injury.max] for a partial restore.
-        -- DISCLOSED RESIDUAL RISK this resource cannot close alone: the
-        -- health transition is read SERVER-side so it cannot be spoofed, but
-        -- a player can still choose to die and be revived on purpose. The
-        -- real cost of using that as a free Injury reset is bounded only by
-        -- whatever minimum downed-duration or fee YOUR ambulance/laststand
-        -- system imposes, which this resource has no visibility into. If
-        -- your revive flow is instant and free, set this lower than 100.
+        -- DISCLOSED RESIDUAL RISK, restated 2026-08-25 after a red-team
+        -- pass found the original wording understated it. What remains is:
+        -- a player deliberately holding their K9's health at or below the
+        -- dead-health threshold for at least MIN_DEATH_EPISODE_DURATION_MS
+        -- (server/wellbeing.lua, ~60s at shipped defaults) and then healing
+        -- normally, with no real ambulance or laststand flow required.
+        -- That is bounded to a real minimum time cost per attempt and to
+        -- ONE payout per episode -- never free, never unbounded.
+        --
+        -- What this fix already closed, and why the earlier wording here
+        -- was wrong: the restore originally fired on ANY observed health
+        -- crossing of the threshold, so an ordinary bandage after an
+        -- ordinary hit paid a full Injury reset, and health oscillating
+        -- during one genuine laststand could pay out several times. Both
+        -- are now gated behind the minimum-duration check. The health
+        -- transition itself is read SERVER-side and cannot be spoofed.
+        --
+        -- Note the duration gate is a code constant, not a config value,
+        -- on purpose -- an operator-tunable minimum could simply be set
+        -- low enough to reopen the exploit. Same reasoning as
+        -- HESITATION_MAX_CONTINUOUS_MS elsewhere in that file.
         deathRespawnRestoreAmount = 100,
     },
 }

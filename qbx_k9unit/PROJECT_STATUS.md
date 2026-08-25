@@ -77,24 +77,33 @@ check.
 
 **`Config.Features.BoneSweepDevTool` is currently `true`.**
 
-Plain version: this turns on a hidden command (`/k9bonetool`) that lets
-whoever has a specific staff permission spawn and attach real objects in
-the game world, on demand, in front of any player. It exists purely so a
-developer can figure out exactly where a cosmetic vest should attach to a
-dog's body — a one-time, private test-server job. The code that builds
-this feature says, in its own words, **"never enable this on a production
-server."** Right now, on this server, it is enabled.
+Plain version: this turns on a hidden command (`/k9bonetool`) that lets a
+department boss spawn and attach real objects in the game world, on
+demand, in front of any player. It exists purely so a developer can
+figure out exactly where a cosmetic vest should attach to a dog's body —
+a one-time, private test-server job. The code that builds this feature
+says, in its own words, **"never enable this on a production server."**
+Right now, on this server, the flag is enabled.
 
-It's ACE-gated (see the glossary above), so a random player can't reach it
-— but the flag itself, not the permission, is described in this
-resource's own documentation as "the real switch," and the real switch is
-on.
+**Corrected 2026-08-25**: this used to be gated by a staff permission
+(ACE). It no longer is. Two things must now both be true for anyone to
+actually reach the command: (1) the caller must be a boss of a job listed
+in `Config.Departments` (the same kind of check this resource's other
+senior-officer actions use, not a server-console grant), **and** (2) the
+server itself must have explicitly opted in with a separate switch,
+`setr qbx_k9unit_enable_bone_dev_tool 1`, in its own startup configuration
+— a step your server's files either have or don't, independent of this
+feature flag. If that second switch was never set, the command isn't
+reachable at all regardless of the flag above or anyone's rank. Check
+both before assuming this is live on your server.
 
 **What to do:** ask whoever manages this server's files to open
 `config.lua`, find `BoneSweepDevTool`, set it back to `false`, and restart
 the resource (not just save the file — the command stays reachable until
-an actual restart, even after the switch is flipped back). This is the
-single most urgent item in this whole document.
+an actual restart, even after the switch is flipped back). Also confirm
+the `qbx_k9unit_enable_bone_dev_tool` convar mentioned above isn't set to
+`1` anywhere in your server's startup files. This is the single most
+urgent item in this whole document.
 
 ---
 
@@ -111,8 +120,9 @@ questions.
 | **Tracking & search** | Scent/blood/gunpowder trailing, vehicle/person search, contraband alerts, thermal/night vision, door interaction | Low. Nothing here restrains, damages, or moves another player. One real to-do: `Config.SearchContrabandItems` still lists placeholder item names (`weed_bud`, `coke_brick`, etc.) — swap these for your own server's real item names, or searches won't find anything real. Also see D6 below (a live check that was never run). |
 | **Combat** | Bite & Hold, Non-Lethal Takedown, Dragging, Handler-Down Defense, the Handler Partnership registry, Recall | **Yes — see D3 and D13 below before treating this as safe.** A cheater can already shrug off the restraining half of these mechanics on a modified client; that's disclosed and accepted by turning them on, not a new problem. What's *not* settled is whether the security check meant to stop a different exploit (self-granted invincibility) actually works the way this project believes, and whether a griefing exploit against `FearStressSystem` (also now on) is something you're willing to live with. |
 | **Inventory, XP, wellbeing** | K9 gear stash, K9 medkit, XP progression, Fatigue/Mood/Fear-Stress/Distraction/Injury | Low risk to other players, but every number driving these (XP awards, thresholds) is still an unreviewed placeholder — see "placeholder numbers are now live money" below. |
-| **Audio, props, kennel** | Advanced bark variants, proximity audio, cosmetic vest, fetch, deployable kennel | Low. Two are cosmetic-only and known to look wrong until a one-time dev task is done (D8/D9 below); most bark/ambient sounds are still silent because the audio files don't exist yet (see D7). |
-| **Admin & developer tools** | The read-only admin/audit commands, the bone-sweep dev tool | The audit commands are safe by design (read-only) and are gated by **police job rank**, not an ACE permission — a senior-enough rank in a department listed in `Config.Departments` (or that department's boss) can already run them, with no separate staff grant needed at all. This changed 2026-08-25; there is no more ACE permission to configure for these specifically. **The bone-sweep tool is different and is still ACE-gated** (a separate permission, unrelated to police rank, because it's a dev tool, not a police capability) — see the urgent warning above; that one is genuinely not safe to leave on. |
+| **Audio, props, kennel** | Advanced bark variants, proximity audio, cosmetic vest, fetch, deployable kennel | Low. Two are cosmetic-only and known to look wrong until a one-time dev task is done (D8/D9 below); bark/ambient sounds all have real audio behind them now (see "Bark and ambient audio" below — this was fixed 2026-08-25, D7 is closed). |
+| **Admin & developer tools** | The read-only admin/audit commands, the bone-sweep dev tool | The audit commands are safe by design (read-only) and are gated by **police job rank**, not an ACE permission — a senior-enough rank in a department listed in `Config.Departments` (or that department's boss) can already run them, with no separate staff grant needed at all. This changed 2026-08-25; there is no more ACE permission to configure for these specifically. **The bone-sweep tool changed the same way, and further** — it's now gated on being a department *boss* specifically (stricter than the audit commands' rank threshold), plus a separate server-startup switch (`setr qbx_k9unit_enable_bone_dev_tool 1`) that must be turned on on purpose before the command exists at all — see the urgent warning above; it is still genuinely not safe to leave reachable on a live server. |
+| **PD High Command** (new, still landing) | A senior-rank tier (`Config.Features.HighCommand`, `Config.HighCommand`, `Config.Departments[job].highCommandGrade`) meant to let a department's most senior rank bypass every other rank check in this resource and grant XP directly via `/k9givexp`. | **Nothing to check yet — there is no code behind this flag.** `config.lua` already describes it in detail and the flag is switched on, but `server/highcommand.lua` does not exist on disk and isn't loaded by `fxmanifest.lua`, so `/k9givexp` is not a real command and nothing currently reads `highCommandGrade`. Same situation as `CameraFeedPiP` above: flipping the flag changes nothing in-game today. Re-check `config.lua`'s own `Config.HighCommand` comment block for what it's designed to deliberately NOT do (run arbitrary server commands) once this actually ships, and revisit this row then. |
 | **Not really a feature** | `CameraFeedPiP` | Currently `false` again after briefly being swept to `true` along with everything else — corrected because no code exists behind it either way. The idea (a live camera feed) has been confirmed genuinely impossible with the game engine's current capabilities, not just unbuilt. Harmless regardless of which way this flag is set. |
 
 ---
@@ -240,19 +250,17 @@ implication. Kept here so nothing quietly disappears.
   appears instead of a broken one — but worth a two-minute check now that
   the feature is live.
 
-**Bark and ambient audio — partly resolved, partly still your call:**
-The single sound needed for the default "Bark" action (`bark.ogg`) has
-been sourced under a permissive, attribution-only license and is
-confirmed wired up to actually reach players — this one already works.
-Four more sound files (three alternate barks, one ambient growl) used by
-optional features that are now switched on are still silent, because no
-audio file has been supplied for them yet. Every real candidate found
-requires giving credit to the original creator; none is public domain.
-That's a small, one-line-of-credit-text decision for whoever runs this
-server, not a blocker — accept an attribution-only license, accept a
-share-alike one (a heavier condition, worth reading about before
-accepting), commission your own, or leave those specific sounds silent.
-See `AUDIO_SOURCING.md` for the details.
+**Bark and ambient audio — resolved, nothing left for you to decide:**
+As of 2026-08-25, **all five sound files this resource can play now
+ship with it** — the default "Bark," all three alternate bark variants
+(Alert/Aggressive/Calm), and the ambient growl. All five are confirmed
+wired up to actually reach players. Every one of them required giving
+credit to its original creator (none is public domain), and that credit
+is already recorded — you don't need to do anything about licensing
+unless you want to replace one of these files with your own. See
+`html/sounds/CREDITS.md` for the full source/license record for every
+file, including exactly which words of credit are legally required if
+you ever redistribute this resource yourself.
 
 **A version number is overdue.** This resource is still labelled `0.1.0`.
 Given that every flag is now on, a real version bump (not just to `0.2.0`

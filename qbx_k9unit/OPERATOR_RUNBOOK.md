@@ -14,7 +14,13 @@ about that one. Every "before you enable X" instruction in this document
 below is now "X is already enabled — do this now, not before you flip a
 switch that's already flipped." One flag in particular, `BoneSweepDevTool`,
 is dangerous to leave on — see section 4 immediately if you haven't
-already turned it back off.
+already turned it back off. A second flag, `HighCommand` (and the
+`Config.Departments[job].highCommandGrade`/`Config.HighCommand` settings
+next to it in `config.lua`), is also switched on but has **no implementing
+code anywhere in this resource yet** — `server/highcommand.lua` doesn't
+exist and isn't loaded by `fxmanifest.lua`, so there is nothing to
+configure or verify for it right now regardless of what `config.lua` says;
+this will need its own runbook entry once it actually ships.
 
 **This file needs no `fxmanifest.lua` entry.** Documentation files are never
 loaded by the resource — do not add `OPERATOR_RUNBOOK.md` (or `README.md`)
@@ -26,6 +32,14 @@ that's a mistake, not something this file is missing.
 ## 1. Install order
 
 ### 1a. Fresh install (no existing `qbx_k9unit` database)
+
+**Minimum database engine: MySQL 5.7.8+ or MariaDB 10.2+.** `k9_certifications`'
+`active_cert_key` column is a `GENERATED ALWAYS AS (...) VIRTUAL` column,
+which older engine versions do not support at all — a real attempt against
+MySQL 5.6 left the schema only half-built (every table before that one in
+`install.sql` created successfully, then the migration stopped). Confirm
+your database engine and version before running anything below; upgrading
+the engine itself is outside what this resource's own SQL can do for you.
 
 Run **`sql/install.sql`** once, against your database, before first start.
 That single file creates all four tables this resource uses
@@ -180,15 +194,22 @@ If you want to fix it, on a **dev server only**:
    (it already is, resource-wide, as of this document's last check —
    confirm your dev server's own copy of `config.lua` still has it set)
    and restart.
-2. Grant yourself `Config.BoneSweepTool.AcePermission` (default
-   `k9unit.bonesweep`) via your server's normal ACE/principal setup in
-   `server.cfg` (e.g. `add_ace identifier.<yours> k9unit.bonesweep allow`,
-   or via a principal group). This is the only ACE permission left anywhere
-   in this resource as of 2026-08-25 — the admin/audit commands (`/k9auditcert`
-   and friends) no longer use ACE at all, they check police job rank
-   instead, so there is no "admin-audit ACE" to keep this one separate
-   from any more; `k9unit.bonesweep` still deliberately stands alone as its
-   own principal.
+2. **Corrected 2026-08-25 — this is no longer an ACE permission.** The tool
+   dropped ACE entirely and now needs two things at once, neither of which
+   is an ACE grant:
+   - Add `setr qbx_k9unit_enable_bone_dev_tool 1` to your **dev server's**
+     `server.cfg` (never a live one) and restart. Without this convar set,
+     the command does not exist at all, regardless of the flag or anyone's
+     rank.
+   - Be a **boss** (`job.isboss == true`) of a job listed in
+     `Config.Departments` — a numeric grade is not enough for this specific
+     tool, unlike the audit commands.
+   There is no ACE permission to grant anywhere in this resource any more —
+   not for this tool, and not for the admin/audit commands (`/k9auditcert`
+   and friends), which check police job rank instead. If you have an old
+   `add_ace ... k9unit.bonesweep allow` line in your `server.cfg` from a
+   previous version of this resource, it does nothing now and can be
+   removed.
 3. Connect and play as a K9-modeled ped.
 4. Run `/k9bonetool help` for the full workflow, then `/k9bonetool known`
    for a candidate shortlist, `/k9bonetool goto <index>` /
@@ -291,13 +312,19 @@ itself the effect on demand" (a live exploit, if the guard doesn't hold).
 **As of 2026-08-25, `Config.Features.BoneSweepDevTool` is `true`.** Its own
 code comment says, in these words, "never enable this on a production
 server." It spawns and attaches real objects in the world on command from
-anyone holding the `k9unit.bonesweep` ACE permission. If this server has
-real players on it, this needs fixing now, not at the end of your reading
-list.
+any department boss — **and, as of this same date, it also requires a
+separate server-startup switch, `setr qbx_k9unit_enable_bone_dev_tool 1`,
+to be reachable at all** (this is new; if that convar was never set in
+your `server.cfg`, the command doesn't exist regardless of the flag). If
+this server has real players on it, check both of these now, not at the
+end of your reading list.
 
 **What to do, in order:**
 1. Open `config.lua`, set `Config.Features.BoneSweepDevTool = false`.
-2. **Restart the resource.** This is not optional and not implied by
+2. Confirm `qbx_k9unit_enable_bone_dev_tool` is not set to `1` anywhere in
+   this server's own `server.cfg` (or any included config file) — remove
+   or comment out the line if it is.
+3. **Restart the resource.** This is not optional and not implied by
    saving the file.
 
 **Why the restart matters, specifically:** like every other command in
@@ -306,41 +333,40 @@ gating happens at registration time, not inside the handler, which is what
 makes a disabled feature genuinely inert rather than merely hidden. The
 consequence: turning `Config.Features.BoneSweepDevTool`
 back to `false` **without restarting the resource** does not unregister
-`/k9bonetool`. It stays reachable (still ACE-gated) until the next
-restart. For most flags in this resource that's harmless. For this one it
-isn't — it spawns and attaches real objects on command. If you ever
-turn this on for the dev-server check in section 2b, **restart the
-resource after turning it back off**, and never leave it `true` on a
-server real players connect to.
+`/k9bonetool`. It stays reachable (to any department boss, and only if the
+convar above is also set) until the next restart. For most flags in this
+resource that's harmless. For this one it isn't — it spawns and attaches
+real objects on command. If you ever turn this on for the dev-server check
+in section 2b, **restart the resource after turning it back off**, and
+never leave the flag `true` or the convar set to `1` on a server real
+players connect to.
 
-### Supplying bark/ambient audio means accepting a licence
+### Bark/ambient audio — already shipped, nothing for you to do
 
-No audio ships with this resource — every bark (`BasicBarkSounds`,
-`AdvancedBarkRadial`) and the ambient `ProximityAudioFX` resolve to a
-silent no-op until you supply four short `.ogg` files yourself
-(`html/sounds/{bark,bark_alert,bark_aggressive,bark_calm}.ogg`, plus
-`growl_ambient.ogg` for proximity audio). This is silent by design, not a
-bug — but if you want it audible, **every candidate source found and
-directly checked against its own licence page is either CC BY-SA (3.0 or
-4.0) or OGA-BY 3.0. None is public domain.** (Wikimedia's own bark files
-that an earlier note called "public domain" are CC BY-SA; the OpenGameArt
-file an earlier note called "CC0" is actually OGA-BY 3.0 — it just sits in
-a collection *named* "CC0 Audio," which is why a quick text search gets it
-wrong.) Read `html/sounds/CREDITS.md` before sourcing anything yourself:
+**Corrected 2026-08-25 — this section used to tell you to source your own
+audio. That's no longer true.** All five sound files this resource can
+play now ship with it: the plain bark, all three `AdvancedBarkRadial`
+variants (Alert/Aggressive/Calm), and `ProximityAudioFX`'s ambient growl.
+They're already at their correct paths under `html/sounds/`, already
+listed in `fxmanifest.lua`'s `files{}` block, and confirmed wired up to
+actually reach a connected client — you do not need to find, license, or
+convert anything to hear them.
 
-- **CC BY-SA** — attribution *plus* share-alike. Share-alike is a copyleft
-  term; think about what it means to apply that to audio shipped inside a
-  resource you distribute to other server owners, before accepting it.
-- **OGA-BY 3.0** — attribution only, lighter obligation, but the file is
-  `.wav` and needs converting to `.ogg` first.
-- Commissioning/recording your own, or simply accepting silence and
-  leaving `AdvancedBarkRadial`/`ProximityAudioFX` off, are the other two
-  options.
+Every one of these files carries a real attribution obligation (none is
+public domain) — that obligation has already been satisfied on your
+behalf. `html/sounds/CREDITS.md` has the full source URL, author, license,
+and exact required credit text for each file. Read it if:
 
-This is a licensing decision about *your* project. Nobody can make it on
-your behalf, and it isn't reversible in the sense that matters — once you
-ship an attribution- or share-alike-obligated file inside a resource you
-distribute, that obligation travels with every copy of it.
+- You distribute this resource yourself and need to know what attribution
+  obligation travels with it, or
+- You want to **replace** any of these five files with your own audio —
+  in which case follow `html/sounds/CREDITS.md`'s own pre-drop checklist
+  (confirm the replacement's license, confirm it's genuinely Ogg Vorbis,
+  record its own source/license entry in that file) rather than dropping
+  a file in with no record of where it came from.
+
+No action is required otherwise. If a bark or the ambient growl is ever
+silent on your server, that's a bug to report, not an asset you're missing.
 
 ---
 

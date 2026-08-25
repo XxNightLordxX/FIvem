@@ -37,12 +37,13 @@ A few words come up a lot below. Here's what they mean in plain English:
   server ID. Used for commands that need to work on someone who isn't
   online right now.
 - **ACE permission** — a permission flag server owners grant to specific
-  people, separate from any in-game job or rank. As of 2026-08-25, only one
-  command in this guide needs one (`/k9bonetool`, the developer-only tool
-  near the end). The staff audit commands listed alongside it use a
-  different check instead — a high-enough police/sheriff/BCSO rank (see
-  "Staff-only and developer-only commands" below) — so a senior officer can
-  already use those with no separate staff grant at all.
+  people, separate from any in-game job or rank. As of 2026-08-25, **no
+  command in this guide is gated by one any more.** `/k9bonetool` (the
+  developer-only tool near the end) used to need one; it's now gated by
+  being a department boss instead, the same style of check the staff audit
+  commands use, plus a separate server-wide switch staff must turn on on
+  purpose before the command is even reachable at all. See "Staff-only and
+  developer-only commands" below.
 
 ## Is this stuff even turned on for me?
 
@@ -117,9 +118,11 @@ nothing if Fear/Stress has been switched off.
 
 You'll probably never be able to run these — the audit commands (all but
 the last row) check for a high-enough rank in an eligible department, not
-a special staff permission; `/k9bonetool` is different and is something
-server owners are told never to turn on for regular play at all. Listed
-here only for completeness.
+a special staff permission. `/k9bonetool` now uses the same kind of
+check (department boss only), but on top of that it also needs a separate
+server-wide switch your server's staff must turn on on purpose — it's
+something server owners are told never to turn on for regular play at all.
+Listed here only for completeness.
 
 | Command | What it does |
 |---|---|
@@ -293,22 +296,19 @@ mentioned below, it's switched off — not missing by mistake.
 
 ### About Bark's sound
 
-Bark is turned on. As of when this guide was last checked, a
-real, properly-licensed bark sound file has been added and is confirmed to
-actually reach your game client, so a plain Bark should genuinely play a
-sound.
+Bark is turned on, and as of this guide's last check, **every bark and
+ambient sound this resource can play now has a real, properly-licensed
+sound file behind it** — the plain Bark, all three "different bark styles"
+variants (Alert/Aggressive/Calm), and the continuous ambient "K9 presence"
+sound that plays based on how close you are to a K9. All five are
+confirmed to actually reach your game client, so you should genuinely hear
+something for each one.
 
-Two related, *also switched-on* features stay silent, and that's expected,
-not a bug: the "different bark styles" feature (three extra bark variants
-— Alert/Aggressive/Calm) shows its options in the radial menu and does
-nothing audible when picked, and a separate ambient "K9 presence" sound
-that's supposed to play continuously based on how close you are to a K9
-also has no sound behind it. Both are switched on; neither has its sound
-file supplied yet. This resource is actively being worked on by multiple
-people at once, so if Bark itself (the plain, single bark) is ever silent
-for you, that's worth reporting to your server's staff rather than
-assuming it's expected — check `html/sounds/CREDITS.md` in this resource's
-files for the current, up-to-date record of exactly which sounds exist.
+This resource is actively being worked on by multiple people at once, so
+if any of these is ever silent for you, that's worth reporting to your
+server's staff rather than assuming it's expected — check
+`html/sounds/CREDITS.md` in this resource's files for the current,
+up-to-date record of exactly which sounds exist and where they came from.
 
 ---
 

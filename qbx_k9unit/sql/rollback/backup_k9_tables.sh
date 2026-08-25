@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 #
-# qbx_k9unit :: back up this resource's four database tables
+# qbx_k9unit :: back up this resource's five database tables
 # =====================================================================
 #
 # RUN THIS BEFORE ANY ROLLBACK OR UNINSTALL. It is the only way back.
 #
-# It saves a copy of the four tables qbx_k9unit owns:
+# It saves a copy of the five tables qbx_k9unit owns:
 #     k9_certifications   who is certified, granted/revoked by whom
 #     k9_search_log       every contraband search ever performed
 #     k9_partnerships     every K9/handler partnership, past and present
 #     k9_progression      every player's accumulated K9 XP
+#     k9_permissions      every named permission grant/revoke, and by whom
 #
 # ...into a single timestamped .sql file, and prints the one command that
 # puts it all back. It touches nothing else in your database, and it makes
@@ -96,10 +97,10 @@ if ! "$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e "SELECT 1" "$DB" >/d
     exit 4
 fi
 
-# --- work out which of the four tables actually exist -------------------
+# --- work out which of the five tables actually exist -------------------
 # Dumping a table that does not exist makes mysqldump fail outright, so a
 # database that only ever ran part of the install still backs up cleanly.
-ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression)
+ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_permissions)
 PRESENT=()
 MISSING=()
 for t in "${ALL_TABLES[@]}"; do
@@ -109,7 +110,7 @@ for t in "${ALL_TABLES[@]}"; do
 done
 
 if [ "${#PRESENT[@]}" -eq 0 ]; then
-    echo "ERROR: none of the four qbx_k9unit tables exist in database '$DB'." >&2
+    echo "ERROR: none of the five qbx_k9unit tables exist in database '$DB'." >&2
     echo "       There is nothing to back up. Check you named the right database." >&2
     exit 5
 fi
@@ -186,7 +187,7 @@ else
 fi
 echo ""
 echo " (It will ask for the same password you just typed. Restoring REPLACES"
-echo "  the four tables with the versions saved in this file.)"
+echo "  the five tables with the versions saved in this file.)"
 echo ""
 echo " Keep this file somewhere safe -- copy it off the server if you can."
 echo "======================================================================"

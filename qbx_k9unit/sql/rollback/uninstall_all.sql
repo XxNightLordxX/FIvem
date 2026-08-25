@@ -1,5 +1,5 @@
 -- =====================================================================
--- qbx_k9unit :: FULL UNINSTALL -- DROPS ALL FOUR TABLES
+-- qbx_k9unit :: FULL UNINSTALL -- DROPS ALL FIVE TABLES
 --
 -- #####################################################################
 -- #  THIS FILE PERMANENTLY DELETES DATA. THERE IS NO UNDO.            #
@@ -32,6 +32,12 @@
 --   k9_progression     Every player's accumulated K9 XP, earned over
 --                      weeks of play. Not recomputable.
 --
+--   k9_permissions     Every named K9 permission ever granted or revoked
+--                      (k9.access / k9.certify / k9.audit / k9.givexp),
+--                      and by whom. Your grantable-capability record --
+--                      dropping this also silently strips every
+--                      currently-active grant, not just the history.
+--
 -- ==> THE ONLY WAY BACK IS A BACKUP YOU TOOK BEFORE RUNNING THIS.
 --     Run sql/rollback/backup_k9_tables.sh first. It takes seconds.
 --     See sql/rollback/README.md step 1. If you have not run it, stop
@@ -46,8 +52,10 @@
 --
 -- Also note: you do NOT need to uninstall to stop using the resource.
 -- Removing `ensure qbx_k9unit` from server.cfg stops it completely, and
--- leaves all four tables intact and harmless on disk in case you ever
--- want them back.
+-- leaves all five tables intact and harmless on disk in case you ever
+-- want them back. Just want permission grants specifically off?
+-- `Config.Features.PermissionGrants = false` does that without touching
+-- any table at all -- see sql/rollback/0005_down.sql.
 -- =====================================================================
 
 
@@ -84,9 +92,10 @@ BEGIN
         DROP TABLE IF EXISTS `k9_certifications`;
         DROP TABLE IF EXISTS `k9_partnerships`;
         DROP TABLE IF EXISTS `k9_progression`;
+        DROP TABLE IF EXISTS `k9_permissions`;
 
         SELECT 'UNINSTALLED' AS status,
-               'All four qbx_k9unit tables have been dropped. This is permanent. If you took a backup with backup_k9_tables.sh, the restore command it printed is now your only way back.' AS detail;
+               'All five qbx_k9unit tables have been dropped. This is permanent. If you took a backup with backup_k9_tables.sh, the restore command it printed is now your only way back.' AS detail;
     ELSE
         SELECT 'REFUSED - NOTHING WAS DELETED' AS status,
                'This file is not armed, so it did nothing at all. Your tables are untouched. If you genuinely want to delete them: take a backup first (sql/rollback/backup_k9_tables.sh), then uncomment the SET @K9_UNINSTALL_CONFIRM line near the top of this file and run it again.' AS detail;
@@ -118,3 +127,4 @@ DROP PROCEDURE IF EXISTS `qbx_k9unit_rollback_0004_drop_active_cert_key_column`;
 DROP PROCEDURE IF EXISTS `qbx_k9unit_rollback_0004_drop_idx_citizen_job_active`;
 DROP PROCEDURE IF EXISTS `qbx_k9unit_rollback_0004_drop_idx_job_active`;
 DROP PROCEDURE IF EXISTS `qbx_k9unit_rollback_0004_drop_uq_one_active_cert_per_job`;
+DROP PROCEDURE IF EXISTS `qbx_k9unit_rollback_0005_report`;

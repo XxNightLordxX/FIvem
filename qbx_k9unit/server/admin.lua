@@ -498,6 +498,14 @@ end
 --- comparison, so none of them can throw. `job.isboss` is the only path
 --- that returns true without inspecting job.grade at all, matching
 --- IsEligibleCertifier's own documented behavior.
+---
+--- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
+--- project-owner-directed this pass): a caller for whom IsHighCommand(source)
+--- is true also qualifies, regardless of auditGrade — see that file's own
+--- header for the full "run any command" contract. Guarded by a
+--- `type(...) == 'function'` runtime existence check, so this function is
+--- byte-identical in behavior to before if server/highcommand.lua is ever
+--- removed or Config.Features.HighCommand is false.
 --- @param source number
 --- @return boolean
 local function IsAuthorizedAdmin(source)
@@ -542,6 +550,17 @@ local function IsAuthorizedAdmin(source)
     -- threshold -- same rule, same reasoning, as
     -- server/certifications.lua's IsEligibleCertifier.
     if job.isboss then return true end
+
+    -- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
+    -- project-owner-directed this pass) -- auditGrade is explicitly one of
+    -- the gates a High Command officer must bypass (see that file's own
+    -- header PART 1 for the full contract). Guarded by a
+    -- `type(...) == 'function'` runtime existence check, this resource's
+    -- established soft-dependency convention -- this function still works
+    -- exactly as before if server/highcommand.lua is ever removed or
+    -- Config.Features.HighCommand is false (IsHighCommand re-checks that
+    -- flag itself and returns false).
+    if type(IsHighCommand) == 'function' and IsHighCommand(source) then return true end
 
     -- SAME hardening IsEligibleCertifier/HasK9Access already carry: an
     -- explicit type check on BOTH operands before the `>=` comparison, not a

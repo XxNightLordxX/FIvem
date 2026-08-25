@@ -145,6 +145,16 @@
     "no_active_ball_to_recall": "You have no active fetch item to recall.",
     "recalled_success": "Fetch item recalled."
   },
+  "highcommand": {
+    "grant_success_granter": "Granted %d XP to %s. Their new total is %d.",
+    "grant_success_target": "High command awarded you %d XP. Your new total is %d.",
+    "grant_success_target_partner": "High command awarded your K9 partnership %d XP. The new total is %d.",
+    "invalid_amount": "Enter a whole number of XP between 1 and %d.",
+    "not_authorized": "Only high command can do that.",
+    "self_grant_disabled": "You can't grant XP to yourself. Ask another member of high command.",
+    "usage_givexp": "Usage: /k9givexp [server id] [amount]",
+    "xp_system_unavailable": "XP progression is disabled on this server, so there's nothing to grant."
+  },
   "inventory": {
     "open_gear_target_label": "Open K9 Gear",
     "reason_feature_disabled": "K9 gear access is disabled on this server.",

@@ -1,5 +1,33 @@
 # Native verification pass — NetworkRequestControlOfEntity success-check, three ped natives' server status, stamina semantics, cross-file native-context sweep, prop_doghouse_01
 
+**STATUS UPDATE (docs pass, 2026-08-25) — read before the rest of this file.**
+This note has no citation anywhere else in this repository (checked by grep,
+not assumed) — it's kept only because item 2 below is not yet applied
+anywhere else. Per-item status, so a reader doesn't have to work it out:
+
+- **Item 1** (`NetworkHasControlOfEntity` exists and should be used
+  non-blockingly) — **applied.** `client/combat.lua`'s own header now states
+  this directly; this note's finding is fully absorbed there.
+- **Item 2** (the "no `apiset` entry in the primary source = client-only"
+  test is invalid — it can't distinguish a real client-only native from a
+  server-callable one that simply lacks the field, like `GetEntityCoords`)
+  — **NOT yet applied.** `server/combat.lua`'s header still cites the old,
+  now-shown-invalid "no apiset entry" reasoning for `SetEntityCanBeDamaged`'s
+  client-only status (the conclusion itself still holds, per this note's own
+  finding — only the *justification* needs correcting). This is the one
+  reason this file hasn't been deleted; whoever next edits `server/combat.lua`
+  should fold this footnote in and then this file can be reconsidered.
+- **Item 5** (`prop_doghouse_01` "still unconfirmed, keep the fallback")
+  — **superseded, not merely applied.** `config.lua`'s `Config.DeployableKennel`
+  block went further after this note was written: `prop_doghouse_01` was
+  actively refuted (absent from a 5,171-entry object database with
+  screenshots) and replaced with `prop_dog_cage_01`. Read this note's own §5
+  below as a historical snapshot, not the current state.
+- **Items 3 and 4** — still accurate and still unresolved, consistent with
+  `client/hud.lua`'s and `server/kennel.lua`'s own current header comments.
+
+---
+
 Status: pure verification pass, no code touched (only `.lua` files may be edited
 this session, and this task is scoped to reading + reporting only). Ordered by
 the task's own stated priority. Every claim below is graded HIGH / MEDIUM /

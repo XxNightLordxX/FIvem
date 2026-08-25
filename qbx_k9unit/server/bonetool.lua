@@ -360,12 +360,18 @@ end
 --- IsAuthorizedAdmin shape exactly for every resolvable-shape check: fails
 --- CLOSED (returns false, never throws) on a missing player record, a
 --- missing job, or a job whose name is not a configured Config.Departments
---- key. UNLIKE IsAuthorizedAdmin, there is no numeric-grade branch at all —
---- only `job.isboss` qualifies (see header for why reusing
+--- key. UNLIKE IsAuthorizedAdmin, there is no per-department numeric-grade
+--- branch of its own at all — only `job.isboss` OR High Command
+--- (server/highcommand.lua's IsHighCommand, project-owner-directed this
+--- pass — see that file's own header for the full "run any command"
+--- contract) qualifies (see header for why reusing
 --- Config.Departments[...].auditGrade here would be a real regression, not
---- a convenience). No console carve-out either: this is only ever called
---- for `src ~= 0` (see the RegisterCommand handler below, which already
---- rejects source == 0 before this function is ever reached).
+--- a convenience — that reasoning is UNCHANGED by the High Command bypass,
+--- which is a resource-wide "senior command can do anything this resource
+--- offers" tier, not a reuse of any existing per-department threshold). No
+--- console carve-out either: this is only ever called for `src ~= 0` (see
+--- the RegisterCommand handler below, which already rejects source == 0
+--- before this function is ever reached).
 --- @param source number
 --- @return boolean
 local function IsAuthorizedBoneSweepDevTool(source)
@@ -375,7 +381,22 @@ local function IsAuthorizedBoneSweepDevTool(source)
     local job = Player.PlayerData.job
     if not job or not Config.Departments or not Config.Departments[job.name] then return false end
 
-    return job.isboss == true
+    if job.isboss == true then return true end
+
+    -- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
+    -- project-owner-directed this pass) -- LAYER 2 (this in-game rank check)
+    -- only -- LAYER 1 (Config.Features.BoneSweepDevTool AND the
+    -- `qbx_k9unit_enable_bone_dev_tool` convar, checked once at
+    -- registration, above/before this function is ever reached) is a
+    -- server-OPERATOR opt-in, deliberately left untouched: an in-game
+    -- promotion must never be able to switch on a dev-only prop-spawning
+    -- tool an operator never opted into at the process level. Guarded by a
+    -- `type(...) == 'function'` runtime existence check, this resource's
+    -- established soft-dependency convention -- this function still works
+    -- exactly as before if server/highcommand.lua is ever removed or
+    -- Config.Features.HighCommand is false (IsHighCommand re-checks that
+    -- flag itself and returns false).
+    return type(IsHighCommand) == 'function' and IsHighCommand(source)
 end
 
 -- REFACTOR_ROADMAP.md item 1 convention: per-source rate limit on running

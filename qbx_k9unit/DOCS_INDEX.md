@@ -66,10 +66,9 @@ explained there.
   features — both are explained without jargon and without softening that
   they're unresolved. **Current** as of its own stated date; treat it as a
   snapshot, not a live dashboard, the same caveat it gives about itself.
-- **`DECISIONS_NEEDED.md`** — **now a redirect stub.** Its content (every
-  decision item, D1 through D13) lives in `PROJECT_STATUS.md` above. Left
-  behind only because the tooling used for the merge could not delete a
-  file outright; whoever next has shell access should remove it.
+- **`DECISIONS_NEEDED.md`** — **deleted.** Its content (every decision item,
+  D1 through D13) lives in `PROJECT_STATUS.md` above. This entry is kept
+  only as a pointer for anyone who remembers the old filename.
 
 ## History
 
@@ -111,17 +110,35 @@ one harder to find, not easier.
   and K9 wellbeing, written ahead of that code being built. Historical.
 - **`PHASE5_SPEC.md`** — planning document for proximity audio, prop
   attachments, and fetch. Historical.
-- **`phase2_notes/`** (14 files) — a folder of research and design notes
-  written during development: native-function verification passes, security
-  reviews, and design sketches for individual mechanics. This is scratch
-  work from building the resource, not a maintained reference — open a
-  specific file only if you're chasing the history behind one particular
-  mechanic; do not treat anything in this folder as describing current
-  behavior without checking the actual code. Reviewed during the
-  2026-08-25 consolidation pass and left as-is — it was already clearly
-  described as historical scratch, and its 14 files each cover a distinct
-  mechanic rather than duplicating each other, so there was nothing to
-  merge.
+- **`phase2_notes/`** (24 files as of this check — grew from 14 since the
+  count above was last verified; re-count before trusting this number) — a
+  folder of research and design notes written during development:
+  native-function verification passes, security reviews, and design
+  sketches for individual mechanics. This is scratch work from building the
+  resource, not a maintained reference — open a specific file only if
+  you're chasing the history behind one particular mechanic; do not treat
+  anything in this folder as describing current behavior without checking
+  the actual code. **Re-examined (not just re-inherited) during a
+  2026-08-25 documentation pass**: every file was checked against the
+  actual `.lua`/`.md` files that cite it, rather than trusting the earlier
+  "nothing to merge" verdict on its face. Twenty of the twenty-four are
+  cited by filename directly from a live `.lua` code comment
+  (grep-verified) — deleting any of those would orphan a citation the code
+  itself points to as its own source of justification, so none were
+  removed. Three more (`phase3_combat_patterns.md`,
+  `phase3_handler_partnership_decision.md`, `phase4_hud_early_design.md`)
+  aren't cited from code but are named directly in `PHASE3_SPEC.md`/
+  `PHASE4_SPEC.md` as the research those specs were written against — kept
+  for the same reason. Only one file, `native_verification_pass.md`, has
+  zero citations anywhere in this repository; it was kept anyway because
+  one of its findings (a correction to the "no `apiset` entry means
+  client-only" native-verification method `server/combat.lua`'s own header
+  still relies on) hasn't been applied to that header yet — deleting the
+  note would lose the only place that correction is recorded. A different
+  finding in that same note (about `Config.DeployableKennel.propModel`) has
+  since been superseded by `config.lua`'s own later, more thorough
+  correction — read that note's own §5 as historical, not current. Nothing
+  in this folder was found to be pure dead weight this pass.
 
 ## Ideas and integrations — historical, mostly overtaken
 
@@ -134,10 +151,9 @@ one harder to find, not easier.
   recommendations have since all been built (see `README.md`'s exports/
   admin-command/tenure-bonus sections for the current, shipped state).
   Historical.
-- **`COMPLEMENTARY_FEATURES.md`** — **now a redirect stub.** Its content
-  lives in `FEATURE_IDEAS.md`'s Part B. Left behind only because the
-  tooling used for the merge could not delete a file outright; whoever next
-  has shell access should remove it.
+- **`COMPLEMENTARY_FEATURES.md`** — **deleted.** Its content lives in
+  `FEATURE_IDEAS.md`'s Part B. This entry is kept only as a pointer for
+  anyone who remembers the old filename.
 
 ## Technical debt
 
@@ -150,10 +166,9 @@ one harder to find, not easier.
   merge itself. For developers doing cleanup work. Historical/point-in-time
   snapshot in each part, not a living document — both parts say this about
   themselves.
-- **`REFACTOR_ROADMAP_2.md`** — **now a redirect stub.** Its content lives
-  in `REFACTOR_ROADMAP.md`'s Part B. Left behind only because the tooling
-  used for the merge could not delete a file outright; whoever next has
-  shell access should remove it.
+- **`REFACTOR_ROADMAP_2.md`** — **deleted.** Its content lives in
+  `REFACTOR_ROADMAP.md`'s Part B. This entry is kept only as a pointer for
+  anyone who remembers the old filename.
 
 ## Audio
 
@@ -166,10 +181,9 @@ one harder to find, not easier.
   files actually exist in this resource and under what license — check
   this file, not assumptions, before trusting any claim about bark audio
   working. **Current.**
-- **`AUDIO_SOURCING.md`** — **now a redirect stub.** Its content lives in
-  `html/sounds/CREDITS.md` above. Left behind only because the tooling
-  used for the merge could not delete a file outright; whoever next has
-  shell access should remove it.
+- **`AUDIO_SOURCING.md`** — **deleted.** Its content lives in
+  `html/sounds/CREDITS.md` above. This entry is kept only as a pointer for
+  anyone who remembers the old filename.
 
 ## Developer process docs
 

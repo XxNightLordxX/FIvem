@@ -262,6 +262,18 @@ globals = {
     -- and checked it in the same call, silently dropping the first XP award
     -- of every session for every player.
     "IsValidXpMintBudgetParam",
+    -- server/highcommand.lua -- the PD high-command tier. IsHighCommand is
+    -- consulted by server/admin.lua, server/certifications.lua and
+    -- server/bonetool.lua to let high command bypass their own rank gates;
+    -- every consumer guards it with type(fn) == 'function' so those files
+    -- still work with Config.Features.HighCommand off. AwardXPDirect is the
+    -- /k9givexp entry point, deliberately SEPARATE from server/progression's
+    -- AwardXP: that one takes a config-owned actionKey precisely so no caller
+    -- can name an arbitrary amount, and weakening it would have removed the
+    -- guarantee for every other caller. This one accepts an amount, and is
+    -- why it is bounded by Config.HighCommand.maxXpPerGrant and audited on
+    -- every use.
+    "IsHighCommand", "AwardXPDirect",
     -- Seams opened so other files can reach logic that was previously locked
     -- inside an ox_target closure or a `local`. Each verified defined before
     -- being declared here: client/inventory.lua:195, client/medkit.lua:181,

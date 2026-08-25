@@ -401,15 +401,37 @@ t.test('the InjuryLimping thread resumes real per-frame blocking the instant the
     t.equals(f.waitLog[2], 0)
 end)
 
-t.test('InjuryLimping thread: healthy injury (above both thresholds) never blocks any control, and idles the same as being dead/not-a-K9', function()
+t.test('IDLE-SPIN FIX (performance audit, this pass): InjuryLimping thread: healthy injury (above both thresholds) never blocks any control, and now idles at 1000ms -- NOT Wait(0) -- the same coarse cadence as being dead/not-a-K9', function()
+    -- CORRECTED, this pass -- this test used to assert `f.waitLog[2] == 0`
+    -- ("still runs at Wait(0) -- 'alive and K9-modeled' is the branch
+    -- condition, independent of whether either threshold currently
+    -- applies") and locked that in as the EXPECTED behavior. It was not: a
+    -- performance audit found this was a real, live idle-spin bug, and the
+    -- one that mattered most of the three found in this resource this
+    -- session, because it hit the DEFAULT case rather than an edge case --
+    -- with the shipped thresholds (sprintBlockThreshold=30,
+    -- jumpBlockThreshold=20 out of Injury.max=100), a HEALTHY K9 (injury
+    -- anywhere in (30, 100], the overwhelmingly common state) spun this
+    -- thread at full per-frame rate forever -- roughly 180 native calls/sec
+    -- sustained (PlayerPedId, IsOwnModelK9 -> GetEntityModel, IsEntityDead),
+    -- for every K9 player, for the entire time they played, for zero
+    -- gameplay effect, since DisableControlAction was never even being
+    -- called that tick. FIXED in client/wellbeing.lua: Wait(0) is now taken
+    -- ONLY when at least one threshold is ACTUALLY crossed this tick (i.e.
+    -- there is a real DisableControlAction call to re-assert); a healthy K9
+    -- idles at the same 1000ms as the dead/not-a-K9 branches, mirroring the
+    -- OWN-DEATH GUARD's own already-established cadence for the identical
+    -- "nothing to do this tick" reasoning. DO NOT revert this back to
+    -- Wait(0) believing the spin was deliberate -- it was the bug this
+    -- comment exists to prevent from quietly reappearing.
     local f = newWellbeingFixture({ features = { InjuryLimping = true } })
     -- lastStats.injury starts at its safe default (100, per this file's own
     -- header) -- never pushed below any threshold in this test.
     f.setIsOwnModelK9(true)
     f.setPedDead(false)
     f.step()
-    t.equals(#f.disableControlActionCalls, 0)
-    t.equals(f.waitLog[2], 0, 'still runs at Wait(0) -- "alive and K9-modeled" is the branch condition, independent of whether either threshold currently applies')
+    t.equals(#f.disableControlActionCalls, 0, 'a healthy K9 must never have any control disabled')
+    t.equals(f.waitLog[2], 1000, 'THE FIX: a healthy K9 (injury at/above BOTH thresholds, nothing to enforce this tick) must idle coarsely, not spin at full frame rate for zero effect')
 end)
 
 t.test('InjuryLimping thread: not currently K9-modeled at all also idles at 1000ms, the same branch as own-death', function()

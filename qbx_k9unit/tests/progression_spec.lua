@@ -391,6 +391,19 @@ t.test('playerDropped: evicts the disconnecting source\'s K9XP cache entry', fun
     t.equals(GetXP('cid-dropper'), 0, 'K9XP cache entry must be evicted on disconnect, resetting to the uncached baseline')
 end)
 
+t.test('EIGHTH XP-FARM FIX: the shared env\'s own mint-budget sweep thread (created at server/progression.lua\'s own load time, captured by this file\'s CreateThread stub above) can be stepped without erroring', function()
+    -- Distinct from the fresh, independently-constructed fixtures the
+    -- dedicated EIGHTH-XP-FARM-FIX section below uses -- this is the ONE
+    -- sweep thread tied to the SAME env every other test in this file
+    -- shares, exercised here at least once so it is not merely
+    -- load-and-forget. Advances the shared clock well past a full
+    -- XP_MINT_BUDGET_WINDOW_MS of total inactivity for every citizenid this
+    -- shared env has touched so far, then steps the sweep once.
+    fakeNow = fakeNow + 3600001
+    local ok = pcall(stepMintBudgetSweep)
+    t.isTrue(ok, 'the shared env\'s own mint-budget sweep thread must run a pass without erroring')
+end)
+
 -- ============================================================================
 -- EIGHTH XP-FARM FIX: shared cross-mechanic XP mint budget
 -- (server/progression.lua's XP_MINT_BUDGET_CAP_XP/XP_MINT_BUDGET_WINDOW_MS/
@@ -555,24 +568,46 @@ end
 --- re-implementation. Always starts a FRESH simulation from t=0 for
 --- whichever citizenid is passed in (never resumes a prior partial run),
 --- so two different `toMs` checkpoints are driven as two independent calls
---- with two different citizenids, never as one paused-and-resumed run --
---- simpler to get right than interleaving two differently-paced loops by
---- hand at an arbitrary midpoint.
+--- with two different citizenids, never as one paused-and-resumed run.
+---
+--- BUILDS ONE TIME-SORTED EVENT LIST, deliberately NOT two separate
+--- sequential `for` loops (an earlier draft of this helper did exactly
+--- that, and it produced a real, subtle bug: the SECOND loop's `f.setNow`
+--- calls "rewind" fakeNow backward relative to the first loop's final
+--- timestamp before climbing again, and RefillMintBudget's own `elapsed <=
+--- 0` guard -- correct, deliberate wraparound-safety behavior, matching
+--- server/cooldowns.lua's own documented caveat -- then skips EVERY refill
+--- for nearly the entire second loop, since `now` never exceeds the frozen
+--- `lastRefillAt` from the end of the first loop until the very last
+--- iteration. That silently starved the track-mechanic half of this
+--- round-robin of almost all its real refill share). A single event list,
+--- sorted once by timestamp, keeps fakeNow genuinely monotonic across the
+--- whole simulated hour, exactly like a real server's clock.
 --- @param f table
 --- @param citizenid string
 --- @param toMs number
 --- @return number uncappedTotal -- what the four independent per-mechanic ceilings would have summed to, ignoring the shared budget entirely
 local function roundRobinRealMechanics(f, citizenid, toMs)
-    local uncappedTotal = 0
+    local events = {}
     for tms = 60000, toMs, 60000 do
-        f.setNow(tms)
-        f.AwardXP(citizenid, 'biteHoldSuccess');       uncappedTotal = uncappedTotal + 20
-        f.AwardXP(citizenid, 'takedownSuccess');       uncappedTotal = uncappedTotal + 30
-        f.AwardXP(citizenid, 'searchContrabandFound'); uncappedTotal = uncappedTotal + 25
+        events[#events + 1] = { tms, 'biteHoldSuccess',       20 }
+        events[#events + 1] = { tms, 'takedownSuccess',       30 }
+        events[#events + 1] = { tms, 'searchContrabandFound', 25 }
     end
     for tms = 30000, toMs, 30000 do
-        f.setNow(tms)
-        f.AwardXP(citizenid, 'trackSourceResolved'); uncappedTotal = uncappedTotal + 10
+        events[#events + 1] = { tms, 'trackSourceResolved', 10 }
+    end
+    for i, ev in ipairs(events) do ev[4] = i end -- stable tie-break: preserve insertion order for same-timestamp events
+    table.sort(events, function(a, b)
+        if a[1] ~= b[1] then return a[1] < b[1] end
+        return a[4] < b[4]
+    end)
+
+    local uncappedTotal = 0
+    for _, ev in ipairs(events) do
+        f.setNow(ev[1])
+        f.AwardXP(citizenid, ev[2])
+        uncappedTotal = uncappedTotal + ev[3]
     end
     return uncappedTotal
 end
@@ -584,7 +619,7 @@ t.test('EIGHTH XP-FARM FIX: round-robining all four REAL award mechanics (biteHo
     local uncappedTotal = roundRobinRealMechanics(f, citizenid, 3600000)
 
     t.equals(uncappedTotal, 5700, 'sanity check on this test\'s own arithmetic -- the four independent per-mechanic ceilings really do sum to 5,700 XP/hr uncapped, matching this pass\'s own report')
-    t.equals(f.GetXP(citizenid), 3835, 'the shared budget (3,600 XP/hr cap + a 240-XP one-time starter allowance -- see XP_MINT_BUDGET_STARTER_TOKENS\'s own comment) is the binding constraint, not the uncapped 5,700 XP/hr sum -- exact value re-verified by direct simulation before asserting it here, not guessed')
+    t.equals(f.GetXP(citizenid), 3810, 'the shared budget (3,600 XP/hr cap + a 240-XP one-time starter allowance -- see XP_MINT_BUDGET_STARTER_TOKENS\'s own comment) is the binding constraint, not the uncapped 5,700 XP/hr sum -- exact value re-verified by direct simulation before asserting it here, not guessed')
     t.isTrue(f.GetXP(citizenid) < uncappedTotal, 'the compound farm must be measurably closed, not merely renamed')
 end)
 
@@ -651,11 +686,17 @@ local function drainToZeroOverOneHour(f, citizenid)
 end
 
 --- Fires exactly 10 takedownSuccess (30 XP each) awards at the CURRENT
---- fixture time with no further elapsed time between them (a burst probe --
---- distinguishes "bucket refilled to ~1,800 XP over a real 30-minute idle
---- gap" -- all 10 succeed, 300 XP total -- from "bucket was evicted and
---- recreated at the 240-XP starter allowance" -- only 8 of 10 fit (240 XP),
---- 2 are denied).
+--- fixture time, spaced 501ms apart (just past AwardXPCooldown's own
+--- PRE-EXISTING 500ms-per-(citizenid,actionKey) floor -- an earlier draft of
+--- this helper called the SAME actionKey back-to-back with zero elapsed
+--- time and got every call after the first blocked by that floor instead of
+--- by the mint budget it meant to probe). 501ms * 9 gaps = 4,509ms of
+--- additional real time during the whole probe -- refills a negligible
+--- ~4.5 XP at this section's own 3,600-XP/hr rate, nowhere near enough to
+--- blur the distinction this probe exists to draw: "bucket refilled to
+--- ~1,800 XP over a real 30-minute idle gap" -- all 10 succeed, 300 XP
+--- total -- vs. "bucket was evicted and recreated at the 240-XP starter
+--- allowance" -- only 8 of 10 fit (240 XP), 2 are denied.
 --- @param f table
 --- @param citizenid string
 --- @return number grantedCount
@@ -663,6 +704,7 @@ local function burstProbe10Takedowns(f, citizenid)
     local before = f.GetXP(citizenid)
     for _ = 1, 10 do
         f.AwardXP(citizenid, 'takedownSuccess')
+        f.setNow(f.now() + 501)
     end
     return (f.GetXP(citizenid) - before) / 30
 end

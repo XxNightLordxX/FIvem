@@ -392,4 +392,213 @@ t.test('SILENT-FAILURE FIX: a k9_search_log audit INSERT that genuinely FAILS is
     env.MySQL.insert = realInsert
 end)
 
+-- ============================================================================
+-- EIGHTH XP-FARM FIX: cross-file integration -- proves server/progression.lua's
+-- new SHARED cross-mechanic XP mint budget genuinely binds through THIS
+-- file's own real, unmodified 'qbx_k9unit:server:searchTarget' callback, not
+-- just via a directly-called AwardXP the way tests/progression_spec.lua's
+-- own coverage already does. Everything above this point in this file stubs
+-- AwardXP directly (see this file's own header) -- this section is the one
+-- place that loads the REAL server/progression.lua alongside the REAL
+-- server/search.lua in the SAME sandbox, so a contraband find that goes
+-- through search.lua's OWN validation/cooldown/weight-changed logic still
+-- has its XP withheld by the budget when that budget is already spent,
+-- while every other side effect (the search result itself, the audit log,
+-- the alert broadcast) keeps firing normally -- exactly the "gate the mint,
+-- never the mechanic" property this pass's own report documents for every
+-- other mechanic. Deliberately a FRESH, independent sandbox (own Config, own
+-- fake clock) rather than reusing this file's shared `env` above, so it
+-- cannot perturb any of the 13 tests already passing against that shared
+-- state.
+-- ============================================================================
+
+local function newSearchPlusProgressionFixture()
+    local fakeNow2 = 0
+    local function GetGameTimer2() return fakeNow2 end
+
+    local eventHandlers2 = {}
+    local function AddEventHandler2(eventName, handler)
+        eventHandlers2[eventName] = eventHandlers2[eventName] or {}
+        eventHandlers2[eventName][#eventHandlers2[eventName] + 1] = handler
+    end
+
+    local function GetCurrentResourceName2() return 'qbx_k9unit' end
+
+    local threadRunner2 = Sandbox.newThreadRunner()
+
+    local registeredCallbacks2 = {}
+    local libStub2 = { callback = { register = function(name, handler) registeredCallbacks2[name] = handler end } }
+
+    local playerByCitizenId2 = {}
+    local playersBySource2 = {}
+    local exportsStub2 = {
+        ox_inventory = {},
+        qbx_core = {
+            GetPlayer = function(_self, source) return playersBySource2[source] end,
+            GetPlayerByCitizenId = function(_self, citizenid) return playerByCitizenId2[citizenid] end,
+        },
+    }
+
+    local MySQLStub2 = {
+        scalar = { await = function(_sql, _params) return nil end },
+        insert = { await = function(_sql, _params) return 1 end },
+    }
+
+    local onlineIds2 = {}
+    local function GetPlayers2()
+        local out = {}
+        for id in pairs(onlineIds2) do out[#out + 1] = tostring(id) end
+        return out
+    end
+
+    -- REAL Config.XP.awards -- just the one mechanic this integration test
+    -- needs (searchContrabandFound = 25, matching config.lua exactly) --
+    -- XP_MINT_BUDGET_STARTER_TOKENS (server/progression.lua) will compute as
+    -- exactly 25 from this table, so a single 25-XP award drains it to
+    -- precisely 0 in one call -- see the test below for why that is useful.
+    local Config2 = {
+        Features = { SearchZones = true, XPProgression = true, ContrabandAlerts = false },
+        SearchZones = {
+            alertBroadcastRadius = 50.0, searchCooldownMs = 10, sniffAnimDurationMs = 10,
+            vehicleSearchDistance = 100.0, personSearchDistance = 100.0,
+        },
+        SearchContrabandItems = { 'weed_baggy' },
+        ContrabandAlertTiers = {
+            { minWeight = 0, alert = 'clean' },
+            { minWeight = 1, alert = 'whine' },
+        },
+        XP = {
+            scopePerCitizenidOrJob = 'citizenid',
+            awards = { searchContrabandFound = 25 },
+        },
+        XPTiers = {
+            { xp = 0, label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+        },
+    }
+
+    local env2 = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer2,
+        AddEventHandler = AddEventHandler2,
+        GetCurrentResourceName = GetCurrentResourceName2,
+        GetPlayers = GetPlayers2,
+        CreateThread = threadRunner2.CreateThread,
+        Wait = threadRunner2.Wait,
+        lib = libStub2,
+        exports = exportsStub2,
+        MySQL = MySQLStub2,
+        TriggerEvent = function(_eventName, ...) end,
+        TriggerClientEvent = function(_eventName, _target, ...) end,
+        HasK9Access = function() return true end,
+        NetworkGetEntityFromNetworkId = function(netId) return netId end,
+        DoesEntityExist = function(entity) return entity ~= 0 end,
+        GetEntityType = function(_entity) return 2 end, -- vehicle, same convention as this file's shared section above
+        GetVehicleNumberPlateText = function(entity) return 'PLATE' .. tostring(entity) end,
+        GetPlayerPed = function(_source) return 42 end,
+        GetEntityCoords = function(_entity) return ZERO_VEC end,
+        Config = Config2,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env2)
+    Sandbox.loadInto('../server/entities.lua', env2)
+    Sandbox.loadInto('../server/progression.lua', env2)
+    Sandbox.loadInto('../server/search.lua', env2)
+    for _, handler in ipairs(eventHandlers2['onResourceStart'] or {}) do
+        handler('qbx_k9unit')
+    end
+
+    local searchCallback2 = registeredCallbacks2['qbx_k9unit:server:searchTarget']
+    local itemsByInvId2 = {}
+    exportsStub2.ox_inventory.GetInventoryItems = function(_self, invOrId)
+        local invId = type(invOrId) == 'table' and invOrId.id or invOrId
+        return itemsByInvId2[invId] or {}
+    end
+
+    return {
+        AwardXP = env2.AwardXP,
+        GetXP = env2.GetXP,
+        setNow = function(ms) fakeNow2 = ms end,
+        now = function() return fakeNow2 end,
+        runOneTick = function()
+            if not threadRunner2.primed then threadRunner2.step(); threadRunner2.primed = true end
+            threadRunner2.step()
+        end,
+        setPlayer = function(source, citizenid)
+            playersBySource2[source] = { PlayerData = { citizenid = citizenid, job = { name = 'police' } } }
+            playerByCitizenId2[citizenid] = { PlayerData = { citizenid = citizenid, source = source } }
+            onlineIds2[source] = true
+        end,
+        --- Drives one full REAL 'vehicle' searchTarget call, exactly mirroring
+        --- this file's own top-level searchVehicle helper, against THIS
+        --- fixture's own fresh callback/state instead of the shared one.
+        --- @param source number
+        --- @param netId number
+        --- @param weight number
+        searchVehicle = function(source, netId, weight)
+            local invId = 'trunkPLATE' .. tostring(netId)
+            itemsByInvId2[invId] = weight and weight > 0 and { { name = 'weed_baggy', weight = weight, slot = 1 } } or {}
+            return searchCallback2(source, 'vehicle', netId)
+        end,
+    }
+end
+
+t.test('EIGHTH XP-FARM FIX (cross-file integration): a real search find through the REAL, unmodified searchTarget callback still succeeds normally when the shared XP mint budget is already spent -- only the XP is withheld', function()
+    local f = newSearchPlusProgressionFixture()
+    local citizenid = 'CITIZEN-COMPOUND-FARM'
+    f.setPlayer(501, citizenid)
+
+    -- Drain the shared budget directly via the REAL AwardXP (standing in for
+    -- "this citizenid already spent it via bite-hold/takedown/tracking
+    -- elsewhere this hour" -- server/combat.lua/tracking.lua are not loaded
+    -- in this sandbox, but AwardXP is the SAME single chokepoint every one
+    -- of them goes through, so calling it directly here is calling the real
+    -- gate, not a re-implementation of it). XP_MINT_BUDGET_STARTER_TOKENS
+    -- computes to exactly 25 from this fixture's own Config.XP.awards (see
+    -- newSearchPlusProgressionFixture's own comment), so one 25-XP award
+    -- drains it to precisely 0 with negligible elapsed time.
+    f.setNow(0)
+    f.AwardXP(citizenid, 'searchContrabandFound')
+    t.equals(f.GetXP(citizenid), 25, 'sanity check: the direct drain call itself must pay (this citizenid has never earned anything before it)')
+
+    -- Advance past AwardXPCooldown's OWN pre-existing 500ms-per-
+    -- (citizenid,actionKey) floor (server/progression.lua) before the real
+    -- search below -- NOT the mechanism this test means to isolate. Without
+    -- this, the search callback's own internal AwardXP('searchContrabandFound')
+    -- call would be blocked by THAT floor instead of by the shared budget,
+    -- making this test pass for the wrong reason. 600ms leaves the shared
+    -- budget's own refill at a negligible ~0.6 XP -- nowhere near enough to
+    -- cover the 25-XP find below, so the shared budget is still the thing
+    -- actually being exercised.
+    f.setNow(600)
+
+    -- Now drive a GENUINE, fresh, first-ever find through the REAL
+    -- searchTarget callback -- a different target, a real weight, every one
+    -- of server/search.lua's own gates (HasK9Access, proximity, cooldowns,
+    -- the weight-changed check, ContrabandXpMintCooldown) passes on its own
+    -- terms. The shared budget is still, for all practical purposes, at 0
+    -- tokens.
+    local result = f.searchVehicle(501, 9001, 20)
+    t.isTrue(result.ok, 'the search request itself must still succeed -- the shared budget must never block the MECHANIC, only the mint')
+    t.isTrue(result.contrabandFound, 'contraband must still be reported to the requester')
+    t.equals(result.totalWeight, 20, 'the requester must still see the real, current weight')
+    t.equals(f.GetXP(citizenid), 25, 'no additional XP may be granted -- the shared budget (server/progression.lua) correctly withheld this genuine find\'s XP because it is already fully spent, even though search.lua\'s OWN per-mechanic gates (ContrabandXpMintCooldown, the weight-changed check) all independently passed')
+end)
+
+t.test('EIGHTH XP-FARM FIX (cross-file integration): once the shared budget has refilled, the SAME kind of real search find pays normally again', function()
+    local f = newSearchPlusProgressionFixture()
+    local citizenid = 'CITIZEN-COMPOUND-FARM-2'
+    f.setPlayer(501, citizenid)
+
+    f.setNow(0)
+    f.AwardXP(citizenid, 'searchContrabandFound') -- drains to exactly 0, same as above
+    t.equals(f.GetXP(citizenid), 25)
+
+    -- A full hour later (XP_MINT_BUDGET_WINDOW_MS, server/progression.lua) --
+    -- the bucket has fully refilled to XP_MINT_BUDGET_CAP_XP (3,600 XP) --
+    -- comfortably enough for one more 25-XP find.
+    f.setNow(3600000)
+    local result = f.searchVehicle(501, 9002, 20)
+    t.isTrue(result.ok)
+    t.equals(f.GetXP(citizenid), 50, 'a real search find must pay normally again once the shared budget has genuinely refilled -- this gate is a temporary throttle, never a permanent lockout')
+end)
+
 os.exit(t.summary())

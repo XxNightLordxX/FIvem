@@ -299,26 +299,34 @@ local AwardXPCooldown = NewNestedCooldown(500)
 --
 -- Re-verified by direct simulation with the REAL shipped award table (search
 -- 25 + track 10 + bite 20 + takedown 30 + tenure 15+40+100 = 240 starter
--- tokens), continuous max-rate round-robin farming across all four
--- mechanics: 3,835 XP granted at T=1hr (vs. the four independent
--- per-mechanic ceilings' own UNCAPPED sum of 5,700 XP/hr -- this budget is
--- still the binding constraint), and the 9,000-XP Elite tier first reached
--- at T=8,790,000ms = 2.442 hours (~2h 26.5m) -- comfortably over the 2-hour
--- floor, though with a smaller margin (~26.5 minutes) than a pure
--- start-empty design's clean 2.5h would have had.
+-- tokens) AND the REAL bucket-created-at-first-use semantics (a bucket's
+-- own `lastRefillAt` is set to the instant of its OWN first AwardXP call,
+-- crediting ZERO prior elapsed time -- an earlier draft of this simulation
+-- wrongly assumed a bucket already existed, accruing, from some earlier
+-- "time 0" baseline, which overstated every number below; re-simulated and
+-- cross-checked directly against tests/progression_spec.lua's own EIGHTH-
+-- XP-farm-fix section, which exercises the REAL AwardXP function end to
+-- end, not a re-implementation, before landing these final figures):
+-- continuous max-rate round-robin farming across all four mechanics grants
+-- 3,810 XP at T=1hr (vs. the four independent per-mechanic ceilings' own
+-- UNCAPPED sum of 5,700 XP/hr -- this budget is still the binding
+-- constraint), and the 9,000-XP Elite tier is first reached at
+-- T=8,820,000ms = 2.45 hours (2h 27m) -- comfortably over the 2-hour floor,
+-- though with a smaller margin (~27 minutes) than a pure start-empty
+-- design's clean 2.5h would have had.
 --
 -- NUMBERS CHOSEN (XP_MINT_BUDGET_CAP_XP / XP_MINT_BUDGET_WINDOW_MS below):
 -- 3,600 XP per 3,600,000ms (1 hour) -- clean, round numbers to reason about.
 -- Needed: comfortably below 4,500 XP/hr (9000 / 4500 = exactly 2.0 hours --
 -- the retuned floor requires MORE than 2 hours, so the cap must clear that
 -- with real margin, not sit on the boundary), which it does even with the
--- 240-XP starter offset above (2.442h > 2.0h). Recomputed tier times at this
--- REAL post-fix ceiling (simulated, not the pure-continuous approximation),
--- reported to whoever owns config.lua for that file's own Config.XPTiers
--- economy comment (not edited by this pass):
---   Trained (1,250 XP): reached at ~0.283h (~17m)
---   Veteran (4,000 XP): reached at ~1.050h (~1h 3m)
---   Elite   (9,000 XP): reached at ~2.442h (~2h 26.5m -- clears the floor)
+-- 240-XP starter offset above (2.45h > 2.0h). Recomputed tier times at this
+-- REAL post-fix ceiling (simulated AND test-verified, not a pure-continuous
+-- approximation), reported to whoever owns config.lua for that file's own
+-- Config.XPTiers economy comment (not edited by this pass):
+--   Trained (1,250 XP): reached at 0.30h    (18m)
+--   Veteran (4,000 XP): reached at ~1.058h  (~1h 3.5m)
+--   Elite   (9,000 XP): reached at 2.45h    (2h 27m -- clears the floor)
 --
 -- FILE-LOCAL CONSTANTS, NOT CONFIG KEYS -- same reasoning as every one of
 -- the four per-mechanic mint cooldowns' own "FILE-LOCAL CONSTANTS, NOT
@@ -543,6 +551,30 @@ AddEventHandler('onResourceStart', function(resourceName)
              'citizenid, ever, regardless of how long they wait between awards. Raise XP_MINT_BUDGET_CAP_XP ' ..
              '(server/progression.lua) to at least this amount.')
                 :format(tostring(actionKey), tostring(amount), XP_MINT_BUDGET_CAP_XP)
+        )
+        -- SECOND GUARD (coordinator-prompted re-check, this pass): a
+        -- non-positive award amount breaks the shared budget's own math in
+        -- a DIFFERENT way than "too large" above -- see AwardXP's own
+        -- runtime `amount > 0` guard on this same block for the exact
+        -- mechanism (a NEGATIVE amount would silently INCREASE the bucket
+        -- instead of spending it, since `tokens < amount` never trips and
+        -- `tokens - amount` then subtracts a negative number). ZERO is
+        -- explicitly allowed here, deliberately NOT bundled into this
+        -- guard: a 0-XP award is a harmless no-op either way (AwardXP's own
+        -- `amount > 0` runtime check already skips the budget entirely for
+        -- it, and `K9XP[citizenid] = oldXp + 0` changes nothing) -- some
+        -- callers legitimately use a 0-value actionKey as a placeholder
+        -- (this file's own test suite does), and this guard exists to catch
+        -- the genuinely dangerous case, not to forbid a harmless one. No
+        -- currently shipped Config.XP.awards value is negative, but nothing
+        -- before this pass ever asserted that -- fails loudly here rather
+        -- than relying solely on the runtime guard to silently no-op it.
+        assert(
+            type(amount) ~= 'number' or amount >= 0,
+            ('[qbx_k9unit] progression: Config.XP.awards.%s (%s XP) must not be negative -- a negative award ' ..
+             'amount would silently inflate the shared XP mint budget instead of spending it (see AwardXP\'s ' ..
+             'own runtime `amount > 0` guard on the XPMintBudget block for the exact mechanism).')
+                :format(tostring(actionKey), tostring(amount))
         )
     end
 end)
@@ -831,7 +863,23 @@ function AwardXP(citizenid, actionKey)
     -- rejected call must never spend this shared budget either), BEFORE any
     -- cache/DB mutation below -- same "reject before touching state" order
     -- this function already follows throughout.
-    if XPMintBudgetEnabled then
+    -- EDGE CASE, checked before touching the bucket at all (coordinator-
+    -- prompted re-check, this pass, of "what else could go wrong here"):
+    -- `amount` is only type-checked as `type(amount) == 'number'` above --
+    -- never asserted positive. Every Config.XP.awards value shipped today
+    -- IS positive, but nothing enforces that for a future entry, and this
+    -- budget's own math silently breaks on a non-positive one: `bucket.
+    -- tokens < amount` is FALSE for any non-positive amount (tokens is
+    -- never negative), so the deny-path never triggers, and `tokens =
+    -- tokens - amount` then SUBTRACTS a non-positive number, i.e. INCREASES
+    -- the bucket -- a negative/zero award would silently mint free budget
+    -- instead of spending it. `amount > 0` is asserted at resource start
+    -- below for every currently-configured award (see the STRUCTURAL GUARD
+    -- assert further above) precisely so this can never fire against a real
+    -- shipped value -- kept here anyway as an explicit runtime guard, not
+    -- just a start-time assert, matching this file's own "fail loud enough
+    -- to be caught, never silently wrong" posture elsewhere.
+    if XPMintBudgetEnabled and amount > 0 then
         local budgetNow = GetGameTimer()
         local bucket = XPMintBudget[citizenid]
         if not bucket then

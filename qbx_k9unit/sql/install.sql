@@ -3,13 +3,15 @@
 --
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
--- This is a hard requirement, not a recommendation. Three of the four
+-- This is a hard requirement, not a recommendation. Four of the five
 -- tables below declare an INDEXED VIRTUAL GENERATED COLUMN backing a
 -- UNIQUE KEY (`k9_certifications.active_cert_key`,
--- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`)
+-- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
+-- `k9_permissions.active_permission_key`)
 -- -- the DB-level backstop for this resource's "at most one active
--- certification per (citizenid, job)" and "at most one active partnership
--- per party" invariants. Secondary indexes on virtual generated columns
+-- certification per (citizenid, job)", "at most one active partnership
+-- per party" and "at most one active permission grant per (citizenid,
+-- permission)" invariants. Secondary indexes on virtual generated columns
 -- arrived in MySQL 5.7.8 and MariaDB 10.2; nothing older can parse these
 -- statements.
 --
@@ -21,6 +23,16 @@
 --   MySQL 5.7.44   -- OK (install.sql + migrations 0001-0004 all clean).
 --   MySQL 8.0.46   -- OK.
 --   MariaDB 10.11  -- OK.
+--
+-- `k9_permissions` (migration 0005) reuses this exact generated-column /
+-- unique-key technique verbatim -- same VARCHAR(105) CONCAT(citizenid,
+-- '::', X) VIRTUAL shape already proven above for `k9_certifications` and
+-- `k9_partnerships` -- rather than inventing a new one. Its own execution
+-- verification (clean install, migration-on-existing-db, re-run
+-- idempotency, rollback, and the 20-connection concurrent-grant race) is
+-- tracked as a separate pass against the same MySQL 5.7/8.0/MariaDB 10.11
+-- targets above; see sql/migrations/0005_create_k9_permissions.sql's own
+-- header for status.
 --
 -- If your host runs MySQL 5.6, upgrade the database server before
 -- installing this resource; there is no supported downgrade path for the
@@ -623,4 +635,179 @@ CREATE TABLE IF NOT EXISTS `k9_progression` (
   -- that query today -- adding an index nothing queries yet is
   -- speculative cost for no confirmed benefit; add it if/when that query
   -- is actually built.
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_permissions
+--
+-- Backs `Config.Features.PermissionGrants` / `Config.Permissions` /
+-- `server/permissions.lua`: lets a high-command officer grant one NAMED
+-- capability (a `Config.Permissions` key -- currently `k9.access`,
+-- `k9.certify`, `k9.audit`, `k9.givexp`) to one specific citizenid --
+-- handler or K9, since both are just citizenids to this resource -- and
+-- revoke it later. See config.lua's own `Config.Permissions` block for the
+-- full capability list/labels and the 4-step resolution order this table
+-- feeds step 1 of ("an active, explicitly granted permission for that
+-- citizenid -> ALLOW", checked before the high-command/rank fallbacks).
+--
+-- MODELED DIRECTLY ON `k9_certifications` ABOVE (read in full before this
+-- table was written, per this resource's own established convention of
+-- reusing that table's shape rather than inventing a new one -- see
+-- `k9_partnerships`' header for the same instruction applied once already).
+-- Same append-mostly audit-log design: granting INSERTs a new row, revoking
+-- UPDATEs the existing active row to `active = 0` (never deletes), so the
+-- full grant/revoke history per (citizenid, permission) is always
+-- reconstructable -- this is an AUTHORIZATION AUDIT TRAIL ("who gave whom
+-- what power, and when it was taken away"), not just current-state storage,
+-- for the exact same reason `k9_certifications` keeps its revoked rows
+-- rather than deleting them.
+--
+-- SHAPE DIFFERENCE FROM `k9_certifications`: one citizenid + one
+-- department-scoped `job` there, versus one citizenid + one
+-- resource-global `permission` key here -- a grant is not scoped to a
+-- department, it is scoped to the specific capability named in
+-- `Config.Permissions`. `permission` is therefore this table's structural
+-- analogue of `k9_certifications.job`, and every index/generated-column
+-- choice below mirrors that table's (citizenid, job) pattern with
+-- (citizenid, permission) substituted throughout.
+--
+-- WHY `permission` IS `VARCHAR(50)`, NOT `ENUM(...)`: config.lua's own
+-- `Config.Permissions` header is explicit that this is a config-driven,
+-- extensible catalog ("Add a new key and migrate [the Lua config, and
+-- existing grant rows stay valid under the new key set] instead" of
+-- renaming one in place) -- a server owner can add a fifth capability by
+-- editing `Config.Permissions` alone, with no DB schema change. `ENUM`
+-- would silently defeat that: every new capability would additionally
+-- require an `ALTER TABLE ... MODIFY permission ENUM(...)` on every
+-- installed database just to become grantable, which is exactly the kind
+-- of hidden coupling this table must not introduce. Sized at
+-- `VARCHAR(50)`, matching `citizenid`/`job`/`granted_by`/`revoked_by`'s
+-- existing width in this file, even though every current key
+-- (`k9.givexp` at 9 characters) is far shorter -- headroom for future
+-- capability names costs nothing and avoids a second migration later
+-- purely to widen a column.
+--
+-- WHY THIS TABLE, NOT A COLUMN ON AN EXISTING TABLE: a grant is keyed by
+-- (citizenid, permission), an N:M relationship -- one citizenid can hold
+-- several permissions at once, and one permission can be held by many
+-- citizenids. Neither `k9_certifications` nor `k9_progression` (one row
+-- per citizenid) can represent that without denormalizing one flag column
+-- per capability, which breaks the moment a fifth capability is added.
+--
+-- NO FK to a `players` table is declared here, for the identical reason
+-- `k9_certifications` above declares none (see that table's own comment in
+-- full -- not repeated here): this resource's migration must not depend on
+-- qbx_core's own schema existing first, and a player-data reset/delete
+-- workflow on another resource's table must never be able to fail this
+-- table's constraints. Relational integrity to qbx_core players is
+-- enforced at the application layer, same convention used throughout this
+-- file. This also covers the K9-as-citizenid case identically -- a K9's
+-- "player row" is the same qbx_core players table under its own citizenid,
+-- so no separate carve-out is needed for granting to a K9 versus a
+-- handler.
+--
+-- `granted_by`/`revoked_by` carry the SAME no-FK, no-format-constraint
+-- convention as `k9_certifications.granted_by`/`revoked_by`: ordinarily a
+-- citizenid (the high-command officer who acted), but nothing in this
+-- table enforces that shape, so a future automatic-teardown path (e.g. a
+-- department change stripping a grant, mirroring
+-- `k9_certifications`' own `'system:job_change'` sentinel) could write a
+-- non-citizenid `'system:...'` sentinel into `revoked_by` without a schema
+-- change -- NOT currently exercised by any code in this resource (grants
+-- are revoked only by an explicit high-command action today, per
+-- config.lua's `Config.Permissions` header), reserved for parity with the
+-- established pattern rather than implemented ahead of need.
+--
+-- NO TIMESTAMPDIFF / ELAPSED-TIME MATH ANYWHERE IN THIS TABLE'S DESIGN OR
+-- ITS THREE QUERIES BELOW (see sql/install.sql's own DATETIME-timezone
+-- hazard note and PHASE3_SPEC.md-adjacent tuning tables elsewhere in this
+-- resource for why that matters): every consumer query filters on
+-- `active`/`citizenid`/`permission` and orders by `granted_at`, never
+-- diffs two DATETIME columns. If a future feature adds a grant EXPIRY
+-- (e.g. "this permission lapses after N days"), that computation would
+-- inherit the exact hazard this file's other DATETIME columns already
+-- carry (a DB server timezone change after go-live skews TIMESTAMPDIFF
+-- math) and must be designed with that in mind -- not present today, so
+-- not designed around here.
+--
+-- Generated helper column (derived only, never written directly by app
+-- code), and its backing unique key: NULL for every inactive/revoked row,
+-- and `citizenid::permission` for an active row -- identical mechanism to
+-- `k9_certifications.active_cert_key` above (see that column's own comment
+-- for the full "why a VIRTUAL generated column, why NULLs never collide"
+-- rationale, not repeated here). THIS IS A CORRECTNESS REQUIREMENT, NOT A
+-- NICETY: `server/permissions.lua`'s grant path is expected to be the same
+-- application-level check-then-insert shape `server/certifications.lua`
+-- already uses, with no transaction spanning both statements -- exactly
+-- the shape a 20-connection concurrent-grant race test already proved
+-- (see sql/rollback/0004_down.sql's own measured numbers for
+-- `k9_certifications`) produces 20 simultaneously-active rows with zero
+-- errors when the equivalent constraint is absent. coder-backend: on the
+-- grant INSERT, treat a duplicate-key error on this constraint
+-- (MySQL/MariaDB error 1062) identically to the normal pre-check
+-- "already granted" no-op -- it means another request won the race, not a
+-- real failure.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates this table, see
+-- `qbx_k9unit/sql/migrations/0005_create_k9_permissions.sql`.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_permissions` (
+  `id`               INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `citizenid`        VARCHAR(50)  NOT NULL,                          -- qbx_core / QBCore citizenid convention; the handler OR K9 the grant applies to (both are citizenids)
+  `permission`       VARCHAR(50)  NOT NULL,                          -- Config.Permissions key, e.g. 'k9.access' / 'k9.certify' / 'k9.audit' / 'k9.givexp' -- VARCHAR not ENUM, see header comment above
+  `granted_by`       VARCHAR(50)  NOT NULL,                          -- citizenid of the granting high-command officer
+  `granted_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `revoked_by`       VARCHAR(50)  DEFAULT NULL,                      -- citizenid of the revoking officer; NULL until revoked. See header comment for the reserved (unused today) 'system:...' sentinel convention.
+  `revoked_at`       DATETIME     DEFAULT NULL,
+  `active`           TINYINT(1)   NOT NULL DEFAULT 1,                -- 1 = currently grants the capability, 0 = historical/revoked row
+
+  -- Generated helper column, identical mechanism to
+  -- `k9_certifications.active_cert_key` (see that column's comment above):
+  -- NULL for every inactive/revoked row, `citizenid::permission` for an
+  -- active row. Backs the DB-level "one active grant per (citizenid,
+  -- permission)" backstop below.
+  `active_permission_key` VARCHAR(105)
+                       GENERATED ALWAYS AS (
+                         CASE WHEN `active` = 1
+                              THEN CONCAT(`citizenid`, '::', `permission`)
+                              ELSE NULL
+                         END
+                       ) VIRTUAL,
+
+  PRIMARY KEY (`id`),
+
+  -- Hot-path index: "does citizenid X currently hold permission P" --
+  -- checked on every capability check (server/permissions.lua's per-action
+  -- gate, ahead of the high-command/rank fallbacks per config.lua's 4-step
+  -- resolution order). citizenid leads the index so it ALSO serves the
+  -- tablet's per-person view, "list every active permission citizenid X
+  -- currently holds", as a citizenid-prefix scan with `active = 1`
+  -- evaluated via index condition pushdown -- same dual-purpose role
+  -- `k9_certifications.idx_citizen_job_active` plays for that table.
+  --   -- hot-path capability check:
+  --   SELECT id FROM k9_permissions
+  --   WHERE citizenid = ? AND permission = ? AND active = 1 LIMIT 1;
+  --   -- tablet per-person view:
+  --   SELECT permission, granted_by, granted_at FROM k9_permissions
+  --   WHERE citizenid = ? AND active = 1 ORDER BY granted_at DESC;
+  KEY `idx_citizen_permission_active` (`citizenid`, `permission`, `active`),
+
+  -- Roster-path index: "list everyone holding permission P" (the tablet's
+  -- roster view for a given capability). idx_citizen_permission_active
+  -- above cannot serve this efficiently because `permission` is not its
+  -- leading column; this index makes it an index seek instead of a full
+  -- table scan, mirroring k9_certifications.idx_job_active's role.
+  --   SELECT citizenid, granted_by, granted_at FROM k9_permissions
+  --   WHERE permission = ? AND active = 1;
+  KEY `idx_permission_active` (`permission`, `active`),
+
+  -- DB-level backstop for the app-enforced "one active grant per
+  -- (citizenid, permission)" invariant -- see the header comment above for
+  -- why this is a correctness requirement, not a nicety. Closes the
+  -- check-then-insert race window the same way
+  -- `k9_certifications.uq_one_active_cert_per_job` closes it for
+  -- certification grants.
+  UNIQUE KEY `uq_one_active_permission_per_citizen` (`active_permission_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -235,31 +235,62 @@ if Config.Features.InjuryLimping then
 
     CreateThread(function()
         while true do
-            -- OWN-DEATH GUARD (coder-frontend correctness pass, this
+            -- OWN-DEATH GUARD (coder-frontend correctness pass, earlier
             -- session): mirrors this codebase's own established "own ped
             -- death forces an active perception/effect feature to end"
             -- precedent (client/vision.lua's maintenance thread,
             -- client/propattachment.lua's "OWN-DEATH AUTO-DETACH",
             -- client/tracking.lua's own equivalent guard on its
             -- state/compute thread). A dead ped can neither sprint nor
-            -- jump anyway, so this block previously spinning at Wait(0)
-            -- and re-issuing DisableControlAction every single frame while
-            -- the K9 lay dead was pure wasted per-frame native-call cost
-            -- with zero gameplay effect — exactly the "thread left
-            -- spinning at full frequency while its feature is inactive"
-            -- case this file's own review criteria call out. Idles at the
-            -- same 1000ms as the "not currently K9" branch below while
-            -- dead, and resumes real per-frame blocking the instant the
-            -- ped is alive again (no separate respawn hook needed —
-            -- IsEntityDead() is polled fresh every loop iteration here).
+            -- jump anyway, so spinning at Wait(0) and re-issuing
+            -- DisableControlAction every single frame while the K9 lay dead
+            -- was pure wasted per-frame native-call cost with zero gameplay
+            -- effect. Idles at the same 1000ms as the "not currently K9"
+            -- branch below while dead, and resumes real per-frame checking
+            -- the instant the ped is alive again (no separate respawn hook
+            -- needed — IsEntityDead() is polled fresh every loop iteration
+            -- here).
+            --
+            -- IDLE-SPIN FIX (performance audit, this pass): the branch below
+            -- used to take Wait(0) for the ENTIRE "alive and K9-modeled"
+            -- case unconditionally, regardless of whether either threshold
+            -- was actually crossed. With the shipped defaults
+            -- (sprintBlockThreshold=30, jumpBlockThreshold=20 out of
+            -- Injury.max=100), a HEALTHY K9 — injury anywhere in (30, 100],
+            -- the overwhelmingly common case for the entire time InjuryLimping
+            -- has anything to do — spun this thread at full per-frame rate
+            -- forever, calling PlayerPedId/IsOwnModelK9 (-> GetEntityModel)/
+            -- IsEntityDead roughly 180 times/second per K9 player, for the
+            -- rest of that session, for zero gameplay effect: this is the
+            -- DEFAULT case, not an edge case, unlike the dead-ped guard
+            -- above (which correctly idles only the much rarer "currently
+            -- dead" state). FIXED the same way that guard already
+            -- established: only take Wait(0) — the cadence
+            -- DisableControlAction's own contract genuinely requires while
+            -- actively re-asserting a block — when at least one threshold is
+            -- ACTUALLY crossed this tick; idle at the same coarse 1000ms
+            -- otherwise. A healthy-to-injured transition can therefore take
+            -- up to 1000ms to start being enforced (the same latency the
+            -- dead-ped guard above already accepts for resuming enforcement
+            -- after a respawn) — negligible against Config.Wellbeing
+            -- .tickIntervalMs's own 5000ms default cadence for Injury to
+            -- change at all, and this was never a security boundary to
+            -- begin with (this section's own header, and PHASE4_SPEC.md
+            -- §13.0 Decision 3).
             if IsOwnModelK9() and not IsEntityDead(PlayerPedId()) then
-                if lastStats.injury < Config.Wellbeing.Injury.sprintBlockThreshold then
-                    DisableControlAction(0, INPUT_SPRINT, true)
+                local sprintBlocked = lastStats.injury < Config.Wellbeing.Injury.sprintBlockThreshold
+                local jumpBlocked = lastStats.injury < Config.Wellbeing.Injury.jumpBlockThreshold
+                if sprintBlocked or jumpBlocked then
+                    if sprintBlocked then
+                        DisableControlAction(0, INPUT_SPRINT, true)
+                    end
+                    if jumpBlocked then
+                        DisableControlAction(0, INPUT_JUMP, true)
+                    end
+                    Wait(0) -- must disable every frame while ACTUALLY blocking something this tick, per DisableControlAction's own contract
+                else
+                    Wait(1000) -- healthy (injury at/above BOTH thresholds) -- nothing to disable this tick; idle coarsely instead of spinning at full frame rate for zero effect, same cadence as the dead/non-K9 branch below
                 end
-                if lastStats.injury < Config.Wellbeing.Injury.jumpBlockThreshold then
-                    DisableControlAction(0, INPUT_JUMP, true)
-                end
-                Wait(0) -- must disable every frame while active, per DisableControlAction's own contract
             else
                 Wait(1000)
             end

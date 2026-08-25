@@ -736,6 +736,118 @@ t.test('confirmKennelPlaced: a netId already claimed by a DIFFERENT citizenid\'s
 end)
 
 -- ----------------------------------------------------------------------
+-- PRE-CONFIRMATION-WINDOW RACE (coder-architect, urgent red-team finding
+-- this pass) -- every test ABOVE this point that names a "victim's real
+-- kennel" builds it via `deploySuccessfully`, i.e. the victim's OWN confirm
+-- has ALREADY landed and the object is ALREADY recorded in `Kennels` (and
+-- claimed in the shared registry) by the time an attacker ever names its
+-- netId. That is exactly why they could not, on their own, catch the
+-- narrower and more dangerous window this section covers: a victim's client
+-- CreateObject()s a real, networked entity the instant requestDeployKennel's
+-- own instruction (event 5) is handled, but does not call
+-- confirmKennelPlaced until AFTER PlaceObjectOnGroundProperly/
+-- FreezeEntityPosition/NetworkGetNetworkIdFromEntity finish -- a multi-step
+-- sequence OneSync's own entity-relevance replication can (and, per this
+-- codebase's own FIRST-WRITER-WINS PROP-HIJACK RACE finding in
+-- server/propattachment.lua, often does) outrun. An attacker who already has
+-- their OWN pending slot open (never creating anything real) can read that
+-- netId off the wire and confirm it BEFORE the victim's own confirm ever
+-- reaches this server -- at which point NEITHER `FindKennelOwnerByNetId` NOR
+-- `IsNetworkEntityClaimedByOther` can help, because neither registry is
+-- written until a confirm SUCCEEDS. The NETWORK-OWNERSHIP GUARD
+-- (`NetworkGetEntityOwner(entity) == src`) is what closes this -- every test
+-- below drives the victim only as far as "client created a real object, no
+-- confirm sent yet" before the attacker acts.
+-- ----------------------------------------------------------------------
+
+t.test('PRE-CONFIRMATION-WINDOW: an attacker confirming a victim\'s real, NOT-YET-CONFIRMED kennel BEFORE the victim\'s own confirm arrives cannot delete it (deletion shape)', function()
+    local f = newKennelFixture()
+
+    -- Victim: requestDeployKennel already ran, their client already created
+    -- the real object (registerEntity, owner = 1) -- but confirmKennelPlaced
+    -- has NOT been called yet. Kennels and the shared claim registry are
+    -- both completely empty for this netId at this instant.
+    f.setAccess(1, true)
+    f.setPlayer(1, 'VICTIM01')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    local victimInstruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
+    local victimNetId = freshNetId()
+    local victimHandle = victimNetId + 500000
+    f.registerEntity(victimNetId, victimHandle, {
+        coords = { x = victimInstruction.args[1], y = victimInstruction.args[2], z = victimInstruction.args[3] },
+        owner = 1,
+    })
+
+    -- Attacker: their OWN pending slot, far away, creates nothing real --
+    -- then races in a confirm naming the victim's netId before the victim's
+    -- own confirm ever fires.
+    f.setAccess(2, true)
+    f.setPlayer(2, 'ATTACKER1')
+    f.setPed(2, 5002, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimNetId)
+
+    t.isTrue(f.notifyCalls[#f.notifyCalls].notifyType == 'error', 'the attacker gets a genuine rejection')
+    t.isNil(f.deletedEntities[victimHandle], 'the victim\'s real object, not yet even confirmed by its own owner, must survive an attacker racing in first')
+
+    -- The victim's OWN, genuine confirm -- arriving SECOND -- must still
+    -- succeed normally: nothing above may have consumed or corrupted it.
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, victimNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.deployed_success'))
+end)
+
+t.test('PRE-CONFIRMATION-WINDOW: an attacker confirming a victim\'s real, NOT-YET-CONFIRMED kennel from WITHIN tolerance cannot steal it (theft shape -- the plain success path)', function()
+    local f = newKennelFixture()
+
+    f.setAccess(1, true)
+    f.setPlayer(1, 'VICTIM01')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    local victimInstruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
+    local victimNetId = freshNetId()
+    local victimHandle = victimNetId + 500000
+    f.registerEntity(victimNetId, victimHandle, {
+        coords = { x = victimInstruction.args[1], y = victimInstruction.args[2], z = victimInstruction.args[3] },
+        owner = 1,
+    })
+
+    -- Attacker deploys from the SAME base position -- their own
+    -- server-computed spawn point lands within KENNEL_CONFIRM_DISTANCE_TOLERANCE
+    -- of the victim's real, not-yet-confirmed object (two handlers at the
+    -- same station -- this file's own DEFENSE-IN-DEPTH comment already calls
+    -- this an ordinary case), so the distance check alone would NOT catch
+    -- this. Races their own confirm in first, naming the victim's netId.
+    f.setAccess(2, true)
+    f.setPlayer(2, 'ATTACKER1')
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimNetId)
+
+    -- Must be rejected -- NOT silently registered as Kennels[ATTACKER1].
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_unconfirmed'), 'the NETWORK-OWNERSHIP GUARD rejects this before the distance/uniqueness checks would even matter')
+    t.isNil(f.deletedEntities[victimHandle])
+
+    -- PROOF the write never happened: the attacker owns nothing to pick up.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 2, victimNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.not_owner'))
+    t.isNil(f.deletedEntities[victimHandle])
+
+    -- The victim's OWN, genuine confirm -- arriving SECOND -- still succeeds
+    -- normally: the attacker's bogus confirm never claimed anything for it
+    -- to collide with.
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, victimNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.deployed_success'))
+
+    -- HARD CONSTRAINT check -- not stranded either: the victim can still
+    -- remove their own, now-properly-registered kennel through the ordinary
+    -- pickup path.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, victimNetId)
+    t.isTrue(f.deletedEntities[victimHandle])
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
+end)
+
+-- ----------------------------------------------------------------------
 -- RED-TEAM FIX: confirmKennelPlaced's rejection branches must never delete
 -- an entity the confirming citizenid does not own (server/kennel.lua's
 -- `safeToCleanup`, mirroring server/fetch.lua's `safeToCleanup` pattern).
@@ -1246,6 +1358,7 @@ local function newCombinedFixture()
         DoesEntityExist = DoesEntityExist,
         GetEntityType = GetEntityType,
         GetEntityModel = GetEntityModel,
+        NetworkGetEntityOwner = NetworkGetEntityOwner,
         DeleteEntity = DeleteEntity,
         CreateThread = CreateThread,
         Config = config,
@@ -1280,9 +1393,16 @@ local function newCombinedFixture()
             networkEntities[netId] = handle
             existingEntities[handle] = opts.exists ~= false
             entityTypes[handle] = opts.entityType or 3
-            entityModels[handle] = opts.model or PROP_HASH
+            -- Defaults to FALLBACK_MODEL's hash ('prop_tennis_ball'), NOT
+            -- kennel's own PRIMARY model -- this fixture's whole point is the
+            -- model kennel's fallback and fetch's ball SHARE, so an entity
+            -- registered with no explicit `model` must credibly be either
+            -- feature's own real object by default.
+            entityModels[handle] = opts.model or FALLBACK_HASH
+            entityOwners[handle] = opts.owner -- nil (no owner) unless the caller says otherwise -- see entityOwners' own declaration comment above
             coordsByHandle[handle] = opts.coords or { x = 0, y = 0, z = 0 }
         end,
+        setEntityOwner = function(handle, src) entityOwners[handle] = src end,
         removeExistence = function(handle) existingEntities[handle] = false end,
         dispatchNetEvent = function(eventName, src, ...)
             env.source = src
@@ -1324,7 +1444,11 @@ local function throwFetchBallSuccessfully(f, src, citizenid, pedHandle, pedCoord
     local x, y, z = instruction.args[1], instruction.args[2], instruction.args[3]
     local netId = freshNetId()
     local objectHandle = netId + 900000 -- distinct offset from deploySuccessfully's own +500000, so a kennel and a fetch ball in the same test never collide on entity handle
-    f.registerEntity(netId, objectHandle, { coords = { x = x, y = y, z = z } })
+    -- owner = src: an honest client's confirm always names the object IT
+    -- ITSELF just created -- see newCombinedFixture()'s own
+    -- NETWORK-OWNERSHIP GUARD mock declaration comment for why this must be
+    -- explicit.
+    f.registerEntity(netId, objectHandle, { coords = { x = x, y = y, z = z }, owner = src })
     f.dispatchNetEvent('qbx_k9unit:server:confirmFetchBallThrown', src, netId)
     return netId, objectHandle
 end
@@ -1365,9 +1489,17 @@ t.test('CROSS-FEATURE, THE MORE SEVERE SHAPE: confirmKennelPlaced\'s plain SUCCE
     f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimBallNetId)
 
-    -- Must be REJECTED (the shared IsNetworkEntityClaimedByOther check), not
-    -- silently written into Kennels as the attacker's own.
-    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_already_claimed'), 'must be rejected, not silently registered as a genuine new kennel')
+    -- Must be REJECTED, not silently written into Kennels as the attacker's
+    -- own. DISCLOSED MESSAGE DETAIL: caught by the NETWORK-OWNERSHIP GUARD
+    -- (placement_failed_unconfirmed, added this same pass to close the
+    -- PRE-CONFIRMATION-WINDOW theft this test also exercises -- the attacker
+    -- is never the victim's ball's real OneSync owner), which runs BEFORE
+    -- the IsNetworkEntityClaimedByOther pre-write check this test was
+    -- originally written to isolate -- both guards independently reject this
+    -- exact scenario; the ownership one simply fires first. The SECURITY
+    -- OUTCOME under test (never silently registered, never deletable) is
+    -- what matters and is unchanged.
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_unconfirmed'), 'must be rejected, not silently registered as a genuine new kennel')
     t.isNil(f.deletedEntities[victimBallHandle])
 
     -- PROOF the write never happened: the attacker's own requestPickupKennel

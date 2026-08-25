@@ -673,27 +673,29 @@ t.test('Each step() after priming executes exactly one TickWellbeing pass -- one
     t.equals(#f.clientEvents, 3)
 end)
 
-t.test('playerDropped resets the TRANSIENT, ped-instance-scoped observations (lastCoords here; injuryDiedWhileTracked is proved separately in the DEATH/RESPAWN section below) -- a disconnect-and-reconnect-elsewhere must not manufacture a bogus sprint-fatigue hit', function()
+t.test('playerDropped resets the TRANSIENT, ped-instance-scoped observations (lastCoords here; injuryDeathEpisodeStartedAt is proved separately in the DEATH/RESPAWN section below) -- a disconnect-and-reconnect-elsewhere must not manufacture a bogus sprint-fatigue hit', function()
     -- RETITLED (this task, regression follow-up): this test's ORIGINAL title
     -- claimed playerDropped resets "ONLY lastCoords". That was true when
-    -- written and stopped being true the moment injuryDiedWhileTracked
+    -- written and stopped being true the moment this file's death/respawn
+    -- reset field (originally a plain boolean, `injuryDiedWhileTracked`,
+    -- later redesigned into the timestamp `injuryDeathEpisodeStartedAt`)
     -- shipped WITHOUT the same reset -- a regression pass caught, live
     -- against this resource, that a K9 could disconnect while dead and
-    -- reconnect to a fresh, genuinely-alive ped, which the stale flag then
+    -- reconnect to a fresh, genuinely-alive ped, which the stale value then
     -- misread as a real revival and paid a free deathRespawnRestoreAmount
     -- for. server/wellbeing.lua's own WellbeingStats struct comment now
     -- names the real distinction this test's old title glossed over: TWO
     -- different categories of field live in that table (persisted
     -- fatigue/mood/fearStress/injury + timestamp fields, vs. TRANSIENT
     -- ped-instance-scoped observations like lastCoords AND
-    -- injuryDiedWhileTracked), and playerDropped resets every field in the
-    -- SECOND category, not just this one. This test still only exercises
-    -- the lastCoords/Fatigue half directly (that's what it was built to
-    -- prove, and duplicating the injuryDiedWhileTracked proof here would
-    -- just be a worse-fixtured copy of the dedicated regression test below)
-    -- -- but its TITLE must never again claim "ONLY lastCoords", so the next
-    -- editor does not read this test passing as license to "fix" a future
-    -- transient field's own missing reset back out.
+    -- injuryDeathEpisodeStartedAt), and playerDropped resets every field in
+    -- the SECOND category, not just this one. This test still only
+    -- exercises the lastCoords/Fatigue half directly (that's what it was
+    -- built to prove, and duplicating the injuryDeathEpisodeStartedAt proof
+    -- here would just be a worse-fixtured copy of the dedicated regression
+    -- test below) -- but its TITLE must never again claim "ONLY lastCoords",
+    -- so the next editor does not read this test passing as license to
+    -- "fix" a future transient field's own missing reset back out.
     local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
     f.setOnline({ 1 })
     f.setPlayer(1, 'K9-CID')
@@ -1187,98 +1189,185 @@ end)
 -- POINT B: death/respawn reset. GetEntityHealth(ped) <= 100
 -- (PED_DEAD_HEALTH_THRESHOLD, a local constant in server/wellbeing.lua,
 -- mirroring server/combat.lua's/server/medkit.lua's own identical constant)
--- is the death signal -- IsEntityDead has no FXServer server registration
+-- is the death SAMPLE -- IsEntityDead has no FXServer server registration
 -- (see server/wellbeing.lua's own header for the citation), so this
 -- fixture's GetEntityHealth stub (default 200, set via f.setHealth) is what
 -- actually drives this behavior, not a separate IsEntityDead stub.
+--
+-- THIS IS A HEURISTIC, NOT AN EVENT -- read server/wellbeing.lua's own
+-- header (STUCK-K9 SOFTLOCK FIX item 2) before "simplifying" any of this
+-- section's arithmetic. A single observed health crossing of the threshold
+-- is NOT sufficient to qualify for a restore (a red-team pass found this
+-- paid out on an ORDINARY COMBAT HEAL, not just a genuine death) -- a
+-- candidate episode (a continuous stretch observed at/below the threshold)
+-- must span at least MIN_DEATH_EPISODE_DURATION_MS
+-- (`math.max(Config.Wellbeing.tickIntervalMs * 3, 60000)`, a LOCAL constant
+-- in server/wellbeing.lua) between the tick it starts and the tick it ends
+-- before it qualifies. At this fixture's own shipped tickIntervalMs(5000),
+-- that evaluates to 60000ms -- exactly 12 tick intervals.
 -- ------------------------------------------------------------------------
 
-t.test('DEATH/RESPAWN: a K9 observed dead (health<=100) then alive again (health>100) on the NEXT tick has Injury restored by deathRespawnRestoreAmount(100), clamped to max, and passive regen resumes the SAME tick', function()
-    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
-    local src, ped = 1, 100
-    wireOnlineInjuryK9(f, src) -- ped defaults to src*100 = 100
-    dropInjuryBy(f, src, 50) -- Injury: 100 -> 50
-
-    f.setHealth(ped, 50) -- <= PED_DEAD_HEALTH_THRESHOLD(100): dead
-    f.advance(5000)
-    f.runOneTick()
-    local snapDead = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snapDead.injury, 50, 'no passive regen while genuinely dead -- Injury must not have moved')
-
-    f.setHealth(ped, 200) -- alive again (revived/respawned)
-    f.advance(5000)
-    f.runOneTick()
-    local snapRevived = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snapRevived.injury, 100, '50 + deathRespawnRestoreAmount(100), clamped to max(100), THEN +passiveRegenPerTick(1.0) also clamped to 100 the same tick')
-end)
-
-t.test('DEATH/RESPAWN: staying observed-dead across MULTIPLE ticks does not repeat the restore -- it fires exactly once, on the genuine dead->alive transition', function()
-    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
-    local src, ped = 1, 100
-    wireOnlineInjuryK9(f, src)
-    dropInjuryBy(f, src, 70) -- Injury: 100 -> 30
-
-    f.setHealth(ped, 50) -- dead
-    for _ = 1, 5 do
+--- Advances fixture time by exactly one tickIntervalMs (5000ms, this
+--- fixture's own shipped default) and runs one TickWellbeing pass, `n`
+--- times in a row, without touching health -- used to hold a ped
+--- continuously observed in whatever state it is currently set to across a
+--- controlled number of samples.
+--- @param f table
+--- @param n integer
+local function advanceTicks(f, n)
+    for _ = 1, n do
         f.advance(5000)
         f.runOneTick()
     end
+end
+
+-- MIN_DEATH_EPISODE_DURATION_MS = math.max(tickIntervalMs * 3, 60000) --
+-- at this fixture's own shipped tickIntervalMs (5000), the 60000 floor
+-- dominates: math.max(15000, 60000) = 60000. In ticks: a candidate episode
+-- must span at least 12 tick intervals (12 * 5000 = 60000) between the
+-- tick it is FIRST observed dead and the tick it is next observed alive
+-- for a restore to qualify.
+local QUALIFYING_DEAD_TICKS = 12    -- 12 * 5000 = 60000ms -- exactly the boundary
+local DISQUALIFYING_DEAD_TICKS = 11 -- 11 * 5000 = 55000ms -- one tick short
+
+--- Sets `ped`'s health to 50 (dead) and runs `deadTicks` consecutive
+--- TickWellbeing passes while it stays dead (the candidate episode's start
+--- timestamp is recorded on the FIRST of these and never moves), then sets
+--- it back to 200 (alive) and runs ONE MORE tick to observe the ending
+--- transition. The episode's measured span AT that final tick is exactly
+--- `deadTicks * 5000` ms.
+--- @param f table
+--- @param ped number
+--- @param deadTicks integer
+local function dieForTicksThenRevive(f, ped, deadTicks)
+    f.setHealth(ped, 50)
+    advanceTicks(f, deadTicks)
+    f.setHealth(ped, 200)
+    advanceTicks(f, 1)
+end
+
+t.test('MIN_DEATH_EPISODE_DURATION_MS BOUNDARY: an episode spanning EXACTLY the qualifying duration (12 ticks * 5000ms = 60000ms) restores Injury by deathRespawnRestoreAmount, clamped to max, with ordinary passive regen resuming the SAME tick', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    local ped = wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 50) -- Injury: 100 -> 50
+
+    f.setHealth(ped, 50) -- dead
+    advanceTicks(f, QUALIFYING_DEAD_TICKS) -- 12 ticks continuously dead
     local snapStillDead = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snapStillDead.injury, 30, 'five ticks spent dead must not have moved Injury at all -- no repeated/partial restore while merely staying dead')
+    t.equals(snapStillDead.injury, 50, 'no passive regen across any of the 12 dead ticks -- Injury must not have moved')
+
+    f.setHealth(ped, 200) -- alive again
+    advanceTicks(f, 1) -- 13th tick: elapsed since episode start = 12 * 5000 = 60000ms, exactly at the boundary
+    local snapRevived = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapRevived.injury, 100, '50 + deathRespawnRestoreAmount(100), clamped to max(100), THEN +passiveRegenPerTick(1.0) also clamped to 100 the same tick -- the boundary itself (>=) must count as qualifying')
+end)
+
+t.test('MIN_DEATH_EPISODE_DURATION_MS BOUNDARY: an episode spanning ONE TICK SHORT of the qualifying duration (11 ticks * 5000ms = 55000ms) does NOT restore -- only ordinary passive regen applies once alive again', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    local ped = wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 50) -- Injury: 100 -> 50
+
+    f.setHealth(ped, 50)
+    advanceTicks(f, DISQUALIFYING_DEAD_TICKS) -- 11 ticks dead
+    f.setHealth(ped, 200)
+    advanceTicks(f, 1) -- elapsed = 11 * 5000 = 55000, below the 60000 boundary
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.injury, 51, '50 + ordinary passiveRegenPerTick(1.0) ONLY -- 55000ms falls short of MIN_DEATH_EPISODE_DURATION_MS(60000), so no restore fires')
+end)
+
+t.test('RED-TEAM FIX (FOLLOW-UP FIX #2): an ORDINARY COMBAT DIP -- health grazed to 90 (a real wound, not a death) and healed back above 100 within a single tick interval -- must NOT trigger a restore. This is the exact exploit a red-team pass found: the naive crossing-based version paid a full deathRespawnRestoreAmount for the price of an ordinary bandage', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    local ped = wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 10) -- Injury: 100 -> 90, a real hit taken -- this is what makes the K9's real health dip in the first place
+
+    f.setHealth(ped, 90) -- grazed to 90 -- at/below PED_DEAD_HEALTH_THRESHOLD(100), but a live, active combat participant, not dead in any gameplay sense
+    f.advance(5000)
+    f.runOneTick() -- injuryDeathEpisodeStartedAt is set, candidate episode begins
+    local snapGrazed = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapGrazed.injury, 90, 'no passive regen this one tick while sampled at/below the threshold -- unchanged so far')
+
+    f.setHealth(ped, 150) -- an ordinary heal (bandage/food/armor/vanilla regen) -- no revive, no ambulance, no death of any kind
+    f.advance(5000)
+    f.runOneTick()
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.injury, 91, '90 + ordinary passiveRegenPerTick(1.0) ONLY. Before FOLLOW-UP FIX #2 this would have read 100 (90 + deathRespawnRestoreAmount(100), clamped) -- a full, free Injury reset for one ordinary bandage, cheaper than K9Medkit itself (injuryRestore = 40) and repeatable roughly every tick interval')
+end)
+
+t.test('OSCILLATION: health flickering above/below the threshold several times during one real laststand, with each individual dip too short to qualify on its own, never collects a restore -- each candidate episode is judged independently, never summed', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    local ped = wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 40) -- Injury: 100 -> 60
+
+    -- Three short dips, each well under the 60000ms floor, separated by
+    -- brief alive ticks -- simulates health flickering near the threshold
+    -- rather than one clean continuous down.
+    for _ = 1, 3 do
+        f.setHealth(ped, 90) -- dip
+        f.advance(5000)
+        f.runOneTick()
+        f.setHealth(ped, 150) -- brief recovery
+        f.advance(5000)
+        f.runOneTick()
+    end
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    -- 3 dip ticks: no passive regen. 3 recovery ticks: +1.0 each.
+    t.equals(snap.injury, 63, '60 + 3 * passiveRegenPerTick(1.0) (the three brief "alive" ticks) -- no restore ever qualified, since each individual dip (one tick, 5000ms) never reached MIN_DEATH_EPISODE_DURATION_MS(60000) on its own')
+end)
+
+t.test('DEATH/RESPAWN: staying observed-dead well past the qualifying duration does not repeat the restore -- it fires exactly once, on the genuine episode-ending transition', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    local ped = wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 70) -- Injury: 100 -> 30
+
+    f.setHealth(ped, 50)
+    advanceTicks(f, 20) -- 20 dead ticks (100000ms), well past the 60000ms floor -- still just ONE continuous episode
+    local snapStillDead = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapStillDead.injury, 30, 'no passive regen across any dead tick, however long the episode runs -- Injury must not have moved')
 
     f.setHealth(ped, 200) -- alive again, once
     f.advance(5000)
     f.runOneTick()
     local snapRevived = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snapRevived.injury, 100, '30 + 100 (deathRespawnRestoreAmount), clamped to max -- restored exactly once on the real transition')
+    t.equals(snapRevived.injury, 100, '30 + 100 (deathRespawnRestoreAmount), clamped to max -- restored exactly once on the real transition, regardless of how long the qualifying episode ran')
 
     -- Continuing to stay alive must not re-apply the restore a second time.
     f.advance(5000)
     f.runOneTick()
     local snapStillAlive = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snapStillAlive.injury, 100, 'still clamped to max via ordinary passive regen -- the restore itself must not re-fire without a fresh death')
+    t.equals(snapStillAlive.injury, 100, 'still clamped to max via ordinary passive regen -- the restore itself must not re-fire without a fresh qualifying episode')
 end)
 
-t.test('DEATH/RESPAWN: a SECOND death-then-revival cycle restores again -- this is a genuine per-transition mechanism, not a one-time-ever flag', function()
+t.test('DEATH/RESPAWN: a SECOND qualifying death-then-revival cycle restores again -- this is a genuine per-episode mechanism, not a one-time-ever flag', function()
     local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
-    local src, ped = 1, 100
-    wireOnlineInjuryK9(f, src)
+    local src = 1
+    local ped = wireOnlineInjuryK9(f, src)
     dropInjuryBy(f, src, 90) -- Injury: 100 -> 10
 
-    f.setHealth(ped, 50) -- death #1
-    f.advance(5000)
-    f.runOneTick()
-    f.setHealth(ped, 200) -- revival #1
-    f.advance(5000)
-    f.runOneTick()
+    dieForTicksThenRevive(f, ped, 15) -- comfortably past the 60000ms floor
     local snapAfterFirst = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snapAfterFirst.injury, 100, '10 + 100, clamped -- first restore landed')
+    t.equals(snapAfterFirst.injury, 100, '10 + 100, clamped, +1.0 passive regen (already at max) -- first restore landed')
 
     dropInjuryBy(f, src, 90) -- Injury: 100 -> 10 again, a second real firefight
-    f.setHealth(ped, 50) -- death #2
-    f.advance(5000)
-    f.runOneTick()
-    f.setHealth(ped, 200) -- revival #2
-    f.advance(5000)
-    f.runOneTick()
+    dieForTicksThenRevive(f, ped, 15) -- a second, independent qualifying episode
     local snapAfterSecond = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snapAfterSecond.injury, 100, 'a second, independent death/revival cycle must restore again -- not suppressed by the first one already having fired')
+    t.equals(snapAfterSecond.injury, 100, 'a second, independent qualifying episode must restore again -- not suppressed by the first one already having fired')
 end)
 
 t.test('DEATH/RESPAWN: Config.Wellbeing.Injury.deathRespawnRestoreAmount respects a PARTIAL (non-max) configured value -- proves the amount itself is applied, not just "snap to max"', function()
     local cfg = baselineWellbeingConfig()
     cfg.Injury.deathRespawnRestoreAmount = 25
     local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true }, wellbeingCfg = cfg })
-    local src, ped = 1, 100
-    wireOnlineInjuryK9(f, src)
+    local src = 1
+    local ped = wireOnlineInjuryK9(f, src)
     dropInjuryBy(f, src, 90) -- Injury: 100 -> 10
 
-    f.setHealth(ped, 50)
-    f.advance(5000)
-    f.runOneTick()
-    f.setHealth(ped, 200)
-    f.advance(5000)
-    f.runOneTick()
+    dieForTicksThenRevive(f, ped, 15)
     local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
     t.equals(snap.injury, 36, '10 + 25 (the configured partial amount) + 1.0 (passive regen, same tick) = 36 -- never snaps straight to max')
 end)
@@ -1287,21 +1376,16 @@ t.test('DEATH/RESPAWN: Config.Wellbeing.Injury.deathRespawnRestoreAmount = 0 is 
     local cfg = baselineWellbeingConfig()
     cfg.Injury.deathRespawnRestoreAmount = 0
     local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true }, wellbeingCfg = cfg })
-    local src, ped = 1, 100
-    wireOnlineInjuryK9(f, src)
+    local src = 1
+    local ped = wireOnlineInjuryK9(f, src)
     dropInjuryBy(f, src, 90) -- Injury: 100 -> 10
 
-    f.setHealth(ped, 50)
-    f.advance(5000)
-    f.runOneTick()
-    f.setHealth(ped, 200)
-    f.advance(5000)
-    f.runOneTick()
+    dieForTicksThenRevive(f, ped, 15)
     local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snap.injury, 11, '10 + 0 (restore disabled) + 1.0 (ordinary passive regen resuming) = 11 -- respawn grants NO special relief, exactly as configured')
+    t.equals(snap.injury, 11, '10 + 0 (restore disabled) + 1.0 (ordinary passive regen resuming) = 11 -- respawn grants NO special relief, exactly as configured, even for a genuinely qualifying long episode')
 end)
 
-t.test('DEATH/RESPAWN: a K9 that never dies at all is entirely unaffected -- the flag never fires a spurious restore', function()
+t.test('DEATH/RESPAWN: a K9 that never dies at all is entirely unaffected -- no candidate episode is ever started, so no restore ever fires', function()
     local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
     local src = 1
     wireOnlineInjuryK9(f, src) -- default health 200 (alive) for every tick
@@ -1328,8 +1412,10 @@ end)
 
 -- ------------------------------------------------------------------------
 -- REGRESSION (found empirically against the live resource, fixed this
--- pass): injuryDiedWhileTracked is a TRANSIENT, ped-instance-scoped
--- observation ("was THIS ped last seen dead"), not a persisted value -- but
+-- pass, FOLLOW-UP FIX #1): injuryDeathEpisodeStartedAt (originally a plain
+-- boolean, `injuryDiedWhileTracked`, before FOLLOW-UP FIX #2 redesigned it
+-- into a timestamp) is a TRANSIENT, ped-instance-scoped observation ("was
+-- THIS ped last seen dead, and since when"), not a persisted value -- but
 -- it shipped living in the same table this file's own header documents as
 -- deliberately surviving a disconnect, and was NOT reset by either of the
 -- two places that already reset lastCoords (the model-switch-away branch
@@ -1338,21 +1424,27 @@ end)
 -- next tick as a genuine revival, paying a full deathRespawnRestoreAmount
 -- for free, no revive/ambulance/medkit/delay required, repeatably. See
 -- server/wellbeing.lua's own header, STUCK-K9 SOFTLOCK FIX item 2's
--- FOLLOW-UP note, and the WellbeingStats struct comment's category-1-vs-2
--- split, for the full writeup this section's two tests below prove against.
+-- FOLLOW-UP FIX #1 note, and the WellbeingStats struct comment's
+-- category-1-vs-2 split, for the full writeup this section's two tests
+-- below prove against. Both tests below use a deliberately LONG
+-- (10-minute) real-world gap while offline/non-K9-modeled, specifically
+-- because a longer gap makes the bug WORSE, not better, under the
+-- duration-gated design FOLLOW-UP FIX #2 introduced -- an un-reset
+-- timestamp read against a much-later `now` looks even MORE like a
+-- genuine long down episode, so the fix must make the gap's length
+-- irrelevant entirely, not merely short enough to accidentally miss the
+-- boundary.
 -- ------------------------------------------------------------------------
 
-t.test('DEATH/RESPAWN REGRESSION (FIXED): a K9 that dies, DISCONNECTS while still dead (no revive of any kind), and reconnects to a fresh always-alive ped must NOT receive a free restore -- playerDropped must clear the stale injuryDiedWhileTracked flag, not just lastCoords', function()
+t.test('DEATH/RESPAWN REGRESSION (FIXED): a K9 that dies, DISCONNECTS while still dead (no revive of any kind), and reconnects to a fresh always-alive ped must NOT receive a free restore, no matter how long the real-world gap -- playerDropped must clear the stale injuryDeathEpisodeStartedAt timestamp, not just lastCoords', function()
     local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
     local src = 1
     local oldPed = wireOnlineInjuryK9(f, src) -- ped 100, default health 200 (alive)
     dropInjuryBy(f, src, 10) -- Injury: 100 -> 90 (a real hit taken)
 
-    -- The ped's real health drops to/below PED_DEAD_HEALTH_THRESHOLD(100)
-    -- -- the K9 is dead.
-    f.setHealth(oldPed, 50)
+    f.setHealth(oldPed, 50) -- dead
     f.advance(5000)
-    f.runOneTick() -- sets injuryDiedWhileTracked = true; no passive regen while dead
+    f.runOneTick() -- injuryDeathEpisodeStartedAt is set to this tick's timestamp
     local snapDead = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
     t.equals(snapDead.injury, 90, 'still dead, no transition observed yet -- Injury unchanged')
 
@@ -1360,6 +1452,12 @@ t.test('DEATH/RESPAWN REGRESSION (FIXED): a K9 that dies, DISCONNECTS while stil
     -- kind ever runs in this sequence.
     f.setOnline({})
     f.firePlayerDropped(src)
+
+    -- A LONG real-world gap passes while offline (10 real minutes) -- long
+    -- enough that, WITHOUT the fix, the stale timestamp would trivially
+    -- exceed MIN_DEATH_EPISODE_DURATION_MS(60000) and read as an obviously
+    -- "genuine" long down episode.
+    f.advance(600000)
 
     -- RECONNECT to a genuinely fresh ped handle (a real reconnect always
     -- gets one) -- its default health (this fixture's own alive default,
@@ -1373,10 +1471,10 @@ t.test('DEATH/RESPAWN REGRESSION (FIXED): a K9 that dies, DISCONNECTS while stil
     f.advance(5000)
     f.runOneTick()
     local snapReconnected = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snapReconnected.injury, 91, '90 + ordinary passive regen(1.0) ONLY. THE FIX: playerDropped clearing the stale flag means this always-alive fresh ped is never misread as a dead-to-alive TRANSITION. Before this fix this read 100 (90 + deathRespawnRestoreAmount(100), clamped) -- a full, free, repeatable restore with zero revive/ambulance/medkit/delay involved')
+    t.equals(snapReconnected.injury, 91, '90 + ordinary passive regen(1.0) ONLY. THE FIX: playerDropped clearing the stale timestamp means this always-alive fresh ped starts with NO candidate episode at all, regardless of how long the real-world gap was. Before FOLLOW-UP FIX #1 this would have read 100 (90 + deathRespawnRestoreAmount(100), clamped) -- and the 10-minute gap here would have made it look EVEN MORE like a genuine down episode, not less')
 end)
 
-t.test('DEATH/RESPAWN REGRESSION (FIXED): the SAME stale-flag bug via the OTHER reset site -- a K9 that dies, switches to a non-K9 model while STILL CONNECTED and dead, is revived by unrelated means while non-K9-modeled, then switches back to a K9 model must NOT receive a free restore', function()
+t.test('DEATH/RESPAWN REGRESSION (FIXED): the SAME stale-timestamp bug via the OTHER reset site -- a K9 that dies, switches to a non-K9 model while STILL CONNECTED and dead, is revived by unrelated means while non-K9-modeled for a long real stretch, then switches back to a K9 model must NOT receive a free restore', function()
     local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
     local src = 1
     local ped = wireOnlineInjuryK9(f, src)
@@ -1384,7 +1482,7 @@ t.test('DEATH/RESPAWN REGRESSION (FIXED): the SAME stale-flag bug via the OTHER 
 
     f.setHealth(ped, 50) -- dead
     f.advance(5000)
-    f.runOneTick() -- injuryDiedWhileTracked = true
+    f.runOneTick() -- injuryDeathEpisodeStartedAt is set
     local snapDead = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
     t.equals(snapDead.injury, 80, 'still dead -- unchanged')
 
@@ -1392,16 +1490,18 @@ t.test('DEATH/RESPAWN REGRESSION (FIXED): the SAME stale-flag bug via the OTHER 
     -- -- the `elseif ped ~= 0` branch inside TickWellbeing, not a
     -- disconnect. This branch already resets lastCoords for the identical
     -- "stale ped-instance-scoped observation" reason; it must now ALSO
-    -- reset injuryDiedWhileTracked.
+    -- reset injuryDeathEpisodeStartedAt.
     f.setModel(ped, 777) -- no longer a configured K9 model
     f.setIsK9Model(777, false)
     f.advance(5000)
     f.runOneTick()
 
     -- Revived by some entirely unrelated means (this resource's own real
-    -- laststand/EMS flow, outside this file's concern) WHILE non-K9-modeled
-    -- -- native health recovers before the model ever switches back.
+    -- laststand/EMS flow, outside this file's concern) WHILE non-K9-modeled,
+    -- and stays non-K9-modeled for a long real stretch (10 minutes) before
+    -- ever switching back.
     f.setHealth(ped, 200)
+    f.advance(600000)
 
     -- Switches back to a K9 model, already alive.
     f.setModel(ped, 555)
@@ -1410,10 +1510,10 @@ t.test('DEATH/RESPAWN REGRESSION (FIXED): the SAME stale-flag bug via the OTHER 
     f.runOneTick()
 
     local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
-    t.equals(snap.injury, 81, '80 + ordinary passive regen(1.0) ONLY -- the model-switch-away branch must have cleared the stale flag too, so switching back to a K9 model while already alive is never misread as a transition this file actually observed')
+    t.equals(snap.injury, 81, '80 + ordinary passive regen(1.0) ONLY -- the model-switch-away branch must have cleared the stale timestamp too, so switching back to a K9 model while already alive (after any real stretch of time) is never misread as a qualifying episode this file actually observed')
 end)
 
-t.test('AUDIT (this task\'s own item c -- checking the WHOLE struct, not just injuryDiedWhileTracked): the ABSOLUTE-TIMESTAMP fields (hesitatingUntil) are correctly LEFT ALONE by playerDropped -- GetGameTimer() keeps advancing while a player is offline, so a stored future timestamp is still a meaningful comparison after reconnect, which is why this field does NOT belong in the same "must reset on disconnect" category as injuryDiedWhileTracked', function()
+t.test('AUDIT (this task\'s own item c -- checking the WHOLE struct, not just injuryDeathEpisodeStartedAt): the ABSOLUTE-TIMESTAMP fields (hesitatingUntil) are correctly LEFT ALONE by playerDropped -- GetGameTimer() keeps advancing while a player is offline, so a stored future timestamp is still a meaningful comparison after reconnect, which is why this field does NOT belong in the same "must reset on disconnect" category as injuryDeathEpisodeStartedAt', function()
     local f = newWellbeingFixture({ featuresOverride = { FearStressSystem = true } })
     local src = 1
     f.setOnline({ src })
@@ -1443,13 +1543,12 @@ t.test('AUDIT (this task\'s own item c -- checking the WHOLE struct, not just in
     -- A short reconnect gap, still well inside the armed window -- must
     -- STILL read as hesitating: the timestamp was correctly left alone.
     f.advance(2000) -- now = 147000, hesitatingUntil(153000) still in the future
-    t.isTrue(f.isHesitating('K9-CID'), 'hesitatingUntil must survive the disconnect completely untouched -- this is CORRECT, unlike injuryDiedWhileTracked')
+    t.isTrue(f.isHesitating('K9-CID'), 'hesitatingUntil must survive the disconnect completely untouched -- this is CORRECT, unlike injuryDeathEpisodeStartedAt')
 
     -- Enough real server uptime elapses (while the player was offline) for
     -- the SAME absolute timestamp to genuinely lapse on its own -- proving
     -- this is a real, live clock comparison across a disconnect, never a
-    -- stale flag frozen at disconnect-time the way injuryDiedWhileTracked
-    -- was before this pass's fix.
+    -- stale value frozen at disconnect-time.
     f.advance(10000) -- now = 157000, past hesitatingUntil(153000)
     t.isFalse(f.isHesitating('K9-CID'), 'hesitatingUntil must lapse on its own real-world schedule regardless of connection state -- exactly why this field needs NO playerDropped reset at all')
 end)

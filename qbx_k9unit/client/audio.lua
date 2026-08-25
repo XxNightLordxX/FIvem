@@ -19,9 +19,11 @@
     edited to make that happen (still true) — the wiring lives entirely in
     client/main.lua, owned by someone else — but readers of this header
     should not go looking for a pending integration note; there isn't one
-    anymore. (fxmanifest.lua's own load-order comment on this file, "Has no
-    caller yet", is ALSO stale for the same reason and belongs to that
-    file's owner to correct — flagged, not fixed here.)
+    anymore. (fxmanifest.lua's own load-order comment on this file used to
+    say "Has no caller yet", which was ALSO stale for the same reason — that
+    has since been corrected there too, by this file's manifest owner, to
+    describe the live PlaySoundOnNetworkEntity -> PlayK9Sound wiring
+    directly; nothing left to flag here.)
 
     AUTHORITATIVE BACKGROUND — read before touching this file:
       - phase2_notes/dependency_and_audio_status.md, "Question 2" (the pass
