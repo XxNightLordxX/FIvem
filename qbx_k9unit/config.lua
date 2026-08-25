@@ -31,6 +31,23 @@ Config = {}
 -- the name in `backticks`. No line numbers here on purpose -- they go stale
 -- the moment anything is added, and a wrong line number is worse than none.
 --
+-- ONE TRAP WORTH KNOWING BEFORE YOU EDIT ANYTHING: every field in this
+-- file whose name ends in `CooldownMs`. In most FiveM scripts, setting a
+-- cooldown to 0 means "no cooldown". **HERE IT DOES NOT.** This resource's
+-- cooldown system fails CLOSED on zero or a negative number, which would
+-- block the action permanently rather than allow it freely -- the exact
+-- opposite of what you would expect.
+--
+-- You will not break anything by trying: a bad value is now caught at
+-- startup, quietly swapped for a sensible built-in number, and a warning
+-- naming the exact setting is printed to your server console. But it will
+-- never do what "0 = off" does elsewhere.
+--
+-- There is no value that disables a cooldown. If you genuinely want a
+-- mechanic to have none, that is not a cooldown setting -- turn the whole
+-- feature off in `Config.Features` instead, or set the cooldown to
+-- something very small like 1.
+--
 -- THE ONE TO KNOW ABOUT: `Config.Features` is the master list of on/off
 -- switches, right below this. Almost every entry there has its own settings
 -- table further down with the same name -- turn something on there, then
