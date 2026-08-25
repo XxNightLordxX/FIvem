@@ -338,7 +338,7 @@ before understanding this.
 
 | Flag | Default | What it gates | Prerequisite / caveat |
 |---|---|---|---|
-| `DeployableKennel` | `false` | Places a world kennel object (`/k9deploykennel`); server computes the spawn point and independently re-validates the placed object. Reachable from the radial menu ("Deploy Kennel") as well as the command. | `Config.DeployableKennel.propModel` (`'prop_doghouse_01'`) is a **single-source, unconfirmed** prop name found in an unrelated third-party resource's config — it has not been independently cross-verified as a real streamable model. `fallbackPropModel` (`'prop_tennis_ball'`, confirmed real) is used automatically if the primary model fails to load, so a bad `propModel` degrades to "an oddly-shaped real object" rather than a silent failure. |
+| `DeployableKennel` | `false` | Places a world kennel object (`/k9deploykennel`); server computes the spawn point and independently re-validates the placed object. Reachable from the radial menu ("Deploy Kennel") as well as the command. | `Config.DeployableKennel.propModel` was `'prop_doghouse_01'` — **refuted and replaced 2026-08-25**. That name traced to a single unverified third-party config default and does not appear in a 5,171-entry live object database (its screenshot URL 404s); it has been replaced with `'prop_dog_cage_01'` (hash `379820688`), which **does** appear in that database with a real rendered screenshot. Still worth eyeballing on your own dev server before enabling — a database entry with a screenshot is checkable evidence, not an in-engine confirmation. `fallbackPropModel` (`'prop_tennis_ball'`, confirmed real) is used automatically if the primary model fails to load, so a bad `propModel` degrades to "an oddly-shaped real object" rather than a silent failure. |
 | `AdvancedBarkRadial` | `false` | Turns the single "Bark" radial item into a 3-way Alert/Aggressive/Calm submenu. | Requires `BasicBarkSounds` also enabled. Same no-audio caveat as below. |
 | `ProximityAudioFX` | `false` | Ambient K9 presence audio that scales with a listener's live distance, built on `client/audio.lua`'s bridge. | `client/proximityaudio.lua` and `Config.ProximityAudioFX` are real and **registered in `fxmanifest.lua`** — reachable the moment this flag is `true`. Still silent, like every other bark/ambient path, until real `.ogg` audio is supplied — see [Bark sounds](#bark-sounds-are-placeholders-no-audio-ships). |
 | `PropAttachments` | `false` | Cosmetic prop (vest/harness) toggle on a K9's own ped, reachable from the radial menu ("Toggle K9 Vest"). | Real client+server code, config, and radial entry all exist and are registered. `Config.PropAttachments.boneIndex` is still the root-bone (`0`) placeholder pending the dev-only bone-index sweep (`BoneSweepDevTool`, `client/bonetool.lua`/`server/bonetool.lua`) — degrades to "visibly attached at the wrong point," never a crash. |
@@ -638,14 +638,100 @@ player can use them, not just server admins.
 | `/k9decertify` | `/k9decertify [server id]` | Revokes a certification from an **online** target. Refuses and points to `/k9decertifyoffline` if the target isn't connected. |
 | `/k9decertifyoffline` | `/k9decertifyoffline [citizenid] [job]` | Revokes a certification for a **disconnected** target. Refuses and points to `/k9decertify` if the citizenid resolves to an online player. |
 
-Feature-gated commands (each requires its own flag `true`):
+Feature-gated commands (each requires its own flag `true`; the command is
+never even registered while its flag is `false`):
 
 | Command | Flag | Notes |
 |---|---|---|
 | `/k9calmdown` | `FearStressSystem` | Self-only, reduces stress early. |
 | `/k9meatbait` | `DistractionSystem` | Usable by any player, not just K9-UI-eligible ones. |
 | `/k9whistle` | `DistractionSystem` | Same as above. |
-| `/k9deploykennel` | `DeployableKennel` | Places a world kennel near the handler. |
+| `/k9deploykennel` | `DeployableKennel` | Places a world kennel near the handler. Same action as the radial menu's "Deploy Kennel". |
+| `/k9recall` | `Recall` | The handler's "call the dog off" button — ends whatever bite/takedown/drag their partnered K9 currently holds. Deliberately **never** gated on certification, K9 UI access, or proximity — a decertified handler must still be able to call their dog off mid-engagement. A no-op (with a "nothing to recall" notification) if there's nothing active. |
+| `/k9propattach` | `PropAttachments` | Toggles the cosmetic vest/harness prop on the caller's own K9-modeled ped. Same action as the radial menu's "Toggle K9 Vest". |
+| `/k9throwfetchball` | `FetchMechanic` | Throws the fetch ball. Gated on `HasK9Access()` (a handler command), not on playing a K9 model. Same action as the radial menu's "Fetch: Throw". |
+| `/k9dropfetchball` | `FetchMechanic` | Releases a ball the caller's K9 is currently carrying. Same action as the radial menu's "Fetch: Drop". |
+| `/k9recallfetchball` | `FetchMechanic` | The thrower's own early-interrupt for their in-progress fetch cycle, in any state. Not gated on `HasK9Access()` — server-side ownership (only the real thrower's own `source`) is the actual check. Same action as the radial menu's "Fetch: Recall". |
+
+### Admin/audit commands (`Config.Features.AdminAuditCommands`)
+
+`server/admin.lua` — read-only, ACE-gated wrappers over `k9_certifications`,
+`k9_partnerships`, `k9_search_log`, and `k9_progression`, replacing "an
+admin runs raw SQL by hand" with four in-game commands. **None of these
+four commands are registered at all unless `Config.Features.AdminAuditCommands`
+is `true`** (checked once, at resource start) — the flag being `false`
+means the commands don't exist, not merely that they're hidden. Zero
+mutation paths exist anywhere in this file: every query is a `SELECT`.
+
+This is this resource's **first ACE-gated surface** — unlike every other
+command above, authorization has nothing to do with department membership
+or K9 certification:
+
+- The caller must pass `IsPlayerAceAllowed(source, Config.AdminAudit.AcePermission)`
+  (default ACE principal: `'k9unit.admin'`). Set this deliberately before
+  enabling — these commands expose **who searched whom, and when**, so this
+  is a privacy boundary as well as an admin one.
+- All four commands share one per-caller cooldown, `Config.AdminAudit.CommandCooldownMs`
+  (default `3000`ms).
+- The server console (`source == 0`) is **not** trusted by default
+  (`Config.AdminAudit.TrustConsole`, default `false`). In FiveM, `source == 0`
+  is not only the real console — it's also an RCON client (authenticated by
+  `rcon_password` alone) and **any other resource on the server** calling
+  `ExecuteCommand`, since these commands are registered unrestricted.
+  Turning `TrustConsole` on accepts all three as trusted equally. Prefer
+  granting a genuine console operator the ACE directly, or querying the
+  database yourself, over flipping this on.
+- Every invocation — allowed, denied, rate-limited, or malformed — is
+  printed to the server console, so the audit surface itself has an audit
+  trail.
+
+| Command | Usage | Notes |
+|---|---|---|
+| `/k9auditcert` | `/k9auditcert [citizenid] [limit]` | Full certification grant/revoke history for one citizenid, across every department, most recently **granted** first. `[limit]` defaults to `Config.AdminAudit.MaxResults.Certifications` (`25`), and is always clamped to `[1, 100]` regardless of config. |
+| `/k9auditpartner` | `/k9auditpartner [citizenid] [limit]` | Full partnership history (active and historical) for one citizenid, in **either** the K9 or handler role. Same default/clamp behavior, using `MaxResults.Partnerships`. |
+| `/k9auditsearch` | `/k9auditsearch <officer\|plate\|person\|recent> [value] [limit]` | `officer <citizenid>` — searches **performed by** that citizenid; `plate <plate>` — searches **of** that vehicle; `person <citizenid>` — searches **of** that person; `recent` — the N most recent searches of any kind (no `value` argument). All modes order most-recent-first. Same default/clamp behavior, using `MaxResults.SearchLog`. |
+| `/k9auditxp` | `/k9auditxp [citizenid]` | Current persisted XP total for one citizenid, from `k9_progression`. A single-row point lookup — no `[limit]`. Reports the raw `xp` integer only, not a derived tier; compare it against `Config.XPTiers` yourself. |
+
+### Dev-only tooling (`Config.Features.BoneSweepDevTool`)
+
+`/k9bonetool <goto|next|prev|test|stop|known|help> [arg]` —
+`server/bonetool.lua` + `client/bonetool.lua`. Exists to answer one open
+question: which numeric bone index on a dog skeleton is the correct attach
+point for `PropAttachments`'s vest and `FetchMechanic`'s mouth-carry. See
+`OPERATOR_RUNBOOK.md` for the full walkthrough.
+
+**Never enable this on a production server.** `Config.Features.BoneSweepDevTool`
+spawns and attaches real objects on command, and must stay `false` outside
+a dev session. It is additionally gated on its own ACE
+(`Config.BoneSweepTool.AcePermission`, default `'k9unit.bonesweep'` —
+**deliberately a different principal** from the admin-audit ACE above, so
+granting one never grants the other) — but treat the feature flag itself
+as the real switch, not the ACE.
+
+**Disabling the flag and restarting are two different things.** Like every
+command in this resource, `/k9bonetool` is registered once, at load. Flipping
+this flag back to `false` without restarting the resource leaves the
+command reachable (still ACE-gated) until the next restart — restart after
+disabling it, don't just flip the config.
+
+Console (`source == 0`) cannot use this command at all (unlike the audit
+commands above) — every subcommand acts on "your own current ped," which
+the server console doesn't have.
+
+| Subcommand | Usage | What it does |
+|---|---|---|
+| `goto` | `/k9bonetool goto <index>` | Preview one exact bone index: a live debug marker plus an on-screen index label, replacing whatever was previously previewed. Clamped to `[0, Config.BoneSweepTool.MaxBoneIndex]` (default `200`). |
+| `next` / `prev` | `/k9bonetool next [step]` / `/k9bonetool prev [step]` | Step the current preview index forward/backward by `[step]` (default `1`, must be a positive integer). |
+| `test` | `/k9bonetool test` | Really attaches a test prop (`Config.BoneSweepTool.TestPropModel`, default `prop_tennis_ball`) at the current preview index — a real `CreateObject` + `AttachEntityToEntity`, for final visual confirmation. Replaces any previous test object. |
+| `known` | `/k9bonetool known` | Resolves a curated list of documented `ePedBoneId` names against your own live ped via `GetPedBoneIndex` and reports every raw result via chat/console — a shortlist of candidates to `goto` and confirm with your own eyes, never a trusted answer by itself. Does not change the current preview index. |
+| `stop` | `/k9bonetool stop` | Stops the preview marker and removes any test object. |
+| `help` | `/k9bonetool help` | Prints the full subcommand reference. Handled entirely server-side, no client round-trip needed. |
+
+Found the right index? Record it in `config.lua`:
+`Config.PropAttachments.boneIndex` (vest) or
+`Config.FetchMechanic.mouthBoneIndex` (fetch mouth-carry — also flip
+`Config.FetchMechanic.mouthCarryMode` from `'fake'` to `'attach'` once
+confirmed).
 
 In-world ox_target equivalents (no command needed; self-targeting is
 excluded for certify/revoke):
@@ -808,4 +894,10 @@ own.
 
 See `SPEC.md`, `PHASE3_SPEC.md`, `PHASE4_SPEC.md`, `PHASE5_SPEC.md` for the
 full product spec and phased build plan, and `CHANGELOG.md` for a running
-history of what changed and why.
+history of what changed and why. See `OPERATOR_RUNBOOK.md` for the
+step-by-step guide to standing this resource up on a real server (install
+order including the SQL migrations, the dev-server checks that gate
+`ScentTracking`/`PropAttachments`/`FetchMechanic`/`DeployableKennel`, the
+sequenced check for the client-event origin guard, and a recommended first
+tranche of flags to enable), and `DECISIONS_NEEDED.md` for the open
+decisions only a server owner can make.
