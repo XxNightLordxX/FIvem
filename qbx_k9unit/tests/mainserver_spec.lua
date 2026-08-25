@@ -186,6 +186,18 @@ local function newMainFixture(opts)
 
     local function IsConfiguredK9Model(hash) return hash == K9_MODEL_HASH end
 
+    -- K9 role/model decoupling (server/appearance.lua) -- CheckLeashEligibility
+    -- ORs this in alongside IsConfiguredK9Model(GetEntityModel(...)) to let a
+    -- role-holder on a human/custom model still count as "the K9 party".
+    -- Stubbed here (not the real server/appearance.lua) for the same reason
+    -- HasK9Access/IsConfiguredK9Model are: this file's job is main.lua's OWN
+    -- eligibility/handshake logic, not a second copy of appearance.lua's,
+    -- which has its own spec (appearance_spec.lua). Defaults to false for
+    -- every source, matching "no role granted" being the default real-world
+    -- state.
+    local hasRoleBySource = {}
+    local function HasK9Role(src) return hasRoleBySource[src] == true end
+
     local jobBySource = {} -- source -> job name, or nil = unresolved/no Player record at all
     local exportsStub = {
         qbx_core = {
@@ -249,6 +261,7 @@ local function newMainFixture(opts)
         NotifyPlayer = NotifyPlayer,
         HasK9Access = HasK9Access,
         IsConfiguredK9Model = IsConfiguredK9Model,
+        HasK9Role = HasK9Role,
         exports = exportsStub,
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
@@ -276,6 +289,7 @@ local function newMainFixture(opts)
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         now = function() return fakeNow end,
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
+        setK9Role = function(src, hasRole) hasRoleBySource[src] = hasRole end,
         setJob = function(src, jobName) jobBySource[src] = jobName end,
         setPed = function(src, pedHandle, coords, modelHash)
             pedBySource[src] = pedHandle
@@ -689,6 +703,76 @@ t.test('leash reject reason: no_k9_party (neither party is a configured K9 model
     f.setJob(2, 'police')
     f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
     t.equals(lastNotifyTo(f, 1).description, locale('common.no_k9_party'))
+end)
+
+-- K9 ROLE/MODEL DECOUPLING WIDENING -- "I also want everything to work with
+-- any ped". Previously, a certified handler holding the K9 role while
+-- standing on a human (or any unrecognized custom) model was rejected
+-- outright as `no_k9_party`, exactly as if neither party were a K9 at all.
+-- These pin the fix: HasK9Role(src) now stands in for
+-- IsConfiguredK9Model(GetEntityModel(...)) wherever the model check alone
+-- would otherwise fail.
+t.test('K9 ROLE/MODEL DECOUPLING: a role-holder on a HUMAN model (not a configured K9 model) is still accepted as the K9 party -- no longer no_k9_party', function()
+    local f = newMainFixture()
+    -- Both peds wear the officer model; only source 1 holds the decoupled
+    -- K9 role. Pre-widening this was unconditionally `no_k9_party`.
+    f.setPed(1, 10, ORIGIN, OFFICER_MODEL_HASH)
+    f.setAccess(1, true)
+    f.setK9Role(1, true)
+    f.setPed(2, 20, ORIGIN, OFFICER_MODEL_HASH)
+    f.setJob(2, 'police')
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('leash.request_sent'), 'a human-modeled role-holder must be accepted as the K9 party, not rejected as no_k9_party')
+end)
+
+t.test('K9 ROLE/MODEL DECOUPLING: role-holder-on-human-model still must satisfy HasK9Access (not_certified still fires)', function()
+    local f = newMainFixture()
+    f.setPed(1, 10, ORIGIN, OFFICER_MODEL_HASH)
+    f.setAccess(1, false) -- role granted, but not currently certified/access-holding
+    f.setK9Role(1, true)
+    f.setPed(2, 20, ORIGIN, OFFICER_MODEL_HASH)
+    f.setJob(2, 'police')
+    f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
+    t.equals(lastNotifyTo(f, 1).description, locale('common.k9_not_certified'), 'the widening only decides WHO counts as the K9 party -- HasK9Access is still independently enforced')
+end)
+
+t.test('K9 ROLE/MODEL DECOUPLING: HasK9Role not being loaded at all (soft dependency absent) fails CLOSED to the pre-decoupling model-only check, never errors', function()
+    -- Rebuild a fixture with no HasK9Role global at all (simulates
+    -- server/appearance.lua being removed/not loaded) by loading main.lua
+    -- directly rather than through newMainFixture(), which always injects
+    -- the stub above.
+    local fakeNow = 0
+    local eventHandlers, netEvents = {}, {}
+    local env = Sandbox.newEnv({
+        GetGameTimer = function() return fakeNow end,
+        AddEventHandler = function(name, h) eventHandlers[name] = eventHandlers[name] or {}; eventHandlers[name][#eventHandlers[name] + 1] = h end,
+        RegisterNetEvent = function(name, h) netEvents[name] = h end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        TriggerClientEvent = function() end,
+        NotifyPlayer = function() end,
+        HasK9Access = function() return true end,
+        IsConfiguredK9Model = function(hash) return hash == K9_MODEL_HASH end,
+        -- HasK9Role deliberately OMITTED.
+        exports = { qbx_core = { GetPlayer = function() return nil end } },
+        GetPlayerPed = function() return 0 end,
+        GetEntityCoords = function() return ORIGIN end,
+        GetEntityModel = function() return OFFICER_MODEL_HASH end,
+        NetworkGetNetworkIdFromEntity = function(h) return h end,
+        NetworkGetEntityFromNetworkId = function() return 0 end,
+        DoesEntityExist = function() return false end,
+        GetEntityType = function() return 0 end,
+        GetPlayers = function() return {} end,
+        CreateThread = Sandbox.newThreadRunner().CreateThread,
+        Wait = Sandbox.newThreadRunner().Wait,
+        Config = { Features = { LeashMechanics = true }, LeashMaxDistance = LEASH_MAX_DISTANCE, Departments = { police = true } },
+    })
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/entities.lua', env)
+    -- Must not raise merely from HasK9Role being absent (type(HasK9Role) ==
+    -- 'function' is false for a nil global -- the `and` short-circuits
+    -- before ever calling it).
+    Sandbox.loadInto('../server/main.lua', env)
+    t.isNotNil(netEvents['qbx_k9unit:server:requestLeashAttach'], 'file must still load and register its handlers with HasK9Role entirely absent')
 end)
 
 t.test('leash reject reason: not_certified (K9-modeled party lacks HasK9Access)', function()

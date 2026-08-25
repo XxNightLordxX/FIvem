@@ -155,6 +155,13 @@ local function newFetchFixture(opts)
     local fakeNow = 0
     local function GetGameTimer() return fakeNow end
 
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
     local eventHandlers = {} -- eventName -> { handler, handler, ... } (AddEventHandler)
     local function AddEventHandler(eventName, handler)
         eventHandlers[eventName] = eventHandlers[eventName] or {}
@@ -182,6 +189,14 @@ local function newFetchFixture(opts)
     local function HasK9Access(src) return hasAccessBySource[src] == true end
 
     local function IsConfiguredK9Model(hash) return hash == K9_PED_HASH end
+
+    -- K9 role/model decoupling (server/appearance.lua) -- requestPickupFetchBall
+    -- ORs this in alongside IsConfiguredK9Model(GetEntityModel(ped)) so a
+    -- role-holder on a non-K9 model can still carry. Stubbed here (not the
+    -- real server/appearance.lua), same "this file's own logic only"
+    -- reasoning as HasK9Access/IsConfiguredK9Model above. Defaults false.
+    local hasRoleBySource = {}
+    local function HasK9Role(src) return hasRoleBySource[src] == true end
 
     local playersBySource = {} -- source -> citizenid string, or nil = unresolved
     local exportsStub = {
@@ -239,7 +254,7 @@ local function newFetchFixture(opts)
             throwUpOffsetMeters = 1.2,
             throwForceForward = 12.0,
             throwForceUp = 6.0,
-            throwCooldownMs = THROW_COOLDOWN_MS,
+            throwCooldownMs = opts.throwCooldownMs or THROW_COOLDOWN_MS,
             pendingThrowTtlMs = PENDING_THROW_TTL_MS,
             maxBallLifetimeMs = MAX_BALL_LIFETIME_MS,
             pickupInteractDistanceMeters = PICKUP_INTERACT_DIST,
@@ -248,7 +263,7 @@ local function newFetchFixture(opts)
             mouthCarryMode = opts.mouthCarryMode or 'fake',
             mouthBoneIndex = 0,
             mouthOffsetX = 0.0, mouthOffsetY = 0.0, mouthOffsetZ = 0.0,
-            pickupCooldownMs = PICKUP_COOLDOWN_MS,
+            pickupCooldownMs = opts.pickupCooldownMs or PICKUP_COOLDOWN_MS,
             releaseCooldownMs = opts.releaseCooldownMs, -- deliberately never read by the production file -- see releaseFetchBall tests
         },
     }
@@ -256,7 +271,7 @@ local function newFetchFixture(opts)
     local runner = Sandbox.newThreadRunner()
 
     local env = Sandbox.newEnv({
-        GetGameTimer = GetGameTimer,
+        HasK9Role = HasK9Role,
         AddEventHandler = AddEventHandler,
         RegisterNetEvent = RegisterNetEvent,
         GetCurrentResourceName = GetCurrentResourceName,
@@ -277,6 +292,7 @@ local function newFetchFixture(opts)
         DeleteEntity = DeleteEntity,
         CreateThread = runner.CreateThread,
         Wait = runner.Wait,
+        print = printStub,
         Config = config,
     })
 
@@ -285,10 +301,12 @@ local function newFetchFixture(opts)
     Sandbox.loadInto('../server/fetch.lua', env)
 
     return {
+        env = env,
         config = config,
         clientEvents = clientEvents,
         notifyCalls = notifyCalls,
         deletedEntities = deletedEntities,
+        printedLines = printedLines,
         eventHandlerCount = function(name) return #(eventHandlers[name] or {}) end,
         netEventNames = netEvents,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,

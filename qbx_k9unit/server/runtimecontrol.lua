@@ -542,16 +542,64 @@ for key, entry in pairs(TUNABLE_REGISTRY) do
 end
 
 -- ======================================================================
--- THEME -- see header PART 2. DEFAULT_THEME mirrors
+-- THEME -- see header PART 2. DEFAULT_THEME's four COLOUR fields seed from
+-- Config.CommandTablet.branding.theme (the operator's own "starting
+-- colours, matched to the shipped logo" -- config.lua's own comment) so a
+-- FRESH install with no k9_tablet_theme row yet, and no override ever
+-- saved, shows the operator's actual branding immediately rather than a
+-- generic placeholder blue that would only ever be replaced once someone
+-- opened the tablet's theme tab and pressed Save at least once.
+-- CROSS-FILE GAP THIS CLOSES: this file's four colour literals were
+-- previously hardcoded independently of config.lua's own
+-- branding.theme -- shipped config.lua sets branding.theme to a crimson
+-- palette, but a fresh install (no DB row) rendered the OLD placeholder
+-- blue below until the real tabletGetTheme response replaced it, since
+-- THIS default (not branding.theme) is what CurrentTheme seeds from at
+-- boot. The old literals are kept as the FALLBACK-of-fallback (an
+-- invalid/missing/malformed branding.theme entry, or no
+-- Config.CommandTablet table at all e.g. CommandTablet disabled) --
+-- never silently propagating a bad config value into CurrentTheme, same
+-- "never trust blindly" posture ValidateFullTheme already applies to a
+-- loaded DB row. `density`/`headerTitle` are NOT part of branding.theme
+-- (config.lua's own comment: branding.theme is "starting colours" only)
+-- and keep their own literal defaults, matching
 -- sql/migrations/0007_create_k9_runtime_control.sql's own k9_tablet_theme
--- column DEFAULTs exactly, so "never configured yet" and "explicitly reset"
--- always converge on the same values.
+-- column DEFAULTs exactly, so "never configured yet" and "explicitly
+-- reset" always converge on the same non-colour values.
 -- ======================================================================
-local DEFAULT_THEME = {
+local FALLBACK_THEME_COLORS = {
     primaryColor    = '#2563eb',
     accentColor     = '#f59e0b',
     backgroundColor = '#111827',
     textColor       = '#f9fafb',
+}
+
+--- Narrow, standalone `#RRGGBB` check -- duplicated from IsValidHexColor's
+--- own pattern (defined further below in this file) rather than reordered
+--- ahead of it, so a config-authored branding colour is validated with the
+--- exact same rule a runtime-submitted one is, without restructuring this
+--- file's existing top-to-bottom section order for one early call site.
+--- @param value any
+--- @return boolean
+local function IsPlausibleHexColorForBrandingSeed(value)
+    return type(value) == 'string' and value:match('^#%x%x%x%x%x%x$') ~= nil
+end
+
+--- @param field string -- one of the four DEFAULT_THEME colour keys
+--- @return string
+local function ResolveBrandingSeedColor(field)
+    local branding = type(Config.CommandTablet) == 'table' and Config.CommandTablet.branding
+    local brandingTheme = type(branding) == 'table' and branding.theme
+    local candidate = type(brandingTheme) == 'table' and brandingTheme[field]
+    if IsPlausibleHexColorForBrandingSeed(candidate) then return candidate end
+    return FALLBACK_THEME_COLORS[field]
+end
+
+local DEFAULT_THEME = {
+    primaryColor    = ResolveBrandingSeedColor('primaryColor'),
+    accentColor     = ResolveBrandingSeedColor('accentColor'),
+    backgroundColor = ResolveBrandingSeedColor('backgroundColor'),
+    textColor       = ResolveBrandingSeedColor('textColor'),
     density         = 'comfortable',
     headerTitle     = 'K9 Command Tablet',
 }

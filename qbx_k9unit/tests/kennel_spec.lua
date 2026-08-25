@@ -129,9 +129,17 @@ end
 --- it (same load order fxmanifest.lua's server_scripts list requires), and
 --- every other cross-file/native dependency as a test-controlled stub.
 --- @return table fixture
-local function newKennelFixture()
+local function newKennelFixture(opts)
+    opts = opts or {}
     local fakeNow = 0
     local function GetGameTimer() return fakeNow end
+
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
 
     local eventHandlers = {} -- eventName -> { handler, handler, ... } (AddEventHandler)
     local function AddEventHandler(eventName, handler)
@@ -213,7 +221,7 @@ local function newKennelFixture()
             propModel = PROP_MODEL,
             fallbackPropModel = FALLBACK_MODEL,
             placementForwardOffsetMeters = 2.0,
-            deployCooldownMs = DEPLOY_COOLDOWN_MS,
+            deployCooldownMs = opts.deployCooldownMs or DEPLOY_COOLDOWN_MS,
             pendingPlacementTtlMs = PENDING_TTL_MS,
         },
     }
@@ -237,6 +245,7 @@ local function newKennelFixture()
         GetEntityModel = GetEntityModel,
         NetworkGetEntityOwner = NetworkGetEntityOwner,
         DeleteEntity = DeleteEntity,
+        print = printStub,
         Config = config,
     })
 
@@ -245,10 +254,12 @@ local function newKennelFixture()
     Sandbox.loadInto('../server/kennel.lua', env)
 
     return {
+        env = env,
         config = config,
         clientEvents = clientEvents,
         notifyCalls = notifyCalls,
         deletedEntities = deletedEntities,
+        printedLines = printedLines,
         eventHandlerCount = function(name) return #(eventHandlers[name] or {}) end,
         netEventNames = netEvents,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
@@ -373,6 +384,71 @@ t.test('server/kennel.lua registers a playerDropped and an onResourceStop handle
     local f = newKennelFixture()
     t.isTrue(f.eventHandlerCount('playerDropped') >= 1, 'kennel.lua\'s own handler, plus DeployCooldown\'s own via RegisterPlayerDropped()')
     t.isTrue(f.eventHandlerCount('onResourceStop') >= 1)
+end)
+
+-- ========================================================================
+-- REGRESSION (same class of bug QA reproduced against server/combat.lua):
+-- DeployCooldown = NewCooldown(Config.DeployableKennel.deployCooldownMs)
+-- used to hand a raw, operator-editable Config value straight to
+-- NewCooldown -- an uncaught non-positive/NaN value there would abort THIS
+-- FILE's own load from that line onward, taking requestDeployKennel,
+-- confirmKennelPlaced, cancelKennelPlacement, and -- critically --
+-- requestPickupKennel (this file's own termination/cleanup path for an
+-- already-deployed kennel, alongside its playerDropped/onResourceStop
+-- handlers, all registered textually AFTER DeployCooldown) down with it.
+-- Fixed via ResolveConfiguredThresholdMs (server/cooldowns.lua) at this
+-- file's one raw Config-cooldown call site. Proves the fix at the exact
+-- level the bug was found: does the file still load, and does the
+-- pickup/cleanup path an operator would need to un-stick a stray kennel
+-- stay reachable, no matter what an operator puts in the config.
+-- ========================================================================
+
+t.test('REGRESSION: Config.DeployableKennel.deployCooldownMs = 0 no longer aborts this file\'s load -- clamps to the shipped 5000ms fallback, warns loudly (naming the exact key/value/substitute), and every event/cleanup path stays registered', function()
+    local f = newKennelFixture({ deployCooldownMs = 0 })
+
+    local names, count = {}, 0
+    for name in pairs(f.netEventNames) do names[name] = true; count = count + 1 end
+    t.equals(count, 4, 'every net event this file documents must still register, not just the ones textually above the bad value')
+    t.isNotNil(names['qbx_k9unit:server:requestPickupKennel'],
+        'the pickup/cleanup path an operator needs to un-stick a stray kennel must remain reachable no matter what an operator puts in the config')
+    t.isTrue(f.eventHandlerCount('playerDropped') >= 1)
+    t.isTrue(f.eventHandlerCount('onResourceStop') >= 1)
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.DeployableKennel.deployCooldownMs', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find('5000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted -- the operator must still find out')
+end)
+
+t.test('REGRESSION: Config.DeployableKennel.deployCooldownMs = NaN also no longer aborts this file\'s load', function()
+    local f = newKennelFixture({ deployCooldownMs = 0 / 0 })
+    local count = 0
+    for _ in pairs(f.netEventNames) do count = count + 1 end
+    t.equals(count, 4)
+end)
+
+t.test('REGRESSION: with a valid Config.DeployableKennel.deployCooldownMs, DeployCooldown genuinely uses the CONFIGURED value, not silently always the fallback', function()
+    local f = newKennelFixture({ deployCooldownMs = 777 })
+    f.setAccess(1, true)
+    f.setPlayer(1, 'citizen1')
+    f.setPed(1, 100, { x = 0, y = 0, z = 0 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    local firstCount = #f.clientEvents
+    t.isTrue(firstCount > 0, 'first request must succeed')
+
+    f.dispatchNetEvent('qbx_k9unit:server:cancelKennelPlacement', 1) -- clear the pending placement so a retry is possible
+    f.advance(776) -- 1ms short of the configured 777ms cooldown
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(#f.clientEvents, firstCount, 'still on the CONFIGURED 777ms cooldown, not silently using some other value')
+
+    f.advance(2) -- now past the configured 777ms threshold
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.isTrue(#f.clientEvents > firstCount, 'cooldown elapsed at the CONFIGURED threshold, proving the real value (not a fallback) is in effect')
 end)
 
 -- ----------------------------------------------------------------------
