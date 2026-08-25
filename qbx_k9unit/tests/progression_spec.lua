@@ -203,6 +203,7 @@ local env = Sandbox.newEnv({
 -- needs the real constructor in scope at progression.lua's own load time --
 -- same load-order requirement as server/admin.lua.
 Sandbox.loadInto('../server/cooldowns.lua', env)
+Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
 Sandbox.loadInto('../server/progression.lua', env)
 
 for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
@@ -533,6 +534,7 @@ local function newProgressionFixture()
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env2)
+    Sandbox.loadInto('../server/events.lua', env2) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/progression.lua', env2)
     for _, handler in ipairs(eventHandlers2['onResourceStart'] or {}) do
         handler('qbx_k9unit')

@@ -329,6 +329,7 @@ local function newFixture(opts)
     -- added at the certifications.lua call site for the full reasoning).
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/certifications.lua', env)
 
     return {

@@ -192,6 +192,7 @@ serverEnv = Sandbox.newEnv({
 })
 
 Sandbox.loadInto('../server/cooldowns.lua', serverEnv) -- hard load-order dependency, see server/sarcalls.lua's own FILE-TO-FILE CONTRACT
+Sandbox.loadInto('../server/events.lua', serverEnv) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
 Sandbox.loadInto('../server/sarcalls.lua', serverEnv)
 
 local requestSarCall = registeredCallbacks['qbx_k9unit:server:requestSarCall']

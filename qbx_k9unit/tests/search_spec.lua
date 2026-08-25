@@ -106,6 +106,7 @@ local env = Sandbox.newEnv({
 
 Sandbox.loadInto('../server/cooldowns.lua', env)
 Sandbox.loadInto('../server/entities.lua', env) -- ResolveNetworkEntity/ResolveConnectedPlayerFromPed, read by search.lua per its own FILE-TO-FILE CONTRACT
+Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
 Sandbox.loadInto('../server/search.lua', env)
 
 -- Fire onResourceStart: search.lua's own config-safety guards (the
@@ -501,6 +502,7 @@ local function newSearchPlusProgressionFixture()
     Sandbox.loadInto('../server/cooldowns.lua', env2)
     Sandbox.loadInto('../server/entities.lua', env2)
     Sandbox.loadInto('../server/progression.lua', env2)
+    Sandbox.loadInto('../server/events.lua', env2) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/search.lua', env2)
     for _, handler in ipairs(eventHandlers2['onResourceStart'] or {}) do
         handler('qbx_k9unit')

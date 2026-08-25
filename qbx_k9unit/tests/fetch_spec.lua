@@ -271,6 +271,7 @@ local function newFetchFixture(opts)
     local runner = Sandbox.newThreadRunner()
 
     local env = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer,
         HasK9Role = HasK9Role,
         AddEventHandler = AddEventHandler,
         RegisterNetEvent = RegisterNetEvent,
@@ -311,6 +312,7 @@ local function newFetchFixture(opts)
         netEventNames = netEvents,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
+        setK9Role = function(src, hasRole) hasRoleBySource[src] = hasRole end,
         setPlayer = function(src, citizenid) playersBySource[src] = citizenid end,
         setPed = function(src, pedHandle, coords, heading, modelHash)
             pedBySource[src] = pedHandle
@@ -477,6 +479,69 @@ t.test('server/fetch.lua registers a playerDropped and an onResourceStop handler
     local f = newFetchFixture()
     t.isTrue(f.eventHandlerCount('playerDropped') >= 1)
     t.isTrue(f.eventHandlerCount('onResourceStop') >= 1)
+end)
+
+-- ========================================================================
+-- REGRESSION (same class of bug QA reproduced against server/combat.lua):
+-- ThrowCooldown/PickupCooldown = NewCooldown(Config.FetchMechanic.
+-- throwCooldownMs / pickupCooldownMs) used to hand a raw, operator-editable
+-- Config value straight to NewCooldown -- an uncaught non-positive/NaN
+-- value there would abort THIS FILE's own load from that line onward,
+-- taking every one of its 11 net events (including releaseFetchBall, this
+-- file's own "always let go" termination path a stuck carrier depends on)
+-- and its playerDropped/onResourceStop handlers down with it. Fixed via
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua) at both of this
+-- file's raw Config-cooldown call sites. Proves the fix at the exact level
+-- the bug was found: does the file still load, and does the termination
+-- path stay reachable, no matter what an operator puts in the config.
+-- ========================================================================
+
+t.test('REGRESSION: Config.FetchMechanic.throwCooldownMs = 0 no longer aborts this file\'s load -- clamps to the shipped 5000ms fallback, warns loudly (naming the exact key/value/substitute), and every event/termination path stays registered', function()
+    local f = newFetchFixture({ throwCooldownMs = 0 })
+
+    local names, count = {}, 0
+    for name in pairs(f.netEventNames) do names[name] = true; count = count + 1 end
+    t.equals(count, 11, 'every net event this file documents must still register, not just the ones textually above the bad value')
+    t.isNotNil(names['qbx_k9unit:server:releaseFetchBall'],
+        'the termination path a stuck carrier depends on must remain reachable no matter what an operator puts in the config')
+    t.isTrue(f.eventHandlerCount('playerDropped') >= 1)
+    t.isTrue(f.eventHandlerCount('onResourceStop') >= 1)
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.FetchMechanic.throwCooldownMs', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find('5000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted -- the operator must still find out')
+end)
+
+t.test('REGRESSION: Config.FetchMechanic.pickupCooldownMs = -1 no longer aborts this file\'s load -- clamps to the shipped 500ms fallback and warns loudly', function()
+    local f = newFetchFixture({ pickupCooldownMs = -1 })
+
+    local names, count = {}, 0
+    for name in pairs(f.netEventNames) do names[name] = true; count = count + 1 end
+    t.equals(count, 11)
+    t.isNotNil(names['qbx_k9unit:server:releaseFetchBall'])
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.FetchMechanic.pickupCooldownMs', 1, true)
+            and line:find('found: -1', 1, true)
+            and line:find('500', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned)
+end)
+
+t.test('REGRESSION: both throwCooldownMs and pickupCooldownMs invalid at once (worst case) still loads cleanly with every event/termination path intact', function()
+    local f = newFetchFixture({ throwCooldownMs = 0 / 0, pickupCooldownMs = 0 })
+    local count = 0
+    for _ in pairs(f.netEventNames) do count = count + 1 end
+    t.equals(count, 11)
 end)
 
 -- ----------------------------------------------------------------------
@@ -813,6 +878,21 @@ t.test('requestPickupFetchBall: a non-K9 ped model is rejected', function()
     f.setPed(2, 5002, { x = 0, y = 0, z = 0 }, 0.0, NON_K9_PED_HASH)
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 2, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('fetch.carry_requires_k9_model'))
+end)
+
+-- K9 ROLE/MODEL DECOUPLING WIDENING -- "I also want everything to work with
+-- any ped". A caller who holds the decoupled K9 ROLE (HasK9Role) but is
+-- standing on a non-K9 model must still be able to carry -- previously this
+-- was unconditionally rejected as carry_requires_k9_model.
+t.test('requestPickupFetchBall: K9 ROLE/MODEL DECOUPLING -- a non-K9 ped model IS accepted when the caller holds the decoupled K9 role', function()
+    local f = newFetchFixture()
+    local netId = throwSuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(2, true)
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 }, 0.0, NON_K9_PED_HASH)
+    f.setK9Role(2, true)
+    f.setPlayer(2, 'BBB222')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 2, netId)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:carryFetchBall'), 1, 'a human/custom-modeled role-holder must be allowed to carry, not rejected as carry_requires_k9_model')
 end)
 
 t.test('requestPickupFetchBall: already carrying (or mid attach-transition) is rejected', function()

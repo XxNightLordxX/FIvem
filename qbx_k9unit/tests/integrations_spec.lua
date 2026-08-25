@@ -187,6 +187,7 @@ local function newIntegrationsFixture(opts)
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
     Sandbox.loadInto('../server/integrations.lua', env)
 
     return {

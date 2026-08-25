@@ -1314,10 +1314,11 @@ t.test('ephemeral by construction: a fresh module load (simulating a resource re
 end)
 
 print('')
-print('mainserver_spec.lua coverage summary (68 cases -- run this file, do not')
+print('mainserver_spec.lua coverage summary (71 cases -- run this file, do not')
 print('grep it, per tests/README.md\'s own "count you must run" note): relayBark')
 print('(8), relayDoorScratch (11), CheckLeashEligibility\'s 8 reject reasons + happy')
-print('path (12), symmetric role assignment incl. the both-K9 tie-break (3),')
+print('path + 3 K9 role/model decoupling widening cases (15), symmetric role')
+print('assignment incl. the both-K9 tie-break (3),')
 print('request-time pending/rate-limit ordering (4), respondLeashAttach incl.')
 print('double-accept/double-decline fail-closed AND the mismatched-fromServerId')
 print('FINDING (9), TOCTOU re-validation at accept (4), detach/ForceDetach')
