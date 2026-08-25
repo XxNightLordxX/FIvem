@@ -462,11 +462,29 @@ Config.XPTiers = {
     --
     -- New thresholds keep the old proportions (14% / 44% / 100% of top).
     -- At a realistic legitimate rate of ~500 XP/hr, Elite takes about 18
-    -- hours total, or roughly 2 to 2.5 weeks at an hour or so a day. At the
-    -- worst-case farmable ceiling of 4320 XP/hr -- both combat awards
-    -- enabled, two NPC targets, perfect cooldown cycling, no real police
-    -- work -- Elite still costs over 2 hours of deliberate grinding rather
-    -- than happening by accident.
+    -- hours total, or roughly 2 to 2.5 weeks at an hour or so a day.
+    --
+    -- WORST-CASE FARMABLE CEILING, recomputed 2026-08-25. The figure that
+    -- used to sit here (4320 XP/hr) was wrong, because it reasoned about
+    -- the combat awards in isolation. Each of the four XP mechanics had its
+    -- own independent mint cooldown, and nobody had ever summed them:
+    --     bite-hold      60s / 20 XP  -> 1,200/hr
+    --     takedown       60s / 30 XP  -> 1,800/hr
+    --     contraband     60s / 25 XP  -> 1,500/hr
+    --     track resolved 30s / 10 XP  -> 1,200/hr
+    -- Round-robining all four came to 5,700 XP/hr, putting Elite at about
+    -- 1h35m -- under the "over 2 hours" floor these tiers were retuned to
+    -- guarantee. Worse, none of it required real police work: an ambient,
+    -- non-wanted pedestrian qualified for both combat awards.
+    --
+    -- Closed by a shared cross-mechanic mint budget in server/progression's
+    -- AwardXP (a per-citizenid token bucket, 3600 XP per rolling hour) plus
+    -- Config.XP.mintXpForNpcCombatTargets defaulting off. The four
+    -- per-mechanic cooldowns still decide WHICH mechanic may mint; the
+    -- budget caps the TOTAL. Real ceiling is now 3,600 XP/hr:
+    --     Trained (1,250)  ~18m
+    --     Veteran (4,000)  ~1h 04m
+    --     Elite   (9,000)  ~2h 27m   -- clears the floor with ~27m to spare
     --
     -- Deliberately NOT the order-of-magnitude raise floated earlier. That
     -- figure was anchored to the ~9000 XP/hr contraband farm, which is now
@@ -488,6 +506,22 @@ Config.XPTiers = {
 -- (SPEC.md §9 item 4), same status Config.XPTiers itself already carries.
 -- ======================================================================
 Config.XP = {
+    -- Whether an NPC bite-hold or takedown target MINTS XP. Defaults false.
+    --
+    -- This does NOT change whether NPC combat is allowed -- that is a
+    -- separate, settled decision and this key does not touch it. It only
+    -- decides whether an NPC target PAYS.
+    --
+    -- Why it defaults off: Config.Combat.RequireWantedStatus applies to
+    -- player targets only, so with this on, any ambient pedestrian
+    -- qualified for both combat awards. That made the largest share of the
+    -- farmable XP ceiling reachable with no police work at all -- provoke a
+    -- passer-by into running and take them down, on repeat. Turning it on
+    -- is a legitimate choice for a server that wants NPC K9 work to
+    -- progress a handler; just know it is the single biggest lever on how
+    -- fast XP can be farmed without doing anything real.
+    mintXpForNpcCombatTargets = false,
+
     awards = {
         -- server/search.lua's HandleSearchTarget, at the point
         -- `contrabandFound == true` is already known (existing Phase 2
