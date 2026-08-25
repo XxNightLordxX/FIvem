@@ -532,9 +532,9 @@ t.test('server/combat.lua registers exactly its 7 documented server net events',
     end
 end)
 
-t.test('server/combat.lua registers exactly 4 playerDropped handlers (its own, plus BiteHoldCooldown/TakedownCooldown/TakedownMutex own RegisterPlayerDropped)', function()
+t.test('server/combat.lua registers exactly 6 playerDropped handlers (its own, plus BiteHoldCooldown/TakedownCooldown/TakedownMutex, and the BiteHoldXpMintCooldown/TakedownXpMintCooldown anti-farm trackers added when the seventh XP farm was closed)', function()
     local f = newCombatFixture()
-    t.equals(f.eventHandlerCount('playerDropped'), 4)
+    t.equals(f.eventHandlerCount('playerDropped'), 6)
 end)
 
 t.test('server/combat.lua registers exactly 1 onResourceStart handler (the PropDragging override warning)', function()

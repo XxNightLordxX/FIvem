@@ -596,6 +596,85 @@ BiteHoldTargetCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, func
     return (now - loggedAt) > (Config.Combat.BiteAndHold.targetCooldownMs * 2)
 end)
 
+-- SEVENTH XP-FARM FIX (this pass, coder-security, economy-audit follow-up --
+-- independently re-verified against ValidateCombatRequest and both AwardXP
+-- call sites below before acting, not taken on the report alone): every
+-- cooldown declared above (BiteHoldCooldown/TakedownCooldown per-K9,
+-- BiteHoldTargetCooldown/TakedownTargetCooldown per-target) gates the
+-- ACTION -- none of them gate the XP MINT itself, independent of how cheaply
+-- the action can be repeated. That gap is exploitable on its own (switch
+-- between two targets and each one's own per-target cooldown never binds,
+-- leaving only the per-K9 cooldown standing), and is made trivially
+-- reachable with zero risk/collusion by ValidateCombatRequest's own NPC
+-- branch a few lines up (`isPlayerTarget and not
+-- IsPlayerWantedEligible(targetSrc)` -- an NPC target never runs the
+-- eligibility check at all): two ambient, non-hostile NPC pedestrians in
+-- range are a fully qualifying farm pair. Measured ceilings, from this
+-- file's own shipped config.lua numbers: biteHoldSuccess (20 XP @
+-- BiteAndHold.cooldownMs=20000) = 3,600 XP/hr; takedownSuccess (30 XP @
+-- NonLethalTakedown.cooldownMs=25000) = 4,320 XP/hr -- both against a fixed
+-- target this resource never required to actually be fleeing, wanted, or
+-- carrying any risk to pay out. This is the same shape server/tracking.lua's
+-- TrackTicketMintCooldown and server/search.lua's ContrabandXpMintCooldown
+-- already closed for trackSourceResolved/searchContrabandFound respectively
+-- -- ported here verbatim rather than reinvented: a flat, per-HOLDER (never
+-- per-target -- that dimension is exactly what BiteHoldTargetCooldown/
+-- TakedownTargetCooldown above already cover, and exactly the dimension
+-- switching targets already defeats), cross-target cooldown on the MINT,
+-- CONSUMED only at the exact instant a real award is about to happen -- see
+-- both AwardXP call sites below (EndHold's 'bite' branch, HandleTakedownRequest's
+-- own award block) for the gate itself, deliberately the LAST condition
+-- checked in both places, mirroring TrackTicketMintCooldown.Consume/
+-- ContrabandXpMintCooldown.Consume's own "ordered after every other
+-- would-never-have-paid-anyway check" placement, so a hold/takedown that
+-- was never going to pay out regardless (wrong end reason, under the
+-- duration floor, a failed speed gate, no citizenid resolved) never burns
+-- this budget for nothing, and a denied mint never stamps any other
+-- "already paid" state -- neither AwardXP call site below writes anything
+-- to ActiveHolds/K9ActiveEffect/any other table on this path, so a denial
+-- can only ever cost this ONE award, never anything permanent (unlike the
+-- near-miss this exact ordering exists to prevent in ContrabandXpState's own
+-- history: stamping a permanent "already accounted for" record BEFORE
+-- confirming the mint actually succeeded would turn a rate limit into a
+-- standing denial).
+--
+-- 60000ms for both (recommended, not derived from a formula) lands in the
+-- SAME ORDER OF MAGNITUDE the two prior fixes already established
+-- (TrackTicketMintCooldown: 30s @ 10 XP = 1,200 XP/hr; ContrabandXpMintCooldown:
+-- 60s @ 25 XP = 1,500 XP/hr) rather than inventing a new economy tier for
+-- this mechanic: biteHoldSuccess becomes 60s @ 20 XP = 1,200 XP/hr,
+-- takedownSuccess becomes 60s @ 30 XP = 1,800 XP/hr.
+--
+-- FILE-LOCAL CONSTANTS, NOT CONFIG KEYS -- same call TrackTicketMintCooldown's
+-- own declaration comment already made for the identical reasoning,
+-- re-verified here rather than assumed to still hold: this is an ANTI-FARM
+-- FLOOR, not an operator-tunable balance knob. Config.Combat.BiteAndHold.
+-- cooldownMs/targetCooldownMs and Config.Combat.NonLethalTakedown.cooldownMs/
+-- targetCooldownMs are already the legitimate, operator-facing dials for how
+-- often this mechanic can be used; these two constants exist ONLY to close
+-- the "switch targets to dodge the per-target gate" mint farm, a security
+-- floor rather than a balance decision. Exposing this as a Config field
+-- would reopen exactly the footgun server/cooldowns.lua's own
+-- IsValidThreshold/AssertValidDefaultThreshold pass exists to catch for
+-- OTHER thresholds but structurally cannot catch for this one: an
+-- operator-set value that is merely TOO LOW (as opposed to non-positive,
+-- which NewCooldown's fail-closed handling already protects against) still
+-- reads as a perfectly valid positive threshold, passes every existing
+-- assert/guard in this codebase without complaint, and silently reopens
+-- this exact farm at whatever cadence was chosen -- there is no validation
+-- this file or cooldowns.lua could add that would catch "500ms is a valid
+-- but useless value here" the way it already catches "0 means permanently
+-- blocked, not disabled". Keeping this a file-local constant means the only
+-- way to weaken it is to edit this file's own source under code review, not
+-- a config edit.
+local BiteHoldXpMintCooldown = NewCooldown()
+BiteHoldXpMintCooldown.RegisterPlayerDropped()
+local BITE_HOLD_XP_MINT_COOLDOWN_MS = 60000
+
+local TakedownXpMintCooldown = NewCooldown()
+TakedownXpMintCooldown.RegisterPlayerDropped()
+local TAKEDOWN_XP_MINT_COOLDOWN_MS = 60000
+
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
 -- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
@@ -1019,7 +1098,20 @@ local function EndHold(targetNetId, reason)
         if reason == 'released' or reason == 'timeout' then
             local heldDurationMs = GetGameTimer() - hold.startedAt
             if reason == 'timeout' or heldDurationMs >= MIN_BITE_HOLD_XP_DURATION_MS then
-                if type(AwardXP) == 'function' then
+                -- SEVENTH XP-FARM FIX (this pass) -- see
+                -- BiteHoldXpMintCooldown's own declaration comment above for
+                -- the full writeup. Gates ONLY this AwardXP call, checked
+                -- LAST (after the reason exclusion and the duration floor
+                -- above), so a hold that was never going to pay out anyway
+                -- never burns this per-holder mint budget for nothing.
+                -- Everything else in this branch (both relay
+                -- TriggerClientEvent calls above, ActiveHolds/K9ActiveEffect
+                -- already having been cleared at the top of EndHold) is
+                -- entirely unaffected by whether this Consume succeeds -- a
+                -- K9 out of mint budget still gets its hold/release/relay
+                -- exactly as before, it just is not paid for this one.
+                if type(AwardXP) == 'function'
+                    and BiteHoldXpMintCooldown.Consume(hold.holderSrc, BITE_HOLD_XP_MINT_COOLDOWN_MS) then
                     local holderPlayer = exports.qbx_core:GetPlayer(hold.holderSrc)
                     local holderCitizenid = holderPlayer and holderPlayer.PlayerData and holderPlayer.PlayerData.citizenid
                     if holderCitizenid then
@@ -1904,7 +1996,21 @@ local function HandleTakedownRequest(src, targetNetId)
     -- hold-then-release lifecycle). Runtime existence guard, same
     -- convention as server/tracking.lua's own trackSourceResolved call
     -- site — no load-order assumption on server/progression.lua.
-    if type(AwardXP) == 'function' then
+    -- SEVENTH XP-FARM FIX (this pass) -- see TakedownXpMintCooldown's own
+    -- declaration comment (near BiteHoldXpMintCooldown, above) for the full
+    -- writeup. Gates ONLY this AwardXP call, checked LAST -- reaching this
+    -- line already means the feature flag, HasK9Access, live proximity, the
+    -- full ValidateCombatRequest re-check, the server-computed speed gate,
+    -- AND both TakedownCooldown/TakedownTargetCooldown.Consume calls above
+    -- all already succeeded, so this is the very last thing that can still
+    -- gate whether this specific takedown pays out. The relay
+    -- (applyNpcTakedown/forceRagdoll above), ActiveHolds/K9ActiveEffect
+    -- (already written above), and the notify call below are all entirely
+    -- unaffected by whether this Consume succeeds -- a K9 out of mint budget
+    -- still performs a fully normal takedown, it just is not paid for this
+    -- one.
+    if type(AwardXP) == 'function'
+        and TakedownXpMintCooldown.Consume(src, TAKEDOWN_XP_MINT_COOLDOWN_MS) then
         local holderPlayer = exports.qbx_core:GetPlayer(src)
         local holderCitizenid = holderPlayer and holderPlayer.PlayerData and holderPlayer.PlayerData.citizenid
         if holderCitizenid then
