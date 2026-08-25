@@ -152,10 +152,32 @@ string. Nobody has run the five-minute empirical check yet (print `source`
 and its type once from a real server trigger and once from a locally forged
 one, and compare).
 
-**Your call**: trust it as shipped (it's strictly better than nothing and
-already applied everywhere), or have someone run that empirical check on a
-dev server before enabling any combat feature. The more of Category B combat
-(D2) you turn on, the more this one matters.
+**The check has to test the right thing, and that changed on 2026-08-25.**
+A dedicated review of `client/combat.lua` named a specific way this guard
+could fail **open** rather than closed — which is the opposite of what the
+rest of this section assumed, and the reason the experiment above is not
+quite the right one.
+
+If FiveM's client runtime treats `source` as an ordinary global that gets
+set when a network event is dispatched and is simply *never cleared* for a
+local `TriggerEvent`, then any client that has ever received a genuine
+server event — which is every client, within seconds of connecting — is
+carrying a stale `source == 65535`. A later self-triggered call would
+inherit that stale value and **pass the guard**. The exploit this whole fix
+exists to close would still work.
+
+Nothing proves that is how it behaves. But it means the five-minute check
+must compare the two cases **in sequence on one client**, not in isolation:
+receive a genuine server event first, then fire a local one from the same
+client, and see whether `source` still reads `65535`. Testing a local
+trigger on a fresh client that has never received anything would come back
+clean and tell you nothing.
+
+**Your call**: trust it as shipped (it is strictly better than nothing, is
+applied everywhere, and the per-mechanic feature gating closes the original
+flags-off exploit independently of this guard), or run that sequenced check
+on a dev server before enabling any combat feature. The more of Category B
+combat (D2) you turn on, the more this one matters.
 
 ---
 
