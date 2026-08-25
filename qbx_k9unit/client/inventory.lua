@@ -83,7 +83,7 @@
 -- NOTE: 'on_cooldown' and 'request_in_progress' are deliberately absent from
 -- this table — both are routine, expected traffic (a double-click, a
 -- hovering re-trigger), handled as a silent no-op below (never looked up
--- here at all), same treatment contraband_search_contract.md §4's
+-- here at all), same treatment RESEARCH_ARCHIVE.md#contraband-search §4's
 -- "Rejection UX note" already recommends for search's identical on_cooldown
 -- case.
 -- Each value below is a distinct locale() call (not a plain string) rather
@@ -154,7 +154,7 @@ local function OpenK9InventoryForNetId(netId)
         local reason = result and result.reason
         -- 'on_cooldown'/'request_in_progress' are routine, expected
         -- traffic (a double-click, a hovering re-trigger) — same
-        -- silent-no-op treatment contraband_search_contract.md §4's
+        -- silent-no-op treatment RESEARCH_ARCHIVE.md#contraband-search §4's
         -- "Rejection UX note" already recommends for search's
         -- identical on_cooldown case, applied here to this file's
         -- two analogous reasons.

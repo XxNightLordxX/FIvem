@@ -34,8 +34,8 @@ Author: product-agent, 2026-08-23, jlwood17190665@gmail.com.
 
 **Revision 2 (fork-resolution pass): product-agent, 2026-08-23,
 jlwood17190665@gmail.com.** §12.0's four flagged design forks were
-re-examined against two research passes (`phase2_notes/phase3_combat_patterns.md`,
-`phase2_notes/phase3_combat_natives.md`). That revision **decided the PvP
+re-examined against two research passes (`phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat`,
+`phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat`). That revision **decided the PvP
 vs. PvE fork as "NPC-only for Phase 3."**
 
 **Revision 3 (PvP reversal, explicit product override): product-agent,
@@ -99,7 +99,7 @@ documents that supplement (not replace) `SPEC.md`, each explicitly
 cross-referencing back to the section(s) they extend rather than requiring an
 edit to `SPEC.md` itself to be authoritative — this document follows that
 same convention. Until it is folded in, treat it exactly the way
-`phase2_notes/contraband_search_contract.md` treats its own relationship to
+`phase2_notes/RESEARCH_ARCHIVE.md#contraband-search` treats its own relationship to
 §11: **authoritative detail that supplements, and where more specific
 supersedes, `SPEC.md` §6.2/§7/§8/§9's existing Phase 3 text** — reconcile
 against `SPEC.md` directly if the two ever drift. In particular, `SPEC.md`
@@ -113,7 +113,7 @@ specific conclusion.
 item this document carried since its original draft — §12.0 item 7,
 "handler-partnership link: reuse active leash pairing, or a new persistent
 registry?" (extracted into its own dedicated doc,
-`phase2_notes/phase3_handler_partnership_decision.md`, per that file's own
+`phase2_notes/RESEARCH_ARCHIVE.md#handler-partnership`, per that file's own
 note that it is "the **one remaining item** out of PHASE3_SPEC.md's original
 four cross-cutting design forks") — is resolved here with a concrete,
 scoped design, not a restatement of the two options. **Decision: a new,
@@ -132,7 +132,7 @@ now-updated §12.1 (sub-phase ordering), §12.3 (new `server/partnership.lua`
 file entry), §12.5.1/§12.5.3 (BiteAndHold's Recall actor and
 HandlerDownDefense's trigger, now pointing at a concrete mechanism instead
 of a hedge), §12.6, and §12.7 (quick-reference). `phase2_notes/
-phase3_handler_partnership_decision.md` is updated with a resolution banner
+RESEARCH_ARCHIVE.md#handler-partnership` is updated with a resolution banner
 pointing back here rather than left to read as still-open. No `.lua` file
 was touched to produce this revision either — this remains a design/
 spec-only pass, not committed; `server/partnership.lua` does not exist yet.
@@ -264,7 +264,7 @@ question (this feature never targets anything, it's the K9's own-body
 locomotion). `Config.Combat.AgilityAdvanced.detectionMethod = 'raycast'`
 ships as the Phase 3 default, implemented as a multi-height capsule sweep
 (`StartShapeTestCapsule`/`GetShapeTestResult`, confirmed real natives per
-`phase2_notes/phase3_combat_natives.md` §5). See §12.5.5 for the full,
+`phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat` §5). See §12.5.5 for the full,
 unchanged detail.
 
 #### 4. Non-consensual state application posture — RESOLVED (Revision 3; was dormant under Revision 2, was item 2 in the original draft)
@@ -434,7 +434,7 @@ path):**
    read `metadata.isdead` / `.inlaststand` (or a similarly-named laststand
    flag) if the player's data structure exposes it — used automatically
    with no server-side setup for the common case. Higher confidence than
-   item 5's wanted-status equivalent, per `phase2_notes/phase3_combat_patterns.md`'s
+   item 5's wanted-status equivalent, per `phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat`'s
    confirmation that this is how mature cuffing/laststand integrations
    already work in practice across the ecosystem.
 2. An explicit override hook, `Config.Combat.PropDragging.IsPlayerDownedOverride`
@@ -464,11 +464,11 @@ new verdict underneath old wording).
 #### 7. Handler-partnership link: reuse active leash pairing, or a new persistent registry? — RESOLVED (Revision 5, coder-architect): new persistent registry (Option B), not a reuse of `LeashPairs`
 
 **Why this couldn't be closed by more research, and why it's closed by
-design work instead.** Neither `phase2_notes/phase3_combat_patterns.md` nor
-`phase2_notes/phase3_combat_natives.md` surfaced anything about how other
+design work instead.** Neither `phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat` nor
+`phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat` surfaced anything about how other
 K9/handler-pair scripts model an ongoing partnership link independent of a
 leash-equivalent mechanic, because — as
-`phase2_notes/phase3_handler_partnership_decision.md` already correctly
+`phase2_notes/RESEARCH_ARCHIVE.md#handler-partnership` already correctly
 diagnosed — the surveyed ecosystem is overwhelmingly a
 handler-commands-NPC-dog architecture, where "who is the handler" is
 trivial and definitionally always true. That precedent genuinely does not
@@ -758,7 +758,7 @@ event, just via a different native. This means `PropDragging`'s attach must
 be **re-asserted every tick from the K9's own client** (call
 `AttachEntityToEntity` again each frame the drag is active, not once at
 drag-start) to survive a target repeatedly self-detaching — mirroring the
-discipline `phase2_notes/phase3_combat_natives.md` §4 already requires for
+discipline `phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat` §4 already requires for
 `SET_PED_MOVE_RATE_OVERRIDE` (must be looped, not one-shot). Read "the
 attach itself is Category A, no relay problem exists for it" above as true
 only under this every-tick-reassert discipline — a one-shot attach
@@ -897,7 +897,7 @@ ignores the instruction," worked through rather than hand-waved:**
 
    - **The cooperative request path (`NetworkRequestControlOfEntity`,
      already a confirmed-real native in this codebase's own
-     `phase2_notes/phase3_combat_natives.md`, used there for the *NPC*-target
+     `phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat`, used there for the *NPC*-target
      path) is fundamentally a best-effort ask of the current owning
      client, not a server-forceable operation.** citizenfx/fivem issue
      #3338 ("Bugged entity ownerships") documents this failing outright
@@ -1466,7 +1466,7 @@ before deciding whether to notify anyone.
   `Config.Combat.PropDragging.maxDragDistance` before an automatic release
   — distinct from `Config.LeashMaxDistance`.
   `SET_PED_MOVE_RATE_OVERRIDE` must be looped/re-asserted every tick, per
-  `phase2_notes/phase3_combat_natives.md` §4, unchanged.
+  `phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat` §4, unchanged.
 - Either the K9 or the dragged player can end the drag at will — **this is
   no longer a "future PvP phase" forward note (Revision 2 hedged this as
   "in a future PvP phase, if ever scoped"); it is real, current-phase

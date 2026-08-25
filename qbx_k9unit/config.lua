@@ -2379,3 +2379,53 @@ Config.ScentTrailHunt = {
     -- session.
     maxHuntDurationMs = 300000,
 }
+
+-- ======================================================================
+-- DATABASE (Config.Database) -- whether this resource is allowed to talk
+-- to a database at all.
+--
+-- READ THIS EVEN IF YOU DO NOT CODE. With `enabled = false` you do NOT
+-- need to run ANY of the .sql files in the sql/ folder -- not
+-- install.sql, not a single migration. Every feature still works
+-- tonight, for everyone on the server right now. The trade is memory,
+-- not features: certifications, XP, partnerships, permission grants,
+-- tablet theming and K9 appearance are held in the server's memory only,
+-- for as long as it keeps running. The moment it restarts -- a crash, an
+-- update, a scheduled reboot -- all of it is gone and everyone starts
+-- over. Dogs forget who trained them, handlers lose their rank and XP,
+-- partners are un-paired, the tablet theme resets. Nothing is corrupted
+-- and nothing crashes. It simply never remembers past today.
+--
+-- ONE THING THIS DOES NOT TURN OFF: `oxmysql` must still be installed and
+-- started as its own resource. This resource declares it as a hard
+-- dependency, and FXServer refuses to START qbx_k9unit without it --
+-- that check happens before this file is ever read, so no setting here
+-- can route around it. `enabled = false` means this resource never sends
+-- oxmysql a single query and needs none of its own tables to exist. If
+-- you run no database at all, you still need the oxmysql resource
+-- present, pointed at any reachable database.
+--
+-- THIS IS NOT THE RECOMMENDED WAY TO RUN THIS. It is here for someone
+-- who genuinely does not want to do a database import, for a trial
+-- server, or for a test before committing to a real install. If you can
+-- run sql/install.sql, do -- your handlers keep what they earned.
+--
+-- PERMANENTLY LOST, not merely delayed: THE AUDIT TRAIL. No record of
+-- who certified whom, no search log -- "did this K9 really search my
+-- car" -- and no permission-grant history. If a dispute comes up there
+-- is nothing to check. Not a smaller record. None. Most police servers
+-- decide that alone is worth running the database for.
+--
+-- A SAFETY RULE THE CODE FOLLOWS SO YOU DO NOT HAVE TO THINK ABOUT IT:
+-- with this off, nobody ever ends up with MORE access than they would
+-- have on a database-backed server. A memory-only grant can only be
+-- easier to LOSE than a saved one, never easier to get.
+-- ======================================================================
+Config.Database = {
+    -- true (recommended, and the default) saves certifications, XP,
+    -- partnerships, permissions, runtime overrides, tablet theming and K9
+    -- appearance so they survive a restart. false means none of that is
+    -- ever read from or written to a database -- it lives in memory for
+    -- this server session only. See the block above for what that costs.
+    enabled = true,
+}

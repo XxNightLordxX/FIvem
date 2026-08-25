@@ -50,7 +50,7 @@
     the real award -- this file contains NO call to AwardXP, NO call to
     AwardXPDirect, and reads no field of Config.XP.awards. THE CEILING IS
     0 XP/HOUR, BY CONSTRUCTION -- verifiable by grep, not merely by
-    argument (see tests/trainingnoxp_spec.lua's own "no AwardXP reference
+    argument (see tests/training_spec.lua's own "no AwardXP reference
     anywhere in this file's source text" case, in addition to its
     behavioral cases). This is precisely what makes it safe to leave
     genuinely UNLIMITED for practice, per the owner's own stated

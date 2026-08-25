@@ -11,7 +11,14 @@
 -- ...or paste it into phpMyAdmin / HeidiSQL with your database selected.
 --
 -- WHAT YOU WANT TO SEE: every row saying "OK". Anything starting with
--- "!!" means stop and read that row before you install.
+-- "!!" means stop and read that row before you install -- these are the
+-- only rows this file considers a real reason not to proceed (a name
+-- conflict, a too-old server). Anything starting with "WARN" is worth
+-- reading but is NOT a reason to stop by itself (e.g. CHECK 5's "does
+-- this look like the right database" sanity check, which can be
+-- legitimately true on a brand-new server) -- `sql/k9_setup.sh` treats
+-- these two markers differently for exactly this reason: it refuses to
+-- proceed on any "!!" line, but only prints "WARN" lines for you to read.
 --
 -- It deliberately uses NO stored procedures, so it also works on managed
 -- hosts that do not grant CREATE ROUTINE -- which is itself one of the
@@ -20,7 +27,7 @@
 
 
 -- ---------------------------------------------------------------------
--- CHECK 1: does anything already own one of our six table names?
+-- CHECK 1: does anything already own one of our table names?
 --
 -- `install.sql` uses CREATE TABLE IF NOT EXISTS, so it will never
 -- overwrite or damage a table that is already there -- but that also
@@ -39,6 +46,9 @@ SELECT
     CASE
         WHEN x.tbl_exists = 0
             THEN 'OK - absent, install.sql will create it'
+        WHEN x.obj_type <> 'BASE TABLE'
+            THEN CONCAT('!! CONFLICT - a ', LOWER(x.obj_type),
+                        ' already uses this name, not a table. install.sql will skip it and this resource will fail at runtime with errors like "The target table is not insertable". Rename or remove it before installing.')
         WHEN x.cols_found = x.cols_expected
             THEN 'OK - already present and is ours'
         ELSE CONCAT('!! CONFLICT - a DIFFERENT table already uses this name (matched only ',
@@ -48,28 +58,59 @@ SELECT
 FROM (
     SELECT 'k9_certifications' AS table_name, 7 AS cols_expected,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certifications') AS tbl_exists,
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certifications') AS obj_type,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certifications'
          AND COLUMN_NAME IN ('citizenid','job','granted_by','granted_at','revoked_by','revoked_at','active')) AS cols_found
     UNION ALL SELECT 'k9_search_log', 9,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_search_log'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_search_log'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_search_log'
          AND COLUMN_NAME IN ('searcher_citizenid','searcher_job','target_type','target_plate','target_citizenid','result','total_weight','alert_tier','searched_at'))
     UNION ALL SELECT 'k9_partnerships', 7,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'
          AND COLUMN_NAME IN ('k9_citizenid','handler_citizenid','established_by','established_at','ended_by','ended_at','active'))
     UNION ALL SELECT 'k9_progression', 4,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'
          AND COLUMN_NAME IN ('citizenid','xp','created_at','updated_at'))
     UNION ALL SELECT 'k9_permissions', 7,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permissions'
          AND COLUMN_NAME IN ('citizenid','permission','granted_by','granted_at','revoked_by','revoked_at','active'))
     UNION ALL SELECT 'k9_certification_specializations', 8,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_specializations'
          AND COLUMN_NAME IN ('citizenid','job','specialization','granted_by','granted_at','revoked_by','revoked_at','active'))
+    UNION ALL SELECT 'k9_runtime_feature_overrides', 5,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_feature_overrides'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_feature_overrides'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_feature_overrides'
+         AND COLUMN_NAME IN ('override_key','kind','value','updated_by','updated_at'))
+    UNION ALL SELECT 'k9_runtime_override_audit', 6,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_override_audit'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_override_audit'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_runtime_override_audit'
+         AND COLUMN_NAME IN ('override_key','kind','old_value','new_value','changed_by','changed_at'))
+    UNION ALL SELECT 'k9_tablet_theme', 8,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme'
+         AND COLUMN_NAME IN ('primary_color','accent_color','background_color','text_color','density','header_title','updated_by','updated_at'))
+    UNION ALL SELECT 'k9_tablet_theme_audit', 8,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_tablet_theme_audit'
+         AND COLUMN_NAME IN ('primary_color','accent_color','background_color','text_color','density','header_title','changed_by','changed_at'))
+    UNION ALL SELECT 'k9_ped_assignments', 7,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_ped_assignments'
+         AND COLUMN_NAME IN ('citizenid','model','original_model_hash','active','applied_by','applied_at','revoked_at'))
 ) x
 ORDER BY x.table_name;
 
@@ -115,7 +156,7 @@ SELECT
 SELECT TABLE_NAME AS `our_table`, TABLE_ROWS AS `approx_rows`
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations')
+  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations','k9_runtime_feature_overrides','k9_runtime_override_audit','k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments')
 ORDER BY TABLE_NAME;
 
 
@@ -156,3 +197,43 @@ SELECT
       THEN 'OK - CREATE ROUTINE available, migrations and rollback scripts will run'
       ELSE 'NOTE - this user has no CREATE ROUTINE. A FRESH install.sql still works fine and is unaffected. But migrations 0003/0004 and every sql/rollback/ script will stop with ERROR 1370 (nothing is damaged). Ask your host to GRANT CREATE ROUTINE, or have them run those files for you.'
     END AS create_routine_verdict;
+
+
+-- ---------------------------------------------------------------------
+-- CHECK 5: does this look like the right database at all?
+--
+-- Every citizenid this resource ever stores is only meaningful next to a
+-- real qbx_core/QBCore `players` table -- this resource declares no
+-- foreign key to it (see install.sql's own k9_certifications header for
+-- why), so installing into the WRONG database, or a database qbx_core has
+-- never touched yet, does not error. It just quietly produces a K9 system
+-- full of citizenids that never match anyone real -- the single most
+-- common real-world cause of "why don't my certifications show up
+-- in-game" support requests, and usually a typo'd database name, not a
+-- real problem with this resource.
+--
+-- WARNING ONLY -- never a stop. A brand-new, multi-resource database
+-- provisioned before qbx_core has run for the very first time is a real,
+-- legitimate situation, not necessarily a mistake, so this never refuses
+-- to let you continue -- it only asks you to double-check.
+-- ---------------------------------------------------------------------
+SELECT
+    CASE
+        WHEN (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE()) = 0
+            THEN CONCAT('WARN - database `', DATABASE(), '` has NO tables at all. ',
+                        'If you meant to install into your live FiveM database, check for a typo''d ',
+                        'database name before continuing -- this is the most common real-world cause ',
+                        'of a K9 system whose citizenids never match a real player. If this is a ',
+                        'genuinely brand-new server and qbx_core has never started yet, start it first ',
+                        'so its `players` table exists, then come back and install this resource. ',
+                        '(This is a warning, not a stop -- a fresh multi-resource database provisioned ',
+                        'before qbx_core''s first run is a real, legitimate situation.)')
+        WHEN (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'players') = 0
+            THEN CONCAT('WARN - database `', DATABASE(), '` has tables, but none named `players`. ',
+                        'qbx_k9unit''s citizenid columns are only meaningful next to a real qbx_core/QBCore ',
+                        '`players` table. This resource will still install correctly (it has no foreign key ',
+                        'to `players`, on purpose), but double-check this is really the same database your ',
+                        'FiveM server''s `qbx_core` resource points at before you rely on any of this. ',
+                        '(This is a warning, not a stop.)')
+        ELSE CONCAT('OK - database `', DATABASE(), '` has a `players` table, consistent with a real qbx_core/QBCore install')
+    END AS qbx_core_sanity_check;

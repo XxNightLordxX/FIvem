@@ -41,8 +41,8 @@
        `CEventNetworkEntityDamage` relay pattern is real and sound, but
        flags that it does NOT fire for script-applied damage (only organic
        gameplay damage) — a real, documented gap, not a bug to fix here.
-    5. phase2_notes/RESEARCH_ARCHIVE.md#tracking / water_gunpowder_natives.md
-       — confirms `IsPedShooting` debounce is the right client-side
+    5. phase2_notes/RESEARCH_ARCHIVE.md#tracking — confirms `IsPedShooting`
+       debounce is the right client-side
        trigger for gunpowder (this file only ever receives the resulting
        relay event, it does no shooting-detection itself), and that the
        water-crossing modifier is entirely a CLIENT-side concern
@@ -102,7 +102,7 @@
     phase2_notes/RESEARCH_ARCHIVE.md#tracking §3 item 2 already explicitly frame
     as acceptable-risk: tracking grants no real capability (SPEC.md §11.6),
     and "a false report just plants a harmless phantom blood-trail
-    location" (scent_blood_tracking.md §3 item 2's own words, written
+    location" (RESEARCH_ARCHIVE.md#tracking §3 item 2's own words, written
     before this exact scenario was raised again by exploit-tester).
     DECISION: accept this as a known, documented limitation — a griefer can
     waste a K9 officer's time with a fabricated trail, never anything
@@ -936,7 +936,7 @@ local function RegisterScentInventoryHook()
         if ped == 0 then return end -- defensive: no live ped (e.g. a system/script-originated drop with no real connected player behind payload.source)
 
         TrackableLog.scent[#TrackableLog.scent + 1] = {
-            coords = GetEntityCoords(ped), -- the DROPPING PLAYER'S OWN live position — NEVER ox_inventory's internal/eventual drop-inventory .coords (not yet created at this point in ox_inventory's own dropItem flow anyway, per scent_source_resolution.md §2) and NEVER anything client-supplied
+            coords = GetEntityCoords(ped), -- the DROPPING PLAYER'S OWN live position — NEVER ox_inventory's internal/eventual drop-inventory .coords (not yet created at this point in ox_inventory's own dropItem flow anyway, per RESEARCH_ARCHIVE.md#scent-source-resolution §2) and NEVER anything client-supplied
             loggedAt = GetGameTimer(),
             ticketIssued = false, -- ANTI-FARM FIX (this pass) — see findTrackableSource's own comment on this field for the full writeup
         }
@@ -996,7 +996,7 @@ end)
 ---      client UI state.
 ---   3. HasK9Access(source).
 ---   4. Per-(source, trackType) cooldown — stamped BEFORE any lookup work
----      below, mirroring the ordering fix contraband_search_contract.md §3
+---      below, mirroring the ordering fix RESEARCH_ARCHIVE.md#contraband-search §3
 ---      step 13 mandates for searchTarget's cooldown-vs-await race (applies
 ---      here in case the 'scent' branch ever awaits an ox_inventory call).
 ---   5. Resolve the caller's own LIVE position — never a client-supplied

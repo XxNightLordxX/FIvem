@@ -266,7 +266,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     )
 end)
 
--- In-flight mutex per source (contraband_search_contract.md §4A). Set
+-- In-flight mutex per source (RESEARCH_ARCHIVE.md#contraband-search §4A). Set
 -- synchronously, BEFORE any yielding work, checked immediately after the
 -- cheap validation steps (payload shape, feature flag, access) and before
 -- any cooldown/entity-resolution work, cleared on EVERY exit path
@@ -283,7 +283,7 @@ local SearchMutex = NewMutex()
 SearchMutex.RegisterPlayerDropped()
 
 -- Flat per-source cooldown — BLOCKING per
--- contraband_search_security_review.md §2 ("nothing stops a single
+-- RESEARCH_ARCHIVE.md#contraband-search §2 ("nothing stops a single
 -- source from searching many different targets back-to-back with zero
 -- delay"). Sized around Config.SearchZones.sniffAnimDurationMs (that
 -- finding's own suggestion). Mirrors BARK_COOLDOWN_MS/lastBarkAt's exact
@@ -302,9 +302,9 @@ SearchCooldown.RegisterPlayerDropped()
 
 -- Per-resolved-target cooldown backing Config.SearchZones.searchCooldownMs
 -- — keyed on the RESOLVED, STABLE identity (plate for vehicles; citizenid
--- for persons, per contraband_search_security_review.md §7's "survives a
+-- for persons, per RESEARCH_ARCHIVE.md#contraband-search §7's "survives a
 -- ped-recreation edge case" note), NOT the raw client-supplied
--- `targetNetId` (recyclable/spoofable-adjacent, contraband_search_contract.md
+-- `targetNetId` (recyclable/spoofable-adjacent, RESEARCH_ARCHIVE.md#contraband-search
 -- §4B). Outlives any single player's connection (a plate persists after
 -- the searching officer disconnects), so — unlike SearchCooldown/SearchMutex
 -- above — this table needs its OWN independent TTL-based sweep instead of
@@ -325,7 +325,7 @@ for _, itemName in ipairs(Config.SearchContrabandItems) do
     ContrabandItemSet[itemName] = true
 end
 
--- Container recursion depth cap (contraband_search_contract.md §2 —
+-- Container recursion depth cap (RESEARCH_ARCHIVE.md#contraband-search §2 —
 -- "an explicitly chosen max depth (e.g. 3) — not unbounded, and not
 -- skipped"). Deliberately a LOCAL implementation constant, not a
 -- Config.* field — recursion depth is an internal defensive bound of this
@@ -334,7 +334,7 @@ local MAX_CONTAINER_RECURSION_DEPTH = 3
 
 --- Recursively sums the weight of every slot (top-level + nested
 --- containers, up to MAX_CONTAINER_RECURSION_DEPTH) in `items` whose
---- `.name` is a configured contraband item (contraband_search_contract.md
+--- `.name` is a configured contraband item (RESEARCH_ARCHIVE.md#contraband-search
 --- §2 — "must-handle, not optional polish": a naive top-level-only scan
 --- will not match a bag's OWN item name against Config.SearchContrabandItems,
 --- so "put the drugs in a bag" would otherwise be a trivial, fully-defeating
@@ -420,7 +420,7 @@ function GetContrabandAlertTier(totalWeight)
     return ResolveAlertTier(totalWeight)
 end
 
---- BLOCKING per contraband_search_security_review.md §1: iterates
+--- BLOCKING per RESEARCH_ARCHIVE.md#contraband-search §1: iterates
 --- connected players and only notifies those within
 --- Config.SearchZones.alertBroadcastRadius of the TARGET's own live
 --- coordinates — NEVER a global TriggerClientEvent(-1, ...) like
@@ -448,7 +448,7 @@ local function BroadcastContrabandAlert(targetCoords, targetNetId, alertTierName
 end
 
 -- An entry older than its own cooldown window is by definition no longer
--- doing any rate-limiting work and is safe to drop (contraband_search_contract.md
+-- doing any rate-limiting work and is safe to drop (RESEARCH_ARCHIVE.md#contraband-search
 -- §4). Not the same table/schedule as server/tracking.lua's TrackableLog
 -- prune pass — unrelated tables, unrelated reasons, do not merge the
 -- threads.
@@ -972,7 +972,7 @@ end
 --- reported as `{ ok = false, reason = 'search_failed' }`.
 ---
 --- Validation order — cheapest/most-defensive checks first, expensive/
---- leaky ones last (contraband_search_contract.md §3's own framing;
+--- leaky ones last (RESEARCH_ARCHIVE.md#contraband-search §3's own framing;
 --- reordering "for convenience," e.g. moving the inventory read before
 --- the proximity check, silently reopens the map-wide oracle this
 --- ordering exists to prevent):
@@ -1142,7 +1142,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
             return { ok = false, reason = 'invalid_target' }
         end
         -- Confirmed against the real overextended/ox_inventory source
-        -- (contraband_search_contract.md §1): a vehicle trunk's inventory
+        -- (RESEARCH_ARCHIVE.md#contraband-search §1): a vehicle trunk's inventory
         -- id is literally 'trunk' .. plate.
         inventoryId = ('trunk%s'):format(plate)
         cooldownKey = 'vehicle:' .. plate
@@ -1173,7 +1173,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- Query contents (recursively via SumContrabandWeight below), pcall-
     -- wrapped — a lazily-loaded vehicle inventory can error on edge-case
     -- vehicle classes/timing. LOAD-BEARING DETAIL, confirmed against the
-    -- real overextended/ox_inventory source (contraband_search_contract.md
+    -- real overextended/ox_inventory source (RESEARCH_ARCHIVE.md#contraband-search
     -- §1, re-verified by tech-scout): for an uncached vehicle trunk,
     -- ox_inventory's own loadInventoryData awaits
     -- lib.callback.await('ox_inventory:getVehicleData', source, netid)
@@ -1427,7 +1427,7 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     }
 end
 
---- SPEC.md §11.4 item 2 / contraband_search_contract.md §3. THE
+--- SPEC.md §11.4 item 2 / RESEARCH_ARCHIVE.md#contraband-search §3. THE
 --- security-critical callback of Phase 2 (SPEC.md §11.1 sub-phase 2b).
 lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetType, targetNetId)
     if type(targetType) ~= 'string' or (targetType ~= 'vehicle' and targetType ~= 'person') or type(targetNetId) ~= 'number' then
@@ -1443,7 +1443,7 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     end
 
     -- Set the in-flight mutex synchronously, BEFORE any further work that
-    -- could yield (contraband_search_contract.md §4A) — cleared on EVERY
+    -- could yield (RESEARCH_ARCHIVE.md#contraband-search §4A) — cleared on EVERY
     -- exit path below. TryAcquire combines the original table's
     -- check-then-set into one atomic call: false means already held, so
     -- reject outright, never queue/race a concurrent call from the same
@@ -1455,7 +1455,7 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
     local requestedAt = GetGameTimer()
 
     -- Flat per-source cooldown (ANY target) — BLOCKING per
-    -- contraband_search_security_review.md §2, not present in SPEC.md
+    -- RESEARCH_ARCHIVE.md#contraband-search §2, not present in SPEC.md
     -- §11.4's original text (which describes a per-(source, target)
     -- cooldown — CORRECTION, config audit this pass: what actually shipped
     -- as TargetSearchCooldown below is per-TARGET ONLY, no searcher
@@ -1472,7 +1472,7 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
 
     local ok, result = pcall(HandleSearchTarget, source, targetType, targetNetId, requestedAt)
 
-    SearchMutex.Release(source) -- ALWAYS clear, success or error (contraband_search_contract.md §4A "finally")
+    SearchMutex.Release(source) -- ALWAYS clear, success or error (RESEARCH_ARCHIVE.md#contraband-search §4A "finally")
 
     if not ok then
         print(('[qbx_k9unit] searchTarget error for source %s: %s'):format(source, tostring(result)))

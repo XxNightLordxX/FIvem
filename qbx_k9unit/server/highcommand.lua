@@ -425,18 +425,25 @@ end
 local HighCommandGrantCooldown = NewCooldown()
 HighCommandGrantCooldown.RegisterPlayerDropped()
 
---- Console log line for EVERY invocation of '/k9givexp' -- denied,
---- rate-limited, invalid args, target unresolvable, self-grant blocked, XP
---- system unavailable, or ok. Mirrors server/admin.lua's own
---- LogAuditInvocation "%s ran %s(%s) -> %s" shape exactly -- this command
---- mints economy value, so it gets at least the same traceability as that
---- file's purely read-only audit surface (this task's own "this mints
---- economy value; it must be traceable" framing). The 'ok' outcome's own
---- `detail` string is built by the command handler below to already
+--- Console log line for EVERY invocation of '/k9givexp' (and, this pass,
+--- the K9 Command Tablet's own tabletGiveXp callback, which is a genuinely
+--- different entry point to the SAME underlying grant -- see
+--- GrantHighCommandXp below) -- denied, rate-limited, invalid args, target
+--- unresolvable, self-grant blocked, XP system unavailable, or ok. Mirrors
+--- server/admin.lua's own LogAuditInvocation "%s ran %s(%s) -> %s" shape
+--- exactly -- this command mints economy value, so it gets at least the
+--- same traceability as that file's purely read-only audit surface (this
+--- task's own "this mints economy value; it must be traceable" framing).
+--- The 'ok' outcome's own `detail` string is built by the caller to already
 --- contain the target citizenid, amount, and resulting total in one place,
 --- so a single line captures granter (via `whoLabel`), target, amount, and
 --- total together -- exactly the four facts this task's brief requires be
---- named.
+--- named. The literal `k9givexp(...)` action-name text is kept UNCHANGED
+--- even for a tablet-originated grant -- from the audit trail's own
+--- perspective this is the exact same mechanism a typed command would hit
+--- (mirrors client/tablet.lua's own "a tablet-triggered command is,
+--- from the server's perspective, LITERALLY THE SAME EVENT" framing for
+--- its command bridge), not a second, differently-named grant path.
 --- @param source number
 --- @param detail string
 --- @param outcome string -- 'ok' | 'denied' | 'rate_limited' | 'invalid_args' | 'target_unresolvable' | 'self_grant_blocked' | 'xp_unavailable'
@@ -445,6 +452,101 @@ local function LogAuditInvocation(source, detail, outcome)
     local citizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
     local whoLabel = citizenid and ('citizenid=' .. citizenid) or ('unresolved-source=' .. tostring(source))
     print(('[qbx_k9unit] AUDIT: %s ran k9givexp(%s) -> %s'):format(whoLabel, detail, outcome))
+end
+
+--- Shared authorization PREDICATE for both '/k9givexp' and the tablet's own
+--- tabletGiveXp callback -- factored out (this task's own explicit
+--- instruction: "do NOT duplicate that logic") so a future change to how
+--- this resolves (a third grant path, a new bypass) is made once, not
+--- twice. Two independent routes, matching the resolution order config.lua's
+--- Config.Permissions block documents: an explicit 'k9.givexp' grant, OR
+--- high command rank. Both guarded with `type(fn) == 'function'` so this
+--- still works with either feature disabled -- with both off, nobody
+--- qualifies and it fails closed, which is correct. Pure predicate, no
+--- side effects (no audit line, no cooldown consumption) -- each call site
+--- still owns its own audit/cooldown sequencing exactly as before, so
+--- extracting this changes no observable ordering for '/k9givexp'.
+--- @param source number
+--- @return boolean
+local function IsAuthorizedForXpGrant(source)
+    if type(IsHighCommand) == 'function' and IsHighCommand(source) then return true end
+
+    if type(HasPermission) == 'function' then
+        local callerPlayer = exports.qbx_core:GetPlayer(source)
+        local callerCitizenid = callerPlayer and callerPlayer.PlayerData and callerPlayer.PlayerData.citizenid
+        if type(callerCitizenid) == 'string' and callerCitizenid ~= '' then
+            return HasPermission(callerCitizenid, 'k9.givexp') == true
+        end
+    end
+
+    return false
+end
+
+--- Shared CORE grant mechanics for both '/k9givexp' and tabletGiveXp --
+--- everything from "who actually receives the XP" onward, once
+--- authorization/cooldown/amount have ALREADY been independently checked by
+--- the caller (each caller's own arg-shape/online-target requirements
+--- differ too much to fold in here -- see each call site). Extracted
+--- verbatim from the pre-existing RegisterCommand body except for taking
+--- `directCitizenid` directly (a citizenid the CALLER has already
+--- resolved) instead of re-resolving it from a server id -- this is what
+--- lets tabletGiveXp reuse it for a citizenid that may be OFFLINE (XP is a
+--- DB-backed, always-offline-capable value; AwardXPDirect itself does not
+--- require a live session, see server/progression.lua), unlike
+--- '/k9givexp' itself, which can only ever name a currently-connected
+--- player. See this file's header PART 2 for the full target-resolution /
+--- self-grant / audit writeup this implements unchanged.
+--- @param granterSrc number
+--- @param granterCitizenid string
+--- @param directCitizenid string
+--- @param amount number -- already validated by the caller (IsValidGrantAmount)
+--- @return boolean ok
+--- @return string outcome -- 'self_grant_blocked' | 'xp_unavailable' | 'ok'
+--- @return string? recipientCitizenid -- meaningful only when ok == true
+--- @return number? newTotal -- meaningful only when ok == true
+--- @return boolean? redirectedToPartner -- meaningful only when ok == true
+local function GrantHighCommandXp(granterSrc, granterCitizenid, directCitizenid, amount)
+    -- TARGET RESOLUTION -- K9 vs. handler. See header PART 2 for the
+    -- full "genuine design question" writeup. Soft-guarded: a nil
+    -- GetActivePartnerCitizenId result (no partnership.lua loaded, the
+    -- feature is off, or genuinely no active partnership) leaves
+    -- `recipientCitizenid` as `directCitizenid` -- the unambiguous
+    -- fallback.
+    local recipientCitizenid = directCitizenid
+    local redirectedToPartner = false
+    if type(GetActivePartnerCitizenId) == 'function' then
+        local partnerCitizenid, isK9 = GetActivePartnerCitizenId(directCitizenid)
+        if partnerCitizenid and not isK9 then
+            -- directCitizenid is the HANDLER-role party -- redirect the
+            -- mechanical XP effect to their K9 partner (see header for why).
+            recipientCitizenid = partnerCitizenid
+            redirectedToPartner = true
+        end
+    end
+
+    -- SELF-GRANT -- checked against BOTH the literal target and the
+    -- final (possibly redirected) recipient. See header PART 2's own
+    -- "SELF-GRANT" section for why both, not just the final recipient.
+    if Config.HighCommand.allowSelfGrant ~= true
+        and (directCitizenid == granterCitizenid or recipientCitizenid == granterCitizenid) then
+        LogAuditInvocation(granterSrc, ('target_citizenid=%s'):format(recipientCitizenid), 'self_grant_blocked')
+        return false, 'self_grant_blocked'
+    end
+
+    if type(AwardXPDirect) ~= 'function' then
+        LogAuditInvocation(granterSrc, ('target_citizenid=%s amount=%d'):format(recipientCitizenid, amount), 'xp_unavailable')
+        return false, 'xp_unavailable'
+    end
+
+    local newTotal = AwardXPDirect(recipientCitizenid, amount, 'high_command_grant')
+
+    LogAuditInvocation(
+        granterSrc,
+        ('target_citizenid=%s amount=%d new_total=%s'):format(recipientCitizenid, amount, tostring(newTotal)),
+        'ok'
+    )
+
+    return true, 'ok', recipientCitizenid, newTotal, redirectedToPartner
 end
 
 AddEventHandler('onResourceStart', function(resourceName)
@@ -514,27 +616,10 @@ AddEventHandler('onResourceStart', function(resourceName)
         -- server/admin.lua's own k9audit* ordering ("an unauthorized
         -- caller learns nothing about argument validity") -- appropriate
         -- here for an even stronger reason than admin.lua's read-only
-        -- audit surface: this command mints economy value.
-        -- Two independent routes to authorization, matching the resolution
-        -- order config.lua's Config.Permissions block documents: an explicit
-        -- 'k9.givexp' grant, OR high command rank. The grant path exists so
-        -- an individual officer can be given this without being promoted to
-        -- high command, which is the whole point of the permission layer.
-        -- Both are guarded with type(fn) == 'function' so this command still
-        -- works with either feature disabled -- with both off, nobody
-        -- qualifies and it fails closed, which is correct.
-        local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source)
-
-        local hasGivexpGrant = false
-        if not isHighCommandCaller and type(HasPermission) == 'function' then
-            local callerPlayer = exports.qbx_core:GetPlayer(source)
-            local callerCitizenid = callerPlayer and callerPlayer.PlayerData and callerPlayer.PlayerData.citizenid
-            if type(callerCitizenid) == 'string' and callerCitizenid ~= '' then
-                hasGivexpGrant = HasPermission(callerCitizenid, 'k9.givexp') == true
-            end
-        end
-
-        if not (isHighCommandCaller or hasGivexpGrant) then
+        -- audit surface: this command mints economy value. Uses the SAME
+        -- IsAuthorizedForXpGrant predicate tabletGiveXp calls below --
+        -- see that function's own doc comment.
+        if not IsAuthorizedForXpGrant(source) then
             LogAuditInvocation(source, 'n/a', 'denied')
             NotifyPlayer(source, locale('highcommand.not_authorized'), 'error')
             return
@@ -543,7 +628,12 @@ AddEventHandler('onResourceStart', function(resourceName)
         -- Anti-fat-finger cooldown -- see header COOLDOWN section. Silent
         -- no-op on trip, matching this resource's bark/leash-request/
         -- certify-action convention (still audited below, unlike those,
-        -- since this path mints economy value).
+        -- since this path mints economy value). SAME HighCommandGrantCooldown
+        -- instance tabletGiveXp consumes from below -- one shared per-officer
+        -- bucket regardless of which interface (command or tablet) is used,
+        -- which is the correct anti-fat-finger behavior, not a bug: the
+        -- point of this cooldown is bounding how often ONE officer can issue
+        -- ANY grant, independent of which button they pressed.
         if not HighCommandGrantCooldown.Consume(source, Config.HighCommand.grantCooldownMs) then
             LogAuditInvocation(source, 'n/a', 'rate_limited')
             return
@@ -571,6 +661,13 @@ AddEventHandler('onResourceStart', function(resourceName)
             return
         end
 
+        -- '/k9givexp' takes a SERVER id and therefore can only ever name a
+        -- currently-connected player -- this online-resolution step is NOT
+        -- shared with tabletGiveXp below, which is citizenid-keyed and
+        -- offline-capable by design (see GrantHighCommandXp's own doc
+        -- comment for why that asymmetry is fine here, unlike the
+        -- certification grant's model-check asymmetry: XP has no live-ped
+        -- precondition to lose by going offline-capable).
         local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
         local directCitizenid = targetPlayer and targetPlayer.PlayerData and targetPlayer.PlayerData.citizenid
         if not directCitizenid then
@@ -579,47 +676,15 @@ AddEventHandler('onResourceStart', function(resourceName)
             return
         end
 
-        -- TARGET RESOLUTION -- K9 vs. handler. See header PART 2 for the
-        -- full "genuine design question" writeup. Soft-guarded: a nil
-        -- GetActivePartnerCitizenId result (no partnership.lua loaded, the
-        -- feature is off, or genuinely no active partnership) leaves
-        -- `recipientCitizenid` as `directCitizenid` -- the unambiguous
-        -- fallback.
-        local recipientCitizenid = directCitizenid
-        local redirectedToPartner = false
-        if type(GetActivePartnerCitizenId) == 'function' then
-            local partnerCitizenid, isK9 = GetActivePartnerCitizenId(directCitizenid)
-            if partnerCitizenid and not isK9 then
-                -- directCitizenid is the HANDLER-role party -- redirect the
-                -- mechanical XP effect to their K9 partner (see header for why).
-                recipientCitizenid = partnerCitizenid
-                redirectedToPartner = true
+        local ok, outcome, recipientCitizenid, newTotal, redirectedToPartner = GrantHighCommandXp(source, granterCitizenid, directCitizenid, amount)
+        if not ok then
+            if outcome == 'self_grant_blocked' then
+                NotifyPlayer(source, locale('highcommand.self_grant_disabled'), 'error')
+            elseif outcome == 'xp_unavailable' then
+                NotifyPlayer(source, locale('highcommand.xp_system_unavailable'), 'error')
             end
-        end
-
-        -- SELF-GRANT -- checked against BOTH the literal target and the
-        -- final (possibly redirected) recipient. See header PART 2's own
-        -- "SELF-GRANT" section for why both, not just the final recipient.
-        if Config.HighCommand.allowSelfGrant ~= true
-            and (directCitizenid == granterCitizenid or recipientCitizenid == granterCitizenid) then
-            LogAuditInvocation(source, ('target_citizenid=%s'):format(recipientCitizenid), 'self_grant_blocked')
-            NotifyPlayer(source, locale('highcommand.self_grant_disabled'), 'error')
             return
         end
-
-        if type(AwardXPDirect) ~= 'function' then
-            LogAuditInvocation(source, ('target_citizenid=%s amount=%d'):format(recipientCitizenid, amount), 'xp_unavailable')
-            NotifyPlayer(source, locale('highcommand.xp_system_unavailable'), 'error')
-            return
-        end
-
-        local newTotal = AwardXPDirect(recipientCitizenid, amount, 'high_command_grant')
-
-        LogAuditInvocation(
-            source,
-            ('target_citizenid=%s amount=%d new_total=%s'):format(recipientCitizenid, amount, tostring(newTotal)),
-            'ok'
-        )
 
         NotifyPlayer(source, locale('highcommand.grant_success_granter', amount, recipientCitizenid, newTotal or amount), 'success')
 
@@ -633,6 +698,69 @@ AddEventHandler('onResourceStart', function(resourceName)
             NotifyPlayer(targetServerId, locale('highcommand.grant_success_target', amount, newTotal or amount), 'success')
         end
     end, false)
+
+    -- ==================================================================
+    -- TABLET CALLBACK -- qbx_k9unit:server:tabletGiveXp. Same
+    -- IsAuthorizedForXpGrant/HighCommandGrantCooldown/IsValidGrantAmount/
+    -- GrantHighCommandXp core as '/k9givexp' immediately above -- see each
+    -- one's own doc comment. citizenid-keyed and offline-capable (unlike
+    -- the command): AwardXPDirect itself has no live-session requirement,
+    -- so there is no equivalent of the certification grant's "cannot
+    -- verify a live ped model for an offline target" asymmetry here (see
+    -- server/certifications.lua's GrantCertificationForTablet doc comment
+    -- for that DIFFERENT case, where the answer came out the other way).
+    -- Gated on Config.Features.CommandTablet, mirroring
+    -- server/permissions.lua's identical "TABLET CALLBACKS" gate --
+    -- registered here, inside onResourceStart, specifically because it
+    -- needs HighCommandGrantCooldown/Config.HighCommand.maxXpPerGrant to
+    -- already be confirmed valid by the guards above -- exactly the same
+    -- reason '/k9givexp' itself is only ever registered from inside this
+    -- same block. `source` is ox_lib's own callback dispatch value
+    -- (server-verified, never client-supplied) and is passed straight
+    -- through as `granterSrc` -- never trust `targetCitizenid` as the
+    -- CALLER's own identity.
+    -- ==================================================================
+    if Config.Features and Config.Features.CommandTablet == true then
+        lib.callback.register('qbx_k9unit:server:tabletGiveXp', function(source, targetCitizenid, amount)
+            if type(targetCitizenid) ~= 'string' or targetCitizenid == '' then
+                return { ok = false, error = 'invalid_args' }
+            end
+
+            if not IsAuthorizedForXpGrant(source) then
+                LogAuditInvocation(source, 'n/a', 'denied')
+                return { ok = false, error = 'denied', message = locale('highcommand.not_authorized') }
+            end
+
+            if not HighCommandGrantCooldown.Consume(source, Config.HighCommand.grantCooldownMs) then
+                LogAuditInvocation(source, 'n/a', 'rate_limited')
+                return { ok = false, error = 'rate_limited' }
+            end
+
+            if not IsValidGrantAmount(amount, Config.HighCommand.maxXpPerGrant) then
+                LogAuditInvocation(source, 'n/a', 'invalid_args')
+                return { ok = false, error = 'invalid_amount', message = locale('highcommand.invalid_amount', Config.HighCommand.maxXpPerGrant) }
+            end
+
+            local granterPlayer = exports.qbx_core:GetPlayer(source)
+            local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
+            if not granterCitizenid then
+                LogAuditInvocation(source, 'n/a', 'invalid_args')
+                return { ok = false, error = 'invalid_granter', message = locale('common.unable_to_resolve_citizenid') }
+            end
+
+            local ok, outcome, recipientCitizenid, newTotal = GrantHighCommandXp(source, granterCitizenid, targetCitizenid, amount)
+            if not ok then
+                if outcome == 'self_grant_blocked' then
+                    return { ok = false, error = outcome, message = locale('highcommand.self_grant_disabled') }
+                elseif outcome == 'xp_unavailable' then
+                    return { ok = false, error = outcome, message = locale('highcommand.xp_system_unavailable') }
+                end
+                return { ok = false, error = outcome }
+            end
+
+            return { ok = true, message = locale('highcommand.grant_success_granter', amount, recipientCitizenid, newTotal or amount) }
+        end)
+    end
 
     print('[qbx_k9unit] highcommand.lua: /k9givexp registered.')
 end)

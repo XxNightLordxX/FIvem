@@ -39,6 +39,13 @@ dependencies {
     'ox_lib',
     'ox_target',
     'oxmysql',
+    -- NOTE for anyone setting Config.Database.enabled = false: oxmysql
+    -- below is a HARD dependency and FXServer refuses to start this
+    -- resource without that resource present and started. That check runs
+    -- before config.lua is ever read, so no config setting can route
+    -- around it. Turning Config.Database off means this resource sends
+    -- oxmysql no queries and needs none of its own tables -- it does NOT
+    -- mean you can uninstall oxmysql.
     'ox_inventory', -- Phase 2: server/search.lua reads item weights/contents via ox_inventory exports (GetInventoryItems/GetContainerFromSlot); Phase 1 never touched inventory.
 }
 

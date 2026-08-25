@@ -269,6 +269,24 @@ local function newWellbeingFixture(opts)
     local k9Models = {}
     local function IsConfiguredK9Model(model) return k9Models[model] == true end
 
+    -- SECURITY FIX FOLLOW-UP (coder-architect, adversarial-pass finding,
+    -- this pass): ResolveK9Ped now ALSO requires HasK9Access(source), not
+    -- just a matching model -- see that function's own doc comment in
+    -- server/wellbeing.lua for the full writeup. Defaults every source to
+    -- `true` so every PRE-EXISTING test in this file (none of which were
+    -- ever testing an access-denial scenario -- that is squarely this
+    -- fixture's own owner's territory to add, not invented here) keeps
+    -- behaving exactly as it did before this stub existed. `setHasK9Access`
+    -- exposed below for a future test that wants to exercise the new gate
+    -- directly.
+    local hasK9AccessBySource = {}
+    local defaultHasK9Access = true
+    local function HasK9Access(source)
+        local v = hasK9AccessBySource[source]
+        if v == nil then return defaultHasK9Access end
+        return v
+    end
+
     local coordsByPed = {}
     local function GetEntityCoords(ped) return coordsByPed[ped] or vec3(0, 0, 0) end
 
@@ -345,6 +363,7 @@ local function newWellbeingFixture(opts)
         GetPlayerPed         = GetPlayerPed,
         GetEntityModel       = GetEntityModel,
         IsConfiguredK9Model  = IsConfiguredK9Model,
+        HasK9Access          = HasK9Access,
         GetEntityCoords      = GetEntityCoords,
         GetEntityHealth      = GetEntityHealth,
         GetAllObjects        = GetAllObjects,
@@ -381,6 +400,7 @@ local function newWellbeingFixture(opts)
         setPed = function(src, ped) pedBySource[src] = ped end,
         setModel = function(ped, model) modelByPed[ped] = model end,
         setIsK9Model = function(model, isK9) k9Models[model] = isK9 end,
+        setHasK9Access = function(source, v) hasK9AccessBySource[source] = v end,
         setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
         setHealth = function(ped, hp) healthByPed[ped] = hp end,
         setItemCount = function(src, itemName, n)

@@ -58,7 +58,7 @@
        netId + alertTier, NEVER totalWeight/contrabandFound (those are
        private to the requester, returned solely via the callback above,
        per §11.4 item 2's "never broadcast" language and
-       contraband_search_contract.md §6's "leaking exact contraband detail
+       RESEARCH_ARCHIVE.md#contraband-search §6's "leaking exact contraband detail
        to the wrong audience" exploit note). Distance-filtered server-side
        (Config.SearchZones.alertBroadcastRadius) — NOT a global
        TriggerClientEvent(-1, ...) like relayBark, so a no-op if this
@@ -363,7 +363,7 @@ RegisterNetEvent('qbx_k9unit:client:playContrabandAlert', function(netId, alertT
     -- which is fine since a 'clean' result's requester-side feedback is
     -- already fully covered by PerformSearch()'s own local notify above;
     -- whether 'clean' should ALSO broadcast for bystander symmetry is a
-    -- server/search.lua decision (contraband_search_contract.md §5), not
+    -- server/search.lua decision (RESEARCH_ARCHIVE.md#contraband-search §5), not
     -- something this receiver needs to special-case either way.
     PlaySoundOnNetworkEntity(netId, alertTier)
 end)

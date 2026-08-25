@@ -1,5 +1,8 @@
 # Undoing the qbx_k9unit database install
 
+**Installing or upgrading?** You want `../k9_setup.sh`, not this folder —
+see `../README.md`. Everything here is about undoing something.
+
 **This folder is your safety net.** If running `sql/install.sql` broke
 something, or you want to remove this resource's database tables, this is
 where you undo it.
@@ -18,10 +21,10 @@ you already have a backup.
 
 | Word | What it actually means |
 |---|---|
-| **table** | One spreadsheet-like store of rows. This resource uses six of them. |
+| **table** | One spreadsheet-like store of rows. This resource uses ten of them. |
 | **column** | One field on every row — like one spreadsheet column. |
 | **index** | A lookup shortcut the database keeps so searches are fast. It holds no data of its own; deleting one never deletes rows. |
-| **migration** | A numbered file that changes the shape of a table. `sql/migrations/0001…0006`. |
+| **migration** | A numbered file that changes the shape of a table. `sql/migrations/0001…0007`. |
 | **rollback** / **down script** | A file in this folder that undoes one migration. |
 | **schema** | The *shape* of your tables — the columns and indexes. Separate from the *data* (the rows). |
 | **drop** | Delete permanently. Dropping a table deletes every row in it, forever. |
@@ -39,7 +42,7 @@ mysql -u YOUR_USER -p YOUR_DATABASE < ../preflight_check.sql
 ```
 
 It answers three questions in a few seconds: is your database server new
-enough, does anything already own one of our six table names, and does
+enough, does anything already own one of our ten table names, and does
 your database user have the privileges the migration files need.
 
 **You want every line to start with `OK`.** A line starting with `!!` means
@@ -72,8 +75,19 @@ against, and `YOUR_MYSQL_USER` with your MySQL username (often `root`).
 It will ask for your password — typing nothing and pressing Enter is fine
 if your database has no password.
 
-**What it does:** saves a copy of all six qbx_k9unit tables into one
+**What it does:** saves a copy of all ten qbx_k9unit tables into one
 timestamped file. It only reads; it changes nothing.
+
+**This backs up qbx_k9unit's own tables only** — not the rest of your
+database (not `players`, not other resources' tables). That is the right
+tool before an uninstall or a rollback of *this resource specifically*. If
+you want a safety net before an *install or migration* — something that
+protects your whole database, not just ours, in case anything goes
+sideways — use `./backup_full_database.sh` instead (or just use
+`../k9_setup.sh`, which runs that automatically for you; see "The single
+entry point" below). The two backup files look different on purpose
+(`qbx_k9unit-backup-...` vs `qbx_k9unit-FULLDB-backup-...`) so you cannot
+mix them up under pressure.
 
 **How to tell it worked:** you will see a block like this, and the last
 line of the command will not be an error:
@@ -278,6 +292,30 @@ backup if you need those.)
 
 ---
 
+## STEP 7a — Free dry run: see what removal would affect
+
+Before deleting anything, run the uninstall file **unmodified**:
+
+```bash
+mysql -u YOUR_USER -p YOUR_DATABASE < uninstall_all.sql
+```
+
+Unmodified it deletes nothing — but it prints a report of everything else
+in your database that depends on our tables. An empty report means removal
+is clean. Otherwise you may see:
+
+| What it says | What it means |
+|---|---|
+| `BLOCKS UNINSTALL - foreign key into our table` | Another table is linked to ours. **The uninstall will refuse to run at all** until you remove that link — it prints the exact `ALTER TABLE ... DROP FOREIGN KEY ...` command. This is deliberate: dropping only *some* of our tables would leave you half-uninstalled, so it does nothing instead. |
+| `WILL BREAK - view reads one of our tables` | One of your views reads our data. After removal the view still exists but errors whenever used. Drop or rewrite it. |
+| `WILL BE DELETED - trigger lives on one of our tables` | Something put a trigger on one of our tables. MySQL deletes a trigger together with its table, so it will be gone. Save it first with `SHOW CREATE TRIGGER` if you want it back. |
+| `WILL BREAK - stored routine reads one of our tables` | A stored procedure reads our data and will fail with "Table doesn't exist" when called. Drop or rewrite it. |
+
+None of this happens on a normal install — it only applies if you or
+another resource deliberately linked something to our tables.
+
+---
+
 ## STEP 7 — Delete everything (full uninstall)
 
 **Read STEP 2 again first.** You almost certainly do not need this. To
@@ -308,8 +346,22 @@ nothing was deleted, so just try again.
 **Run it unmodified and it does nothing at all.** That is deliberate: you
 cannot wipe your K9 data by pasting the wrong file.
 
-This deletes all six tables and everything in them, permanently. Your
+This deletes all ten tables and everything in them, permanently. Your
 STEP 1 backup is the only way back.
+
+**It also refuses if something else in your database depends on our
+tables.** Every run — armed or not — first checks for foreign keys, views,
+triggers or stored routines belonging to *other* resources that point at
+one of our ten tables, and prints exactly what it found. If it finds any,
+it stops without deleting anything (a half-uninstall, where some tables
+are gone and others are stuck because of one FK, is worse than refusing
+outright). Fix what it lists, then run it again.
+
+**Prefer the wrapper.** `sql/rollback/uninstall.sh` does STEP 1 for you
+automatically (a full-database backup, not just the six— now ten— K9
+tables), requires you to type your database name back as confirmation,
+and only then arms and runs this file. See "The single entry point"
+below.
 
 ---
 
@@ -321,7 +373,7 @@ Use the line the backup script printed in STEP 1:
 mysql -h 127.0.0.1 -P 3306 -u YOUR_USER -p YOUR_DATABASE < qbx_k9unit-backup-....sql
 ```
 
-This puts all six tables back exactly as they were when you took the
+This puts all ten tables back exactly as they were when you took the
 backup. Anything written *after* the backup is not in it.
 
 **How to tell it worked:**
@@ -333,7 +385,7 @@ SELECT COUNT(*) FROM k9_progression;
 ```
 The numbers should match the "Rows saved" list the backup printed.
 
-Tested end to end: dropping all six tables and restoring from a backup
+Tested end to end: dropping every one of our tables and restoring from a backup
 returns every row, and every calculated column, exactly as it was.
 
 ---
@@ -348,8 +400,11 @@ returns every row, and every calculated column, exactly as it was.
 | `0002_down.sql` | migration 0002 | **No — does nothing on purpose** | Yes |
 | `0005_down.sql` | migration 0005 | **No — does nothing on purpose** | Yes |
 | `0006_down.sql` | migration 0006 | No rows | Yes |
+| `0007_down.sql` | migration 0007 | **No — does nothing on purpose** | Yes |
 | `0001_down.sql` | migration 0001 | **No — does nothing on purpose** | Yes |
-| `uninstall_all.sql` | the whole install | **YES, all six tables** — inert until you arm it | Yes |
+| `backup_full_database.sh` | *(nothing — it saves)* | No, read-only | Yes |
+| `uninstall.sh` | *(wrapper)* | Backs up first, then calls `uninstall_all.sql` | Yes |
+| `uninstall_all.sql` | the whole install | **YES, all ten tables** — inert until you arm it | Yes |
 
 **Why do `0001_down.sql` and `0002_down.sql` do nothing?** Those two
 migrations each create a table. The only way to undo "create a table" is

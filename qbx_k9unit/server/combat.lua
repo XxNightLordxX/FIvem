@@ -363,7 +363,7 @@
     the resolution mechanism. This file instead reuses
     `ResolveConnectedPlayerFromPed(entity)` — the SAME pattern
     server/search.lua's own security-reviewed
-    `contraband_search_security_review.md`-driven implementation already
+    `RESEARCH_ARCHIVE.md#contraband-search`-driven implementation already
     uses for the identical fact ("does this entity belong to a real,
     currently-connected player?"), for the SAME reason that file's own
     header gives: `IsPedAPlayer`/`NetworkGetPlayerIndexFromPed` combos were

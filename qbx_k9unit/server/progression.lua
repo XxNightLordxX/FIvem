@@ -79,7 +79,7 @@
             disabled, per SPEC.md §3 — callers are not required to gate
             this themselves, though every current call site already does
             for clarity). Updates the in-memory K9XP cache SYNCHRONOUSLY
-            before firing a non-blocking DB UPSERT (phase4_xp_schema_notes.md
+            before firing a non-blocking DB UPSERT (RESEARCH_ARCHIVE.md#xp-schema
             §5 — correctness of the applied gameplay effect never depends on
             DB round-trip latency). Called from server/search.lua and
             server/tracking.lua this pass via a `type(AwardXP) == 'function'`

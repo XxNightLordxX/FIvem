@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# qbx_k9unit :: back up this resource's six database tables
+# qbx_k9unit :: back up every database table this resource owns
 # =====================================================================
 #
 # RUN THIS BEFORE ANY ROLLBACK OR UNINSTALL. It is the only way back.
 #
-# It saves a copy of the six tables qbx_k9unit owns:
+# It saves a copy of every table qbx_k9unit owns:
 #     k9_certifications   who is certified, granted/revoked by whom
 #     k9_search_log       every contraband search ever performed
 #     k9_partnerships     every K9/handler partnership, past and present
@@ -99,10 +99,12 @@ if ! "$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e "SELECT 1" "$DB" >/d
     exit 4
 fi
 
-# --- work out which of the six tables actually exist --------------------
+# --- work out which of our tables actually exist ------------------------
 # Dumping a table that does not exist makes mysqldump fail outright, so a
 # database that only ever ran part of the install still backs up cleanly.
-ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_permissions k9_certification_specializations)
+ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_permissions
+            k9_certification_specializations k9_runtime_feature_overrides
+            k9_runtime_override_audit k9_tablet_theme k9_tablet_theme_audit k9_ped_assignments)
 PRESENT=()
 MISSING=()
 for t in "${ALL_TABLES[@]}"; do
@@ -110,6 +112,26 @@ for t in "${ALL_TABLES[@]}"; do
         "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME='$t';" 2>/dev/null || echo 0)
     if [ "$n" = "1" ]; then PRESENT+=("$t"); else MISSING+=("$t"); fi
 done
+
+# --- DRIFT GUARD -------------------------------------------------------
+# Every time a new migration adds a table, that table has to be added to
+# ALL_TABLES above or this script silently backs up less than it claims --
+# which is the worst possible failure for a backup tool, because you only
+# find out when you try to restore. This catches that: anything in the
+# database named like one of ours but NOT in the list above gets called
+# out loudly. (`k9_units` and similar tables belonging to OTHER K9
+# resources will show up here too -- that is correct and expected; they
+# are not ours to back up. This is a prompt to check, not an error.)
+UNKNOWN=$("$CLI_BIN" "${CONN[@]}" --batch --skip-column-names -e \
+    "SELECT GROUP_CONCAT(TABLE_NAME) FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME LIKE 'k9\\_%'
+        AND TABLE_NAME NOT IN ($(printf "'%s'," "${ALL_TABLES[@]}" | sed 's/,$//'))" 2>/dev/null)
+if [ -n "$UNKNOWN" ] && [ "$UNKNOWN" != "NULL" ]; then
+    echo "NOTE: these k9_* tables are NOT backed up by this script: $UNKNOWN" >&2
+    echo "      If any of them belong to qbx_k9unit, this script is out of date --" >&2
+    echo "      report it before relying on this backup. If they belong to a" >&2
+    echo "      different K9 resource, this is expected and you can ignore it." >&2
+fi
 
 if [ "${#PRESENT[@]}" -eq 0 ]; then
     echo "ERROR: none of the qbx_k9unit tables exist in database '$DB'." >&2

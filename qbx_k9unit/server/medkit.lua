@@ -488,7 +488,7 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- a modified client could supply the server id of ANY connected K9
     -- player anywhere on the map and heal/consume-item against them
     -- remotely — the same "map-wide oracle" risk
-    -- contraband_search_contract.md §3 step 8 flags for search, applied
+    -- RESEARCH_ARCHIVE.md#contraband-search §3 step 8 flags for search, applied
     -- here to a mutation instead of a read.
     local dist = #(GetEntityCoords(usingPed) - GetEntityCoords(targetPed))
     if dist > Config.K9Medkit.range then

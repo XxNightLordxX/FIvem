@@ -119,7 +119,7 @@ true for about an hour. **All three are now wired**, and every `.lua` file on
 disk is referenced by the manifest. All three still ship `false`. See `README.md`'s
 Known Issues section for the current, fast-moving state.
 `CameraFeedPiP` remains uncoded and confirmed infeasible — unchanged. A
-further research pass (`phase2_notes/phase5_remaining_features_research.md`)
+further research pass (`phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research`)
 reframed, but did not by itself close, `ProximityAudioFX`'s and
 `PropAttachments`'/`FetchMechanic`'s real blockers before the
 implementations above landed: `ProximityAudioFX`'s real blocker turned out
@@ -1069,9 +1069,9 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     `server/tracking.lua` (§11.3) should confirm the exact exports before
     writing final code. **Update (tech-scout pass, 2026-08-23): the
     item-drop half of this is now resolved — see item 17 below and
-    `phase2_notes/scent_source_resolution.md`.** The search/contraband-read
+    `phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution`.** The search/contraband-read
     half was separately already confirmed by
-    `phase2_notes/contraband_search_contract.md`.
+    `phase2_notes/RESEARCH_ARCHIVE.md#contraband-search`.
 12. **(NEW, Phase 2) Door interaction's "nudge-open" needs a real door-lock
     resource to integrate with** (no such resource is in this spec's scope).
     GTA has no generic native for arbitrary map-door lock state. Scoped in
@@ -1127,7 +1127,7 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     (which always resolves and broadcasts the *sender's own* already-verified
     ped), `relayDoorScratch`'s `doorNetId` (§11.4 item 5) is an arbitrary
     client-supplied network id identifying a *different* entity (a door).
-    Neither §11.4 item 5 nor `phase2_notes/door_interaction.md`'s server-
+    Neither §11.4 item 5 nor `phase2_notes/RESEARCH_ARCHIVE.md#door-interaction`'s server-
     handler sketch (§4.2) call for resolving that id
     (`NetworkGetEntityFromNetworkId`), confirming it still exists, or
     checking it's actually near the reporting player before broadcasting
@@ -1177,7 +1177,7 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     the confirmed `'drop'`-type queryable ground inventory (a secondary,
     not-recommended alternative path), and why the client-side
     world-entity-scan fallback is no longer needed are in
-    **`phase2_notes/scent_source_resolution.md`**. This does not flip
+    **`phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution`**. This does not flip
     `Config.Features.ScentTracking` to enabled by itself — the branch in
     `server/tracking.lua` still needs to be written per that note's §4/§7
     before this item can be closed out and the flag safely enabled.
@@ -1204,7 +1204,7 @@ fetch mechanic, deployable kennel, and the K9 camera feed feasibility spike
     genuinely unclosed by this pass:** the `swapItems` hook's exact
     name/payload shape was confirmed by direct source-reading this session
     (HIGH confidence, two independent corroborations — see
-    `phase2_notes/scent_source_resolution.md` §2/§6), not by an
+    `phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution` §2/§6), not by an
     independent test against a live `ox_inventory` install, and that
     note's own recommended one-time dev-time verification (logging
     `json.encode(payload)` once against the actual target-server
@@ -1462,7 +1462,7 @@ implemented):
    **Four more must-handle items, found by verifying against the actual
    `overextended/ox_inventory` source (not assumed) during Phase 2 design
    review — full detail and exact export names/signatures in
-   `phase2_notes/contraband_search_contract.md`, which supplements this
+   `phase2_notes/RESEARCH_ARCHIVE.md#contraband-search`, which supplements this
    section rather than replacing it:**
    - **Container recursion is required, not optional.** `GetInventoryItems`
      only returns top-level slots — contraband hidden inside a registered
@@ -1748,7 +1748,7 @@ Applying §7's same rigor to every Phase 2 item:
   live position the same way `relayDamageEvent`/`relayWeaponFire` already
   resolve theirs. **The originally-sketched client-side world-entity-scan
   fallback is no longer needed and should not be built** — see
-  `phase2_notes/scent_source_resolution.md` for the full mechanism, exact
+  `phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution` for the full mechanism, exact
   code shape, and why the hook-based approach is strictly better than the
   scan fallback would have been (no client-supplied coordinate at any
   point). SPEC.md §9 item 11's item-drop half and item 17 are updated
@@ -1814,5 +1814,5 @@ cross-reference now reflects. Item 17 was added during the final Phase 2
 sign-off pass (correctness-overseer) — an explicit, visible deferral of
 scent tracking's server-side source resolution, not a newly-found gap; a
 tech-scout pass (2026-08-23) subsequently closed the *research* half of
-item 17 (see item 17's own update and `phase2_notes/scent_source_resolution.md`)
+item 17 (see item 17's own update and `phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution`)
 — the *implementation* half is still open.

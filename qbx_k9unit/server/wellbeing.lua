@@ -271,10 +271,30 @@
     - Calls `IsConfiguredK9Model(modelHash)`, resource-global from
       server/certifications.lua — reused, never re-derived, to verify a
       target/reporting player's ped is really a configured K9 model.
-    - Does NOT call `HasK9Access` — wellbeing tracks the K9 CHARACTER's own
-      body state, gated on CURRENT ped model, not on job/certification
-      (mirrors how AgilityBasicJump/AgilityAdvanced in client/movement.lua
-      gate on IsOwnModelK9, not HasK9Access).
+    - SUPERSEDED (coder-architect, adversarial-pass security finding +
+      owner directive "I also want everything to work with any ped", this
+      pass): this used to read "does NOT call HasK9Access — wellbeing
+      tracks the K9 CHARACTER's own body state, gated on CURRENT ped
+      model, not on job/certification (mirrors how AgilityBasicJump/
+      AgilityAdvanced in client/movement.lua gate on IsOwnModelK9, not
+      HasK9Access)." That rationale predated two things that now override
+      it: (1) a real access-bypass finding — gating on the model ALONE
+      let a never-certified player who simply set their own ped model
+      client-side (no server round trip) pass every check below and
+      manipulate mood/fatigue/fear-stress/injury for free; (2) the owner's
+      explicit instruction that a K9-role holder must get every feature of
+      this resource regardless of what ped they wear, including an
+      unlisted or human one. ResolveK9Ped below now answers "(actually
+      dog-modeled OR holds the K9 role, server/appearance.lua's HasK9Role)
+      AND HasK9Access" — every one of the six gates that read its `isK9`
+      result (damage decay, petK9, feedK9, calmDownK9, applyK9Distraction,
+      the main TickWellbeing loop) inherits both fixes from that one
+      function, with no other change needed in this file. The
+      AgilityBasicJump/AgilityAdvanced comparison above no longer applies:
+      those gate a MOVEMENT RESTRICTION tied to the ped's actual current
+      skeleton (suppressing free quadruped locomotion a human-shaped ped
+      never had to begin with), a genuinely different, still-unresolved
+      question — see this pass's own hand-off report.
     - Uses server/cooldowns.lua's NewCooldown/NewNestedCooldown constructors
       exclusively (REFACTOR_ROADMAP.md item 1's established convention) —
       no hand-rolled cooldown table anywhere in this file.
@@ -723,12 +743,43 @@ local function ResolveCitizenid(source)
     return Player and Player.PlayerData and Player.PlayerData.citizenid or nil
 end
 
+-- SECURITY FIX (coder-architect, adversarial-pass finding routed by
+-- orchestrator, this pass): this used to answer `isK9` from
+-- IsConfiguredK9Model(GetEntityModel(ped)) ALONE -- a networked ped
+-- property the CLIENT fully controls (RequestModel + SetPlayerModel
+-- locally, no server round trip). A never-certified player could set
+-- their own model to a configured K9 model and immediately pass every
+-- gate below (petK9/feedK9/calmDownK9/relayDamageEvent/the main tick),
+-- manipulating mood/fatigue/fear-stress/injury -- which, via
+-- K9MoveRateModifiers, is a real, working way to hold a live client-side
+-- movement-speed effect with no certification at all. Every OTHER
+-- consumer of the same model check in this resource already pairs it
+-- with a real access check (server/main.lua's CheckLeashEligibility,
+-- server/partnership.lua's CheckPartnershipEligibility, server/fetch.lua,
+-- server/inventory.lua, server/propattachment.lua) -- this file was the
+-- one outlier.
+--
+-- ROLE/MODEL DECOUPLING, folded into the SAME fix (coder-architect,
+-- server/appearance.lua, Config.K9Appearance.requireK9ModelForRole):
+-- `isK9` is now `(actually dog-modeled OR holds the K9 role) AND has
+-- access` -- a certified/permitted K9-role holder on an unlisted or human
+-- ped (the owner's explicit "I also want everything to work with any
+-- ped") is no longer excluded from Fatigue/Mood/FearStress/Injury just
+-- because they don't currently look like a dog, but nobody -- modeled or
+-- not -- gets through without `HasK9Access` also being true.
+-- `type(HasK9Role) == 'function'` is a genuine soft dependency (this
+-- resource's established convention), not a load-order assumption:
+-- server/appearance.lua loads well before this file in
+-- fxmanifest.lua's server_scripts, but this still degrades to the
+-- pure-model half if that file is ever absent.
 --- @param source number
 --- @return number ped, boolean isK9 -- ped is 0 if the source isn't a currently-connected player
 local function ResolveK9Ped(source)
     local ped = GetPlayerPed(source)
     if ped == 0 then return 0, false end
-    return ped, IsConfiguredK9Model(GetEntityModel(ped))
+    local looksLikeK9 = IsConfiguredK9Model(GetEntityModel(ped))
+    local holdsK9Role = type(HasK9Role) == 'function' and HasK9Role(source)
+    return ped, (looksLikeK9 or holdsK9Role) and HasK9Access(source)
 end
 
 -- ======================================================================

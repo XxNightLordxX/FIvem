@@ -1284,10 +1284,10 @@ end
 --     list (or alternative detection method)" as "a real implementation
 --     task, not a design-note-level decision" — i.e. still open, not
 --     resolved.
---   - door_interaction_natives.md §7 explicitly flags "whether there's any
+--   - RESEARCH_ARCHIVE.md#door-interaction (§7 in its original form) explicitly flags "whether there's any
 --     lighter-weight way to detect 'this CObject is currently a
 --     swinging/hinged door' (vs. a static prop)... Not verified."
---   - door_interaction_natives.md §4's own "Practical recommendation" (the
+--   - RESEARCH_ARCHIVE.md#door-interaction (§4 in its original form)'s own "Practical recommendation" (the
 --     most concrete guidance that exists) describes the walk-through-able
 --     framing at a CONCEPTUAL level only ("play the K9's push animation as
 --     it passes through a door the player can already physically walk

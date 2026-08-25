@@ -769,7 +769,7 @@ local function HandleOpenK9Inventory(source, targetNetId)
     end
 
     -- Stamp the cooldown NOW, before the possibly-yielding RegisterStash
-    -- call below (contraband_search_contract.md §3 step 13's exact
+    -- call below (RESEARCH_ARCHIVE.md#contraband-search §3 step 13's exact
     -- "stamp before the awaited work" discipline, applied here defensively
     -- even though RegisterStash is not confirmed to yield this session).
     K9InventoryOpenCooldown.Touch(source)

@@ -167,6 +167,36 @@
 -- ---------------------------------------------------------------------
 
 -- ---------------------------------------------------------------------
+-- Step 0: ORDER-PROTECTION GUARD (db-schema foolproofing pass). All four
+-- steps below are ALTER TABLE `k9_certifications`. If that table has never
+-- been created on this database, MySQL/MariaDB's raw error for that is a
+-- cryptic `ERROR 1146 (42S02): Table 'yourdb.k9_certifications' doesn't
+-- exist`. This guard replaces that with one plain-English refusal instead
+-- of four repeats of the same raw error (one per step below) -- a
+-- full-detail SELECT for GUI tools, plus a short SIGNAL (capped at 128
+-- characters by MySQL/MariaDB) so the plain `mysql` CLI also stops with a
+-- readable message. Same drop-before-and-after pattern as every other
+-- procedure in this file, so re-running this file after a refusal is safe.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_require_base_table`;
+DELIMITER $$
+CREATE PROCEDURE `qbx_k9unit_migration_0004_require_base_table`()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'k9_certifications'
+    ) THEN
+        SELECT 'STOPPED - WRONG ORDER' AS status,
+               'Table k9_certifications does not exist in this database. This migration only ever ALTERs that table, so it must exist first. Run sql/install.sql before this file -- it creates every qbx_k9unit table, including the one this migration changes, in one pass. Nothing has been changed by this migration.' AS detail;
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'qbx_k9unit 0004 stopped: k9_certifications missing. See detail above. Run install.sql first.';
+    END IF;
+END$$
+DELIMITER ;
+CALL `qbx_k9unit_migration_0004_require_base_table`();
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_require_base_table`;
+
+
+-- ---------------------------------------------------------------------
 -- Step 1: add `active_cert_key` (generated column) if missing.
 -- ---------------------------------------------------------------------
 DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_active_cert_key_column`;

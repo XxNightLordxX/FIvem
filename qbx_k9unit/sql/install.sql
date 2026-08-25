@@ -3,11 +3,20 @@
 --
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
--- This is a hard requirement, not a recommendation. Four of the five
--- tables below declare an INDEXED VIRTUAL GENERATED COLUMN backing a
--- UNIQUE KEY (`k9_certifications.active_cert_key`,
+-- This is a hard requirement, not a recommendation. Four of the fourteen
+-- tables below (k9_certifications, k9_certification_specializations,
+-- k9_partnerships, k9_permissions) declare an INDEXED VIRTUAL GENERATED
+-- COLUMN backing a UNIQUE KEY (`k9_certifications.active_cert_key`,
+-- `k9_certification_specializations.active_spec_key`,
 -- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
--- `k9_permissions.active_permission_key`)
+-- `k9_permissions.active_permission_key`) -- the other ten
+-- (k9_search_log, k9_progression, k9_runtime_feature_overrides,
+-- k9_runtime_override_audit, k9_tablet_theme, k9_tablet_theme_audit,
+-- k9_ped_assignments, k9_certification_tiers,
+-- k9_certification_tier_capabilities, k9_certification_tier_audit) need
+-- nothing from this floor and would run on an older server on their own,
+-- but this resource has one stated minimum for the schema as a whole,
+-- not a per-table one.
 -- -- the DB-level backstop for this resource's "at most one active
 -- certification per (citizenid, job)", "at most one active partnership
 -- per party" and "at most one active permission grant per (citizenid,
@@ -102,7 +111,62 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
                                                                       -- coder-backend's audit-reading logic should just
                                                                       -- expect it as a valid non-citizenid value.
   `revoked_at`       DATETIME     DEFAULT NULL,
+
+  -- CERTIFICATION DEPTH (FEATURE_IDEAS.md Part A §2 -- coder-backend pass,
+  -- landed via sql/migrations/0006_add_k9_certification_lifecycle.sql for
+  -- an existing database; included here directly so a FRESH install lands
+  -- in the same final shape in one pass, matching this file's own
+  -- documented convergence promise). Nullable, free text NOT used --
+  -- validated against a small fixed vocabulary (retired / reassigned /
+  -- disciplinary / performance / other) at the application layer
+  -- (server/certifications.lua's VALID_REVOKE_REASONS), same "no
+  -- FK/format constraint in the schema, enforced by the app" convention
+  -- `revoked_by`'s own 'system:job_change' sentinel above already
+  -- establishes. NULL until revoked, and stays NULL forever for a row
+  -- revoked before this column existed (no reason is recoverable for
+  -- history that predates it) or for a revoke that simply didn't supply
+  -- one (this argument is optional everywhere it is threaded through).
+  `revoke_reason`    VARCHAR(20)  DEFAULT NULL,
+
+  -- CERTIFICATION DEPTH (FEATURE_IDEAS.md Part A §9). NULL means "does not
+  -- expire" -- the default for EVERY row unless a certifier grants (or
+  -- later renews) this citizenid's certification on a server that has
+  -- explicitly opted in via `Config.Features.CertificationExpiry = true`.
+  -- Every pre-existing row a migration touches stays NULL forever (see
+  -- that migration's own COMPATIBILITY section) -- an operator turning
+  -- this feature on does not retroactively start a countdown on anyone
+  -- already certified. DISCLOSED, ACCEPTED TIMEZONE CAVEAT (same one this
+  -- file's own `k9_permissions` comment below already flags for a
+  -- hypothetical future expiry column, now realized here): like every
+  -- other DATETIME in this schema, this column carries no timezone of its
+  -- own -- `server/certifications.lua` reads it back via
+  -- `UNIX_TIMESTAMP(expires_at)` and writes it via
+  -- `DATE_ADD(NOW(), INTERVAL ? DAY)`, both evaluated against the DB
+  -- session's current time zone. This is internally consistent as long as
+  -- the DB server's configured time zone does not change after rows are
+  -- written; a post-go-live time zone change would skew every stored
+  -- expiry by the same delta every other DATETIME-derived calculation in
+  -- this schema (e.g. `server/tenure.lua`'s `TIMESTAMPDIFF`) already
+  -- silently inherits -- a pre-existing, disclosed limitation of this
+  -- schema's DATETIME convention as a whole, not something this column
+  -- introduces net-new.
+  `expires_at`       DATETIME     DEFAULT NULL,
+
   `active`           TINYINT(1)   NOT NULL DEFAULT 1,                -- 1 = currently grants access, 0 = historical/revoked row
+
+  -- CERTIFICATION DEPTH (FEATURE_IDEAS.md Part A §5). Fixed, ordinal
+  -- 3-step vocabulary (trainee / certified / senior), enforced at the
+  -- application layer (server/certifications.lua's TIER_RANK) rather than
+  -- a DB-level ENUM/CHECK, same reasoning as `revoke_reason` above.
+  -- DEFAULT 'certified' is a DELIBERATE compatibility choice, not an
+  -- arbitrary pick: it is the tier that preserves EVERY existing/new
+  -- plain-boolean-shaped grant's actual capability unchanged -- an
+  -- existing certified handler, or a brand-new grant made by code that
+  -- has never heard of tiers, gets exactly the access level this
+  -- resource's single-boolean model already granted before this column
+  -- existed. Only an explicit, separate SetCertificationTier action ever
+  -- moves a row to 'trainee' or 'senior'.
+  `tier`             VARCHAR(20)  NOT NULL DEFAULT 'certified',
 
   -- Generated helper column (derived only, never written directly by
   -- app code): NULL for every inactive/revoked row, and
@@ -142,6 +206,16 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
   --   WHERE job = ? AND active = 1;
   KEY `idx_job_active` (`job`, `active`),
 
+  -- CERTIFICATION DEPTH (FEATURE_IDEAS.md Part A §9). Not on this
+  -- resource's own hot path (the expiry sweep walks currently-connected
+  -- players via the in-memory cache -- see server/certifications.lua's
+  -- header -- never a live SQL scan over this column); added for the
+  -- natural admin/report query this column invites ("list every
+  -- certification expiring in the next N days across the whole roster"),
+  -- matching idx_job_active's own "add the index the query needs"
+  -- convention immediately above.
+  KEY `idx_expires_at` (`expires_at`),
+
   -- DB-level backstop for the app-enforced "one active row per
   -- (citizenid, job)" invariant. Closes the check-then-insert race
   -- window (e.g. two near-simultaneous grant requests for the same
@@ -151,6 +225,83 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
   -- identically to the normal pre-check "already certified" no-op —
   -- it means another request won the race, not a real failure.
   UNIQUE KEY `uq_one_active_cert_per_job` (`active_cert_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_certification_specializations
+--
+-- FEATURE_IDEAS.md Part B §11 -- named K9 training specializations
+-- (narcotics / explosives / patrol / ..., catalog in
+-- `Config.K9Specializations`) layered on top of an existing ACTIVE
+-- `k9_certifications` row. Landed via
+-- `sql/migrations/0006_add_k9_certification_lifecycle.sql` for an
+-- existing database; included here directly so a fresh install lands in
+-- the same final shape in one pass -- see that migration file's own
+-- header for the full design rationale (why a sibling table and not a
+-- column, why no FK to `k9_certifications`, why the same generated-column
+-- unique-key technique as `k9_certifications.active_cert_key` /
+-- `k9_permissions.active_permission_key` above/below), not repeated a
+-- third time here.
+--
+-- Same append-mostly-audit-log shape as `k9_certifications`/
+-- `k9_permissions`: granting a specialization INSERTs a new row; revoking
+-- (manually, or automatically when the base certification itself is
+-- revoked or lapses -- server/certifications.lua's
+-- RevokeAllSpecializationsForCitizenJob) UPDATEs the existing active row
+-- to `active = 0`, never deletes.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates this table, see
+-- `qbx_k9unit/sql/migrations/0006_add_k9_certification_lifecycle.sql`.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_certification_specializations` (
+  `id`               INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `citizenid`        VARCHAR(50)  NOT NULL,
+  `job`              VARCHAR(50)  NOT NULL,
+  `specialization`   VARCHAR(30)  NOT NULL,          -- a key from Config.K9Specializations, validated at the application layer
+  `granted_by`       VARCHAR(50)  NOT NULL,
+  `granted_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `revoked_by`       VARCHAR(50)  DEFAULT NULL,
+  `revoked_at`       DATETIME     DEFAULT NULL,
+  `active`           TINYINT(1)   NOT NULL DEFAULT 1,
+
+  -- Generated helper column, same VIRTUAL/NULL-when-inactive technique as
+  -- `k9_certifications.active_cert_key` above (see that column's own
+  -- comment for the full "why a unique index on a generated column, why
+  -- NULLs never collide" reasoning).
+  `active_spec_key`  VARCHAR(135)
+                       GENERATED ALWAYS AS (
+                         CASE WHEN `active` = 1
+                              THEN CONCAT(`citizenid`, '::', `job`, '::', `specialization`)
+                              ELSE NULL
+                         END
+                       ) VIRTUAL,
+
+  PRIMARY KEY (`id`),
+
+  -- "Every active specialization citizenid X holds for job Y" -- used by
+  -- QueryActiveSpecializations (tablet/roster reads) and by the
+  -- cascade-revoke-on-base-cert-loss bulk UPDATE
+  -- (RevokeAllSpecializationsForCitizenJob). citizenid leads the index so
+  -- it also serves "every specialization citizenid X has ever held,
+  -- across every job" as a prefix scan:
+  --   SELECT specialization FROM k9_certification_specializations
+  --   WHERE citizenid = ? AND job = ? AND active = 1;
+  KEY `idx_citizen_job_active` (`citizenid`, `job`, `active`),
+
+  -- Admin-path index: "every citizenid currently holding specialization X
+  -- in department Y" (mirrors `k9_certifications.idx_job_active`'s own
+  -- rationale, extended one column):
+  --   SELECT citizenid FROM k9_certification_specializations
+  --   WHERE job = ? AND specialization = ? AND active = 1;
+  KEY `idx_job_spec_active` (`job`, `specialization`, `active`),
+
+  -- DB-level backstop for "at most one ACTIVE (citizenid, job,
+  -- specialization) row" -- same 20-connection-race protection
+  -- `uq_one_active_cert_per_job` gives `k9_certifications` above, scoped
+  -- to a 3-part key instead of a 2-part one.
+  UNIQUE KEY `uq_one_active_spec_per_citizen_job` (`active_spec_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- =====================================================================
@@ -619,7 +770,7 @@ CREATE TABLE IF NOT EXISTS `k9_progression` (
                                                           -- progression stale/abandoned" signal without needing a
                                                           -- separate log table.
 
-  PRIMARY KEY (`citizenid`)
+  PRIMARY KEY (`citizenid`),
   -- `citizenid` is the PRIMARY KEY, not a surrogate `id` + separate UNIQUE
   -- KEY the way `k9_certifications`/`k9_search_log`/`k9_partnerships` use
   -- an AUTO_INCREMENT id -- this table is a one-row-per-citizenid live
@@ -630,11 +781,27 @@ CREATE TABLE IF NOT EXISTS `k9_progression` (
   -- correctly instead of silently accumulating duplicate rows per
   -- citizenid -- see the integration note above.
 
-  -- Optional, NOT added here: `KEY idx_xp (xp)` for a leaderboard-style
-  -- "top K9s by XP" admin query. No spec/config in this resource asks for
-  -- that query today -- adding an index nothing queries yet is
-  -- speculative cost for no confirmed benefit; add it if/when that query
-  -- is actually built.
+  -- ADDED via sql/migrations/0009_add_k9_progression_idx_xp.sql
+  -- (FEATURE_IDEAS.md Part A Tier C §10, server/leaderboard.lua's
+  -- `/k9stats`). PREVIOUSLY documented here as "optional, not added" --
+  -- that was correct until this query actually got built. VERIFIED BY
+  -- REAL EXPLAIN, not assumed (see migration 0009's own header for the
+  -- exact numbers): without this index, `SELECT citizenid, xp FROM
+  -- k9_progression ORDER BY xp DESC LIMIT ?` is `type=ALL,
+  -- Extra=Using filesort` -- a full table scan PLUS a sort of every row,
+  -- on every single invocation, that gets WORSE as the player base grows
+  -- (confirmed identical query cost at both 20,000 and 150,000 rows
+  -- WITHOUT this index -- i.e. before it, the cost scales with table
+  -- size; after it, it does not). With it: `type=index, key=idx_xp,
+  -- Extra=Using index` -- InnoDB secondary indexes always carry the
+  -- table's primary key alongside the indexed column, so this index alone
+  -- already contains both columns `/k9stats` selects (`xp`, `citizenid`),
+  -- a genuine covering index needing zero lookups into the primary-key
+  -- index per returned row. Plain, non-unique, single-column: `xp` is not
+  -- unique across citizenids (many K9s can share a total, especially near
+  -- 0) and `/k9stats` has no WHERE clause to lead a composite key with (a
+  -- global ranking, not a per-citizenid/per-job lookup).
+  KEY `idx_xp` (`xp`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- =====================================================================
@@ -810,4 +977,160 @@ CREATE TABLE IF NOT EXISTS `k9_permissions` (
   -- `k9_certifications.uq_one_active_cert_per_job` closes it for
   -- certification grants.
   UNIQUE KEY `uq_one_active_permission_per_citizen` (`active_permission_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_runtime_feature_overrides / k9_runtime_override_audit /
+--               k9_tablet_theme / k9_tablet_theme_audit
+--
+-- CONVERGENCE FIX (db-schema foolproofing pass): these four tables were
+-- created via `sql/migrations/0007_create_k9_runtime_control.sql` but were
+-- never added here, so a FRESH install silently lacked
+-- Config.Features.RuntimeFeatureControl / Config.Features.TabletTheming's
+-- persistence with no error and no warning -- exactly the same
+-- "fresh install != upgraded install" gap this file's own header already
+-- documents install.sql being responsible for NOT reintroducing. Added
+-- here now, byte-for-byte the same shape as migration 0007 -- see that
+-- file's own header for the full design rationale (why override_key
+-- encodes both kind and target, why old_value/new_value are nullable in
+-- opposite directions, why theme rows are full snapshots, why id=1 is the
+-- only tablet_theme row) -- not repeated a second time here.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates these four tables, run
+-- `sql/migrations/0007_create_k9_runtime_control.sql` instead (a
+-- guaranteed no-op if this file already created them).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_runtime_feature_overrides` (
+  `override_key` VARCHAR(100) NOT NULL,
+  `kind`         VARCHAR(10)  NOT NULL,          -- 'feature' | 'tuning'
+  `value`        VARCHAR(64)  NOT NULL,          -- plain string form of the override
+  `updated_by`   VARCHAR(50)  NOT NULL,          -- citizenid of the high-command officer who set this override
+  `updated_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`override_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `k9_runtime_override_audit` (
+  `id`            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `override_key`  VARCHAR(100) NOT NULL,
+  `kind`          VARCHAR(10)  NOT NULL,
+  `old_value`     VARCHAR(64)  DEFAULT NULL,     -- NULL = there was no prior override (config.lua default before this change)
+  `new_value`     VARCHAR(64)  DEFAULT NULL,     -- NULL = reset back to the config.lua default
+  `changed_by`    VARCHAR(50)  NOT NULL,
+  `changed_at`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  KEY `idx_override_key_changed_at` (`override_key`, `changed_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `k9_tablet_theme` (
+  `id`               TINYINT UNSIGNED NOT NULL,             -- always exactly one row, id = 1 -- see migration 0007's own header
+  `primary_color`    VARCHAR(7)  NOT NULL DEFAULT '#2563eb',
+  `accent_color`     VARCHAR(7)  NOT NULL DEFAULT '#f59e0b',
+  `background_color` VARCHAR(7)  NOT NULL DEFAULT '#111827',
+  `text_color`       VARCHAR(7)  NOT NULL DEFAULT '#f9fafb',
+  `density`          VARCHAR(20) NOT NULL DEFAULT 'comfortable',
+  `header_title`     VARCHAR(40) NOT NULL DEFAULT 'K9 Command Tablet',
+  `updated_by`       VARCHAR(50) DEFAULT NULL,
+  `updated_at`       DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `k9_tablet_theme_audit` (
+  `id`               INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `primary_color`    VARCHAR(7)  NOT NULL,
+  `accent_color`     VARCHAR(7)  NOT NULL,
+  `background_color` VARCHAR(7)  NOT NULL,
+  `text_color`       VARCHAR(7)  NOT NULL,
+  `density`          VARCHAR(20) NOT NULL,
+  `header_title`     VARCHAR(40) NOT NULL,
+  `changed_by`       VARCHAR(50) NOT NULL,
+  `changed_at`       DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_ped_assignments
+--
+-- CONVERGENCE FIX (db-schema foolproofing pass): created via
+-- `sql/migrations/0008_create_k9_ped_assignments.sql` but never added
+-- here -- same class of gap as the four tables immediately above. Added
+-- now, byte-for-byte the same shape as migration 0008 -- see that file's
+-- own header for the full design rationale (why `original_model_hash` is
+-- a hash not a name, why `citizenid` alone is the primary key, why this
+-- is current-state bookkeeping and not an audit log) -- not repeated a
+-- second time here.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates this table, run
+-- `sql/migrations/0008_create_k9_ped_assignments.sql` instead (a
+-- guaranteed no-op if this file already created it).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_ped_assignments` (
+  `citizenid`           VARCHAR(50)  NOT NULL,
+  `model`               VARCHAR(64)  NOT NULL,
+  `original_model_hash` BIGINT       DEFAULT NULL,
+  `active`              TINYINT(1)   NOT NULL DEFAULT 1,
+  `applied_by`          VARCHAR(50)  NOT NULL,
+  `applied_at`          DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `revoked_at`          DATETIME     DEFAULT NULL,
+
+  PRIMARY KEY (`citizenid`),
+  KEY `idx_active` (`active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_certification_tiers / k9_certification_tier_capabilities
+--               / k9_certification_tier_audit
+--
+-- Added alongside `sql/migrations/0010_create_k9_certification_tiers.sql`,
+-- byte-for-byte the same shape -- see that file's own header for the full
+-- design rationale (why this reverses server/certifications.lua's earlier
+-- "tier is hardcoded, not a Config table" decision, why `deleted` is a
+-- tombstone rather than a real row DELETE, why capabilities are a sibling
+-- table rather than a column/CSV/JSON blob, why neither table declares an
+-- FK) -- not repeated a second time here.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates these tables, run
+-- `sql/migrations/0010_create_k9_certification_tiers.sql` instead (a
+-- guaranteed no-op if this file already created them).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_certification_tiers` (
+  `tier_key`     VARCHAR(32)  NOT NULL,
+  `label`        VARCHAR(60)  NOT NULL,
+  `ordinal`      INT          NOT NULL,
+  `deleted`      TINYINT(1)   NOT NULL DEFAULT 0,
+  `created_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_by`   VARCHAR(50)  NOT NULL,
+  `updated_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`tier_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `k9_certification_tier_capabilities` (
+  `tier_key`        VARCHAR(32) NOT NULL,
+  `capability_key`  VARCHAR(64) NOT NULL,
+  `granted_by`      VARCHAR(50) NOT NULL,
+  `granted_at`      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`tier_key`, `capability_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `k9_certification_tier_audit` (
+  `id`           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `action`       VARCHAR(20)  NOT NULL,
+  `tier_key`     VARCHAR(32)  NOT NULL,
+  `detail`       TEXT         NOT NULL,
+  `changed_by`   VARCHAR(50)  NOT NULL,
+  `changed_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  KEY `idx_tier_key_changed_at` (`tier_key`, `changed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

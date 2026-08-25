@@ -362,6 +362,16 @@ local Certifications = {}
 -- through HasSpecialization/QueryActiveSpecializations below.
 local Specializations = {}
 
+-- ExpiryWarned[citizenid] = true once the warn-ahead-of-expiry notice has
+-- been sent THIS SESSION (cleared on playerDropped, and on an explicit
+-- RenewCertification). ExpiryLapsedNotified[citizenid] = true once the
+-- "just expired" notice has been sent THIS SESSION. Both are ephemeral,
+-- one-per-session flags, NOT persisted — see header "EXPIRY" item 2 and
+-- TickCertificationExpiryWarnings' own doc comment below for the full
+-- warning-cadence design.
+local ExpiryWarned = {}
+local ExpiryLapsedNotified = {}
+
 -- Fixed, ordinal tier vocabulary — see "TIER" above for why this is
 -- hardcoded rather than a Config table. Higher number = more capability.
 local TIER_RANK = { trainee = 1, certified = 2, senior = 3 }
@@ -1074,29 +1084,47 @@ local function ResolveGranterCitizenId(granterSrc)
     return granterCitizenid
 end
 
---- SPEC.md §4.2/§4.3 grant flow. Called by both event 2 and command 6.
+--- SPEC.md §4.2/§4.3 grant flow. Called by both event 2 and command 6, and
+--- (this pass) the K9 Command Tablet's server-side aggregation layer
+--- (server/tablet.lua -- see GrantCertificationForTablet below) via its
+--- own resolved, online-only server id.
+---
+--- RETURN VALUE, ADDED THIS PASS (purely additive -- every pre-existing
+--- caller (the RegisterNetEvent/RegisterCommand handlers near the bottom
+--- of this file) discards both return values today, exactly as it
+--- discarded the previous bare `return`/no-value return, so this changes
+--- NO observable behavior for either of them; tests/certifications_spec.lua's
+--- 47+ GrantCertification cases assert on NotifyPlayer/MySQL/cache side
+--- effects only, never on a return value that did not exist before).
+--- Mirrors server/permissions.lua's GrantPermission `(ok, outcome)` shape
+--- exactly, and the same `local outcome` + doGrantInsert-closure-sets-it
+--- convention that file's own header credits to this function in the
+--- first place -- brought back here now that a second caller (the tablet)
+--- actually needs a real result instead of only a fire-and-forget toast.
 --- @param granterSrc number
 --- @param targetServerId number
+--- @return boolean ok
+--- @return string outcome -- 'invalid_target' | 'not_eligible' | 'rate_limited' | 'self_certification_disabled' | 'target_must_be_online' | 'target_not_in_department' | 'target_too_far' | 'target_not_k9_model' | 'already_certified' | 'invalid_granter' | 'db_error' | 'ok'
 local function GrantCertification(granterSrc, targetServerId)
     if type(targetServerId) ~= 'number' then
         NotifyPlayer(granterSrc, locale('certifications.invalid_target'), 'error')
-        return
+        return false, 'invalid_target'
     end
 
     if not IsEligibleCertifier(granterSrc) then
         NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_certify'), 'error')
-        return
+        return false, 'not_eligible'
     end
 
     if IsCertifyActionOnCooldown(granterSrc) then
-        return -- silent no-op: rate-limited, not an error worth notifying about (matches bark/leash-request convention)
+        return false, 'rate_limited' -- silent no-op (no NotifyPlayer): rate-limited, not an error worth notifying about (matches bark/leash-request convention)
     end
 
     -- §4.1: self-certification only allowed if the flag is enabled.
     local isSelfCert = granterSrc == targetServerId
     if isSelfCert and not Config.AllowSelfCertification then
         NotifyPlayer(granterSrc, locale('certifications.self_certification_disabled'), 'error')
-        return
+        return false, 'self_certification_disabled'
     end
 
     -- Grant requires an online target — unlike revoke, which SPEC.md
@@ -1104,7 +1132,7 @@ local function GrantCertification(granterSrc, targetServerId)
     local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
     if not targetPlayer or not targetPlayer.PlayerData then
         NotifyPlayer(granterSrc, locale('certifications.target_must_be_online'), 'error')
-        return
+        return false, 'target_must_be_online'
     end
 
     -- §4.2.3: cross-department granting IS currently allowed (open
@@ -1114,7 +1142,7 @@ local function GrantCertification(granterSrc, targetServerId)
     local targetJob = targetPlayer.PlayerData.job
     if not targetJob or not Config.Departments[targetJob.name] then
         NotifyPlayer(granterSrc, locale('certifications.target_not_in_department'), 'error')
-        return
+        return false, 'target_not_in_department'
     end
 
     -- §4.2.4 proximity — skipped only for self-cert (nothing to measure
@@ -1125,16 +1153,29 @@ local function GrantCertification(granterSrc, targetServerId)
         local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
         if dist > Config.CertifyProximityMeters then
             NotifyPlayer(granterSrc, locale('certifications.target_too_far_to_certify'), 'error')
-            return
+            return false, 'target_too_far'
         end
     end
 
     -- §4.2.5 (grant-only, applies UNIFORMLY even to self-certification):
-    -- target's LIVE server-side ped model must be a configured K9 model.
-    local targetModel = GetEntityModel(GetPlayerPed(targetServerId))
-    if not IsConfiguredK9Model(targetModel) then
-        NotifyPlayer(granterSrc, locale('certifications.target_not_k9_model'), 'error')
-        return
+    -- target's LIVE server-side ped model must be a configured K9 model --
+    -- but ONLY when Config.K9Appearance.requireK9ModelForRole is explicitly
+    -- true (coder-architect, K9 role/model decoupling pass,
+    -- server/appearance.lua). At the false default the K9 ROLE is an
+    -- assignment held against a citizenid, independent of what they
+    -- currently look like (a human, an unlisted custom model, whatever) --
+    -- see server/appearance.lua's header for the full decoupling writeup.
+    -- Guarded with `Config.K9Appearance and` for a defensive read: this
+    -- file does not itself assert that table's shape (server/appearance.lua
+    -- does, at ITS OWN load time), so a config predating this feature or a
+    -- config.lua edited out from under this table would otherwise throw
+    -- here instead of falling back to the pre-decoupling behavior.
+    if Config.K9Appearance and Config.K9Appearance.requireK9ModelForRole == true then
+        local targetModel = GetEntityModel(GetPlayerPed(targetServerId))
+        if not IsConfiguredK9Model(targetModel) then
+            NotifyPlayer(granterSrc, locale('certifications.target_not_k9_model'), 'error')
+            return false, 'target_not_k9_model'
+        end
     end
 
     local targetCitizenid = targetPlayer.PlayerData.citizenid
@@ -1149,10 +1190,16 @@ local function GrantCertification(granterSrc, targetServerId)
     local lockKey = targetCitizenid .. ':' .. jobName
     if GrantInFlight[lockKey] then
         NotifyPlayer(granterSrc, locale('certifications.target_already_certified'), 'inform')
-        return
+        return false, 'already_certified'
     end
     GrantInFlight[lockKey] = true
 
+    -- RETURN VALUE, ADDED THIS PASS: `outcome` is set by doGrantInsert below
+    -- (an upvalue, since doGrantInsert's own `return` exits the closure, not
+    -- this outer function) and read back after the pcall -- identical shape
+    -- to server/permissions.lua's GrantPermission, which this function's own
+    -- doc comment already credits as the precedent for this exact pattern.
+    local outcome
     -- Everything from here down is the actual DB critical section this lock
     -- protects — wrapped in its own closure so it can be pcall'd as a unit
     -- below, guaranteeing GrantInFlight[lockKey] is released on EVERY exit
@@ -1169,11 +1216,15 @@ local function GrantCertification(granterSrc, targetServerId)
         })
         if existingId then
             NotifyPlayer(granterSrc, locale('certifications.target_already_certified'), 'inform')
+            outcome = 'already_certified'
             return
         end
 
         local granterCitizenid = ResolveGranterCitizenId(granterSrc)
-        if not granterCitizenid then return end
+        if not granterCitizenid then
+            outcome = 'invalid_granter'
+            return
+        end
 
         -- CERTIFICATION DEPTH (this pass, Part A §9): a brand-new grant
         -- starts its own expiry clock immediately, but ONLY when an
@@ -1215,11 +1266,13 @@ local function GrantCertification(granterSrc, targetServerId)
                 -- an unhandled error.
                 RefreshCertificationCache(targetCitizenid, jobName)
                 NotifyPlayer(granterSrc, locale('certifications.target_already_certified'), 'inform')
+                outcome = 'already_certified'
                 return
             end
 
             print(('[qbx_k9unit] GrantCertification INSERT failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(insertResultOrErr)))
             NotifyPlayer(granterSrc, locale('certifications.grant_error'), 'error')
+            outcome = 'db_error'
             return
         end
 
@@ -1243,6 +1296,7 @@ local function GrantCertification(granterSrc, targetServerId)
 
         NotifyPlayer(granterSrc, locale('certifications.grant_success_granter'), 'success')
         NotifyPlayer(targetServerId, locale('certifications.grant_success_target'), 'success')
+        outcome = 'ok'
     end
 
     local grantOk, grantErr = pcall(doGrantInsert)
@@ -1250,7 +1304,76 @@ local function GrantCertification(granterSrc, targetServerId)
     if not grantOk then
         print(('[qbx_k9unit] GrantCertification unexpected error for %s/%s: %s'):format(targetCitizenid, jobName, tostring(grantErr)))
         NotifyPlayer(granterSrc, locale('certifications.grant_error'), 'error')
+        return false, 'db_error'
     end
+
+    return outcome == 'ok', outcome
+end
+
+--- ======================================================================
+--- TABLET CERTIFY -- THE OFFLINE-GRANT ASYMMETRY (server/tablet.lua's own
+--- `qbx_k9unit:server:tabletCertify` callback, registered at the bottom of
+--- this file). RevokeCertificationOffline above closes the identical gap
+--- for REVOKE (a genuinely offline target, reached by citizenid). GRANT
+--- cannot get the same treatment: §4.2.5's model check
+--- (`IsConfiguredK9Model(GetEntityModel(GetPlayerPed(targetServerId)))`)
+--- reads a LIVE ped's model, and this resource's schema has no persisted
+--- "this citizenid plays a K9 model" fact to substitute for a disconnected
+--- target -- there is nothing else in `k9_certifications`, qbx_core's
+--- player table, or anywhere else this file can query, to stand in for it.
+--- Building an "offline grant" that simply skipped that check would let
+--- ANY citizenid -- a human character, not just an unlucky K9 who happens
+--- to be logged off -- be certified as a K9 handler with nothing having
+--- ever verified they can even be one; that is not a smaller version of
+--- the real feature, it is a different, materially weaker one that quietly
+--- drops the entire point of condition 5. DECISION: no offline grant path
+--- exists. `GrantCertificationForTablet` below resolves `citizenid` to a
+--- currently-connected server id and, if (and only if) that succeeds,
+--- delegates to GrantCertification UNCHANGED -- the exact same eligibility,
+--- cooldown, self-cert, proximity, model-check, INSERT, cache-refresh,
+--- notification and outbound-event sequence a live '/k9certify [server id]'
+--- would run, one code path, no duplicated authority. A disconnected
+--- target fails closed with 'target_must_be_online', the SAME outcome (and
+--- the SAME locale('certifications.target_must_be_online') message) a live
+--- attempt against a since-disconnected target already produces today --
+--- an honest, distinguishable, non-silent failure, never a weaker grant.
+--- ======================================================================
+
+--- @param granterSrc number
+--- @param citizenid string
+--- @param departmentKey string -- validated against Config.Departments as an
+--- input-sanity/UX check only; NOT used to override the target's actual
+--- live job -- GrantCertification (per its own §4.2.3 comment) always
+--- certifies into whatever department the target's LIVE, server-read job
+--- actually is, exactly as a live '/k9certify [server id]' attempt would.
+--- A live job that does not match `departmentKey` is reported as
+--- 'department_mismatch' rather than silently certifying into the
+--- mismatched real department -- a stale tablet view (the target changed
+--- department since the operator's roster/summary was last fetched) must
+--- surface as an error the UI can react to, never a silent substitution of
+--- what the operator actually clicked.
+--- @return boolean ok
+--- @return string outcome -- every GrantCertification outcome, plus 'invalid_target' (shape) | 'invalid_department' | 'target_must_be_online' | 'department_mismatch'
+local function GrantCertificationForTablet(granterSrc, citizenid, departmentKey)
+    if type(citizenid) ~= 'string' or citizenid == '' or type(departmentKey) ~= 'string' or departmentKey == '' then
+        return false, 'invalid_target'
+    end
+    if not Config.Departments[departmentKey] then
+        return false, 'invalid_department'
+    end
+
+    local onlineTarget = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    local onlineTargetSrc = onlineTarget and onlineTarget.PlayerData and onlineTarget.PlayerData.source
+    if not onlineTargetSrc then
+        return false, 'target_must_be_online'
+    end
+
+    local liveJob = onlineTarget.PlayerData.job
+    if not liveJob or liveJob.name ~= departmentKey then
+        return false, 'department_mismatch'
+    end
+
+    return GrantCertification(granterSrc, onlineTargetSrc)
 end
 
 --- SPEC.md §4.2/§4.3 revoke flow (manual). Called by both event 3 and
@@ -1639,6 +1762,583 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
 end
 
+-- ======================================================================
+-- CERTIFICATION DEPTH (this pass) — TIER / RENEWAL / SPECIALIZATION
+-- ACTIONS. See this file's header for the full design writeup. All FIVE
+-- functions below share the same shape: IsEligibleCertifier + the SAME
+-- CertifyActionCooldown instance grant/revoke already use (this file's
+-- own established "one shared cooldown per related-action group"
+-- convention) + the SAME self-action/proximity rules GrantCertification
+-- uses. DELIBERATE SCOPE REDUCTION vs. RevokeCertification's own
+-- reconcile-on-throw dance: these five are secondary-capability actions
+-- that never flip base access on their own (a thrown UPDATE here reports
+-- a plain error and changes nothing, rather than reconciling against an
+-- independent read) — the elaborate reconciliation RevokeCertification
+-- performs exists specifically because a WRONGLY-reported outcome on the
+-- primary access gate is a real security/trust problem; these five are
+-- not that, and treating them identically would be needless complexity
+-- for a much lower-stakes mutation. Stated explicitly here, not silently
+-- decided, per this task's own instruction to keep the model something
+-- an operator (and a reviewer) can hold in their head.
+-- ======================================================================
+
+--- Changes `targetServerId`'s certification tier for their OWN currently
+--- active department certification. Deliberately SEPARATE from
+--- GrantCertification (see header "TIER") — every grant still always
+--- creates a 'certified' row; this is the only way to move a citizenid to
+--- 'trainee' or 'senior'.
+--- @param granterSrc number
+--- @param targetServerId number
+--- @param newTier string -- 'trainee'|'certified'|'senior'
+local function SetCertificationTier(granterSrc, targetServerId, newTier)
+    if type(targetServerId) ~= 'number' then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_target'), 'error')
+        return
+    end
+
+    if not IsEligibleCertifier(granterSrc) then
+        NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_certify'), 'error')
+        return
+    end
+
+    if IsCertifyActionOnCooldown(granterSrc) then
+        return
+    end
+
+    if type(newTier) ~= 'string' or not TIER_RANK[newTier] then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_tier'), 'error')
+        return
+    end
+
+    local isSelfCert = granterSrc == targetServerId
+    if isSelfCert and not Config.AllowSelfCertification then
+        NotifyPlayer(granterSrc, locale('certifications.self_certification_disabled'), 'error')
+        return
+    end
+
+    local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
+    if not targetPlayer or not targetPlayer.PlayerData then
+        NotifyPlayer(granterSrc, locale('certifications.action_target_must_be_online'), 'error')
+        return
+    end
+
+    if not isSelfCert then
+        local granterPed = GetPlayerPed(granterSrc)
+        local targetPed = GetPlayerPed(targetServerId)
+        local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
+        if dist > Config.CertifyProximityMeters then
+            NotifyPlayer(granterSrc, locale('certifications.action_target_too_far'), 'error')
+            return
+        end
+    end
+
+    local targetCitizenid = targetPlayer.PlayerData.citizenid
+    local jobName = targetPlayer.PlayerData.job and targetPlayer.PlayerData.job.name
+    local cached = jobName and Certifications[targetCitizenid]
+    if not (cached and cached.active and cached.job == jobName) then
+        NotifyPlayer(granterSrc, locale('certifications.target_not_actively_certified'), 'error')
+        return
+    end
+
+    if cached.tier == newTier then
+        NotifyPlayer(granterSrc, locale('certifications.tier_already_set'), 'inform')
+        return
+    end
+
+    local granterCitizenid = ResolveGranterCitizenId(granterSrc)
+    if not granterCitizenid then return end
+
+    local oldTier = cached.tier
+    local updateOk, err = pcall(
+        MySQL.update.await,
+        'UPDATE k9_certifications SET tier = ? WHERE citizenid = ? AND job = ? AND active = 1',
+        { newTier, targetCitizenid, jobName }
+    )
+
+    if not updateOk then
+        print(('[qbx_k9unit] SetCertificationTier UPDATE failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(err)))
+        NotifyPlayer(granterSrc, locale('certifications.tier_change_error'), 'error')
+        return
+    end
+
+    RefreshCertificationCache(targetCitizenid, jobName)
+    FireOutboundEvent('qbx_k9unit:events:certificationTierChanged', targetCitizenid, jobName, oldTier, newTier, granterCitizenid)
+
+    NotifyPlayer(granterSrc, locale('certifications.tier_change_success_granter', newTier), 'success')
+    NotifyPlayer(targetServerId, locale('certifications.tier_change_success_target', newTier), 'success')
+end
+
+--- Extends `targetServerId`'s certification expiry by
+--- `Config.CertificationExpiryDays` from now, WITHOUT touching
+--- `granted_at`/`granted_by` (the original grant lineage is preserved —
+--- this is a renewal, not a re-grant). See header "EXPIRY" — date
+--- arithmetic happens in SQL (`DATE_ADD(NOW(), INTERVAL ? DAY)`), never in
+--- Lua. Does NOT re-run the K9-model check (mirrors RevokeCertification's
+--- own "model check is grant-only" precedent — a renewal is re-affirming
+--- paperwork, not re-verifying identity).
+--- @param granterSrc number
+--- @param targetServerId number
+local function RenewCertification(granterSrc, targetServerId)
+    if type(targetServerId) ~= 'number' then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_target'), 'error')
+        return
+    end
+
+    if not IsEligibleCertifier(granterSrc) then
+        NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_certify'), 'error')
+        return
+    end
+
+    if IsCertifyActionOnCooldown(granterSrc) then
+        return
+    end
+
+    local expiryDays = Config.Features and Config.Features.CertificationExpiry == true
+        and type(Config.CertificationExpiryDays) == 'number' and Config.CertificationExpiryDays > 0
+        and Config.CertificationExpiryDays or nil
+    if not expiryDays then
+        NotifyPlayer(granterSrc, locale('certifications.renew_feature_disabled'), 'error')
+        return
+    end
+
+    local isSelfCert = granterSrc == targetServerId
+    if isSelfCert and not Config.AllowSelfCertification then
+        NotifyPlayer(granterSrc, locale('certifications.self_certification_disabled'), 'error')
+        return
+    end
+
+    local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
+    if not targetPlayer or not targetPlayer.PlayerData then
+        NotifyPlayer(granterSrc, locale('certifications.action_target_must_be_online'), 'error')
+        return
+    end
+
+    if not isSelfCert then
+        local granterPed = GetPlayerPed(granterSrc)
+        local targetPed = GetPlayerPed(targetServerId)
+        local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
+        if dist > Config.CertifyProximityMeters then
+            NotifyPlayer(granterSrc, locale('certifications.action_target_too_far'), 'error')
+            return
+        end
+    end
+
+    local targetCitizenid = targetPlayer.PlayerData.citizenid
+    local jobName = targetPlayer.PlayerData.job and targetPlayer.PlayerData.job.name
+    local cached = jobName and Certifications[targetCitizenid]
+    if not (cached and cached.active and cached.job == jobName) then
+        NotifyPlayer(granterSrc, locale('certifications.target_not_actively_certified'), 'error')
+        return
+    end
+
+    local granterCitizenid = ResolveGranterCitizenId(granterSrc)
+    if not granterCitizenid then return end
+
+    local updateOk, err = pcall(
+        MySQL.update.await,
+        'UPDATE k9_certifications SET expires_at = DATE_ADD(NOW(), INTERVAL ? DAY) WHERE citizenid = ? AND job = ? AND active = 1',
+        { expiryDays, targetCitizenid, jobName }
+    )
+
+    if not updateOk then
+        print(('[qbx_k9unit] RenewCertification UPDATE failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(err)))
+        NotifyPlayer(granterSrc, locale('certifications.renew_error'), 'error')
+        return
+    end
+
+    RefreshCertificationCache(targetCitizenid, jobName)
+    local newCached = Certifications[targetCitizenid]
+    FireOutboundEvent('qbx_k9unit:events:certificationRenewed', targetCitizenid, jobName, newCached and newCached.expiresAtUnix, granterCitizenid)
+
+    -- A successful, explicit renewal clears the one-per-session warning/
+    -- lapsed flags — see the sweep thread below for why these exist; a
+    -- fresh renewal genuinely un-lapses a certification, so the next
+    -- sweep pass should be able to warn/announce again on its own future
+    -- merits, not stay silenced by a flag set before this renewal.
+    ExpiryWarned[targetCitizenid] = nil
+    ExpiryLapsedNotified[targetCitizenid] = nil
+
+    NotifyPlayer(granterSrc, locale('certifications.renew_success_granter'), 'success')
+    NotifyPlayer(targetServerId, locale('certifications.renew_success_target'), 'success')
+end
+
+--- Grants `specializationKey` (a `Config.K9Specializations` key) to
+--- `targetServerId` for their OWN currently active department
+--- certification. See header "SPECIALIZATIONS" / "WHY THIS DOES NOT REUSE
+--- k9_permissions" for the full authorization/design writeup. Mirrors
+--- GrantCertification's own online+proximity requirement and TOCTOU
+--- lock shape (reusing the SAME `GrantInFlight` table under a distinct,
+--- 'spec:'-prefixed key namespace so it can never collide with a base
+--- certification's own lock key).
+--- @param granterSrc number
+--- @param targetServerId number
+--- @param specializationKey string
+local function GrantSpecialization(granterSrc, targetServerId, specializationKey)
+    if type(targetServerId) ~= 'number' then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_target'), 'error')
+        return
+    end
+
+    if not IsEligibleCertifier(granterSrc) then
+        NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_certify'), 'error')
+        return
+    end
+
+    if IsCertifyActionOnCooldown(granterSrc) then
+        return
+    end
+
+    local catalog = type(Config.K9Specializations) == 'table' and Config.K9Specializations or {}
+    if type(specializationKey) ~= 'string' or not catalog[specializationKey] then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_specialization'), 'error')
+        return
+    end
+
+    local isSelfCert = granterSrc == targetServerId
+    if isSelfCert and not Config.AllowSelfCertification then
+        NotifyPlayer(granterSrc, locale('certifications.self_certification_disabled'), 'error')
+        return
+    end
+
+    local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
+    if not targetPlayer or not targetPlayer.PlayerData then
+        NotifyPlayer(granterSrc, locale('certifications.action_target_must_be_online'), 'error')
+        return
+    end
+
+    if not isSelfCert then
+        local granterPed = GetPlayerPed(granterSrc)
+        local targetPed = GetPlayerPed(targetServerId)
+        local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
+        if dist > Config.CertifyProximityMeters then
+            NotifyPlayer(granterSrc, locale('certifications.action_target_too_far'), 'error')
+            return
+        end
+    end
+
+    local targetCitizenid = targetPlayer.PlayerData.citizenid
+    local jobName = targetPlayer.PlayerData.job and targetPlayer.PlayerData.job.name
+    local cached = jobName and Certifications[targetCitizenid]
+    if not (cached and cached.active and cached.job == jobName) then
+        NotifyPlayer(granterSrc, locale('certifications.specialization_requires_active_cert'), 'error')
+        return
+    end
+
+    local lockKey = 'spec:' .. targetCitizenid .. ':' .. jobName .. ':' .. specializationKey
+    if GrantInFlight[lockKey] then
+        NotifyPlayer(granterSrc, locale('certifications.specialization_already_granted'), 'inform')
+        return
+    end
+    GrantInFlight[lockKey] = true
+
+    local function doGrantInsert()
+        local existingId = MySQL.scalar.await(
+            'SELECT id FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND specialization = ? AND active = 1 LIMIT 1',
+            { targetCitizenid, jobName, specializationKey }
+        )
+        if existingId then
+            NotifyPlayer(granterSrc, locale('certifications.specialization_already_granted'), 'inform')
+            return
+        end
+
+        local granterCitizenid = ResolveGranterCitizenId(granterSrc)
+        if not granterCitizenid then return end
+
+        local insertOk, insertErr = pcall(MySQL.insert.await,
+            'INSERT INTO k9_certification_specializations (citizenid, job, specialization, granted_by) VALUES (?, ?, ?, ?)',
+            { targetCitizenid, jobName, specializationKey, granterCitizenid }
+        )
+
+        if not insertOk then
+            if IsDuplicateKeyError(insertErr) then
+                RefreshSpecializationCache(targetCitizenid, jobName)
+                NotifyPlayer(granterSrc, locale('certifications.specialization_already_granted'), 'inform')
+                return
+            end
+            print(('[qbx_k9unit] GrantSpecialization INSERT failed for %s/%s/%s: %s'):format(targetCitizenid, jobName, specializationKey, tostring(insertErr)))
+            NotifyPlayer(granterSrc, locale('certifications.specialization_grant_error'), 'error')
+            return
+        end
+
+        RefreshSpecializationCache(targetCitizenid, jobName)
+        FireOutboundEvent('qbx_k9unit:events:specializationGranted', targetCitizenid, jobName, specializationKey, granterCitizenid)
+
+        NotifyPlayer(granterSrc, locale('certifications.specialization_grant_success_granter', specializationKey), 'success')
+        NotifyPlayer(targetServerId, locale('certifications.specialization_grant_success_target', specializationKey), 'success')
+    end
+
+    local grantOk, grantErr = pcall(doGrantInsert)
+    GrantInFlight[lockKey] = nil
+    if not grantOk then
+        print(('[qbx_k9unit] GrantSpecialization unexpected error for %s/%s/%s: %s'):format(targetCitizenid, jobName, specializationKey, tostring(grantErr)))
+        NotifyPlayer(granterSrc, locale('certifications.specialization_grant_error'), 'error')
+    end
+end
+
+--- Revokes `specializationKey` from `targetServerId` (online-capable
+--- path — see RevokeSpecializationOffline below for a genuinely
+--- disconnected target). Mirrors RevokeCertification's own online
+--- proximity rule; does NOT require the base certification to still be
+--- active (a specialization can legitimately be pulled independently of
+--- the base cert, e.g. a narcotics-specific disciplinary issue that
+--- doesn't warrant a full decertification).
+--- @param granterSrc number
+--- @param targetServerId number
+--- @param specializationKey string
+local function RevokeSpecialization(granterSrc, targetServerId, specializationKey)
+    if type(targetServerId) ~= 'number' then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_target'), 'error')
+        return
+    end
+
+    if not IsEligibleCertifier(granterSrc) then
+        NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_revoke'), 'error')
+        return
+    end
+
+    if IsCertifyActionOnCooldown(granterSrc) then
+        return
+    end
+
+    if type(specializationKey) ~= 'string' or specializationKey == '' then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_specialization'), 'error')
+        return
+    end
+
+    local isSelfCert = granterSrc == targetServerId
+    if isSelfCert and not Config.AllowSelfCertification then
+        NotifyPlayer(granterSrc, locale('certifications.self_certification_disabled'), 'error')
+        return
+    end
+
+    local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
+    if not targetPlayer or not targetPlayer.PlayerData then
+        NotifyPlayer(granterSrc, locale('certifications.specialization_target_offline_use_offline_command'), 'error')
+        return
+    end
+
+    if not isSelfCert then
+        local granterPed = GetPlayerPed(granterSrc)
+        local targetPed = GetPlayerPed(targetServerId)
+        local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
+        if dist > Config.CertifyProximityMeters then
+            NotifyPlayer(granterSrc, locale('certifications.action_target_too_far'), 'error')
+            return
+        end
+    end
+
+    local targetCitizenid = targetPlayer.PlayerData.citizenid
+    local jobName = targetPlayer.PlayerData.job and targetPlayer.PlayerData.job.name
+    if not jobName or not Config.Departments[jobName] then
+        NotifyPlayer(granterSrc, locale('certifications.target_no_department_cert'), 'error')
+        return
+    end
+
+    local granterCitizenid = ResolveGranterCitizenId(granterSrc)
+    if not granterCitizenid then return end
+
+    local updateOk, affectedRowsOrErr = pcall(
+        MySQL.update.await,
+        'UPDATE k9_certification_specializations SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND specialization = ? AND active = 1',
+        { granterCitizenid, targetCitizenid, jobName, specializationKey }
+    )
+
+    if not updateOk then
+        print(('[qbx_k9unit] RevokeSpecialization UPDATE failed for %s/%s/%s: %s'):format(targetCitizenid, jobName, specializationKey, tostring(affectedRowsOrErr)))
+        NotifyPlayer(granterSrc, locale('certifications.specialization_revoke_error'), 'error')
+        return
+    elseif not affectedRowsOrErr or affectedRowsOrErr == 0 then
+        NotifyPlayer(granterSrc, locale('certifications.specialization_not_granted'), 'inform')
+        return
+    end
+
+    RefreshSpecializationCache(targetCitizenid, jobName)
+    FireOutboundEvent('qbx_k9unit:events:specializationRevoked', targetCitizenid, jobName, specializationKey, 'manual')
+
+    NotifyPlayer(granterSrc, locale('certifications.specialization_revoke_success_granter', specializationKey), 'success')
+    NotifyPlayer(targetServerId, locale('certifications.specialization_revoke_success_target', specializationKey), 'error')
+end
+
+--- Offline-capable counterpart to RevokeSpecialization, mirroring
+--- RevokeCertificationOffline's exact shape (own online-check guard,
+--- deliberately no proximity check — impossible against a disconnected
+--- target).
+--- @param granterSrc number
+--- @param citizenid string
+--- @param job string
+--- @param specializationKey string
+local function RevokeSpecializationOffline(granterSrc, citizenid, job, specializationKey)
+    if not IsEligibleCertifier(granterSrc) then
+        NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_revoke'), 'error')
+        return
+    end
+
+    if IsCertifyActionOnCooldown(granterSrc) then
+        return
+    end
+
+    if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == ''
+        or type(specializationKey) ~= 'string' or specializationKey == '' then
+        NotifyPlayer(granterSrc, locale('certifications.usage_unspecialize_offline'), 'error')
+        return
+    end
+
+    if not Config.Departments[job] then
+        NotifyPlayer(granterSrc, locale('certifications.invalid_department', job), 'error')
+        return
+    end
+
+    local granterCitizenid = ResolveGranterCitizenId(granterSrc)
+    if not granterCitizenid then return end
+
+    local onlineCheckTarget = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+    if onlineCheckTarget and onlineCheckTarget.PlayerData and onlineCheckTarget.PlayerData.source then
+        NotifyPlayer(granterSrc, locale('certifications.specialization_target_online_use_online_command', onlineCheckTarget.PlayerData.source), 'error')
+        return
+    end
+
+    local updateOk, affectedRowsOrErr = pcall(
+        MySQL.update.await,
+        'UPDATE k9_certification_specializations SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND specialization = ? AND active = 1',
+        { granterCitizenid, citizenid, job, specializationKey }
+    )
+
+    if not updateOk then
+        print(('[qbx_k9unit] RevokeSpecializationOffline UPDATE failed for %s/%s/%s: %s'):format(citizenid, job, specializationKey, tostring(affectedRowsOrErr)))
+        NotifyPlayer(granterSrc, locale('certifications.specialization_revoke_error'), 'error')
+        return
+    elseif not affectedRowsOrErr or affectedRowsOrErr == 0 then
+        NotifyPlayer(granterSrc, locale('certifications.specialization_not_granted'), 'inform')
+        return
+    end
+
+    RefreshSpecializationCache(citizenid, job)
+    FireOutboundEvent('qbx_k9unit:events:specializationRevoked', citizenid, job, specializationKey, 'manual_offline')
+
+    NotifyPlayer(granterSrc, locale('certifications.specialization_revoke_success_granter', specializationKey), 'success')
+end
+
+-- ======================================================================
+-- READ-ONLY ACCESSORS (this pass) — exposed globally (no `local`) for
+-- future Phase 2/3 gates (search.lua/combat.lua/defense.lua-style files,
+-- none of which this pass reaches into — see header "TIER") and for
+-- whichever file ends up owning the tablet's roster aggregation (see
+-- header "CACHE SHAPE" / server/permissions.lua's own
+-- ListActivePermissionsForCitizenId precedent for the identical
+-- "expose an accessor, let another file aggregate" pattern).
+-- ======================================================================
+
+--- Cache-based, hot-path-safe: `citizenid`'s current tier for `jobName`,
+--- or nil if not actively/matchingly certified (regardless of whether
+--- that's because they were never certified, were revoked, or their
+--- certification has lapsed — same "just say no capability" shape
+--- HasK9Access already uses, not a 3-way distinction).
+--- @param citizenid string
+--- @param jobName string
+--- @return string?
+function GetCertificationTier(citizenid, jobName)
+    local cached = Certifications[citizenid]
+    if cached and cached.active and cached.job == jobName and not cached.expired then
+        return cached.tier
+    end
+    return nil
+end
+
+--- Cache-based, hot-path-safe: does `citizenid` currently hold AT LEAST
+--- `minTier` for `jobName`? Ordinal comparison via TIER_RANK — a future
+--- Phase 2/3 gate calls this instead of duplicating the tier-ranking
+--- logic itself. Fails closed on a nil actual tier (not certified) or an
+--- unrecognized `minTier` (a typo'd tier name must never accidentally
+--- open a gate; a malformed argument is a bug, not a low bar to clear).
+--- @param citizenid string
+--- @param jobName string
+--- @param minTier string
+--- @return boolean
+function MeetsTierRequirement(citizenid, jobName, minTier)
+    if type(minTier) ~= 'string' or not TIER_RANK[minTier] then return false end
+    local actualTier = GetCertificationTier(citizenid, jobName)
+    if not actualTier or not TIER_RANK[actualTier] then return false end
+    return TIER_RANK[actualTier] >= TIER_RANK[minTier]
+end
+
+--- Cache-based, hot-path-safe: does `citizenid` currently hold
+--- `specializationKey` for `jobName`? Also requires the BASE certification
+--- to currently be active/matching/unexpired — see header "SPECIALIZATIONS":
+--- an expired base certification softly disables its specializations too,
+--- the same "stop granting NEW access, never force-detach" posture
+--- HasK9Access already applies one level up.
+--- @param citizenid string
+--- @param jobName string
+--- @param specializationKey string
+--- @return boolean
+function HasSpecialization(citizenid, jobName, specializationKey)
+    local cached = Certifications[citizenid]
+    if not (cached and cached.active and cached.job == jobName and not cached.expired) then return false end
+    local jobSpecs = Specializations[citizenid] and Specializations[citizenid][jobName]
+    return jobSpecs ~= nil and jobSpecs[specializationKey] == true
+end
+
+--- DB-authoritative (works for an OFFLINE citizenid too, unlike the
+--- cache-based accessors above — for tablet/roster/admin reads, mirroring
+--- server/permissions.lua's own ListActivePermissionsForCitizenId
+--- precedent). Fails closed (returns nil) on a query error or an
+--- unreadable citizenid, matching this file's own established SafeQuery
+--- posture.
+--- @param citizenid string
+--- @param jobName string
+--- @return table? record -- { tier, grantedBy, grantedAt, revokedBy, revokedAt, revokeReason, expiresAtUnix, specializations: string[] } for the active row, or nil if none
+function QueryCertificationRecord(citizenid, jobName)
+    if type(citizenid) ~= 'string' or citizenid == '' or type(jobName) ~= 'string' or jobName == '' then return nil end
+
+    local ok, row = pcall(MySQL.single.await,
+        'SELECT tier, granted_by, granted_at, revoked_by, revoked_at, revoke_reason, UNIX_TIMESTAMP(expires_at) AS expires_at_unix ' ..
+        'FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1',
+        { citizenid, jobName }
+    )
+    if not ok or not row then
+        if not ok then
+            print(('[qbx_k9unit] QueryCertificationRecord query failed for %s/%s: %s'):format(citizenid, jobName, tostring(row)))
+        end
+        return nil
+    end
+
+    return {
+        tier = row.tier,
+        grantedBy = row.granted_by,
+        grantedAt = row.granted_at,
+        revokedBy = row.revoked_by,
+        revokedAt = row.revoked_at,
+        revokeReason = row.revoke_reason,
+        expiresAtUnix = tonumber(row.expires_at_unix),
+        specializations = QueryActiveSpecializations(citizenid, jobName),
+    }
+end
+
+--- DB-authoritative list of every specialization key `citizenid` currently
+--- holds for `jobName` — see QueryCertificationRecord's own doc comment
+--- for the "works offline, fails closed" contract this shares.
+--- @param citizenid string
+--- @param jobName string
+--- @return string[]
+function QueryActiveSpecializations(citizenid, jobName)
+    if type(citizenid) ~= 'string' or citizenid == '' or type(jobName) ~= 'string' or jobName == '' then return {} end
+
+    local ok, rows = pcall(MySQL.query.await,
+        'SELECT specialization FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND active = 1',
+        { citizenid, jobName }
+    )
+    if not ok then
+        print(('[qbx_k9unit] QueryActiveSpecializations query failed for %s/%s: %s'):format(citizenid, jobName, tostring(rows)))
+        return {}
+    end
+
+    local out = {}
+    for i, row in ipairs(rows or {}) do
+        out[i] = row.specialization
+    end
+    return out
+end
+
 --- SPEC.md §4.4 (NEW): automatic revoke when actually leaving the
 --- department (not on a same-department grade change). Server-only path —
 --- never exposed as a client-callable event.
@@ -1804,6 +2504,32 @@ lib.callback.register('qbx_k9unit:server:hasK9Access', function(source)
     return HasK9Access(source)
 end)
 
+-- ======================================================================
+-- TABLET CALLBACK -- see GrantCertificationForTablet's own doc comment
+-- above for the full "offline-grant asymmetry" writeup. Gated on
+-- Config.Features.CommandTablet AT REGISTRATION TIME, mirroring
+-- server/permissions.lua's identical "TABLET CALLBACKS" gate (that file's
+-- own header: "gate at registration, not just inside the handler")
+-- -- independent of whether this file's own underlying feature checks
+-- (Config.AllowSelfCertification, IsEligibleCertifier's own rank/grant/
+-- high-command resolution) would themselves allow anything; registering
+-- this callback regardless of THOSE lets the tablet render a real,
+-- specific denial reason instead of the callback not existing at all.
+-- `source` is ox_lib's own callback dispatch value (server-verified, never
+-- a client-supplied one) and is passed straight through as `granterSrc` --
+-- GrantCertificationForTablet/GrantCertification already independently
+-- re-verify eligibility from that source's own live job, so this wrapper
+-- adds no authorization logic of its own, only the return-shape
+-- translation client/tablet.lua's AwaitServerCallback expects.
+-- ======================================================================
+if Config.Features and Config.Features.CommandTablet == true then
+    lib.callback.register('qbx_k9unit:server:tabletCertify', function(source, targetCitizenid, departmentKey)
+        local ok, outcome = GrantCertificationForTablet(source, targetCitizenid, departmentKey)
+        if ok then return { ok = true } end
+        return { ok = false, error = outcome }
+    end)
+end
+
 RegisterNetEvent('qbx_k9unit:server:certifyHandler', function(targetServerId)
     GrantCertification(source, targetServerId)
 end)
@@ -1859,6 +2585,114 @@ RegisterCommand('k9decertifyoffline', function(source, args)
     RevokeCertificationOffline(source, citizenid, job, args[3])
 end, false)
 
+-- ======================================================================
+-- CERTIFICATION DEPTH (this pass) — net events + commands for tier/
+-- renewal/specialization, mirroring the exact "command and event both
+-- call the same internal function" convention every action above already
+-- uses.
+-- ======================================================================
+
+RegisterNetEvent('qbx_k9unit:server:setCertificationTier', function(targetServerId, newTier)
+    SetCertificationTier(source, targetServerId, newTier)
+end)
+
+RegisterCommand('k9settier', function(source, args)
+    local targetServerId = tonumber(args[1])
+    if not targetServerId then
+        NotifyPlayer(source, locale('certifications.usage_settier'), 'error')
+        return
+    end
+    SetCertificationTier(source, targetServerId, args[2])
+end, false)
+
+RegisterNetEvent('qbx_k9unit:server:renewCertification', function(targetServerId)
+    RenewCertification(source, targetServerId)
+end)
+
+RegisterCommand('k9recertify', function(source, args)
+    local targetServerId = tonumber(args[1])
+    if not targetServerId then
+        NotifyPlayer(source, locale('certifications.usage_recertify'), 'error')
+        return
+    end
+    RenewCertification(source, targetServerId)
+end, false)
+
+RegisterNetEvent('qbx_k9unit:server:grantSpecialization', function(targetServerId, specializationKey)
+    GrantSpecialization(source, targetServerId, specializationKey)
+end)
+
+RegisterCommand('k9specialize', function(source, args)
+    local targetServerId = tonumber(args[1])
+    if not targetServerId then
+        NotifyPlayer(source, locale('certifications.usage_specialize'), 'error')
+        return
+    end
+    GrantSpecialization(source, targetServerId, args[2])
+end, false)
+
+RegisterNetEvent('qbx_k9unit:server:revokeSpecialization', function(targetServerId, specializationKey)
+    RevokeSpecialization(source, targetServerId, specializationKey)
+end)
+
+RegisterCommand('k9unspecialize', function(source, args)
+    local targetServerId = tonumber(args[1])
+    if not targetServerId then
+        NotifyPlayer(source, locale('certifications.usage_unspecialize'), 'error')
+        return
+    end
+    RevokeSpecialization(source, targetServerId, args[2])
+end, false)
+
+-- Offline-capable counterpart to /k9unspecialize — see
+-- RevokeSpecializationOffline above and RevokeCertificationOffline's own
+-- header note (item 7b) for why this exists as a separate, citizenid-keyed
+-- command rather than extending the numeric targetServerId contract.
+RegisterCommand('k9unspecializeoffline', function(source, args)
+    local citizenid = args[1]
+    local job = args[2]
+    local specializationKey = args[3]
+    if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == ''
+        or type(specializationKey) ~= 'string' or specializationKey == '' then
+        NotifyPlayer(source, locale('certifications.usage_unspecialize_offline'), 'error')
+        return
+    end
+    RevokeSpecializationOffline(source, citizenid, job, specializationKey)
+end, false)
+
+--- CERTIFICATION DEPTH (this pass, Part A §9) — see header "EXPIRY" item
+--- 2 for the full design. Sends AT MOST one warn-ahead notice and one
+--- just-lapsed notice per (citizenid) per session — never re-sent on
+--- every call, so this is safe to call both from PlayerLoaded (once, at
+--- login) and from the periodic sweep (repeatedly, for every currently
+--- online certified handler) without spamming either one.
+--- @param onlineSrc number -- a LIVE, currently-connected server id (never a client claim — resolved by the caller from qbx_core, exactly like every other NotifyPlayer target in this file)
+--- @param citizenid string
+--- @param cached table -- a Certifications[citizenid] entry (active, job, tier, expiresAtUnix, expired)
+local function CheckAndNotifyExpiry(onlineSrc, citizenid, cached)
+    if not cached.expiresAtUnix then return end -- no expiry set -- nothing to warn about, ever
+
+    if cached.expired then
+        if not ExpiryLapsedNotified[citizenid] then
+            ExpiryLapsedNotified[citizenid] = true
+            NotifyPlayer(onlineSrc, locale('certifications.expiry_lapsed_notice'), 'error')
+        end
+        return
+    end
+
+    local now = NowUnix()
+    if now == nil then return end -- see NowUnix's own doc comment -- fail toward silence, not toward a wrong day-count
+
+    local warningDays = type(Config.CertificationExpiryWarningDays) == 'number' and Config.CertificationExpiryWarningDays > 0
+        and Config.CertificationExpiryWarningDays or 7
+    local secondsRemaining = cached.expiresAtUnix - now
+    if secondsRemaining <= (warningDays * 86400) and not ExpiryWarned[citizenid] then
+        ExpiryWarned[citizenid] = true
+        local daysRemaining = math.max(1, math.ceil(secondsRemaining / 86400))
+        NotifyPlayer(onlineSrc, locale('certifications.expiry_warning', tostring(daysRemaining)), 'inform')
+    end
+end
+
 -- CONFIDENCE NOTE (not silently asserted as verified fact): no qbx_core
 -- install was reachable in this sandbox to inspect its actual
 -- exports/events against (the filesystem was searched; only this
@@ -1894,6 +2728,17 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     -- so `cached` is guaranteed non-nil immediately after the call above.
     local cached = Certifications[citizenid]
     Player.Functions.SetMetaData('k9certified', cached.active)
+
+    -- CERTIFICATION DEPTH (this pass, Part A §9): a handler logging in
+    -- already near or past their own expiry gets the same proactive
+    -- notice an already-online handler would get from the periodic
+    -- sweep — no need to wait for the next sweep pass just because they
+    -- happened to log in between two of them. Gated the same way the
+    -- sweep itself is (Player.PlayerData.source is always this login's
+    -- own live source, never a client claim).
+    if Config.Features and Config.Features.CertificationExpiry == true and cached.active then
+        CheckAndNotifyExpiry(Player.PlayerData.source, citizenid, cached)
+    end
 end)
 
 -- Regression-test fix: `Certifications` is keyed by citizenid and
@@ -1914,6 +2759,15 @@ AddEventHandler('playerDropped', function(_reason)
     local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
     if citizenid then
         Certifications[citizenid] = nil
+
+        -- CERTIFICATION DEPTH (this pass): same unbounded-growth reasoning
+        -- as Certifications above, applied to the three new per-citizenid
+        -- tables this pass adds. All three are harmlessly rebuilt/re-armed
+        -- on the citizenid's next PlayerLoaded/RefreshCertificationCache
+        -- touch, exactly like Certifications itself.
+        Specializations[citizenid] = nil
+        ExpiryWarned[citizenid] = nil
+        ExpiryLapsedNotified[citizenid] = nil
     end
 
     -- REFACTOR_ROADMAP.md item 1: CertifyActionCooldown already registered
@@ -1923,3 +2777,63 @@ AddEventHandler('playerDropped', function(_reason)
     -- throttles the CERTIFIER's connection, not any particular citizenid),
     -- so nothing needs to happen here for it anymore.
 end)
+
+-- ======================================================================
+-- CERTIFICATION DEPTH (this pass, Part A §9) — background expiry sweep.
+-- See header "EXPIRY" item 2 for the full design. Mirrors
+-- server/tenure.lua's own CreateThread/Wait tick-loop shape exactly,
+-- including its config-driven-interval + fallback-on-misconfiguration
+-- convention (a non-positive/NaN/non-number interval fed straight to
+-- Wait() can busy-loop or silently kill this thread forever — same
+-- footgun that file's own PollIntervalMs-adjacent comment documents).
+--
+-- GATED AT THE CreateThread REGISTRATION ITSELF, not just inside the loop
+-- body: on a server that has never turned Config.Features.CertificationExpiry
+-- on, this thread is never even created — a total, zero-cost no-op,
+-- matching this task's own "a server with none of this configured must
+-- see a clean no-op" requirement literally, not just "does nothing when
+-- it runs."
+-- ======================================================================
+
+--- One sweep pass: for every currently-connected player, if their cached
+--- certification carries an expiry, warn ahead of it or announce a lapse
+--- (at most once per session each — see CheckAndNotifyExpiry). Walks
+--- `GetPlayers()`/cache reads only — NEVER a live SQL query — matching
+--- this file's header "EXPIRY" item 2 ("never a live per-access SQL
+--- query").
+local function TickCertificationExpiryWarnings()
+    for _, playerId in ipairs(GetPlayers()) do
+        local src = tonumber(playerId)
+        if src then
+            local Player = exports.qbx_core:GetPlayer(src)
+            local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+            local cached = citizenid and Certifications[citizenid]
+            if cached and cached.active then
+                CheckAndNotifyExpiry(src, citizenid, cached)
+            end
+        end
+    end
+end
+
+local WarnedBadExpiryCheckIntervalMs = false
+local EXPIRY_CHECK_INTERVAL_FALLBACK_MS = 300000
+
+if Config.Features and Config.Features.CertificationExpiry == true then
+    CreateThread(function()
+        while true do
+            local rawIntervalMs = Config.CertificationExpiryCheckIntervalMs
+            local intervalMs = EXPIRY_CHECK_INTERVAL_FALLBACK_MS
+            if type(rawIntervalMs) == 'number' and rawIntervalMs == rawIntervalMs and rawIntervalMs > 0 then
+                intervalMs = rawIntervalMs
+            elseif rawIntervalMs ~= nil and not WarnedBadExpiryCheckIntervalMs then
+                WarnedBadExpiryCheckIntervalMs = true
+                print(('[qbx_k9unit] certifications: Config.CertificationExpiryCheckIntervalMs (%s) is not a positive number -- using the built-in %dms interval instead.'):format(tostring(rawIntervalMs), EXPIRY_CHECK_INTERVAL_FALLBACK_MS))
+            end
+            Wait(intervalMs)
+            local ok, err = pcall(TickCertificationExpiryWarnings)
+            if not ok then
+                print(('[qbx_k9unit] certification expiry sweep tick error: %s'):format(tostring(err)))
+            end
+        end
+    end)
+end

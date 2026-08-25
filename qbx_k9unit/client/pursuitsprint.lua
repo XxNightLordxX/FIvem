@@ -1,0 +1,331 @@
+--[[
+    qbx_k9unit/client/pursuitsprint.lua
+
+    K9_IDEAS.md §5 ("Pursuit sprint -- a short burst of 'the dog is
+    genuinely faster than you'"). Client half of a short, cooldown-gated
+    speed burst for a certified K9 actively chasing a player this server's
+    own system has already flagged wanted/suspect. Server half:
+    server/pursuitsprint.lua -- read that file's header IN FULL first; it
+    is the authoritative source for the balance numbers, the event
+    contract, the XP decision, and the per-person feature-control
+    disclosure. This file only covers what is genuinely client-side: local
+    candidate selection (a display-only convenience, never the security
+    boundary), and applying/expiring the effect on the K9's OWN ped once
+    the server has granted it.
+
+    Explicitly NOT building "crowd-control barking" (K9_IDEAS.md's own
+    not-recommended section) -- see server/pursuitsprint.lua's own header
+    "WHAT THIS FILE DOES NOT DO" for the full statement; nothing here
+    targets, resolves, or affects any ped other than the local player's own.
+
+    ======================================================================
+    ANY PED, GATED ON ROLE/CERTIFICATION, NEVER ON PED MODEL. This file
+    deliberately does NOT call CanShowK9UI()/DenyK9UIAccess() anywhere --
+    unlike nearly every other self-initiated trigger in this resource
+    (K9Sit, RequestLeashAttach, RequestBiteHold, RequestPartnerUp). Two
+    reasons, together:
+      1. CanShowK9UI() can itself be model-gated (client/main.lua's own
+         doc comment: with Config.K9Appearance.requireK9ModelForRole = true,
+         or if client/appearance.lua is not loaded, CanShowK9UI() reduces to
+         `IsOwnModelK9() and HasK9Access()`), and this task requires this
+         feature to work identically on ANY ped -- a custom streamed ped,
+         one not listed in Config.Peds, or a human model -- gated on
+         role/certification ALONE. Depending on a check that CAN
+         (depending on an operator's own separate appearance setting)
+         narrow to a ped-model condition is the wrong foundation for a
+         feature required to never do that.
+      2. The real, binding authorization gate for this feature is
+         server-side anyway (server/pursuitsprint.lua's own
+         HasK9Access(src) -- itself a pure role/certification check with
+         no model component at all, per server/certifications.lua's own
+         "ROLE/MODEL DECOUPLING" header). This file's own local checks
+         below (vehicle tuck, "is there a nearby candidate") are
+         DISPLAY/UX-only, exactly like client/combat.lua's own
+         FindNearestCombatTarget and every ox_target canInteract predicate
+         in this resource -- the server independently re-resolves and
+         re-validates everything regardless of what this file believes.
+    A player entirely lacking K9 role/certification can still press the
+    keybind; the request reaches the server and is denied there with a
+    real, server-authoritative notification -- exactly the same tradeoff
+    client/movement.lua's own "Attach Leash"/"Certify Handler" ox_target
+    options already document and accept.
+
+    ======================================================================
+    THE BALANCE PROBLEM -- see server/pursuitsprint.lua's own header for
+    the full numbers/worst-case writeup. The one fact that matters for THIS
+    file specifically: this feature contributes exactly ONE multiplicative
+    input (K9MoveRateModifiers.pursuitSprint) into client/movement.lua's
+    ALREADY-SHIPPED move-rate composer (RecomputeK9MoveRate), which clamps
+    the combined product of every active modifier to [0.1, 2.0]. This file
+    NEVER calls SetPedMoveRateOverride directly, and never introduces a
+    second clamp -- client/movement.lua's own header names
+    RecomputeK9MoveRate() as "This resource's ONLY call site for
+    SetPedMoveRateOverride, anywhere" and this file keeps that true.
+
+    ======================================================================
+    NO UNBOUNDED TRAP -- THE LOAD-BEARING INVARIANT THIS FILE EXISTS TO
+    SATISFY (mirrors server/recall.lua's own header framing for its
+    equivalent termination path). The code path that ENDS a burst (natural
+    timeout, death, or this resource stopping) below:
+      - is NEVER gated on CanShowK9UI()/HasK9Access()/any certification
+        check of any kind -- confirmed by reading this file's own end-timer
+        thread and onResourceStop handler below: neither calls anything
+        from that family at all. A K9 that loses certification, or has its
+        server-side role revoked, MID-BURST still has the multiplier reset
+        on schedule -- the ability to end an effect must never depend on
+        still holding the permission that started it (server/recall.lua's
+        own documented invariant, applied here to a different mechanic).
+      - fires even if this resource restarts mid-burst (the onResourceStop
+        handler below), and even if the K9 dies mid-burst (the end-timer's
+        own IsEntityDead(PlayerPedId()) check -- FiveM respawn REUSES the
+        ped handle, so a stale non-1.0 override could otherwise persist
+        onto the respawned character; the natural, bounded (<=
+        Config.PursuitSprint.durationMs) timeout ALSO independently bounds
+        this even without the death check, so this is defense-in-depth, not
+        the only thing standing between a death and a stuck multiplier).
+      - is guarded by a generation counter (`sprintGeneration` below) so a
+        stale end-timer from an earlier grant can never clobber a NEWER,
+        still-active burst's modifier -- the same "stale/foreign event must
+        never clear a DIFFERENT instance's state" discipline
+        client/combat.lua's own biteHoldEnded/dragEnded handlers already
+        apply (`if MyEngagedTargetNetId ~= targetNetId then return end`).
+        In practice this should be unreachable (the server's own
+        cooldownMs default, 45s, vastly outlasts one burst's durationMs
+        default, 5s, so two grants can never legitimately overlap), but
+        this file does not rely on that margin alone.
+
+    ======================================================================
+    EVENT CONTRACT (agreed with coder-backend -- see server/pursuitsprint.lua's
+    own header for the full writeup):
+      Client -> Server: 'qbx_k9unit:server:requestPursuitSprint' (targetNetId: number)
+      Server -> Client: 'qbx_k9unit:client:pursuitSprintGranted' ()  -- NO PAYLOAD
+        Deliberately payload-less: Config.PursuitSprint.speedMultiplier/
+        durationMs are shared_scripts config, already identical on both
+        sides of the network boundary -- sending them again as event
+        arguments would just be a second, redundant copy that could in
+        principle drift from the config this same client already loaded
+        (it cannot, in practice, since both sides read the same file, but
+        there is no reason to introduce even a theoretical second source of
+        truth for a value already available locally).
+      A rejected request is NEVER a dedicated client event -- the server
+      sends a single ox_lib notify (via NotifyPlayer) and nothing else. Do
+      not add a 'qbx_k9unit:client:pursuitSprintDenied' event without
+      updating this comment and server/pursuitsprint.lua's own header
+      together.
+
+    ======================================================================
+    SOURCE-ORIGIN GUARD on the one `qbx_k9unit:client:*` handler below
+    (`if source ~= 65535 then return end`) -- mirrors client/combat.lua's
+    own "SOURCE-ORIGIN GUARD" header block exactly; read that file's header
+    for the full reasoning and the same honestly-graded MEDIUM-HIGH
+    confidence note (official documented pattern, not independently
+    re-verified against a live client this session) rather than
+    re-deriving it here. What forging this locally would gain an attacker:
+    a self-only speed buff on their OWN ped with zero cooldown enforcement
+    (the server-side cooldown is bypassed entirely by construction, since a
+    forged local TriggerEvent never reaches server/pursuitsprint.lua at
+    all) -- this closes that gap for the same "any qbx_k9unit:client:*
+    handler must require genuine server origin" resource-wide convention
+    every other file already follows, not because this one instance was
+    independently assessed as higher/lower risk than the others.
+
+    ======================================================================
+    NATIVES USED, AND HOW EACH IS ALREADY ESTABLISHED IN THIS EXACT
+    CODEBASE (per this task's own verification requirement -- every native
+    below already has a real, relied-upon call site elsewhere in this
+    resource; none is newly introduced by this file):
+      - GetGamePool('CPed'), IsEntityDead, DoesEntityExist, GetEntityCoords,
+        PlayerPedId, IsPedInAnyVehicle: client/combat.lua's own
+        FindNearestCombatTarget (GetGamePool/IsEntityDead/DoesEntityExist/
+        GetEntityCoords/PlayerPedId) and client/agility.lua's TryVault
+        (IsPedInAnyVehicle) -- byte-identical usage shape reused here.
+      - NetworkGetPlayerIndexFromPed: client/movement.lua's "Attach Leash"
+        ox_target onSelect handler, already established.
+      - NetworkGetNetworkIdFromEntity: client/combat.lua's
+        RequestBiteHold/RequestTakedown/RequestDrag, already established
+        (this file's own TriggerServerEvent call mirrors those three
+        exactly: `NetworkGetNetworkIdFromEntity(target)` as the sole
+        argument to a `qbx_k9unit:server:request*` event).
+      - SetPedMoveRateOverride: NEVER called directly by this file -- see
+        "THE BALANCE PROBLEM" above. This file only ever writes
+        K9MoveRateModifiers.pursuitSprint and calls the existing
+        RecomputeK9MoveRate(), inheriting that native's own
+        already-recorded confidence grading (client/movement.lua's "MOVE-
+        RATE COMPOSER" header) rather than introducing a second,
+        independent claim about it.
+    ======================================================================
+]]
+
+if not Config.Features.PursuitSprint then return end
+
+-- ======================================================================
+-- CONFIG SHAPE ASSERTS -- mirrors server/pursuitsprint.lua's own asserts
+-- exactly (both files validate independently since either could load on a
+-- misconfigured server without the other -- e.g. a client-only or
+-- server-only partial deploy during an update). Placed after the
+-- feature-flag gate above, same convention as client/agility.lua's
+-- Config.Combat.AgilityAdvanced.detectionMethod assert.
+-- ======================================================================
+assert(type(Config.PursuitSprint) == 'table',
+    "qbx_k9unit: Config.Features.PursuitSprint is true but Config.PursuitSprint is missing from config.lua. " ..
+    "Add the settings table (speedMultiplier/durationMs/cooldownMs/requestRangeMeters) before enabling this feature.")
+
+assert(type(Config.PursuitSprint.speedMultiplier) == 'number' and Config.PursuitSprint.speedMultiplier > 0,
+    "qbx_k9unit: Config.PursuitSprint.speedMultiplier must be a positive number.")
+
+assert(type(Config.PursuitSprint.durationMs) == 'number' and Config.PursuitSprint.durationMs > 0,
+    "qbx_k9unit: Config.PursuitSprint.durationMs must be a positive number of milliseconds.")
+
+assert(type(Config.PursuitSprint.requestRangeMeters) == 'number' and Config.PursuitSprint.requestRangeMeters > 0,
+    "qbx_k9unit: Config.PursuitSprint.requestRangeMeters must be a positive number of meters.")
+
+--- Finds the nearest OTHER live PLAYER'S ped within `rangeMeters` of the
+--- local player. DISPLAY-ONLY CONVENIENCE, never the security boundary --
+--- server/pursuitsprint.lua independently re-resolves and re-validates the
+--- target from scratch (role, distance, player-vs-NPC, wanted status)
+--- regardless of what this function picked, exactly like
+--- client/combat.lua's own FindNearestCombatTarget's doc comment already
+--- states for that file's equivalent search. UNLIKE that function, this
+--- one filters to PLAYER peds only (`NetworkGetPlayerIndexFromPed(ped) ~=
+--- -1`) -- see server/pursuitsprint.lua's own header for why this feature
+--- is player-target-only (a "wanted" flag is a player-only concept in this
+--- codebase).
+--- @param rangeMeters number
+--- @return number? targetPed
+local function FindNearestPursuitTarget(rangeMeters)
+    local myPed = PlayerPedId()
+    local myCoords = GetEntityCoords(myPed)
+    local nearestPed, nearestDist
+
+    for _, ped in ipairs(GetGamePool('CPed')) do
+        if ped ~= myPed and DoesEntityExist(ped) and not IsEntityDead(ped) and NetworkGetPlayerIndexFromPed(ped) ~= -1 then
+            local dist = #(myCoords - GetEntityCoords(ped))
+            if dist <= rangeMeters and (not nearestDist or dist < nearestDist) then
+                nearestPed, nearestDist = ped, dist
+            end
+        end
+    end
+
+    return nearestPed
+end
+
+--- Self-initiated trigger -- bound to a keybind below (this resource has
+--- no radial-menu entry for this feature yet; client/radial.lua is not a
+--- file this pass owns -- see this pass's own report for the exact,
+--- ready-to-apply follow-up for whoever owns that file next).
+function RequestPursuitSprint()
+    local myPed = PlayerPedId()
+
+    -- Nothing to chase on foot while seated in, or "tucked" into
+    -- (client/vehicle.lua's EnterNearestK9Vehicle), a vehicle -- silent,
+    -- mirrors client/agility.lua's TryVault and client/combat.lua's own
+    -- IsBlockedByVehicleTuck exclusion for the identical state. Soft
+    -- dependency on IsInK9Vehicle (`type(...) == 'function'` guard, this
+    -- resource's established convention for this exact optional cross-file
+    -- read -- see client/agility.lua/client/movement.lua's own identical
+    -- guard on this same global).
+    if IsPedInAnyVehicle(myPed, false) or (type(IsInK9Vehicle) == 'function' and IsInK9Vehicle()) then
+        return
+    end
+
+    local targetPed = FindNearestPursuitTarget(Config.PursuitSprint.requestRangeMeters)
+    if not targetPed then
+        lib.notify({ title = locale('common.notify_title'), description = locale('pursuitsprint.no_target_nearby'), type = 'error' })
+        return
+    end
+
+    TriggerServerEvent('qbx_k9unit:server:requestPursuitSprint', NetworkGetNetworkIdFromEntity(targetPed))
+end
+
+RegisterCommand('qbx_k9unit:pursuitsprint', function()
+    RequestPursuitSprint()
+end, false)
+
+RegisterKeyMapping('qbx_k9unit:pursuitsprint', locale('pursuitsprint.keybind_label'), 'keyboard', 'N')
+
+-- ======================================================================
+-- GRANT HANDLING -- see this file's header "NO UNBOUNDED TRAP" for the
+-- full invariant this section (together with the onResourceStop handler
+-- below) exists to satisfy.
+-- ======================================================================
+
+-- Incremented on every genuine grant; an end-timer only ever resets the
+-- shared modifier if it is still the MOST RECENT grant's own timer by the
+-- time it finishes -- see this file's header for the full reasoning.
+local sprintGeneration = 0
+
+--- Shared by the end-timer thread below AND onResourceStop, so there is
+--- exactly one place that ever writes K9MoveRateModifiers.pursuitSprint
+--- back to neutral -- mirrors client/movement.lua's own "there is exactly
+--- one place" discipline for its analogous resets.
+local function ResetPursuitSprintModifier()
+    if type(K9MoveRateModifiers) == 'table' then
+        K9MoveRateModifiers.pursuitSprint = 1.0
+    end
+    if type(RecomputeK9MoveRate) == 'function' then
+        RecomputeK9MoveRate()
+    end
+end
+
+RegisterNetEvent('qbx_k9unit:client:pursuitSprintGranted', function()
+    if source ~= 65535 then return end -- SOURCE-ORIGIN GUARD, see this file's header
+
+    -- Soft dependency on client/movement.lua's shared move-rate composer
+    -- (`type(...) == 'table'`/`type(...) == 'function'` guards, this
+    -- resource's established convention for this exact pair -- see
+    -- client/movement.lua's own header: "client/progression.lua's own
+    -- defensive... checks"). If either symbol is missing (a renamed or
+    -- removed client/movement.lua), this fails CLOSED -- no burst is
+    -- ever applied, rather than erroring or applying a native call this
+    -- file does not own directly.
+    if type(K9MoveRateModifiers) ~= 'table' or type(RecomputeK9MoveRate) ~= 'function' then
+        return
+    end
+
+    sprintGeneration = sprintGeneration + 1
+    local myGeneration = sprintGeneration
+
+    K9MoveRateModifiers.pursuitSprint = Config.PursuitSprint.speedMultiplier
+    RecomputeK9MoveRate()
+    lib.notify({ title = locale('common.notify_title'), description = locale('pursuitsprint.activated'), type = 'success' })
+
+    -- Feature-scoped thread -- exists ONLY for the bounded lifetime of one
+    -- burst (Config.PursuitSprint.durationMs, a few seconds), never an
+    -- always-on loop. Ticks at a fixed 100ms so an in-progress death is
+    -- noticed promptly without polling every frame.
+    local durationMs = Config.PursuitSprint.durationMs
+    local tickMs = 100
+    CreateThread(function()
+        local elapsed = 0
+        while elapsed < durationMs do
+            Wait(tickMs)
+            elapsed = elapsed + tickMs
+            if IsEntityDead(PlayerPedId()) then
+                break -- END-ON-DEATH -- never gated on access/cert, see header "NO UNBOUNDED TRAP"
+            end
+        end
+
+        -- Only the MOST RECENT grant's own end-timer may reset the shared
+        -- modifier -- see this file's header for why (guards against a
+        -- should-be-impossible, but defended-anyway, stale/overlapping
+        -- end-timer).
+        if sprintGeneration == myGeneration then
+            ResetPursuitSprintModifier()
+        end
+    end)
+end)
+
+-- qa-tester-class hygiene, same reasoning as client/movement.lua's own
+-- lastAppliedMoveRate/isFirstPersonK9View onResourceStop handlers: a
+-- resource restart mid-burst must not leave K9MoveRateModifiers.pursuitSprint
+-- (and therefore the applied native move-rate override) stuck above
+-- neutral forever. Bumps sprintGeneration too, purely for consistency (no
+-- thread survives a resource stop regardless -- CreateThread-created
+-- coroutines die with the rest of this resource's Lua state -- so this is
+-- not load-bearing on its own, just keeps the invariant "generation only
+-- ever increases, reset always wins" visibly true).
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    sprintGeneration = sprintGeneration + 1
+    ResetPursuitSprintModifier()
+end)

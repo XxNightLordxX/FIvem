@@ -18,8 +18,8 @@ implemented) both sit ahead of this in the build queue, and while
 deliberately excludes — is reportedly being implemented live by a concurrent
 coder-ui/coder-frontend session. **This document does not cover
 `HealthStaminaHUD`, does not touch `client/hud.lua`, `html/`/`web/`, or
-either of `phase2_notes/phase4_hud_bridge_design.md` /
-`phase2_notes/phase4_hud_early_design.md`'s own open items, and does not
+either of `phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge` /
+`phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge`'s own open items, and does not
 modify any file that session might be touching.** It covers exactly the
 other nine Phase 4 `Config.Features` flags: `K9Inventory`, `XPProgression`,
 `FatigueSystem`, `MoodSystem`, `FearStressSystem`, `DistractionSystem`,
@@ -38,9 +38,9 @@ review), §11 (Phase 2's detailed spec — reused directly for
 document's format mirrors, and the direct source of the `SetPedMoveRateOverride`
 re-assertion caveat and the NPC-vs-player scope-fork methodology reused
 below); `config.lua`'s already-drafted, unused `Config.XPTiers` table;
-`phase2_notes/phase4_xp_schema_notes.md` (db-schema's persistence
-recommendation for XP, adopted below); `phase2_notes/phase4_hud_bridge_design.md`
-and `phase2_notes/phase4_hud_early_design.md` (read for cross-reference only —
+`phase2_notes/RESEARCH_ARCHIVE.md#xp-schema` (db-schema's persistence
+recommendation for XP, adopted below); `phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge`
+and `phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge` (read for cross-reference only —
 specifically their `CanShowK9UI()` vs. `IsOwnModelK9()` resolution, which this
 document reuses rather than re-litigating, and their identification of
 `SetPedMoveRateOverride` as a native other Phase 3/4 systems will also want,
@@ -48,7 +48,7 @@ which this document turns into a cross-cutting architectural requirement in
 §13.0); and the actual shipped Phase 1/2 files (`config.lua`,
 `client/main.lua`, `client/movement.lua`, `client/radial.lua`,
 `client/vehicle.lua`, `server/main.lua`, `server/certifications.lua`,
-`fxmanifest.lua`) plus `phase2_notes/contraband_search_contract.md` (the
+`fxmanifest.lua`) plus `phase2_notes/RESEARCH_ARCHIVE.md#contraband-search` (the
 closest existing precedent for a real ox_inventory integration's
 security-critical shape, deliberately reused as the template for both
 `K9Inventory` and `K9Medkit` below, per this document's own explicit
@@ -184,7 +184,7 @@ collision rather than a rare race.
 **Decision:** a single resource-global client function,
 `RecomputeK9MoveRate()` (proposed name — no existing naming-slot collision;
 follows this codebase's established `PascalCase` verb-first convention per
-`phase2_notes/EXPORT_TRACKING.md`'s documented rule), owns the **one and
+`README.md#public-api-exports`'s documented rule), owns the **one and
 only** call to `SetPedMoveRateOverride` for the K9's own ped. Every system
 that wants to influence movement speed — `client/wellbeing.lua` (Fatigue,
 Injury), the XP tier effect (wherever it lands, §13.4.1), and Phase 3's
@@ -212,7 +212,7 @@ coordination can close. Flagged as a known limitation, not treated as solved.
 Following `PHASE3_SPEC.md` §12.0's own established practice of resolving a
 recurring cross-cutting question once instead of five times: every wellbeing
 stat, and XP, is **server-authoritative state** — the server, never the
-client, owns the real number, exactly the same posture `phase2_notes/phase4_xp_schema_notes.md`
+client, owns the real number, exactly the same posture `phase2_notes/RESEARCH_ARCHIVE.md#xp-schema`
 already argues for XP specifically ("a modified client claiming 'I'm Elite
 tier, give me 10.0m scent range and +15% speed' is a real speedhack/detection-range
 exploit if the server ever takes that claim at face value"). But — stated
@@ -285,7 +285,7 @@ Config.XP = {
     -- 'citizenid' (default): XP belongs to the K9 character itself, portable
     -- across a department change. 'job': composite-keyed like
     -- k9_certifications, resets on a department change. OPEN QUESTION, see
-    -- phase2_notes/phase4_xp_schema_notes.md §6 item 1 -- NOT decided here,
+    -- phase2_notes/RESEARCH_ARCHIVE.md#xp-schema §6 item 1 -- NOT decided here,
     -- a product call, not a schema call.
     scopePerCitizenidOrJob = 'citizenid',
 }
@@ -357,12 +357,12 @@ Config.Wellbeing = {
 -- ======================================================================
 -- PHASE 4 — K9 INVENTORY (ox_inventory stash). See §13.4.2 for the full
 -- security-critical integration writeup, mirroring
--- phase2_notes/contraband_search_contract.md's rigor for the same reason
+-- phase2_notes/RESEARCH_ARCHIVE.md#contraband-search's rigor for the same reason
 -- that note was written for Phase 2's search feature.
 -- ======================================================================
 Config.K9Inventory = {
     slots         = 5,
-    maxWeight     = 8000,  -- grams-equivalent, same units ox_inventory's own item .weight fields already use (confirmed unit convention: phase2_notes/contraband_search_contract.md §1)
+    maxWeight     = 8000,  -- grams-equivalent, same units ox_inventory's own item .weight fields already use (confirmed unit convention: phase2_notes/RESEARCH_ARCHIVE.md#contraband-search §1)
     interactRange = 2.0,
     -- 'department' (default): any player whose job ∈ Config.Departments may
     -- open it, mirroring "shared field equipment" framing.
@@ -423,7 +423,7 @@ real-capability-grant files):
 | `server/wellbeing.lua` | **New** | The unified stat store (`K9Wellbeing[citizenid] = { fatigue, mood, fearStress, injury, distractedUntil }`), the single shared `Config.Wellbeing.tickIntervalMs` decay/regen loop for all five stats (§13.0 Decision 1), consumption of Phase 2's existing `relayDamageEvent`/`relayWeaponFire` logs (new *readers* of `server/tracking.lua`'s state, not a second copy of that ingestion logic — recommend exposing a small read-only accessor from `server/tracking.lua` if its log isn't already a plain accessible table, rather than reaching into that file's internals directly), the `qbx_k9unit:server:getWellbeingSnapshot` callback (§13.4.3), the server-side halves of `Pet K9`/`Calm Down`/meat-bait/whistle handling, and the server-side gate `server/combat.lua` (Phase 3) must call before honoring a `FearStress`-hesitating K9's bite-hold/takedown request (§13.4.3.3). Ephemeral/in-memory only by default — see §13.4.3's open persistence question — mirroring `server/tracking.lua`'s own precedent for exactly this kind of session-scoped state. |
 | `client/wellbeing.lua` | **New** | Receives pushed wellbeing snapshots, sets/clears `K9MoveRateModifiers.fatigue`/`.injury` (§13.0 Decision 2) and calls `RecomputeK9MoveRate()`, enforces the client-local sprint/jump input blocks for low Injury (§13.4.3.5's reality check on why this is client-local, not server-enforced), plays the Distraction status animation/effect, and is the one file every one of the five wellbeing `Config.Features` flags gates its own registration inside (mirroring `client/radial.lua`'s per-item gating convention). |
 | `client/movement.lua` | **Extends** | Adds `RecomputeK9MoveRate()` (§13.0 Decision 2) and the shared `K9MoveRateModifiers` table — the "own body, native locomotion" category this file already owns (`AgilityBasicJump`'s suppression thread, the camera toggle) is the correct home for a composer over the K9's own movement natives, not a new file. Also adds the XP tier's own multiplier slot (`K9MoveRateModifiers.xpTier`, written by whatever XP module pushes tier-change notifications, §13.4.1) and reserves the fourth slot (`K9MoveRateModifiers.dragging`) for Phase 3's `PropDragging` to set once that phase lands — this file becomes the one shared seam between Phase 3 and Phase 4's otherwise-independent movement-affecting systems. |
-| `server/progression.lua` | **New** | XP award/persistence: the in-memory `K9XP[citizenid]` cache (mirrors `server/certifications.lua`'s `Certifications[citizenid]` cache pattern exactly, per `phase2_notes/phase4_xp_schema_notes.md` §5's own recommendation), the atomic `k9_progression` UPSERT (schema per that note's §4, not re-derived here), the tier-lookup helper walking `Config.XPTiers` the same way `server/search.lua` walks `Config.ContrabandAlertTiers`, and the award hooks into Phase 2/3's own success paths (§13.4.1). No dedicated client file — the tier-change *effect* is a small addition to `client/movement.lua`'s composer (above), not a whole new client module, per §13.1 sub-phase 4h's note. |
+| `server/progression.lua` | **New** | XP award/persistence: the in-memory `K9XP[citizenid]` cache (mirrors `server/certifications.lua`'s `Certifications[citizenid]` cache pattern exactly, per `phase2_notes/RESEARCH_ARCHIVE.md#xp-schema` §5's own recommendation), the atomic `k9_progression` UPSERT (schema per that note's §4, not re-derived here), the tier-lookup helper walking `Config.XPTiers` the same way `server/search.lua` walks `Config.ContrabandAlertTiers`, and the award hooks into Phase 2/3's own success paths (§13.4.1). No dedicated client file — the tier-change *effect* is a small addition to `client/movement.lua`'s composer (above), not a whole new client module, per §13.1 sub-phase 4h's note. |
 | `client/inventory.lua` / `server/inventory.lua` | **New pair** | `K9Inventory`'s ox_target-triggered stash open, the per-K9 `RegisterStash` call and its access-scope enforcement (§13.4.2). New pair, not folded into an existing file, for the same "real ox_inventory capability grant deserves the certification-file's level of scrutiny" reasoning §11.3 already gave for `client/search.lua`/`server/search.lua`. |
 | `client/medkit.lua` / `server/medkit.lua` | **New pair, small** | `K9Medkit`'s ox_inventory useable-item registration and the server-side heal validation (§13.4.4). Calls into `server/wellbeing.lua`'s exposed `RestoreInjury(citizenid, amount)` helper rather than mutating the stat store directly from a second file — same "reuse the existing global, don't re-derive the logic" rule `server/search.lua` already follows for `HasK9Access`. |
 | `server/search.lua` | **Extends** (Phase 2 file — referenced here as a plan only; not touched by this document, and not implemented yet as of this pass either) | Adds one small addition for `ContrabandScreenFX`: after computing `alertTier` (§11.4 item 2 step 12), if `Config.Features.ContrabandScreenFX` and `alertTier` is in `Config.ContrabandScreenFX.triggerTiers`, send a client-only (not broadcast) `qbx_k9unit:client:applyContrabandScreenFx` event to the requesting K9's own client alongside the existing return value. Deliberately not a new file — this is a two-line addition to an existing, already-designed callback's success path, the same "small enough to not warrant a new file" judgment call `PHASE3_SPEC.md` §12.3 made for folding `PropDragging` into `client/combat.lua` once its scope narrowed. |
@@ -449,7 +449,7 @@ a "small" action.
 - A configured gameplay action (Phase 2 search success, Phase 2 tracking
   success, Phase 3 bite-hold/takedown success — per `Config.XP.awards`)
   awards a flat XP amount to the acting K9's `citizenid`, applied via the
-  atomic UPSERT pattern `phase2_notes/phase4_xp_schema_notes.md` §4 already
+  atomic UPSERT pattern `phase2_notes/RESEARCH_ARCHIVE.md#xp-schema` §4 already
   specifies (`INSERT ... ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp)`),
   updating the in-memory `K9XP[citizenid]` cache **synchronously**, before
   the DB write completes — per that note's §5, correctness of the applied
@@ -472,7 +472,7 @@ a "small" action.
 
 **Reality check:** fully native-only, zero new asset. The one genuinely
 uncertain piece is not a native at all but a **data-model question**, already
-raised and left open by `phase2_notes/phase4_xp_schema_notes.md` (see Open
+raised and left open by `phase2_notes/RESEARCH_ARCHIVE.md#xp-schema` (see Open
 Questions below) — this is a persistence-design uncertainty, not a
 feasibility one.
 
@@ -482,7 +482,7 @@ feasibility one.
   server-cached**. A modified client claiming a higher tier gets nothing —
   `server/tracking.lua`'s `findTrackableSource` reads the server's own
   `K9XP`-derived `scentRange`, never anything the client asserts about its
-  own tier, closing exactly the exploit `phase4_xp_schema_notes.md` names
+  own tier, closing exactly the exploit `RESEARCH_ARCHIVE.md#xp-schema` names
   explicitly.
 - The `speedMultiplier` consequence is a client-self-applied native effect
   (§13.0 Decision 3) — disclosed, bounded, not treated as solved.
@@ -506,7 +506,7 @@ feasibility one.
 
 **Open questions, explicitly flagged:**
 1. **Per-citizenid or per-(citizenid, job) XP scoping** —
-   `phase2_notes/phase4_xp_schema_notes.md` §6 item 1, unresolved: does XP
+   `phase2_notes/RESEARCH_ARCHIVE.md#xp-schema` §6 item 1, unresolved: does XP
    survive a department transfer (this document's default,
    `Config.XP.scopePerCitizenidOrJob = 'citizenid'`) or reset with it
    (mirroring `k9_certifications`' job-scoping)? A genuine product call, not
@@ -514,7 +514,7 @@ feasibility one.
    since the schema's primary key shape depends on the answer.
 2. **Should a separate append-only `k9_xp_log` exist** for anti-cheat/dispute
    auditing, the way `k9_search_log` exists for search accountability?
-   `phase2_notes/phase4_xp_schema_notes.md` §6 item 2 raises this explicitly
+   `phase2_notes/RESEARCH_ARCHIVE.md#xp-schema` §6 item 2 raises this explicitly
    and does not answer it — not decided here either.
 3. **What exactly counts as "the K9 reached the resolved source" for
    `Config.XP.awards.trackSourceResolved`?** Phase 2's `findTrackableSource`
@@ -567,7 +567,7 @@ their own persistent character, the same way `k9_certifications` and
 handler's.
 
 **Reality check:** unambiguously native/export-only, zero new asset — ox_inventory
-is designed exactly for this (`phase2_notes/contraband_search_contract.md`
+is designed exactly for this (`phase2_notes/RESEARCH_ARCHIVE.md#contraband-search`
 already confirms `RegisterStash`'s existence and behavior for the vehicle-trunk
 case; the *dynamic, per-player-registered-at-runtime* stash pattern used here
 is a different call shape than that note verified, and should get its own
@@ -610,7 +610,7 @@ than assumed.
   verification). If no such option exists, enforcing a whitelist would
   require a `registerHook`-style server-side hook on item movement into this
   specific stash (the same `exports.ox_inventory:registerHook('swapItems', ...)`
-  mechanism Phase 2's `phase2_notes/scent_source_resolution.md` already
+  mechanism Phase 2's `phase2_notes/RESEARCH_ARCHIVE.md#scent-source-resolution` already
   confirmed exists and works for a different purpose) — rejecting/reversing
   a disallowed item's move into the K9 stash. **This is a real, currently
   unresolved implementation question, not assumed away**: whether
@@ -679,7 +679,7 @@ limitation.
 **Event/callback contract sketch:**
 - `qbx_k9unit:client:wellbeingUpdate` (stats: table) [server→client,
   `client/wellbeing.lua`] — one combined push per tick (or on-change with an
-  epsilon + heartbeat, mirroring `phase2_notes/phase4_hud_bridge_design.md`
+  epsilon + heartbeat, mirroring `phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge`
   §5's already-established push-cadence pattern for exactly this class of
   "slowly-changing numbers nobody needs sub-second precision on" problem,
   reused here rather than re-invented) carrying all five wellbeing values
@@ -778,7 +778,7 @@ decay brings it back below threshold.
 **Reality check:** fully native-only — this is the cleanest reuse in the
 whole wellbeing subsystem, since it needs zero new detection mechanism at
 all: Phase 2's `relayWeaponFire`/`IsPedShooting` relay (already confirmed
-real, `phase2_notes/water_gunpowder_natives.md`) is queried, not
+real, `phase2_notes/RESEARCH_ARCHIVE.md#tracking`) is queried, not
 re-implemented. No new asset.
 
 **Server-authority points — the one wellbeing stat with a *real*, not just
@@ -813,7 +813,7 @@ files must add.
 - `IsHesitating(citizenid) -> boolean` [server resource-global,
   `server/wellbeing.lua`] — the new cross-file accessor described above,
   called from `server/combat.lua` once Phase 3 exists. Naming follows
-  `phase2_notes/EXPORT_TRACKING.md`'s documented `PascalCase` verb-first
+  `README.md#public-api-exports`'s documented `PascalCase` verb-first
   convention for resource-globals (`IsX` boolean-check form, matching
   `IsOwnModelK9`/`IsConfiguredK9Model`).
 - Included in the same `wellbeingUpdate` push as Fatigue/Mood.
@@ -1002,7 +1002,7 @@ subject to `Config.K9Medkit.cooldownMs` per target.
 
 **Reality check:** the *restoration* mechanism itself is native/export-level
 achievable, but with an honest confidence caveat this document flags rather
-than glosses over, following the same rigor `phase2_notes/phase4_hud_early_design.md`
+than glosses over, following the same rigor `phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge`
 already applied to its own uncertain stamina native: **`SetEntityHealth`
 restoring a networked ped's health from server-side script is standard,
 widely-used FiveM practice (common in existing QBCore/Qbox EMS revive
@@ -1025,20 +1025,20 @@ independently confirmed as necessary,** flagged for whoever implements this
 to verify one way or the other before committing to either approach.
 
 **Server-authority points — the item-use validation shape deliberately
-mirrors `phase2_notes/contraband_search_contract.md`'s established
+mirrors `phase2_notes/RESEARCH_ARCHIVE.md#contraband-search`'s established
 security-critical pattern, per the task's own explicit direction to treat
 this with similar rigor:**
 1. Feature-flag and eligibility check first (`Config.Features.K9Medkit`, job
    ∈ `Config.Departments` or `Config.K9Medkit.emsJobs`, or the optional
    `IsMedkitUserAuthorizedOverride` hook) — same "cheapest/most-defensive
-   checks first" ordering discipline `contraband_search_contract.md` §3
+   checks first" ordering discipline `RESEARCH_ARCHIVE.md#contraband-search` §3
    establishes.
 2. **Live proximity check, mandatory, before any state mutation** — distance
    between the using player's own live server-side position and the
    target K9's own live server-side position must be `<= Config.K9Medkit.range`
    — never a client-claimed distance or a client-claimed target identity.
    This closes the identical "map-wide oracle/effect" risk
-   `contraband_search_contract.md` §3 step 8 flags as the single most
+   `RESEARCH_ARCHIVE.md#contraband-search` §3 step 8 flags as the single most
    important ordering constraint in that document, applied here to a heal
    effect instead of an inventory read.
 3. **Target-type verification** — the resolved target must actually be a
@@ -1055,11 +1055,11 @@ this with similar rigor:**
    confirming whether items are registered as useable via a
    `data/items.lua` `client.export`/`server.export` field or a
    `CreateUseableItem`-style runtime call, before implementation, mirroring
-   `phase2_notes/contraband_search_contract.md`'s own methodology of reading
+   `phase2_notes/RESEARCH_ARCHIVE.md#contraband-search`'s own methodology of reading
    the real source rather than assuming a remembered API shape).
 5. `Config.K9Medkit.cooldownMs` per target, stamped **before** the heal
    completes (not after), same TOCTOU-safe ordering discipline
-   `contraband_search_contract.md` §4 already established for the search
+   `RESEARCH_ARCHIVE.md#contraband-search` §4 already established for the search
    cooldown.
 6. Restoration is clamped to each value's own max (`GetEntityMaxHealth`,
    `Config.Wellbeing.Injury.max`) — never allowed to overheal past 100%.
@@ -1122,7 +1122,7 @@ uncertainty this document does not resolve with false confidence**:
 family of timecycle modifiers GTA V's own base game data is understood to
 ship (the same family `SPEC.md` §7's original text gestured at without
 naming one), but — unlike `SetSeethrough`/`SetNightvision`, which
-`phase2_notes/thermal_night_vision_natives.md` and two other independent
+`phase2_notes/RESEARCH_ARCHIVE.md#vision` and two other independent
 passes all confirmed against real source/ecosystem evidence — **no
 equivalent verification pass has been done for this specific modifier name**
 in this codebase. Flagged explicitly as needing a native/asset-data
@@ -1134,7 +1134,7 @@ specific string with unearned confidence.
 **Server-authority points:** this is a purely cosmetic, self-applied
 client-side effect on the K9's own screen — the same bounded trust category
 as vision toggles (§11.6) and the HUD's own self-vitals display
-(`phase2_notes/phase4_hud_bridge_design.md` §6's reasoning: no gameplay
+(`phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge` §6's reasoning: no gameplay
 advantage from faking or ignoring a self-only cosmetic). **The one real
 server-authority point is upstream of this feature entirely**: the
 `alertTier` value this feature keys off is already 100% server-computed by
@@ -1201,7 +1201,7 @@ bystander would ever need to see this).
   build the composer as shared infrastructure rather than a single-purpose
   helper scoped only to their own feature.
 - **Every ox_inventory export/registration pattern this document relies on
-  beyond what `phase2_notes/contraband_search_contract.md` already
+  beyond what `phase2_notes/RESEARCH_ARCHIVE.md#contraband-search` already
   confirmed** (dynamic per-player `RegisterStash`, useable-item registration,
   any item-whitelist enforcement hook) **is flagged as unverified against
   real ox_inventory source or a live install this session** — recommend a
@@ -1230,7 +1230,7 @@ bystander would ever need to see this).
    `PHASE3_SPEC.md` §12.0 items 1–3 carry for their own "decided, sign-off
    still needed" items.
 2. **XP scoping: per-citizenid or per-(citizenid, job)?** — genuinely open,
-   `phase2_notes/phase4_xp_schema_notes.md` §6 item 1, blocks
+   `phase2_notes/RESEARCH_ARCHIVE.md#xp-schema` §6 item 1, blocks
    `server/progression.lua`'s schema.
 3. **`K9Inventory.accessScope`: department-shared or owner-only?** — genuinely
    open, §13.4.2 item 1, blocks the `RegisterStash` `owner`/`groups`
@@ -1247,7 +1247,7 @@ bystander would ever need to see this).
 7. **ox_inventory export/registration signatures** for dynamic per-player
    stashes and useable items — genuinely open, needs a verification pass
    against real source, same methodology as
-   `phase2_notes/contraband_search_contract.md`.
+   `phase2_notes/RESEARCH_ARCHIVE.md#contraband-search`.
 8. **Every numeric placeholder in §13.2** needs a config-validator/
    economy-balance-agent pass before any of the nine `Config.Features` flags
    in this document's scope defaults to `true` on a live server — unchanged

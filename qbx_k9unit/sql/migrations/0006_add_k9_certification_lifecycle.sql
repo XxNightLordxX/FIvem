@@ -124,6 +124,54 @@
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
+-- Step 0: ORDER-PROTECTION GUARD (db-schema foolproofing pass). Steps 1-4
+-- below are ALTER TABLE `k9_certifications`. If that table has never been
+-- created on this database, MySQL/MariaDB's raw error is a cryptic
+-- `ERROR 1146 (42S02): Table 'yourdb.k9_certifications' doesn't exist`.
+-- This guard replaces that with one plain-English refusal instead -- a
+-- full-detail SELECT for GUI tools, plus a short SIGNAL (capped at 128
+-- characters by MySQL/MariaDB) so the plain `mysql` CLI also stops with a
+-- readable message.
+--
+-- CORRECTED (verified by execution, not assumed -- an earlier revision of
+-- this comment claimed Step 5, CREATE TABLE k9_certification_specializations,
+-- "is NOT blocked by this refusal" because it has no column-level
+-- dependency on k9_certifications. That is true of the STATEMENT itself,
+-- but not of what actually happens when this file is run the documented
+-- way: through the plain `mysql` CLI without `--force` (this resource's
+-- own stated install method, see README.md), which aborts the REST OF THE
+-- SCRIPT on the first statement error -- including this SIGNAL. Confirmed
+-- live: running this file against a database with no k9_certifications
+-- table leaves ZERO tables behind afterward, not a lone
+-- k9_certification_specializations. So: THIS MIGRATION REFUSES AS ONE
+-- UNIT when k9_certifications is missing, Step 5 included, under this
+-- resource's own documented invocation method -- which is the right
+-- contract anyway ("the whole migration refuses together" is easier to
+-- reason about than "some of it silently lands"), not merely an accepted
+-- side effect.
+--
+-- Same drop-before-and-after pattern as every other procedure in this
+-- file, so re-running this file after a refusal is safe.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0006_require_base_table`;
+DELIMITER $$
+CREATE PROCEDURE `qbx_k9unit_migration_0006_require_base_table`()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'k9_certifications'
+    ) THEN
+        SELECT 'STOPPED - WRONG ORDER (whole file, including Step 5)' AS status,
+               'Table k9_certifications does not exist in this database. Steps 1-4 of this migration ALTER that table, so it must exist first -- run sql/install.sql before this file. This refusal (via SIGNAL) also stops Step 5 (CREATE TABLE k9_certification_specializations) from running when this file is executed the documented way, through the plain mysql CLI, because that CLI aborts the rest of the script on the first error. Nothing has been changed by this migration.' AS detail;
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'qbx_k9unit 0006 stopped: k9_certifications missing. See detail above. Run install.sql first.';
+    END IF;
+END$$
+DELIMITER ;
+CALL `qbx_k9unit_migration_0006_require_base_table`();
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0006_require_base_table`;
+
+
+-- ---------------------------------------------------------------------
 -- Step 1: add `tier` if missing.
 -- ---------------------------------------------------------------------
 DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0006_add_tier_column`;

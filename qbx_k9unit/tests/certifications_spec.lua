@@ -92,12 +92,35 @@ end
 -- never leak between unrelated test cases.
 -- ----------------------------------------------------------------------
 
---- @param opts table? -- { includePartnershipHook: boolean (default true), departments: table (default 2-dept Config.Departments), allowSelfCert: boolean (default true), proximityMeters: number (default 5.0) }
+--- @param opts table? -- { includePartnershipHook: boolean (default true), departments: table (default 2-dept Config.Departments), allowSelfCert: boolean (default true), proximityMeters: number (default 5.0), features: table? (Config.Features -- default nil, matching every pre-existing test's shipped-default posture), expiryDays/expiryWarningDays/expiryCheckIntervalMs: number?, k9Specializations: table? }
 local function newFixture(opts)
     opts = opts or {}
 
-    local state = { now = 1000000 }
+    local state = { now = 1000000, nowUnix = 1700000000 }
     local function GetGameTimer() return state.now end
+    -- CERTIFICATION DEPTH (this pass): a SEPARATE fake clock from
+    -- GetGameTimer's `state.now` (ms-since-resource-start) -- os.time()
+    -- models real wall-clock epoch seconds, a genuinely different axis
+    -- this file's own EXPIRY design deliberately keeps as the ONLY
+    -- Lua-side wall-clock read (see certifications.lua's own NowUnix doc
+    -- comment). Overridable per test via advanceUnixTime below.
+    local osStub = { time = function() return state.nowUnix end }
+
+    -- CERTIFICATION DEPTH (this pass): GetPlayers() backs
+    -- TickCertificationExpiryWarnings' sweep loop -- reflects whichever
+    -- sources are CURRENTLY registered (registerPlayer/disconnectPlayer),
+    -- exactly like the real native. Returns STRING ids, matching FiveM's
+    -- own documented GetPlayers() contract (server/main.lua's own
+    -- onResourceStart backfill loop already assumes/tonumber()s this same
+    -- shape).
+    local playersBySourceRef -- forward-declared; assigned once playersBySource itself exists below
+    local function GetPlayers()
+        local out = {}
+        for src in pairs(playersBySourceRef) do
+            out[#out + 1] = tostring(src)
+        end
+        return out
+    end
 
     local notifyLog = {} -- { {source=, message=, kind=}, ... }
     local function NotifyPlayer(source, message, kind)
@@ -115,6 +138,7 @@ local function newFixture(opts)
 
     local playersBySource = {}
     local playersByCitizenId = {}
+    playersBySourceRef = playersBySource
 
     --- @param source number
     --- @param citizenid string
@@ -218,8 +242,43 @@ local function newFixture(opts)
         },
         AllowSelfCertification = opts.allowSelfCert,
         CertifyProximityMeters = opts.proximityMeters or 5.0,
+        -- K9 role/model decoupling (coder-architect, server/appearance.lua,
+        -- landed concurrently with this pass): GrantCertification's own
+        -- §4.2.5 model check now only runs when
+        -- Config.K9Appearance.requireK9ModelForRole is explicitly true --
+        -- absent here by default so most tests match this file's own
+        -- pre-decoupling shape (Config.Peds/model-hash tests below opt
+        -- in explicitly via opts.k9Appearance where the model check itself
+        -- is under test).
+        K9Appearance = opts.k9Appearance,
+        -- CERTIFICATION DEPTH (this pass): Features/expiry knobs default to
+        -- ABSENT (nil), matching every pre-existing test's shipped-default
+        -- posture (the feature is off until a test explicitly opts in via
+        -- opts.features) -- see this fixture's own header for the full
+        -- opts shape.
+        Features = opts.features,
+        CertificationExpiryDays = opts.expiryDays,
+        CertificationExpiryWarningDays = opts.expiryWarningDays,
+        CertificationExpiryCheckIntervalMs = opts.expiryCheckIntervalMs,
+        K9Specializations = opts.k9Specializations or {
+            narcotics = { label = 'Narcotics detection' },
+            explosives = { label = 'Explosives detection' },
+        },
     }
     if Config.AllowSelfCertification == nil then Config.AllowSelfCertification = true end
+
+    -- CERTIFICATION DEPTH (this pass): the sweep thread's own
+    -- CreateThread(...) call happens at THIS FILE'S OWN LOAD TIME (gated
+    -- on Config.Features.CertificationExpiry), so the thread runner and
+    -- CapturingWait must both be wired into `overrides` BEFORE
+    -- Sandbox.loadInto below -- mirrors tests/tenure_spec.lua's own
+    -- identical setup for server/tenure.lua's tick loop.
+    local threadRunner = Sandbox.newThreadRunner()
+    local waitCalls = {}
+    local function CapturingWait(ms)
+        waitCalls[#waitCalls + 1] = ms
+        return threadRunner.Wait(ms)
+    end
 
     local overrides = {
         Config = Config,
@@ -239,6 +298,10 @@ local function newFixture(opts)
         print = printStub,
         ForceDetachLeashForSource = function(src, reason) leashDetachCalls[#leashDetachCalls + 1] = { src, reason } end,
         ForceDetachOfficerLeashForSource = function(src, reason) officerLeashDetachCalls[#officerLeashDetachCalls + 1] = { src, reason } end,
+        os = osStub,
+        GetPlayers = GetPlayers,
+        CreateThread = threadRunner.CreateThread,
+        Wait = CapturingWait,
     }
     -- ForceBreakPartnershipForCitizenId is runtime-existence-guarded
     -- (`type(...) == 'function'`) at every call site in the production file
@@ -275,6 +338,12 @@ local function newFixture(opts)
         printLog = printLog,
         setSource = function(src) env.source = src end,
         advanceTime = function(ms) state.now = state.now + ms end,
+        -- CERTIFICATION DEPTH (this pass): advances the SEPARATE os.time()
+        -- fake clock (real wall-clock seconds), independent of advanceTime
+        -- above (GetGameTimer ms).
+        advanceUnixTime = function(seconds) state.nowUnix = state.nowUnix + seconds end,
+        threadRunner = threadRunner,
+        waitCalls = waitCalls,
     }
 end
 
@@ -505,8 +574,11 @@ t.test('GrantCertification: proximity is skipped for self-certification (nothing
     t.isTrue(anyNotify(f, 1, Sandbox.locale('certifications.grant_success_target'), 'success'))
 end)
 
-t.test('GrantCertification: a target whose LIVE ped model is not a configured K9 model is rejected, even if job/proximity pass', function()
-    local f = newFixture()
+t.test('GrantCertification: a target whose LIVE ped model is not a configured K9 model is rejected, even if job/proximity pass (Config.K9Appearance.requireK9ModelForRole opted in)', function()
+    -- K9 role/model decoupling (coder-architect, server/appearance.lua):
+    -- this check now only runs when explicitly opted in -- see this
+    -- fixture's own Config.K9Appearance comment above.
+    local f = newFixture({ k9Appearance = { requireK9ModelForRole = true } })
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
     f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
     f.setPed(1, 100, vec3(0, 0, 0))
@@ -1209,6 +1281,834 @@ t.test('RefreshCertificationCache: a throwing MySQL.scalar.await fails CLOSED (a
     local active = f.env.RefreshCertificationCache('CIT90', 'police')
     t.isFalse(active, 'the return value itself must report the fail-closed result')
     t.isFalse(f.env.HasK9Access(90), 'an unreadable cert row must never be treated as an active grant')
+end)
+
+-- ======================================================================
+-- CERTIFICATION DEPTH (this pass) -- Part A §2/§5/§9, Part B §11.
+-- ======================================================================
+
+-- ----------------------------------------------------------------------
+-- MIGRATION PATH: RefreshCertificationCache's tier/expiry metadata read
+-- must degrade cleanly on a pre-migration-0006 database (columns don't
+-- exist yet -- MySQL.single.await throws), and must correctly parse a
+-- real metadata row once they do exist.
+-- ----------------------------------------------------------------------
+
+t.test('RefreshCertificationCache: MIGRATION PATH -- a throwing tier/expiry metadata query (pre-0006 schema) still succeeds active=true, defaults to tier=certified with no expiry', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end -- existence check: active row confirmed
+    f.mysql.single.await = function() error("unknown column 'tier' in 'field list' (simulated pre-migration-0006 schema)") end
+
+    local active = f.env.RefreshCertificationCache('CIT1', 'police')
+
+    t.isTrue(active, 'the base existence check must still succeed independent of the metadata query')
+    t.isTrue(f.env.HasK9Access(1), 'access must not be affected by a metadata-read failure')
+    t.equals(f.env.GetCertificationTier('CIT1', 'police'), 'certified', 'an unreadable tier must default to certified, never a less-privileged tier')
+end)
+
+t.test('RefreshCertificationCache: a real tier/expiry metadata row is parsed correctly into the cache', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'senior', expires_at_unix = 1700086400 } end -- 1 day after fixture's default nowUnix (1700000000)
+
+    f.env.RefreshCertificationCache('CIT1', 'police')
+
+    t.equals(f.env.GetCertificationTier('CIT1', 'police'), 'senior')
+    t.isTrue(f.env.HasK9Access(1), 'not yet expired -- 1700086400 > nowUnix 1700000000')
+end)
+
+t.test('RefreshCertificationCache: an unrecognized tier value from the DB (data corruption) defaults to certified rather than an unranked string', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'not-a-real-tier', expires_at_unix = nil } end
+
+    f.env.RefreshCertificationCache('CIT1', 'police')
+
+    t.equals(f.env.GetCertificationTier('CIT1', 'police'), 'certified')
+end)
+
+-- ----------------------------------------------------------------------
+-- EXPIRY BOUNDARIES
+-- ----------------------------------------------------------------------
+
+t.test('HasK9Access: EXPIRY BOUNDARY -- expiresAtUnix one second in the FUTURE still grants access', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000001 } end -- nowUnix + 1
+    f.env.RefreshCertificationCache('CIT1', 'police')
+    t.isTrue(f.env.HasK9Access(1))
+end)
+
+t.test('HasK9Access: EXPIRY BOUNDARY -- expiresAtUnix EXACTLY equal to now is treated as expired (>=, not >)', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000000 } end -- == nowUnix exactly
+    f.env.RefreshCertificationCache('CIT1', 'police')
+    t.isFalse(f.env.HasK9Access(1), 'the exact expiry second must already be treated as expired, not one grace second later')
+end)
+
+t.test('HasK9Access: EXPIRY BOUNDARY -- expiresAtUnix one second in the PAST is expired', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1699999999 } end -- nowUnix - 1
+    f.env.RefreshCertificationCache('CIT1', 'police')
+    t.isFalse(f.env.HasK9Access(1))
+end)
+
+t.test('HasK9Access: an expired cert falls through to the autoAccessGrade bypass rather than hard-failing', function()
+    local f = newFixture({ departments = {
+        police = { label = 'Police', certifierGrade = 4, autoAccessGrade = 10 },
+    } })
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 10 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1699999999 } end -- already expired
+    f.env.RefreshCertificationCache('CIT1', 'police')
+    t.isTrue(f.env.HasK9Access(1), 'grade 10 >= autoAccessGrade 10 must still bypass, independent of the expired cert')
+end)
+
+t.test('HasK9Access: EXPIRY -- a missing os.time() (environment anomaly) fails TOWARD availability, never toward lockout', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1699999999 } end -- would be expired, IF os.time() were readable
+    f.env.RefreshCertificationCache('CIT1', 'police')
+    t.isFalse(f.env.HasK9Access(1), 'sanity: genuinely expired under the real os stub')
+
+    -- Simulate os.time being entirely unavailable and re-refresh -- IsExpiredUnix
+    -- must degrade to "not expired" rather than erroring or defaulting to locked-out.
+    f.env.os = nil
+    f.env.RefreshCertificationCache('CIT1', 'police')
+    t.isTrue(f.env.HasK9Access(1), 'a missing os.time must never be indistinguishable from "definitely expired"')
+end)
+
+-- ----------------------------------------------------------------------
+-- READ-ONLY ACCESSORS: GetCertificationTier / MeetsTierRequirement /
+-- HasSpecialization
+-- ----------------------------------------------------------------------
+
+t.test('GetCertificationTier: nil for a citizenid with no active/matching cert', function()
+    local f = newFixture()
+    t.isNil(f.env.GetCertificationTier('NOBODY', 'police'))
+end)
+
+t.test('MeetsTierRequirement: senior meets a certified requirement; trainee does not; an unrecognized minTier fails closed', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'senior' } end
+    f.env.RefreshCertificationCache('CIT1', 'police')
+
+    t.isTrue(f.env.MeetsTierRequirement('CIT1', 'police', 'certified'))
+    t.isTrue(f.env.MeetsTierRequirement('CIT1', 'police', 'senior'))
+    t.isFalse(f.env.MeetsTierRequirement('CIT1', 'police', 'not-a-real-tier'), 'an unrecognized minTier must never be treated as a low bar to clear')
+
+    f.registerPlayer(2, 'CIT2', { name = 'police', grade = { level = 1 } })
+    f.mysql.single.await = function() return { tier = 'trainee' } end
+    f.env.RefreshCertificationCache('CIT2', 'police')
+    t.isFalse(f.env.MeetsTierRequirement('CIT2', 'police', 'certified'))
+end)
+
+t.test('HasSpecialization: true only when BOTH the base cert is active/unexpired AND the specialization is active', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.query.await = function() return { { specialization = 'narcotics' } } end
+    f.env.RefreshCertificationCache('CIT1', 'police')
+
+    t.isTrue(f.env.HasSpecialization('CIT1', 'police', 'narcotics'))
+    t.isFalse(f.env.HasSpecialization('CIT1', 'police', 'explosives'), 'a specialization never granted must read false')
+end)
+
+t.test('HasSpecialization: an EXPIRED base cert soft-disables its specializations too, without any DB write', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1699999999 } end -- expired
+    f.mysql.query.await = function() return { { specialization = 'narcotics' } } end
+    f.env.RefreshCertificationCache('CIT1', 'police')
+
+    t.isFalse(f.env.HasK9Access(1), 'sanity: base cert is expired')
+    t.isFalse(f.env.HasSpecialization('CIT1', 'police', 'narcotics'), 'the specialization row is still active in the DB but must read as unusable while the base cert is expired')
+end)
+
+-- ----------------------------------------------------------------------
+-- SetCertificationTier
+-- ----------------------------------------------------------------------
+
+t.test('SetCertificationTier: FAIL-CLOSED -- a granter who is not certifier-eligible is rejected', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 1 } }) -- below certifierGrade 4, not boss
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setSource(1)
+    f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_certify'), 'error'))
+end)
+
+t.test('SetCertificationTier: FAIL-CLOSED -- an invalid tier name is rejected outright, before any MySQL call', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 100, vec3(0, 0, 0))
+    f.setPed(2, 200, vec3(0, 0, 0))
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+    f.setSource(1)
+    f.events['qbx_k9unit:server:setCertificationTier'](2, 'not-a-real-tier')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.invalid_tier'), 'error'))
+    t.isFalse(updateCalled)
+end)
+
+t.test('SetCertificationTier: FAIL-CLOSED -- self-action is rejected when Config.AllowSelfCertification is false', function()
+    local f = newFixture({ allowSelfCert = false })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+    f.events['qbx_k9unit:server:setCertificationTier'](1, 'senior')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.self_certification_disabled'), 'error'))
+end)
+
+t.test('SetCertificationTier: FAIL-CLOSED -- an offline target is rejected', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+    f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.action_target_must_be_online'), 'error'))
+end)
+
+t.test('SetCertificationTier: FAIL-CLOSED -- a target beyond Config.CertifyProximityMeters is rejected', function()
+    local f = newFixture({ proximityMeters = 5.0 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(2, 1020, vec3(50, 0, 0))
+    f.setSource(1)
+    f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.action_target_too_far'), 'error'))
+end)
+
+t.test('SetCertificationTier: FAIL-CLOSED -- a target with no active certification for their current job is rejected', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } }) -- never certified
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(2, 1020, vec3(0, 0, 0))
+    f.setSource(1)
+    f.events['qbx_k9unit:server:setCertificationTier'](2, 'senior')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_not_actively_certified'), 'error'))
+end)
+
+t.test('SetCertificationTier: already holding the requested tier is a distinguishable no-op', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(2, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified' } end
+    f.env.RefreshCertificationCache('T1', 'police')
+    f.setSource(1)
+    f.events['qbx_k9unit:server:setCertificationTier'](2, 'certified')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.tier_already_set'), 'inform'))
+end)
+
+t.test('SetCertificationTier: TIER TRANSITION -- full success path promotes certified -> senior, updates the cache, notifies both parties, fires the outbound event', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified' } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+    t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'certified', 'sanity')
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.single.await = function() return { tier = 'senior' } end -- post-update re-cache reflects the new tier
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:setCertificationTier'](20, 'senior')
+
+    t.equals(updateParams[1], 'senior')
+    t.equals(updateParams[2], 'TARGET')
+    t.equals(updateParams[3], 'police')
+    t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'senior', 'the cache must reflect the promotion immediately')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.tier_change_success_granter', 'senior'), 'success'))
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.tier_change_success_target', 'senior'), 'success'))
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:certificationTierChanged' and ev[2] == 'TARGET' and ev[3] == 'police' and ev[4] == 'certified' and ev[5] == 'senior' and ev[6] == 'GRANTER' then fired = true end
+    end
+    t.isTrue(fired)
+end)
+
+t.test('SetCertificationTier: TIER TRANSITION -- demotion certified -> trainee also succeeds (a non-punitive refresher, not a revoke)', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified' } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.mysql.single.await = function() return { tier = 'trainee' } end
+    f.setSource(10)
+    f.events['qbx_k9unit:server:setCertificationTier'](20, 'trainee')
+
+    t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'trainee')
+    t.isTrue(f.env.HasK9Access(20), 'a trainee still holds BASE K9 access -- tiering only gates higher capability, never base access')
+end)
+
+t.test('SetCertificationTier: a thrown UPDATE reports tier_change_error, never a silent success', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified' } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.mysql.update.await = function() error('simulated connection drop') end
+    f.setSource(10)
+    local ok = pcall(f.events['qbx_k9unit:server:setCertificationTier'], 20, 'senior')
+    t.isTrue(ok, 'must never propagate a thrown DB error')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.tier_change_error'), 'error'))
+    t.equals(f.env.GetCertificationTier('TARGET', 'police'), 'certified', 'the cache must be untouched by a failed update')
+end)
+
+t.test('/k9settier command: a non-numeric args[1] is rejected with the usage message', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.commands['k9settier'].fn(1, { 'not-a-number', 'senior' })
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_settier'), 'error'))
+end)
+
+-- ----------------------------------------------------------------------
+-- RenewCertification
+-- ----------------------------------------------------------------------
+
+t.test('RenewCertification: FAIL-CLOSED -- disabled by default (Config.Features.CertificationExpiry absent) is rejected outright', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setSource(1)
+    f.events['qbx_k9unit:server:renewCertification'](2)
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.renew_feature_disabled'), 'error'))
+end)
+
+t.test('RenewCertification: FAIL-CLOSED -- a granter who is not certifier-eligible is rejected even with the feature enabled', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 1 } })
+    f.setSource(1)
+    f.events['qbx_k9unit:server:renewCertification'](2)
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_certify'), 'error'))
+end)
+
+t.test('RenewCertification: FAIL-CLOSED -- a target with no active certification is rejected', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 1010, vec3(0, 0, 0))
+    f.setPed(2, 1020, vec3(0, 0, 0))
+    f.setSource(1)
+    f.events['qbx_k9unit:server:renewCertification'](2)
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.target_not_actively_certified'), 'error'))
+end)
+
+t.test('RenewCertification: EXPIRY -- full success path extends expires_at via DATE_ADD(NOW(), INTERVAL ? DAY), refreshes the cache, clears the warned/lapsed flags, fires the outbound event', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000100 } end -- near-expiry
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1707776000 } end -- ~90 days out, post-renewal
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:renewCertification'](20)
+
+    t.equals(updateParams[1], 90)
+    t.equals(updateParams[2], 'TARGET')
+    t.equals(updateParams[3], 'police')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.renew_success_granter'), 'success'))
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.renew_success_target'), 'success'))
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:certificationRenewed' and ev[2] == 'TARGET' and ev[3] == 'police' and ev[4] == 1707776000 and ev[5] == 'GRANTER' then fired = true end
+    end
+    t.isTrue(fired)
+end)
+
+t.test('RenewCertification: a thrown UPDATE reports renew_error, never a silent success', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified' } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.mysql.update.await = function() error('simulated connection drop') end
+    f.setSource(10)
+    local ok = pcall(f.events['qbx_k9unit:server:renewCertification'], 20)
+    t.isTrue(ok)
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.renew_error'), 'error'))
+end)
+
+t.test('/k9recertify command: a non-numeric args[1] is rejected with the usage message', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.commands['k9recertify'].fn(1, {})
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_recertify'), 'error'))
+end)
+
+-- ----------------------------------------------------------------------
+-- GrantSpecialization / RevokeSpecialization / RevokeSpecializationOffline
+-- ----------------------------------------------------------------------
+
+t.test('GrantSpecialization: FAIL-CLOSED -- an unconfigured specialization key is rejected outright', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 100, vec3(0, 0, 0))
+    f.setPed(2, 200, vec3(0, 0, 0))
+    f.setSource(1)
+    f.events['qbx_k9unit:server:grantSpecialization'](2, 'not-a-real-specialization')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.invalid_specialization'), 'error'))
+end)
+
+t.test('GrantSpecialization: FAIL-CLOSED -- a target with no active base certification is rejected', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setPed(1, 100, vec3(0, 0, 0))
+    f.setPed(2, 200, vec3(0, 0, 0))
+    f.setSource(1)
+    f.events['qbx_k9unit:server:grantSpecialization'](2, 'narcotics')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.specialization_requires_active_cert'), 'error'))
+end)
+
+t.test('GrantSpecialization: full success path -- INSERT fires, cache reflects the grant, both parties notified, outbound event fired', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end -- active base cert
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        return nil -- pre-check: no existing active specialization row
+    end
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
+    f.mysql.query.await = function() return { { specialization = 'narcotics' } } end -- post-insert cache refresh
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+
+    t.equals(insertParams[1], 'TARGET')
+    t.equals(insertParams[2], 'police')
+    t.equals(insertParams[3], 'narcotics')
+    t.equals(insertParams[4], 'GRANTER')
+    t.isTrue(f.env.HasSpecialization('TARGET', 'police', 'narcotics'))
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_grant_success_granter', 'narcotics'), 'success'))
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.specialization_grant_success_target', 'narcotics'), 'success'))
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:specializationGranted' and ev[2] == 'TARGET' and ev[3] == 'police' and ev[4] == 'narcotics' and ev[5] == 'GRANTER' then fired = true end
+    end
+    t.isTrue(fired)
+end)
+
+t.test('GrantSpecialization: an already-held specialization (existingId pre-check) is rejected as a no-op, never reaches the INSERT', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.mysql.scalar.await = function() return 99 end -- existing active specialization row
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_already_granted'), 'inform'))
+    t.isFalse(insertCalled)
+end)
+
+t.test('GrantSpecialization: a duplicate-key error thrown by the INSERT is treated as the same "already granted" no-op', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.mysql.scalar.await = function() return nil end
+    f.mysql.insert.await = function() error({ errno = 1062, message = 'Duplicate entry' }) end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_already_granted'), 'inform'))
+end)
+
+t.test('/k9specialize command: a non-numeric args[1] is rejected with the usage message', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.commands['k9specialize'].fn(1, { 'not-a-number', 'narcotics' })
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_specialize'), 'error'))
+end)
+
+t.test('RevokeSpecialization: FAIL-CLOSED -- a granter who is not certifier-eligible is rejected', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', grade = { level = 1 } })
+    f.registerPlayer(2, 'T1', { name = 'police', grade = { level = 1 } })
+    f.setSource(1)
+    f.events['qbx_k9unit:server:revokeSpecialization'](2, 'narcotics')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.not_authorized_to_revoke'), 'error'))
+end)
+
+t.test('RevokeSpecialization: an offline target is refused with a pointer to the offline command', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.setSource(1)
+    f.events['qbx_k9unit:server:revokeSpecialization'](2, 'narcotics')
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.specialization_target_offline_use_offline_command'), 'error'))
+end)
+
+t.test('RevokeSpecialization: full online success path -- UPDATE fires, cache refreshed, outbound event reason is manual', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.query.await = function() return {} end -- post-revoke cache refresh: no active specializations left
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:revokeSpecialization'](20, 'narcotics')
+
+    t.equals(updateParams[1], 'REVOKER')
+    t.equals(updateParams[2], 'TARGET')
+    t.equals(updateParams[3], 'police')
+    t.equals(updateParams[4], 'narcotics')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_revoke_success_granter', 'narcotics'), 'success'))
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.specialization_revoke_success_target', 'narcotics'), 'error'))
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:specializationRevoked' and ev[4] == 'narcotics' and ev[5] == 'manual' then fired = true end
+    end
+    t.isTrue(fired)
+end)
+
+t.test('RevokeSpecialization: a specialization not currently held is a distinguishable no-op', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.update.await = function() return 0 end
+    f.setSource(10)
+    f.events['qbx_k9unit:server:revokeSpecialization'](20, 'narcotics')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_not_granted'), 'inform'))
+end)
+
+t.test('RevokeSpecializationOffline: full offline success path -- UPDATE fires, outbound event reason is manual_offline', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    -- TARGET intentionally never registered -- genuinely offline.
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.query.await = function() return {} end
+
+    f.commands['k9unspecializeoffline'].fn(10, { 'TARGET', 'police', 'narcotics' })
+
+    t.equals(updateParams[1], 'REVOKER')
+    t.equals(updateParams[2], 'TARGET')
+    t.equals(updateParams[3], 'police')
+    t.equals(updateParams[4], 'narcotics')
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_revoke_success_granter', 'narcotics'), 'success'))
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:specializationRevoked' and ev[5] == 'manual_offline' then fired = true end
+    end
+    t.isTrue(fired)
+end)
+
+t.test('RevokeSpecializationOffline: SECURITY -- refuses outright when the "offline" citizenid is actually online right now', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'ACTUALLY-ONLINE', { name = 'police', grade = { level = 1 } })
+    local updateCalled = false
+    f.mysql.update.await = function() updateCalled = true; return 1 end
+    f.commands['k9unspecializeoffline'].fn(10, { 'ACTUALLY-ONLINE', 'police', 'narcotics' })
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_target_online_use_online_command', 20), 'error'))
+    t.isFalse(updateCalled)
+end)
+
+t.test('RevokeSpecializationOffline: a typo\'d/unconfigured department is rejected outright', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.commands['k9unspecializeoffline'].fn(10, { 'SOMEONE', 'not-a-real-department', 'narcotics' })
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.invalid_department', 'not-a-real-department'), 'error'))
+end)
+
+t.test('/k9unspecialize command: a non-numeric args[1] is rejected with the usage message', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
+    f.commands['k9unspecialize'].fn(1, { 'not-a-number', 'narcotics' })
+    t.isTrue(notifiedExactly(f, 1, Sandbox.locale('certifications.usage_unspecialize'), 'error'))
+end)
+
+t.test('/k9unspecializeoffline command: a missing specialization argument is rejected with the usage message', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.commands['k9unspecializeoffline'].fn(10, { 'SOMEONE', 'police' }) -- args[3] missing
+    t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.usage_unspecialize_offline'), 'error'))
+end)
+
+-- ----------------------------------------------------------------------
+-- SPECIALIZATION CASCADE: a specialization must not outlive the base
+-- certification it requires.
+-- ----------------------------------------------------------------------
+
+t.test('RevokeCertification: CASCADE -- revoking the base certification also revokes every active specialization for that (citizenid, job)', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.query.await = function() return { { specialization = 'narcotics' } } end
+    f.env.RefreshCertificationCache('REVOKEE', 'police')
+    t.isTrue(f.env.HasSpecialization('REVOKEE', 'police', 'narcotics'), 'sanity: specialization active before the revoke')
+
+    local specUpdateParams
+    f.mysql.update.await = function(sql, params)
+        if sql:find('k9_certification_specializations', 1, true) then
+            specUpdateParams = params
+        end
+        return 1
+    end
+    f.mysql.scalar.await = function() return nil end -- post-revoke base-cert re-cache: no active row
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:revokeHandler'](20)
+
+    -- The cascade UPDATE is a BULK revoke over every active row for
+    -- (citizenid, job) -- no `specialization = ?` filter, only 3 bound
+    -- params -- unlike a single-specialization RevokeSpecialization call.
+    t.isNotNil(specUpdateParams, 'the specialization cascade UPDATE must have fired')
+    t.equals(specUpdateParams[1], 'REVOKER')
+    t.equals(specUpdateParams[2], 'REVOKEE')
+    t.equals(specUpdateParams[3], 'police')
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:specializationRevoked' and ev[2] == 'REVOKEE' and ev[3] == 'police' and ev[4] == 'narcotics' and ev[5] == 'certification_revoked' then fired = true end
+    end
+    t.isTrue(fired)
+end)
+
+t.test('RevokeCertificationOffline: CASCADE -- revoking an offline citizenid\'s base certification also revokes their active specializations (DB-authoritative, not cache-dependent)', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    -- REVOKEE never registered -- genuinely offline, so its Specializations
+    -- cache entry was never populated either -- proves the cascade reads the
+    -- DB directly rather than relying on the in-memory cache (see
+    -- RevokeAllSpecializationsForCitizenJob's own doc comment).
+    local specUpdateParams
+    f.mysql.update.await = function(sql, params)
+        if sql:find('k9_certification_specializations', 1, true) then
+            specUpdateParams = params
+        end
+        return 1
+    end
+    f.mysql.query.await = function() return { { specialization = 'explosives' } } end
+    f.mysql.scalar.await = function() return nil end
+
+    f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
+
+    t.isNotNil(specUpdateParams, 'the specialization cascade UPDATE must have fired for the offline path too')
+    t.equals(specUpdateParams[1], 'REVOKER')
+    t.equals(specUpdateParams[2], 'REVOKEE')
+    t.equals(specUpdateParams[3], 'police')
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:specializationRevoked' and ev[4] == 'explosives' and ev[5] == 'certification_revoked' then fired = true end
+    end
+    t.isTrue(fired)
+end)
+
+t.test('OnJobUpdate: CASCADE -- a real department change also revokes every active specialization for the OLD (citizenid, job)', function()
+    local f = newFixture()
+    f.registerPlayer(40, 'CIT40', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 9 end
+    f.mysql.query.await = function() return { { specialization = 'narcotics' } } end
+    f.env.RefreshCertificationCache('CIT40', 'police')
+
+    local specUpdateParams
+    f.mysql.update.await = function(sql, params)
+        if sql:find('k9_certification_specializations', 1, true) then
+            specUpdateParams = params
+        end
+        return 1
+    end
+    f.mysql.scalar.await = function() return nil end
+
+    fireJobUpdate(f, 40, { name = 'sheriff', grade = { level = 1 } })
+
+    t.isNotNil(specUpdateParams)
+    t.equals(specUpdateParams[1], 'system:job_change')
+    t.equals(specUpdateParams[2], 'CIT40')
+    t.equals(specUpdateParams[3], 'police')
+end)
+
+t.test('RevokeAllSpecializationsForCitizenJob: no active specializations means no UPDATE at all -- common case is a cheap no-op', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('REVOKEE', 'police') -- no specializations seeded -- query.await defaults to {}
+
+    local specUpdateCalled = false
+    f.mysql.update.await = function(sql, params)
+        if sql:find('k9_certification_specializations', 1, true) then specUpdateCalled = true end
+        return 1
+    end
+    f.mysql.scalar.await = function() return nil end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:revokeHandler'](20)
+
+    t.isFalse(specUpdateCalled, 'no specialization UPDATE should run when the pre-read finds nothing active')
+end)
+
+-- ----------------------------------------------------------------------
+-- EXPIRY WARNING SWEEP
+-- ----------------------------------------------------------------------
+
+t.test('TickCertificationExpiryWarnings: warns an online handler once within the warning window, then never again the same session', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90, expiryWarningDays = 7 })
+    local target = f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    -- 3 days remaining (259200s) -- inside the 7-day warning window.
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1700000000 + 259200 } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    -- Prime, then run one full sweep pass (fixtures/sandbox.lua's own
+    -- newThreadRunner convention: the first step() only reaches the
+    -- initial Wait()).
+    f.threadRunner.step()
+    f.threadRunner.step()
+
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.expiry_warning', '3'), 'inform'))
+
+    local warnCountAfterFirst = 0
+    for _, e in ipairs(f.notifyLog) do
+        if e.source == 20 then warnCountAfterFirst = warnCountAfterFirst + 1 end
+    end
+
+    f.threadRunner.step() -- a second sweep pass, same session
+    local warnCountAfterSecond = 0
+    for _, e in ipairs(f.notifyLog) do
+        if e.source == 20 then warnCountAfterSecond = warnCountAfterSecond + 1 end
+    end
+    t.equals(warnCountAfterSecond, warnCountAfterFirst, 'a second sweep pass in the same session must not re-warn')
+    t.isNotNil(target) -- silence unused-var lint
+end)
+
+t.test('TickCertificationExpiryWarnings: proactively announces a JUST-LAPSED certification once, never every tick', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1699999999 } end -- already lapsed
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.threadRunner.step()
+    f.threadRunner.step()
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.expiry_lapsed_notice'), 'error'))
+
+    local lapsedCount = 0
+    for _, e in ipairs(f.notifyLog) do
+        if e.source == 20 and e.message == Sandbox.locale('certifications.expiry_lapsed_notice') then lapsedCount = lapsedCount + 1 end
+    end
+    f.threadRunner.step()
+    local lapsedCountAfter = 0
+    for _, e in ipairs(f.notifyLog) do
+        if e.source == 20 and e.message == Sandbox.locale('certifications.expiry_lapsed_notice') then lapsedCountAfter = lapsedCountAfter + 1 end
+    end
+    t.equals(lapsedCountAfter, lapsedCount, 'the lapsed notice must fire at most once per session')
+end)
+
+t.test('RenewCertification: clears the warned/lapsed session flags so a genuinely renewed handler can be warned again on its own future merits', function()
+    local f = newFixture({ features = { CertificationExpiry = true }, expiryDays = 90 })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1699999999 } end -- lapsed
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    f.threadRunner.step()
+    f.threadRunner.step()
+    t.isTrue(notifiedExactly(f, 20, Sandbox.locale('certifications.expiry_lapsed_notice'), 'error'), 'sanity: lapsed notice sent once')
+
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1707776000 } end -- renewed, far future
+    f.setSource(10)
+    f.events['qbx_k9unit:server:renewCertification'](20)
+
+    local lapsedCountAfterRenewal = 0
+    for _, e in ipairs(f.notifyLog) do
+        if e.source == 20 and e.message == Sandbox.locale('certifications.expiry_lapsed_notice') then lapsedCountAfterRenewal = lapsedCountAfterRenewal + 1 end
+    end
+
+    -- Simulate a SECOND, later lapse (e.g. the renewal's own new deadline
+    -- eventually passes too) and confirm the flag genuinely resets rather
+    -- than staying permanently silenced by the FIRST lapse this session.
+    f.mysql.single.await = function() return { tier = 'certified', expires_at_unix = 1699999999 } end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+    f.threadRunner.step()
+
+    local lapsedCountAfterSecondLapse = 0
+    for _, e in ipairs(f.notifyLog) do
+        if e.source == 20 and e.message == Sandbox.locale('certifications.expiry_lapsed_notice') then lapsedCountAfterSecondLapse = lapsedCountAfterSecondLapse + 1 end
+    end
+    t.equals(lapsedCountAfterSecondLapse, lapsedCountAfterRenewal + 1, 'a renewal must clear the one-per-session lapsed flag so a genuinely NEW lapse can be announced again')
 end)
 
 os.exit(t.summary())

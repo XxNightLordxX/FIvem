@@ -426,6 +426,10 @@ globals = {
     -- client-side answer here may make a menu option appear; the server
     -- re-checks on the action, so it must never make the action succeed.
     "IsK9Role", "IsK9RoleForPlayer",
+    -- client/pursuitsprint.lua (K9_IDEAS.md §5). Same "resource-global so
+    -- the radial and a chat command can both reach it" convention as
+    -- RequestRecall above.
+    "RequestPursuitSprint",
     -- shared/compat/core.lua -- the resource auto-detection registry.
     -- Assigned in core.lua, read by the five sibling adapter files and by
     -- any future consumer. Same "global helper, per-file private state"

@@ -633,9 +633,10 @@ end
 --- @param granterSrc number
 --- @param targetCitizenid string
 --- @param permissionKey string
+--- @param appearanceModelOverride string? -- K9 ROLE/MODEL DECOUPLING (coder-architect, server/appearance.lua): ONLY consulted when permissionKey == 'k9.access' and Config.K9Appearance.applyPedModelOnCertify is on -- the explicit ped model server/appearance.lua's ApplyK9PedRole (the tablet's direct "apply K9" action) wants applied instead of the automatic-grant default (Config.Peds[1].model). Every OTHER caller of GrantPermission simply omits this and gets the default, exactly as before this parameter existed.
 --- @return boolean ok
 --- @return string outcome -- 'ok' | 'feature_disabled' | 'denied' | 'invalid_permission' | 'invalid_target' | 'invalid_granter' | 'self_grant_blocked' | 'rate_limited' | 'already_granted' | 'db_error'
-function GrantPermission(granterSrc, targetCitizenid, permissionKey)
+function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceModelOverride)
     if not (Config.Features and Config.Features.PermissionGrants == true) then
         return false, 'feature_disabled'
     end
@@ -745,6 +746,20 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey)
         NotifyPlayer(onlineTargetSrc, locale('permissions.grant_notify_target', Config.Permissions[permissionKey].label), 'success')
     end
 
+    -- K9 ROLE/MODEL DECOUPLING (coder-architect, server/appearance.lua) --
+    -- config.lua's own Config.K9Appearance header is explicit that granting
+    -- 'k9.access' is one of the two actions that "actually turns their
+    -- character into the ped" when applyPedModelOnCertify is on. Guarded
+    -- with `type(...) == 'function'` (this file loads before
+    -- server/appearance.lua in fxmanifest.lua's server_scripts, per that
+    -- file's own requested placement -- see its header -- so this is a
+    -- genuine soft dependency, not a load-order assumption: by the time a
+    -- real grant can fire, every server_scripts file has already loaded).
+    if permissionKey == 'k9.access' and Config.K9Appearance and Config.K9Appearance.applyPedModelOnCertify
+        and type(ApplyK9AppearanceOnGrant) == 'function' then
+        ApplyK9AppearanceOnGrant(targetCitizenid, granterCitizenid, appearanceModelOverride)
+    end
+
     return true, 'ok'
 end
 
@@ -850,6 +865,18 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     -- when stillHasAccess == 'rank_or_high_command'.
     if onlineTargetSrc and stillHasAccess == nil then
         NotifyPlayer(onlineTargetSrc, locale('permissions.revoke_notify_target', Config.Permissions[permissionKey].label), 'error')
+    end
+
+    -- K9 ROLE/MODEL DECOUPLING (coder-architect, server/appearance.lua) --
+    -- only when 'k9.access' is FULLY gone (stillHasAccess == nil): if the
+    -- target still qualifies via rank/high-command or is offline (unknown),
+    -- MaybeRevertK9Appearance does its OWN independent reconciliation
+    -- anyway (it also checks for a separate active k9_certifications row),
+    -- so this is a cheap pre-filter, not a correctness dependency. Guarded
+    -- with `type(...) == 'function'`, same soft-dependency reasoning as the
+    -- grant-side call above.
+    if permissionKey == 'k9.access' and stillHasAccess == nil and type(MaybeRevertK9Appearance) == 'function' then
+        MaybeRevertK9Appearance(targetCitizenid)
     end
 
     return true, 'ok', stillHasAccess

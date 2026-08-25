@@ -18,7 +18,7 @@ implemented (`client/kennel.lua`/`server/kennel.lua`,
 `client/radial.lua`'s Bark submenu + `config.lua`'s `Config.AdvancedBarkRadial`,
 confirmed by direct read this pass) and are **not** respecified here.
 `CameraFeedPiP` was independently researched and concluded impossible for a
-true inset feed (`phase2_notes/phase5_features_research.md` §6, corroborated
+true inset feed (`phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research` §6, corroborated
 by a live upstream `citizenfx/fivem` issue) — also **not** covered here.
 This document's entire scope is the three Phase 5 items that were researched
 but never specced: `ProximityAudioFX`, `PropAttachments`, `FetchMechanic`.
@@ -27,7 +27,7 @@ Author: product-agent, 2026-08-24, jlwood17190665@gmail.com.
 
 ## Source material (read in full to produce this document, not re-derived)
 
-- `phase2_notes/phase5_remaining_features_research.md` — the decisive pass.
+- `phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research` — the decisive pass.
   Its findings are treated as settled fact throughout this document, not
   re-litigated: ProximityAudioFX's mechanism (an NUI `GainNode`, or — this
   document's own conclusion below — a native discrete-clip-tier approach) is
@@ -38,15 +38,15 @@ Author: product-agent, 2026-08-24, jlwood17190665@gmail.com.
   pursue/carry logic is simpler than its one real precedent once re-scoped
   around a real player's own movement, and its mouth-carry is the *same*
   open bone item as `PropAttachments`' vest, not a separate one.
-- `phase2_notes/phase5_features_research.md` and
-  `phase2_notes/dependency_and_audio_status.md` — the audio-asset baseline:
+- `phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research` and
+  `phase2_notes/RESEARCH_ARCHIVE.md#dependencies-and-audio` — the audio-asset baseline:
   every bark in this resource today (`client/main.lua`'s `BARK_SOUND_NAME`/
   `K9_SOUND_SET`, `config.lua`'s `Config.AdvancedBarkRadial`) is a
   placeholder soundset name that resolves to a harmless `PlaySoundFromEntity`
   no-op. There is no real audio anywhere in this resource. A real custom
   soundset needs authored `.awc`/`dat151`/`dat54` RAGE-audio-bank assets (the
   native path) or licensed `.ogg` files delivered through an NUI bridge (the
-  cheaper path `dependency_and_audio_status.md` recommends, and which a
+  cheaper path `RESEARCH_ARCHIVE.md#dependencies-and-audio` recommends, and which a
   coder-ui pass is reportedly building the plumbing for right now,
   independently of this document — see fork 1 below for how this spec
   avoids depending on that in-flight code's specifics).
@@ -67,7 +67,7 @@ Author: product-agent, 2026-08-24, jlwood17190665@gmail.com.
   fork 2 below), `server/main.lua` (`relayBark`'s cooldown/length-cap/
   broadcast pattern, and `relayDoorScratch`'s deliberately **independent**
   cooldown table — the precedent fork 2 below follows for `ProximityAudioFX`),
-  `client/combat.lua`/`phase2_notes/phase3_combat_natives.md`
+  `client/combat.lua`/`phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat`
   (`NETWORK_REQUEST_CONTROL_OF_ENTITY` and the "re-assert every tick" vs.
   "one-shot is fine" distinction — reused for `FetchMechanic`'s ball attach),
   `client/hud.lua`/`html/app.js` (the only NUI bridge that exists today — a
@@ -112,7 +112,7 @@ argued for).
 research question, and its output is a config table — not a design
 decision left open.**
 
-`phase2_notes/phase5_remaining_features_research.md` confirms
+`phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research` confirms
 `AttachEntityToEntity`'s bone-index parameter accepts a raw integer either
 way — a documented bone **name** (`GetEntityBoneIndexByName`) was never
 actually load-bearing for the mechanical attach, only for the convenience of
@@ -272,7 +272,7 @@ real visual/audio payload is actually still missing:
 
 | Feature | Ships fully functional with **zero** new assets? | What an operator must supply for the full experience |
 |---|---|---|
-| `ProximityAudioFX` | **Audio delivery mechanism: yes** (reuses the exact placeholder-soundset-name convention `BasicBarkSounds`/`AdvancedBarkRadial` already ship safely with — a harmless `PlaySoundFromEntity` no-op). **The trigger condition: no** — see fork 2; it will never fire at all until an operator wires `SuspectDistanceSource`, independent of whether real audio exists. | Real, distinct growl/pant audio (the SAME asset-sourcing task already named, not duplicated, for `AdvancedBarkRadial` — see `phase2_notes/phase5_features_research.md` §1), **and** a `SuspectDistanceSource` implementation (a new, separate, non-audio integration task — see fork 2). |
+| `ProximityAudioFX` | **Audio delivery mechanism: yes** (reuses the exact placeholder-soundset-name convention `BasicBarkSounds`/`AdvancedBarkRadial` already ship safely with — a harmless `PlaySoundFromEntity` no-op). **The trigger condition: no** — see fork 2; it will never fire at all until an operator wires `SuspectDistanceSource`, independent of whether real audio exists. | Real, distinct growl/pant audio (the SAME asset-sourcing task already named, not duplicated, for `AdvancedBarkRadial` — see `phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research` §1), **and** a `SuspectDistanceSource` implementation (a new, separate, non-audio integration task — see fork 2). |
 | `PropAttachments` | **No.** Unlike `DeployableKennel` (which found at least one plausible, if unconfirmed, vanilla prop name to fall back on, `prop_doghouse_01`), **no research pass across this project found any generically-real "close enough" placeholder prop for a quadruped vest/harness** — `SPEC.md` §7's own table already concluded a purpose-built model is most likely needed. Per this project's own established discipline (`config.lua`'s `Config.DeployableKennel` comment explicitly declines a *second* unverified prop-name guess for exactly this reason), this document does **not** invent one either. | A real prop model name (custom-modeled, or a confirmed-suitable vanilla GTA prop if one is later identified) — `propModel` ships `nil`, and the feature safely no-ops (logs once, does nothing visible) until an operator sets it. |
 | `FetchMechanic` | **Yes, for the ball itself** — `prop_tennis_ball` is the single highest-confidence prop name found across every Phase 5 research pass (traced to a real, source-read, shipped community script's own config default, not a guess). Spawn/throw/lifecycle are fully native-only. **The mouth-*carry* fidelity is conditional** on fork 1's sweep outcome — see §14.4.3's `mouthCarryModeByModel`, which defaults every model to the zero-asset `'fake'` (delete-and-animate) mode until a developer's sweep session explicitly upgrades a specific model to `'attach'`. | Nothing required for a working feature. Optionally: a custom "evidence bag" prop as a reskin of the ball concept (named in `SPEC.md` §6.7, not required for v1), and whatever real carry animation/scenario `'fake'` mode uses if the existing bark/pant scenarios aren't judged good enough as a stand-in (open question, §14.4.3). |
 
@@ -416,8 +416,8 @@ Config.PropAttachments = {
 -- on client/kennel.lua/server/kennel.lua's own shipped lifecycle pattern.
 -- ======================================================================
 Config.FetchMechanic = {
-    -- CONFIRMED real & free (phase5_remaining_features_research.md §3 /
-    -- phase5_features_research.md §4 -- highest-confidence prop name found
+    -- CONFIRMED real & free (RESEARCH_ARCHIVE.md#phase-5-research §3 /
+    -- RESEARCH_ARCHIVE.md#phase-5-research §4 -- highest-confidence prop name found
     -- across every Phase 5 research pass, traced to a real, source-read
     -- community script's own shipped config default, not a guess).
     ballPropModel = 'prop_tennis_ball',
@@ -570,7 +570,7 @@ of scope for this document, not an oversight.
   or push-based — none of which this document guesses at.
 - Real growl/pant audio asset sourcing — the same named, not-yet-resourced
   task `AdvancedBarkRadial` already needs (`phase2_notes/
-  phase5_features_research.md` §1), not a new or larger ask created by this
+  RESEARCH_ARCHIVE.md#phase-5-research` §1), not a new or larger ask created by this
   feature.
 
 ### 14.4.2 Prop Attachments (`Config.Features.PropAttachments`)
@@ -633,7 +633,7 @@ of scope for this document, not an oversight.
   explicitly, deliberately no functional link to any live camera feed.
   `CameraFeedPiP` is out of this document's scope entirely and was
   independently concluded impossible for a true inset feed
-  (`phase2_notes/phase5_features_research.md` §6) — naming a slot
+  (`phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research` §6) — naming a slot
   "tracking camera" here ships a visual prop, nothing else, and this is a
   named non-goal to prevent scope creep, not an implied roadmap item.
 
@@ -873,7 +873,7 @@ entire rest of the feature working regardless of fork 1's outcome.
   for exactly what's missing per feature; none of the three gaps are new
   categories of gap this document introduces, all trace directly to
   already-named, already-tracked asset needs (`SPEC.md` §7/§9 item 7,
-  `phase2_notes/phase5_features_research.md` §1).
+  `phase2_notes/RESEARCH_ARCHIVE.md#phase-5-research` §1).
 - **`ProximityAudioFX`'s `SuspectDistanceSource` and `PropAttachments`'
   `propModel` are both, deliberately, "we cannot resolve this ourselves,
   here is the seam" integration points**, not partially-implemented

@@ -109,6 +109,44 @@
 -- file after ANY prior partial run safe, not just after a clean one.
 -- =====================================================================
 
+-- ---------------------------------------------------------------------
+-- STEP 0: ORDER-PROTECTION GUARD (db-schema foolproofing pass).
+--
+-- Every step below is an ALTER TABLE `k9_partnerships`. If that table has
+-- never been created on this database (install.sql, or migration 0001,
+-- has not been run here yet), MySQL/MariaDB's own error for that is a raw,
+-- easy-to-misread:
+--     ERROR 1146 (42S02): Table 'yourdb.k9_partnerships' doesn't exist
+-- This guard turns that into one specific, actionable, plain-English
+-- refusal instead -- a full-detail SELECT for GUI tools (phpMyAdmin/
+-- HeidiSQL always show a result set), plus a short SIGNAL so the plain
+-- `mysql` CLI also stops with a message it can actually show (SIGNAL's
+-- own MESSAGE_TEXT is capped at 128 characters by MySQL/MariaDB, hence two
+-- messages instead of one long one).
+--
+-- SAFE TO RE-RUN: this guard procedure follows the exact same
+-- drop-before-and-after pattern as every other procedure in this file, so
+-- re-running this file after a refusal (once the real problem -- running
+-- things out of order -- is fixed) is always safe.
+-- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0003_require_base_table`;
+DELIMITER $$
+CREATE PROCEDURE `qbx_k9unit_migration_0003_require_base_table`()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'k9_partnerships'
+    ) THEN
+        SELECT 'STOPPED - WRONG ORDER' AS status,
+               'Table k9_partnerships does not exist in this database. This migration only ever ALTERs that table, so it must exist first. Run sql/install.sql (creates every qbx_k9unit table, including this migration''s change, in one pass) -- or, if you are applying migrations one file at a time, run sql/migrations/0001_create_k9_partnerships.sql before this file. Nothing has been changed by this migration.' AS detail;
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'qbx_k9unit 0003 stopped: k9_partnerships missing. See detail above. Run install.sql first.';
+    END IF;
+END$$
+DELIMITER ;
+CALL `qbx_k9unit_migration_0003_require_base_table`();
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0003_require_base_table`;
+
+
 DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0003_add_tenure_column`;
 
 DELIMITER $$

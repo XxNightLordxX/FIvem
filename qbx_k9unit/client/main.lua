@@ -65,7 +65,19 @@
             an ox_target `canInteract` predicate (which can run many times
             a second while hovering) doesn't flood the server.
         CanShowK9UI() -> boolean
-            Combinator: IsOwnModelK9() and HasK9Access(). THIS is the
+            ROLE/MODEL DECOUPLING (coder-architect, this pass —
+            client/appearance.lua): with Config.K9Appearance
+            .requireK9ModelForRole at its false default, this is
+            IsK9Role() and HasK9Access() — IsK9Role() (client/appearance.lua)
+            is the server-authoritative "do I hold the K9 role right now"
+            check (active certification for my job, OR an active
+            'k9.access' permission grant — see server/appearance.lua's
+            header for why that's the right definition), deliberately
+            NOT a model check, so a K9-role player on an unlisted or even
+            human model still sees every K9 UI element. With
+            requireK9ModelForRole = true (or if client/appearance.lua
+            somehow isn't loaded), this is IsOwnModelK9() and HasK9Access(),
+            exactly as before this pass. THIS is the
             function radial.lua/vehicle.lua/movement.lua should actually
             call for their gating decisions — don't call the other two
             directly from other files, so the "how do we combine these"
@@ -134,12 +146,73 @@ function IsEntityModelK9(entity)
     return K9ModelHashes[GetEntityModel(entity)] == true
 end
 
---- Pure client-side, display-only check: is the local player's OWN
---- character currently a recognized K9 model? Never used for security —
---- see SPEC.md §4.5 ("Convenience (client)" bullet).
+--- Client-side, display-only check: does the LOCAL player currently count
+--- as a K9 for gating purposes? Still never used for security — see
+--- SPEC.md §4.5 ("Convenience (client)" bullet) and this doc comment's own
+--- audit note below.
+---
+--- ROLE/MODEL DECOUPLING (coder-architect, this pass, owner directive
+--- "I also want everything to work with any ped" / "[an unlisted ped]...
+--- can still be assigned a k9 role even if its human" — client/appearance.lua):
+--- true if EITHER the local player's live ped model is a recognized K9
+--- model (the original, unchanged check — IsEntityModelK9(PlayerPedId())),
+--- OR (when Config.K9Appearance.requireK9ModelForRole is at its false
+--- default) the server says this player holds the K9 role right now
+--- (IsK9Role(), client/appearance.lua — active certification for their
+--- job, or an active 'k9.access' permission grant; model-independent by
+--- construction). This is a deliberate OR, not a replacement: a player who
+--- is genuinely dog-modeled but holds no role at all (an uncertified K9
+--- model, or a department outsider who somehow ended up on a K9 skin)
+--- still passes via the model half exactly as before this pass — nothing
+--- that used to work stops working. `type(IsK9Role) == 'function'` is a
+--- genuine soft dependency (client/appearance.lua may not be loaded, or
+--- requireK9ModelForRole may be true), not a load-order assumption, this
+--- resource's established convention.
+---
+--- WHY THIS FUNCTION SPECIFICALLY, AND NOT IsEntityModelK9(entity) IN
+--- GENERAL: every other caller of IsEntityModelK9 targets SOME OTHER
+--- entity (an ox_target canInteract predicate's `entity` parameter, e.g.
+--- client/movement.lua's "Attach Leash" option) — this client has no cheap,
+--- local way to know a DIFFERENT player's server-side role without a
+--- per-target network round trip, so IsEntityModelK9(entity) for anyone but
+--- the local player is intentionally left a PURE model guess, same as
+--- before this pass ("cheap client-side plausibility only... the server
+--- independently re-validates everything for real", per those call sites'
+--- own comments) — see this pass's hand-off report for the one disclosed,
+--- residual gap that leaves open (a human-shaped role-holder is not
+--- targetable via that specific ox_target predicate by someone else).
+--- IsOwnModelK9() is different: "own" always means the LOCAL player, whose
+--- role this client CAN cheaply and safely ask about via the same
+--- server-backed, TTL-cached callback HasK9Access() already established
+--- the pattern for.
+---
+--- SECURITY AUDIT NOTE (this pass, per explicit instruction to confirm or
+--- refute the existing "never a security boundary" claim rather than
+--- assume it still holds): grepped and read every real call site in this
+--- resource (client/combat.lua, client/vision.lua, client/movement.lua,
+--- client/wellbeing.lua, client/partnership.lua, client/exports.lua, plus
+--- this file's own CanShowK9UI() below) — every one of them uses this
+--- function's result ONLY for local UI/effect gating (show/hide a radial
+--- item, apply/withhold a client-local visual or movement effect, an
+--- ox_target predicate's display filter) or, transitively, feeds into
+--- CanShowK9UI(), which is documented and used identically. NONE of them
+--- treat a `true` result here as authorization for anything a server-side
+--- handler doesn't independently re-verify (HasK9Access/HasK9Role/
+--- IsConfiguredK9Model, all server-authoritative, all re-derived from live
+--- server-side data, never from a client claim). CONFIRMED STILL TRUE:
+--- this function is not, and must never become, a security boundary — a
+--- modified client returning `true` here unconditionally gains nothing
+--- beyond seeing UI it cannot actually use, because every real action
+--- re-checks server-side regardless.
 --- @return boolean
 function IsOwnModelK9()
-    return IsEntityModelK9(PlayerPedId())
+    if IsEntityModelK9(PlayerPedId()) then return true end
+
+    if Config.K9Appearance and Config.K9Appearance.requireK9ModelForRole == false and type(IsK9Role) == 'function' then
+        return IsK9Role()
+    end
+
+    return false
 end
 
 -- Lightweight TTL cache for HasK9Access() below. Hot call sites (ox_target
@@ -198,9 +271,22 @@ function HasK9Access()
 end
 
 --- Combinator every other client file should call for K9 UI/feature
---- gating decisions. See FILE-TO-FILE CONTRACT above.
+--- gating decisions. See FILE-TO-FILE CONTRACT above for the full
+--- ROLE/MODEL DECOUPLING writeup on the CanShowK9UI() entry.
+---
+--- `type(IsK9Role) == 'function'` is a genuine soft dependency, not a
+--- load-order assumption (this resource's established convention) —
+--- client/appearance.lua defines it, and this file has no hard
+--- requirement on loading after it. Falls back to the pre-decoupling
+--- IsOwnModelK9()-based formula whenever requireK9ModelForRole is true OR
+--- IsK9Role isn't available for any reason, so this never regresses
+--- behavior for an operator who explicitly wants the stricter,
+--- model-enforced mode.
 --- @return boolean
 function CanShowK9UI()
+    if Config.K9Appearance and Config.K9Appearance.requireK9ModelForRole == false and type(IsK9Role) == 'function' then
+        return IsK9Role() and HasK9Access()
+    end
     return IsOwnModelK9() and HasK9Access()
 end
 
