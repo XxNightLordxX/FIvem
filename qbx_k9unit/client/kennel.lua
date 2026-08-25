@@ -122,7 +122,7 @@ function RequestDeployKennel()
     end
 
     if myKennelNetId then
-        lib.notify({ title = 'K9 Unit', description = 'You already have a kennel deployed.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.already_deployed'), type = 'error' })
         return
     end
 
@@ -175,7 +175,7 @@ RegisterNetEvent('qbx_k9unit:client:deployKennelAt', function(x, y, z)
     end
 
     if not modelHash then
-        lib.notify({ title = 'K9 Unit', description = 'Kennel prop failed to load.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.prop_load_failed'), type = 'error' })
         TriggerServerEvent('qbx_k9unit:server:cancelKennelPlacement')
         return
     end
@@ -193,7 +193,7 @@ RegisterNetEvent('qbx_k9unit:client:deployKennelAt', function(x, y, z)
     SetModelAsNoLongerNeeded(modelHash)
 
     if not DoesEntityExist(obj) then
-        lib.notify({ title = 'K9 Unit', description = 'Kennel placement failed.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.placement_failed'), type = 'error' })
         TriggerServerEvent('qbx_k9unit:server:cancelKennelPlacement')
         return
     end
@@ -205,7 +205,7 @@ RegisterNetEvent('qbx_k9unit:client:deployKennelAt', function(x, y, z)
         -- silently ship a broken result" convention, don't confirm a
         -- kennel the game itself couldn't ground properly.
         DeleteEntity(obj)
-        lib.notify({ title = 'K9 Unit', description = 'No suitable ground to place the kennel here.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.no_suitable_ground'), type = 'error' })
         TriggerServerEvent('qbx_k9unit:server:cancelKennelPlacement')
         return
     end
@@ -321,7 +321,7 @@ if Config.Features.DeployableKennel then
         {
             name = 'qbx_k9unit:pickupKennel',
             icon = 'fas fa-dog',
-            label = 'Pick Up Kennel',
+            label = locale('kennel.pickup_target_label'),
             distance = Config.DeployableKennel.interactDistanceMeters,
             canInteract = function(entity, distance, coords, name)
                 if not Config.Features.DeployableKennel then return false end

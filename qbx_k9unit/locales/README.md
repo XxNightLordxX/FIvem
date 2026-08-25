@@ -10,6 +10,19 @@ in this resource was hardcoded English. That gap is now closed for two
 files. It is not closed for the rest of the resource — see "What's left"
 below.
 
+**Update (second migration pass):** `client/kennel.lua` is now also
+migrated (new `kennel.*` group below). Four more files —
+`client/screenfx.lua`, `client/audio.lua`, `client/proximityaudio.lua`,
+`client/recall.lua` — were reviewed for this same pass and found to
+contain **zero player-facing strings** to migrate at all: they are pure
+NUI/Web-Audio plumbing, a discovery/maintenance thread, and a bare
+`RegisterCommand`/`TriggerServerEvent` pair with no `lib.notify`, no
+`ox_target` labels, and no `RegisterKeyMapping` description anywhere in
+them (confirmed by grep, not just a skim — see "What's left" below for the
+exact count this leaves). Do not assume a file is unmigrated just because
+it isn't named in the two-file list above; check whether it actually has
+any player-facing strings first.
+
 ## Format (verified against ox_lib source, not assumed)
 
 Checked directly against `overextended/ox_lib`
@@ -83,6 +96,19 @@ this same `common.*` group (e.g. `common.no_k9_access`) for the identical
 reason above — it too is duplicated verbatim across several other files
 (`client/movement.lua` alone hardcodes it at least four times).
 
+### `kennel.*` (added in the second migration pass, `client/kennel.lua`)
+
+Five new leaf keys: `already_deployed`, `prop_load_failed`,
+`placement_failed`, `no_suitable_ground` (all four `lib.notify`
+descriptions, each paired with `common.notify_title` exactly like
+`vision.*`/`vehicle.*` already do — none of the four were duplicated
+elsewhere in this resource's `client/` tree, confirmed by grep, so none
+were promoted to `common.*`), and `pickup_target_label` (the "Pick Up
+Kennel" `ox_target` option label). See "What's left" below for an
+important **non**-duplication note about `server/kennel.lua`'s own
+similarly-worded-but-different `NotifyPlayer` strings — do not reuse
+`kennel.placement_failed` for those when that file gets migrated.
+
 ## Why no interpolation was used for the vision on/off strings
 
 `vision.thermal_on` / `vision.thermal_off` (and the `night_*` pair) are
@@ -126,22 +152,42 @@ specific language.
 
 ## What's left (honest count)
 
-This change migrates exactly **2 of roughly 48 Lua files** in this
-resource's `client/` + `server/` trees (`client/vision.lua` and
-`client/vehicle.lua`). Every other file — `client/main.lua`,
-`client/movement.lua`, `client/radial.lua`, `client/tracking.lua`,
-`client/search.lua`, `client/hud.lua`, `client/inventory.lua`,
-`client/kennel.lua`, `client/medkit.lua`, `client/wellbeing.lua`,
-`client/progression.lua`, `client/combat.lua`, `client/partnership.lua`,
-`client/defense.lua`, `client/propattachment.lua`, `client/bonetool.lua`,
-`client/fetch.lua`, `client/screenfx.lua`, `client/audio.lua`,
-`client/proximityaudio.lua`, `client/recall.lua`, `client/exports.lua`,
-and every file under `server/` — still has 100% hardcoded English for any
-player-facing string it contains (server-side strings sent to players via
-`lib.notify`/`exports.qbx_core:Notify`/similar are just as in scope as
+As of this pass, **3 of roughly 48 Lua files** in this resource's
+`client/` + `server/` trees have actually needed a `locale()` migration —
+`client/vision.lua`, `client/vehicle.lua`, and now `client/kennel.lua`.
+Four more files (`client/screenfx.lua`, `client/audio.lua`,
+`client/proximityaudio.lua`, `client/recall.lua`) were checked this pass
+and confirmed to have **no player-facing strings at all**, so they need no
+`locale()` calls — don't re-check them again from scratch, but do
+re-check if you add new player-facing UI to any of them later.
+
+Every other file — `client/main.lua`, `client/movement.lua`,
+`client/radial.lua`, `client/tracking.lua`, `client/search.lua`,
+`client/hud.lua`, `client/inventory.lua`, `client/medkit.lua`,
+`client/wellbeing.lua`, `client/progression.lua`, `client/combat.lua`,
+`client/partnership.lua`, `client/defense.lua`,
+`client/propattachment.lua`, `client/bonetool.lua`, `client/fetch.lua`,
+`client/exports.lua`, and every file under `server/` — is UNCHECKED by
+this pass and should be assumed to still have 100% hardcoded English for
+any player-facing string it contains (server-side strings sent to players
+via `lib.notify`/`exports.qbx_core:Notify`/similar are just as in scope as
 client-side ones; only `print()`/comments are out of scope). This file
 establishes the pattern and the shared `common.*` keys; it does not claim
 to have finished the job.
+
+**Note for whoever migrates `server/kennel.lua`:** that file has its own
+`NotifyPlayer(src, '...', 'error')` strings ("Kennel placement failed —
+the object could not be confirmed.", "...— unexpected object model.",
+"...— placed too far from the assigned spot.") that are SIMILAR to but NOT
+identical with this pass's new `kennel.placement_failed` ("Kennel
+placement failed.", used by `client/kennel.lua` for a different failure
+case — a client-side object-creation/grounding failure, not the server's
+own post-hoc placement validation). Do not silently collapse these into
+one key — they are different messages for different failure conditions,
+even though they share the "Kennel placement failed" phrase; give the
+server-side ones their own `kennel.*` keys (or a `server_kennel.*` group,
+your call) rather than reusing `kennel.placement_failed` for a different
+sentence.
 
 ## Manifest change needed (not made here — `fxmanifest.lua` is out of
 scope for this change)

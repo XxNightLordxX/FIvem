@@ -17,5 +17,12 @@
         "released": "Released from the vehicle.",
         "target_enter_label": "Load K9 Into Vehicle",
         "target_exit_label": "Release K9 From Vehicle"
+    },
+    "kennel": {
+        "already_deployed": "You already have a kennel deployed.",
+        "prop_load_failed": "Kennel prop failed to load.",
+        "placement_failed": "Kennel placement failed.",
+        "no_suitable_ground": "No suitable ground to place the kennel here.",
+        "pickup_target_label": "Pick Up Kennel"
     }
 }
