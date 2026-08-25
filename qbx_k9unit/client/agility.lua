@@ -237,7 +237,7 @@ if Config.Features.AgilityAdvanced then
     --- directly here.
     local function TryVault()
         if not CanShowK9UI() then
-            lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
+            DenyK9UIAccess()
             return
         end
 

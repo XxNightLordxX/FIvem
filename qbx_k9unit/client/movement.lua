@@ -325,7 +325,7 @@ local K9_SIT_DEFAULT_SCENARIO = 'WORLD_DOG_SITTING_SHEPHERD' -- fallback if play
 
 function K9Sit()
     if not CanShowK9UI() then
-        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
+        DenyK9UIAccess()
         return
     end
 
@@ -1309,7 +1309,7 @@ local function ScratchAtDoor(entity)
     -- independently re-verifies Config.Features.DoorInteraction AND
     -- HasK9Access(source) regardless of what this client claims.
     if not CanShowK9UI() then
-        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
+        DenyK9UIAccess()
         return
     end
 
@@ -1421,7 +1421,7 @@ local function NudgeDoor(entity)
     -- precisely because nothing below grants any real capability regardless
     -- (see the SAFETY DESIGN notes above).
     if not CanShowK9UI() then
-        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
+        DenyK9UIAccess()
         return
     end
 
