@@ -137,7 +137,32 @@
         maxBallLifetimeMs, pickupInteractDistanceMeters,
         deliverProximityMeters, maintenanceIntervalMs,
         mouthCarryMode, mouthBoneIndex, mouthOffsetX, mouthOffsetY, mouthOffsetZ,
+        pickupCooldownMs, releaseCooldownMs, -- OPTIONAL; PickupCooldown/
+          -- ReleaseCooldown below fall back to an in-file default (500ms)
+          -- if absent, so this file never errors on a config.lua that
+          -- predates this hardening pass — see those locals' own comments.
       }
+
+    ======================================================================
+    GLOBAL NETID-UNIQUENESS INVARIANT (red-team hardening pass): at most ONE
+    `FetchBalls[citizenid]` entry may ever have `.netId == N` for any given
+    network id N, at any moment. `FindBallByNetId`'s first-match `pairs`
+    scan is only safe to rely on (in confirmFetchBallThrown's "shouldn't be
+    reachable" comment, in the pickup/deliver paths' ownership checks, etc.)
+    if this invariant actually holds — a scan that can silently return
+    either of two colliding entries depending on hash-table iteration order
+    is not a substitute for actually preventing the collision. Every place
+    that is about to WRITE a client-reported netId into the registry
+    (confirmFetchBallThrown creating a new entry; confirmFetchBallCarried
+    and confirmFetchBallDropped updating an existing entry's `.netId` field)
+    MUST first confirm, via `FindOtherBallByNetId`, that no *other*
+    citizenid's entry already claims that netId — otherwise a second
+    player can register their own throw/carry/drop confirm against a netId
+    that already belongs to someone else's active ball, creating two
+    registry entries that both act on the same physical entity (one
+    player's recall/delivery/expiry then deletes an entity the other
+    player's entry still believes it owns). Do not remove these checks
+    without replacing them with an equally strict alternative.
 ]]
 
 -- GATE AT REGISTRATION, NOT INSIDE THE HANDLER — this file's whole purpose
@@ -170,6 +195,21 @@ local PendingFetchDrops = {}
 local ThrowCooldown = NewCooldown(Config.FetchMechanic.throwCooldownMs)
 ThrowCooldown.RegisterPlayerDropped()
 
+-- Red-team hardening: requestPickupFetchBall/releaseFetchBall previously had
+-- no rate limit at all (only the initial throw did) — dedicated
+-- NewCooldown trackers, per this file's own REFACTOR_ROADMAP.md convention,
+-- never a hand-rolled table. `Config.FetchMechanic.pickupCooldownMs`/
+-- `releaseCooldownMs` are OPTIONAL tunables not yet in every config.lua;
+-- the `or 500` fallback keeps this file correct (never erroring on a nil
+-- threshold — see server/cooldowns.lua's own FAIL-CLOSED note on why a
+-- missing/non-positive threshold must never silently disable a cooldown)
+-- on a server that hasn't added them yet.
+local PickupCooldown = NewCooldown(Config.FetchMechanic.pickupCooldownMs or 500)
+PickupCooldown.RegisterPlayerDropped()
+
+local ReleaseCooldown = NewCooldown(Config.FetchMechanic.releaseCooldownMs or 500)
+ReleaseCooldown.RegisterPlayerDropped()
+
 -- NotifyPlayer used to be defined here as its own local copy (a 13th
 -- hand-rolled copy of this exact pattern, landed in this file after
 -- REFACTOR_ROADMAP.md's 12-copy dedup audit was already written -- see
@@ -195,6 +235,25 @@ local function FindBallByNetId(netId)
         end
     end
     return nil, nil
+end
+
+--- Enforces this file's header GLOBAL NETID-UNIQUENESS INVARIANT. Returns
+--- the citizenid of a DIFFERENT registry entry that already claims `netId`,
+--- if one exists — `excludeCitizenId` lets a caller that is re-confirming/
+--- updating its OWN entry's netId (confirmFetchBallCarried,
+--- confirmFetchBallDropped) not treat its own prior value as a collision.
+--- Every write of a client-reported netId into `FetchBalls` must be
+--- guarded by this returning nil first.
+--- @param netId number
+--- @param excludeCitizenId string?
+--- @return string? otherCitizenId
+local function FindOtherBallByNetId(netId, excludeCitizenId)
+    for citizenid, entry in pairs(FetchBalls) do
+        if citizenid ~= excludeCitizenId and entry.netId == netId then
+            return citizenid
+        end
+    end
+    return nil
 end
 
 --- Shared terminal-cleanup path — every way a fetch cycle can permanently
@@ -325,6 +384,16 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
         return
     end
 
+    -- GLOBAL NETID-UNIQUENESS INVARIANT (this file's header) — reject a
+    -- confirm that names a netId ALREADY claimed by another citizenid's
+    -- entry (e.g. someone else's real, already-thrown/carried ball).
+    -- `citizenid` is confirmed above to have no entry of its own yet, so
+    -- any hit here is necessarily a genuine cross-citizenid collision.
+    if FindOtherBallByNetId(netId, citizenid) then
+        NotifyPlayer(src, 'Fetch ball placement failed — that item is already tracked.', 'error')
+        return
+    end
+
     local now = GetGameTimer()
     FetchBalls[citizenid] = {
         netId = netId,
@@ -367,6 +436,10 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
         return
     end
 
+    if not PickupCooldown.Consume(src) then
+        return -- silent no-op: rate-limited, matches ThrowCooldown's own convention
+    end
+
     local ped = GetPlayerPed(src)
     if ped == 0 then return end
     if not IsConfiguredK9Model(GetEntityModel(ped)) then
@@ -391,6 +464,20 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
     local entity = ResolveNetworkEntity(netId, 3)
     if not entity or not FetchBallModelHashes[GetEntityModel(entity)] then
         NotifyPlayer(src, 'That fetch item could not be confirmed.', 'error')
+        return
+    end
+
+    -- RED-TEAM FIX: server-side proximity re-check. `distance` on the
+    -- client's ox_target option (client/fetch.lua) is UI-only and trivially
+    -- bypassed by firing this event directly with an arbitrary netId — this
+    -- is the actual authority boundary, mirroring requestDeliverFetchBall's
+    -- own live GetEntityCoords proximity check below (the in-file
+    -- precedent) rather than inventing a new shape. Without this, any K9
+    -- anywhere on the map could steal (and, via a subsequent release,
+    -- relocate) another citizen's active ball.
+    local dist = #(GetEntityCoords(ped) - GetEntityCoords(entity))
+    if dist > Config.FetchMechanic.pickupInteractDistanceMeters then
+        NotifyPlayer(src, 'Get closer to the fetch item to pick it up.', 'error')
         return
     end
 
@@ -449,6 +536,16 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallCarried', function(netId)
         return
     end
 
+    -- GLOBAL NETID-UNIQUENESS INVARIANT (this file's header) — a freshly
+    -- AttachPropToOwnPed-created entity should never legitimately collide
+    -- with another citizenid's existing entry, but this write is exactly
+    -- the kind this file's header invariant exists to guard: end the cycle
+    -- rather than let two entries point at the same physical object.
+    if FindOtherBallByNetId(netId, pending.throwerCitizenId) then
+        EndFetchCycle(pending.throwerCitizenId, ball)
+        return
+    end
+
     ball.netId = netId
 end)
 
@@ -476,6 +573,10 @@ end)
 --- (PendingFetchCarries) to avoid racing a not-yet-confirmed attach.
 RegisterNetEvent('qbx_k9unit:server:releaseFetchBall', function()
     local src = source
+
+    if not ReleaseCooldown.Consume(src) then
+        return -- silent no-op: rate-limited, matches ThrowCooldown's own convention
+    end
 
     if PendingFetchCarries[src] then
         return -- still transitioning into the carry itself; nothing to release yet
@@ -528,6 +629,11 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallDropped', function(netId)
 
     local entity = ResolveNetworkEntity(netId, 3)
     if not entity or not FetchBallModelHashes[GetEntityModel(entity)] then return end
+
+    -- GLOBAL NETID-UNIQUENESS INVARIANT (this file's header) — reject if
+    -- this freshly-created "recreated ball" object's netId somehow already
+    -- matches another citizenid's live entry.
+    if FindOtherBallByNetId(netId, pending.throwerCitizenId) then return end
 
     ball.netId = netId
 end)
@@ -730,9 +836,9 @@ AddEventHandler('playerDropped', function(_reason)
         end
     end
 
-    -- ThrowCooldown already registered its own playerDropped handler via
-    -- :RegisterPlayerDropped() — REFACTOR_ROADMAP.md item 1 convention,
-    -- nothing to do for it here.
+    -- ThrowCooldown/PickupCooldown/ReleaseCooldown each already registered
+    -- their own playerDropped handler via :RegisterPlayerDropped() —
+    -- REFACTOR_ROADMAP.md item 1 convention, nothing to do for them here.
 end)
 
 -- Resource-stop cleanup (task requirement, same class of gap

@@ -1171,7 +1171,21 @@ Config.FetchMechanic = {
     throwCooldownMs              = 5000,
     pendingThrowTtlMs            = 15000,
     maxBallLifetimeMs            = 300000, -- absolute ceiling; no ball outlives this
+    -- ENFORCED SERVER-SIDE, not just as an ox_target radius. A red-team pass
+    -- found this value was previously only the client's ox_target `distance`
+    -- field -- pure UI -- so requestPickupFetchBall accepted a pickup from
+    -- anywhere on the map. Any player with K9 access could take another
+    -- player's ball remotely and then re-drop it at their own position.
+    -- server/fetch.lua now re-measures live distance against this, the way
+    -- requestDeliverFetchBall always did.
     pickupInteractDistanceMeters = 2.0,
+
+    -- Neither pickup nor release had ANY rate limit before; only the initial
+    -- throw did, which is what made the remote-steal loop freely repeatable.
+    -- server/fetch.lua falls back to 500 if these are absent, so removing them
+    -- degrades safely rather than removing the throttle.
+    pickupCooldownMs             = 500,
+    releaseCooldownMs            = 500,
     deliverProximityMeters       = 3.0,
     maintenanceIntervalMs        = 2000,
 
