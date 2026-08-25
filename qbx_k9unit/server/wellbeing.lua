@@ -156,18 +156,35 @@
       validation once it exists — guard with
       `type(IsHesitating) == 'function'`, the same forward-compatible
       pattern server/medkit.lua already uses for RestoreInjury.
-      DISCLOSED RESIDUAL RISK (coder-security finding B, this pass — full
-      writeup on the relayWeaponFire AddEventHandler below): the fearStress
-      input this accessor's return value is derived from is fed by a
-      payload-less, forgeable event, deduped by reporting source this pass
-      to close the primary amplification vector, but a single sustained
-      forged reporter can still keep a nearby K9's fearStress elevated
-      indistinguishably from genuine continuous nearby gunfire. Whoever
-      wires server/combat.lua's own call to this accessor should be aware
-      hesitation can be externally forced/renewed by a non-participant
-      bystander, not just by real combat — not a reason to skip calling
-      this (PHASE4_SPEC.md §13.5 still requires it), just a known limitation
-      to weigh if live abuse reports ever come in.
+      DISCLOSED RESIDUAL RISK (coder-security finding B, config-audit
+      follow-up pass — full writeup on the relayWeaponFire AddEventHandler
+      below): the fearStress input this accessor's return value is derived
+      from is fed by a payload-less, forgeable event, deduped by reporting
+      source to close the primary amplification vector. server/combat.lua
+      DOES now call this accessor as a hard reject in ValidateCombatRequest
+      — that is no longer a hypothetical "whoever wires this up next"
+      concern, it is real, live code today. CONFIRMED (this pass): because
+      the reporting event carries no target and the affected-K9 loop below
+      matches by RADIUS around the reporter's own live position, a forger
+      does not merely hesitate their own K9 — physical proximity to ANY
+      other connected K9 is sufficient to target that specific K9, whether
+      or not the forger is a K9, a combat participant, or has any other
+      interaction with that player at all. That made this a real, targeted
+      denial-of-capability once combat.lua shipped as a consumer, not a
+      near-harmless self-only quirk. TickWellbeing's HESITATION_MAX_CONTINUOUS_MS
+      cap (this pass) bounds it: a forger can still force repeated
+      hesitation episodes on a specific K9 by staying nearby and
+      re-touching the event, but each episode is capped and is always
+      followed by an enforced window where that K9 is guaranteed not to be
+      hesitating — "indefinite" is closed, "repeatable but bounded" is the
+      disclosed, accepted remainder. Not a reason to skip calling this
+      accessor (PHASE4_SPEC.md §13.5 still requires it) — just an accurate,
+      current statement of what calling it exposes you to, kept up to date
+      here specifically because the LAST version of this note went stale
+      the moment a second file started consuming it without this note being
+      re-checked. Whoever next changes either this accessor's contract or
+      its call site in server/combat.lua should update BOTH this note and
+      that file's own comment together, not just one.
     - IsDistracted(citizenid: string) -> boolean — same shape as
       IsHesitating, for Distraction's own "breaks command" state
       (PHASE4_SPEC.md §13.4.3.4's reading of that state as a server-enforced
@@ -202,6 +219,10 @@
 -- WellbeingStats[citizenid] = {
 --     fatigue, mood, fearStress, injury,     -- 0..Config.Wellbeing.<Stat>.max
 --     distractedUntil, hesitatingUntil,       -- GetGameTimer() ms timestamps, 0 = inactive
+--     hesitationEpisodeStartedAt,             -- GetGameTimer() ms, 0 = not currently in a
+--                                              -- continuous at/above-threshold episode -- see
+--                                              -- HESITATION_MAX_CONTINUOUS_MS below (coder-security,
+--                                              -- this pass) for why this exists.
 --     lastCoords,                             -- vector3? -- previous tick's sample, for Fatigue's sprint-speed calc
 -- }
 local WellbeingStats = {}
@@ -244,6 +265,7 @@ local function EnsureStats(citizenid)
             injury = Config.Wellbeing.Injury.max,
             distractedUntil = 0,
             hesitatingUntil = 0,
+            hesitationEpisodeStartedAt = 0,
             lastCoords = nil,
         }
         WellbeingStats[citizenid] = stats
@@ -368,20 +390,53 @@ end)
 -- one reporter's contribution to exactly what one continuously-firing real
 -- shooter would also cause — which is the intended mechanic, not a gap.
 --
--- NOT CLOSED, DISCLOSED RESIDUAL RISK: deduping by source does not, and
+-- STILL NOT FULLY CLOSED, BUT NO LONGER "INDEFINITE" (coder-security,
+-- config-audit follow-up pass): deduping by source does not, and
 -- structurally cannot without a real corroboration signal (this event
 -- carries no payload to corroborate against, by design — see
 -- server/tracking.lua's header for why adding one is a real can of worms,
--- not a cheap fix), prevent a SINGLE determined attacker from sustaining
--- elevated fearStress/hesitation on a nearby K9 indefinitely by repeatedly
--- re-touching this event at the ingest cooldown's own rate, with zero real
--- gunfire ever happening — mechanically indistinguishable, server-side,
--- from that one attacker genuinely firing continuously nearby the whole
--- time. Flagged explicitly for whoever wires server/combat.lua's
--- IsHesitating() gate, and for coder-security's next pass, rather than
--- landed silently — revisit if live abuse confirms this is a real problem
--- in practice, mirroring the exact "revisit if a later phase changes the
--- stakes" framing server/tracking.lua's own header already uses.
+-- not a cheap fix), prevent a SINGLE determined attacker from re-touching
+-- this event to sustain elevated fearStress/hesitation on a nearby K9 with
+-- zero real gunfire ever happening — mechanically indistinguishable,
+-- server-side, from that one attacker genuinely firing continuously nearby.
+--
+-- THE SHAPE OF WHAT WENT WRONG, FOR THE NEXT EDITOR: this exact paragraph,
+-- before this pass, called that residual risk "indefinite" and left it at
+-- that — an accurate statement THE DAY IT WAS WRITTEN, because at that time
+-- nothing anywhere read IsHesitating(). It silently stopped being accurate
+-- the moment server/combat.lua's ValidateCombatRequest started calling
+-- IsHesitating() as a hard reject (see that file's own header/
+-- ValidateCombatRequest comments) — a second file began CONSUMING this
+-- file's disclosed-but-accepted risk without this file's own disclosure
+-- being re-checked against that new consumer. Neither file's own review
+-- would have caught it in isolation: this file's review correctly says "the
+-- signal is forgeable, but nothing acts on it yet"; combat.lua's review
+-- correctly says "IsHesitating() is a real function I'm calling correctly,
+-- per its own documented contract." The hole only exists in the SEAM
+-- between the two — a disclosure whose truth depended on a fact (no
+-- consumer exists) that a change in a different file quietly invalidated.
+-- Anyone editing either file's hesitation-related code should re-check the
+-- OTHER file's own disclosure before assuming it still holds.
+--
+-- THE FIX, THIS PASS: TickWellbeing below now caps how long ANY single
+-- continuous at/above-hesitationThreshold episode may keep renewing
+-- hesitatingUntil (see HESITATION_MAX_CONTINUOUS_MS's own comment at that
+-- call site) before forcing fearStress back down and requiring a fresh
+-- climb past the threshold. This does not, and cannot, tell a forged report
+-- apart from a real one (same structural limit as above) — it bounds the
+-- CONSEQUENCE instead: a forger can still force a K9 into repeated
+-- hesitation episodes for as long as they keep re-touching this event, but
+-- each episode is capped, and every episode is followed by a real,
+-- enforced window in which the K9 is guaranteed NOT to be hesitating and
+-- server/combat.lua's gate will grant requests normally again. "Indefinite,
+-- renewable denial of a specific K9's combat commands" is closed; "a
+-- forger who stays near one K9 can repeatedly force short disruptions" is
+-- the disclosed, accepted, BOUNDED risk that replaces it. Revisit if live
+-- abuse ever shows this bounded version is still disruptive enough to
+-- matter, mirroring the exact "revisit if a later phase changes the
+-- stakes"/"revisit if live abuse confirms this is a real problem in
+-- practice" framing server/tracking.lua's and this section's own prior
+-- text already used.
 -- ======================================================================
 RegisterNetEvent('qbx_k9unit:server:relayWeaponFire')
 
@@ -410,6 +465,30 @@ AddEventHandler('qbx_k9unit:server:relayWeaponFire', function()
     -- header comment above for the full exploit/fix writeup.
     RecentGunfire[#RecentGunfire + 1] = { coords = GetEntityCoords(ped), loggedAt = GetGameTimer(), source = src }
 end)
+
+-- SECURITY FIX (coder-security, config-audit follow-up pass): bounds how
+-- long a SINGLE continuous at/above-hesitationThreshold episode may keep
+-- renewing `hesitatingUntil` in TickWellbeing below. The structural problem
+-- (see the relayWeaponFire AddEventHandler's own header above and
+-- IsHesitating's doc comment) is that the server cannot tell a forged
+-- reporter apart from one real, continuously-firing shooter — both look
+-- identical as "at least one nearby source reporting fire within the
+-- lookback window." Rather than chase that unsolvable signal problem, this
+-- caps the CONSEQUENCE: once an episode has been continuously renewing for
+-- HESITATION_MAX_CONTINUOUS_MS, TickWellbeing force-resets fearStress to 0
+-- and requires a fresh climb back past hesitationThreshold before
+-- hesitatingUntil can be extended again — guaranteeing every episode is
+-- followed by a real window (at minimum, however long that fresh climb
+-- takes) in which server/combat.lua's ValidateCombatRequest is guaranteed
+-- to grant, not reject, a bite-hold/takedown request for this K9.
+-- Deliberately derived from Config.Wellbeing.FearStress.hesitationDurationMs
+-- (8 renewal-cycles' worth) rather than a bare magic number, so it scales
+-- automatically if that value is retuned later, and deliberately a LOCAL
+-- constant rather than a new Config.Wellbeing.FearStress field: this file's
+-- own MOOD_INTERACT_RANGE/DISTRACTION_COOLDOWN_PRUNE_INTERVAL_MS above are
+-- the established precedent for a small, disclosed, non-spec value living
+-- here rather than in config.lua.
+local HESITATION_MAX_CONTINUOUS_MS = Config.Wellbeing.FearStress.hesitationDurationMs * 8
 
 -- ======================================================================
 -- MOOD — "Pet K9" / "Feed K9" ox_target interactions (client/wellbeing.lua).
@@ -771,7 +850,58 @@ local function TickWellbeing()
                         end
 
                         if stats.fearStress >= Config.Wellbeing.FearStress.hesitationThreshold then
-                            stats.hesitatingUntil = math.max(stats.hesitatingUntil, now + Config.Wellbeing.FearStress.hesitationDurationMs)
+                            if stats.hesitationEpisodeStartedAt == 0 then
+                                stats.hesitationEpisodeStartedAt = now
+                            end
+
+                            -- SECURITY FIX (coder-security, config-audit
+                            -- follow-up pass): see HESITATION_MAX_CONTINUOUS_MS's
+                            -- own comment above the relayWeaponFire
+                            -- AddEventHandler for the full writeup. This is
+                            -- the enforcement half of that cap — the
+                            -- accessor's own comment and this section's own
+                            -- header above describe WHY it exists.
+                            if (now - stats.hesitationEpisodeStartedAt) < HESITATION_MAX_CONTINUOUS_MS then
+                                stats.hesitatingUntil = math.max(stats.hesitatingUntil, now + Config.Wellbeing.FearStress.hesitationDurationMs)
+                            else
+                                -- Forced recovery: fearStress must climb back
+                                -- past hesitationThreshold from zero before
+                                -- hesitatingUntil can be extended again.
+                                -- `hesitatingUntil` itself is left untouched
+                                -- here — it already carries an absolute
+                                -- timestamp from the last legitimate renewal
+                                -- (at most hesitationDurationMs in the
+                                -- future) and is allowed to elapse on its
+                                -- own, exactly like a real, ordinary
+                                -- hesitation window would.
+                                stats.fearStress = 0
+                                stats.hesitationEpisodeStartedAt = 0
+                            end
+                        elseif stats.hesitatingUntil <= now then
+                            -- Only clear the episode's start timestamp once
+                            -- hesitation has ACTUALLY lapsed (IsHesitating()
+                            -- genuinely false, i.e. the last renewal's
+                            -- absolute `hesitatingUntil` is in the past) —
+                            -- NOT merely because this one tick's fearStress
+                            -- sample dipped below threshold. `hesitatingUntil`
+                            -- is a several-second-wide absolute timestamp,
+                            -- not re-evaluated between ticks, so a fearStress
+                            -- value that dips below threshold for a single
+                            -- tick and climbs back above it on the next does
+                            -- NOT give the K9 a real window to act — the
+                            -- earlier renewal is still in effect the whole
+                            -- time. Resetting the episode clock on that
+                            -- dip alone would let a forger engineer exactly
+                            -- that one-tick wobble once per
+                            -- HESITATION_MAX_CONTINUOUS_MS to keep resetting
+                            -- the cap while hesitatingUntil itself never
+                            -- actually lapses — silently recreating the
+                            -- indefinite lock this cap exists to close.
+                            -- Keying the reset off `hesitatingUntil` instead
+                            -- ties "episode over" to the same real-world
+                            -- condition server/combat.lua's ValidateCombatRequest
+                            -- itself checks (IsHesitating() returning false).
+                            stats.hesitationEpisodeStartedAt = 0
                         end
                     end
 

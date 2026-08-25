@@ -679,6 +679,28 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     -- inside either accessor must fail this specific request closed (never
     -- granted), not bubble up and abort the whole event handler for an
     -- unrelated reason.
+    --
+    -- SECURITY, READ BEFORE CHANGING THIS BLOCK (coder-security, config-audit
+    -- follow-up pass): this is a HARD reject driven by IsHesitating(), and
+    -- IsHesitating() is driven by a payload-less, forgeable client event
+    -- (server/wellbeing.lua's own header, 'relayWeaponFire') — CONFIRMED
+    -- this pass to be forgeable by ANY connected player who is merely
+    -- physically near the K9 whose hesitation they want to force, not just
+    -- by that K9's own client or by a real combat participant. That was
+    -- true, and disclosed, before this call site existed; it became a real
+    -- targeted denial-of-capability (not a self-only nuisance) the moment
+    -- this hard reject started consuming it, because a forged report here
+    -- blocks THIS specific K9's bite-hold/takedown, not the forger's own.
+    -- server/wellbeing.lua's TickWellbeing now caps how long any one
+    -- hesitation episode can keep renewing (HESITATION_MAX_CONTINUOUS_MS)
+    -- specifically so this reject can never become an indefinite lock —
+    -- every episode is guaranteed to be followed by a window where this
+    -- check passes again. That bound lives entirely in server/wellbeing.lua;
+    -- this file does not need its own copy of that logic, only needs to
+    -- keep trusting IsHesitating()'s return value at face value, same as
+    -- today. If this reject is ever softened into a penalty instead of an
+    -- outright denial, or IsHesitating() gains real corroboration, update
+    -- server/wellbeing.lua's own IsHesitating doc comment in the same pass.
     if type(IsHesitating) == 'function' or type(IsDistracted) == 'function' then
         local k9Player = exports.qbx_core:GetPlayer(src)
         local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid

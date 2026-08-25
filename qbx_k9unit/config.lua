@@ -1075,9 +1075,23 @@ Config.Wellbeing = {
         -- server/wellbeing.lua documents as deliberately payload-less and
         -- therefore FORGEABLE. That disclosure was written when nothing
         -- consumed IsHesitating(); combat.lua does now. So a hostile client
-        -- can re-touch that event to hold a specific K9 in hesitation
-        -- indefinitely and lock out its combat actions. Two correct reviews,
-        -- one emergent hole. Tuning these numbers does NOT close it.
+        -- can re-touch that event to lock out a specific K9's combat actions.
+        -- CLOSED, and the wording here has been corrected: this comment used
+        -- to say "indefinitely", which was true when written and is no longer.
+        -- server/wellbeing.lua's HESITATION_MAX_CONTINUOUS_MS now caps any
+        -- single continuous hesitation episode, forcing a real window in which
+        -- ValidateCombatRequest is guaranteed to grant. What remains, and is
+        -- disclosed rather than claimed closed, is that a forger who stays
+        -- nearby can still cause repeated BOUNDED disruption.
+        -- Two things worth carrying forward. First, the exploit was worse than
+        -- its own original disclosure: once fearStress is primed, the renewal
+        -- check re-extends hesitation every tick regardless of new input, so
+        -- sustaining the lock cost roughly one forged event per minute, not
+        -- the continuous spam the note assumed. Second, a forger targets
+        -- ANOTHER player's K9 simply by standing within gunfireRadius of it --
+        -- proximity to the victim, no relationship to the attacker required.
+        -- Two correct reviews, one emergent hole in the seam between them.
+        -- Tuning these numbers does NOT close it; the cap does.
         hesitationThreshold      = 85,
         hesitationDurationMs     = 8000,  -- how long a rejected Phase 3 combat-command attempt stays refused before the K9 may retry, absent a manual calm-down
         calmDownReduceAmount     = 40,    -- "Calm Down" command's effect (self-only, see server/wellbeing.lua)
