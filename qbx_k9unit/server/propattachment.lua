@@ -547,7 +547,14 @@ AddEventHandler('onResourceStart', function(resourceName)
     for _, key in ipairs({ 'offsetX', 'offsetY', 'offsetZ', 'rotX', 'rotY', 'rotZ' }) do
         assert(type(cfg[key]) == 'number', ('[qbx_k9unit] Config.PropAttachments.%s must be a number.'):format(key))
     end
-    assert(type(cfg.toggleCooldownMs) == 'number' and cfg.toggleCooldownMs >= 0, '[qbx_k9unit] Config.PropAttachments.toggleCooldownMs must be a number >= 0.')
+    -- `> 0`, not `>= 0`: ToggleCooldown is a NewCooldown() with no
+    -- constructor default, so this value is read fresh at call time, where
+    -- server/cooldowns.lua treats a non-positive threshold as permanently ON
+    -- rather than as "no cooldown". A 0 set to mean "unthrottled" would
+    -- instead lock every player out of toggling their vest again for the
+    -- rest of the resource's uptime, after their first toggle. Matches
+    -- server/admin.lua and server/bonetool.lua, which both require > 0.
+    assert(type(cfg.toggleCooldownMs) == 'number' and cfg.toggleCooldownMs > 0, '[qbx_k9unit] Config.PropAttachments.toggleCooldownMs must be a number > 0 -- 0 or negative does NOT mean "no cooldown" here, it means the vest toggle fails closed (permanently blocked) after one use. See server/cooldowns.lua\'s fail-closed threshold handling.')
     assert(type(cfg.pendingConfirmTtlMs) == 'number' and cfg.pendingConfirmTtlMs > 0, '[qbx_k9unit] Config.PropAttachments.pendingConfirmTtlMs must be a positive number.')
     assert(type(cfg.confirmDistanceTolerance) == 'number' and cfg.confirmDistanceTolerance > 0, '[qbx_k9unit] Config.PropAttachments.confirmDistanceTolerance must be a positive number.')
 

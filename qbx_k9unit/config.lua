@@ -636,6 +636,16 @@ Config.Combat = {
         -- and no variety. Set slightly above NonLethalTakedown's 30000 on
         -- purpose: a bite hold can pay out every 3s of a 15s window,
         -- whereas a takedown is a single discrete event.
+        --
+        -- What this bounds, precisely: 35000 exceeds the 20000 per-K9
+        -- cooldown, so against ONE target the per-target gate binds and the
+        -- ceiling is about 2057 XP/hr. With two or more targets available
+        -- the per-K9 cooldown binds instead and the ceiling rises to about
+        -- 3600 XP/hr. That second number is the honest one for a populated
+        -- server -- the per-target gate closes the degenerate
+        -- single-stationary-target farm, it does not cap the mechanic
+        -- overall, and the per-K9 cooldown was always the intended throttle
+        -- for legitimate repeated use.
         targetCooldownMs = 35000,
     },
     NonLethalTakedown = {
@@ -1074,7 +1084,16 @@ Config.Wellbeing = {
         idleRegenPerTick        = 1.0,  -- per tick while not sprinting
         restRegenPerTick        = 4.0,  -- WIRED. server/wellbeing.lua scans GetAllObjects()/GetAllVehicles() once per tick (shared across all K9s, not per-K9) for restSources models and applies this instead of idleRegenPerTick when a K9 is within restRadius and not sprinting. Positions are resolved server-side; a client can never claim to be resting. The "NOT WIRED THIS PASS" note that stood here was true when written.
         restRadius              = 5.0,
-        restSources             = { 'water_bowl' }, -- PLACEHOLDER, not wired to any real detection this pass
+        -- The DETECTION is wired (see restRegenPerTick above -- the scan,
+        -- the radius check and the server-side position resolution are all
+        -- real). What is unverified is this MODEL NAME: 'water_bowl' is a
+        -- guess that never got the two-independent-sources treatment
+        -- prop_dog_cage_01 and prop_bodyarmour_02 got elsewhere in this
+        -- file, so it may match nothing in the world. Confirm it on a dev
+        -- server before enabling FatigueSystem, or the rest bonus simply
+        -- never triggers -- silently, since a scan that matches nothing is
+        -- indistinguishable from a K9 that is never near a rest source.
+        restSources             = { 'water_bowl' },
         speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty
         -- RAISED 0.85 -> 0.90. These three wellbeing penalties MULTIPLY:
         -- client/movement.lua's own comment computes the worst case as
