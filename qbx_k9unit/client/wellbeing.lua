@@ -358,7 +358,15 @@ if Config.Features.MoodSystem then
                 distance = 3.0,
                 canInteract = function(entity)
                     if not Config.Features.MoodSystem then return false end
-                    return IsEntityModelK9(entity)
+                    -- WIDENED (K9 role/model decoupling) with
+                    -- IsK9RoleForPlayer(...) -- client/appearance.lua's own
+                    -- per-target-cached (1s TTL) server round trip for
+                    -- "does THAT player hold the K9 role" -- so a target on
+                    -- a human/custom model who already holds the role can
+                    -- still be petted. Matches server/wellbeing.lua's own
+                    -- ResolveK9Ped, which already accepts
+                    -- (looksLikeK9 or holdsK9Role) server-side.
+                    return IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
                 end,
                 onSelect = function(data)
                     local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
@@ -386,7 +394,9 @@ if Config.Features.MoodSystem then
                 distance = 3.0,
                 canInteract = function(entity)
                     if not Config.Features.MoodSystem then return false end
-                    return IsEntityModelK9(entity)
+                    -- WIDENED (K9 role/model decoupling) -- same
+                    -- IsK9RoleForPlayer(...) reasoning as "Pet K9" above.
+                    return IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
                 end,
                 onSelect = function(data)
                     local targetServerId = ResolvePlayerServerIdFromPed(data.entity)

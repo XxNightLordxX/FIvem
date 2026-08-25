@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/partnership.lua
 
-    Phase 3 implementation (coder-backend), PHASE3_SPEC.md §12.0 item 7
+    Phase 3 implementation (coder-backend), DEVELOPER_REFERENCE.md §12.0 item 7
     (Revision 5, coder-architect resolution) / §12.3's file-plan entry.
     Owns the "K9 partnership" registry -- a persistent, DB-backed,
     mutually-consented "who is my ongoing handler/K9 partner" relationship,
@@ -9,14 +9,14 @@
     This file is a FOUNDATION ONLY: it establishes/persists/tears down a
     partnership and exposes read accessors for a future consumer, but wires
     NO combat consequence of its own. `BiteAndHold`'s Recall actor and
-    `HandlerDownDefense` (the two features PHASE3_SPEC.md §12.0 item 7 names
+    `HandlerDownDefense` (the two features DEVELOPER_REFERENCE.md §12.0 item 7 names
     as blocked on this file existing) are explicitly OUT OF SCOPE here and
     remain unimplemented -- see "FUTURE CONSUMERS" below for the exact
     accessor functions either should call once built.
 
     ======================================================================
     WHY OPTION B (THIS FILE), NOT LeashPairs -- one-paragraph restatement,
-    full reasoning in PHASE3_SPEC.md §12.0 item 7: `LeashPairs` is
+    full reasoning in DEVELOPER_REFERENCE.md §12.0 item 7: `LeashPairs` is
     explicitly ephemeral, session-scoped state for a movement-restriction
     mechanic (server/main.lua's own header: "a live session mechanic, not
     part of the certification/permission system"). `HandlerDownDefense`'s
@@ -92,7 +92,7 @@
     are two different columns, so MySQL's per-column unique-index
     enforcement never sees them as conflicting. This resource's own design
     intent (the flat `Partnerships[citizenid] = { partner, isK9, active }`
-    cache shape PHASE3_SPEC.md §12.0 item 7 itself specifies -- ONE entry
+    cache shape DEVELOPER_REFERENCE.md §12.0 item 7 itself specifies -- ONE entry
     per citizenid, not a list) assumes a citizenid holds AT MOST ONE active
     partnership TOTAL, in either role, at a time -- a real player controls
     one character at a time, and "you have one partner" is the intended
@@ -127,7 +127,7 @@
     `k9_citizenid`/`handler_citizenid` columns are decided ONCE, at
     establishment time, and never re-validated against the parties' CURRENT
     ped model while the partnership stays active. This is intentional, not
-    an oversight: the entire point of this registry (per PHASE3_SPEC.md
+    an oversight: the entire point of this registry (per DEVELOPER_REFERENCE.md
     §12.0 item 7's own framing) is to answer "who is my partner"
     independent of momentary state -- re-deriving role from a live model
     check on every read would reintroduce exactly the "goes stale the
@@ -141,11 +141,11 @@
 
     ======================================================================
     FUTURE CONSUMERS (both explicitly OUT OF SCOPE for this file/pass --
-    read PHASE3_SPEC.md §12.0 item 7's "Consumers, made concrete" block
+    read DEVELOPER_REFERENCE.md §12.0 item 7's "Consumers, made concrete" block
     before wiring either):
     - BiteAndHold's Recall actor should call
         IsActivePartnerOf(recallerCitizenid, heldK9Citizenid)
-      which returns exactly the boolean expression PHASE3_SPEC.md §12.0
+      which returns exactly the boolean expression DEVELOPER_REFERENCE.md §12.0
       item 7 specifies (`Partnerships[recallerCitizenid].active and
       Partnerships[recallerCitizenid].partner == heldK9Citizenid`) via a
       safe accessor rather than reaching into `Partnerships` directly --
@@ -156,7 +156,7 @@
         GetActivePartnerCitizenId(handlerCitizenid)
       which returns `(partnerCitizenid, isK9)` or `(nil, nil)` if no active
       partnership exists for that citizenid -- a silent no-op per
-      PHASE3_SPEC.md §12.0 item 7's own "never partnered, or partnership
+      DEVELOPER_REFERENCE.md §12.0 item 7's own "never partnered, or partnership
       broken: silent no-op" framing. The caller is still responsible for
       separately checking the resolved K9 citizenid is CURRENTLY ONLINE
       (e.g. via exports.qbx_core:GetPlayerByCitizenId) before notifying --
@@ -182,7 +182,7 @@
       closes that the earlier, pre-mutex re-check alone could not).
     - 'qbx_k9unit:server:breakPartnership' ()
       Either party, at any time, ZERO consent needed -- mirrors leash's
-      detachLeash exactly (PHASE3_SPEC.md §12.0 item 7 point 3's own "no
+      detachLeash exactly (DEVELOPER_REFERENCE.md §12.0 item 7 point 3's own "no
       unbounded trap" restatement, now applied to a persistent relationship
       rather than only a transient one).
 
@@ -237,7 +237,7 @@
       from server/certifications.lua alongside every existing
       ForceDetachLeashForSource/ForceDetachOfficerLeashForSource call site
       (K9-role cert revocation, either party's department change) --
-      PHASE3_SPEC.md §12.0 item 7 point 3's exact instruction: "the exact
+      DEVELOPER_REFERENCE.md §12.0 item 7 point 3's exact instruction: "the exact
       call-site list that file already maintains for leash, extended with
       one more line per site rather than a new independent mechanism."
       Returns `false` (no-op, not an error) if `citizenid` has no active
@@ -252,7 +252,7 @@
     (server/certifications.lua's own `ForceDetachLeashIfOnline` wrapper
     exists specifically to make this no-op explicit at the call site). A
     K9 partnership is the OPPOSITE by design intent -- DB-backed
-    specifically so it survives a disconnect (PHASE3_SPEC.md §12.0 item 7
+    specifically so it survives a disconnect (DEVELOPER_REFERENCE.md §12.0 item 7
     point 2: "session-spanning, plausibly shift-spanning"). This means
     `RevokeCertificationOffline` (server/certifications.lua) revoking a
     GENUINELY OFFLINE K9-role citizenid's certification must still be able
@@ -314,7 +314,7 @@
 ]]
 
 -- Partnerships[citizenid] = { partner = partnerCitizenid, isK9 = boolean,
--- active = true } -- ONE entry per citizenid, per PHASE3_SPEC.md §12.0 item
+-- active = true } -- ONE entry per citizenid, per DEVELOPER_REFERENCE.md §12.0 item
 -- 7's own cache shape (see the "THE TWO UNIQUE CONSTRAINTS" header section
 -- above for the gap between this single-entry assumption and what the DB
 -- schema alone actually enforces). `local`, exactly like
@@ -484,7 +484,7 @@ function GetActivePartnerCitizenId(citizenid)
 end
 
 --- Read-only accessor over the `local` `Partnerships` cache, expressing
---- exactly the boolean check PHASE3_SPEC.md §12.0 item 7 specifies for
+--- exactly the boolean check DEVELOPER_REFERENCE.md §12.0 item 7 specifies for
 --- BiteAndHold's Recall actor -- see "FUTURE CONSUMERS" in this file's
 --- header for the intended caller (not yet implemented).
 --- @param citizenid string
@@ -555,7 +555,7 @@ end
 --- CheckLeashEligibility exact TOCTOU discipline -- re-run at accept time
 --- so nothing that changed in between slips through).
 ---
---- AUTHORIZATION MODEL (PHASE3_SPEC.md §12.0 item 7 point 4 -- "mutual
+--- AUTHORIZATION MODEL (DEVELOPER_REFERENCE.md §12.0 item 7 point 4 -- "mutual
 --- consent only, no certifier-grade hierarchy"): deliberately reuses
 --- LEASH's own asymmetric eligibility shape, not a stricter
 --- both-need-HasK9Access reading of that item's own point 1 prose ("both
@@ -576,7 +576,7 @@ end
 --- needs mere department membership, no same-department cross-check).
 --- This function follows point 4's precise wording and
 --- CheckLeashEligibility's shipped precedent over point 1's looser prose,
---- since PHASE3_SPEC.md §12.0 item 7 point 1 itself says this design
+--- since DEVELOPER_REFERENCE.md §12.0 item 7 point 1 itself says this design
 --- "reuses `CheckLeashEligibility`" as its own stated model. Flagged
 --- honestly as a judgment call on an ambiguous spec phrase, not asserted
 --- as the only possible reading.
@@ -630,8 +630,15 @@ local function CheckPartnershipEligibility(initiatorSrc, targetSrc)
     -- Roles via live model check (never client-claimed) -- see this file's
     -- header "ROLE IS FROZEN AT ESTABLISHMENT" note for why this is the
     -- ONLY point in this partnership's lifetime role is derived this way.
+    -- WIDENED (K9 role/model decoupling, server/appearance.lua) with the
+    -- same `or HasK9Role(...)` shape as server/main.lua's identical
+    -- CheckLeashEligibility check -- see that file's own comment on this
+    -- line for the full "why OR, why guarded, why not touching
+    -- IsConfiguredK9Model itself" reasoning, which applies verbatim here.
     local initiatorIsK9 = IsConfiguredK9Model(GetEntityModel(initiatorPed))
+        or (type(HasK9Role) == 'function' and HasK9Role(initiatorSrc))
     local targetIsK9 = IsConfiguredK9Model(GetEntityModel(targetPed))
+        or (type(HasK9Role) == 'function' and HasK9Role(targetSrc))
 
     if not initiatorIsK9 and not targetIsK9 then
         return false, nil, nil, 'no_k9_party'
@@ -1098,7 +1105,7 @@ local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
 end
 
 --- Either party ends the partnership unilaterally, no consent required --
---- mirrors server/main.lua's detachLeash exactly (PHASE3_SPEC.md §12.0
+--- mirrors server/main.lua's detachLeash exactly (DEVELOPER_REFERENCE.md §12.0
 --- item 7 point 3's "no unbounded trap" guarantee, now applied to a
 --- persistent relationship). No-op if the caller isn't currently
 --- partnered with anyone.
@@ -1162,7 +1169,7 @@ end)
 --- Resource-global (no `local`) -- exposed for server/certifications.lua to
 --- call alongside every existing ForceDetachLeashForSource/
 --- ForceDetachOfficerLeashForSource call site (K9-role cert revocation,
---- either party's department change) -- PHASE3_SPEC.md §12.0 item 7 point
+--- either party's department change) -- DEVELOPER_REFERENCE.md §12.0 item 7 point
 --- 3's exact instruction. CITIZENID-keyed, not source-keyed -- works
 --- whether `citizenid` is online or offline right now (see this file's
 --- header "OFFLINE-CAPABLE BY DESIGN" section for why this is required,
@@ -1221,7 +1228,7 @@ AddEventHandler('playerDropped', function(_reason)
     -- DELIBERATELY DOES NOT CALL DoBreakPartnership / ForceBreakPartnershipForCitizenId
     -- HERE. A K9 partnership is explicitly designed to SURVIVE a
     -- disconnect/reconnect -- that is the entire reason it is DB-backed
-    -- rather than ephemeral (PHASE3_SPEC.md §12.0 item 7 point 2:
+    -- rather than ephemeral (DEVELOPER_REFERENCE.md §12.0 item 7 point 2:
     -- "session-spanning, plausibly shift-spanning"). Only this citizenid's
     -- in-memory CACHE entry is dropped below -- mirroring
     -- server/certifications.lua's own unbounded-growth fix for its

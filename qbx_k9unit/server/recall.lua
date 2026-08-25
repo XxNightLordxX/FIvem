@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/recall.lua
 
-    Phase 3 implementation, PHASE3_SPEC.md §12.5.1's "Recall actor" (§12.0
+    Phase 3 implementation, DEVELOPER_REFERENCE.md §12.5.1's "Recall actor" (§12.0
     item 7, Revision 5's resolution) -- the one consumer server/partnership.lua's
     own "FUTURE CONSUMERS" header section names as still unbuilt for
     BiteAndHold's Recall path, and this resource's PRIMARY escape hatch for
@@ -24,7 +24,7 @@
 
     ======================================================================
     NO UNBOUNDED TRAP -- THE LOAD-BEARING INVARIANT THIS FILE EXISTS TO
-    SATISFY (read before touching a single line below): PHASE3_SPEC.md's own
+    SATISFY (read before touching a single line below): DEVELOPER_REFERENCE.md's own
     §12.0 item 4 names BiteAndHold/NonLethalTakedown/PropDragging's hard
     duration/distance caps as "this mechanic's version of the leash's 'no
     unbounded trap' guarantee -- not merely a balance knob, load-bearing for
@@ -50,7 +50,7 @@
     ======================================================================
 
     SCOPE: ALL THREE ENGAGEMENT TYPES, NOT JUST BITEANDHOLD --
-    PHASE3_SPEC.md §12.5.1's own prose names Recall specifically for
+    DEVELOPER_REFERENCE.md §12.5.1's own prose names Recall specifically for
     BiteAndHold ("ending early on ... the K9's registered partner ...
     issuing 'Recall'"). This file generalizes that to whatever engagement
     server/combat.lua's own `K9ActiveEffect[k9Src]` currently names for the
@@ -60,14 +60,14 @@
     own `EndHold` is ALREADY effect-agnostic (a single shared teardown for
     all three, see that function's own header) -- there is no bite-specific
     machinery this file would need to skip for takedown/drag; (2)
-    PHASE3_SPEC.md §12.0 item 4's "no unbounded trap" guarantee is framed
+    DEVELOPER_REFERENCE.md §12.0 item 4's "no unbounded trap" guarantee is framed
     identically across all three mechanics, not as a BiteAndHold-only
     concern; (3) narrowing Recall to bite-only would leave a handler with no
     way to call off their OWN partner K9 mid-drag or mid-takedown-ragdoll-
     window, which is a strictly WORSE "unbounded trap" posture than
     generalizing produces. Flagged explicitly as a deliberate scope
     decision, not a silent reading of the spec's literal text -- whoever
-    next reconciles PHASE3_SPEC.md's prose with shipped behavior should
+    next reconciles DEVELOPER_REFERENCE.md's prose with shipped behavior should
     update §12.5.1's own text to match, not the other way around.
 
     ======================================================================

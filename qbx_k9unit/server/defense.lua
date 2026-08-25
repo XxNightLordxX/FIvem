@@ -1,9 +1,9 @@
 --[[
     qbx_k9unit/server/defense.lua
 
-    Phase 3 implementation (coder-backend), PHASE3_SPEC.md §12.5.3
+    Phase 3 implementation (coder-backend), DEVELOPER_REFERENCE.md §12.5.3
     (Handler-Down Defense) / §12.3's file-plan row for this exact file.
-    Was blocked all session on `server/partnership.lua` (PHASE3_SPEC.md
+    Was blocked all session on `server/partnership.lua` (DEVELOPER_REFERENCE.md
     §12.0 item 7) not existing -- that blocker is gone as of commit 52a58a1
     (`server/partnership.lua`/`client/partnership.lua` landed) and commit
     94fbc4e (`server/certifications.lua` wired to tear partnerships down on
@@ -33,7 +33,7 @@
     compare server/combat.lua's own "NPC-TARGET NATIVE EXECUTION CONTEXT"
     section for the same kind of honest deviation writeup):
 
-    1. "Reuses Phase 2's server/tracking.lua damage-event log" (PHASE3_SPEC.md
+    1. "Reuses Phase 2's server/tracking.lua damage-event log" (DEVELOPER_REFERENCE.md
        §12.1's 3e row, §12.2's `hostileLookbackSeconds` comment) is WRONG
        about what that log actually contains. Read server/tracking.lua in
        full before writing this file: `relayDamageEvent` is payload-less BY
@@ -85,7 +85,7 @@
 
     ======================================================================
     "IS THE HANDLER DOWN" -- SAME NATIVE-RELIABILITY PROBLEM AS
-    PROPDRAGGING'S DOWNED-CHECK (PHASE3_SPEC.md §12.0 item 6), RESOLVED THE
+    PROPDRAGGING'S DOWNED-CHECK (DEVELOPER_REFERENCE.md §12.0 item 6), RESOLVED THE
     SAME WAY: a raw `Config.Combat.HandlerDownDefense.handlerHealthThreshold`
     comparison against `GetEntityHealth` has the identical false-positive/
     false-negative shape item 6 documents for PropDragging's target ("most
@@ -212,7 +212,7 @@
       -- server/partnership.lua may be absent, or `HandlerPartnership` may
       be disabled on a given server (in which case the accessor, if
       defined at all, simply never has anything cached to return -- a
-      silent no-op either way, per PHASE3_SPEC.md §12.0 item 7's own
+      silent no-op either way, per DEVELOPER_REFERENCE.md §12.0 item 7's own
       framing).
     - Calls `ResolveNetworkEntity(netId, expectedEntityType)`
       (server/entities.lua) for EVERY netId resolution below -- never a
@@ -243,10 +243,10 @@
     Config surface REQUESTED (not yet landed as of this file -- see this
     pass's own report for the exact block): `Config.Combat.HandlerDownDefense`
     with `handlerHealthThreshold`/`triggerRadius`/`hostileLookbackSeconds`
-    (PHASE3_SPEC.md §12.2's original sketch values, still unreviewed
+    (DEVELOPER_REFERENCE.md §12.2's original sketch values, still unreviewed
     placeholders) plus four NEW fields this implementation needs
     (`pollIntervalMs`, `retriggerCooldownMs`, `promptTtlMs`,
-    `attackerReportCooldownMs`) that PHASE3_SPEC.md's own sketch did not
+    `attackerReportCooldownMs`) that DEVELOPER_REFERENCE.md's own sketch did not
     anticipate, since it did not work out the polling/hint-relay mechanics
     this file had to design to make the feature buildable at all.
     `Config.Features.HandlerDownDefense` stays `false` -- this file must
@@ -424,7 +424,7 @@ local function IsHandlerDown(handlerSrc, handlerPed)
     -- No override configured: best-effort metadata guess (same
     -- metadata.isdead/.inlaststand convention as server/combat.lua's own
     -- IsTargetDowned default) OR'd with the literal handlerHealthThreshold
-    -- PHASE3_SPEC.md §12.2's original sketch named -- either signal alone
+    -- DEVELOPER_REFERENCE.md §12.2's original sketch named -- either signal alone
     -- can miss a real "handler needs help" moment on a server with neither
     -- convention wired the way the other expects; combining them costs
     -- nothing given this is a non-authoritative trigger (see header).
@@ -441,7 +441,7 @@ end
 --- partner K9 is online and within triggerRadius, resolves a fresh
 --- pre-selected hostile if one is on record, and -- if every check
 --- passes -- sends the notification. Silent no-op at every step per
---- PHASE3_SPEC.md §12.0 item 7's own "never partnered, or partnership
+--- DEVELOPER_REFERENCE.md §12.0 item 7's own "never partnered, or partnership
 --- broken: silent no-op" framing, extended here to every OTHER reason this
 --- convenience feature might not apply right now (K9 offline, K9 too far,
 --- already notified recently).
@@ -508,7 +508,7 @@ local function TryNotifyPartnerK9(handlerSrc, handlerPed)
     -- K9" (the opposite of what the value actually means) and could mislead
     -- a future reader into "fixing" a correct check.
     local partnerCitizenid, queriedIsK9Role = GetActivePartnerCitizenId(handlerCitizenid)
-    -- Silent no-op: never partnered / partnership broken (PHASE3_SPEC.md
+    -- Silent no-op: never partnered / partnership broken (DEVELOPER_REFERENCE.md
     -- §12.0 item 7), OR the citizenid whose health crossed the threshold
     -- (handlerCitizenid, the queried party above) is itself the K9-role
     -- party, not the handler-role party -- HandlerDownDefense is

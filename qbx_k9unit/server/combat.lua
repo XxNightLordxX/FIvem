@@ -1912,8 +1912,26 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
     -- would incorrectly penalize the NEXT K9 who tries this same target,
     -- and burning BiteHoldCooldown (per-K9) here for nothing would cost this
     -- K9 20s for a request that was never granted.
-    if BiteHoldCooldown.IsOnCooldown(src, Config.Combat.BiteAndHold.cooldownMs)
-        or BiteHoldTargetCooldown.IsOnCooldown(targetNetId, Config.Combat.BiteAndHold.targetCooldownMs) then
+    --
+    -- NO EXPLICIT thresholdMs ARGUMENT BELOW (this pass, QA sandbox repro --
+    -- see server/cooldowns.lua's header ADDENDUM): this used to re-read
+    -- Config.Combat.BiteAndHold.cooldownMs/targetCooldownMs RAW, directly
+    -- from Config, as a per-call override -- completely redundant with (and,
+    -- worse, silently SHADOWING) each tracker's own constructor default a
+    -- few lines above, which is now the SAFE, ResolveConfiguredThresholdMs-
+    -- resolved value. Since `local threshold = thresholdMs or
+    -- defaultThresholdMs` treats a non-nil override as authoritative and 0
+    -- is truthy in Lua, that raw re-read would have silently REOPENED this
+    -- exact footgun at the one place that actually enforces it at runtime,
+    -- even after the constructor-level fix: a misconfigured
+    -- Config.Combat.BiteAndHold.cooldownMs = 0 would still have permanently
+    -- fail-closed this ONE mechanic, ignoring the safe fallback the
+    -- constructor already computed. Config.Combat.BiteAndHold.cooldownMs/
+    -- targetCooldownMs are never mutated at runtime anywhere in this
+    -- codebase (grep-verified), so omitting them here changes nothing for a
+    -- valid config and gets the safe fallback for an invalid one, for free.
+    if BiteHoldCooldown.IsOnCooldown(src)
+        or BiteHoldTargetCooldown.IsOnCooldown(targetNetId) then
         NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
         return
     end
@@ -2090,8 +2108,18 @@ local function HandleTakedownRequest(src, targetNetId)
     -- Cooldowns CHECKED (not yet consumed) before the yield below — actual
     -- Consume happens only after re-validation post-yield, so a request
     -- that ultimately fails the speed gate never burns either cooldown.
-    if TakedownCooldown.IsOnCooldown(src, Config.Combat.NonLethalTakedown.cooldownMs)
-        or TakedownTargetCooldown.IsOnCooldown(targetNetId, Config.Combat.NonLethalTakedown.targetCooldownMs) then
+    --
+    -- NO EXPLICIT thresholdMs ARGUMENT BELOW (this pass, QA sandbox repro --
+    -- same reasoning as requestBiteHold's identical fix above, see that
+    -- comment / server/cooldowns.lua's header ADDENDUM for the full
+    -- writeup): relies on TakedownCooldown/TakedownTargetCooldown's own
+    -- ResolveConfiguredThresholdMs-resolved constructor default instead of
+    -- re-reading Config.Combat.NonLethalTakedown.cooldownMs/targetCooldownMs
+    -- raw, which would silently shadow that safe default with an invalid
+    -- Config value again at the one place this actually gates a real
+    -- request.
+    if TakedownCooldown.IsOnCooldown(src)
+        or TakedownTargetCooldown.IsOnCooldown(targetNetId) then
         NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
         return
     end
@@ -2139,8 +2167,14 @@ local function HandleTakedownRequest(src, targetNetId)
         return
     end
 
-    if not TakedownCooldown.Consume(src, Config.Combat.NonLethalTakedown.cooldownMs)
-        or not TakedownTargetCooldown.Consume(targetNetId, Config.Combat.NonLethalTakedown.targetCooldownMs) then
+    -- NO EXPLICIT thresholdMs ARGUMENT BELOW either -- same reasoning as the
+    -- pre-yield IsOnCooldown check above; both must resolve the SAME
+    -- threshold the pre-yield check just used, which is only guaranteed by
+    -- both reading the tracker's own constructor default rather than each
+    -- independently re-reading (and each independently risking shadowing)
+    -- raw Config.
+    if not TakedownCooldown.Consume(src)
+        or not TakedownTargetCooldown.Consume(targetNetId) then
         -- Extremely narrow race: something else consumed one of these
         -- cooldowns during the wait above despite the pre-check. Fail
         -- closed rather than apply a takedown with an inconsistent

@@ -159,24 +159,32 @@
     ======================================================================
 
     ======================================================================
-    NAME RESOLUTION -- DISCLOSED GAP, reported in full this pass. An ONLINE
-    citizenid's display name resolves via qbx_core's own PlayerData.charinfo
+    NAME RESOLUTION -- DISCLOSED GAP, ORIGINALLY reported in full this pass,
+    NOW ANSWERED (2026-08-25, native-api-assistant): an ONLINE citizenid's
+    display name resolves via qbx_core's own PlayerData.charinfo
     (firstname/lastname), falling back to the GetPlayerName native (a
     real, VERIFIED server-callable native -- ext/native-decls/GetPlayerName.md
-    returns HTTP 200, apiset: server) if charinfo is absent/malformed. An
-    OFFLINE citizenid has no live Player object at all, and this codebase
-    has no independently-verified qbx_core export (e.g. a documented
-    GetOfflinePlayer/GetOfflinePlayerByCitizenId) or confirmed `players`
-    table column layout for resolving one -- reaching for either without
-    verification risks silently returning nil/erroring for every offline
-    roster row, the exact class of "never allowlist a native/export on an
-    assumption" mistake this session's own coordination notes warn against
-    repeatedly. ResolveDisplayName below therefore falls back to the
-    citizenid ITSELF for an offline target -- always present, never wrong,
-    just less friendly than a real name. Requested from native-api-assistant
-    this pass (message sent, no response received in this session's
-    window); until answered, every offline roster/summary row shows its
-    citizenid where a name would otherwise appear.
+    returns HTTP 200, apiset: server) if charinfo is absent/malformed.
+
+    For an OFFLINE citizenid, this question is now closed: confirmed
+    directly against qbx_core's live server/player.lua that
+    `exports.qbx_core:GetOfflinePlayer(citizenid)` IS a real export --
+    returns a Player-shaped object (`.PlayerData`, `.Offline = true`) for a
+    known citizenid, or nil if not found. `GetOfflinePlayerByCitizenId`
+    does NOT exist as a separate export -- that half of the name floated in
+    this file's original draft was never real; `GetOfflinePlayer` alone is
+    the one and only offline accessor, already keyed by citizenid (no
+    separate ByCitizenId variant needed).
+
+    NOT YET WIRED INTO ResolveDisplayName BELOW -- that is a genuine
+    behavior change (a new resource-global call, a new nil/malformed-
+    PlayerData guard, a real player-visible improvement to every offline
+    roster/summary row) that belongs to whoever next owns this file's
+    runtime logic, not to the structural pass that closed this question.
+    ResolveDisplayName still falls back to the citizenid ITSELF for an
+    offline target in the meantime -- always present, never wrong, just
+    less friendly than a real name; that fallback remains correct and safe
+    to keep exactly as-is until the wiring lands.
     ======================================================================
 
     ======================================================================

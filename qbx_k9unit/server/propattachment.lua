@@ -402,7 +402,13 @@ RegisterNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', function()
     local ped = GetPlayerPed(src)
     if ped == 0 then return end -- defensive: src disconnected between the event firing and this line
 
-    if not IsConfiguredK9Model(GetEntityModel(ped)) then
+    -- WIDENED (K9 role/model decoupling, server/appearance.lua): a caller
+    -- who holds the decoupled K9 ROLE (HasK9Role) but is not currently on
+    -- a configured K9 model may still attach a prop -- same
+    -- `type(...) == 'function'` guard/fail-closed reasoning as
+    -- server/fetch.lua's identical widening of its own carry-eligibility
+    -- check.
+    if not (IsConfiguredK9Model(GetEntityModel(ped)) or (type(HasK9Role) == 'function' and HasK9Role(src))) then
         NotifyPlayer(src, locale('propattachment.requires_k9_form'), 'error')
         return
     end

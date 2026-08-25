@@ -129,16 +129,26 @@
     not edited here) for the exact tuning values.
 
     WHO COUNTS: a currently-connected player whose live ped model is a
-    configured K9 model (IsConfiguredK9Model, server/certifications.lua) AND
-    who currently has K9 access (HasK9Access, same file) -- i.e. a real,
-    on-duty, certified handler's K9, not merely anyone who happens to be
-    wearing a dog skin. Both are resource-global functions from
-    server/certifications.lua, called directly with no runtime existence
-    guard: unlike a genuinely optional soft dependency (a different feature
-    file that might be removed or whose flag might be off), certifications.lua
-    is this resource's own permission-system root and is always present,
-    loaded well before this file (fxmanifest.lua's own server_scripts order),
-    matching every other same-resource, same-load-time caller of these two.
+    configured K9 model (IsConfiguredK9Model, server/certifications.lua) OR
+    who holds the decoupled K9 ROLE (HasK9Role, server/appearance.lua --
+    K9 role/model decoupling pass) on a model neither of those recognizes
+    (a human, a custom streamed ped), AND who currently has K9 access
+    (HasK9Access, server/certifications.lua) -- i.e. a real, on-duty,
+    certified handler's K9, not merely anyone who happens to be wearing a
+    dog skin, and not merely anyone who bypasses HasK9Access without
+    actually being the K9 (a high-command tester, or an officer above
+    Config.Departments' autoAccessGrade threshold, neither of which
+    HasK9Role recognizes). IsConfiguredK9Model/HasK9Access are
+    resource-global functions from server/certifications.lua, called
+    directly with no runtime existence guard: unlike a genuinely optional
+    soft dependency (a different feature file that might be removed or
+    whose flag might be off), certifications.lua is this resource's own
+    permission-system root and is always present, loaded well before this
+    file (fxmanifest.lua's own server_scripts order), matching every other
+    same-resource, same-load-time caller of these two. HasK9Role IS guarded
+    with `type(...) == 'function'`, matching every other widened site this
+    pass (server/main.lua's CheckLeashEligibility has the fullest writeup
+    on why).
 
     PAYLOAD: 'qbx_k9unit:events:k9Down' (source: number, citizenid: string,
     jobName: string, coords: vector3, health: number). `source` is the
@@ -165,15 +175,16 @@
     boundary this file specifically guards):
     1. RE-DERIVE, NEVER TRUST. Every value in the k9Down payload is read
        fresh, server-side, at the moment of firing -- never a client claim.
-    2. FAIL CLOSED, NEVER THROW ACROSS THE RESOURCE BOUNDARY. FireOutboundEvent
-       below pcall-wraps the TriggerEvent call, exactly like every other
-       file in this resource's own copy of this helper (certifications.lua,
-       partnership.lua, progression.lua, search.lua) -- a misbehaving
-       listener's own AddEventHandler throwing can never unwind back into
-       this file's own poll thread. This is the file's fifth copy of this
-       six-line helper; extracting it to a shared global would mean editing
-       four files this pass does not own to delete their copies -- reported
-       as a legitimate future cleanup, not done here.
+    2. FAIL CLOSED, NEVER THROW ACROSS THE RESOURCE BOUNDARY.
+       FireOutboundEvent (server/events.lua, shared across every file that
+       fires a `qbx_k9unit:events:*` event) pcall-wraps the TriggerEvent
+       call -- a misbehaving listener's own AddEventHandler throwing can
+       never unwind back into this file's own poll thread. UPDATED
+       2026-08-25: this used to be this file's own fifth independent copy
+       of that six-line helper, with this exact paragraph noting the
+       cross-file extraction as "a legitimate future cleanup, not done
+       here" -- that cleanup has now happened; see server/events.lua's
+       header for the full writeup.
     3. ABSENCE IS A CLEAN NO-OP. With Config.Features.K9DownDispatch false
        (or absent), this file starts no thread, allocates no table, and
        calls TriggerEvent zero times -- a server with no dispatch resource
@@ -280,7 +291,22 @@ local function PollK9Health()
                 -- stale episode state rather than let a later reconnect
                 -- inherit an unrelated old episode.
                 K9DownState[src] = nil
-            elseif not (IsConfiguredK9Model(GetEntityModel(ped)) and HasK9Access(src)) then
+            -- PERFORMANCE (this is a per-tick, every-connected-player poll,
+            -- not a one-off authorization check): HasK9Access(src) is
+            -- checked FIRST and short-circuits the `and` below for the
+            -- (overwhelming majority, on any real server) of connected
+            -- players who have no K9 access at all -- IsConfiguredK9Model
+            -- is a cheap hash compare either way, but HasK9Role can fall
+            -- through to a real MySQL read (server/appearance.lua's
+            -- IsCertifiedK9ForJob) when its own in-memory permission-cache
+            -- check misses, and that must never run once per connected
+            -- player per poll tick. Ordering this OTHER way (role/model
+            -- check first) would run that DB-capable fallback against
+            -- every non-K9 player on the server, every tick -- exactly the
+            -- N+1-shaped cost this resource's own HasK9Access ordering
+            -- (permission-cache bypass checked before any DB-touching
+            -- branch) already avoids elsewhere.
+            elseif not (HasK9Access(src) and (IsConfiguredK9Model(GetEntityModel(ped)) or (type(HasK9Role) == 'function' and HasK9Role(src)))) then
                 -- Not currently a real, on-duty, certified K9 (WHO COUNTS
                 -- above) -- clear any stale episode so a K9 who lost
                 -- certification or changed model mid-episode cannot later
@@ -305,8 +331,52 @@ local function PollK9Health()
                             local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
                             local jobName = Player and Player.PlayerData and Player.PlayerData.job and Player.PlayerData.job.name
                             if citizenid and jobName then
-                                FireOutboundEvent('qbx_k9unit:events:k9Down', src, citizenid, jobName, GetEntityCoords(ped), health)
+                                local coords = GetEntityCoords(ped)
+                                FireOutboundEvent('qbx_k9unit:events:k9Down', src, citizenid, jobName, coords, health)
                                 state.firedThisEpisode = true
+
+                                -- CONVENIENCE LAYER, PURELY ADDITIVE -- see
+                                -- shared/compat/dispatch.lua's own header
+                                -- for the full contract; this is the exact
+                                -- copy-paste call that file's author left
+                                -- for whoever wired this in, placed
+                                -- immediately AFTER (never instead of) the
+                                -- FireOutboundEvent call above so BOTH fire
+                                -- from the SAME detection episode. This
+                                -- resource's own custom/off-the-shelf
+                                -- dispatch that listens ONLY for the plain
+                                -- 'qbx_k9unit:events:k9Down' event above
+                                -- keeps working with ZERO setup either way
+                                -- -- K9Compat.Get('dispatch').Alert(...) is
+                                -- a safe no-op (returns false, sends
+                                -- nothing) whenever no supported
+                                -- off-the-shelf dispatch is detected (see
+                                -- core.lua's BuildNoOpStub/BuildSafeAdapter
+                                -- for why this can never throw into this
+                                -- poll thread), so removing this one call
+                                -- would change nothing about the line
+                                -- above it. `title` is a plain string, not
+                                -- a locale() call, per dispatch.lua's own
+                                -- header LOCALE NOTE (this file is not the
+                                -- locale-file owner this pass). Guarded the
+                                -- same way scentlineup.lua guards its own
+                                -- K9Compat.Get('framework') call -- a
+                                -- missing K9Compat (e.g. shared/compat/
+                                -- core.lua not yet loaded/registered for any
+                                -- reason) degrades to "this convenience
+                                -- layer did nothing this poll tick," never a
+                                -- thrown error that could take down this
+                                -- poll thread's own pcall wrapper's caller.
+                                if type(K9Compat) == 'table' and type(K9Compat.Get) == 'function' then
+                                    K9Compat.Get('dispatch').Alert({
+                                        code     = 'k9_down',
+                                        title    = 'K9 Unit Down',
+                                        message  = ('A K9 unit (%s) has gone down and needs assistance.'):format(jobName),
+                                        coords   = coords,
+                                        jobs     = { jobName },
+                                        priority = 0,
+                                    })
+                                end
                             end
                             -- else: a transient exports.qbx_core:GetPlayer
                             -- resolution miss -- firedThisEpisode stays

@@ -2,7 +2,7 @@
     qbx_k9unit/server/wellbeing.lua
 
     Phase 4 implementation. Owns Config.Features.FatigueSystem / MoodSystem /
-    FearStressSystem / DistractionSystem / InjuryLimping (PHASE4_SPEC.md
+    FearStressSystem / DistractionSystem / InjuryLimping (DEVELOPER_REFERENCE.md
     §13.0 Decision 1, §13.2, §13.4.3) — ONE shared per-citizenid stat store,
     ONE shared Config.Wellbeing.tickIntervalMs decay/regen tick, each of the
     five Config.Features flags independently gating only its OWN stat's tick
@@ -52,7 +52,7 @@
     2. Fatigue's "sprinting" detection (a server-side rolling
        position-sample: distance travelled between ticks / tickIntervalMs)
        is THIS FILE'S OWN implementation of the general technique
-       PHASE3_SPEC.md §12.5.2 is understood to describe for
+       DEVELOPER_REFERENCE.md §12.5.2 is understood to describe for
        NonLethalTakedown's speed gate — that document was NOT re-read this
        pass (out of this session's file-scope boundary; another agent owns
        Phase 3 combat). MEDIUM confidence: the technique is sound and
@@ -60,7 +60,7 @@
        implementation once that lands — flagged for reconciliation then,
        not assumed identical now.
     3. `SetPedMoveRateOverride` itself is not called from this file at all
-       (that's client/movement.lua's `RecomputeK9MoveRate()`, PHASE4_SPEC.md
+       (that's client/movement.lua's `RecomputeK9MoveRate()`, DEVELOPER_REFERENCE.md
        §13.0 Decision 2) — this file only ever sets named entries in the
        stats snapshot pushed to the owning client; HIGH confidence, this
        file has no native-call uncertainty of its own.
@@ -76,7 +76,7 @@
        `IsHesitating`/`IsDistracted`'s exact established contract (self-only
        citizenid lookup, type-checked, gated on
        Config.Features.DistractionSystem, zero cross-player influence — it
-       reads only static config plus its own string argument). PHASE4_SPEC.md
+       reads only static config plus its own string argument). DEVELOPER_REFERENCE.md
        §13.4.3.4's reality check still stands UNCHANGED for the other half:
        nothing in this codebase, and no confirmed third-party flashbang/stun
        resource's event name/payload shape, exists for this file to listen
@@ -93,7 +93,7 @@
        as solved.
     6. Fatigue rest-source regen (Config.Wellbeing.Fatigue.restRegenPerTick /
        .restRadius / .restSources) — THIS PASS (coder-backend) wires this
-       using PHASE4_SPEC.md §13.4.3.1 open question 1's own "a world-object
+       using DEVELOPER_REFERENCE.md §13.4.3.1 open question 1's own "a world-object
        proximity check" reading (not an item-name check — no dropped-item
        log exists for this purpose, and inventing one would duplicate
        server/tracking.lua's own scent-log machinery for no disclosed
@@ -163,7 +163,7 @@
     4. 'qbx_k9unit:server:applyK9Distraction' (itemType: 'meatBait'|'whistle')
        -> { ok, reason?, affected? } [THIS FILE] Re-validates
        Config.Features.DistractionSystem, consumes the configured item from
-       the USING player (open question, PHASE4_SPEC.md §13.4.3.4 item 2,
+       the USING player (open question, DEVELOPER_REFERENCE.md §13.4.3.4 item 2,
        resolved here as OPEN to any player, not gated on Config.Departments —
        this document's own tentative reading, "a trainer's tool that also
        works as a suspect's countermeasure"), then resolves affected K9s by
@@ -197,12 +197,12 @@
        requester only, client/wellbeing.lua] — one combined push per tick
        carrying all five wellbeing values together (mirrors
        phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge's own "one combined message
-       beats a split one" reasoning, PHASE4_SPEC.md §13.4.3.1).
+       beats a split one" reasoning, DEVELOPER_REFERENCE.md §13.4.3.1).
 
     Resource-globals (no `local` — other files call these directly):
     - RestoreInjury(citizenid: string, amount: number) — the accessor
       server/medkit.lua ALREADY CALLS via a `type(RestoreInjury) == 'function'`
-      guard (PHASE4_SPEC.md §13.4.3.5/§13.4.4). Signature matches that
+      guard (DEVELOPER_REFERENCE.md §13.4.3.5/§13.4.4). Signature matches that
       call site exactly: `RestoreInjury(targetCitizenid, Config.K9Medkit.injuryRestore)`.
       No-op if Config.Features.InjuryLimping is false (never gates/mutates
       anything the feature flag hasn't activated, per this file's own
@@ -211,7 +211,7 @@
       never allowed to move the value downward.
     - IsHesitating(citizenid: string) -> boolean — true while a FearStress-
       driven hesitation window (Config.Wellbeing.FearStress.hesitationDurationMs)
-      is active. THE genuine new cross-file dependency PHASE4_SPEC.md §13.5
+      is active. THE genuine new cross-file dependency DEVELOPER_REFERENCE.md §13.5
       flags: server/combat.lua (Phase 3, not yet built as of this pass) must
       call this as part of its own bite-hold/takedown/drag request
       validation once it exists — guard with
@@ -239,7 +239,7 @@
       followed by an enforced window where that K9 is guaranteed not to be
       hesitating — "indefinite" is closed, "repeatable but bounded" is the
       disclosed, accepted remainder. Not a reason to skip calling this
-      accessor (PHASE4_SPEC.md §13.5 still requires it) — just an accurate,
+      accessor (DEVELOPER_REFERENCE.md §13.5 still requires it) — just an accurate,
       current statement of what calling it exposes you to, kept up to date
       here specifically because the LAST version of this note went stale
       the moment a second file started consuming it without this note being
@@ -248,9 +248,9 @@
       that file's own comment together, not just one.
     - IsDistracted(citizenid: string) -> boolean — same shape as
       IsHesitating, for Distraction's own "breaks command" state
-      (PHASE4_SPEC.md §13.4.3.4's reading of that state as a server-enforced
+      (DEVELOPER_REFERENCE.md §13.4.3.4's reading of that state as a server-enforced
       command rejection, the same category as FearStress's hesitation, not
-      named as its own accessor anywhere in PHASE4_SPEC.md's own text but a
+      named as its own accessor anywhere in DEVELOPER_REFERENCE.md's own text but a
       direct, natural extension of the SAME pattern it names for
       IsHesitating — added here so Phase 3's combat.lua has a real hook for
       BOTH command-breaking wellbeing states, not just one).
@@ -319,7 +319,7 @@
     minutes to clear `jumpBlockThreshold` (20) and ~25 minutes to clear
     `sprintBlockThreshold` (30) — client/wellbeing.lua's INPUT_SPRINT/
     INPUT_JUMP thread `DisableControlAction`-blocks both, unconditionally,
-    below those thresholds, with no server override (PHASE4_SPEC.md §13.0
+    below those thresholds, with no server override (DEVELOPER_REFERENCE.md §13.0
     Decision 3's own disclosed, deliberate limitation — never a security
     boundary, but a real gameplay one). This file had NO death/respawn
     handling anywhere before this pass (confirmed: no `IsEntityDead`/
@@ -840,7 +840,7 @@ end)
 -- Config.Wellbeing.FearStress.gunfireRadius, with no wanted-status or
 -- K9-model requirement on the reporter — required by the feature's own
 -- design (a K9 near a firefight it isn't itself part of should still get
--- stressed, PHASE4_SPEC.md §13.4.3.3), but it means ANY connected player,
+-- stressed, DEVELOPER_REFERENCE.md §13.4.3.3), but it means ANY connected player,
 -- K9 or not, can call this repeatedly to affect a bystander K9 they have no
 -- other interaction with. Today this is inert (nothing reads
 -- IsHesitating() yet); once server/combat.lua gates bite-hold/takedown on
@@ -930,7 +930,7 @@ AddEventHandler('qbx_k9unit:server:relayWeaponFire', function()
     if ped == 0 then return end
 
     -- Deliberately NOT restricted to a K9-modeled shooter — FearStress
-    -- reacts to ANY nearby gunfire (PHASE4_SPEC.md §13.4.3.3's own
+    -- reacts to ANY nearby gunfire (DEVELOPER_REFERENCE.md §13.4.3.3's own
     -- "gunfire happened nearby" framing), not just gunfire a K9 itself
     -- caused.
     -- `source = src` added this pass (coder-security finding B) so
@@ -969,7 +969,7 @@ local HESITATION_MAX_CONTINUOUS_MS = Config.Wellbeing.FearStress.hesitationDurat
 -- ======================================================================
 
 -- Live-proximity radius for both interactions below. NOT in
--- PHASE4_SPEC.md §13.2's sketch (that document names ox_target interactions
+-- DEVELOPER_REFERENCE.md §13.2's sketch (that document names ox_target interactions
 -- but no explicit interact-range value for them) — a small, disclosed
 -- addition needed to satisfy the spec's own "server-enforced live proximity,
 -- never a client-claimed distance" mandate (§13.4.3.2's server-authority
@@ -984,7 +984,7 @@ local MOOD_INTERACT_RANGE = 3.0
 local AffectionCooldown = NewNestedCooldown()
 AffectionCooldown.RegisterPlayerDropped()
 
---- PHASE4_SPEC.md §13.4.3.2. Server-authoritative "Pet K9" interaction.
+--- DEVELOPER_REFERENCE.md §13.4.3.2. Server-authoritative "Pet K9" interaction.
 lib.callback.register('qbx_k9unit:server:petK9', function(source, targetServerId)
     if type(targetServerId) ~= 'number' then
         return { ok = false, reason = 'invalid_target' }
@@ -1023,7 +1023,7 @@ end)
 -- REWARD-FARM FIX (this pass, coder-backend): deliberately reuses
 -- petK9's AffectionCooldown TRACKER INSTANCE (not merely petCooldownMs's
 -- threshold VALUE) for the same (source, targetCitizenid) pair — feeding
--- and petting are the same class of "affection" interaction PHASE4_SPEC.md
+-- and petting are the same class of "affection" interaction DEVELOPER_REFERENCE.md
 -- §13.4.3.2 groups together, and only sharing the actual instance stops a
 -- player alternating pet/feed calls to double their effective mood-regen
 -- rate. This file previously declared a SECOND, independent
@@ -1036,7 +1036,7 @@ end)
 -- stamp the SAME `AffectionCooldown` instance petK9 uses, not a
 -- same-threshold-but-different-table lookalike.
 
---- PHASE4_SPEC.md §13.4.3.2. Server-authoritative "Feed K9" interaction.
+--- DEVELOPER_REFERENCE.md §13.4.3.2. Server-authoritative "Feed K9" interaction.
 --- Mirrors server/medkit.lua's item-consumption discipline exactly:
 --- possession check (cheap, non-mutating) before the cooldown is stamped,
 --- cooldown stamped BEFORE removal (TOCTOU-safe ordering), state mutated
@@ -1088,7 +1088,7 @@ lib.callback.register('qbx_k9unit:server:feedK9', function(source, targetServerI
 end)
 
 -- ======================================================================
--- FEARSTRESS — "Calm Down" self-only action. PHASE4_SPEC.md §13.4.3.3 open
+-- FEARSTRESS — "Calm Down" self-only action. DEVELOPER_REFERENCE.md §13.4.3.3 open
 -- question 2's own tentative reading (self-only, mirrors K9Sit) is taken
 -- here — no target parameter exists at all, so there is no "force another
 -- player's K9 to calm down" vector to guard against.
@@ -1119,7 +1119,7 @@ end)
 
 -- ======================================================================
 -- DISTRACTION — item-triggered ("meat bait" / "ultrasonic whistle").
--- PHASE4_SPEC.md §13.4.3.4. Deliberately open to ANY player, not gated on
+-- DEVELOPER_REFERENCE.md §13.4.3.4. Deliberately open to ANY player, not gated on
 -- Config.Departments/HasK9Access — see this file's header EVENT/CALLBACK
 -- CONTRACT item 4 for why (this document's own tentative reading of the
 -- open question).
@@ -1136,7 +1136,7 @@ DistractionCooldown.StartSweep(DISTRACTION_COOLDOWN_PRUNE_INTERVAL_MS, function(
     return (now - loggedAt) > staleAfterMs
 end)
 
---- PHASE4_SPEC.md §13.4.3.4. Server-authoritative distraction-item use.
+--- DEVELOPER_REFERENCE.md §13.4.3.4. Server-authoritative distraction-item use.
 lib.callback.register('qbx_k9unit:server:applyK9Distraction', function(source, itemType)
     if itemType ~= 'meatBait' and itemType ~= 'whistle' then
         return { ok = false, reason = 'invalid_item' }
@@ -1279,7 +1279,7 @@ end)
 -- FATIGUE — rest-source model resolution. THIS PASS (coder-backend).
 -- Config.Wellbeing.Fatigue.restSources is a list of MODEL NAMES (an object
 -- prop like a kennel, or a vehicle model like one of Config.K9Vehicles'
--- entries) treated as a "rest point" — PHASE4_SPEC.md §13.4.3.1 open
+-- entries) treated as a "rest point" — DEVELOPER_REFERENCE.md §13.4.3.1 open
 -- question 1's own "a world-object proximity check" reading (see this
 -- file's header CONFIDENCE GRADING item 6 for the full writeup on why this
 -- reading was chosen over an item-name check). Hashed ONCE here
@@ -1302,7 +1302,7 @@ local function GetRestSourceModelHashes()
 end
 
 -- ======================================================================
--- SHARED TICK LOOP — PHASE4_SPEC.md §13.0 Decision 1. ONE loop for all
+-- SHARED TICK LOOP — DEVELOPER_REFERENCE.md §13.0 Decision 1. ONE loop for all
 -- five stats, one pass over currently-connected players per tick. Started
 -- ONLY if at least one of the five flags is enabled — a fully-disabled
 -- subsystem runs no thread at all, per this file's own "no code needed

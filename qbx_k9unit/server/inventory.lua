@@ -735,8 +735,30 @@ local function HandleOpenK9Inventory(source, targetNetId)
         return { ok = false, reason = 'invalid_target' } -- NPC, or no longer a connected player's ped
     end
 
-    if not IsConfiguredK9Model(GetEntityModel(entity)) then
-        return { ok = false, reason = 'invalid_target' } -- not currently playing a recognized K9 model
+    -- WIDENED (K9 role/model decoupling, server/appearance.lua), NOT
+    -- DELETED: a first pass at this site considered simply removing this
+    -- check outright, reasoning that the HasK9Access(targetServerId) check
+    -- immediately below already "is" the role check. That reasoning does
+    -- not hold up: HasK9Access is deliberately BROADER than the K9 role
+    -- (HasK9Role) -- it also returns true for a high-command bypass
+    -- (server/highcommand.lua's IsHighCommand) or an officer above
+    -- Config.Departments' autoAccessGrade threshold, NEITHER of whom is
+    -- actually the K9 in a handler/K9 pairing. Deleting this line outright
+    -- would have made ANY such officer's own citizenid a valid target for
+    -- "open their K9 gear inventory" the moment they were merely standing
+    -- near another player, on their own ordinary human model, holding
+    -- neither a K9 model nor the K9 role -- a real widening of who can be
+    -- treated as "the K9 gear" beyond this file's own doc comment above
+    -- ("this is specifically a 'K9 gear' interaction, not a generic
+    -- player-inventory bridge"). OR-ing in HasK9Role(targetServerId)
+    -- instead keeps that invariant intact: only a live K9 model OR a
+    -- genuine K9-role holder can be targeted at all, and HasK9Access below
+    -- still independently confirms that access hasn't since lapsed. Same
+    -- `type(...) == 'function'` guard/fail-closed reasoning as every other
+    -- widened site this pass (server/main.lua's CheckLeashEligibility has
+    -- the fullest writeup).
+    if not (IsConfiguredK9Model(GetEntityModel(entity)) or (type(HasK9Role) == 'function' and HasK9Role(targetServerId))) then
+        return { ok = false, reason = 'invalid_target' } -- not currently playing a recognized K9 model, and does not hold the decoupled K9 role either
     end
 
     if not HasK9Access(targetServerId) then

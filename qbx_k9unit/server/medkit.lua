@@ -625,8 +625,14 @@ local function HandleUseK9Medkit(source, targetServerId, requestedAt)
     end
 
     -- Re-derive the TARGET's REAL model server-side — never trust that the
-    -- client's ox_target selection was actually a K9.
-    if not IsConfiguredK9Model(GetEntityModel(targetPed)) then
+    -- client's ox_target selection was actually a K9. WIDENED (K9
+    -- role/model decoupling, server/appearance.lua) to also accept a
+    -- target who holds the decoupled K9 ROLE (HasK9Role) on a model
+    -- IsConfiguredK9Model doesn't recognize -- same `type(...) ==
+    -- 'function'` guard/fail-closed reasoning as every other widened site
+    -- this pass (see server/main.lua's CheckLeashEligibility for the
+    -- fullest writeup).
+    if not (IsConfiguredK9Model(GetEntityModel(targetPed)) or (type(HasK9Role) == 'function' and HasK9Role(targetServerId))) then
         return { ok = false, reason = 'invalid_target' }
     end
 

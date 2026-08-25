@@ -175,7 +175,15 @@ local function RegisterMedkitOxTargetOption()
             distance = Config.K9Medkit.range,
             canInteract = function(entity, distance, coords, name)
                 if not Config.Features.K9Medkit then return false end
-                return IsEntityModelK9(entity)
+                -- WIDENED (K9 role/model decoupling) with
+                -- IsK9RoleForPlayer(...) -- client/appearance.lua's own
+                -- per-target-cached (1s TTL) server round trip for "does
+                -- THAT player hold the K9 role" -- so a target on a
+                -- human/custom model who already holds the role can still
+                -- be treated. Short-circuited last: only reached on a
+                -- cache miss for the (rare) case IsEntityModelK9 didn't
+                -- already answer this.
+                return IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
             end,
             onSelect = function(data)
                 local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
@@ -211,13 +219,13 @@ end)
 --- here rather than shared (this file has no import mechanism to reach
 --- those, and per this task's file-ownership split client/radial.lua is
 --- out of scope here) — for RequestTreatNearestK9()'s self-initiated
---- (radial) entry point below. Filters to a live K9 model, unlike
---- FindNearestLeashCandidate (which filters to none) — this file's own
---- ox_target `canInteract` above applies the exact same IsEntityModelK9
---- filter, for the same "why show/offer this against a human player"
---- reasoning. Display-only: server/medkit.lua's HandleUseK9Medkit
---- independently re-verifies the target's real model, aliveness,
---- proximity, and certification regardless of what this scan picks.
+--- (radial) entry point below. Filters to a live K9 model OR the decoupled
+--- K9 role (K9 role/model decoupling -- IsK9RoleForPlayer(...), same
+--- widening and same reasoning as this file's own ox_target `canInteract`
+--- above), unlike FindNearestLeashCandidate (which filters to none).
+--- Display-only: server/medkit.lua's HandleUseK9Medkit independently
+--- re-verifies the target's real model/role, aliveness, proximity, and
+--- certification regardless of what this scan picks.
 --- @return number? candidateServerId
 local function FindNearestTreatableK9()
     local myPed = PlayerPedId()
@@ -227,7 +235,8 @@ local function FindNearestTreatableK9()
     for _, playerId in ipairs(GetActivePlayers()) do
         if playerId ~= PlayerId() then
             local targetPed = GetPlayerPed(playerId)
-            if targetPed ~= 0 and DoesEntityExist(targetPed) and IsEntityModelK9(targetPed) then
+            if targetPed ~= 0 and DoesEntityExist(targetPed)
+                and (IsEntityModelK9(targetPed) or IsK9RoleForPlayer(GetPlayerServerId(playerId))) then
                 local dist = #(myCoords - GetEntityCoords(targetPed))
                 if dist <= Config.K9Medkit.range and (not nearestDist or dist < nearestDist) then
                     nearestPlayer, nearestDist = playerId, dist

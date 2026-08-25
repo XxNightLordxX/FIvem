@@ -670,7 +670,7 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Bite & Hold / Release — PHASE3_SPEC.md §12.5.1. A single
+    --- Bite & Hold / Release — DEVELOPER_REFERENCE.md §12.5.1. A single
     --- context-sensitive item, following the SAME toggle shape as Attach/Detach
     --- Leash above: client/combat.lua's RequestBiteHold()/ReleaseBiteHold()/
     --- IsBiteHoldEngaged() are a start/stop pair with an "am I engaged" query,
@@ -751,7 +751,7 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Non-Lethal Takedown — PHASE3_SPEC.md §12.5.2. A single one-shot action
+    --- Non-Lethal Takedown — DEVELOPER_REFERENCE.md §12.5.2. A single one-shot action
     --- item, NOT a context-sensitive toggle like Bite & Hold above:
     --- client/combat.lua exposes only RequestTakedown(), with no matching
     --- "release"/"cancel" counterpart and no IsTakedownEngaged()-style query —
@@ -790,7 +790,7 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Drag / Release — PHASE3_SPEC.md §12.5.4. A single context-sensitive item,
+    --- Drag / Release — DEVELOPER_REFERENCE.md §12.5.4. A single context-sensitive item,
     --- the SAME toggle shape as Bite & Hold / Attach-Detach Leash above:
     --- client/combat.lua's RequestDrag()/ReleaseDrag()/IsDragEngaged() are a
     --- start/stop pair with an "am I engaged" query, exactly mirroring
@@ -846,7 +846,7 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Break Partnership -- PHASE3_SPEC.md §12.0 item 7. Closes a real gap a QA
+    --- Break Partnership -- DEVELOPER_REFERENCE.md §12.0 item 7. Closes a real gap a QA
     --- pass found: client/partnership.lua exposes BreakPartnership() as a fully
     --- implemented resource-global specifically FOR a future radial entry (see
     --- that file's own header, "FILE-TO-FILE CONTRACT" -> BreakPartnership()),
@@ -946,7 +946,7 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Partner Up -- PHASE3_SPEC.md §12.0 item 7. The other half of the gap
+    --- Partner Up -- DEVELOPER_REFERENCE.md §12.0 item 7. The other half of the gap
     --- Break Partnership above already closed: client/partnership.lua's own
     --- ox_target "Partner Up" option is a live entry point, but nothing in
     --- this file offered the same action from the radial (fxmanifest.lua's own
@@ -987,7 +987,7 @@ local function RegisterK9RadialMenu()
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_partner_up',
             -- Reuses the already-migrated partnership.* key rather than minting
-            -- a fourth-pass-flagged duplicate — see locales/README.md's
+            -- a fourth-pass-flagged duplicate — see DEVELOPER_REFERENCE.md's
             -- "Found, NOT touched" note on this exact label (byte-for-byte
             -- identical to client/partnership.lua's own ox_target option text).
             label = locale('partnership.partner_up_target_label'),
@@ -1011,7 +1011,7 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Recall -- PHASE3_SPEC.md §12.5.1. Closes a real gap: client/recall.lua
+    --- Recall -- DEVELOPER_REFERENCE.md §12.5.1. Closes a real gap: client/recall.lua
     --- exposes RequestRecall() specifically "ready for [a future
     --- client/radial.lua entry]" (that file's own header), but until this pass
     --- nothing ever called it from here -- only its own '/k9recall' chat
@@ -1052,7 +1052,7 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Handler-Down Defense confirm -- PHASE3_SPEC.md §12.5.3. Fixes a live,
+    --- Handler-Down Defense confirm -- DEVELOPER_REFERENCE.md §12.5.3. Fixes a live,
     --- QA-found WRONG-INSTRUCTION bug: client/defense.lua's own
     --- handlerDownDefenseTrigger notify literally tells the K9 "Press %s to
     --- respond, OR USE THE RADIAL MENU" -- and until this pass, no radial menu
@@ -1344,7 +1344,7 @@ local function RegisterK9RadialMenu()
     --- when the English matches exactly" convention this file already applies
     --- to Partner Up's `partnership.partner_up_target_label` and the opener's
     --- `${common.notify_title}` cross-reference (see this file's own header /
-    --- locales/README.md).
+    --- DEVELOPER_REFERENCE.md).
     ---
     --- `RequestTreatNearestK9()` takes no arguments and re-checks both
     --- CanShowK9UI() and Config.Features.K9Medkit internally (confirmed by
@@ -1394,7 +1394,7 @@ local function RegisterK9RadialMenu()
                 -- coincidence: this opener's label and every lib.notify title
                 -- in this resource are the same "K9 Unit" string, so this
                 -- embeds that existing key rather than minting a byte-identical
-                -- duplicate under a different name (see locales/README.md).
+                -- duplicate under a different name (see DEVELOPER_REFERENCE.md).
                 label = locale('radial.menu_open_label'),
                 icon = 'dog',
                 menu = 'k9unit',

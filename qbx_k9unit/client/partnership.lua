@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/partnership.lua
 
-    Phase 3 (HandlerPartnership registry, PHASE3_SPEC.md §12.0 item 7 /
+    Phase 3 (HandlerPartnership registry, DEVELOPER_REFERENCE.md §12.0 item 7 /
     §12.3's file-plan entry) — the client half of server/partnership.lua
     (read in full before this file was written; that file's header is the
     authoritative contract for everything below). Originally delivered
@@ -25,7 +25,7 @@
     ======================================================================
     EVENT/CALLBACK CONTRACT — verified against server/partnership.lua's own
     header (its "EVENT/CALLBACK CONTRACT" section), not re-derived from
-    PHASE3_SPEC.md prose alone:
+    DEVELOPER_REFERENCE.md prose alone:
 
     Server events (client->server), THIS FILE triggers:
     - 'qbx_k9unit:server:requestPartnerUp' (targetServerId: number)
@@ -136,7 +136,7 @@
     NEITHER CanShowK9UI() NOR DenyK9UIAccess(), and does NOT pre-check
     IsPartnered() before sending. This mirrors client/movement.lua's
     DetachLeash() in spirit (no access-gate on the way out, matching
-    PHASE3_SPEC.md §12.0 item 7 point 3's "no unbounded trap" guarantee,
+    DEVELOPER_REFERENCE.md §12.0 item 7 point 3's "no unbounded trap" guarantee,
     now applied to a persistent relationship) but goes one step further
     than DetachLeash() by also skipping the LOCAL state pre-check --
     see the next section for exactly why that extra step is required here
@@ -164,7 +164,7 @@
     pre-checked `IsPartnered()` the way DetachLeash() checks `IsLeashed()`,
     a player in exactly that state could never break their own real,
     active, DB-persisted partnership at all -- precisely the "unbounded
-    trap" PHASE3_SPEC.md §12.0 item 7 point 3 forbids. Sending
+    trap" DEVELOPER_REFERENCE.md §12.0 item 7 point 3 forbids. Sending
     'qbx_k9unit:server:breakPartnership' UNCONDITIONALLY instead costs
     nothing: server/partnership.lua's own handler is already a safe no-op
     for a citizenid with no active partnership (`DoBreakPartnership`
@@ -214,7 +214,7 @@
     and never offer the one control that actually works unconditionally
     (BreakPartnership() -- see "TERMINATION MUST NEVER BE GATED" above).
     That player would hit a server-side 'already_partnered' rejection
-    instead of an exit -- exactly the "unbounded trap" PHASE3_SPEC.md
+    instead of an exit -- exactly the "unbounded trap" DEVELOPER_REFERENCE.md
     §12.0 item 7 point 3 forbids, reintroduced through a stale read rather
     than a missing control. Calling RefreshPartnershipStateFromServer()
     before that decision is what avoids it.
@@ -332,7 +332,7 @@ function RequestPartnerUp(targetServerId)
     -- is the ONE AND ONLY entry point for the "Partner Up" ox_target
     -- option below, whose own canInteract predicate
     -- (`IsOwnModelK9() or IsEntityModelK9(entity)`) and this resource's own
-    -- PHASE3_SPEC.md §12.0 item 7 point 1 ("initiated by either party
+    -- DEVELOPER_REFERENCE.md §12.0 item 7 point 1 ("initiated by either party
     -- (K9-role or officer-role) against the other") both explicitly
     -- require an officer-initiated request to work. The unconditional gate
     -- therefore silently denied 100% of officer-initiated "Partner Up"
@@ -572,7 +572,14 @@ local function RegisterPartnerUpOxTargetOption()
                 -- At least one side should plausibly be a K9 (either us, or
                 -- the target's live model) -- cheap client-side plausibility
                 -- only, mirrors client/movement.lua's "Attach Leash" predicate.
-                return IsOwnModelK9() or IsEntityModelK9(entity)
+                -- WIDENED (K9 role/model decoupling) with IsK9RoleForPlayer(...)
+                -- -- client/appearance.lua's own per-target-cached (1s TTL)
+                -- server round trip for "does THAT player hold the K9 role" --
+                -- so a target on a human/custom model who already holds the
+                -- role is offered too. Short-circuited last: only reached on
+                -- a cache miss for the (rare) case neither IsOwnModelK9() nor
+                -- IsEntityModelK9(entity) already answered this.
+                return IsOwnModelK9() or IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
             end,
             onSelect = function(data)
                 local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)

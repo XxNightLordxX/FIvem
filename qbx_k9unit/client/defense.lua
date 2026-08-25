@@ -1,13 +1,13 @@
 --[[
     qbx_k9unit/client/defense.lua
 
-    Phase 3 implementation (coder-backend), PHASE3_SPEC.md §12.5.3
+    Phase 3 implementation (coder-backend), DEVELOPER_REFERENCE.md §12.5.3
     (Handler-Down Defense) / §12.3's file-plan row for this exact file
     ("HandlerDownDefense's client-side presentation ONLY -- per §12.0 item 2's
     reading, this never applies any state to or takes control of the K9
     player's own ped"). Read server/defense.lua's own header in full before
     this file -- that file's REALITY-CHECK section documents two places
-    PHASE3_SPEC.md's prose did not survive contact with the real,
+    DEVELOPER_REFERENCE.md's prose did not survive contact with the real,
     already-shipped code; this file is the client-side half of both fixes.
 
     ======================================================================
@@ -46,7 +46,7 @@
     functions themselves fire, with the identical payload shape (a single
     `targetNetId: number`). server/combat.lua's `ValidateCombatRequest` runs
     byte-for-byte identically regardless of which client-side code path
-    produced the request -- PHASE3_SPEC.md §12.0 item 2's "goes through the
+    produced the request -- DEVELOPER_REFERENCE.md §12.0 item 2's "goes through the
     exact same requestBiteHold/requestTakedown server validation path"
     criterion is satisfied at the protocol level, which is the level that
     actually carries server authority; only the LOCAL convenience wrapper
@@ -123,7 +123,7 @@
       [server/combat.lua] -- same as above, for RequestTakedown().
 
     Commands / keybinds (THIS FILE):
-    - 'qbx_k9unit:confirmHandlerDownDefense' -- PHASE3_SPEC.md §12.0 item 2's
+    - 'qbx_k9unit:confirmHandlerDownDefense' -- DEVELOPER_REFERENCE.md §12.0 item 2's
       "single simplified... input... instead of navigating the radial menu
       first," made concrete as a single default-bound key
       (Config.Combat.HandlerDownDefense.confirmKey, always rebindable
@@ -157,7 +157,7 @@
       not a load-order assumption, this codebase's established convention.
     - Reads Config.Combat.HandlerDownDefense (config.lua -- REQUESTED, not
       yet landed as of this file; see this pass's own report for the exact
-      block, including four fields PHASE3_SPEC.md's own §12.2 sketch did
+      block, including four fields DEVELOPER_REFERENCE.md's own §12.2 sketch did
       not anticipate: pollIntervalMs/retriggerCooldownMs/promptTtlMs/
       attackerReportCooldownMs/confirmKey -- see server/defense.lua's own
       header for pollIntervalMs/retriggerCooldownMs/attackerReportCooldownMs;
@@ -271,13 +271,13 @@ end)
 --- removed, that notify text must be reverted to keybind-only wording in
 --- the SAME change, not left to drift false again.
 --- ======================================================================
---- Manual confirmation step -- PHASE3_SPEC.md §12.0 item 2's own "the K9
+--- Manual confirmation step -- DEVELOPER_REFERENCE.md §12.0 item 2's own "the K9
 --- player must still manually confirm before any bite-and-hold or takedown
 --- action actually executes" acceptance criterion, made concrete. Exposed
 --- as a resource-global for a future radial entry (see FILE-TO-FILE
 --- CONTRACT above) and already wired to a default keybind below.
 ---
---- DEFAULT ACTION TYPE, disclosed judgment call: PHASE3_SPEC.md §12.5.3
+--- DEFAULT ACTION TYPE, disclosed judgment call: DEVELOPER_REFERENCE.md §12.5.3
 --- names both `requestBiteHold`/`requestTakedown` as this feature's
 --- downstream targets but does not specify which one a single "confirm"
 --- input should prefer. Bite-and-hold is chosen as the default here

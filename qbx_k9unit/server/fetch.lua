@@ -79,7 +79,7 @@
                                -- transition -- see the maintenance thread
                                -- below, this feature's "no unbounded trap"
                                -- guarantee (task requirement, mirrors
-                               -- PHASE3_SPEC.md §12.0 item 4's maxDurationMs/
+                               -- DEVELOPER_REFERENCE.md §12.0 item 4's maxDurationMs/
                                -- maxDragDistance precedent).
     }
     CarrierIndex[carrierSrc] = throwerCitizenId -- reverse lookup; release/
@@ -622,10 +622,10 @@ RegisterNetEvent('qbx_k9unit:server:cancelFetchThrow', function()
     end
 end)
 
---- Step 3: a K9 (own ped model required — this leg IS K9-specific, unlike
---- the throw) requests to pick up a specific fetch ball by netId. NEVER
---- trusts the reported netId alone — see this file's header ENTITY-THEFT
---- DISCIPLINE block.
+--- Step 3: a K9 (own ped model OR the decoupled K9 ROLE required — this
+--- leg IS K9-specific, unlike the throw) requests to pick up a specific
+--- fetch ball by netId. NEVER trusts the reported netId alone — see this
+--- file's header ENTITY-THEFT DISCIPLINE block.
 --- @param netId number
 RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
     local src = source
@@ -642,7 +642,13 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupFetchBall', function(netId)
 
     local ped = GetPlayerPed(src)
     if ped == 0 then return end
-    if not IsConfiguredK9Model(GetEntityModel(ped)) then
+    -- WIDENED (K9 role/model decoupling, server/appearance.lua): a
+    -- caller who holds the decoupled K9 ROLE (HasK9Role) but is not
+    -- currently on a configured K9 model may still carry -- see
+    -- server/main.lua's CheckLeashEligibility for the identical
+    -- `type(...) == 'function'` guard/fail-closed reasoning, applied here
+    -- to the CALLER's own ped rather than a counterparty's.
+    if not (IsConfiguredK9Model(GetEntityModel(ped)) or (type(HasK9Role) == 'function' and HasK9Role(src))) then
         NotifyPlayer(src, locale('fetch.carry_requires_k9_model'), 'error')
         return
     end
@@ -1114,7 +1120,7 @@ CreateThread(function()
 
         -- (a) Absolute lifetime ceiling — THIS is the "no unbounded trap"
         -- guarantee for a ball nobody ever picks up, drops, delivers, or
-        -- recalls, mirroring PHASE3_SPEC.md §12.0 item 4's maxDurationMs/
+        -- recalls, mirroring DEVELOPER_REFERENCE.md §12.0 item 4's maxDurationMs/
         -- maxDragDistance precedent. Checked unconditionally.
         for citizenid, ball in pairs(FetchBalls) do
             if now > ball.expiresAt then

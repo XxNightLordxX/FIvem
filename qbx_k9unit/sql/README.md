@@ -81,7 +81,7 @@ being written; there is nothing yet to protect.
 
 | | `rollback/backup_k9_tables.sh` | `rollback/backup_full_database.sh` |
 |---|---|---|
-| Backs up | qbx_k9unit's own ~11 tables only | **Every** table in the database |
+| Backs up | qbx_k9unit's own tables only (see `rollback/backup_k9_tables.sh`'s own `ALL_TABLES` list for the current, authoritative count) | **Every** table in the database |
 | Use before | uninstalling / rolling back *this resource* | installing or migrating (any schema change) |
 | Called automatically by | `rollback/uninstall.sh` | `k9_setup.sh` |
 | File name starts with | `qbx_k9unit-backup-` | `qbx_k9unit-FULLDB-backup-` |
@@ -131,8 +131,36 @@ remaining hazards is worth more than a claim of total safety that fails once.
   against mysqldump's own completion marker and a per-table structural
   count before anything is allowed to rely on it; an incomplete file is
   renamed with a `.INCOMPLETE` suffix so it cannot be picked up by mistake.
+- A real foreign key into one of our tables being invisible to
+  `uninstall_all.sql`'s own safety gate because a migration added a table
+  without every safety-net file being updated to match in the same change
+  — reproduced by execution once (migration 0010's three certification-tier
+  tables were absent from the FK-blocker check, the dependency report, and
+  `preflight_check.sql`/`migration_status.sql`, so an armed uninstall could
+  print `UNINSTALLED` without ever mentioning a real blocking FK). Fixed for
+  those three tables; see the next bullet for what still isn't (and
+  structurally can't be) fully closed for a *future* migration.
 
 **Warned, but not blocked (a judgment call is genuinely yours to make):**
+- A `k9_*` table existing in your database that `preflight_check.sql`,
+  `migration_status.sql`, or `uninstall_all.sql` does not recognize. This
+  means one of two things this tooling cannot tell apart automatically:
+  either one of those three files is out of date (a migration added a
+  table without it being updated to match — exactly the migration-0010 gap
+  above, before it was fixed), or a different K9 resource sharing this
+  database (e.g. `k9_units`) legitimately owns that table and it is none of
+  this resource's business. Each of the three files now prints an
+  unmissable, unconditional warning on every single run when this happens,
+  specifically so the next instance of the first case announces itself
+  instead of hiding for a day (or longer) the way migration 0010's did —
+  but none of them can safely guess which case it is, so none of them
+  block on it by itself. This hand-maintained-list-plus-drift-warning
+  design is deliberate, not an oversight: a blind `k9_*` pattern sweep
+  would either risk refusing a legitimate uninstall because of an FK into
+  a *different* resource's same-prefixed table, or risk dropping tables in
+  the wrong order if a future table ever needs one — see
+  `uninstall_all.sql`'s own "OWNED TABLE LIST" comment for the full
+  reasoning.
 - Installing into a database with no `players` table, or no tables at all —
   flagged by `preflight_check.sql`'s CHECK 5 as worth a second look, because
   a brand-new pre-qbx_core database is a real, legitimate situation and not

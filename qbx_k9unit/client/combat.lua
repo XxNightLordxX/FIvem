@@ -2,12 +2,12 @@
     qbx_k9unit/client/combat.lua
 
     Phase 3 completion pass. server/combat.lua (coder-security,
-    PHASE3_SPEC.md §12.5.1/§12.5.2, built under §12.0 item 8's resolution)
+    DEVELOPER_REFERENCE.md §12.5.1/§12.5.2, built under §12.0 item 8's resolution)
     was committed with no client half and was NOT registered in
     fxmanifest.lua — this file is that missing client half, written
     directly against server/combat.lua's own event contract (read in full
     before writing a line of this file) rather than re-derived from
-    PHASE3_SPEC.md's prose alone, per that file's own status as the
+    DEVELOPER_REFERENCE.md's prose alone, per that file's own status as the
     authority on what actually shipped.
 
     This file owns THREE genuinely different roles, per §12.3's file/module
@@ -43,7 +43,7 @@
        this role carries none of role 2's trust-boundary exposure.
 
     PHASE 3 ADDITION (this pass, coder-architect): PropDragging
-    (PHASE3_SPEC.md §12.5.4), folded into the same three roles above rather
+    (DEVELOPER_REFERENCE.md §12.5.4), folded into the same three roles above rather
     than a fourth new role:
     1'. RequestDrag()/ReleaseDrag()/IsDragEngaged() — same self-initiated
         shape as RequestBiteHold/ReleaseBiteHold/IsBiteHoldEngaged, plus the
@@ -62,7 +62,7 @@
 
     ======================================================================
     §12.3 TRUST-BOUNDARY NOTE, made concrete for THIS file (read together
-    with PHASE3_SPEC.md §12.3's own "first for this codebase" paragraph,
+    with DEVELOPER_REFERENCE.md §12.3's own "first for this codebase" paragraph,
     not a substitute for it): every other client-side gated action in this
     resource is initiated by, or applies an effect to, a player who is
     themselves attempting to use a K9 feature. The four `RegisterNetEvent`
@@ -97,7 +97,7 @@
     this, but that call site is a COSMETIC notification only (whether to
     show a fear-stress toast) — a wrong comparison there degrades a message,
     nothing else. This file cannot accept the same degradation:
-    PHASE3_SPEC.md §12.0 item 4's "no unbounded trap" guarantee is EXPLICITLY
+    DEVELOPER_REFERENCE.md §12.0 item 4's "no unbounded trap" guarantee is EXPLICITLY
     binding for BiteAndHold/NonLethalTakedown (server/combat.lua's own header
     guardrail list, item 4/5), and a target whose DisableControlAction loop
     or damage-immunity bracket never locally expires because of a clock
@@ -170,7 +170,7 @@
     ======================================================================
 
     ======================================================================
-    PROP DRAGGING — HOLDER-SIDE ATTACH RE-ASSERTION (PHASE3_SPEC.md §12.0
+    PROP DRAGGING — HOLDER-SIDE ATTACH RE-ASSERTION (DEVELOPER_REFERENCE.md §12.0
     item 8's "new finding," binding guardrail 2): AttachEntityToEntity is
     documented (citizenfx/fivem issue #3726) to require no network
     ownership/authority over the target at all to take initial effect — but
@@ -207,7 +207,7 @@
     same reason the attach/move-rate natives are re-asserted every tick —
     control can be lost again mid-effect. IMPORTANT, stated honestly rather
     than asserted as solved: NetworkRequestControlOfEntity is itself a
-    best-effort ASK of the current owning client (PHASE3_SPEC.md §12.0 item
+    best-effort ASK of the current owning client (DEVELOPER_REFERENCE.md §12.0 item
     8, point 3's own citation of citizenfx/fivem issue #3338), not a
     server-forceable guarantee. CORRECTION (native-api-assistant audit, this
     pass): an earlier version of this note claimed no success-check native
@@ -233,13 +233,13 @@
     problem.
 
     MOVE-RATE COMPOSER SCOPE — client/movement.lua's RecomputeK9MoveRate()
-    (PHASE4_SPEC.md §13.0 Decision 2) is HARD-GATED on IsOwnModelK9(): it
+    (DEVELOPER_REFERENCE.md §13.0 Decision 2) is HARD-GATED on IsOwnModelK9(): it
     resets to neutral and returns early for any ped that is not currently a
     recognized K9 model (see that function's own `if not IsOwnModelK9() then
     ... return end` branch). PropDragging's applyDragSpeedLimit handler
     below runs on the TARGET's own client, and the overwhelmingly common
     real case is a human suspect, NOT another K9 — unconditionally routing
-    through the composer, as PHASE4_SPEC.md §13.0 Decision 2's own text
+    through the composer, as DEVELOPER_REFERENCE.md §13.0 Decision 2's own text
     would suggest at first read ("nothing should ever call
     SetPedMoveRateOverride directly except RecomputeK9MoveRate()"), would
     therefore silently no-op for the actual primary use case, since the
@@ -400,7 +400,7 @@ local ActiveForcedRagdoll = nil
 -- ActiveNpcEffects[npcNetId] = { kind = 'bite' | 'takedown', localDeadline = number }
 local ActiveNpcEffects = {}
 
--- PROP DRAGGING — HOLDER-SIDE state (PHASE3_SPEC.md §12.5.4, this pass):
+-- PROP DRAGGING — HOLDER-SIDE state (DEVELOPER_REFERENCE.md §12.5.4, this pass):
 -- this K9's own client's own view of a drag IT is currently performing.
 -- `isPlayerTarget` is carried here (not re-derived) because it decides,
 -- every tick, whether this client ALSO drives the target's own move rate
@@ -468,7 +468,7 @@ local INPUT_ATTACK = 24
 --- Finds the nearest OTHER live ped (NPC or player) within `rangeMeters` of
 --- the local player, for BiteAndHold/NonLethalTakedown's self-initiated
 --- radial trigger. Deliberately NOT restricted to players only —
---- PHASE3_SPEC.md §12.0 item 1 (Revision 3): "targets may be an NPC ped OR
+--- DEVELOPER_REFERENCE.md §12.0 item 1 (Revision 3): "targets may be an NPC ped OR
 --- a live player." This is a candidate-selection CONVENIENCE only, same
 --- "canInteract/candidate search is a DISPLAY optimization, never the
 --- security boundary" posture every ox_target option and
@@ -543,7 +543,7 @@ local function IsBlockedByVehicleTuck()
     return type(IsInK9Vehicle) == 'function' and IsInK9Vehicle()
 end
 
---- Self-initiated BiteAndHold trigger — PHASE3_SPEC.md §12.5.1. Called from
+--- Self-initiated BiteAndHold trigger — DEVELOPER_REFERENCE.md §12.5.1. Called from
 --- client/radial.lua's "Bite & Hold / Release" item when not currently
 --- engaged (see IsBiteHoldEngaged() below for the toggle).
 function RequestBiteHold()
@@ -592,7 +592,7 @@ function IsBiteHoldEngaged()
     return MyEngagedTargetNetId ~= nil
 end
 
---- Self-initiated NonLethalTakedown trigger — PHASE3_SPEC.md §12.5.2. No
+--- Self-initiated NonLethalTakedown trigger — DEVELOPER_REFERENCE.md §12.5.2. No
 --- local "is the target fleeing" check is attempted here — that is
 --- EXCLUSIVELY a server-computed speed gate from live position samples
 --- (server/combat.lua's own HandleTakedownRequest), never a client claim,
@@ -647,7 +647,7 @@ end
 --- "is this target downed" pre-filter is attempted here at all: the native
 --- IsPedDeadOrDying/IsPedRagdoll check would be reliable for an NPC but
 --- categorically CANNOT answer this question for a player target,
---- PHASE3_SPEC.md §12.0 item 6 — attempting it here would just be a
+--- DEVELOPER_REFERENCE.md §12.0 item 6 — attempting it here would just be a
 --- misleading, inconsistent convenience).
 --- @param rangeMeters number
 --- @return number? targetPed
@@ -668,7 +668,7 @@ local function FindNearestDraggableCandidate(rangeMeters)
     return nearestPed
 end
 
---- Self-initiated PropDragging trigger — PHASE3_SPEC.md §12.5.4.
+--- Self-initiated PropDragging trigger — DEVELOPER_REFERENCE.md §12.5.4.
 function RequestDrag()
     -- PER-MECHANIC FEATURE GATE. This file's top-level gate only checks that
     -- AT LEAST ONE of BiteAndHold/NonLethalTakedown/PropDragging is on, so
@@ -790,7 +790,7 @@ end
 --     documented pattern alone.
 --
 -- WHAT THIS DOES NOT CLOSE:
---   1. PHASE3_SPEC.md §12.0 item 8's own residual gap — a legitimately
+--   1. DEVELOPER_REFERENCE.md §12.0 item 8's own residual gap — a legitimately
 --      TARGETED player's client honestly receiving a genuine server-sent
 --      Category B event and then simply choosing not to execute it (skip
 --      the DisableControlAction calls, run a patched build of this
@@ -849,7 +849,7 @@ local function AssertDragAsHolderTick(dragState)
     if targetPed then
         NetworkRequestControlOfEntity(targetPed) -- best-effort, see header "NETWORK OWNERSHIP OF THE TARGET PED"
 
-        -- PHASE3_SPEC.md §12.0 item 8's own "new finding": DetachEntity is
+        -- DEVELOPER_REFERENCE.md §12.0 item 8's own "new finding": DetachEntity is
         -- very likely NOT ownership-gated either (citizenfx/fivem issue
         -- #3726), so a hostile target's own client can call it on itself at
         -- any moment. Re-asserting the attach EVERY TICK (never one-shot)
@@ -1057,7 +1057,7 @@ if Config.Features.BiteAndHold then
     -- design — the per-MECHANIC gate above is a different, narrower thing
     -- (whether this handler exists AT ALL on this server), not a
     -- per-invocation authorization check.
-    --- PHASE3_SPEC.md §12.0 item 8 / server/combat.lua's own header: applies
+    --- DEVELOPER_REFERENCE.md §12.0 item 8 / server/combat.lua's own header: applies
     --- DisableControlAction on sprint/fire locally every frame until the
     --- (locally-derived, see this file's header CLOCK-DOMAIN NOTE) deadline
     --- or an endBiteHold arrives first, whichever is sooner. `holderNetId`
@@ -1164,7 +1164,7 @@ if Config.Features.NonLethalTakedown then
     -- TARGET-SIDE CATEGORY B RELAY HANDLER — see BiteAndHold's own group
     -- above for the full trust-boundary/per-mechanic-gating reasoning,
     -- identical here.
-    --- PHASE3_SPEC.md §12.0 item 8 / server/combat.lua's own header: applies
+    --- DEVELOPER_REFERENCE.md §12.0 item 8 / server/combat.lua's own header: applies
     --- the ragdoll + damage-bracket locally, bracket-before-ragdoll ordering,
     --- per phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §2 ("damage-bracket + health
     --- floor BEFORE the ragdoll task, never after") — same ordering
@@ -1443,7 +1443,7 @@ end
 --     SetPedMoveRateOverride's own contracts each independently require
 --     reasserting every single frame (same "must reassert every frame"
 --     discipline as client/movement.lua's AgilityBasicJump suppression
---     thread, and PHASE3_SPEC.md §12.0 item 8's own new finding on
+--     thread, and DEVELOPER_REFERENCE.md §12.0 item 8's own new finding on
 --     DetachEntity's lack of an ownership gate for the attach specifically).
 --   - Forced ragdoll (also applied TO this client) and every NPC-relay
 --     bite/takedown effect (applied BY this client, to an NPC, on this K9's
@@ -1621,7 +1621,7 @@ CreateThread(function()
                 -- (NPC-target) SetPedMoveRateOverride sequence dragStarted's own
                 -- handler above already runs once, immediately, on grant; this
                 -- is the CONTINUOUS every-tick reassertion of the same thing
-                -- (PHASE3_SPEC.md §12.0 item 8's own "new finding": DetachEntity
+                -- (DEVELOPER_REFERENCE.md §12.0 item 8's own "new finding": DetachEntity
                 -- is very likely NOT ownership-gated either, citizenfx/fivem
                 -- issue #3726, so a hostile target's own client can call it on
                 -- itself at any moment — re-asserting the attach EVERY TICK,

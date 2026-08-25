@@ -959,26 +959,12 @@ local function CopyTier(tier)
     return copy
 end
 
---- Fires a stable `qbx_k9unit:events:*` outbound event for other resources
---- (dispatch/MDT/evidence integrations — see server/exports.lua's header
---- "EVENT CONTRACT" section for the full documented contract this
---- implements). Same shape/reasoning as server/certifications.lua's and
---- server/partnership.lua's own file-local copies of this helper: fired
---- ONLY after the change it reports on has already committed (per this
---- file's own design, that commit point is the synchronous K9XP cache
---- write in AwardXP below, NOT the fire-and-forget DB UPSERT that follows
---- it — see that function's own comment on why correctness never depends
---- on DB round-trip latency here), and pcall-wrapped so a misbehaving
---- consumer's `AddEventHandler` throwing can never unwind back into (and
---- abort) the AwardXP call that fired it.
---- @param eventName string
---- @param ... any
-local function FireOutboundEvent(eventName, ...)
-    local ok, err = pcall(TriggerEvent, eventName, ...)
-    if not ok then
-        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
-    end
-end
+--- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
+--- file's own `FireOutboundEvent` copy — byte-for-byte identical to the
+--- five other copies that existed alongside it — is now the single shared
+--- resource-global implementation in that file. See server/events.lua's
+--- header for the full extraction writeup. Every call site below is
+--- unchanged: same event names, arguments, order, and firing conditions.
 
 --- Resource-global — see FILE-TO-FILE CONTRACT above for the full contract.
 --- THE single server-authoritative XP-award entry point. Never trusts a

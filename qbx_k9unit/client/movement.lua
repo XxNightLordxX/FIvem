@@ -735,7 +735,17 @@ local function RegisterLeashOxTargetOption()
                 -- At least one side should plausibly be a K9 (either us, or
                 -- the target's live model) — cheap client-side plausibility
                 -- only, per this file's header note not to over-invest here.
-                return IsOwnModelK9() or IsEntityModelK9(entity)
+                -- WIDENED (K9 role/model decoupling): IsEntityModelK9(entity)
+                -- alone misses a target who holds the decoupled K9 ROLE on a
+                -- human/custom model -- IsK9RoleForPlayer(...) is
+                -- client/appearance.lua's own per-target-cached (1s TTL,
+                -- same shape as HasK9Access() above) server round trip for
+                -- exactly that question, so it is only ever awaited here on
+                -- a cache miss, never on every frame. Short-circuited last
+                -- (Lua `or`): a real K9 model or the local player's own K9
+                -- role already answers this for the overwhelming common
+                -- case without ever reaching the network call.
+                return IsOwnModelK9() or IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
             end,
             onSelect = function(data)
                 local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
@@ -822,10 +832,27 @@ local function RegisterCertifyOxTargetOptions()
                 if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-cert stays command-only (/k9certify [own id]), matches the leash option's self-exclusion above
 
                 -- SPEC.md §4.2 condition 5: grant requires the TARGET's live
-                -- ped model to be a configured K9 model. Cheap client-side
-                -- plausibility check only — the server independently
-                -- re-verifies via GetEntityModel(GetPlayerPed(targetServerId))
-                -- regardless, see GrantCertification.
+                -- ped model to be a configured K9 model -- BUT ONLY when
+                -- Config.K9Appearance.requireK9ModelForRole is explicitly
+                -- true (K9 role/model decoupling, server/appearance.lua).
+                -- REPRODUCIBLE BUG, FIXED THIS PASS: at the shipped (false)
+                -- default this predicate used to demand a K9 model
+                -- unconditionally while GrantCertification itself does not
+                -- -- a perfectly certifiable candidate (any job-member,
+                -- any model) never showed this option at all. Mirrors
+                -- GrantCertification's own gate exactly (same config read,
+                -- same default), not a statebag/round-trip question at
+                -- all: a target who does not YET hold the role has nothing
+                -- for IsK9RoleForPlayer to answer true to, so the fix here
+                -- is to stop requiring a model instead. Cheap client-side
+                -- plausibility check only either way — the server
+                -- independently re-verifies via
+                -- GetEntityModel(GetPlayerPed(targetServerId)) regardless,
+                -- see GrantCertification.
+                if Config.K9Appearance and Config.K9Appearance.requireK9ModelForRole == false then
+                    return true
+                end
+
                 return IsEntityModelK9(entity)
             end,
             onSelect = function(data)
@@ -848,14 +875,21 @@ local function RegisterCertifyOxTargetOptions()
                 -- already left K9 form) — but this predicate still reuses
                 -- IsEntityModelK9 as the display-only plausibility gate rather
                 -- than showing this option on every nearby player regardless
-                -- of appearance, per this block's header note above (no new
-                -- eligibility-check callback added this pass). A handler who
+                -- of appearance, per this block's header note above. A handler who
                 -- has already left K9 form and needs their cert pulled remains
                 -- reachable via /k9decertify [id] (or /k9decertifyoffline if
                 -- they've since disconnected), neither of which has any model
                 -- restriction at all — this ox_target option is a convenience
-                -- entry point, not the only way to revoke.
-                return IsEntityModelK9(entity)
+                -- entry point, not the only way to revoke. WIDENED (K9
+                -- role/model decoupling) with IsK9RoleForPlayer(...) --
+                -- unlike certify above, a REVOKE target by definition
+                -- already holds the role, so this is exactly the "is that
+                -- other player a K9" question that cached, per-target
+                -- server round trip answers (see the "Attach Leash" option
+                -- above for the full reasoning) -- letting this option
+                -- also show up for a role-holder who was never on, or has
+                -- already left, a configured K9 model.
+                return IsEntityModelK9(entity) or IsK9RoleForPlayer(ResolvePlayerServerIdFromPed(entity))
             end,
             onSelect = function(data)
                 local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)

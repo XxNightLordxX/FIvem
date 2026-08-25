@@ -135,11 +135,21 @@ for (const malicious of MALICIOUS_STRINGS) {
             }),
         });
 
-        h.postMessage('tablet:open', {});
+        // branding.serverName -- config-authored, but per this file's own
+        // header, treated as fully attacker-controlled regardless of which
+        // side of the contract nominally authors it. No `logo` here so it
+        // renders directly (see the separate ped-label/branding coverage
+        // in the "admin roster/person" test above and
+        // tablet_role_theme_certtiers_spec.js for the logo-present path).
+        h.postMessage('tablet:open', { branding: { serverName: malicious } });
         await settle();
 
         // Theme headerTitle -- rendered directly into the panel's <h1>.
         t.isTrue(findAll(h.getRoot(), (n) => n._textContent === malicious).length >= 1, 'malicious theme headerTitle rendered verbatim in the header');
+        t.equals(everyElementInnerHTMLWriteCount(h), 0);
+
+        // branding.serverName -- rendered in the header's own branding slot.
+        t.isTrue(findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-branding-name') && n._textContent === malicious).length >= 1, 'malicious serverName rendered verbatim in the branding element');
         t.equals(everyElementInnerHTMLWriteCount(h), 0);
 
         const { findByText } = require('./tablet-dom-stub');

@@ -857,23 +857,12 @@ end
 -- now calls that shared global below (HandleSearchTarget's 'person'
 -- branch) instead of defining its own.
 
---- Fires a stable `qbx_k9unit:events:*` outbound event for other resources
---- (dispatch/MDT/evidence integrations — see server/exports.lua's header
---- "EVENT CONTRACT" section for the full documented contract this
---- implements). Same shape/reasoning as server/certifications.lua's,
---- server/partnership.lua's, and server/progression.lua's own file-local
---- copies of this helper: fired ONLY after the write it reports on has
---- already been issued, and pcall-wrapped so a misbehaving consumer's
---- `AddEventHandler` throwing can never unwind back into (and abort) the
---- searchTarget flow that fired it.
---- @param eventName string
---- @param ... any
-local function FireOutboundEvent(eventName, ...)
-    local ok, err = pcall(TriggerEvent, eventName, ...)
-    if not ok then
-        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
-    end
-end
+--- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
+--- file's own `FireOutboundEvent` copy — byte-for-byte identical to the
+--- five other copies that existed alongside it — is now the single shared
+--- resource-global implementation in that file. See server/events.lua's
+--- header for the full extraction writeup. Every call site below is
+--- unchanged: same event names, arguments, order, and firing conditions.
 
 --- Fire-and-forget audit log write to `k9_search_log`
 --- (sql/install.sql — see that table's own header comment for the full

@@ -129,7 +129,7 @@
       ForceDetachLeashIfOnline's own doc comment and server/main.lua's
       header for the full rationale (SPEC.md §1/§4.4 "immediately").
     - THIS FILE also calls `ForceBreakPartnershipForCitizenId(citizenid,
-      reason)`, exposed by server/partnership.lua (Phase 3, PHASE3_SPEC.md
+      reason)`, exposed by server/partnership.lua (Phase 3, DEVELOPER_REFERENCE.md
       §12.0 item 7), alongside all FOUR existing leash-teardown call sites
       in this file: RevokeCertification's online branch
       (ForceDetachLeashForSource), RevokeCertificationOffline
@@ -760,12 +760,20 @@ function RefreshCertificationCache(citizenid, jobName)
     -- CERTIFICATION DEPTH (this pass, Part A §5/§9) — tier/expiry
     -- metadata, read via a SEPARATE query from the existence check above,
     -- DELIBERATELY: this file's own regression tests sequence exact call
-    -- counts against the ORIGINAL `MySQL.scalar.await` existence-check
-    -- call (e.g. the GrantInFlight concurrency test's
-    -- `scalarCallCount == 2` assertion) — changing that call's own
+    -- counts against the existence-check call's underlying
+    -- `MySQL.scalar.await` invocation (e.g. the GrantInFlight concurrency
+    -- test's `scalarCallCount == 2` assertion) — changing that call's own
     -- SQL/shape would be a needless, high-blast-radius edit to already
-    -- passing coverage for no behavioral gain. Only run once an active
-    -- row is already confirmed to exist above.
+    -- passing coverage for no behavioral gain. DATASTORE MIGRATION NOTE:
+    -- this file now calls K9Store.Cert_GetActiveId instead of
+    -- MySQL.scalar.await directly, but K9Store.Cert_GetActiveId forwards
+    -- to that exact same MySQL.scalar.await call with the identical SQL/
+    -- params when Config.Database.enabled is not literally false, so the
+    -- scalarCallCount assertion still counts the same underlying calls
+    -- unchanged (see tests/certifications_spec.lua's own fixture, which
+    -- loads the real server/datastore.lua alongside this file for exactly
+    -- this reason). Only run once an active row is already confirmed to
+    -- exist above.
     --
     -- `UNIX_TIMESTAMP(expires_at)` does the date arithmetic in SQL, never
     -- in Lua — see this file's header "EXPIRY" item 3. Returns NULL
@@ -960,34 +968,12 @@ local function IsDuplicateKeyError(err)
     return false
 end
 
---- Fires a stable `qbx_k9unit:events:*` outbound event for other resources
---- (dispatch/MDT/evidence integrations — see server/exports.lua's header
---- "EVENT CONTRACT" section for the full documented contract this
---- implements). Every call site below fires this ONLY after its own DB
---- write has already committed and every eligibility check has already
---- passed — never optimistically, never inside a branch that can still
---- fail/roll back — so by the time this runs, this resource's own state
---- already reflects the change being announced.
----
---- `TriggerEvent` runs every `AddEventHandler` registered by every OTHER
---- resource on this server, SYNCHRONOUSLY, on this same call stack. A
---- misbehaving/buggy consumer resource's handler throwing must never be
---- able to unwind back into (and abort the remainder of) the certification/
---- partnership/search flow that triggered it — pcall-wrapped so a
---- consumer's exception is swallowed and logged here, never propagated.
---- Because this is only ever called AFTER the real state change already
---- committed, a pcall failure here can only ever mean "a consumer's own
---- handler broke," never "this resource's own DB/cache state disagrees
---- with what it just announced" — nothing above this call is undone or
---- retried based on whether the fire succeeds.
---- @param eventName string
---- @param ... any
-local function FireOutboundEvent(eventName, ...)
-    local ok, err = pcall(TriggerEvent, eventName, ...)
-    if not ok then
-        print(('[qbx_k9unit] outbound event %s: a registered handler in another resource errored: %s'):format(eventName, tostring(err)))
-    end
-end
+--- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
+--- file's own `FireOutboundEvent` copy — byte-for-byte identical to the
+--- five other copies that existed alongside it — is now the single shared
+--- resource-global implementation in that file. See server/events.lua's
+--- header for the full extraction writeup. Every call site below is
+--- unchanged: same event names, arguments, order, and firing conditions.
 
 --- CERTIFICATION DEPTH (this pass, Part B §11): a specialization cannot
 --- outlive the base certification it requires. Bulk-revokes EVERY active
@@ -1258,9 +1244,7 @@ local function GrantCertification(granterSrc, targetServerId)
         -- unconditionally by GrantInFlight above, and further backstopped
         -- below by the DB's unique index in case that constraint is present
         -- on this install (see IsDuplicateKeyError).
-        local existingId = MySQL.scalar.await('SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', {
-            targetCitizenid, jobName,
-        })
+        local existingId = K9Store.Cert_GetActiveId(targetCitizenid, jobName)
         if existingId then
             NotifyPlayer(granterSrc, locale('certifications.target_already_certified'), 'inform')
             outcome = 'already_certified'
@@ -1288,16 +1272,10 @@ local function GrantCertification(granterSrc, targetServerId)
             and type(Config.CertificationExpiryDays) == 'number' and Config.CertificationExpiryDays > 0
             and Config.CertificationExpiryDays or nil
 
-        local insertSql, insertParams
-        if expiryDays then
-            insertSql = 'INSERT INTO k9_certifications (citizenid, job, granted_by, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))'
-            insertParams = { targetCitizenid, jobName, granterCitizenid, expiryDays }
-        else
-            insertSql = 'INSERT INTO k9_certifications (citizenid, job, granted_by) VALUES (?, ?, ?)'
-            insertParams = { targetCitizenid, jobName, granterCitizenid }
-        end
-
-        local insertOk, insertResultOrErr = pcall(MySQL.insert.await, insertSql, insertParams)
+        -- K9Store.Cert_Insert owns the with-expiry/without-expiry SQL
+        -- branch internally now (byte-identical to the two insertSql
+        -- shapes this used to build here) -- see its own doc comment.
+        local insertOk, insertResultOrErr = pcall(K9Store.Cert_Insert, targetCitizenid, jobName, granterCitizenid, expiryDays)
 
         if not insertOk then
             if IsDuplicateKeyError(insertResultOrErr) then
@@ -1534,11 +1512,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
     -- test asserting on `updateParams[1..3]` for THIS call site was
     -- updated to match (tests/certifications_spec.lua) — a deliberate,
     -- reviewed shape change, not an accidental break.
-    local updateOk, affectedRowsOrErr = pcall(
-        MySQL.update.await,
-        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP, revoke_reason = ? WHERE citizenid = ? AND job = ? AND active = 1',
-        { granterCitizenid, reason, targetCitizenid, targetJobName }
-    )
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Cert_RevokeActive, targetCitizenid, targetJobName, granterCitizenid, reason)
 
     if not updateOk then
         print(('[qbx_k9unit] RevokeCertification UPDATE failed for %s/%s: %s -- reconciling before reporting an outcome'):format(targetCitizenid, targetJobName, tostring(affectedRowsOrErr)))
@@ -1609,7 +1583,7 @@ local function RevokeCertification(granterSrc, targetServerId, reason)
             pcall(EndActiveEffectForHolder, targetServerId)
         end
 
-        -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): a K9 partnership must not
+        -- Phase 3 (DEVELOPER_REFERENCE.md §12.0 item 7): a K9 partnership must not
         -- outlive its K9-role party's certification either — same
         -- "immediately" requirement as leash directly above, now extended
         -- to the persistent partnership registry (server/partnership.lua).
@@ -1730,11 +1704,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     -- CERTIFICATION DEPTH (this pass, Part A §2): `revoke_reason` added,
     -- same positional shift as RevokeCertification's own UPDATE above —
     -- this call site's own test assertion was updated to match.
-    local updateOk, affectedRowsOrErr = pcall(
-        MySQL.update.await,
-        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP, revoke_reason = ? WHERE citizenid = ? AND job = ? AND active = 1',
-        { granterCitizenid, reason, citizenid, job }
-    )
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Cert_RevokeActive, citizenid, job, granterCitizenid, reason)
 
     if not updateOk then
         print(('[qbx_k9unit] RevokeCertificationOffline UPDATE failed for %s/%s: %s -- reconciling before reporting an outcome'):format(citizenid, job, tostring(affectedRowsOrErr)))
@@ -1804,7 +1774,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job, reason)
     -- doc comment.
     ForceDetachLeashIfOnline(citizenid, 'certification_revoked')
 
-    -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): unlike leash immediately
+    -- Phase 3 (DEVELOPER_REFERENCE.md §12.0 item 7): unlike leash immediately
     -- above (a genuine, in-memory-only no-op for a truly offline citizenid
     -- — see ForceDetachLeashIfOnline's own doc comment), a K9 partnership
     -- is DB-backed and DOES persist across a disconnect
@@ -1955,11 +1925,7 @@ local function SetCertificationTier(granterSrc, targetServerId, newTier)
         return
     end
 
-    local updateOk, err = pcall(
-        MySQL.update.await,
-        'UPDATE k9_certifications SET tier = ? WHERE citizenid = ? AND job = ? AND active = 1',
-        { newTier, targetCitizenid, jobName }
-    )
+    local updateOk, err = pcall(K9Store.Cert_SetTier, targetCitizenid, jobName, newTier)
 
     if haveTierMutex then TierEditMutex.Release(newTier) end
 
@@ -2042,11 +2008,7 @@ local function RenewCertification(granterSrc, targetServerId)
     local granterCitizenid = ResolveGranterCitizenId(granterSrc)
     if not granterCitizenid then return end
 
-    local updateOk, err = pcall(
-        MySQL.update.await,
-        'UPDATE k9_certifications SET expires_at = DATE_ADD(NOW(), INTERVAL ? DAY) WHERE citizenid = ? AND job = ? AND active = 1',
-        { expiryDays, targetCitizenid, jobName }
-    )
+    local updateOk, err = pcall(K9Store.Cert_RenewExpiry, targetCitizenid, jobName, expiryDays)
 
     if not updateOk then
         print(('[qbx_k9unit] RenewCertification UPDATE failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(err)))
@@ -2140,10 +2102,7 @@ local function GrantSpecialization(granterSrc, targetServerId, specializationKey
     GrantInFlight[lockKey] = true
 
     local function doGrantInsert()
-        local existingId = MySQL.scalar.await(
-            'SELECT id FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND specialization = ? AND active = 1 LIMIT 1',
-            { targetCitizenid, jobName, specializationKey }
-        )
+        local existingId = K9Store.Spec_GetActiveId(targetCitizenid, jobName, specializationKey)
         if existingId then
             NotifyPlayer(granterSrc, locale('certifications.specialization_already_granted'), 'inform')
             return
@@ -2152,10 +2111,7 @@ local function GrantSpecialization(granterSrc, targetServerId, specializationKey
         local granterCitizenid = ResolveGranterCitizenId(granterSrc)
         if not granterCitizenid then return end
 
-        local insertOk, insertErr = pcall(MySQL.insert.await,
-            'INSERT INTO k9_certification_specializations (citizenid, job, specialization, granted_by) VALUES (?, ?, ?, ?)',
-            { targetCitizenid, jobName, specializationKey, granterCitizenid }
-        )
+        local insertOk, insertErr = pcall(K9Store.Spec_Insert, targetCitizenid, jobName, specializationKey, granterCitizenid)
 
         if not insertOk then
             if IsDuplicateKeyError(insertErr) then
@@ -2245,11 +2201,7 @@ local function RevokeSpecialization(granterSrc, targetServerId, specializationKe
     local granterCitizenid = ResolveGranterCitizenId(granterSrc)
     if not granterCitizenid then return end
 
-    local updateOk, affectedRowsOrErr = pcall(
-        MySQL.update.await,
-        'UPDATE k9_certification_specializations SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND specialization = ? AND active = 1',
-        { granterCitizenid, targetCitizenid, jobName, specializationKey }
-    )
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Spec_RevokeOne, targetCitizenid, jobName, specializationKey, granterCitizenid)
 
     if not updateOk then
         print(('[qbx_k9unit] RevokeSpecialization UPDATE failed for %s/%s/%s: %s'):format(targetCitizenid, jobName, specializationKey, tostring(affectedRowsOrErr)))
@@ -2305,11 +2257,7 @@ local function RevokeSpecializationOffline(granterSrc, citizenid, job, specializ
         return
     end
 
-    local updateOk, affectedRowsOrErr = pcall(
-        MySQL.update.await,
-        'UPDATE k9_certification_specializations SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND specialization = ? AND active = 1',
-        { granterCitizenid, citizenid, job, specializationKey }
-    )
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Spec_RevokeOne, citizenid, job, specializationKey, granterCitizenid)
 
     if not updateOk then
         print(('[qbx_k9unit] RevokeSpecializationOffline UPDATE failed for %s/%s/%s: %s'):format(citizenid, job, specializationKey, tostring(affectedRowsOrErr)))
@@ -2405,11 +2353,7 @@ end
 function QueryCertificationRecord(citizenid, jobName)
     if type(citizenid) ~= 'string' or citizenid == '' or type(jobName) ~= 'string' or jobName == '' then return nil end
 
-    local ok, row = pcall(MySQL.single.await,
-        'SELECT tier, granted_by, granted_at, revoked_by, revoked_at, revoke_reason, UNIX_TIMESTAMP(expires_at) AS expires_at_unix ' ..
-        'FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1',
-        { citizenid, jobName }
-    )
+    local ok, row = pcall(K9Store.Cert_GetActiveRecord, citizenid, jobName)
     if not ok or not row then
         if not ok then
             print(('[qbx_k9unit] QueryCertificationRecord query failed for %s/%s: %s'):format(citizenid, jobName, tostring(row)))
@@ -2438,10 +2382,7 @@ end
 function QueryActiveSpecializations(citizenid, jobName)
     if type(citizenid) ~= 'string' or citizenid == '' or type(jobName) ~= 'string' or jobName == '' then return {} end
 
-    local ok, rows = pcall(MySQL.query.await,
-        'SELECT specialization FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND active = 1',
-        { citizenid, jobName }
-    )
+    local ok, rows = pcall(K9Store.Spec_GetActiveKeys, citizenid, jobName)
     if not ok then
         print(('[qbx_k9unit] QueryActiveSpecializations query failed for %s/%s: %s'):format(citizenid, jobName, tostring(rows)))
         return {}
@@ -2506,7 +2447,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
             pcall(EndActiveEffectForHolder, source)
         end
 
-        -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): department loss ends an
+        -- Phase 3 (DEVELOPER_REFERENCE.md §12.0 item 7): department loss ends an
         -- active partnership the same way it ends an active leash pairing
         -- directly above — a partnership's handler-role party who no
         -- longer passes department membership is exactly as invalid a
@@ -2554,11 +2495,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     -- below already carries. Same positional shift as the two manual
     -- revoke paths above; this call site's own test assertion was
     -- updated to match.
-    local updateOk, updateErr = pcall(
-        MySQL.update.await,
-        'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP, revoke_reason = ? WHERE citizenid = ? AND job = ? AND active = 1',
-        { 'system:job_change', 'reassigned', citizenid, oldJob }
-    )
+    local updateOk, updateErr = pcall(K9Store.Cert_RevokeActive, citizenid, oldJob, 'system:job_change', 'reassigned')
 
     if not updateOk then
         print(('[qbx_k9unit] OnJobUpdate auto-revoke UPDATE failed for %s/%s: %s -- reconciling before applying any side effects'):format(citizenid, oldJob, tostring(updateErr)))
@@ -2643,7 +2580,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
         pcall(EndActiveEffectForHolder, source)
     end
 
-    -- Phase 3 (PHASE3_SPEC.md §12.0 item 7): same "must not outlive
+    -- Phase 3 (DEVELOPER_REFERENCE.md §12.0 item 7): same "must not outlive
     -- certification loss" requirement as leash immediately above, applied
     -- to the partnership registry. This branch is only reached for a
     -- K9-role citizenid — the department-membership-only handler/officer

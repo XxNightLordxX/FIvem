@@ -32,28 +32,18 @@
     entirely would leave the existing event working exactly as it does
     today -- that is the definition of "purely additive."
 
-    WHO ACTUALLY CALLS `K9Compat.Get('dispatch').Alert(...)`: nobody yet.
-    server/integrations.lua is this session's own DO-NOT-EDIT list (per the
-    task that produced this file) and is owned by whoever is mid-edit on it
-    concurrently, so wiring its k9Down poll to ALSO call this adapter is
-    intentionally left to that file's next real editor rather than done
-    here as a drive-by edit to a file this pass has no authority over. The
-    exact call that follow-up needs (copy-paste ready, once
-    server/integrations.lua's own owner picks this up) is:
-
-        local sent = K9Compat.Get('dispatch').Alert({
-            code     = 'k9_down',
-            title    = locale('dispatch.k9_down_title')  -- or a plain string; this file's own Alert() never touches locale() itself, see SECURITY/LOCALE note below
-            message  = ('A K9 unit (%s) has gone down and needs assistance.'):format(jobName),
-            coords   = coords,       -- the SAME server-resolved vector3 server/integrations.lua already passes to FireOutboundEvent
-            jobs     = { jobName },  -- the SAME server-resolved job name already in scope there
-            priority = 0,            -- see PRIORITY SCALE below -- 0 is this scale's "critical" tier, matching the existing event's own "an officer's K9 going down" severity
-        })
-
-    placed immediately AFTER (never instead of) the existing
-    `FireOutboundEvent('qbx_k9unit:events:k9Down', ...)` call in that
-    file's PollK9Health, so both fire from the exact same detection episode.
-    This file does not perform that wiring itself; it only guarantees the
+    WHO ACTUALLY CALLS `K9Compat.Get('dispatch').Alert(...)`: server/
+    integrations.lua's PollK9Health, wired in a later pass once that file's
+    own concurrent edit window closed -- placed immediately AFTER (never
+    instead of) the existing `FireOutboundEvent('qbx_k9unit:events:k9Down',
+    ...)` call, guarded the same `type(K9Compat) == 'table' and
+    type(K9Compat.Get) == 'function'` way server/scentlineup.lua guards its
+    own K9Compat.Get('framework') call, so both fire from the exact same
+    detection episode and a missing K9Compat degrades to "the convenience
+    layer did nothing," never a thrown error. `title` there is a plain
+    string, not `locale(...)` (see LOCALE NOTE below -- server/
+    integrations.lua is not the locale-file owner). This file does not
+    perform that wiring itself; it only guarantees the
     other end (`Alert`) is ready and safe to call the moment someone does.
 
     ======================================================================

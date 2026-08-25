@@ -59,7 +59,7 @@
 
 -- ======================================================================
 -- ADVANCED AGILITY -- fence/window vault approximation
--- (Config.Features.AgilityAdvanced). PHASE3_SPEC.md §12.5.5, §12.0 item 3
+-- (Config.Features.AgilityAdvanced). DEVELOPER_REFERENCE.md §12.5.5, §12.0 item 3
 -- (DECIDED: capsule-sweep raycast, detectionMethod = 'raycast', as the
 -- Phase 3 default -- unaffected by Revision 3's PvP scope reversal), §12.1
 -- sub-phase 3a ("independent, start immediately -- pure client-local
@@ -73,7 +73,7 @@
 -- NEVER resolves, targets, or applies any effect to another ped/player --
 -- it only reads world geometry (via a capsule shape-test sweep) and
 -- repositions the K9's OWN ped. It is therefore entirely UNAFFECTED by
--- PHASE3_SPEC.md §12.0 item 8 (the still-open, coder-security-owned
+-- DEVELOPER_REFERENCE.md §12.0 item 8 (the still-open, coder-security-owned
 -- client-relay/non-cooperating-target-client question), which only
 -- concerns effects a K9 applies to a DIFFERENT entity (BiteAndHold /
 -- NonLethalTakedown / PropDragging). Do not conflate this feature with
@@ -81,7 +81,7 @@
 --
 -- EVENT/CALLBACK CONTRACT: NONE. No TriggerServerEvent, no callback,
 -- nothing server-authoritative touched anywhere in this block -- matches
--- PHASE3_SPEC.md §12.5.5's own "Event/callback contract: unchanged --
+-- DEVELOPER_REFERENCE.md §12.5.5's own "Event/callback contract: unchanged --
 -- minimal, entirely client-local" framing exactly.
 --
 -- GATING CHOICE: gated on CanShowK9UI() (not just the cheap, local
@@ -98,19 +98,19 @@ if Config.Features.AgilityAdvanced then
 
     -- Fail loudly, not silently, if a server sets detectionMethod to
     -- anything other than the one Phase 3 default actually implemented
-    -- here. PHASE3_SPEC.md §12.2/§12.5.5 document 'taggedProp' as a
+    -- here. DEVELOPER_REFERENCE.md §12.2/§12.5.5 document 'taggedProp' as a
     -- theoretical per-server override SHAPE, but no such detection path
     -- is built in this codebase -- same "assert rather than silently
     -- no-op a field that looks load-bearing" posture client/movement.lua's
     -- own Config.DoorInteraction.nudgeRequiresUnlocked assertion uses.
     assert(agilityCfg.detectionMethod == 'raycast',
         ("qbx_k9unit: Config.Combat.AgilityAdvanced.detectionMethod = '%s' is not implemented -- " ..
-         "only 'raycast' (the PHASE3_SPEC.md §12.0 item 3 Phase 3 default, a multi-height capsule " ..
+         "only 'raycast' (the DEVELOPER_REFERENCE.md §12.0 item 3 Phase 3 default, a multi-height capsule " ..
          "sweep) is built in client/agility.lua. Set it back to 'raycast', or implement the " ..
          "'taggedProp' path with a reviewed code change before shipping this value."):format(tostring(agilityCfg.detectionMethod)))
 
     -- Capsule-sweep TUNING CONSTANTS -- deliberately plain local constants,
-    -- NOT promoted into config.lua, because PHASE3_SPEC.md §12.5.5's own
+    -- NOT promoted into config.lua, because DEVELOPER_REFERENCE.md §12.5.5's own
     -- "Open questions" list names the exact height bands/capsule radius/
     -- forward distance as in-engine TUNING work still to be done against
     -- real map geometry, not a settled design choice -- promoting untested
@@ -164,7 +164,7 @@ if Config.Features.AgilityAdvanced then
     --- This specific multi-band-sweep ALGORITHM built on top of them is
     --- this file's own construction, not verified in-engine this session --
     --- exactly the "in-engine tuning... against real map geometry"
-    --- PHASE3_SPEC.md §12.5.5 already lists as open, unresolved TUNING
+    --- DEVELOPER_REFERENCE.md §12.5.5 already lists as open, unresolved TUNING
     --- work, not a design fork. Treat the returned height as an
     --- approximation to be validated against real fences/windows in
     --- testing, not a precise measurement.
@@ -283,7 +283,7 @@ if Config.Features.AgilityAdvanced then
 
         lastVaultAt = now
 
-        -- Scripted arc over the detected obstacle. PHASE3_SPEC.md
+        -- Scripted arc over the detected obstacle. DEVELOPER_REFERENCE.md
         -- §12.5.5's own wording correction applies here: there is no
         -- dedicated ped "jump" TASK native (confirmed absent,
         -- phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat §5) -- this arc is driven
@@ -296,7 +296,7 @@ if Config.Features.AgilityAdvanced then
         -- formula below): LOW/UNTUNED -- this is a first-pass placeholder
         -- shape, not derived from any confirmed source, and is exactly the
         -- kind of "in-engine tuning against real map geometry" work
-        -- PHASE3_SPEC.md §12.5.5 already flags as open. Revisit after an
+        -- DEVELOPER_REFERENCE.md §12.5.5 already flags as open. Revisit after an
         -- in-engine pass, same as the sweep tuning constants above.
         local forward = GetEntityForwardVector(ped)
         local verticalSpeed = 4.0 + obstacleHeight * 2.0 -- taller obstacle -> slightly higher arc

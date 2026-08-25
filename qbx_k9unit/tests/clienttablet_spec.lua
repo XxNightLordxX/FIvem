@@ -1051,6 +1051,20 @@ t.test('OpenTablet(): themingEnabled reflects Config.Features.TabletTheming = fa
     t.isFalse(f.sendNuiMessageCalls[1].data.themingEnabled)
 end)
 
+t.test('OpenTablet(): payload carries branding verbatim (shared Config.CommandTablet.branding, no round trip)', function()
+    local customBranding = { serverName = 'Crimson Roleplay', logo = 'images/logo.png', theme = { primaryColor = '#C8102E', accentColor = '#FF2D2D', backgroundColor = '#0B0B0D', textColor = '#F5F5F5' } }
+    local f = newTabletFixture({ commandTablet = { branding = customBranding } })
+    f.env.OpenTablet()
+    t.equals(f.sendNuiMessageCalls[1].data.branding, customBranding)
+end)
+
+t.test('OpenTablet(): a missing/malformed Config.CommandTablet.branding degrades to an empty table, never nil/error', function()
+    local f = newTabletFixture({ commandTablet = { branding = 'not-a-table' } })
+    f.env.OpenTablet()
+    t.isNotNil(f.sendNuiMessageCalls[1].data.branding)
+    t.equals(next(f.sendNuiMessageCalls[1].data.branding), nil)
+end)
+
 -- ----------------------------------------------------------------------
 -- tablet:assignK9Role / tablet:revertK9Ped -- forwarded verbatim,
 -- server/tablet.lua's own tabletAssignK9Role/tabletRevertK9Ped already do

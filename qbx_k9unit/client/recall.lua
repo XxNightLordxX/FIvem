@@ -2,7 +2,7 @@
     qbx_k9unit/client/recall.lua
 
     Phase 3 implementation, the client half of server/recall.lua
-    (PHASE3_SPEC.md §12.5.1's "Recall actor" -- read that file's header in
+    (DEVELOPER_REFERENCE.md §12.5.1's "Recall actor" -- read that file's header in
     full before touching this one; it is the authoritative contract for
     everything below). Provides the handler-facing entry point for Recall
     -- a chat command, per this pass's own scope (a client/radial.lua

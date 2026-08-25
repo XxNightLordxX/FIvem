@@ -97,7 +97,7 @@ ORDER BY t.table_name;
 
 
 -- ---------------------------------------------------------------------
--- PART 2: sql/migrations/0001-0009 -- what would each one do, in order?
+-- PART 2: sql/migrations/0001-0010 -- what would each one do, in order?
 --
 -- Mirrors each file's own INFORMATION_SCHEMA guard exactly, so the
 -- verdict below is what that file will actually decide, not a guess.
@@ -277,6 +277,32 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression' AND INDEX_NAME='idx_xp') AS idx_exists
 ) base;
 
+-- 0010: CREATE TABLE x3 (k9_certification_tiers /
+-- k9_certification_tier_capabilities / k9_certification_tier_audit) --
+-- db-schema foolproofing pass: this migration was previously completely
+-- absent from this report, so `k9_setup.sh --dry-run` never told an
+-- operator it existed or what it would do, even though `install.sql`
+-- already creates all three tables directly (see PART 1 above) and
+-- `sql/migrations/0010_create_k9_certification_tiers.sql` creates them for
+-- an upgrade path. Independent of every other table (see that migration's
+-- own header "ORDERING" section -- no FK, no dependency on any other
+-- table), so unlike 0003/0004/0006/0009 above there is no "BLOCKED"
+-- case to report here.
+SELECT
+    t.table_name AS `0010_create_k9_certification_tiers.sql would...`,
+    CASE WHEN t.tbl_exists = 0
+         THEN CONCAT('CREATE TABLE `', t.table_name, '` (currently absent)')
+         ELSE CONCAT('no-op -- `', t.table_name, '` already exists')
+    END AS plan
+FROM (
+    SELECT 'k9_certification_tiers' AS table_name,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tiers') AS tbl_exists
+    UNION ALL SELECT 'k9_certification_tier_capabilities',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities')
+    UNION ALL SELECT 'k9_certification_tier_audit',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit')
+) t;
+
 
 -- ---------------------------------------------------------------------
 -- PART 3: blast-radius summary -- row counts for every table that
@@ -289,7 +315,31 @@ WHERE TABLE_SCHEMA = DATABASE()
   AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression',
                       'k9_permissions','k9_certification_specializations',
                       'k9_runtime_feature_overrides','k9_runtime_override_audit',
-                      'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments')
+                      'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments',
+                      'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit')
 ORDER BY TABLE_NAME;
+
+-- DRIFT CHECK -- same posture and same reasoning as preflight_check.sql's
+-- own CHECK 1b and uninstall_all.sql's own DRIFT CHECK dependency-report
+-- branch (both added in the same change as this one): a `k9_%` table this
+-- report does not know to plan for is either this file being out of date
+-- (report it) or a different K9 resource's own table sharing the prefix
+-- (expected, ignore it) -- this file cannot tell those apart, so it warns
+-- rather than guessing either way.
+SELECT
+    CASE WHEN COUNT(*) = 0
+        THEN 'OK - no k9_* table in this database is unknown to this report'
+        ELSE CONCAT('WARN - ', COUNT(*), ' k9_* table(s) exist that this report does not plan for: ',
+                    GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME SEPARATOR ', '),
+                    '. If any of these belong to qbx_k9unit, this file is missing a migration -- report it. If they belong to a different K9 resource sharing this database, this is expected and safe to ignore.')
+    END AS unrecognized_k9_tables_check
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME LIKE 'k9\_%'
+  AND TABLE_NAME NOT IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression',
+                          'k9_permissions','k9_certification_specializations',
+                          'k9_runtime_feature_overrides','k9_runtime_override_audit',
+                          'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments',
+                          'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit');
 
 SELECT 'DRY RUN COMPLETE -- nothing was changed by this report. Run sql/k9_setup.sh (without --dry-run) to actually apply the plan above; it backs up your whole database first, automatically, and refuses to write anything if that backup fails.' AS final_note;

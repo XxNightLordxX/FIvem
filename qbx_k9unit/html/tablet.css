@@ -110,10 +110,49 @@ body {
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.k9tablet-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
 .k9tablet-title {
     margin: 0;
     font-size: 18px;
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/*
+    Server branding (Config.CommandTablet.branding) -- logo + serverName,
+    with the SAME text-fallback-on-load-failure discipline
+    html/tablet.js's own buildBrandingElement() implements: `.k9tablet-
+    branding-name` starts hidden via an inline style when a logo IS
+    present, and that file's own `error` listener is what reveals it --
+    nothing here assumes a logo is always configured.
+*/
+.k9tablet-branding {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.k9tablet-branding-logo {
+    height: 28px;
+    width: 28px;
+    object-fit: contain;
+    border-radius: 4px;
+}
+
+.k9tablet-branding-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--k9tablet-accent, #f59e0b);
+    white-space: nowrap;
 }
 
 .k9tablet-close-btn {

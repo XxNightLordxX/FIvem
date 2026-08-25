@@ -3,7 +3,7 @@
 --
 -- WHO NEEDS THIS FILE: an existing installation whose `qbx_k9unit/sql/install.sql`
 -- was applied BEFORE `k9_partnerships` existed in it (i.e. before
--- PHASE3_SPEC.md section 12.0 item 7's handler-partnership registry
+-- DEVELOPER_REFERENCE.md section 12.0 item 7's handler-partnership registry
 -- landed). A fresh install never needs this file -- install.sql already
 -- creates this table in final shape (including
 -- `tenure_bonus_tier_granted`, see migration 0003 below) in one pass.

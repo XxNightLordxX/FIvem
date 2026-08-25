@@ -5,9 +5,10 @@
 #
 # This is NOT the same tool as backup_k9_tables.sh. Read the difference:
 #
-#   backup_k9_tables.sh        backs up ONLY our ten qbx_k9unit tables.
-#                               Use it before an uninstall/rollback of
-#                               THIS resource.
+#   backup_k9_tables.sh        backs up ONLY our own qbx_k9unit tables (see
+#                               that script's own ALL_TABLES list for the
+#                               current, authoritative count). Use it before
+#                               an uninstall/rollback of THIS resource.
 #
 #   backup_full_database.sh    (this file) backs up EVERY table in your
 #                               database -- players, other resources,
@@ -57,7 +58,7 @@
 #
 # SIZE: a long-running server's database can be many gigabytes. Dumping it
 # takes real time and real disk space, proportional to how much data you
-# have, not to how small qbx_k9unit's own six-to-ten tables are. This
+# have, not to how small qbx_k9unit's own handful of tables are. This
 # script estimates your database's size from INFORMATION_SCHEMA before
 # starting and checks it against the free space in the backup directory --
 # see "CHECK: is there enough disk space?" below. It refuses rather than

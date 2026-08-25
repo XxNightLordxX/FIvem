@@ -2,7 +2,7 @@
     tests/partnership_spec.lua
 
     Direct + indirect tests of server/partnership.lua -- the mutually-
-    consented "K9 partnership" registry (PHASE3_SPEC.md §12.0 item 7) --
+    consented "K9 partnership" registry (DEVELOPER_REFERENCE.md §12.0 item 7) --
     against the REAL, unmodified production file. Loads the real
     server/cooldowns.lua (hard file-load-time dependency: NewCooldown for
     PartnerRequestCooldown, NewMutex for PartnershipEstablishMutex) and

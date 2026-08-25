@@ -128,20 +128,37 @@
     EVENT CONTRACT — WIRED, NOT JUST DOCUMENTED (correction: this section
     originally read "DOCUMENTED, NOT YET WIRED" — that was accurate when
     this file was first written and is stale now; do not re-implement any
-    of the six wiring described below, it already exists). Verified by
-    direct grep of the current tree: server/certifications.lua,
-    server/partnership.lua, server/progression.lua, and server/search.lua
-    each now call a shared `FireOutboundEvent(...)` helper at the exact
-    success points described below, firing all six events by their exact
-    names/payload shapes. This file itself still only documents the
-    contract and does not fire anything directly (it never did — firing
-    happens at the owning files' own success points, which was always the
-    intended design, not a placeholder); what changed is that those four
-    files' owners have since done the wiring this section originally
-    described as still needed. FEATURE_IDEAS.md Part B §1's ask (outbound
-    events other resources can react to — certification granted/revoked, a
-    partnership formed/broken, a contraband search completing, an XP tier
-    crossing) is therefore now fully delivered, not merely specified.
+    of the wiring described below, it already exists). Verified by direct
+    grep of the current tree: server/certifications.lua,
+    server/partnership.lua, server/progression.lua, server/search.lua,
+    server/sarcalls.lua, and server/integrations.lua each fire their events
+    at the exact success points described below, by their exact
+    names/payload shapes.
+
+    CORRECTED 2026-08-25 (same pass as the count correction below): this
+    paragraph previously said those files "each now call a shared
+    `FireOutboundEvent(...)` helper" — that was NOT true when written. It
+    was six INDEPENDENT, byte-for-byte identical `local function
+    FireOutboundEvent` copies, one per file (and only four of the six
+    firing files were even named above; server/sarcalls.lua and
+    server/integrations.lua each had their own copy too, undocumented
+    here). It is genuinely shared now: all six copies have been extracted
+    into ONE resource-global `FireOutboundEvent` in server/events.lua (see
+    that file's header for the full extraction writeup) — this correction
+    exists so a future reader does not repeat the earlier mistake of
+    trusting this claim as already-true before it actually was.
+
+    This file itself still only documents the contract and does not fire
+    anything directly (it never did — firing happens at the owning files'
+    own success points, which was always the intended design, not a
+    placeholder); what changed is that those files' owners have since done
+    the wiring this section originally described as still needed.
+    FEATURE_IDEAS.md Part B §1's ask (outbound events other resources can
+    react to — certification granted/revoked, a partnership formed/broken,
+    a contraband search completing, an XP tier crossing) is therefore now
+    fully delivered, not merely specified — see the FOURTEEN-event count
+    below for the current full list, not the six named in this paragraph's
+    original draft.
 
     CORRECTED 2026-08-25, LATE PASS. The paragraph that stood here said
     "still exactly the six calls... still no seventh", and then the very

@@ -185,6 +185,7 @@
           maxXpPerGrant = Config.HighCommand.maxXpPerGrant,
           peds = Config.Peds,               -- shared config, no round trip -- display list only for tablet:assignK9Role's model picker; server/appearance.lua's IsValidPedModelName is the real gate
           themingEnabled = Config.Features.TabletTheming == true, -- UX hint only -- hides the theme editor's Save/Reset controls when off rather than offering ones that would always come back 'feature_disabled'; the CURRENT theme is still fetched/applied for every viewer regardless (tablet:getTheme has no such gate)
+          branding = Config.CommandTablet.branding,  -- shared config, no round trip -- { serverName: string, logo: string (relative to html/), theme: {primaryColor,accentColor,backgroundColor,textColor} }. Owner-supplied server identity (name/logo) PLUS the operator's chosen starting palette for a fresh install -- COSMETIC ONLY, same as tablet:getTheme's own theme, never consulted by any authorization check. html/tablet.js renders `logo` with a `serverName`-text fallback on load failure (never a broken-image icon -- the operator hand-swaps this file and may typo it) and seeds its OWN pre-fetch initial paint from `branding.theme`'s four colours ONLY until the real, authoritative tablet:getTheme response lands (which always wins once it does, same "config is the starting point, the runtime edit wins" precedence server/runtimecontrol.lua's own DEFAULT_THEME->k9_tablet_theme-DB-override chain already establishes for that file's own default).
       } }
       { action = 'tablet:close', data = {} }
       { action = 'tablet:themeUpdated', data = Theme }
@@ -359,6 +360,8 @@ function OpenTablet()
                 and Config.HighCommand.maxXpPerGrant or nil,
             peds = Config.Peds, -- shared config, no round trip -- see this file's header NUI CONTRACT note on tablet:assignK9Role
             themingEnabled = Config.Features and Config.Features.TabletTheming == true, -- UX hint only, see NUI CONTRACT
+            branding = (type(Config.CommandTablet) == 'table' and type(Config.CommandTablet.branding) == 'table')
+                and Config.CommandTablet.branding or {}, -- shared config, no round trip -- { serverName, logo, theme:{4 colors} } -- see this file's header NUI CONTRACT note
         },
     })
     SetNuiFocus(true, true)

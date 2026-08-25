@@ -510,6 +510,7 @@
         maxXpPerGrant: null,
         peds: [], // Config.Peds, verbatim -- see tablet:assignK9Role's own NUI contract note; display list only, server re-validates the chosen model regardless
         themingEnabled: false, // Config.Features.TabletTheming -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
+        branding: {}, // { serverName, logo, theme:{4 colors} } -- Config.CommandTablet.branding, verbatim; see buildBrandingElement()/applyBrandingSeedTheme()
 
         viewer: null, // set once tablet:requestMyRecord resolves successfully
         myRecordLoading: false,
@@ -856,11 +857,64 @@
 
     function buildHeader() {
         var header = mk('div', { class: 'k9tablet-header' });
+
+        var left = mk('div', { class: 'k9tablet-header-left' });
+        left.appendChild(buildBrandingElement());
         var titleText = (state.theme && typeof state.theme.headerTitle === 'string' && state.theme.headerTitle.length > 0)
             ? state.theme.headerTitle : S('title');
-        header.appendChild(mk('h1', { class: 'k9tablet-title', text: titleText }));
+        left.appendChild(mk('h1', { class: 'k9tablet-title', text: titleText }));
+        header.appendChild(left);
+
         header.appendChild(mkButton('×', 'k9tablet-close-btn', requestClose, { title: S('close_label') }));
         return header;
+    }
+
+    /**
+     * Server logo + name (Config.CommandTablet.branding, owner-supplied)
+     * -- MUST DEGRADE TO TEXT: a missing/failed-to-load image shows
+     * `serverName` alone, NEVER a broken-image icon, since the operator
+     * hand-swaps html/images/logo.png and may typo/omit it (config.lua's
+     * own comment: "It never shows a broken image"). The `error` listener
+     * below is the ONLY place this file ever mutates an already-built
+     * element's style directly rather than going through state+render() --
+     * a deliberate, narrow exception: an <img> load failure is an
+     * asynchronous BROWSER event with no corresponding state change this
+     * page's own render() cycle would ever naturally re-run for, and the
+     * fix (hide the broken image, reveal the plain-text fallback that is
+     * ALREADY in the DOM right beside it) is a pure, local, one-way,
+     * idempotent visibility flip -- see html/tests/tablet-dom-stub.js's
+     * Element.style (`{}`, a plain settable object) for how this stays
+     * fully testable without a real image-loading engine: a test can
+     * dispatch the SAME 'error' event this real img element would.
+     * `serverName`/`logo` are OPERATOR-SUPPLIED, DOM-bound strings --
+     * rendered via mk()'s own textContent-only path / an `alt` attribute
+     * only, never innerHTML, matching html/tests/tablet_xss_spec.js's own
+     * coverage of this exact element.
+     */
+    function buildBrandingElement() {
+        var branding = state.branding || {};
+        var serverName = (typeof branding.serverName === 'string' && branding.serverName.length > 0) ? branding.serverName : '';
+        var logoPath = (typeof branding.logo === 'string' && branding.logo.length > 0) ? branding.logo : '';
+
+        var wrap = mk('div', { class: 'k9tablet-branding' });
+        if (serverName.length === 0 && logoPath.length === 0) return wrap;
+
+        var fallbackText = mk('span', { class: 'k9tablet-branding-name', text: serverName });
+
+        if (logoPath.length > 0) {
+            var img = mk('img', { class: 'k9tablet-branding-logo', attrs: { src: logoPath, alt: serverName } });
+            // Hidden unless/until the image actually fails -- showing both
+            // at once would duplicate the server name for no reason in the
+            // ordinary (image loads fine) case.
+            fallbackText.style.display = 'none';
+            img.addEventListener('error', function () {
+                img.style.display = 'none';
+                fallbackText.style.display = '';
+            });
+            wrap.appendChild(img);
+        }
+        wrap.appendChild(fallbackText);
+        return wrap;
     }
 
     function buildActionNotice() {
@@ -1852,6 +1906,41 @@
         styleTarget.setProperty('--k9tablet-text', theme.textColor || DEFAULT_THEME.textColor);
     }
 
+    /**
+     * Seeds state.theme/applies it, from Config.CommandTablet.branding's
+     * own `theme` (four colours only -- density/headerTitle are NOT part
+     * of branding, see config.lua's own comment: branding.theme is only
+     * "starting colours, matched to the shipped logo"). Called ONLY when
+     * state.theme is still null (see handleOpen()) -- i.e. this page's
+     * very first open this session, before tablet:getTheme has EVER
+     * resolved even once. Purely a first-paint cosmetic improvement so
+     * the tablet does not flash the generic code-level DEFAULT_THEME
+     * before the real fetch lands; the real tablet:getTheme response
+     * (server/runtimecontrol.lua's own CurrentTheme -- config default,
+     * DB override wins, the SAME precedence this function mirrors for the
+     * brief window before that fetch resolves) is what actually matters
+     * and OVERWRITES this the moment it arrives, every time, unconditionally
+     * -- see loadTheme() below, which never checks "do I already have a
+     * seeded value" before applying its own result.
+     */
+    function applyBrandingSeedTheme() {
+        var brandingTheme = state.branding && state.branding.theme;
+        if (!brandingTheme || typeof brandingTheme !== 'object') return;
+        var seeded = assignShallow({}, DEFAULT_THEME);
+        // Only the four colour keys -- an unexpected extra key on
+        // branding.theme (a config mistake) is silently ignored here, not
+        // propagated; server/runtimecontrol.lua's own ValidateFullTheme is
+        // still the only check that actually matters once the real fetch
+        // lands regardless.
+        if (typeof brandingTheme.primaryColor === 'string') seeded.primaryColor = brandingTheme.primaryColor;
+        if (typeof brandingTheme.accentColor === 'string') seeded.accentColor = brandingTheme.accentColor;
+        if (typeof brandingTheme.backgroundColor === 'string') seeded.backgroundColor = brandingTheme.backgroundColor;
+        if (typeof brandingTheme.textColor === 'string') seeded.textColor = brandingTheme.textColor;
+        state.theme = seeded;
+        state.themeDraft = assignShallow({}, seeded);
+        applyThemeToDocument(seeded);
+    }
+
     /** Fetched once per open (see handleOpen()) and again on the theme tab
      * being opened directly (see buildTabs()) -- APPLIED FOR EVERY VIEWER
      * regardless of role (tablet:getTheme itself has no authorization gate,
@@ -2219,6 +2308,14 @@
         state.maxXpPerGrant = typeof data.maxXpPerGrant === 'number' ? data.maxXpPerGrant : null;
         state.peds = Array.isArray(data.peds) ? data.peds : [];
         state.themingEnabled = data.themingEnabled === true;
+        state.branding = (data.branding && typeof data.branding === 'object') ? data.branding : {};
+
+        // First-open ONLY, cosmetic seeding -- see applyBrandingSeedTheme()'s
+        // own comment: gives this page an immediately correct-looking
+        // palette before tablet:getTheme's real, authoritative response
+        // (loaded a few lines below) has had a chance to land, WITHOUT ever
+        // overwriting an already-loaded/edited theme on a later re-open.
+        if (!state.theme) applyBrandingSeedTheme();
 
         // Fresh baseline every open -- never show stale data from a
         // previous session (see this file's header contract note on

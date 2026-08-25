@@ -13,6 +13,15 @@
 #     k9_permissions      every named permission grant/revoke, and by whom
 #     k9_certification_specializations
 #                         every K9 specialization grant/revoke, and by whom
+#     k9_runtime_feature_overrides / k9_runtime_override_audit
+#                         every live runtime override, and its full history
+#     k9_tablet_theme / k9_tablet_theme_audit
+#                         the current tablet theme, and its full history
+#     k9_ped_assignments  every citizenid's currently-applied K9 ped model
+#     k9_certification_tiers / k9_certification_tier_capabilities /
+#     k9_certification_tier_audit
+#                         the certification tier catalog, what each tier
+#                         grants, and the full history of every tier edit
 #
 # ...into a single timestamped .sql file, and prints the one command that
 # puts it all back. It touches nothing else in your database, and it makes
@@ -102,9 +111,23 @@ fi
 # --- work out which of our tables actually exist ------------------------
 # Dumping a table that does not exist makes mysqldump fail outright, so a
 # database that only ever ran part of the install still backs up cleanly.
+#
+# migration 0010 (db-schema foolproofing pass, 2026-08-25): the three
+# certification-tier tables below were missing from this list entirely --
+# flagged explicitly by sql/rollback/0010_down.sql's own header as needing
+# this exact fix, since a backup taken via this script right before an
+# uninstall would otherwise silently NOT protect them. This list stays
+# hand-maintained rather than a `k9\_%` INFORMATION_SCHEMA sweep for the
+# same reason sql/rollback/uninstall_all.sql's own DROP list does (see that
+# file's "OWNED TABLE LIST" comment): this database can legitimately
+# contain another K9 resource's own tables (e.g. `k9_units`), and a blind
+# sweep would try to dump those too, which is not this script's job and may
+# not even be readable by this database user. The DRIFT GUARD immediately
+# below is the backstop for the next table a future migration adds here.
 ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_permissions
             k9_certification_specializations k9_runtime_feature_overrides
-            k9_runtime_override_audit k9_tablet_theme k9_tablet_theme_audit k9_ped_assignments)
+            k9_runtime_override_audit k9_tablet_theme k9_tablet_theme_audit k9_ped_assignments
+            k9_certification_tiers k9_certification_tier_capabilities k9_certification_tier_audit)
 PRESENT=()
 MISSING=()
 for t in "${ALL_TABLES[@]}"; do

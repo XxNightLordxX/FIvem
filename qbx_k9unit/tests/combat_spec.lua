@@ -369,6 +369,7 @@ local function newCombatFixture(opts)
     end
 
     return {
+        env = env,
         config = config,
         clientEvents = clientEvents,
         notifyCalls = notifyCalls,
@@ -588,6 +589,84 @@ end)
 t.test('server/combat.lua registers exactly 1 onResourceStart handler (the PropDragging override warning)', function()
     local f = newCombatFixture()
     t.equals(f.eventHandlerCount('onResourceStart'), 1)
+end)
+
+-- ========================================================================
+-- REGRESSION (QA sandbox repro, this pass): a single non-positive Config
+-- cooldown value used to abort THIS ENTIRE FILE's load, not just disable
+-- one cooldown. Reproduced concretely by QA: loading the real
+-- server/cooldowns.lua then server/combat.lua with ONLY
+-- Config.Combat.BiteAndHold.cooldownMs set to 0 (every other default left
+-- at its shipped value) threw at this file's own
+-- `BiteHoldCooldown = NewCooldown(...)` line, so nothing textually below
+-- it -- EndActiveEffectForHolder (this codebase's termination primitive,
+-- depended on by server/recall.lua and server/training.lua), every
+-- BiteAndHold/NonLethalTakedown/PropDragging RegisterNetEvent, and this
+-- file's own onResourceStart/playerDropped handlers -- ever existed for the
+-- rest of that resource's uptime. Fixed via ResolveConfiguredThresholdMs
+-- (server/cooldowns.lua) at all four of this file's raw Config-cooldown
+-- call sites. This section proves the fix at the exact level the bug was
+-- found: does the file still load, and is the termination path still
+-- defined, no matter what an operator puts in the config.
+-- ========================================================================
+
+t.test('REGRESSION: Config.Combat.BiteAndHold.cooldownMs = 0 (exact QA repro) no longer aborts this file\'s load, and EndActiveEffectForHolder stays defined', function()
+    local f = newCombatFixture({
+        biteAndHoldCfg = { range = 2.5, maxDurationMs = 15000, cooldownMs = 0, targetCooldownMs = 35000 },
+    })
+
+    t.equals(type(f.env.EndActiveEffectForHolder), 'function',
+        'the termination primitive server/recall.lua and server/training.lua depend on must remain reachable no matter what an operator puts in the config')
+
+    local names, count = {}, 0
+    for name in pairs(f.netEventNames) do names[name] = true; count = count + 1 end
+    t.equals(count, 7, 'every net event this file documents must still register, not just the ones textually above the bad value')
+    t.equals(f.eventHandlerCount('onResourceStart'), 1)
+    t.equals(f.eventHandlerCount('playerDropped'), 6)
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.Combat.BiteAndHold.cooldownMs', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find('20000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must still name the exact key, the value found, and the fallback substituted -- the operator must still find out')
+end)
+
+t.test('REGRESSION: all four of this file\'s Config-sourced cooldowns invalid at once (worst case) still loads cleanly with every termination/net-event path intact', function()
+    local f = newCombatFixture({
+        biteAndHoldCfg = { range = 2.5, maxDurationMs = 15000, cooldownMs = 0, targetCooldownMs = -1 },
+        takedownCfg = { range = 3.0, minTargetSpeed = 4.0, speedSampleWindowMs = 250, ragdollDurationMs = 4000, cooldownMs = 0 / 0, targetCooldownMs = 'oops', healthFloor = 100 },
+    })
+
+    t.equals(type(f.env.EndActiveEffectForHolder), 'function')
+    local count = 0
+    for _ in pairs(f.netEventNames) do count = count + 1 end
+    t.equals(count, 7)
+end)
+
+t.test('REGRESSION: with a valid Config.Combat.BiteAndHold.cooldownMs, BiteHoldCooldown genuinely uses the CONFIGURED value, not silently always the fallback -- ResolveConfiguredThresholdMs must be pass-through for valid input', function()
+    local f = newCombatFixture({
+        biteAndHoldCfg = { range = 2.5, maxDurationMs = 15000, cooldownMs = 999, targetCooldownMs = 35000 },
+    })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.isTrue(#f.clientEvents > 0, 'first request must succeed')
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    local afterRelease = #f.clientEvents -- releaseBiteHold fires its own client events too -- track a running baseline rather than asserting an unrelated implementation-detail count
+
+    f.advance(998) -- 1ms short of the configured 999ms cooldown
+    wireNpcTarget(f, 501)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+    t.equals(#f.clientEvents, afterRelease, 'still on the CONFIGURED 999ms cooldown, not silently using some other value -- the rejected retry fires no new client events')
+
+    f.advance(2) -- now past the configured 999ms threshold
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+    t.isTrue(#f.clientEvents > afterRelease, 'cooldown elapsed at the CONFIGURED threshold, proving the real value (not a fallback) is in effect')
 end)
 
 t.test('with every combat feature flag off, the maintenance thread is never created, and requests are silently feature-gated', function()

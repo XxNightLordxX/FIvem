@@ -446,13 +446,13 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
 -- updated in place per its own prior instruction to do so once that
 -- happened, rather than left describing a since-resolved "ahead of
 -- implementation" state (same "don't leave stale framing around a
--- resolved item" standard PHASE3_SPEC.md's own revision history already
+-- resolved item" standard DEVELOPER_REFERENCE.md's own revision history already
 -- applies to itself). The schema below is UNCHANGED from the version
 -- landed ahead of implementation -- `server/partnership.lua` was written
 -- to match these real columns/constraints exactly, not the other way
 -- around; see that file's own header for the schema-to-code mapping.
 --
--- Governing spec: PHASE3_SPEC.md section 12.0, item 7 ("Handler-
+-- Governing spec: DEVELOPER_REFERENCE.md section 12.0, item 7 ("Handler-
 -- partnership link: reuse active leash pairing, or a new persistent
 -- registry?"), resolved in Revision 5 (coder-architect) as Option B: a
 -- new, DB-backed, mutually-consented K9/handler partnership registry,
@@ -463,7 +463,7 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
 -- non-functional for its own primary use case -- an off-leash foot
 -- chase, where the pair is deliberately unleashed).
 --
--- Owner file: `server/partnership.lua`. Per PHASE3_SPEC.md section 12.0
+-- Owner file: `server/partnership.lua`. Per DEVELOPER_REFERENCE.md section 12.0
 -- item 7 and section 12.3, that file:
 --   * handles the "Partner Up" consent handshake (mirroring
 --     `server/main.lua`'s `PendingLeashRequests` pattern -- a TTL'd
@@ -489,7 +489,7 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
 --     termination, mirroring the leash's own "no unbounded trap" rule.
 --
 -- Modeled directly on `k9_certifications` above (same file, read in
--- full before this table was written), per PHASE3_SPEC.md's explicit
+-- full before this table was written), per DEVELOPER_REFERENCE.md's explicit
 -- instruction to reuse that table's conventions rather than invent new
 -- ones: append-mostly audit rows (establishing INSERTs a new row,
 -- ending UPDATEs the existing active row to active = 0, never deletes),
@@ -507,7 +507,7 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
 --   * TWO generated-column unique constraints instead of one --
 --     `k9_certifications`' single `active_cert_key` only had to prevent
 --     two simultaneous active rows for the same (citizenid, job) pair.
---     Here, per PHASE3_SPEC.md section 12.0 item 7's explicit call-out,
+--     Here, per DEVELOPER_REFERENCE.md section 12.0 item 7's explicit call-out,
 --     BOTH "at most one active partnership per K9 citizenid" AND "at
 --     most one active partnership per handler citizenid" must hold
 --     independently -- a single combined key (e.g. on the concatenated
@@ -673,7 +673,7 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
 -- than re-derived from scratch -- the two agree because the sketch is
 -- what that file was written against.
 --
--- Governing spec: PHASE4_SPEC.md section 13.4.1 (`Config.Features.
+-- Governing spec: DEVELOPER_REFERENCE.md section 13.4.1 (`Config.Features.
 -- XPProgression`), and phase2_notes/RESEARCH_ARCHIVE.md#xp-schema's own
 -- persistence-decision note (sections 2-4) for the full "why a table, not
 -- qbx_core metadata" rationale -- restated briefly here: (1) atomic
@@ -714,7 +714,7 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
 -- unlike k9_certifications") and config.lua's `Config.XP.
 -- scopePerCitizenidOrJob` comment (currently only 'citizenid' is
 -- implemented; 'job' is flagged there as a still-open product call, per
--- PHASE4_SPEC.md section 13.6 item 2 -- NOT guessed at here). If that call
+-- DEVELOPER_REFERENCE.md section 13.6 item 2 -- NOT guessed at here). If that call
 -- is ever made, the fix is a migration on this table (composite
 -- `PRIMARY KEY (citizenid, job)` instead of `citizenid` alone, mirroring
 -- `k9_certifications`' job-scoping), not a rewrite.
@@ -887,7 +887,7 @@ CREATE TABLE IF NOT EXISTS `k9_progression` (
 --
 -- NO TIMESTAMPDIFF / ELAPSED-TIME MATH ANYWHERE IN THIS TABLE'S DESIGN OR
 -- ITS THREE QUERIES BELOW (see sql/install.sql's own DATETIME-timezone
--- hazard note and PHASE3_SPEC.md-adjacent tuning tables elsewhere in this
+-- hazard note and DEVELOPER_REFERENCE.md-adjacent tuning tables elsewhere in this
 -- resource for why that matters): every consumer query filters on
 -- `active`/`citizenid`/`permission` and orders by `granted_at`, never
 -- diffs two DATETIME columns. If a future feature adds a grant EXPIRY

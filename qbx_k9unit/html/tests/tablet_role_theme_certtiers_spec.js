@@ -153,6 +153,92 @@ t.test('Revert to Human is reachable and enabled for a target holding ZERO certi
 });
 
 // ======================================================================
+// SERVER BRANDING (Config.CommandTablet.branding) -- logo + serverName in
+// the header, degrading to text-only on a failed/missing image load, and
+// seeding the pre-fetch initial palette from branding.theme.
+// ======================================================================
+
+t.test('branding: logo renders with serverName as its alt text, and the fallback text node starts hidden', async () => {
+    const h = createHarness({ fetchImpl: routeFetch(baseHandlers()) });
+    h.postMessage('tablet:open', { branding: { serverName: 'Crimson Roleplay', logo: 'images/logo.png' } });
+    await settle();
+
+    const imgs = findAll(h.getRoot(), (n) => n.tagName === 'img' && n.classList.contains('k9tablet-branding-logo'));
+    t.equals(imgs.length, 1);
+    t.equals(imgs[0].getAttribute('src'), 'images/logo.png');
+    t.equals(imgs[0].getAttribute('alt'), 'Crimson Roleplay');
+
+    const names = findAll(h.getRoot(), (n) => n.tagName === 'span' && n.classList.contains('k9tablet-branding-name'));
+    t.equals(names.length, 1);
+    t.equals(names[0].style.display, 'none', 'fallback text stays hidden while a logo is present and has not (yet) failed to load');
+});
+
+t.test('branding: an onerror on the logo <img> hides the image and reveals the serverName text -- never a broken-image icon', async () => {
+    const h = createHarness({ fetchImpl: routeFetch(baseHandlers()) });
+    h.postMessage('tablet:open', { branding: { serverName: 'Crimson Roleplay', logo: 'images/does-not-exist.png' } });
+    await settle();
+
+    const img = findAll(h.getRoot(), (n) => n.tagName === 'img' && n.classList.contains('k9tablet-branding-logo'))[0];
+    const name = findAll(h.getRoot(), (n) => n.tagName === 'span' && n.classList.contains('k9tablet-branding-name'))[0];
+    t.equals(name.style.display, 'none');
+
+    img._dispatch('error');
+
+    t.equals(img.style.display, 'none', 'the broken image itself is hidden');
+    t.equals(name.style.display, '', 'the plain-text fallback is revealed');
+});
+
+t.test('branding: no logo configured at all -- serverName renders directly, no <img> element exists', async () => {
+    const h = createHarness({ fetchImpl: routeFetch(baseHandlers()) });
+    h.postMessage('tablet:open', { branding: { serverName: 'Crimson Roleplay' } });
+    await settle();
+
+    t.equals(findAll(h.getRoot(), (n) => n.tagName === 'img').length, 0);
+    t.isTrue(findByText(h.getRoot(), 'Crimson Roleplay').length >= 1);
+});
+
+t.test('branding: neither serverName nor logo configured -- the branding element renders nothing, no crash', async () => {
+    const h = createHarness({ fetchImpl: routeFetch(baseHandlers()) });
+    h.postMessage('tablet:open', { branding: {} });
+    await settle();
+    t.equals(findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-branding-logo')).length, 0);
+    t.equals(findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-branding-name')).length, 0);
+});
+
+t.test('branding.theme seeds the FIRST paint before tablet:getTheme resolves, but the real fetch always wins once it lands', async () => {
+    let resolveGetTheme;
+    const h = createHarness({
+        fetchImpl: routeFetch(Object.assign({}, baseHandlers(), {
+            // NOTE: routeFetch() below wraps whatever this handler returns
+            // via jsonResponse() itself -- this must resolve to the PLAIN
+            // body object, never a pre-wrapped jsonResponse() (which would
+            // double-wrap and hide `theme` behind an extra `.json()` layer).
+            'tablet:getTheme': () => new Promise((resolve) => { resolveGetTheme = resolve; }).then(() => ({ ok: true, theme: DEFAULT_THEME_RESPONSE })),
+        })),
+    });
+    h.postMessage('tablet:open', {
+        branding: { serverName: 'Crimson Roleplay', logo: 'images/logo.png', theme: { primaryColor: '#C8102E', accentColor: '#FF2D2D', backgroundColor: '#0B0B0D', textColor: '#F5F5F5' } },
+    });
+    await settle();
+
+    // Before tablet:getTheme resolves: density defaults to comfortable
+    // (branding carries no density/headerTitle of its own), but this is
+    // ONLY directly observable via applyThemeToDocument's CSS variables,
+    // which this test's stub DOM does not implement (see that function's
+    // own comment) -- so this test instead proves the seed took effect via
+    // the theme SCREEN's own draft inputs, reachable without waiting on
+    // the pending fetch at all.
+    findByText(h.getRoot(), 'Tablet Theme')[0].click();
+    await settle();
+    const colorInputs = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('type') === 'color');
+    t.isTrue(colorInputs.some((i) => i.value === '#C8102E'), 'the branding-seeded primaryColor pre-fills the draft form before any fetch resolved');
+
+    resolveGetTheme();
+    await settle();
+    t.isTrue(findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('type') === 'color').every((i) => i.value !== '#C8102E'), 'once the real tablet:getTheme response lands it fully overwrites the seeded value, per "config is the starting point, the runtime edit wins"');
+});
+
+// ======================================================================
 // TABLET THEMING
 // ======================================================================
 
