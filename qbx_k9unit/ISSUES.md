@@ -41,7 +41,7 @@ all".
 Unchanged: every handler can still see **their own** record. That is a
 different question from looking up someone else.
 
-### Decided: fix the text-encoding mismatch — IN PROGRESS
+### Decided: fix the text-encoding mismatch — DONE
 
 Being done in two halves, deliberately:
 
@@ -52,9 +52,11 @@ Being done in two halves, deliberately:
   Converting live tables rewrites them completely, and the search log is
   designed to grow into the millions of rows — so it would be the slowest
   thing this resource has ever asked you to run, for a papercut that never
-  affects the script itself. It ships clearly labelled, with honest timing,
-  to run when you choose. There is also a one-word workaround if you would
-  rather not run it at all.
+  affects the script itself. It ships in `sql/migrations/optional/` — a
+  separate folder, deliberately outside the automatic sequence, so it
+  cannot be run by accident during a routine upgrade. Run it when you
+  choose, or never; there is also a one-word workaround if you would rather
+  not.
 
 ### Decided: keep a copy of the ox libraries — YOUR ACTION, not code
 
@@ -88,13 +90,20 @@ need action.
 
 Not issues — work in flight. Listed so nothing looks finished that is not.
 
-- **Running without a database.** `Config.Database = false` is wired through
-  most of the resource but not all of it yet. Until it is finished, that
-  setting does not fully do what it says.
-- **Works with any ped.** Most of the way there. A few places still check
-  the dog *model* instead of the K9 *role*, so a certified handler on a
-  human body cannot yet leash, partner, carry, or be treated.
-- **Document consolidation.** Twenty files down to about seven.
+- **Running without a database.** Down to the last 4 database calls out of
+  an original 71, in two files, both being finished now. Until they land,
+  leave `Config.Database` on `true` — the setting does not yet fully do
+  what it says.
+  *Note: even when finished, you still need `oxmysql` installed as a
+  resource. FiveM refuses to start this script without it, and that check
+  happens before your config is ever read. "No SQL" means you never import
+  our tables, not that you can remove oxmysql.*
+- **Works with any ped.** Done, apart from final verification. A certified
+  handler on a human body can leash, partner, carry, be treated and be
+  attached to. Jump and crouch are deliberately kept — see the decision
+  above.
+- **Document consolidation.** Twenty files down to about seven. Interrupted
+  by a session limit partway through; needs restarting.
 - **Connecting the compat adapters.** The translation layer for other
   targeting and inventory scripts is written but not yet called, so today
   everything still goes through `ox_target` and `ox_inventory` directly.
