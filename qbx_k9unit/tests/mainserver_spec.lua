@@ -899,7 +899,7 @@ t.test('respondLeashAttach: a MISMATCHED fromServerId never notifies the wrongly
     t.equals(countClientEvents(f, 'qbx_k9unit:client:leashAttached'), 0)
 end)
 
-t.test('FINDING (real bug in the current source, not weakened to pass -- see this test\'s own body): a MISMATCHED fromServerId unconditionally deletes the CALLER\'s current PendingLeashRequests entry via `PendingLeashRequests[src] = nil`, even though that entry was never verified to be the one the caller claimed to be responding to. Since `src` here is `source` (the real, unspoofable calling player), this is only reachable by the ACTUAL TARGET\'s own client -- but that includes an entirely ordinary race with no attacker at all: a duplicate/delayed respondLeashAttach call (e.g. a UI double-fire, or a stale queued response referencing an OLD, already-resolved request) that names the WRONG fromServerId silently destroys a FRESH, completely unrelated, still-valid pending request from a DIFFERENT initiator that was created in the meantime -- with NO notification to that real initiator at all, only a confusing self-notice to the target.', function()
+t.test('REGRESSION GUARD: a MISMATCHED fromServerId no longer destroys an unrelated initiator\'s still-live pending request. This was a real bug -- the `not verifiedMatch` branch cleared PendingLeashRequests[src] unconditionally, so an ordinary duplicate or stale respondLeashAttach naming the WRONG fromServerId silently wiped a FRESH, valid request from a DIFFERENT initiator, who was never told. No attacker needed: a UI double-fire carrying an already-resolved interaction id was enough. LeashMechanics ships enabled, so this reached ordinary servers.', function()
     local f = newMainFixture()
     setupEligiblePair(f, 1, 2) -- A(1) sends a real, currently-live request to T(2)
     f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
@@ -910,17 +910,18 @@ t.test('FINDING (real bug in the current source, not weakened to pass -- see thi
     -- still carrying a previous, already-resolved interaction's id). This
     -- has NOTHING to do with A's real, still-pending request from 1.
     f.dispatchNetEvent('qbx_k9unit:server:respondLeashAttach', 2, 9, true)
-    t.equals(lastNotifyTo(f, 2).description, locale('leash.request_no_longer_valid_self'))
-    t.isNil(lastNotifyTo(f, 1), 'FINDING: the REAL initiator (1) is never told their still-live request just got silently destroyed')
+    t.equals(lastNotifyTo(f, 2).description, locale('leash.request_no_longer_valid_self'),
+        'the caller is still told their response was not valid')
+    t.isNil(lastNotifyTo(f, 1),
+        'and the wrongly-named id is still never notified -- that no-echo property predates this fix and must survive it, or an arbitrary-target notify reopens')
 
-    -- A's real, previously-valid request is now GONE -- wiped as a side
-    -- effect of the unrelated mismatched call above, even though nothing
-    -- about A's own request was ever actually stale or invalid.
+    -- A's real request SURVIVES the unrelated mismatched call. This is the
+    -- fix: the branch now leaves an entry it never verified alone.
     f.clearCaptures()
     f.dispatchNetEvent('qbx_k9unit:server:respondLeashAttach', 2, 1, true)
-    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashAttached'), 0,
-        'FINDING: A\'s genuine request can no longer be accepted -- CheckLeashEligibility never even runs, because the entry backing it was already deleted')
-    t.equals(lastNotifyTo(f, 2).description, locale('leash.request_no_longer_valid_self'))
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashAttached'), 2,
+        'A\'s genuine request still accepts normally -- the entry backing it was never touched')
+    t.isNil(lastNotifyTo(f, 2), 'and a successful accept produces no error notice to either side')
 end)
 
 t.test('respondLeashAttach: an EXPIRED but genuinely-matching pending request notifies BOTH sides "no longer valid" (verified match, just too late)', function()

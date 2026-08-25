@@ -763,17 +763,44 @@ RegisterNetEvent('qbx_k9unit:server:respondLeashAttach', function(fromServerId, 
     local pending = PendingLeashRequests[src]
     local verifiedMatch = pending ~= nil and pending.from == fromServerId
 
-    if not verifiedMatch or GetGameTimer() > pending.expiresAt then
-        PendingLeashRequests[src] = nil -- drop a stale/expired entry, if any, so it doesn't linger
+    -- BUGFIX (coder-backend, 2026-08-25): this branch used to unconditionally
+    -- run `PendingLeashRequests[src] = nil` whenever `not verifiedMatch`,
+    -- which also covers the case where a REAL, still-live pending entry
+    -- exists for `src` but simply belongs to a DIFFERENT initiator than the
+    -- one named in this call. `src` is `source` here and therefore
+    -- unspoofable, but no attacker is even required to hit this: an
+    -- ordinary duplicate/delayed client response (a UI double-fire, or a
+    -- stale queued response naming an OLD, already-resolved fromServerId)
+    -- would silently destroy a fresh, completely unrelated, still-valid
+    -- request from a different initiator that was created in the meantime —
+    -- with that real initiator never told their request just vanished. Only
+    -- clear the slot once we've confirmed it is genuinely the entry this
+    -- call claims to be about (verifiedMatch) AND it has actually expired.
+    -- An unmatched claim — whether because nothing is pending at all, or
+    -- because a DIFFERENT, unrelated request occupies the slot — must leave
+    -- that slot exactly as it was; there's nothing to leak either way, since
+    -- an unmatched-but-genuinely-expired entry left in place here is still
+    -- bounded by its own TTL and gets naturally overwritten the next time
+    -- requestLeashAttach's own expiry check (above) runs against it.
+    if not verifiedMatch then
+        NotifyPlayer(src, locale('leash.request_no_longer_valid_self'), 'error')
+        -- Deliberately no echo to fromServerId here — this is exactly the
+        -- unmatched/spoofed-claim case the coder-security fix above closes;
+        -- echoing would reintroduce an arbitrary-target notify driven by a
+        -- caller-supplied id that was never actually verified against
+        -- anything real.
+        return
+    end
+
+    if GetGameTimer() > pending.expiresAt then
+        PendingLeashRequests[src] = nil -- confirmed genuine match, just too late: safe to drop
         NotifyPlayer(src, locale('leash.request_no_longer_valid_self'), 'error')
         -- Only echo the "no longer valid" notice back to fromServerId when
         -- it's a VERIFIED match to a real (if now-expired) pending request
         -- from that exact id — never for an unmatched/spoofed claim, or
         -- this reintroduces the same arbitrary-target notify the fix above
         -- closes.
-        if verifiedMatch then
-            NotifyPlayer(fromServerId, locale('leash.request_no_longer_valid_initiator'), 'error')
-        end
+        NotifyPlayer(fromServerId, locale('leash.request_no_longer_valid_initiator'), 'error')
         return
     end
 
