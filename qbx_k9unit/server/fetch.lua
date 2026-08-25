@@ -151,10 +151,12 @@
         maxBallLifetimeMs, pickupInteractDistanceMeters,
         deliverProximityMeters, maintenanceIntervalMs,
         mouthCarryMode, mouthBoneIndex, mouthOffsetX, mouthOffsetY, mouthOffsetZ,
-        pickupCooldownMs, releaseCooldownMs, -- OPTIONAL; PickupCooldown/
-          -- ReleaseCooldown below fall back to an in-file default (500ms)
-          -- if absent, so this file never errors on a config.lua that
-          -- predates this hardening pass — see those locals' own comments.
+        pickupCooldownMs, -- OPTIONAL; PickupCooldown below falls back to
+          -- an in-file default (500ms) if absent, so this file never errors
+          -- on a config.lua that predates this hardening pass — see that
+          -- local's own comment. (`releaseCooldownMs` is no longer read at
+          -- all; see releaseFetchBall's doc comment for why its gate was
+          -- removed rather than kept with a defensive default.)
       }
 
     ======================================================================
@@ -209,20 +211,17 @@ local PendingFetchDrops = {}
 local ThrowCooldown = NewCooldown(Config.FetchMechanic.throwCooldownMs)
 ThrowCooldown.RegisterPlayerDropped()
 
--- Red-team hardening: requestPickupFetchBall/releaseFetchBall previously had
--- no rate limit at all (only the initial throw did) — dedicated
--- NewCooldown trackers, per this file's own REFACTOR_ROADMAP.md convention,
--- never a hand-rolled table. `Config.FetchMechanic.pickupCooldownMs`/
--- `releaseCooldownMs` are OPTIONAL tunables not yet in every config.lua;
--- the `or 500` fallback keeps this file correct (never erroring on a nil
--- threshold — see server/cooldowns.lua's own FAIL-CLOSED note on why a
--- missing/non-positive threshold must never silently disable a cooldown)
--- on a server that hasn't added them yet.
+-- Red-team hardening: requestPickupFetchBall previously had no rate limit
+-- at all (only the initial throw did) — a dedicated NewCooldown tracker,
+-- per this file's own REFACTOR_ROADMAP.md convention, never a hand-rolled
+-- table. `Config.FetchMechanic.pickupCooldownMs` is an OPTIONAL tunable not
+-- yet in every config.lua; the `or 500` fallback keeps this file correct
+-- (never erroring on a nil threshold — see server/cooldowns.lua's own
+-- FAIL-CLOSED note on why a missing/non-positive threshold must never
+-- silently disable a cooldown) on a server that hasn't added it yet.
+-- releaseFetchBall deliberately has NO cooldown; see its own doc comment.
 local PickupCooldown = NewCooldown(Config.FetchMechanic.pickupCooldownMs or 500)
 PickupCooldown.RegisterPlayerDropped()
-
-local ReleaseCooldown = NewCooldown(Config.FetchMechanic.releaseCooldownMs or 500)
-ReleaseCooldown.RegisterPlayerDropped()
 
 -- NotifyPlayer used to be defined here as its own local copy (a 13th
 -- hand-rolled copy of this exact pattern, landed in this file after
@@ -612,12 +611,25 @@ end)
 --- let go" posture: a K9 that loses access mid-carry must still be able to
 --- end it. Guards against the brief 'attach'-mode pickup transition window
 --- (PendingFetchCarries) to avoid racing a not-yet-confirmed attach.
+---
+--- This handler used to open with a `ReleaseCooldown.Consume(src)` gate,
+--- which contradicted the contract stated directly above it. Two reasons it
+--- is gone:
+---   1. The precedent it names does not have one. server/combat.lua's
+---      `releaseBiteHold` is unconditional once ownership is verified —
+---      no cooldown of any kind. This handler was the odd one out.
+---   2. server/cooldowns.lua's IsOnCooldown treats a non-positive threshold
+---      as FAIL CLOSED, deliberately: `<= 0` means "permanently on
+---      cooldown", never "no cooldown". That is the right default for a
+---      throttle, but it is the wrong one for an escape hatch. An operator
+---      setting `releaseCooldownMs = 0` to mean "no throttle" would instead
+---      permanently disable voluntary release for every source that had
+---      released once — the same shape as the Config.Recall footgun.
+--- Spam is already bounded without a cooldown: the CarrierIndex lookup
+--- below returns early for anyone who is not currently a carrier, so a
+--- repeated call after the first release does nothing but a table read.
 RegisterNetEvent('qbx_k9unit:server:releaseFetchBall', function()
     local src = source
-
-    if not ReleaseCooldown.Consume(src) then
-        return -- silent no-op: rate-limited, matches ThrowCooldown's own convention
-    end
 
     if PendingFetchCarries[src] then
         return -- still transitioning into the carry itself; nothing to release yet
@@ -896,8 +908,8 @@ AddEventHandler('playerDropped', function(_reason)
         end
     end
 
-    -- ThrowCooldown/PickupCooldown/ReleaseCooldown each already registered
-    -- their own playerDropped handler via :RegisterPlayerDropped() —
+    -- ThrowCooldown/PickupCooldown each already registered their own
+    -- playerDropped handler via :RegisterPlayerDropped() —
     -- REFACTOR_ROADMAP.md item 1 convention, nothing to do for them here.
 end)
 

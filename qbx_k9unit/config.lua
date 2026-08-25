@@ -1258,12 +1258,16 @@ Config.FetchMechanic = {
     -- requestDeliverFetchBall always did.
     pickupInteractDistanceMeters = 2.0,
 
-    -- Neither pickup nor release had ANY rate limit before; only the initial
-    -- throw did, which is what made the remote-steal loop freely repeatable.
-    -- server/fetch.lua falls back to 500 if these are absent, so removing them
-    -- degrades safely rather than removing the throttle.
+    -- Pickup had NO rate limit before; only the initial throw did, which is
+    -- what made the remote-steal loop freely repeatable. server/fetch.lua
+    -- falls back to 500 if this is absent, so removing it degrades safely
+    -- rather than removing the throttle.
+    -- There is deliberately no releaseCooldownMs counterpart: voluntary
+    -- release is an escape hatch, and NewCooldown treats a non-positive
+    -- threshold as permanently-on rather than off, so a `0` here meant to
+    -- disable the throttle would instead disable releasing. See
+    -- server/fetch.lua's releaseFetchBall doc comment.
     pickupCooldownMs             = 500,
-    releaseCooldownMs            = 500,
     deliverProximityMeters       = 3.0,
     maintenanceIntervalMs        = 2000,
 
