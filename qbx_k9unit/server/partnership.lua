@@ -1156,6 +1156,31 @@ end)
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
+    -- PERFORMANCE FIX (QA pass): a partnership row can only ever be CREATED
+    -- while Config.Features.HandlerPartnership is true (CheckPartnershipEligibility
+    -- above is the only creation path and gates on this same flag), so on a
+    -- server where the flag has never been enabled this loop was doing a
+    -- real MySQL.single.await per connected player (RefreshPartnershipCache)
+    -- to warm a cache that no code path can ever populate with a real row
+    -- and that HandlerDownDefense/Recall (its only in-resource readers,
+    -- each independently flag-gated) cannot be online to consume anyway.
+    -- Gated here the same way the creation path already is.
+    --
+    -- KNOWN TRADE-OFF, disclosed rather than silently accepted: this cache
+    -- also backs server/exports.lua's GetActivePartnerCitizenId/
+    -- IsActivePartnerOf, which are deliberately NOT gated on this flag (see
+    -- that file's own reasoning: a partnership row created while the flag
+    -- was on remains real, queryable state even after the flag is later
+    -- flipped off). If an operator enables this flag, lets a partnership
+    -- form, then disables it again WITHOUT tearing the partnership down,
+    -- and restarts this resource while the still-partnered players remain
+    -- online, this gate reintroduces this loop's own original "sits empty
+    -- until next reconnect" gap for that narrow case. Accepted here because
+    -- forming a row at all already required the flag to have been
+    -- deliberately turned on once; the common "flag has always been false"
+    -- default-install case this fix targets cannot exhibit it.
+    if not Config.Features.HandlerPartnership then return end
+
     for _, playerId in ipairs(GetPlayers()) do
         local src = tonumber(playerId)
         if src then
