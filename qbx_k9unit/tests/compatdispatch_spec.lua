@@ -54,6 +54,15 @@
 local t = dofile('testkit.lua')
 local Sandbox = dofile('fixtures/sandbox.lua')
 
+-- Plain lua5.4 has no vector3 constructor (a real FiveM/CFX Lua runtime
+-- type, not stock Lua) -- fixtures/sandbox.lua's own Sandbox.vector3 is the
+-- established minimal x/y/z-table stand-in every other spec that needs one
+-- inside a loaded production file's own env already relies on; aliased
+-- locally here too since THIS file's own top-level test bodies (not just
+-- the production code loaded into a sandboxed env) build `coords` values
+-- to pass into Alert().
+local vector3 = Sandbox.vector3
+
 -- ----------------------------------------------------------------------
 -- Shared stub-building helpers
 -- ----------------------------------------------------------------------

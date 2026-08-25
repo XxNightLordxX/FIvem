@@ -64,11 +64,11 @@ shared_scripts {
     -- config.lua, since it reads Config.Compat. Order AMONG the five
     -- adapters does not matter.
     'shared/compat/core.lua',
-    -- 'shared/compat/inventory.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
-    -- 'shared/compat/target.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
-    -- 'shared/compat/framework.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
-    -- 'shared/compat/dispatch.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
-    -- 'shared/compat/ambulance.lua', -- NOT YET WRITTEN. Commented out deliberately: a manifest entry for a file that does not exist is a resource-start error, which would take the WHOLE resource down, not just this adapter. Uncomment the moment the file lands.
+    'shared/compat/inventory.lua',
+    'shared/compat/target.lua',
+    'shared/compat/framework.lua',
+    'shared/compat/dispatch.lua',
+    'shared/compat/ambulance.lua',
 }
 
 -- Phase 4: first NUI surface this resource has ever had (the passive

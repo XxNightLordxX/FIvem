@@ -210,6 +210,30 @@
     wants a different initial tier calls SetCertificationTier immediately
     after granting.
 
+    SUPERSEDED, 2026-08-25 (owner-directed reversal — see
+    server/certtiers.lua's own header for the full writeup; THIS PARAGRAPH
+    IS KEPT, NOT DELETED, per that pass's own instruction to record why
+    the reasoning above no longer applies rather than erase it): the
+    "deliberately NOT a Config table" argument two paragraphs up was
+    correct for a small, permanently-fixed vocabulary nobody would ever
+    need to extend. It stops applying the moment the owner asks for the
+    opposite — "Allow high command to edit the tiers trainee certified
+    senior etc add more roles edit permissions for those roles etc." The
+    tier catalog (key/label/ordinal/capabilities) is now data, owned by
+    server/certtiers.lua — Config.CertificationTiers for the DEFAULTS
+    (which preserve these exact three keys/ordinals, so an operator who
+    never opens the tablet sees zero behavior change), the
+    `k9_certification_tiers`/`k9_certification_tier_capabilities`
+    database tables for high command's runtime edits (the DB wins). The
+    literal `TIER_RANK` table immediately below is UNCHANGED and STILL
+    LIVE — not vestigial — as the explicit LEGACY FALLBACK every tier
+    accessor in this file now degrades to only if server/certtiers.lua's
+    own accessors are unavailable (see IsKnownTierKeyOrLegacyFallback/
+    GetTierOrdinalOrLegacyFallback below). `SetCertificationTier`'s own
+    signature and every call site are UNCHANGED by this — it still takes
+    a plain tier-key string; it now simply accepts any key the live
+    catalog currently recognizes instead of only these original three.
+
     REVOKE REASON (§2): an OPTIONAL third argument on RevokeCertification/
     RevokeCertificationOffline and their net-event/command entry points —
     fully backward compatible (nil/omitted behaves exactly as before: a
@@ -372,9 +396,40 @@ local Specializations = {}
 local ExpiryWarned = {}
 local ExpiryLapsedNotified = {}
 
--- Fixed, ordinal tier vocabulary — see "TIER" above for why this is
--- hardcoded rather than a Config table. Higher number = more capability.
+-- LEGACY FALLBACK ONLY as of the owner-directed tier-editing pass (see
+-- header "SUPERSEDED" note above server/certtiers.lua now owns the LIVE
+-- tier catalog, config-defaults-plus-database-overrides, EXTENSIBLE at
+-- runtime. This table is kept, byte-identical to its original form, as
+-- what IsKnownTierKeyOrLegacyFallback/GetTierOrdinalOrLegacyFallback
+-- below degrade to ONLY if server/certtiers.lua's own accessors
+-- (IsKnownCertificationTierKey/GetCertificationTierOrdinal) are not
+-- available — the same "runtime existence guard, not a load-order
+-- assumption" soft-dependency convention this file already applies to
+-- IsHighCommand/HasPermission. Every normal-operation code path in this
+-- file (server/certtiers.lua is an unconditional, always-loaded file in
+-- this resource, not a feature-flagged one) defers to the live catalog
+-- instead.
 local TIER_RANK = { trainee = 1, certified = 2, senior = 3 }
+
+--- @param key any
+--- @return boolean
+local function IsKnownTierKeyOrLegacyFallback(key)
+    if type(key) ~= 'string' then return false end
+    if type(IsKnownCertificationTierKey) == 'function' then
+        return IsKnownCertificationTierKey(key)
+    end
+    return TIER_RANK[key] ~= nil
+end
+
+--- @param key any
+--- @return number?
+local function GetTierOrdinalOrLegacyFallback(key)
+    if type(key) ~= 'string' then return nil end
+    if type(GetCertificationTierOrdinal) == 'function' then
+        return GetCertificationTierOrdinal(key)
+    end
+    return TIER_RANK[key]
+end
 
 -- The tier every row had, implicitly, before this pass — migration 0006's
 -- own DEFAULT for existing rows, and GrantCertification's own INSERT
@@ -735,7 +790,16 @@ function RefreshCertificationCache(citizenid, jobName)
         -- these new ones.
         print(('[qbx_k9unit] RefreshCertificationCache tier/expiry metadata query failed for %s/%s: %s -- defaulting to tier=%s, no expiry'):format(citizenid, jobName, tostring(metaRowOrErr), DEFAULT_TIER))
     elseif metaRowOrErr then
-        if type(metaRowOrErr.tier) == 'string' and TIER_RANK[metaRowOrErr.tier] then
+        -- OWNER-DIRECTED TIER-EDITING PASS: was `TIER_RANK[metaRowOrErr.tier]`
+        -- (only the original three hardcoded keys could ever validate) —
+        -- now defers to the live, operator-extensible catalog via
+        -- IsKnownTierKeyOrLegacyFallback, so a row holding an
+        -- operator-ADDED tier key validates too. Falls back to
+        -- DEFAULT_TIER exactly as before for anything unrecognized
+        -- (including a stale/corrupted string) — this branch's own
+        -- "never silently reduce an existing grant's capability" posture
+        -- (see header) is unchanged.
+        if IsKnownTierKeyOrLegacyFallback(metaRowOrErr.tier) then
             tier = metaRowOrErr.tier
         end
         expiresAtUnix = tonumber(metaRowOrErr.expires_at_unix)
@@ -1805,7 +1869,11 @@ local function SetCertificationTier(granterSrc, targetServerId, newTier)
         return
     end
 
-    if type(newTier) ~= 'string' or not TIER_RANK[newTier] then
+    -- OWNER-DIRECTED TIER-EDITING PASS: was `not TIER_RANK[newTier]`
+    -- (only trainee/certified/senior could ever be assigned) — now
+    -- accepts any tier key the live, operator-extensible catalog
+    -- currently recognizes. See IsKnownTierKeyOrLegacyFallback above.
+    if type(newTier) ~= 'string' or not IsKnownTierKeyOrLegacyFallback(newTier) then
         NotifyPlayer(granterSrc, locale('certifications.invalid_tier'), 'error')
         return
     end
@@ -1849,11 +1917,45 @@ local function SetCertificationTier(granterSrc, targetServerId, newTier)
     if not granterCitizenid then return end
 
     local oldTier = cached.tier
+
+    -- TIER CATALOG RACE GUARD (owner-directed tier-editing pass,
+    -- server/certtiers.lua) — see that file's own header "HAZARD 4",
+    -- "THE DELETE-VS-ASSIGN RACE" for the full writeup. Acquires the SAME
+    -- cross-file TierEditMutex, keyed by `newTier`, that
+    -- server/certtiers.lua's DeleteTier acquires before its own
+    -- reference-count check + tombstone write — this closes the window
+    -- where a concurrent delete of `newTier` could otherwise land between
+    -- "this key is currently known" (already checked above) and this
+    -- UPDATE actually committing, which would leave this row referencing
+    -- a tier that no longer exists (exactly the outcome this feature's
+    -- own hazard list forbids). Guarded by a `type(...) == 'table'`
+    -- runtime existence check, this resource's established soft-
+    -- dependency convention — this function still works exactly as
+    -- before (accepting only the previously-undocumented, now-disclosed,
+    -- narrow race) if server/certtiers.lua is ever removed.
+    local haveTierMutex = type(TierEditMutex) == 'table'
+    if haveTierMutex and not TierEditMutex.TryAcquire(newTier) then
+        NotifyPlayer(granterSrc, locale('certifications.tier_change_error'), 'error')
+        return
+    end
+
+    -- Re-check AFTER acquiring the lock, in case `newTier` was deleted by
+    -- a concurrent DeleteTier call in the gap between the earlier check
+    -- and acquiring this lock — refuse now rather than write a reference
+    -- to a tier that no longer exists.
+    if haveTierMutex and not IsKnownTierKeyOrLegacyFallback(newTier) then
+        TierEditMutex.Release(newTier)
+        NotifyPlayer(granterSrc, locale('certifications.invalid_tier'), 'error')
+        return
+    end
+
     local updateOk, err = pcall(
         MySQL.update.await,
         'UPDATE k9_certifications SET tier = ? WHERE citizenid = ? AND job = ? AND active = 1',
         { newTier, targetCitizenid, jobName }
     )
+
+    if haveTierMutex then TierEditMutex.Release(newTier) end
 
     if not updateOk then
         print(('[qbx_k9unit] SetCertificationTier UPDATE failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(err)))
@@ -2255,10 +2357,17 @@ end
 --- @param minTier string
 --- @return boolean
 function MeetsTierRequirement(citizenid, jobName, minTier)
-    if type(minTier) ~= 'string' or not TIER_RANK[minTier] then return false end
+    -- OWNER-DIRECTED TIER-EDITING PASS: ordinal comparison now defers to
+    -- the live, operator-extensible catalog (server/certtiers.lua) via
+    -- GetTierOrdinalOrLegacyFallback, so a future gate can compare
+    -- against an operator-ADDED tier, not just the original three.
+    if not IsKnownTierKeyOrLegacyFallback(minTier) then return false end
     local actualTier = GetCertificationTier(citizenid, jobName)
-    if not actualTier or not TIER_RANK[actualTier] then return false end
-    return TIER_RANK[actualTier] >= TIER_RANK[minTier]
+    if not IsKnownTierKeyOrLegacyFallback(actualTier) then return false end
+    local actualOrdinal = GetTierOrdinalOrLegacyFallback(actualTier)
+    local minOrdinal = GetTierOrdinalOrLegacyFallback(minTier)
+    if not actualOrdinal or not minOrdinal then return false end
+    return actualOrdinal >= minOrdinal
 end
 
 --- Cache-based, hot-path-safe: does `citizenid` currently hold

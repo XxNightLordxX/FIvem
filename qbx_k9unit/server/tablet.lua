@@ -757,13 +757,11 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
 
     local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source) == true
     if not CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller) then
-        -- No `message` here on purpose: 'tablet.console_not_authorized' is
-        -- REQUESTED (see this file's header "LOCALE KEYS THIS FILE NEEDS")
-        -- but not yet landed -- `message` is optional per the JS contract,
-        -- and this resource's convention is to never invent a key inline.
-        -- Once the key lands, add `message = locale('tablet.console_not_authorized')`
-        -- here (both call sites) -- no other change needed.
-        return { ok = false, error = 'not_authorized' }
+        -- 'tablet.console_not_authorized' has now landed in locales/en.json,
+        -- so `message` is populated as this file's header always intended.
+        -- It stays optional per the JS contract: its absence would still be
+        -- a clean fallback, never a broken path.
+        return { ok = false, error = 'not_authorized', message = locale('tablet.console_not_authorized') }
     end
 
     if type(query) ~= 'string' then query = '' end
@@ -865,13 +863,11 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
 
     local isHighCommandCaller = type(IsHighCommand) == 'function' and IsHighCommand(source) == true
     if not CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller) then
-        -- No `message` here on purpose: 'tablet.console_not_authorized' is
-        -- REQUESTED (see this file's header "LOCALE KEYS THIS FILE NEEDS")
-        -- but not yet landed -- `message` is optional per the JS contract,
-        -- and this resource's convention is to never invent a key inline.
-        -- Once the key lands, add `message = locale('tablet.console_not_authorized')`
-        -- here (both call sites) -- no other change needed.
-        return { ok = false, error = 'not_authorized' }
+        -- 'tablet.console_not_authorized' has now landed in locales/en.json,
+        -- so `message` is populated as this file's header always intended.
+        -- It stays optional per the JS contract: its absence would still be
+        -- a clean fallback, never a broken path.
+        return { ok = false, error = 'not_authorized', message = locale('tablet.console_not_authorized') }
     end
 
     local activePermSet = QueryActivePermissionSet(targetCitizenId)

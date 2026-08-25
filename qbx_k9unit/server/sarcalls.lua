@@ -269,6 +269,32 @@
     path at all.
 ]]
 
+-- FEATURE GATE -- a genuine bug caught and only PARTIALLY fixed by another
+-- pass while this file was mid-write (found via this session's own
+-- diff-on-external-change review, not left as found): this file originally
+-- had NO top-level early return at all, so with Config.Features.SARCalls
+-- false, every assert below AND the NewCooldown construction AND the tick
+-- CreateThread AND both event registrations still ran unconditionally --
+-- directly violating this resource's own "flag off means genuinely inert"
+-- invariant (client/kennel.lua's own header names this exact invariant by
+-- name) and, if an operator ever removed the then-unused Config.SARCalls
+-- block entirely, a hard crash on `local tuning = Config.SARCalls` being
+-- nil. An intermediate fix wrapped ONLY the assert block in an `if
+-- Config.Features.SARCalls then ... end` -- that stopped the asserts from
+-- firing, but left `NewCooldown(tuning.startCooldownMs)` a few lines below
+-- (which also indexes `tuning`) and the entire tick loop/event registration
+-- surface still unconditional, so the crash and the "still runs when
+-- disabled" bug both remained. THE ACTUAL FIX: a single top-level early
+-- return, before `tuning` is even read -- the exact, sole pattern every
+-- other feature file in this resource already uses for this (client/
+-- sarcalls.lua's own top-level gate; server/integrations.lua's `if not
+-- Config.Features.K9DownDispatch then return end`; client/recall.lua;
+-- client/scenttrail.lua) -- so the rest of this file, guard included,
+-- reads exactly as originally written, straight-line, with no internal
+-- `if`/`end` wrapper of its own: it simply never executes past this line
+-- when the feature is off.
+if not Config.Features.SARCalls then return end
+
 local tuning = Config.SARCalls
 
 -- ======================================================================
@@ -308,6 +334,7 @@ assert(type(tuning.maxCallDurationMs) == 'number' and tuning.maxCallDurationMs >
     '[qbx_k9unit] Config.SARCalls.maxCallDurationMs must be a positive number -- the hard, unconditional expiry ' ..
     'every active call is measured against regardless of whether anyone completes it (see this file\'s own ' ..
     '"NO UNBOUNDED TRAP" section). A non-positive value here would make every call expire the instant it starts.')
+
 -- startCooldownMs is deliberately NOT re-validated here -- NewCooldown's
 -- own AssertValidDefaultThreshold below already errors loudly, naming that
 -- exact constructor call, the identical reasoning server/integrations.lua's

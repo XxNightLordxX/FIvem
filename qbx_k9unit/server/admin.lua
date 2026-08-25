@@ -479,10 +479,76 @@ local function NotifyPlayer(target, description, notifyType)
     _G.NotifyPlayer(target, description, notifyType, 'K9 Unit — Admin Audit')
 end
 
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL -- config.lua's own Config.FeatureControl
+-- 4-step "first match wins" resolution, steps 2-4 (step 1 -- this
+-- feature's own Config.Features.AdminAuditCommands flag -- is already
+-- checked by this file's own COMMAND REGISTRATION gate further down, at
+-- resource-start time, before any command handler IsAuthorizedAdmin below
+-- guards can ever be registered at all). Mirrors
+-- server/pursuitsprint.lua's IsPursuitSprintPermittedForCitizenId shape
+-- exactly -- see that function's own doc comment for the full reasoning;
+-- kept as this file's own tiny local copy rather than a shared export,
+-- matching this resource's established "each file keeps its own tiny copy
+-- of a genuinely small, self-contained check" convention
+-- (server/permissions.lua's IsDuplicateKeyError doc comment names the same
+-- precedent explicitly).
+--
+-- Called ONLY from inside IsAuthorizedAdmin below, and ONLY once every
+-- OTHER (legacy auditGrade rank / job.isboss / high-command / k9.audit
+-- capability-grant) qualification has ALREADY independently passed -- see
+-- that function's own restructure below for exactly where. An explicit
+-- per-person BLOCK or a missing per-person GRANT can therefore only ever
+-- NARROW who this file's commands allow, never widen it: holding
+-- 'feature.AdminAuditCommands' does not, by itself, ever authorize someone
+-- who fails every other check IsAuthorizedAdmin already performs -- purely
+-- additive in the opposite direction from every OTHER bypass in that
+-- function (isboss/k9.audit-grant/high-command all WIDEN access; this
+-- narrows it), exactly matching config.lua's own documented Config.FeatureControl
+-- precedence ("global off... a block... can never switch on something...").
+-- ======================================================================
+--- @param citizenid string
+--- @return boolean allowed
+local function IsAdminFeaturePermittedForCitizenId(citizenid)
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.AdminAuditCommands') == true then
+        return false -- step 2: an explicit block always wins, even over an otherwise-qualifying rank/high-command/capability-grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.AdminAuditCommands == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.AdminAuditCommands') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Server-authoritative authorization check for every command in this
 --- file. See this file's header "ACCESS MODEL" section for the full
 --- reasoning on both the ACE->job-rank rewrite and the console
 --- (source == 0) carve-out.
+---
+--- PER-PERSON FEATURE CONTROL (this pass, coder-security -- see
+--- IsAdminFeaturePermittedForCitizenId immediately above for the full
+--- contract): every path below that used to `return true` directly now
+--- routes through that check first, keyed to the caller's OWN
+--- server-resolved citizenid -- never a client claim, never the console's
+--- (source == 0 has no citizenid and is a distinct trust boundary --
+--- Config.AdminAudit.TrustConsole -- untouched by this addition, see that
+--- branch below). A block/missing-grant can therefore revoke a
+--- specific officer's audit access WITHOUT touching their job grade, and
+--- takes effect on their VERY NEXT command invocation (this function is
+--- re-checked from scratch on every one of this file's five command
+--- handlers, never cached) -- never gated behind a restart, matching this
+--- resource's "gate at registration, not just inside the handler" rule
+--- for the FEATURE flag itself while keeping the PER-PERSON layer fully
+--- live.
 ---
 --- JOB-RANK CHECK (this pass, project-owner-directed): mirrors
 --- server/certifications.lua's IsEligibleCertifier exactly — same
@@ -546,10 +612,20 @@ local function IsAuthorizedAdmin(source)
     local job = Player.PlayerData.job
     if not job or not Config.Departments[job.name] then return false end
 
+    -- Resolved once, reused by every qualification path below AND by the
+    -- PER-PERSON FEATURE CONTROL check each of them now routes through --
+    -- same citizenid the pre-existing 'k9.audit' permission-grant bypass
+    -- immediately below already reads from this exact field.
+    local citizenid = Player.PlayerData.citizenid
+
     -- job.isboss always qualifies regardless of the configured numeric
     -- threshold -- same rule, same reasoning, as
-    -- server/certifications.lua's IsEligibleCertifier.
-    if job.isboss then return true end
+    -- server/certifications.lua's IsEligibleCertifier. PER-PERSON FEATURE
+    -- CONTROL (this pass) is layered on AFTER this qualifies, never
+    -- instead of it -- see IsAdminFeaturePermittedForCitizenId's own doc
+    -- comment above for why a block/missing-grant can narrow even a boss's
+    -- own audit access without touching their job rank.
+    if job.isboss then return IsAdminFeaturePermittedForCitizenId(citizenid) end
 
     -- PERMISSION GRANT BYPASS (server/permissions.lua, Config.Features.PermissionGrants,
     -- resolution-order STEP 1) -- an active granted 'k9.audit' permission
@@ -558,8 +634,15 @@ local function IsAuthorizedAdmin(source)
     -- "first match wins" order. Guarded by a `type(...) == 'function'`
     -- runtime existence check -- this function still works exactly as
     -- before if server/permissions.lua is ever removed or
-    -- Config.Features.PermissionGrants is false.
-    if type(HasPermission) == 'function' and HasPermission(Player.PlayerData.citizenid, 'k9.audit') then return true end
+    -- Config.Features.PermissionGrants is false. PER-PERSON FEATURE
+    -- CONTROL (this pass) still applies on top of this bypass -- holding
+    -- the 'k9.audit' CAPABILITY grant is a different fact from holding the
+    -- 'feature.AdminAuditCommands' FEATURE grant Config.FeatureControl.RequireGrant
+    -- asks for; a block on the latter still wins even for someone who
+    -- holds the former.
+    if type(HasPermission) == 'function' and HasPermission(citizenid, 'k9.audit') then
+        return IsAdminFeaturePermittedForCitizenId(citizenid)
+    end
 
     -- HIGH COMMAND BYPASS (server/highcommand.lua, Config.Features.HighCommand,
     -- project-owner-directed this pass) -- auditGrade is explicitly one of
@@ -569,8 +652,15 @@ local function IsAuthorizedAdmin(source)
     -- established soft-dependency convention -- this function still works
     -- exactly as before if server/highcommand.lua is ever removed or
     -- Config.Features.HighCommand is false (IsHighCommand re-checks that
-    -- flag itself and returns false).
-    if type(IsHighCommand) == 'function' and IsHighCommand(source) then return true end
+    -- flag itself and returns false). PER-PERSON FEATURE CONTROL (this
+    -- pass) still applies on top of this bypass -- see
+    -- server/tablet.lua's own disclosed "NO high-command bypass at step 3"
+    -- reading of config.lua's Config.FeatureControl order, which this
+    -- mirrors: high command triggering ITS OWN audit access is still
+    -- subject to a block/RequireGrant the same as anyone else.
+    if type(IsHighCommand) == 'function' and IsHighCommand(source) then
+        return IsAdminFeaturePermittedForCitizenId(citizenid)
+    end
 
     -- SAME hardening IsEligibleCertifier/HasK9Access already carry: an
     -- explicit type check on BOTH operands before the `>=` comparison, not a
@@ -585,7 +675,13 @@ local function IsAuthorizedAdmin(source)
     local dept = Config.Departments[job.name]
     if type(dept.auditGrade) ~= 'number' then return false end
 
-    return job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept.auditGrade
+    if not (job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept.auditGrade) then
+        return false
+    end
+
+    -- PER-PERSON FEATURE CONTROL, final path (this pass) -- same check as
+    -- every bypass above, applied to the ordinary rank-qualified case too.
+    return IsAdminFeaturePermittedForCitizenId(citizenid)
 end
 
 --- Parses and clamps an optional caller-supplied result-count argument.

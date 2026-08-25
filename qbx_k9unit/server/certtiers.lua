@@ -397,8 +397,12 @@ local MAX_TIERS = 40
 -- every reference below is a proper upvalue, not an accidental global --
 -- same discipline server/certifications.lua's own `local Certifications`/
 -- `local Specializations` tables already establish.
-local TierByKey = {}
-local TierOrder = {}
+-- Not initialized to `{}` here -- both are populated for real a few
+-- lines down (the "Initial SYNCHRONOUS population" block) before
+-- anything ever reads either one, so an intermediate `{}` here would
+-- just be dead-written-over state (flagged, correctly, by luacheck).
+local TierByKey
+local TierOrder
 
 --- @param list any
 --- @return boolean

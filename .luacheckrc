@@ -448,6 +448,22 @@ globals = {
     -- because abandoning a call is a termination path, and gating one is
     -- how the unbounded trap this resource forbids gets built.
     "RequestStartSarCall", "RequestAbandonSarCall",
+    -- server/datastore.lua -- the single accessor layer behind
+    -- Config.Database.enabled. ONE code path, TWO backends: every DB read
+    -- and write in this resource goes through K9Store, which dispatches to
+    -- either real SQL or an in-memory table. The whole point is that there
+    -- is no second `if Config.Database.enabled then` branch anywhere else,
+    -- because a divergence between two branches is a bug that only shows up
+    -- on whichever one the operator happens to run.
+    "K9Store",
+    -- server/certtiers.lua -- runtime-editable certification tiers. These
+    -- answer questions ABOUT a tier (does it exist, what does it outrank,
+    -- what does it grant); the tier a person HOLDS is still answered by
+    -- server/certifications.lua's GetCertificationTier. Keep that split:
+    -- one is a catalogue, the other is a record.
+    "ListCertificationTiers", "IsKnownCertificationTierKey",
+    "GetCertificationTierOrdinal", "GetCertificationTierCapabilities",
+    "TierHasCapability", "TierEditMutex",
     -- shared/compat/core.lua -- the resource auto-detection registry.
     -- Assigned in core.lua, read by the five sibling adapter files and by
     -- any future consumer. Same "global helper, per-file private state"

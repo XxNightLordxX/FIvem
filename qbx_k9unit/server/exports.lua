@@ -143,14 +143,29 @@
     partnership formed/broken, a contraband search completing, an XP tier
     crossing) is therefore now fully delivered, not merely specified.
 
-    RE-VERIFIED, THIS PASS (2026-08-25 coder-architect six-feature audit,
-    see "SIX-FEATURE COVERAGE AUDIT" below): re-grepped every
-    `FireOutboundEvent(` call site and every `qbx_k9unit:events:*` string
-    literal in the tree again before touching this file. Still exactly the
-    six calls, still the four owning files named above, still no seventh.
-    This correction was NOT stale a second time — recorded here only so a
-    future editor doesn't have to re-derive that this was actually checked
-    twice, by two independent passes, rather than copy-pasted forward.
+    CORRECTED 2026-08-25, LATE PASS. The paragraph that stood here said
+    "still exactly the six calls... still no seventh", and then the very
+    next lines listed a seventh -- a self-contradiction that survived two
+    passes precisely because each one re-verified the claim it inherited
+    rather than re-deriving the number. It was wrong. The real count today
+    is FOURTEEN, measured by grepping every `qbx_k9unit:events:` string
+    literal across client/ and server/ and de-duplicating:
+
+      certificationGranted      certificationRenewed
+      certificationRevoked      certificationTierChanged
+      k9Down                    partnershipEnded
+      partnershipEstablished    sarCallCompleted
+      sarCallStarted            scentLineupResolved
+      searchCompleted           specializationGranted
+      specializationRevoked     xpTierReached
+
+    The lesson worth keeping, since this is a PUBLIC contract other
+    resources are written against: do not state a count here unless you
+    just measured it, and do not re-affirm an inherited one. A stale count
+    in a stable-contract header is worse than no count, because a consumer
+    trusts it. If you add an event, add its name to the list above in the
+    same edit -- the list is the contract; the number is only a summary of
+    it.
 
     Naming: a new `qbx_k9unit:events:<name>` namespace, distinct from the
     existing `qbx_k9unit:server:`/`qbx_k9unit:client:` namespaces (which

@@ -412,10 +412,58 @@ local function IsValidCitizenId(value)
     return type(value) == 'string' and value ~= '' and #value <= 50
 end
 
+--- SECURITY FIX (coder-security, this pass -- the headline finding this
+--- pass exists to close): until now this function accepted ONLY an exact
+--- key already present in Config.Permissions (the four admin capabilities:
+--- k9.access/k9.certify/k9.audit/k9.givexp). It had NO case at all for the
+--- 'feature.<Name>'/'block.<Name>' namespace client/tablet.lua's own
+--- grantFeature/revokeFeature/blockFeature/unblockFeature (and this file's
+--- own header/config.lua's own Config.FeatureControl doc block) already
+--- describe as the real storage shape for a per-person feature grant/
+--- block -- meaning GrantPermission/RevokePermission rejected EVERY such
+--- call with 'invalid_permission' before ever reaching the DB, so
+--- Config.FeatureControl.RequireGrant and per-person blocks were
+--- unimplementable regardless of what any consuming gate (server/combat.lua's
+--- IsCombatFeaturePermittedForCitizenId, server/pursuitsprint.lua's
+--- IsPursuitSprintPermittedForCitizenId, server/admin.lua's
+--- IsAdminFeaturePermittedForCitizenId, all of which already read
+--- HasPermission(citizenid, 'feature.'/'block.' .. Name) correctly) was
+--- prepared to check. See server/tablet.lua's own header "A REAL,
+--- PRE-EXISTING GAP FOUND WHILE BUILDING THIS" for that file's own
+--- independent discovery of the same bug.
+---
+--- FIXED WITHOUT SIMPLY LOOSENING THE CHECK: `feature.<Name>`/
+--- `block.<Name>` are now accepted ONLY when `<Name>` is a REAL key of
+--- Config.Features -- the exact same table every one of this resource's
+--- feature flags already lives in, so `Config.Features[Name] ~= nil` is a
+--- referential check against real, existing resource state, never a
+--- free-form pattern match. `feature.NotARealFeature`,
+--- `block.'; DROP TABLE k9_permissions;--`, or a >50-char payload are all
+--- still rejected exactly as before an unvalidated key would have been --
+--- an unvalidated permission key is a new hole, not a fix. Deliberately
+--- does NOT additionally require `<Name>` to appear in
+--- Config.FeatureControl.RequireGrant: a BLOCK is documented (config.lua's
+--- own Config.FeatureControl header) to work against ANY feature, not only
+--- ones already listed there ("high command can turn an individual
+--- feature on or off for ONE specific K9 or handler"), and a GRANT for a
+--- feature that is not in RequireGrant is simply inert rather than unsafe
+--- (every consuming gate's own step-3 RequireGrant check only ever reads a
+--- 'feature.<Name>' grant when RequireGrant[Name] is true) -- narrowing
+--- this further than Config.Features itself would reject a legitimate
+--- block with no corresponding safety benefit.
 --- @param value any
 --- @return boolean
 local function IsValidPermissionKey(value)
-    return type(Config.Permissions) == 'table' and type(value) == 'string' and Config.Permissions[value] ~= nil
+    if type(value) ~= 'string' or value == '' or #value > 50 then return false end
+
+    if type(Config.Permissions) == 'table' and Config.Permissions[value] ~= nil then
+        return true
+    end
+
+    if type(Config.Features) ~= 'table' then return false end
+
+    local featureName = value:match('^feature%.(.+)$') or value:match('^block%.(.+)$')
+    return featureName ~= nil and Config.Features[featureName] ~= nil
 end
 
 --- Returns true if `err` (the value pcall caught around the grant INSERT)

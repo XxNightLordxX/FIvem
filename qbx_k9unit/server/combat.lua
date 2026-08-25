@@ -903,12 +903,86 @@ local COMBAT_REJECT_MESSAGES = {
     -- CONTRACT entry for IsHesitating/IsDistracted).
     hesitating         = locale('combat.hesitating'),
     distracted         = locale('combat.distracted'),
+    -- PER-PERSON FEATURE CONTROL denial (config.lua's Config.FeatureControl
+    -- -- an explicit 'block.<Name>' row OR 'RequireGrant' listed without an
+    -- active 'feature.<Name>' grant; see IsCombatFeaturePermittedForCitizenId
+    -- below). Collapsed into the SAME generic copy either way, deliberately
+    -- -- matches server/pursuitsprint.lua's own IsPursuitSprintPermittedForCitizenId
+    -- call site: "the player-facing message is deliberately the same...
+    -- a blocked handler does not need a message that reads differently from
+    -- a never-granted one." Reuses the EXISTING combat.reject_fallback
+    -- locale key rather than adding a new one -- this file may not edit
+    -- locales/en.json this pass; an explicit mapping is kept here (rather
+    -- than left to CombatRejectMessage's own fallback-on-miss) so a reader
+    -- of this table sees the reason was deliberately handled, not merely
+    -- unmapped.
+    permission_denied  = locale('combat.reject_fallback'),
 }
 
 --- @param reason string?
 --- @return string
 local function CombatRejectMessage(reason)
     return COMBAT_REJECT_MESSAGES[reason] or locale('combat.reject_fallback')
+end
+
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL -- config.lua's own Config.FeatureControl
+-- 4-step "first match wins" resolution, steps 2-4 (step 1 -- the feature's
+-- own Config.Features.<Name> flag -- is already the `featureEnabled`
+-- parameter ValidateCombatRequest below checks before this can ever run).
+-- Mirrors server/pursuitsprint.lua's IsPursuitSprintPermittedForCitizenId
+-- byte-for-byte in SHAPE (read that function's own doc comment for the
+-- full reasoning this does not repeat) -- generalised here to accept a
+-- `featureKey` parameter since THIS file shares one validator across
+-- THREE RequireGrant-listed features (BiteAndHold, NonLethalTakedown,
+-- PropDragging) rather than pursuitsprint.lua's single hardcoded key. Kept
+-- as this file's own tiny local copy rather than a shared export, matching
+-- this resource's established "each file keeps its own tiny copy of a
+-- genuinely small, self-contained check" convention (see e.g.
+-- server/permissions.lua's IsDuplicateKeyError doc comment for the same
+-- precedent named explicitly).
+--
+-- PRECEDENCE, PRESERVED EXACTLY per config.lua's own header: global off
+-- (step 1, checked by the caller) beats everything; a block (step 2) beats
+-- an active grant; RequireGrant (step 3) is checked ONLY once step 2 has
+-- already passed; nothing here can ever WIDEN access -- both dynamic
+-- lookups below (`RequireGrant[featureKey]`, `HasPermission`) fail CLOSED
+-- on every unresolvable shape (missing Config.FeatureControl, missing
+-- RequireGrant table, HasPermission entirely absent), matching
+-- server/pursuitsprint.lua's identical fail-closed posture. NEVER called
+-- for a termination/cleanup path (EndHold, releaseDrag, the maintenance
+-- threads' own expiry sweep) -- only for the REQUEST that OPENS a new
+-- effect -- so a mid-effect block/revoke can never strand an already-open
+-- hold/drag; see EndHold's own header for why teardown is unconditional.
+-- ======================================================================
+--- @param citizenid string
+--- @param featureKey string -- 'BiteAndHold' | 'NonLethalTakedown' | 'PropDragging' -- always a literal passed by this file's own call sites, never derived from anything client-supplied
+--- @return boolean allowed
+local function IsCombatFeaturePermittedForCitizenId(citizenid, featureKey)
+    -- Soft dependency, this resource's established convention
+    -- (`type(...) == 'function'`) -- server/permissions.lua may be absent
+    -- from an install, or Config.Features.PermissionGrants may be off;
+    -- HasPermission itself already returns false in either case. When it
+    -- is entirely absent, step 2 (below) simply cannot fire -- nobody could
+    -- ever hold a block -- and step 3 further down still fails CLOSED on a
+    -- grant this resource is structurally unable to check.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.' .. featureKey) == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant[featureKey] == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.' .. featureKey) == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
 end
 
 --- Shared request-time validation for BiteAndHold, NonLethalTakedown, AND
@@ -945,13 +1019,15 @@ end
 --- @param targetNetId any
 --- @param featureEnabled boolean
 --- @param rangeMeters number
+--- @param featureKey string -- 'BiteAndHold' | 'NonLethalTakedown' | 'PropDragging' -- passed to IsCombatFeaturePermittedForCitizenId below for the PER-PERSON FEATURE CONTROL check (config.lua's Config.FeatureControl), a REQUIRED parameter (not folded into `opts`, unlike PropDragging's own `requireAlive` knob) because all three call sites need it identically -- there is no effect-agnostic default that would make sense to omit.
+--- @param opts table?
 --- @return boolean ok
 --- @return number? k9Ped
 --- @return number? targetPed
 --- @return boolean? isPlayerTarget
 --- @return number? targetSrc
 --- @return string? reason
-local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMeters, opts)
+local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMeters, featureKey, opts)
     opts = opts or {}
     if not featureEnabled then
         return false, nil, nil, nil, nil, 'feature_disabled'
@@ -963,6 +1039,22 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
 
     if not HasK9Access(src) then
         return false, nil, nil, nil, nil, 'no_access'
+    end
+
+    -- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl, steps
+    -- 2-4 of its documented "first match wins" resolution -- step 1,
+    -- `featureEnabled`, is already checked above). Placed here, immediately
+    -- after HasK9Access and before every other state read below, mirroring
+    -- server/pursuitsprint.lua's requestPursuitSprint call-site placement of
+    -- its own identically-shaped check exactly. See
+    -- IsCombatFeaturePermittedForCitizenId's own doc comment for the full
+    -- fail-closed/precedence contract this implements.
+    do
+        local k9Player = exports.qbx_core:GetPlayer(src)
+        local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
+        if not k9Citizenid or not IsCombatFeaturePermittedForCitizenId(k9Citizenid, featureKey) then
+            return false, nil, nil, nil, nil, 'permission_denied'
+        end
     end
 
     if K9ActiveEffect[src] then
@@ -1773,7 +1865,7 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
     local src = source
 
     local ok, k9Ped, targetPed, isPlayerTarget, targetSrc, reason =
-        ValidateCombatRequest(src, targetNetId, Config.Features.BiteAndHold, Config.Combat.BiteAndHold.range)
+        ValidateCombatRequest(src, targetNetId, Config.Features.BiteAndHold, Config.Combat.BiteAndHold.range, 'BiteAndHold')
     if not ok then
         NotifyPlayer(src, CombatRejectMessage(reason), 'error')
         return
@@ -1960,7 +2052,7 @@ local function HandleTakedownRequest(src, targetNetId)
     -- only invite an accidental use of a value that may already be stale by
     -- the time this function's second half runs.
     local ok, _, targetPed, _, _, reason =
-        ValidateCombatRequest(src, targetNetId, Config.Features.NonLethalTakedown, Config.Combat.NonLethalTakedown.range)
+        ValidateCombatRequest(src, targetNetId, Config.Features.NonLethalTakedown, Config.Combat.NonLethalTakedown.range, 'NonLethalTakedown')
     if not ok then
         NotifyPlayer(src, CombatRejectMessage(reason), 'error')
         return
@@ -2004,7 +2096,7 @@ local function HandleTakedownRequest(src, targetNetId)
     -- this file's own pre-yield call above (`local ok, _, targetPed, _, _,
     -- reason = ValidateCombatRequest(...)`).
     local ok2, _, targetPed2, isPlayerTarget2, targetSrc2, reason2 =
-        ValidateCombatRequest(src, targetNetId, Config.Features.NonLethalTakedown, Config.Combat.NonLethalTakedown.range)
+        ValidateCombatRequest(src, targetNetId, Config.Features.NonLethalTakedown, Config.Combat.NonLethalTakedown.range, 'NonLethalTakedown')
     if not ok2 then
         NotifyPlayer(src, CombatRejectMessage(reason2), 'error')
         return
@@ -2252,7 +2344,7 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
     -- locally for the attach), same "unused-by-design" pattern as
     -- HandleTakedownRequest's own discarded k9Ped2 above.
     local ok, _, targetPed, isPlayerTarget, targetSrc, reason =
-        ValidateCombatRequest(src, targetNetId, Config.Features.PropDragging, Config.Combat.PropDragging.range, { requireAlive = false })
+        ValidateCombatRequest(src, targetNetId, Config.Features.PropDragging, Config.Combat.PropDragging.range, 'PropDragging', { requireAlive = false })
     if not ok then
         NotifyPlayer(src, CombatRejectMessage(reason), 'error')
         return

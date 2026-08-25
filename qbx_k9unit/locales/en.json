@@ -201,6 +201,7 @@
     "revoke_notify_target": "High command revoked: %s"
   },
   "tablet": {
+    "console_not_authorized": "You don't have access to the Command Console.",
     "roster_truncated_notice": "Showing the first %d entries — narrow your search to see the rest.",
     "open_failed_generic": "The tablet can't open right now.",
     "revoke_still_has_access": "Revoked — but they still have this through their rank, so their access is unchanged.",

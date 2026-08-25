@@ -70,7 +70,11 @@ local fakeNow = 0
 local function GetGameTimer() return fakeNow end
 
 local threadRunner = Sandbox.newThreadRunner()
-local function CreateThread(fn) threadRunner.CreateThread(fn) end
+local createThreadCallCount = 0
+local function CreateThread(fn)
+    createThreadCallCount = createThreadCallCount + 1
+    threadRunner.CreateThread(fn)
+end
 
 -- Forward-declared -- server/sarcalls.lua's own playerDropped handler reads
 -- the AMBIENT `source` global (this resource's own established convention,
@@ -154,10 +158,10 @@ local function ServerConfigWith(overrides)
     local base = {
         minRadius = 10.0,
         maxRadius = 30.0,
-        arrivalRadius = 3.0,
+        arrivalRadius = 2.0,
         burningDistance = 5.0,
-        hotDistance = 15.0,
-        warmDistance = 25.0,
+        hotDistance = 8.0,
+        warmDistance = 15.0,
         pollIntervalMs = 2000,
         maxCallDurationMs = 300000,
         startCooldownMs = 8000,
@@ -171,6 +175,7 @@ local ServerConfig = ServerConfigWith()
 serverEnv = Sandbox.newEnv({
     GetGameTimer = GetGameTimer,
     CreateThread = CreateThread,
+    Wait = threadRunner.Wait,
     AddEventHandler = AddEventHandler,
     RegisterNetEvent = RegisterNetEvent,
     math = FakeMath,
@@ -196,10 +201,27 @@ local function tick()
     threadRunner.step()
 end
 
+--- The LAST TriggerClientEvent call recorded for `target`, regardless of
+--- what else the SAME tick may have also pushed for a different, still-
+--- lingering source from an earlier test (ActiveSarCalls is one shared
+--- table across this whole section, by design, matching production; a
+--- test that intentionally leaves a call active -- e.g. the tier-crossing
+--- test below never drives its own call to completion -- is a legitimate
+--- fixture state, not a bug, so assertions key off the SOURCE they care
+--- about rather than assume their own push was the globally-last one).
+--- @param target number
+--- @return table? call
+local function lastEventFor(target)
+    for i = #triggerClientEventCalls, 1, -1 do
+        if triggerClientEventCalls[i].target == target then return triggerClientEventCalls[i] end
+    end
+    return nil
+end
+
 t.test('server load: registers requestSarCall via lib.callback and abandonSarCall via RegisterNetEvent, and starts exactly one tick thread', function()
     t.isNotNil(requestSarCall)
     t.isNotNil(registeredNetEvents['qbx_k9unit:server:abandonSarCall'])
-    t.equals(#threadRunner.threads, 1)
+    t.equals(createThreadCallCount, 1)
 end)
 
 t.test('requestSarCall: Config.Features.SARCalls off is a real no-op (reason = denied), even with access', function()
@@ -299,20 +321,24 @@ t.test('tick loop: pushes sarHintTierChanged on EVERY tier crossing as the offic
     tick()
     t.equals(#triggerClientEventCalls, pushesSoFar, 'no re-push for an unchanged tier')
 
-    -- Close to 12m -> crosses into 'hot' (<=15).
-    pedCoordsBySource[20] = { x = 8.0, y = 0.0, z = 0.0 } -- 2m from target -> distance 2.0... use a value that lands strictly inside 'hot', not 'burning'
-    pedCoordsBySource[20] = { x = 3.0, y = 0.0, z = 0.0 } -- distance to (10,0) = 7.0 -> inside hotDistance(15), outside burningDistance(5) -> 'hot'
+    -- Close in to distance 7.0 -> inside hotDistance(8), outside burningDistance(5) -> 'hot'.
+    pedCoordsBySource[20] = { x = 3.0, y = 0.0, z = 0.0 } -- distance to (10,0) = 7.0
     tick()
-    local hotPush = triggerClientEventCalls[#triggerClientEventCalls]
+    local hotPush = lastEventFor(20)
     t.equals(hotPush.event, 'qbx_k9unit:client:sarHintTierChanged')
-    t.equals(hotPush.target, 20)
     t.equals(hotPush.args[1], 'hot')
 
     -- Close further to 4.0 -> 'burning' (<=5).
     pedCoordsBySource[20] = { x = 6.0, y = 0.0, z = 0.0 } -- distance to (10,0) = 4.0
     tick()
-    local burningPush = triggerClientEventCalls[#triggerClientEventCalls]
+    local burningPush = lastEventFor(20)
     t.equals(burningPush.args[1], 'burning')
+
+    -- Clean up -- this test deliberately never drives source 20's call to
+    -- completion; abandon it explicitly so it does not linger into every
+    -- later test's own tick() calls once fakeNow eventually crosses this
+    -- call's own maxCallDurationMs.
+    fireAbandonSarCall(20)
 end)
 
 t.test('tick loop: found -- awards XP exactly once, fires the sarCallCompleted outbound event with the right payload, notifies, and pushes sarCallEnded(found, callType)', function()
@@ -344,9 +370,8 @@ t.test('tick loop: found -- awards XP exactly once, fires the sarCallCompleted o
     t.isTrue(completedOutbound.args[4] == 'person' or completedOutbound.args[4] == 'property')
     t.equals(completedOutbound.args[5], 1234, 'durationMs must be measured from this call\'s own startedAt')
 
-    local endPush = triggerClientEventCalls[#triggerClientEventCalls]
+    local endPush = lastEventFor(21)
     t.equals(endPush.event, 'qbx_k9unit:client:sarCallEnded')
-    t.equals(endPush.target, 21)
     t.equals(endPush.args[1], 'found')
     t.equals(endPush.args[2], completedOutbound.args[4], 'callType pushed to the client must match the callType in the outbound event')
 
@@ -377,9 +402,8 @@ t.test('tick loop: an unfinished call older than maxCallDurationMs auto-expires 
         t.isFalse(ev.event == 'qbx_k9unit:events:sarCallCompleted' and ev.args[1] == 22, 'a timeout must never fire the completed outbound event')
     end
 
-    local endPush = triggerClientEventCalls[#triggerClientEventCalls]
+    local endPush = lastEventFor(22)
     t.equals(endPush.event, 'qbx_k9unit:client:sarCallEnded')
-    t.equals(endPush.target, 22)
     t.equals(endPush.args[1], 'timeout')
 
     -- Confirmed actually cleared: a fresh request succeeds once the
@@ -425,6 +449,28 @@ t.test('playerDropped clears a source\'s ActiveSarCalls entry (a fresh request f
     queueRandom(0.0, 0.0)
     local fresh = requestSarCall(24)
     t.isTrue(fresh.started, 'a dropped connection must not leave a stale already_active entry behind')
+end)
+
+t.test('FEATURE GATE: Config.Features.SARCalls = false is a genuine no-op at load time -- no assert, no NewCooldown, no thread, no registration -- even with a garbage/absent Config.SARCalls', function()
+    local registeredAnyCallback, registeredAnyNetEvent, createdAnyThread = false, false, false
+    local freshEnv = Sandbox.newEnv({
+        GetGameTimer = function() return 0 end,
+        CreateThread = function() createdAnyThread = true end,
+        AddEventHandler = function() end,
+        RegisterNetEvent = function() registeredAnyNetEvent = true end,
+        math = FakeMath,
+        lib = { callback = { register = function() registeredAnyCallback = true end } },
+        -- No Config.SARCalls at all -- exactly the "operator disabled the
+        -- feature and removed the now-unused block" case this file's own
+        -- FEATURE GATE comment documents finding as a real bug this pass.
+        Config = { Features = { SARCalls = false } },
+    })
+    Sandbox.loadInto('../server/cooldowns.lua', freshEnv)
+    local ok = pcall(Sandbox.loadInto, '../server/sarcalls.lua', freshEnv)
+    t.isTrue(ok, 'must not crash merely because the feature is off, even with Config.SARCalls entirely absent')
+    t.isFalse(registeredAnyCallback, 'requestSarCall must never be registered while the feature is off')
+    t.isFalse(registeredAnyNetEvent, 'abandonSarCall must never be registered while the feature is off')
+    t.isFalse(createdAnyThread, 'the tick loop must never start while the feature is off')
 end)
 
 -- ------------------------------------------------------------------------

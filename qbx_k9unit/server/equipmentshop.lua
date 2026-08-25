@@ -117,13 +117,112 @@
     refusing outright over one bad entry.
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT: none. This file registers no
-    RegisterNetEvent/lib.callback of its own -- every player-facing
-    interaction (opening the shop, buying an item) already flows entirely
-    through ox_inventory's own existing, already-security-reviewed
-    `ox_inventory:openShop`/`ox_inventory:buyItem` callbacks. Adding a
-    second, parallel purchase path of this resource's own would be pure
-    duplication with a second place to get the authorization checks wrong.
+    RUNTIME SHOP LOCATIONS (this pass, coder-frontend). The owner's own
+    words: "make the shop a dog ped and i can change the locations in the
+    config or add more locations remove locations etc along with in the
+    high command tablet." Two things landed this pass:
+
+      1. THE SHOP PED. client/equipmentshop.lua now spawns a real, visible
+         ped at each shop location and targets THAT PED via ox_target's
+         `addLocalEntity` -- not a bare invisible sphere. Which model, and
+         any idle scenario it plays, is fully operator-configurable
+         (Config.K9EquipmentShop.pedModel/pedHeading/pedScenario below, or
+         a per-location override), never hardcoded, and never validated
+         against Config.Peds -- a shop attendant is not a K9. See that
+         file's own header for the full entity-lifecycle contract (what
+         owns each ped's lifetime, what deletes it, and why these are
+         local, non-networked entities -- no netId, no cross-client race).
+
+      2. RUNTIME-EDITABLE LOCATIONS. Config.K9EquipmentShop.locations
+         already covers "change in the config" (add/remove/reorder
+         entries freely, no code change -- unchanged by this pass). NEW
+         this pass: a database-backed pool of ADDITIONAL locations the
+         high command tablet can add to, move within, and remove from AT
+         RUNTIME, persisted across restarts (sql/migrations/0011_create_k9_equipment_shop_locations.sql
+         + its audit-table companion, following the exact
+         current-state-table + append-only-audit-table shape
+         server/runtimecontrol.lua's own migration 0007 already
+         established). SCOPE, stated plainly: these callbacks manage ONLY
+         the database-native pool (`db:<id>` keys) -- a config.lua-defined
+         location (`db:<n>` -- no, a config-sourced `cfg:<n>` key) is never
+         overridden or suppressed from here; it stays editable only by
+         hand-editing config.lua and restarting, exactly as before this
+         pass. This is a deliberate decision, not an oversight: a stored
+         override keyed to config.lua's own ARRAY INDEX would silently
+         apply to the wrong location the instant an operator reorders that
+         array -- which Config.K9EquipmentShop's own comment explicitly
+         invites doing freely -- so this file does not introduce that
+         hazard. The EFFECTIVE location list any player actually sees
+         (BuildEffectiveLocations below) is always a pure UNION of both
+         sources, never a conflict to resolve.
+
+      PRIVILEGE, per this task's own explicit instruction: every mutating
+      callback below (`equipmentShopAddLocation`/`MoveLocation`/
+      `RemoveLocation`) re-verifies `IsHighCommand(source)` SERVER-SIDE, at
+      the point of the action, every single call -- never a flag the NUI
+      sent, never a cached client value, never a client-supplied grade.
+      Mirrors server/runtimecontrol.lua's own CanManageRuntimeControl/
+      CanManageTabletTheme shape as an independent, self-contained copy
+      (this file owns no resource-global of runtimecontrol.lua's and calls
+      none -- see that file's own header: "THIS FILE exposes no
+      resource-global functions") -- same `IsHighCommand` first, then a
+      `HasPermission(citizenid, 'k9.equipmentshoplocations')` escape hatch
+      behind the usual `type(HasPermission) == 'function'` guard, which
+      today always returns false (that key is not yet in
+      Config.Permissions) so IsHighCommand alone gates this, exactly
+      matching this resource's established "the permission-grant escape
+      hatch activates automatically the moment that key is added, zero
+      code change here" convention.
+
+      Every mutation is followed by
+      `TriggerClientEvent('qbx_k9unit:client:equipmentShopLocationsUpdated', -1, locations)`
+      -- the FULL effective location table, same shape GetLocations
+      returns -- so an already-connected player's own shop-ped thread (and
+      any already-open tablet screen) updates live, without a reconnect or
+      a tablet reopen, mirroring server/runtimecontrol.lua's own
+      `themeUpdated` broadcast-on-change pattern exactly.
+
+      Callbacks (ox_lib lib.callback), all in THIS file:
+        'qbx_k9unit:server:equipmentShopGetLocations' (source) ->
+            { ok, locations: table<string, ShopLocation> } -- open to ANY
+            connected player (read-only, no privilege check), same
+            openness as server/runtimecontrol.lua's GetTheme -- a player
+            needs to know where a shop ped goes before they've done
+            anything to earn special trust, exactly like the OLD sphere
+            zone was reachable by anyone with no gate beyond the flag.
+        'qbx_k9unit:server:equipmentShopAddLocation' (source, location:
+            { x, y, z, heading?, model?, scenario?, label? }) ->
+            { ok, locationKey, locations } | { ok = false, reason }
+        'qbx_k9unit:server:equipmentShopMoveLocation' (source,
+            locationKey: string, updates: { x?, y?, z?, heading?, model?,
+            scenario?, label? }) -> { ok, locations } | { ok = false, reason }
+            -- only valid on a `db:` key; see SCOPE above.
+        'qbx_k9unit:server:equipmentShopRemoveLocation' (source,
+            locationKey: string) -> { ok, locations } | { ok = false, reason }
+            -- only valid on a `db:` key; see SCOPE above.
+      Every response is a structured `{ ok, reason, ... }` outcome table,
+      never player-facing prose -- matches server/runtimecontrol.lua's own
+      established "no toast from this file, the tablet renders its own
+      inline feedback from `reason`" precedent. No locale keys needed here
+      for the identical reason that file states none are needed for itself.
+
+      Client events (server->client), THIS file (server half) / the
+      companion client/equipmentshop.lua (client half):
+        'qbx_k9unit:client:equipmentShopLocationsUpdated' (locations: table)
+            [broadcast to -1 on every successful mutation above]
+
+    ======================================================================
+    EVENT/CALLBACK CONTRACT (the ORIGINAL, unchanged shop-registration
+    half of this file): no RegisterNetEvent/lib.callback of its own for
+    the actual shop transaction. Every player-facing interaction (opening
+    the shop, buying an item) already flows entirely through ox_inventory's
+    own existing, already-security-reviewed `ox_inventory:openShop`/
+    `ox_inventory:buyItem` callbacks. Adding a second, parallel purchase
+    path of this resource's own would be pure duplication with a second
+    place to get the authorization checks wrong. The RUNTIME SHOP LOCATIONS
+    callbacks immediately above are new and additional to this paragraph,
+    not a contradiction of it -- they manage WHERE a shop ped stands, never
+    what it sells or what it costs.
 
     ======================================================================
     CONFIG THIS FILE NEEDS (reported, not added here -- config.lua has a
@@ -132,16 +231,32 @@
       Config.Features.K9EquipmentShop : boolean
       Config.K9EquipmentShop : {
           shopType     : string  -- ox_inventory's own shop-type key
-          label        : string  -- shown in the ox_target prompt and the ox_inventory UI header
+          label        : string  -- shown in the ox_target prompt and the ox_inventory UI header;
+                          -- also this shop's DEFAULT per-location ox_target label (see below)
           currencyItem : string  -- an ox_inventory item name, e.g. 'money' -- NOT a banking resource
           items        : { { name: string, price: number }, ... }
-          locations    : { vector3, ... } -- NOT read by THIS file at all (see point 2 above for why
-                          -- this shop is deliberately registered without a `locations` field on the
-                          -- ox_inventory payload itself) -- consumed only by client/equipmentshop.lua
-                          -- to place its own ox_target interaction point(s). Listed here anyway
-                          -- because it lives in the same config table and a server owner adding one
-                          -- without the other would silently get a shop that exists but can never be
-                          -- opened (server-side warning has no way to detect a client-side gap).
+          pedModel     : string  -- DEFAULT ped model for every shop location (NEW this pass) -- any
+                          -- streamed ped, never validated against Config.Peds -- a shop attendant is
+                          -- not a K9
+          pedHeading   : number  -- DEFAULT heading (degrees) for every shop location (NEW this pass)
+          pedScenario  : string|false -- DEFAULT idle scenario for every shop location, or false for
+                          -- no scenario (NEW this pass) -- a REAL, VERIFIED scenario name, e.g.
+                          -- 'WORLD_DOG_SITTING_SHEPHERD' (client/movement.lua's own K9Sit doc comment
+                          -- has the verification this reuses)
+          pedModelLoadTimeoutMs : number -- NEW this pass, same purpose/precedent as
+                          -- Config.K9Appearance.modelLoadTimeoutMs
+          locations    : { { x, y, z, model?, heading?, scenario?, label? }, ... } -- NOT read by
+                          -- THIS file's RegisterShop call at all (see point 2 above for why this shop
+                          -- is deliberately registered without a `locations` field on the ox_inventory
+                          -- payload itself) -- consumed by BuildEffectiveLocations below (for the
+                          -- runtime-locations callbacks' read side) and by client/equipmentshop.lua (to
+                          -- actually place a ped and an ox_target interaction point per location).
+                          -- Each entry may optionally override model/heading/scenario/label for that
+                          -- ONE location only, falling back to the four shop-wide defaults above when
+                          -- absent (NEW this pass -- previously plain { x, y, z } only). Listed here
+                          -- anyway because it lives in the same config table and a server owner adding
+                          -- one without the other would silently get a shop that exists but can never
+                          -- be opened (server-side warning has no way to detect a client-side gap).
       }
     All fields are read defensively throughout both files (type-checked,
     never assumed) so a server that has not yet added them sees a clean,

@@ -70,62 +70,54 @@
       tgiann-inventory  UNCONFIRMED -- same as above.
 
     ======================================================================
-    THE ABSTRACT `RegisterHook` VOCABULARY -- READ THIS BEFORE ADDING A
-    THIRD EVENT OR WIRING A NEW CALLER.
+    THE `RegisterHook` VOCABULARY -- READ THIS BEFORE ADDING A THIRD EVENT
+    OR WIRING A NEW CALLER.
 
-    The contract only names the METHOD `RegisterHook`; it does not name what
-    event strings/payload shapes it carries. ox_inventory's own real
-    `registerHook` is fully generic (any event name it fires internally --
-    `swapItems`, `buyItem`, `useItem`, `createItem`, ...); no other
-    candidate's hook system is that general (qb-inventory's `AddHook` is
-    closed over a fixed enum of 8 named hook TYPES; most candidates have no
-    hook system verified to exist at all). A compat method that just passed
-    an ox_inventory-shaped event NAME straight through would make every
-    other adapter's RegisterHook uncallable in practice, since a caller
-    would have to already know ox_inventory's internal vocabulary -- exactly
-    the assumption this whole layer exists to remove.
+    shared/compat/README.md (the cross-adapter contract doc, owned by
+    shared/compat/core.lua's author) is explicit that parameter/payload
+    shapes are NOT defined by core.lua -- "match the calling convention of
+    the reference resource this pack was built against for that system
+    (ox_inventory for inventory ...), since that's what every OTHER adapter
+    for the same system needs to stay interchangeable with." An EARLIER
+    revision of this file invented its own small abstract vocabulary
+    ('itemEnteredInventory'/'itemDropped') instead -- reconciled here, after
+    that README was read in full, to follow the stated convention instead:
+    `eventName` is ox_inventory's OWN real event-name string (whatever its
+    real `registerHook` accepts -- 'swapItems', 'buyItem', 'useItem',
+    'createItem', ...), and the payload handed to `callback` matches
+    ox_inventory's OWN real 'swapItems' field names (`source`,
+    `fromInventory`, `fromSlot`, `toInventory`, `toType`), not a
+    reinvented shape. This makes the ox_inventory adapter's own RegisterHook
+    a PURE, fully generic pass-through (see BuildOxInventoryServer below --
+    genuinely simpler AND more faithful than the abstracted version), and
+    makes every OTHER adapter responsible for translating its own real
+    hook mechanism INTO that same vocabulary, on a best-effort,
+    only-what's-confirmed basis.
 
-    So this file defines its OWN small, closed vocabulary -- the smallest
-    one that actually covers this resource's two REAL current consumers of
-    ox_inventory's `registerHook('swapItems', ...)` (server/inventory.lua's
-    Config.K9Inventory.allowedItems veto, and server/tracking.lua's
-    ScentTracking drop-source log) -- and maps each event, per adapter, onto
-    whatever real mechanism that backend actually has:
+    THE ONLY EVENT NAME THIS FILE TRANSLATES FOR A NON-ox_inventory BACKEND
+    is `'swapItems'` -- the one this resource's two REAL current consumers
+    (server/inventory.lua's Config.K9Inventory.allowedItems veto,
+    server/tracking.lua's ScentTracking drop-source log) actually need.
+    Passing any OTHER event name to a non-ox_inventory adapter's
+    RegisterHook returns `false` immediately, without probing or
+    registering anything -- there is no confirmed mapping for
+    'buyItem'/'useItem'/'createItem'/etc. on any other backend, and
+    guessing one is exactly what this task's research discipline forbids.
 
-      'itemEnteredInventory' -- fires just before an item is committed into
-        a named inventory (never for a same-inventory slot-to-slot
-        reorganize). Callback signature: `function(payload) -> boolean|nil`
-        where `payload = { toInventoryId, fromInventoryId, itemName,
-        itemCount, source }` (fromInventoryId/source may be nil where the
-        backend does not expose them). Returning the LITERAL boolean
-        `false` vetoes the transfer (a real pre-mutation reject, verified
-        per adapter below); any other return value allows it. This is the
-        ONLY event either currently-shipped caller needs a veto for --
-        Config.K9Inventory.allowedItems.
-
-      'itemDropped' -- fires after an item is dropped to the ground.
-        OBSERVER ONLY: a caller's return value is never consulted (matches
-        server/tracking.lua's own existing 'swapItems' usage, which only
-        ever logs and never rejects a drop). Callback signature:
-        `function(payload)` where `payload = { source, itemName, itemCount,
-        dropId }` (itemName/itemCount/dropId may be nil where the backend
-        does not confirm them for this event).
-
-    Any OTHER event name passed to RegisterHook is a caller bug, not a
-    missing backend feature -- every adapter's RegisterHook returns `false`
-    immediately for an unrecognized event, without probing or registering
-    anything, so a typo surfaces as an always-false return rather than a
-    silent no-op that looks identical to "this backend cannot do it".
-
-    NOT EVERY BACKEND CAN DO BOTH. Per this file's own instruction (do not
-    fake a missing capability): qb-inventory's `RegisterHook('itemDropped',
-    ...)` is a confirmed, disclosed NO-OP (see its own section --
-    `Events.ItemDropped` is declared in qb-inventory's own hook-type enum
-    but no confirmed call site in its complete server-side source ever
-    fires it) -- ScentTracking's scent-drop detection degrades to silently
-    finding nothing on qb-inventory, never to a crash or a fake success.
-    'itemEnteredInventory' (K9Inventory.allowedItems) DOES work for real on
-    both confirmed adapters.
+    For 'swapItems' specifically, on qb-inventory (the one other CONFIRMED
+    adapter): only the "an item is being committed INTO a named
+    inventory, reject with the literal false to veto" half of
+    ox_inventory's real 'swapItems' semantics is reproduced, via the real,
+    confirmed `AddHook('ItemAdded', ...)` veto point -- covers
+    Config.K9Inventory.allowedItems for real. The "item dropped to the
+    ground" half (`payload.toType == 'drop'`, ScentTracking's actual usage)
+    is a CONFIRMED, DISCLOSED NO-OP on qb-inventory (see its own section):
+    `Events.ItemDropped` is declared in its own hook-type enum but no
+    confirmed call site in its complete server-side source ever fires it,
+    and there is no equivalent signal inside `ItemAdded`/`ItemRemoved`
+    either. A caller registering for 'swapItems' on a qb-inventory backend
+    gets the veto behavior for real and will simply never see a
+    `payload.toType == 'drop'` event -- disclosed, never faked.
 
     ======================================================================
     SECURITY NOTE -- READ BEFORE WIRING RegisterStash's `groups` ARGUMENT
@@ -439,8 +431,17 @@ local function BuildOxInventoryServer()
             return callOk
         end,
 
-        --- See this file's header "THE ABSTRACT RegisterHook VOCABULARY"
-        --- section in full before changing anything below.
+        --- See this file's header "THE RegisterHook VOCABULARY" section in
+        --- full before changing anything below. Per shared/compat/
+        --- README.md's own stated convention ("match the calling
+        --- convention of the reference resource"), THIS adapter's
+        --- RegisterHook is a PURE, fully generic pass-through onto
+        --- ox_inventory's own real `registerHook(event, callback)` -- no
+        --- restriction to a fixed event list, no payload translation: since
+        --- ox_inventory IS the reference resource for this system, `eventName`
+        --- and the `payload` handed to `callback` are exactly whatever
+        --- ox_inventory's own real event fires ('swapItems', 'buyItem',
+        --- 'useItem', 'createItem', ...), unmodified.
         ---
         --- HONEST CONFIDENCE NOTE on the underlying `registerHook` export
         --- itself (disclosed here rather than silently assumed airtight):
@@ -469,66 +470,24 @@ local function BuildOxInventoryServer()
         --- file having to resolve the discrepancy itself. Flagged for
         --- whoever next has a live ox_inventory install handy to confirm.
         ---
-        --- @param eventName 'itemEnteredInventory'|'itemDropped'
+        --- @param eventName string -- any real ox_inventory registerHook event name, e.g. 'swapItems'
         --- @param callback fun(payload: table): boolean|nil
         --- @return boolean success
         RegisterHook = function(eventName, callback)
+            if type(eventName) ~= 'string' or eventName == '' then return false end
             if type(callback) ~= 'function' then return false end
 
-            if eventName == 'itemEnteredInventory' then
-                local callOk = SafeExportCall('ox_inventory', 'registerHook', 'swapItems', function(payload)
-                    -- Same-stash reorganize is not an incoming transfer --
-                    -- never re-filtered (confirmed real 'swapItems' shape,
-                    -- modules/inventory/server.lua's four TriggerEventHooks
-                    -- call sites, all traced this session).
-                    if type(payload) ~= 'table' then return end
-                    if payload.toInventory == payload.fromInventory then return end
-                    if type(payload.toInventory) ~= 'string' then return end
-                    local item = payload.fromSlot
-                    if type(item) ~= 'table' or type(item.name) ~= 'string' then return end
-
-                    local vetoOk, veto = pcall(callback, {
-                        toInventoryId = payload.toInventory,
-                        fromInventoryId = type(payload.fromInventory) == 'string' and payload.fromInventory or nil,
-                        itemName = item.name,
-                        itemCount = item.count,
-                        source = payload.source,
-                    })
-                    if vetoOk and veto == false then return false end
-                end)
-                if not callOk then
-                    print('[qbx_k9unit] shared/compat/inventory.lua: ox_inventory RegisterHook(\'itemEnteredInventory\') ' ..
-                        'failed -- registerHook threw (see this method\'s own doc comment for the confirmed-vs-live ' ..
-                        'discrepancy this may indicate). The allowedItems-style veto this backs is NOT enforced this session.')
-                end
-                return callOk
+            local callOk = SafeExportCall('ox_inventory', 'registerHook', eventName, function(payload)
+                local vetoOk, veto = pcall(callback, payload)
+                if vetoOk and veto == false then return false end
+            end)
+            if not callOk then
+                print(('[qbx_k9unit] shared/compat/inventory.lua: ox_inventory RegisterHook(%q) failed -- ' ..
+                    'registerHook threw (see this method\'s own doc comment for the confirmed-vs-live discrepancy ' ..
+                    'this may indicate). Whatever this hook was meant to enforce/observe is NOT active this session.')
+                    :format(eventName))
             end
-
-            if eventName == 'itemDropped' then
-                -- Confirmed real payload for a drop (modules/inventory/
-                -- server.lua's `dropItem`, traced this session):
-                -- `{ source, fromInventory, fromSlot (full item table),
-                -- toInventory = 'newdrop', toType = 'drop', dropId, ... }`.
-                local callOk = SafeExportCall('ox_inventory', 'registerHook', 'swapItems', function(payload)
-                    if type(payload) ~= 'table' or payload.toType ~= 'drop' then return end
-                    local item = payload.fromSlot
-                    pcall(callback, {
-                        source = payload.source,
-                        itemName = type(item) == 'table' and item.name or nil,
-                        itemCount = type(item) == 'table' and item.count or nil,
-                        dropId = payload.dropId,
-                    })
-                    -- OBSERVER ONLY -- never veto a drop, matching
-                    -- server/tracking.lua's own existing usage exactly.
-                end)
-                if not callOk then
-                    print('[qbx_k9unit] shared/compat/inventory.lua: ox_inventory RegisterHook(\'itemDropped\') failed -- ' ..
-                        'registerHook threw. Drop-source detection (e.g. ScentTracking) will see nothing this session.')
-                end
-                return callOk
-            end
-
-            return false -- unrecognized event name -- a caller bug, never silently treated as "nothing to do"
+            return callOk
         end,
     }
 end
@@ -732,74 +691,102 @@ local function BuildQbInventoryServer()
             return callOk
         end,
 
-        --- See this file's header "THE ABSTRACT RegisterHook VOCABULARY".
-        --- 'itemEnteredInventory' maps onto the CONFIRMED, real
+        --- See this file's header "THE RegisterHook VOCABULARY" section.
+        --- Per shared/compat/README.md's "match the reference resource's
+        --- calling convention" rule, `eventName` is ox_inventory's OWN real
+        --- vocabulary -- but qb-inventory only has a confirmed translation
+        --- for ONE of those names: `'swapItems'`, and only the
+        --- "item entering a named inventory, veto with the literal false"
+        --- HALF of what ox_inventory's real 'swapItems' can express. Any
+        --- other `eventName` (including one this file simply has no
+        --- confirmed qb-inventory mapping for) returns `false` immediately,
+        --- never a guess.
+        ---
+        --- 'swapItems' maps onto the CONFIRMED, real
         --- `AddHook('ItemAdded', callback)` veto point
         --- (server/functions.lua's `AddItem`: `local mutatedInfo =
         --- TriggerHook('ItemAdded', pendingItem.type, hookData); if
         --- mutatedInfo == false then return false end` -- traced end to
         --- end this session, including `buildItemAddedData`'s confirmed
         --- `{ toId, toInventory, toType, toSlot, item, amount, reason,
-        --- resource }` payload shape, server/hooks.lua).
+        --- resource }` payload shape, server/hooks.lua). The payload handed
+        --- to `callback` is translated onto ox_inventory's OWN real
+        --- 'swapItems' field names (`fromInventory`, `fromSlot`,
+        --- `toInventory`, `toType`, `source`) -- NOT this backend's own
+        --- `hookData` field names, which differ in both naming AND type
+        --- (qb-inventory's own `hookData.toInventory` is the RESOLVED
+        --- inventory DATA table, not an id string; ox_inventory's
+        --- `toInventory` is always the id STRING -- `hookData.toId` is the
+        --- field that actually matches ox_inventory's `toInventory`
+        --- semantic, and is what this wrapper uses). Confirmed-absent from
+        --- qb-inventory's ItemAdded payload, and therefore always `nil`
+        --- here: `fromInventory` (no source-inventory identifier exists in
+        --- this event at all) and `source` (no player id is threaded
+        --- through `buildItemAddedData`). `toType` is forwarded
+        --- best-effort from `hookData.toType` (qb-inventory's own
+        --- `GetInventoryType` result) but its exact value vocabulary was
+        --- NOT cross-checked against ox_inventory's own `toType` strings
+        --- this session -- do not branch on a specific `toType` STRING
+        --- VALUE for this backend without confirming it first; branching on
+        --- `toInventory`'s id (as Config.K9Inventory.allowedItems' own
+        --- `'k9inv-'` prefix check already does) does not depend on this.
         ---
-        --- 'itemDropped' is a CONFIRMED, DISCLOSED NO-OP for this backend:
+        --- DISCLOSED, UNCONFIRMED EDGE CASE: ox_inventory's real
+        --- 'swapItems' never fires for a same-stash slot-to-slot reorganize
+        --- in a way this file can detect on qb-inventory (there is no
+        --- combined from+to payload the way ox_inventory's single event
+        --- carries both sides) -- `AddItem`'s own `isInternalMove` parameter
+        --- can suppress the `ItemAdded` hook entirely for an internal
+        --- transfer, but this session did not trace every call site that
+        --- passes it, so whether a same-stash reorganize on qb-inventory
+        --- ever reaches this wrapper at all was not fully confirmed either
+        --- way. Not a guess this file's callback logic makes (there is
+        --- nothing here that COULD detect "same stash" from an `ItemAdded`
+        --- payload alone -- no `fromInventory` exists to compare against);
+        --- flagged for whoever next verifies qb-inventory live.
+        ---
+        --- 'swapItems' with `payload.toType == 'drop'` (ScentTracking's
+        --- real usage) is a CONFIRMED, DISCLOSED NO-OP for this backend:
         --- `Events.ItemDropped = { hooks = {}, listeners = {} }` is
         --- declared in server/main.lua's own hook-type enum, but this
         --- session's complete read of qb-inventory's server-side source
         --- (server/main.lua, server/functions.lua, server/commands.lua,
         --- server/hooks.lua -- every server_scripts entry its own
         --- fxmanifest.lua declares) found no call site anywhere that ever
-        --- fires `TriggerHook('ItemDropped', ...)` -- drop creation
-        --- (server/main.lua's `Drops[newDropId] = {...}` construction) has
-        --- no hook call beside it at all. Registering against a
-        --- confirmed-dead hook type would be indistinguishable, from the
-        --- caller's side, from a working registration that simply never
-        --- fires -- exactly the silent no-op this task's own instructions
-        --- name as the single most expensive recurring bug class. This
-        --- method refuses to even call `AddHook` for 'itemDropped': it
-        --- warns once and returns `false` immediately, so a caller sees an
-        --- honest "this did not register" rather than false confidence.
-        --- @param eventName 'itemEnteredInventory'|'itemDropped'
+        --- fires `TriggerHook('ItemDropped', ...)`, and `ItemAdded` is
+        --- never fired for a ground-drop either (dropping is its own
+        --- `Drops[...]` table construction with no hook call beside it at
+        --- all). A caller registering for 'swapItems' on this backend gets
+        --- the veto behavior for real and will simply never observe a drop
+        --- -- disclosed here, never faked as a silent registration success.
+        --- @param eventName string -- only 'swapItems' has a confirmed translation on this backend
         --- @param callback fun(payload: table): boolean|nil
         --- @return boolean success
         RegisterHook = function(eventName, callback)
             if type(callback) ~= 'function' then return false end
+            if eventName ~= 'swapItems' then return false end
 
-            if eventName == 'itemEnteredInventory' then
-                local callOk, hookIdx = SafeExportCall('qb-inventory', 'AddHook', 'ItemAdded', function(_itemType, hookData)
-                    if type(hookData) ~= 'table' then return end
-                    local item = hookData.item
-                    if type(item) ~= 'table' or type(item.name) ~= 'string' then return end
-                    if hookData.toId == nil then return end
+            local callOk, hookIdx = SafeExportCall('qb-inventory', 'AddHook', 'ItemAdded', function(_itemType, hookData)
+                if type(hookData) ~= 'table' then return end
+                local item = hookData.item
+                if type(item) ~= 'table' or type(item.name) ~= 'string' then return end
+                if hookData.toId == nil then return end
 
-                    local vetoOk, veto = pcall(callback, {
-                        toInventoryId = tostring(hookData.toId),
-                        fromInventoryId = nil, -- qb-inventory's ItemAdded payload carries no source-inventory identifier
-                        itemName = item.name,
-                        itemCount = hookData.amount,
-                        source = nil,
-                    })
-                    if vetoOk and veto == false then return false end
-                end)
-                if not callOk or hookIdx == nil then
-                    print('[qbx_k9unit] shared/compat/inventory.lua: qb-inventory RegisterHook(\'itemEnteredInventory\') ' ..
-                        'failed -- AddHook did not return a hook index. The allowedItems-style veto this backs is NOT ' ..
-                        'enforced this session.')
-                    return false
-                end
-                return true
-            end
-
-            if eventName == 'itemDropped' then
-                print('[qbx_k9unit] shared/compat/inventory.lua: qb-inventory RegisterHook(\'itemDropped\') is a ' ..
-                    "confirmed no-op for this backend -- qb-inventory's own Events.ItemDropped hook type is declared " ..
-                    'but never fired anywhere in its real server-side source (verified this session). Drop-source ' ..
-                    'detection (e.g. ScentTracking) will find nothing on a qb-inventory server; this is disclosed, ' ..
-                    'not silently broken.')
+                local vetoOk, veto = pcall(callback, {
+                    toInventory = tostring(hookData.toId),
+                    fromInventory = nil, -- confirmed absent from this event, see doc comment above
+                    fromSlot = { name = item.name, count = hookData.amount },
+                    toType = type(hookData.toType) == 'string' and hookData.toType or nil, -- best-effort, see doc comment above
+                    source = nil, -- confirmed absent from this event, see doc comment above
+                })
+                if vetoOk and veto == false then return false end
+            end)
+            if not callOk or hookIdx == nil then
+                print("[qbx_k9unit] shared/compat/inventory.lua: qb-inventory RegisterHook('swapItems') failed -- " ..
+                    'AddHook did not return a hook index. The allowedItems-style veto this backs is NOT enforced this session.')
                 return false
             end
-
-            return false
+            return true
         end,
     }
 end
