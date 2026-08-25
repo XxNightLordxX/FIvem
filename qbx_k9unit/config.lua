@@ -824,7 +824,18 @@ Config.DeployableKennel = {
     -- `fallbackPropModel` below if this model hash never loads within
     -- REQUEST_MODEL_TIMEOUT_MS, rather than silently placing nothing or
     -- erroring the whole feature out.
-    propModel = 'prop_doghouse_01',
+    -- REFUTED AND REPLACED 2026-08-25. `prop_doghouse_01` was carried on a
+    -- single unverified source and does NOT appear in a 5,171-entry live
+    -- object database that has an in-engine rendered screenshot per entry --
+    -- its screenshot URL 404s. The two places the old name did appear both
+    -- trace to author assumptions, and the "second" source turned out to be
+    -- the same author reusing his own earlier config value, so it was never
+    -- independent corroboration at all.
+    -- `prop_dog_cage_01` (hash 379820688) IS in that database with a real
+    -- rendered screenshot. Not exhaustive proof the old name is fake, but it
+    -- is checkable evidence that affirmatively did not contain it while
+    -- containing a real themed substitute.
+    propModel = 'prop_dog_cage_01',
 
     -- Deliberately NOT a second guess at a "kennel-shaped" model name — a
     -- second unverified guess would carry the exact same single-source

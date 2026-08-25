@@ -63,7 +63,16 @@
        id" standard (server/main.lua). Here the id names an entity the
        client was JUST instructed to create, but a modified client could
        still report an arbitrary pre-existing networked entity's id
-       instead of a genuine new kennel.
+       instead of a genuine new kennel. ALSO rejects a netId already
+       recorded against a DIFFERENT citizenid's Kennels entry (closes a
+       same-tolerance-radius ownership-hijack path found this pass — see
+       that check's own comment at its call site), and on the
+       too-far-from-spawn rejection specifically (only reachable once the
+       model+type checks above it already passed) cleans up the real,
+       already-verified kennel entity itself rather than leaving it
+       orphaned in the world forever (see that branch's own comment for
+       why the wrong-model rejection branch deliberately does NOT do the
+       same).
     3. 'qbx_k9unit:server:cancelKennelPlacement' () [THIS FILE]
        Client reports its own placement attempt failed (model never
        loaded, PlaceObjectOnGroundProperly returned false) so the pending
@@ -276,7 +285,61 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
     if ped == 0 then return end -- defensive: src disconnected between the event firing and this line
 
     local pedCoords = GetEntityCoords(ped)
-    local forward = GetEntityForwardVector(ped)
+
+    -- NOT GetEntityForwardVector(ped) — CONFIRMED BROKEN SERVER-SIDE, not just
+    -- "probably client-only" per the native audit that flagged this. Verified
+    -- this pass directly against the FXServer C++ source
+    -- (citizenfx/fivem, code/components/citizen-server-impl/src/state/
+    -- ServerGameState_Scripting.cpp): that file is the exhaustive list of
+    -- GET_ENTITY_* natives FXServer registers a real server-side handler for
+    -- (GET_ENTITY_COORDS, GET_ENTITY_HEADING, GET_ENTITY_MODEL, etc., all
+    -- backed by the synced-entity sync tree) — GET_ENTITY_FORWARD_VECTOR is
+    -- NOT among them, and does not appear anywhere else in that component or
+    -- in ext/native-decls. Traced the actual dispatch path in
+    -- citizen-scripting-core/src/ScriptInvoker.cpp: on the server build
+    -- (IS_FXSERVER), a native with no registered fx handler resolves to
+    -- `s_invalidNativeHandler`, a no-op lambda (`g_StrictTypeInfo` is a
+    -- hardcoded `false` constant in that same file, so it never throws) —
+    -- and the result buffer it's called with (`ScriptNativeContext`'s
+    -- `results[4]`) is zero-initialized and never written. Net effect:
+    -- calling this native server-side does not error, it silently returns
+    -- vector3(0, 0, 0) every time, unconditionally. With that confirmed,
+    -- `forward.x`/`forward.y` below would ALWAYS have been exactly 0 — not
+    -- "occasionally wrong orientation" but a total no-op on
+    -- placementForwardOffsetMeters, meaning every kennel would have spawned
+    -- exactly on top of the placing handler's own feet, not in front of them.
+    -- (server/fetch.lua's HandleThrowFetchItem has the identical
+    -- GetEntityForwardVector(ped) call at its own line 345, with the same
+    -- consequence for both its spawn offset AND its throw force — flagged to
+    -- the file's owner separately since it's outside this file's ownership.)
+    --
+    -- Substitute: GetEntityHeading(ped) + the standard heading->direction
+    -- trig conversion. GetEntityHeading IS in that same server-registered
+    -- native list (GET_ENTITY_HEADING, ServerGameState_Scripting.cpp), and
+    -- for a Ped it reads `entity->syncTree->GetPedOrientation()->
+    -- currentHeading` — the identical sync-tree mechanism (same file, same
+    -- pattern) that GET_ENTITY_COORDS itself reads position from, i.e. no
+    -- less reliable server-side than the `pedCoords` line directly above,
+    -- which this handler already trusts. The audit that flagged
+    -- GetEntityForwardVector declined to substitute this, citing "reported
+    -- reliability issues under some OneSync configs" for GetEntityHeading —
+    -- that claim was NOT independently verified this pass (no live OneSync
+    -- server was reachable to reproduce it against), so it is not being
+    -- asserted as false. It is noted only that nothing in the FXServer
+    -- source inspected this pass structurally distinguishes heading's
+    -- reliability from coords', and a command a player triggers after
+    -- already being connected and moving (this feature requires HasK9Access
+    -- + being in-world) is well past the one theoretical edge case found
+    -- (a ped whose orientation sync node has never yet populated, which
+    -- would read back as heading 0 — same zero-conf failure class as coords
+    -- would have for a brand-new, not-yet-synced entity, not unique to
+    -- heading). Confidence: HIGH that this is strictly better than the
+    -- previous native (which was 100% broken, always 0,0,0); MEDIUM on
+    -- heading's real-world precision under heavy network jitter, not
+    -- independently re-measured in this pass.
+    local heading = GetEntityHeading(ped)
+    local headingRad = math.rad(heading)
+    local forward = { x = -math.sin(headingRad), y = math.cos(headingRad) }
     local offset = Config.DeployableKennel.placementForwardOffsetMeters
 
     local spawnX = pedCoords.x + forward.x * offset
@@ -356,6 +419,19 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     -- kennel prop models, not an arbitrary pre-existing networked object a
     -- modified client could report instead of a genuine new kennel.
     if not KennelModelHashes[GetEntityModel(entity)] then
+        -- DELIBERATELY NOT deleting `entity` here, even though this file's
+        -- other rejection branches DO clean up their own resolved entity
+        -- (see the distance-check branch below, added this pass). This is
+        -- the one branch where `entity` might NOT be the kennel the client
+        -- actually created at all — it's exactly the "modified client
+        -- reports an arbitrary pre-existing networked entity's id instead"
+        -- case this check exists to catch (see this file's header EVENT/
+        -- CALLBACK CONTRACT item 2). Calling DeleteEntity on it here would
+        -- turn this model check from a rejection into the very
+        -- arbitrary-entity-deletion primitive it's meant to prevent —
+        -- reintroducing the exact bug class this handler's whole
+        -- ResolveNetworkEntity/KennelModelHashes design was hardened
+        -- against. Fail closed: refuse to track it, touch nothing else.
         NotifyPlayer(src, 'Kennel placement failed — unexpected object model.', 'error')
         return
     end
@@ -366,8 +442,58 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     local dz = entityCoords.z - pending.coords.z
     local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
     if dist > KENNEL_CONFIRM_DISTANCE_TOLERANCE then
+        -- CLEANUP FIX, ADDED THIS PASS: `entity` has already passed the
+        -- object-type check (ResolveNetworkEntity's expectedEntityType = 3)
+        -- AND the KennelModelHashes model check above — by this point it is
+        -- credibly the genuine kennel prop THIS client was just instructed
+        -- to create (server/kennel.lua's own spawn point), just placed
+        -- somewhere the ground-snap moved too far from it. Previously this
+        -- branch only notified and returned, leaving that real, frozen,
+        -- now-permanently-untracked object sitting in the world forever —
+        -- nothing else in this file would ever ResolveNetworkEntity/
+        -- DeleteEntity it (it never enters `Kennels`, so
+        -- RemoveKennelForCitizenid, the playerDropped handler, and the
+        -- onResourceStop sweep all only ever loop over `Kennels`' actual
+        -- entries) and ox_target's "Pick Up Kennel" option would keep
+        -- showing for it to any nearby player while requestPickupKennel
+        -- rejects everyone ("you do not own that kennel") since no
+        -- citizenid's registry entry ever points at it — a real, if
+        -- unintentional, permanent-litter case for the exact "every placed
+        -- kennel must always be removable" requirement this feature is
+        -- built to. Clean it up the same way RemoveKennelForCitizenid does:
+        -- a direct server-side attempt plus the broadcast backstop for
+        -- whichever connected client currently holds real network
+        -- ownership, in case the direct attempt is a no-op on this FXServer
+        -- build (see RemoveKennelForCitizenid's own CLEANUP CONFIDENCE NOTE
+        -- in this file's header for why both).
+        DeleteEntity(entity)
+        TriggerClientEvent('qbx_k9unit:client:removeKennel', -1, netId)
         NotifyPlayer(src, 'Kennel placement failed — placed too far from the assigned spot.', 'error')
         return
+    end
+
+    -- DEFENSE-IN-DEPTH, ADDED THIS PASS: reject if this exact netId is
+    -- already recorded as a DIFFERENT citizenid's active kennel. Without
+    -- this, a modified client could exploit the distance tolerance above
+    -- (reachable whenever two certified handlers place within
+    -- KENNEL_CONFIRM_DISTANCE_TOLERANCE of each other, e.g. side by side at
+    -- the same station) to report someone else's already-confirmed kennel's
+    -- netId as its own new placement. Kennels[citizenid] would then point at
+    -- an entity a DIFFERENT citizenid's entry ALSO still points at — the
+    -- first of the two to pick theirs up (or disconnect) DeleteEntity's the
+    -- shared entity out from under the other, whose own registry slot is
+    -- left referencing a netId that no longer resolves to anything.
+    -- RemoveKennelForCitizenid's ResolveNetworkEntity call on that stale
+    -- netId then simply finds nothing and returns without ever clearing
+    -- their Kennels slot — an unbounded trap (this feature's own explicit
+    -- "always removable by its owner" requirement): they can never place a
+    -- new kennel again ("you already have an active kennel deployed") and
+    -- have nothing left in the world to pick up to clear it.
+    for otherCitizenid, otherKennel in pairs(Kennels) do
+        if otherKennel.netId == netId and otherCitizenid ~= citizenid then
+            NotifyPlayer(src, 'Kennel placement failed — that object is already claimed.', 'error')
+            return
+        end
     end
 
     Kennels[citizenid] = {
