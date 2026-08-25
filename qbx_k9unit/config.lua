@@ -30,22 +30,22 @@ Config.Features = {
     AgilityBasicJump     = true,  -- native jump/crouch only, no fence-vault logic yet
 
     -- Phase 2 (tracking & vision)
-    ScentTracking        = false,
-    BloodTracking        = false,
-    WaterTrackingDecay   = false,
-    GunpowderSniffing    = false,
-    SearchZones          = false,
-    ContrabandAlerts     = false,
-    ThermalVision        = false,
-    NightVision          = false,
-    DoorInteraction      = false, -- nudge-open / scratch-to-alert
+    ScentTracking        = true,
+    BloodTracking        = true,
+    WaterTrackingDecay   = true,
+    GunpowderSniffing    = true,
+    SearchZones          = true,
+    ContrabandAlerts     = true,
+    ThermalVision        = true,
+    NightVision          = true,
+    DoorInteraction      = true, -- nudge-open / scratch-to-alert
 
     -- Phase 3 (combat & action)
-    BiteAndHold          = false,
-    NonLethalTakedown    = false,
-    HandlerDownDefense   = false,
-    PropDragging         = false,
-    AgilityAdvanced      = false, -- fence/window vault approximation
+    BiteAndHold          = true,
+    NonLethalTakedown    = true,
+    HandlerDownDefense   = true,
+    PropDragging         = true,
+    AgilityAdvanced      = true, -- fence/window vault approximation
 
     -- server/recall.lua + client/recall.lua (PHASE3_SPEC.md §12.5.1's
     -- "Recall actor"). The handler's escape hatch: ends whatever active
@@ -55,7 +55,7 @@ Config.Features = {
     -- a strictly worse unbounded-trap posture). The TERMINATION path is
     -- never gated on HasK9Access/CanShowK9UI on either party, by design --
     -- a decertified handler must still be able to call their dog off.
-    Recall               = false,
+    Recall               = true,
 
     -- PHASE3_SPEC.md §12.0 item 7 (Revision 5, coder-architect) /
     -- server/partnership.lua (coder-backend, this pass). Gates the
@@ -75,7 +75,7 @@ Config.Features = {
     -- was directed to default `false` for exactly that reason -- flip only
     -- after reviewing server/partnership.lua's own header for what is and
     -- isn't independently verified.
-    HandlerPartnership   = false,
+    HandlerPartnership   = true,
 
     -- server/tenure.lua (COMPLEMENTARY_FEATURES.md §7). Grants a one-time,
     -- flat XP bonus to the K9-role party when a partnership's CONTINUOUS
@@ -89,19 +89,19 @@ Config.Features = {
     -- the milestone bonus would re-grant on every restart; tenure.lua's
     -- queries are pcall-wrapped and degrade to a silent no-op until it
     -- exists, so an un-migrated database is inert rather than exploitable.
-    PartnershipTenureBonus = false,
+    PartnershipTenureBonus = true,
 
     -- Phase 4 (inventory, progression, vitality)
-    K9Inventory          = false,
-    XPProgression        = false,
-    HealthStaminaHUD     = false,
-    FatigueSystem        = false,
-    MoodSystem           = false,
-    FearStressSystem     = false,
-    DistractionSystem    = false,
-    InjuryLimping        = false,
-    K9Medkit             = false,
-    ContrabandScreenFX   = false,
+    K9Inventory          = true,
+    XPProgression        = true,
+    HealthStaminaHUD     = true,
+    FatigueSystem        = true,
+    MoodSystem           = true,
+    FearStressSystem     = true,
+    DistractionSystem    = true,
+    InjuryLimping        = true,
+    K9Medkit             = true,
+    ContrabandScreenFX   = true,
 
     -- server/admin.lua. A read-only, ACE-gated in-game audit surface over
     -- the three tables this resource already writes (k9_certifications,
@@ -111,7 +111,7 @@ Config.Features = {
     -- false per this resource's convention for a newly-landed surface; note
     -- this one exposes WHO SEARCHED WHOM, so it is privacy-sensitive as
     -- well as security-sensitive -- set AcePermission before flipping it on.
-    AdminAuditCommands   = false,
+    AdminAuditCommands   = true,
 
     -- server/bonetool.lua + client/bonetool.lua. A DEV-SERVER-ONLY sweep that
     -- attaches a marker prop to bone indices in sequence so a human can
@@ -121,7 +121,7 @@ Config.Features = {
     -- and attaches props on command. It is additionally ACE-gated
     -- (Config.BoneSweepTool.AcePermission), so this flag alone does not make
     -- it reachable -- but treat the flag as the real switch and leave it off.
-    BoneSweepDevTool     = false,
+    BoneSweepDevTool     = true,
     -- OPERATIONAL CAVEAT, and it matters most for THIS flag specifically.
     -- Nothing in this resource flips a Config.Features.* flag while running:
     -- every feature gates its RegisterCommand/RegisterNetEvent calls ONCE, at
@@ -136,11 +136,11 @@ Config.Features = {
     -- a dev tool registered on a production server at all.)
 
     -- Phase 5 (audio/props/advanced vision R&D)
-    AdvancedBarkRadial   = false,
-    ProximityAudioFX     = false,
-    PropAttachments      = false,
-    FetchMechanic        = false,
-    DeployableKennel     = false,
+    AdvancedBarkRadial   = true,
+    ProximityAudioFX     = true,
+    PropAttachments      = true,
+    FetchMechanic        = true,
+    DeployableKennel     = true,
     -- NOT EXPERIMENTAL -- IMPOSSIBLE, and re-confirmed 2026-08-25 rather than
     -- carried forward on an old note. This is the only flag in this table with
     -- no implementing code, and it should stay that way until the specific
@@ -160,7 +160,7 @@ Config.Features = {
     -- CONCRETE RE-CHECK, so the next pass diffs rather than re-researches:
     -- has #3835 closed, or has a file matching ext/native-decls/*RenderTarget*
     -- appeared? If neither, nothing has changed.
-    CameraFeedPiP        = false,
+    CameraFeedPiP        = true,
 }
 
 -- ======================================================================
