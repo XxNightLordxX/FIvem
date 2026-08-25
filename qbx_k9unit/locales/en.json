@@ -64,7 +64,31 @@
     "usage_decertify_offline": "Usage: /k9decertifyoffline [citizenid] [job]"
   },
   "combat": {
-    "no_target_in_range": "No eligible target in range."
+    "already_held": "That target is already held by another K9.",
+    "bite_hold_attempted": "Bite and hold attempted — restraint is not guaranteed against an uncooperative target.",
+    "distracted": "Your K9 is distracted and not responding to commands.",
+    "drag_attempted": "Attempting to drag the target — this is not guaranteed against an uncooperative target.",
+    "drag_ended": "The drag ended.",
+    "feature_disabled": "This feature is disabled on this server.",
+    "hesitating": "Your K9 is too stressed to comply right now.",
+    "no_access": "You are not certified for K9 duty.",
+    "no_target_in_range": "No eligible target in range.",
+    "noncompliance_message": "K9 non-compliance: %s (%s) — %s",
+    "noncompliance_notify_title": "K9 Unit — Non-Compliance",
+    "noncompliance_target_npc": "NPC netId %s",
+    "noncompliance_target_player": "player source %s",
+    "not_eligible_target": "That target is not currently eligible.",
+    "not_fleeing": "The target does not appear to be fleeing.",
+    "offline": "Unable to resolve your own K9.",
+    "on_cooldown": "You must wait before attempting that again.",
+    "reject_fallback": "Unable to complete that action.",
+    "self_target": "You cannot target yourself.",
+    "takedown_already_in_progress": "A takedown attempt is already in progress.",
+    "takedown_attempted": "Takedown attempted — the target may recover and flee again.",
+    "takedown_ended_early": "The takedown ended early.",
+    "target_dead": "That target is down.",
+    "target_not_downed": "That target does not appear to be downed.",
+    "too_far": "You are too far from the target."
   },
   "common": {
     "handler_not_in_department": "The handler must be employed by an eligible department.",

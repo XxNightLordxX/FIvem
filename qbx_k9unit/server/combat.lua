@@ -766,30 +766,39 @@ end)
 --- shared between BiteAndHold, NonLethalTakedown, and PropDragging since
 --- their reason vocabularies overlap almost entirely.
 local COMBAT_REJECT_MESSAGES = {
-    feature_disabled   = 'This feature is disabled on this server.',
-    invalid_target     = 'Invalid target.',
-    no_access          = 'You are not certified for K9 duty.',
-    already_engaged    = 'You are already engaged with another target.',
-    offline            = 'Unable to resolve your own K9.',
-    self_target        = 'You cannot target yourself.',
-    target_not_downed  = 'That target does not appear to be downed.',
-    target_dead        = 'That target is down.',
-    too_far            = 'You are too far from the target.',
-    already_held       = 'That target is already held by another K9.',
-    not_eligible_target = 'That target is not currently eligible.',
-    not_fleeing        = 'The target does not appear to be fleeing.',
-    on_cooldown        = 'You must wait before attempting that again.',
+    feature_disabled   = locale('combat.feature_disabled'),
+    -- Byte-identical to certifications.lua's own `type(targetServerId) ~=
+    -- 'number'` rejection ("Invalid target.") -- same generic "the supplied
+    -- target id failed basic type validation" concept, confirmed by reading
+    -- that file's GrantCertification/RevokeCertification call sites before
+    -- reusing, not a coincidental short-string collision. Reused rather
+    -- than minted as a new combat.invalid_target duplicate.
+    invalid_target     = locale('certifications.invalid_target'),
+    no_access          = locale('combat.no_access'),
+    -- Byte-identical to client/defense.lua's own already_engaged rejection
+    -- (confirmed by reading both texts before reusing) — reused rather than
+    -- minted as a new combat.already_engaged duplicate.
+    already_engaged    = locale('defense.already_engaged'),
+    offline            = locale('combat.offline'),
+    self_target        = locale('combat.self_target'),
+    target_not_downed  = locale('combat.target_not_downed'),
+    target_dead        = locale('combat.target_dead'),
+    too_far            = locale('combat.too_far'),
+    already_held       = locale('combat.already_held'),
+    not_eligible_target = locale('combat.not_eligible_target'),
+    not_fleeing        = locale('combat.not_fleeing'),
+    on_cooldown        = locale('combat.on_cooldown'),
     -- server/wellbeing.lua-driven — these describe the REQUESTING K9's own
     -- state, never the target's (see this file's header FILE-TO-FILE
     -- CONTRACT entry for IsHesitating/IsDistracted).
-    hesitating         = 'Your K9 is too stressed to comply right now.',
-    distracted         = 'Your K9 is distracted and not responding to commands.',
+    hesitating         = locale('combat.hesitating'),
+    distracted         = locale('combat.distracted'),
 }
 
 --- @param reason string?
 --- @return string
 local function CombatRejectMessage(reason)
-    return COMBAT_REJECT_MESSAGES[reason] or 'Unable to complete that action.'
+    return COMBAT_REJECT_MESSAGES[reason] or locale('combat.reject_fallback')
 end
 
 --- Shared request-time validation for BiteAndHold, NonLethalTakedown, AND
@@ -1032,7 +1041,7 @@ local function EndHold(targetNetId, reason)
             -- non-timeout reason (e.g. the target disconnecting mid-ragdoll);
             -- a plain timeout is the expected, silent end of a successful
             -- takedown.
-            NotifyPlayer(hold.holderSrc, 'The takedown ended early.', 'inform')
+            NotifyPlayer(hold.holderSrc, locale('combat.takedown_ended_early'), 'inform')
         end
     else -- 'drag' (PHASE3_SPEC.md §12.5.4, this pass)
         -- Category A (attach) teardown ALWAYS goes to the HOLDING K9's own
@@ -1058,7 +1067,7 @@ local function EndHold(targetNetId, reason)
             -- button/keybind press itself is the feedback), mirroring
             -- takedown's own "only notify for a non-expected end" posture
             -- above.
-            NotifyPlayer(hold.holderSrc, 'The drag ended.', 'inform')
+            NotifyPlayer(hold.holderSrc, locale('combat.drag_ended'), 'inform')
         end
     end
 end
@@ -1180,9 +1189,20 @@ end)
 --- @param detail string -- already human-formatted; see call sites
 local function FlagNonCompliance(hold, targetNetId, kind, detail)
     local cfg = Config.Combat.NonComplianceDetection
+    -- LOCALE FIX (locale-migration pass, coder-backend): was two `..`
+    -- string-concatenated variants ('player source ' .. tostring(...) /
+    -- 'NPC netId ' .. tostring(...)) — the exact "glue a literal prefix onto
+    -- a dynamic value with `..`" shape this migration's own README already
+    -- flagged and fixed four times elsewhere (this is the fifth). Fixed the
+    -- same way: two independent, complete `%s`-templated locale keys
+    -- selected by a plain if/else, not one template with a conditional
+    -- prefix. This value is ALSO consumed by the print() line immediately
+    -- below (console diagnostics, out of migration scope on its own) — that
+    -- is fine and expected, same as client/bonetool.lua's own
+    -- known_sweep console print consuming already-locale()-sourced text.
     local targetLabel = hold.isPlayerTarget
-        and ('player source ' .. tostring(hold.targetSrc))
-        or ('NPC netId ' .. tostring(targetNetId))
+        and locale('combat.noncompliance_target_player', tostring(hold.targetSrc))
+        or locale('combat.noncompliance_target_npc', tostring(targetNetId))
 
     -- 'log' is the BASELINE, always-on behavior -- 'log' cannot mean
     -- "don't log." This print is the forensic record regardless of
@@ -1191,12 +1211,12 @@ local function FlagNonCompliance(hold, targetNetId, kind, detail)
         :format(kind, hold.effectType, targetLabel, tostring(hold.holderSrc), detail))
 
     if cfg.action == 'notify_staff' then
-        local message = ('K9 non-compliance: %s (%s) — %s'):format(kind, targetLabel, detail)
+        local message = locale('combat.noncompliance_message', kind, targetLabel, detail)
         for _, playerIdStr in ipairs(GetPlayers()) do
             local playerId = tonumber(playerIdStr)
             if playerId and IsPlayerAceAllowed(tostring(playerId), 'command') then
                 TriggerClientEvent('ox_lib:notify', playerId, {
-                    title = 'K9 Unit — Non-Compliance',
+                    title = locale('combat.noncompliance_notify_title'),
                     description = message,
                     type = 'warning',
                     duration = 8000,
@@ -1602,7 +1622,7 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
     TriggerClientEvent('qbx_k9unit:client:biteHoldStarted', src, targetNetId, expiresAt)
     -- BEST-EFFORT WORDING (guardrail 4) -- never claims the target cannot
     -- escape.
-    NotifyPlayer(src, 'Bite and hold attempted — restraint is not guaranteed against an uncooperative target.', 'inform')
+    NotifyPlayer(src, locale('combat.bite_hold_attempted'), 'inform')
 end)
 
 RegisterNetEvent('qbx_k9unit:server:releaseBiteHold', function()
@@ -1893,7 +1913,7 @@ local function HandleTakedownRequest(src, targetNetId)
     end
 
     -- BEST-EFFORT WORDING (guardrail 4).
-    NotifyPlayer(src, 'Takedown attempted — the target may recover and flee again.', 'inform')
+    NotifyPlayer(src, locale('combat.takedown_attempted'), 'inform')
 end
 
 --- @param targetNetId any
@@ -1904,7 +1924,7 @@ RegisterNetEvent('qbx_k9unit:server:requestTakedown', function(targetNetId)
     -- overlapping call from the SAME K9 — see TakedownMutex's own
     -- declaration comment above.
     if not TakedownMutex.TryAcquire(src) then
-        NotifyPlayer(src, 'A takedown attempt is already in progress.', 'error')
+        NotifyPlayer(src, locale('combat.takedown_already_in_progress'), 'error')
         return
     end
 
@@ -2041,7 +2061,7 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
 
     -- BEST-EFFORT WORDING (guardrail 4) -- never claims the target cannot
     -- escape, mirrors requestBiteHold/HandleTakedownRequest's own copy.
-    NotifyPlayer(src, 'Attempting to drag the target — this is not guaranteed against an uncooperative target.', 'inform')
+    NotifyPlayer(src, locale('combat.drag_attempted'), 'inform')
 end)
 
 RegisterNetEvent('qbx_k9unit:server:releaseDrag', function()
