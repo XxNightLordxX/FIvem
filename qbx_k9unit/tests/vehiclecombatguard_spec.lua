@@ -193,12 +193,42 @@ local function newVehicleFixture(opts)
     local RESOURCE_NAME = 'qbx_k9unit'
     local function GetCurrentResourceName() return RESOURCE_NAME end
 
+    -- client/vehicle.lua now routes its "Load Into Vehicle"/"Release From
+    -- Vehicle" options through K9Compat.Get('target')
+    -- (shared/compat/target.lua) rather than calling `exports.ox_target`
+    -- directly -- see that file's own header. This spec loads the REAL
+    -- shared/compat/core.lua + shared/compat/target.lua (never a
+    -- hand-written fake translation layer, which would just assert against
+    -- itself) so K9Compat.Get('target') resolves to the REAL ox_target
+    -- adapter, which is a byte-for-byte pass-through of the options table
+    -- this file already captures below via the exact same colon-call
+    -- `exports.ox_target:addGlobalVehicle` stub as before -- ox_target is
+    -- the ONLY candidate this fixture makes `GetResourceState` report as
+    -- 'started', so detection deterministically resolves to it. Every
+    -- REQUIRED_EXPORTS name (shared/compat/target.lua's OxTargetFactory)
+    -- must exist as a callable function or the whole adapter is rejected as
+    -- unverified and silently falls back to the no-op stub -- the five
+    -- `remove*` names below are never actually called by anything this spec
+    -- exercises, but must still exist.
     local addGlobalVehicleCalls = {}
     local exportsTable = {
         ox_target = {
             addGlobalVehicle = function(_self, options) addGlobalVehicleCalls[#addGlobalVehicleCalls + 1] = options end,
+            addGlobalPlayer = function() end,
+            addGlobalObject = function() end,
+            addModel = function() end,
+            addSphereZone = function() end,
+            removeGlobalPlayer = function() end,
+            removeGlobalVehicle = function() end,
+            removeGlobalObject = function() end,
+            removeModel = function() end,
+            removeZone = function() end,
         },
     }
+    local function IsDuplicityVersion() return false end -- client realm, for shared/compat/core.lua
+    local function GetResourceState(resourceName)
+        return resourceName == 'ox_target' and 'started' or 'missing'
+    end
 
     -- The two soft-dependency globals this spec exists to exercise -- see
     -- this file's own header. `omitCombatGlobals` simulates
@@ -233,6 +263,8 @@ local function newVehicleFixture(opts)
         Wait = Wait,
         GetCurrentResourceName = GetCurrentResourceName,
         exports = exportsTable,
+        IsDuplicityVersion = IsDuplicityVersion,
+        GetResourceState = GetResourceState,
     }
 
     if not opts.omitCombatGlobals then
@@ -254,6 +286,14 @@ local function newVehicleFixture(opts)
     end
     env.Config.K9Vehicles = { vehicleModelName }
     env.Config.VehicleInteractMeters = 3.0
+
+    -- Real K9Compat, real ox_target adapter -- see the `exportsTable`
+    -- comment above for why. Must load before client/vehicle.lua, which
+    -- reads the `K9Compat` global at RegisterVehicleOxTargetOptions() call
+    -- time (fired below via fireOwnResourceStart / f.env.EnterNearestK9Vehicle
+    -- tests don't need it, but the "Load Into Vehicle" option tests do).
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/target.lua', env)
 
     Sandbox.loadInto('../client/vehicle.lua', env)
 

@@ -257,8 +257,7 @@ end
 --- @param citizenid string
 --- @return boolean
 local function IsCertifiedK9ForAnyJob(citizenid)
-    local ok, idOrErr = pcall(MySQL.scalar.await,
-        'SELECT id FROM k9_certifications WHERE citizenid = ? AND active = 1 LIMIT 1', { citizenid })
+    local ok, idOrErr = pcall(K9Store.Cert_GetActiveIdAnyJob, citizenid)
     if not ok then
         print(('[qbx_k9unit] appearance.lua IsCertifiedK9ForAnyJob query failed for %s: %s'):format(citizenid, tostring(idOrErr)))
         return true -- fail OPEN -- see doc comment above
@@ -316,14 +315,13 @@ end)
 --- @param citizenid string
 --- @return table? row -- { model, original_model_hash, active } or nil (not found, or the read failed)
 local function GetAppearanceRow(citizenid)
-    local ok, rows = pcall(MySQL.query.await,
-        'SELECT model, original_model_hash, active FROM k9_ped_assignments WHERE citizenid = ? LIMIT 1',
-        { citizenid })
-    if not ok then
-        print(('[qbx_k9unit] appearance.lua GetAppearanceRow query failed for %s: %s'):format(citizenid, tostring(rows)))
-        return nil
-    end
-    return rows and rows[1] or nil
+    -- K9Store.Appearance_GetRow already pcall-wraps its own DB read
+    -- internally (never throws -- see datastore.lua's own doc comment on
+    -- this function), so this is a direct passthrough, not a pcall around
+    -- it -- this file's own callers (WriteAppearanceApplied historically,
+    -- GetAssignedK9Model below) already only ever expected a row-or-nil
+    -- return, never a caught error.
+    return K9Store.Appearance_GetRow(citizenid)
 end
 
 --- Writes the "a swap for `model` was just confirmed applied" state.
@@ -333,45 +331,34 @@ end
 --- this file's header "STREAMING FAILURE CONTRACT" neighbor note on
 --- revert). `originalHash` may be nil (not yet known -- an offline-target
 --- persisted assignment that hasn't had its first swap attempt yet).
+---
+--- DATASTORE MIGRATION NOTE: this used to pre-read the existing row itself
+--- (GetAppearanceRow) and resolve the "keep or replace" decision in Lua
+--- before ever reaching the INSERT -- K9Store.Appearance_UpsertApplied's
+--- own doc comment confirms its COALESCE(VALUES(original_model_hash),
+--- original_model_hash) reproduces the real SQL verbatim, so that pre-read
+--- is now redundant (every call site in this file already passes
+--- `originalHash = nil` on every re-apply-while-still-a-K9 path, so the
+--- SQL-level COALESCE alone reaches the identical outcome the Lua-level
+--- pre-read used to compute) and has been dropped rather than kept as dead
+--- weight duplicating logic the accessor already owns.
 --- @param citizenid string
 --- @param model string
 --- @param originalHash number?
 --- @param appliedByLabel string
 local function WriteAppearanceApplied(citizenid, model, originalHash, appliedByLabel)
-    local existing = GetAppearanceRow(citizenid)
-    local keepOriginal = existing and existing.active == 1 and existing.original_model_hash or nil
-    local finalOriginal = keepOriginal or originalHash
-
-    local ok, err = pcall(MySQL.query.await, [[
-        INSERT INTO k9_ped_assignments (citizenid, model, original_model_hash, active, applied_by, applied_at, revoked_at)
-        VALUES (?, ?, ?, 1, ?, CURRENT_TIMESTAMP, NULL)
-        ON DUPLICATE KEY UPDATE
-            model = VALUES(model),
-            original_model_hash = COALESCE(VALUES(original_model_hash), original_model_hash),
-            active = 1,
-            applied_by = VALUES(applied_by),
-            applied_at = CURRENT_TIMESTAMP,
-            revoked_at = NULL
-    ]], { citizenid, model, finalOriginal, appliedByLabel })
-
-    if not ok then
-        print(('[qbx_k9unit] appearance.lua WriteAppearanceApplied UPSERT failed for %s: %s'):format(citizenid, tostring(err)))
-        return false
-    end
-    return true
+    -- K9Store.Appearance_UpsertApplied mirrors this function's own
+    -- pre-existing boolean (never-throws) contract -- see its own doc
+    -- comment ("Mirrors WriteAppearanceApplied's own boolean contract").
+    return K9Store.Appearance_UpsertApplied(citizenid, model, originalHash, appliedByLabel)
 end
 
 --- @param citizenid string
 --- @return boolean ok
 local function WriteAppearanceReverted(citizenid)
-    local ok, err = pcall(MySQL.query.await,
-        'UPDATE k9_ped_assignments SET active = 0, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND active = 1',
-        { citizenid })
-    if not ok then
-        print(('[qbx_k9unit] appearance.lua WriteAppearanceReverted UPDATE failed for %s: %s'):format(citizenid, tostring(err)))
-        return false
-    end
-    return true
+    -- K9Store.Appearance_MarkReverted mirrors this function's own
+    -- pre-existing boolean (never-throws) contract.
+    return K9Store.Appearance_MarkReverted(citizenid)
 end
 
 --- Read-only convenience accessor (no known caller in this resource today,
@@ -792,11 +779,14 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
             attempts = attempts + 1
         end
         if ped ~= 0 then
-            local ok, err = pcall(MySQL.update.await,
-                'UPDATE k9_ped_assignments SET original_model_hash = ? WHERE citizenid = ? AND active = 1 AND original_model_hash IS NULL',
-                { GetEntityModel(ped), citizenid })
+            -- K9Store.Appearance_SetOriginalHashIfMissing mirrors this
+            -- call site's own pre-existing boolean (never-throws) contract
+            -- internally -- no pcall needed around it (unlike the raw
+            -- MySQL.update.await this replaces, it never propagates a
+            -- thrown DB error to this caller).
+            local ok = K9Store.Appearance_SetOriginalHashIfMissing(citizenid, GetEntityModel(ped))
             if not ok then
-                print(('[qbx_k9unit] appearance.lua PlayerLoaded original-model capture failed for %s: %s'):format(citizenid, tostring(err)))
+                print(('[qbx_k9unit] appearance.lua PlayerLoaded original-model capture failed for %s'):format(citizenid))
             end
         else
             print(('[qbx_k9unit] appearance.lua PlayerLoaded: could not resolve a live ped for %s to capture ' ..

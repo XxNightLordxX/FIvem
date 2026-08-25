@@ -141,22 +141,57 @@ local function newSearchFixture(opts)
         notify = function(payload) notifyCalls[#notifyCalls + 1] = payload end,
     }
 
-    -- exports.ox_target:addGlobalVehicle/addGlobalPlayer -- colon-call
-    -- syntax means the FIRST argument received is the stub table itself
-    -- (`self`), discarded here; the SECOND is the real definition list
-    -- this file passes.
+    -- client/search.lua now routes its "Search Vehicle"/"Search Person"
+    -- options through K9Compat.Get('target') (shared/compat/target.lua)
+    -- rather than calling `exports.ox_target` directly -- see that file's
+    -- own header. This fixture loads the REAL shared/compat/core.lua +
+    -- shared/compat/target.lua (never a hand-written fake translation
+    -- layer, which would just assert against itself) so K9Compat.Get
+    -- ('target') resolves to the REAL ox_target adapter, which is a
+    -- byte-for-byte pass-through of the options table -- captured below via
+    -- the exact same colon-call `exports.ox_target:addGlobalVehicle/
+    -- addGlobalPlayer` stub as before. ox_target is the ONLY candidate this
+    -- fixture makes `GetResourceState` report as 'started', so detection
+    -- deterministically resolves to it. Every REQUIRED_EXPORTS name
+    -- (shared/compat/target.lua's OxTargetFactory) must exist as a
+    -- callable function or the whole adapter is rejected as unverified and
+    -- silently falls back to the no-op stub -- the exports this file never
+    -- actually exercises are still stubbed as harmless no-ops so
+    -- verification passes.
     local addGlobalVehicleCalls, addGlobalPlayerCalls = {}, {}
     local oxTargetStub = {}
     function oxTargetStub.addGlobalVehicle(_, defs) addGlobalVehicleCalls[#addGlobalVehicleCalls + 1] = defs end
     function oxTargetStub.addGlobalPlayer(_, defs) addGlobalPlayerCalls[#addGlobalPlayerCalls + 1] = defs end
+    function oxTargetStub.addGlobalObject() end
+    function oxTargetStub.addModel() end
+    function oxTargetStub.addSphereZone() end
+    function oxTargetStub.removeGlobalPlayer() end
+    function oxTargetStub.removeGlobalVehicle() end
+    function oxTargetStub.removeGlobalObject() end
+    function oxTargetStub.removeModel() end
+    function oxTargetStub.removeZone() end
 
-    -- AddEventHandler('onResourceStart', ...) -- capturing, per this
-    -- file's own header LIFECYCLE NOTE.
+    local function IsDuplicityVersion() return false end -- client realm, for shared/compat/core.lua
+    local function GetResourceState(resourceName)
+        return resourceName == 'ox_target' and 'started' or 'missing'
+    end
+
+    -- AddEventHandler -- captures EVERY event name (not just
+    -- 'onResourceStart'): shared/compat/core.lua also registers
+    -- 'onClientResourceStart'/'onClientResourceStop' handlers at load time
+    -- (client realm) that this fixture never fires, but must not reject.
+    -- `resourceStartHandlers` (used by fireResourceStart below, matching
+    -- this file's own header LIFECYCLE NOTE) stays scoped to
+    -- 'onResourceStart' specifically, exactly as before.
     local resourceStartHandlers = {}
+    local otherEventHandlers = {}
     local function AddEventHandler(eventName, handler)
-        assert(eventName == 'onResourceStart',
-            ('clientsearch_spec: unexpected AddEventHandler(%q, ...) -- this fixture only expects onResourceStart'):format(tostring(eventName)))
-        resourceStartHandlers[#resourceStartHandlers + 1] = handler
+        if eventName == 'onResourceStart' then
+            resourceStartHandlers[#resourceStartHandlers + 1] = handler
+        else
+            otherEventHandlers[eventName] = otherEventHandlers[eventName] or {}
+            otherEventHandlers[eventName][#otherEventHandlers[eventName] + 1] = handler
+        end
     end
 
     local netEventHandlers = {}
@@ -187,6 +222,8 @@ local function newSearchFixture(opts)
         NetworkGetPlayerIndexFromPed = NetworkGetPlayerIndexFromPed,
         PlayerId = PlayerId,
         PlaySoundOnNetworkEntity = PlaySoundOnNetworkEntity,
+        IsDuplicityVersion = IsDuplicityVersion,
+        GetResourceState = GetResourceState,
         -- TriggerServerEvent deliberately NOT stubbed -- see this file's
         -- own header on why an unstubbed call failing loudly is the
         -- stronger check for "this file sends no server events beyond the

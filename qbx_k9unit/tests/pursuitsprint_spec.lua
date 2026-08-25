@@ -306,23 +306,70 @@ t.test('SERVER: Config.PursuitSprint.requestRangeMeters = -1 fails loudly at loa
     t.contains(f.loadError, 'requestRangeMeters')
 end)
 
-t.test('COOLDOWN FOOTGUN: Config.PursuitSprint.cooldownMs = 0 fails loudly at load, naming this resource\'s own "does NOT mean no cooldown" convention, instead of silently becoming a permanent lockout', function()
+-- UPDATED, this pass (QA sandbox repro against server/combat.lua, same
+-- mechanism applies here -- see server/cooldowns.lua's header ADDENDUM):
+-- these two cases used to assert cooldownMs = 0/negative FAILED THE LOAD.
+-- That was itself the bug, just not yet proven against THIS file: an
+-- uncaught error thrown from this file's own top-level chunk (whether from
+-- its own pre-existing `assert` or from NewCooldown's constructor guard)
+-- aborts THIS FILE's execution from that line onward, silently
+-- un-registering 'qbx_k9unit:server:requestPursuitSprint' along with
+-- everything else below it -- not "this one cooldown fails safe," but "the
+-- entire feature silently stops existing," discoverable only via one
+-- script-error line at boot. server/pursuitsprint.lua now resolves this
+-- value through ResolveConfiguredThresholdMs (server/cooldowns.lua)
+-- instead: the file loads, the event registers, and the feature keeps
+-- working on a safe built-in fallback while printing one unmissable
+-- warning naming the exact key, the value found, and what was substituted.
+t.test('COOLDOWN FOOTGUN: Config.PursuitSprint.cooldownMs = 0 no longer aborts this file\'s load -- it clamps to the shipped fallback, warns loudly (naming the exact key/value/substitute), and the feature keeps working', function()
     local f = newServerFixture({
         pursuitSprintCfg = { speedMultiplier = REAL_SPEED_MULTIPLIER, durationMs = REAL_DURATION_MS, cooldownMs = 0, requestRangeMeters = REAL_RANGE_METERS },
-        expectLoadError = true,
     })
-    t.isFalse(f.loadOk)
-    t.contains(f.loadError, 'cooldownMs')
-    t.contains(f.loadError, 'does NOT mean')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.PursuitSprint.cooldownMs', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find(tostring(REAL_COOLDOWN_MS), 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must print a warning naming the exact key, the value found, and the fallback substituted -- "invalid cooldown" helps nobody find this in a real config.lua')
+
+    -- The net event still registered and the feature is still fully
+    -- functional on the substituted fallback -- this is the whole point:
+    -- one misconfigured field, not a stranded feature.
+    f.registerPlayer(1, 'K9-CID', 100, nil)
+    f.registerPlayer(2, 'TARGET-CID', 200, { wanted = true })
+    f.grantPermission('K9-CID', 'feature.PursuitSprint', true)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setPedCoords(200, 5, 0, 0)
+    f.registerTargetNetId(9001, 200)
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 1, 'a granted request must still succeed even though cooldownMs was misconfigured')
 end)
 
-t.test('COOLDOWN FOOTGUN: a negative cooldownMs is caught the same way as zero', function()
+t.test('COOLDOWN FOOTGUN: a negative cooldownMs is clamped the same way as zero, not treated as unlimited and not aborting the load', function()
     local f = newServerFixture({
         pursuitSprintCfg = { speedMultiplier = REAL_SPEED_MULTIPLIER, durationMs = REAL_DURATION_MS, cooldownMs = -5000, requestRangeMeters = REAL_RANGE_METERS },
-        expectLoadError = true,
     })
-    t.isFalse(f.loadOk)
-    t.contains(f.loadError, 'cooldownMs')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.PursuitSprint.cooldownMs', 1, true) and line:find('-5000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned)
+
+    f.registerPlayer(1, 'K9-CID', 100, nil)
+    f.registerPlayer(2, 'TARGET-CID', 200, { wanted = true })
+    f.grantPermission('K9-CID', 'feature.PursuitSprint', true)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setPedCoords(200, 5, 0, 0)
+    f.registerTargetNetId(9001, 200)
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 1, 'the feature must still work on the fallback cooldown, never "unlimited" and never load-aborted')
 end)
 
 -- ------------------------------------------------------------------

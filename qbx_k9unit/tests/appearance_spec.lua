@@ -351,7 +351,16 @@ local function newFixture(opts)
 
     local env = Sandbox.newEnv(overrides)
 
+    -- server/datastore.lua -- REAL, unmodified, loaded first (fxmanifest.lua's
+    -- own load order: the only file allowed to call MySQL.* directly).
+    -- server/appearance.lua's own k9_certifications/k9_ped_assignments reads
+    -- and writes now go through K9Store.* rather than a local MySQL.*.await
+    -- call -- Config.Database is deliberately absent from this fixture's
+    -- Config table above, so K9Store's own DatabaseEnabled() fails safe to
+    -- `true` (real-DB mode), routing every K9Store.* call straight through
+    -- to this fixture's own `mysql` stub above, unchanged.
     Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/datastore.lua', env)
     Sandbox.loadInto('../server/highcommand.lua', env)
     Sandbox.loadInto('../server/permissions.lua', env)
     Sandbox.loadInto('../server/appearance.lua', env)

@@ -388,3 +388,133 @@ body {
 .k9tablet-person-name {
     margin: 0 0 2px 0;
 }
+
+/*
+    K9 ROLE CONTROL (person screen, high command only) -- Assign K9 Role /
+    Revert to Human. See html/tablet.js's own header on tablet:assignK9Role/
+    tablet:revertK9Ped for the full contract this section drives.
+*/
+.k9tablet-role-control {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.k9tablet-role-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.k9tablet-role-select {
+    background: #1c1f26;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #f2f2f2;
+    padding: 7px 10px;
+    font-size: 13px;
+}
+
+/*
+    TABLET THEMING editor (its own tab, high command only) and
+    CERTIFICATION TIER editing's add/edit form share this same field/label/
+    invalid-highlight shape -- one set of rules for both.
+*/
+.k9tablet-theme-form,
+.k9tablet-cert-tier-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 8px;
+    padding: 12px;
+    background: #1c1f26;
+    border-radius: 8px;
+}
+
+.k9tablet-theme-field {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.k9tablet-theme-field-label {
+    flex: 0 0 140px;
+    font-size: 13px;
+    color: #b7bcc6;
+}
+
+.k9tablet-theme-field--invalid {
+    outline: 1px solid #e08a8a;
+    border-radius: 6px;
+    padding: 4px;
+}
+
+.k9tablet-theme-color-input {
+    width: 48px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+}
+
+.k9tablet-theme-density-select,
+.k9tablet-cert-tier-key-input,
+.k9tablet-cert-tier-label-input {
+    background: #14161a;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #f2f2f2;
+    padding: 7px 10px;
+    font-size: 13px;
+}
+
+.k9tablet-theme-title-input {
+    flex: 1 1 auto;
+    background: #14161a;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #f2f2f2;
+    padding: 7px 10px;
+    font-size: 13px;
+}
+
+.k9tablet-theme-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+/*
+    CERTIFICATION TIER editing table + form. See html/tablet.js's own
+    buildCertTiersScreen() -- the catalogue itself is always fetched fresh
+    from tablet:certTiersList, never hardcoded here.
+*/
+.k9tablet-cert-tier-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.k9tablet-cert-tier-row-error {
+    flex-basis: 100%;
+    margin: 4px 0 0 0;
+    font-size: 12px;
+}
+
+.k9tablet-cert-tier-capabilities {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.k9tablet-cert-tier-capability-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    cursor: pointer;
+}

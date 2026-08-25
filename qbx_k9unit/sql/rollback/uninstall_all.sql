@@ -118,37 +118,44 @@ BEGIN
     -- =================================================================
     DECLARE fk_blockers INT DEFAULT 0;
 
-    -- OWNED TABLE LIST -- this is the ONE thing every query below (this
-    -- COUNT, the dependency report, and the DROP list at the bottom of this
-    -- procedure) must all agree on, and it is deliberately NOT swept from
-    -- INFORMATION_SCHEMA by a `k9\_%` LIKE/REGEXP pattern instead of typed
-    -- out here. Two real constraints make a blind pattern sweep unsafe for
-    -- THIS specific list, unlike the stored-procedure sweep further down
-    -- this same file:
-    --   1. DROP ORDER: if a future table in this list ever gains a real FK
-    --      to another table in this same list, the DROP statements below
-    --      would need to run in dependency order -- a sweep has no way to
-    --      know that order, a hand-maintained list can be written in it.
+    -- OWNED TABLE LIST -- named out in full, byte-identical, in FOUR places
+    -- in this procedure: this COUNT, every branch of the dependency report
+    -- below, the DRIFT CHECK branch of that same report, and the DROP list
+    -- at the bottom. It is deliberately NOT swept from INFORMATION_SCHEMA by
+    -- a bare `k9\_%` LIKE/REGEXP pattern instead of typed out repeatedly.
+    -- Two real constraints make a blind pattern sweep unsafe for THIS
+    -- specific list, unlike the stored-procedure sweep further down this
+    -- same file (which safely IS a pattern sweep -- see its own header for
+    -- why that one is safe and this one is not):
+    --   1. DROP ORDER: if a future table here ever gains a real FK to
+    --      another table in this same list, the DROP statements at the
+    --      bottom would need to run in dependency order -- a sweep has no
+    --      way to know that order, a hand-maintained list can be written in
+    --      it. (No such FK exists between any two of our own tables today --
+    --      every CREATE TABLE in install.sql/this resource's migrations
+    --      declares zero FKs by design, see e.g. k9_certifications' own
+    --      header -- but the DROP list is written defensively as if one
+    --      could exist tomorrow, since retrofitting order into an existing
+    --      DROP list under time pressure is worse than starting with it.)
     --   2. OTHER RESOURCES SHARE THE `k9_` PREFIX: this database can
     --      legitimately contain another K9 resource's own tables (the
     --      "STILL PRESENT" report below and backup_k9_tables.sh's own NOTE
     --      both call out `k9_units`-style tables as a real, expected case)
-    --      -- a bare `k9\_%` sweep in the FK-blocker check below would treat
+    --      -- a bare `k9\_%` sweep in the FK-blocker COUNT below would treat
     --      an FK into THAT resource's table as a reason to refuse OUR
     --      uninstall, which is wrong: we are not dropping that table, so a
     --      constraint pointing at it is none of our business.
     -- Because this list must stay hand-maintained, migration 0010's own
     -- three brand-new tables being absent from it for a time (fixed in this
-    -- same change) is exactly the failure mode this comment exists to keep
-    -- from recurring a third time -- see the DRIFT CHECK further down this
-    -- procedure for the loud, unconditional, every-single-run announcement
-    -- that now exists for the next time a migration is missed here.
-    SET @qbx_k9unit_owned_tables = 'k9_certifications,k9_search_log,k9_partnerships,
-k9_progression,k9_permissions,k9_certification_specializations,
-k9_runtime_feature_overrides,k9_runtime_override_audit,
-k9_tablet_theme,k9_tablet_theme_audit,k9_ped_assignments,
-k9_certification_tiers,k9_certification_tier_capabilities,k9_certification_tier_audit';
-
+    -- same change, verified by execution -- see this file's own git history/
+    -- PR description) is exactly the failure mode this comment exists to
+    -- keep from recurring a THIRD time. The DRIFT CHECK branch of the
+    -- dependency report below is the backstop for the next time a migration
+    -- is missed here anyway: it runs unconditionally, on every single
+    -- invocation (armed or not), and names any `k9_%` table in this
+    -- database that is not one of the fourteen named below, loudly, in the
+    -- one report every operator already reads before doing anything else in
+    -- this file.
     SELECT COUNT(*) INTO fk_blockers
     FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
     WHERE CONSTRAINT_SCHEMA = DATABASE()
@@ -179,8 +186,8 @@ k9_certification_tiers,k9_certification_tier_capabilities,k9_certification_tier_
                       '` DROP FOREIGN KEY `', CONSTRAINT_NAME, '`;') AS detail
         FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
         WHERE CONSTRAINT_SCHEMA = DATABASE()
-          AND REFERENCED_TABLE_NAME REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments)$'
-          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments)$'
+          AND REFERENCED_TABLE_NAME REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit)$'
+          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit)$'
         UNION ALL
         SELECT 2,
                'WILL BREAK - view reads one of our tables',
@@ -197,7 +204,7 @@ k9_certification_tiers,k9_certification_tier_capabilities,k9_certification_tier_
                       ' and MySQL deletes it together with that table. Save its definition now if you want it back (SHOW CREATE TRIGGER `', TRIGGER_NAME, '`).')
         FROM INFORMATION_SCHEMA.TRIGGERS
         WHERE TRIGGER_SCHEMA = DATABASE()
-          AND EVENT_OBJECT_TABLE REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments)$'
+          AND EVENT_OBJECT_TABLE REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit)$'
         UNION ALL
         SELECT 4,
                'WILL BREAK - stored routine reads one of our tables',
