@@ -757,6 +757,62 @@ function K9Store.Perm_RevokeActive(citizenid, permission, revokedBy)
     return 1
 end
 
+--- Mirrors the SafeQuery contract server/admin.lua's own Cert_GetHistory/
+--- Cert_GetActiveRosterByJob use (see those functions' own doc comments for
+--- the full "why this needs the pcall wrap" reasoning) -- replaces
+--- server/permissions.lua's own ListActivePermissionsForCitizenId, which
+--- previously ran this exact SQL through that file's local generic
+--- SafeQuery(sql, params) helper. No LIMIT clause -- the real query never
+--- had one (a citizenid's own full grant history, not a roster-style
+--- capped list).
+--- @return table rows -- newest first, always a table, empty on failure
+function K9Store.Perm_GetHistoryByCitizenId(citizenid)
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await,
+            'SELECT permission, granted_by, granted_at FROM k9_permissions WHERE citizenid = ? AND active = 1 ORDER BY granted_at DESC',
+            { citizenid })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Perm_GetHistoryByCitizenId query failed for %s: %s'):format(citizenid, tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #PermRows, 1, -1 do
+        local row = PermRows[i]
+        if row.citizenid == citizenid and row.active == 1 then
+            out[#out + 1] = { permission = row.permission, granted_by = row.granted_by, granted_at = row.granted_at }
+        end
+    end
+    return out
+end
+
+--- Mirrors the SafeQuery contract, same as Perm_GetHistoryByCitizenId
+--- immediately above -- replaces server/permissions.lua's own
+--- ListPermissionRoster (the tablet's "who currently holds this
+--- permission" view). No LIMIT clause, matching the real query exactly.
+--- @return table rows -- newest-granted first, always a table, empty on failure
+function K9Store.Perm_GetActiveRosterByPermission(permissionKey)
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await,
+            'SELECT citizenid, granted_by, granted_at FROM k9_permissions WHERE permission = ? AND active = 1 ORDER BY granted_at DESC',
+            { permissionKey })
+        if not ok then
+            print(('[qbx_k9unit] datastore: Perm_GetActiveRosterByPermission query failed for permission=%s: %s'):format(tostring(permissionKey), tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for i = #PermRows, 1, -1 do
+        local row = PermRows[i]
+        if row.permission == permissionKey and row.active == 1 then
+            out[#out + 1] = { citizenid = row.citizenid, granted_by = row.granted_by, granted_at = row.granted_at }
+        end
+    end
+    return out
+end
+
 -- ======================================================================
 -- k9_progression
 --

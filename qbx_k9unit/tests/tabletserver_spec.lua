@@ -984,6 +984,8 @@ local function newIntegrationFixture(opts)
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/datastore.lua', env) -- K9Store; server/permissions.lua reads and writes through it now rather than calling MySQL directly
+    Sandbox.loadInto('../server/events.lua', env)    -- FireOutboundEvent, extracted into its own file
     Sandbox.loadInto('../server/permissions.lua', env)
     Sandbox.loadInto('../server/tablet.lua', env)
 

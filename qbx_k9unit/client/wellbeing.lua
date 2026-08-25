@@ -295,7 +295,13 @@ if Config.Features.InjuryLimping then
             -- actual K9-modeled ped, never a human-modeled role-holder) is
             -- exactly a ONE-LINE change: replace `IsOwnModelK9()` below
             -- with `IsEntityModelK9(PlayerPedId())`.
-            if IsOwnModelK9() and not IsEntityDead(PlayerPedId()) then
+            -- OWNER'S DECISION, 2026-08-25: MODEL, not role -- same call and
+            -- same reasoning as client/movement.lua's jump/crouch suppression.
+            -- The injury sprint/jump block restricts quadruped locomotion; a
+            -- role-holder on a human body never had that locomotion to
+            -- restrict. Deliberately NOT IsOwnModelK9(), which answers
+            -- role-OR-model -- do not "fix" this in a future any-ped sweep.
+            if IsEntityModelK9(PlayerPedId()) and not IsEntityDead(PlayerPedId()) then
                 local sprintBlocked = lastStats.injury < Config.Wellbeing.Injury.sprintBlockThreshold
                 local jumpBlocked = lastStats.injury < Config.Wellbeing.Injury.jumpBlockThreshold
                 if sprintBlocked or jumpBlocked then

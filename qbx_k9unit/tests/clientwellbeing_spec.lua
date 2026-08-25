@@ -324,7 +324,19 @@ local function newWellbeingFixture(opts)
         setCanShowK9UI = function(v) canShowK9UI = v end,
         canShowK9UICallCount = function() return canShowK9UICallCount end,
         denyCallCount = function() return denyCalls end,
-        setIsOwnModelK9 = function(v) isOwnModelK9 = v end,
+        -- Sets BOTH halves of the same underlying fact, deliberately.
+        -- In production IsOwnModelK9() is `IsEntityModelK9(PlayerPedId())
+        -- or role`, so "my own model is a K9" and "the player ped is a K9
+        -- model" are not two independent knobs -- the first implies the
+        -- second. They were separate here only because nothing read the
+        -- entity form for the local ped until the injury block moved to
+        -- IsEntityModelK9(PlayerPedId()) (owner's decision: a role-holder on
+        -- a human body keeps sprint and jump). Keeping them in step here is
+        -- what stops a test asserting a state a real client cannot be in.
+        setIsOwnModelK9 = function(v)
+            isOwnModelK9 = v
+            modelK9ByEntity[myPed] = v or nil
+        end,
         setEntityIsK9Model = function(entity, v) modelK9ByEntity[entity] = v end,
         setServerIdForPed = function(entity, serverId) serverIdByPed[entity] = serverId end,
         advance = function(ms) fakeNow = fakeNow + ms end,

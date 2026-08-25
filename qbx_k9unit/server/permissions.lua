@@ -506,21 +506,6 @@ local function LogAuditInvocation(granterSrc, action, detail, outcome)
     print(('[qbx_k9unit] AUDIT: %s ran %s(%s) -> %s'):format(whoLabel, action, detail, outcome))
 end
 
---- Fail-closed SELECT wrapper -- pcall around MySQL.query.await, matching
---- server/admin.lua's own SafeQuery: a failed read returns zero rows to the
---- caller, never a raw Lua error.
---- @param sql string
---- @param params table
---- @return table rows
-local function SafeQuery(sql, params)
-    local ok, rowsOrErr = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] permissions.lua query failed: %s'):format(tostring(rowsOrErr)))
-        return {}
-    end
-    return rowsOrErr or {}
-end
-
 --- Re-queries every ACTIVE permission row for `citizenid` and replaces its
 --- cache entry wholesale. Fails CLOSED on a thrown read (an unreadable
 --- citizenid's permission set is treated as empty, never as "whatever it
@@ -528,7 +513,7 @@ end
 --- server/certifications.lua's RefreshCertificationCache.
 --- @param citizenid string
 local function RefreshPermissionCache(citizenid)
-    local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT permission FROM k9_permissions WHERE citizenid = ? AND active = 1', { citizenid })
+    local ok, rowsOrErr = pcall(K9Store.Perm_GetActiveForCitizen, citizenid)
     if not ok then
         print(('[qbx_k9unit] permissions.lua RefreshPermissionCache query failed for %s: %s'):format(citizenid, tostring(rowsOrErr)))
         PermissionCache[citizenid] = {}
@@ -563,9 +548,7 @@ end
 --- @param permissionKey string
 --- @return boolean? active -- true/false if confirmed against the DB, nil if the read itself failed
 local function IsPermissionRowConfirmedActive(citizenid, permissionKey)
-    local ok, activeIdOrErr = pcall(MySQL.scalar.await, 'SELECT id FROM k9_permissions WHERE citizenid = ? AND permission = ? AND active = 1 LIMIT 1', {
-        citizenid, permissionKey,
-    })
+    local ok, activeIdOrErr = pcall(K9Store.Perm_GetActiveId, citizenid, permissionKey)
     if not ok then
         print(('[qbx_k9unit] permissions.lua row-reconciliation read failed for %s/%s: %s'):format(citizenid, permissionKey, tostring(activeIdOrErr)))
         return nil
@@ -772,17 +755,13 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     -- exactly.
     local outcome
     local function doGrantInsert()
-        local existingId = MySQL.scalar.await('SELECT id FROM k9_permissions WHERE citizenid = ? AND permission = ? AND active = 1 LIMIT 1', {
-            targetCitizenid, permissionKey,
-        })
+        local existingId = K9Store.Perm_GetActiveId(targetCitizenid, permissionKey)
         if existingId then
             outcome = 'already_granted'
             return
         end
 
-        local insertOk, insertResultOrErr = pcall(MySQL.insert.await, 'INSERT INTO k9_permissions (citizenid, permission, granted_by) VALUES (?, ?, ?)', {
-            targetCitizenid, permissionKey, granterCitizenid,
-        })
+        local insertOk, insertResultOrErr = pcall(K9Store.Perm_Insert, targetCitizenid, permissionKey, granterCitizenid)
 
         if not insertOk then
             if IsDuplicateKeyError(insertResultOrErr) then
@@ -891,11 +870,7 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
     -- transaction would not resolve the one genuine ambiguity a thrown
     -- error can leave behind here either (this is the only write in this
     -- function) -- same reasoning that file's own comment already gives.
-    local updateOk, affectedRowsOrErr = pcall(
-        MySQL.update.await,
-        'UPDATE k9_permissions SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND permission = ? AND active = 1',
-        { granterCitizenid, targetCitizenid, permissionKey }
-    )
+    local updateOk, affectedRowsOrErr = pcall(K9Store.Perm_RevokeActive, targetCitizenid, permissionKey, granterCitizenid)
 
     if not updateOk then
         print(('[qbx_k9unit] permissions.lua RevokePermission UPDATE failed for %s/%s: %s -- reconciling before reporting an outcome'):format(targetCitizenid, permissionKey, tostring(affectedRowsOrErr)))
@@ -986,10 +961,7 @@ function ListActivePermissionsForCitizenId(callerSrc, targetCitizenid)
         return false, 'invalid_target'
     end
 
-    local rows = SafeQuery(
-        'SELECT permission, granted_by, granted_at FROM k9_permissions WHERE citizenid = ? AND active = 1 ORDER BY granted_at DESC',
-        { targetCitizenid }
-    )
+    local rows = K9Store.Perm_GetHistoryByCitizenId(targetCitizenid)
     local out = {}
     for i, row in ipairs(rows) do
         out[i] = { permission = row.permission, grantedBy = row.granted_by, grantedAt = row.granted_at }
@@ -1012,10 +984,7 @@ function ListPermissionRoster(callerSrc, permissionKey)
         return false, 'invalid_permission'
     end
 
-    local rows = SafeQuery(
-        'SELECT citizenid, granted_by, granted_at FROM k9_permissions WHERE permission = ? AND active = 1 ORDER BY granted_at DESC',
-        { permissionKey }
-    )
+    local rows = K9Store.Perm_GetActiveRosterByPermission(permissionKey)
     local out = {}
     for i, row in ipairs(rows) do
         out[i] = { citizenid = row.citizenid, grantedBy = row.granted_by, grantedAt = row.granted_at }

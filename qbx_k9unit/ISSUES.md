@@ -4,74 +4,68 @@
 a decision waiting on you — goes here and nowhere else. If it is not in this
 file, it is not tracked.
 
-Last updated: 2026-08-25
+Last updated: 2026-08-25 (all four open decisions answered)
 
 ---
 
 ## 1. Waiting on you
 
-Four things need a decision only you can make. Nothing is broken while they
-sit here; each is a choice about how you want the server to behave. Every
-one is a small change once you have decided.
+**Nothing.** All four open decisions were answered on 2026-08-25 and are
+recorded below with what was done about each. New items go here as they
+come up.
 
-### 1.1 Should a K9 on a human body lose jump and crouch?
+### Decided: a K9 on a human body keeps jump and crouch — DONE
 
-You asked for everything to work with any ped, including a human one. Two
-places restrict what a K9 can do *because* a dog cannot do it: jumping and
-crouching are suppressed, and an injured K9 has sprinting and jumping
-blocked.
+You said it should not lose them, and it no longer does. Both restrictions
+— jump/crouch suppression, and the injured-K9 sprint/jump block — now check
+the *body*, not the role. The reasoning is written into both files so a
+future "make everything work with any ped" sweep does not helpfully undo
+it: these restrictions exist because a four-legged animal has no jump
+animation, so applying them to a human-shaped handler is a rule copied past
+its own reason.
 
-If we apply those to a human-shaped K9 as well, they lose jump and crouch
-they never had a reason to lose. If we do not, a human-shaped K9 has
-slightly more movement than a dog-shaped one.
+### Decided: roster lookups restricted to high command — DONE
 
-Neither is wrong. It is taste. **Recommendation: leave the restrictions off
-for a human body** — the restrictions exist because of the animal's shape,
-so applying them to a human is a rule copied past its reason.
+Looking up another person's record now requires high command, **or** an
+explicit `k9.audit` grant. Ordinary certification no longer gets you in.
 
-### 1.2 Who should see the roster?
+Keeping `k9.audit` is not a loophole in "restrict it to high command": that
+capability is granted *by* high command, to one named person, for exactly
+this purpose — dropping it would leave a permission that is defined,
+grantable, documented, and does nothing. What actually closed is the path
+where simply being a certified handler let you enumerate who holds the
+powerful permissions department-wide. That was never a decision anyone
+made; it was a side effect of asking "do they have *any* permission at
+all".
 
-Right now any certified K9 handler can open the tablet's roster and look up
-any citizen ID, which shows that person's certification history, their XP,
-and **which people hold the high-value permissions** (who can certify, who
-can audit, who can grant XP).
+Unchanged: every handler can still see **their own** record. That is a
+different question from looking up someone else.
 
-Nobody can *change* anything this way — it is read-only. But a rank-and-file
-handler can work out who the powerful people are, department-wide.
+### Decided: fix the text-encoding mismatch — IN PROGRESS
 
-**Recommendation: restrict looking up other people to high command**, and
-leave every handler able to see their own record. Say the word and it moves.
+Being done in two halves, deliberately:
 
-### 1.3 Database text encoding
+- **New installs are fixed properly.** Every table now states its encoding
+  explicitly instead of inheriting whatever the server happened to default
+  to. Free, and it makes the result the same on every machine.
+- **Your existing database gets an optional extra**, not a forced upgrade.
+  Converting live tables rewrites them completely, and the search log is
+  designed to grow into the millions of rows — so it would be the slowest
+  thing this resource has ever asked you to run, for a papercut that never
+  affects the script itself. It ships clearly labelled, with honest timing,
+  to run when you choose. There is also a one-word workaround if you would
+  rather not run it at all.
 
-Our tables and qbx_core's tables use slightly different text-sorting rules.
-It never affects the script — everything here works. It only bites if *you*
-write your own SQL report joining our tables to the player table, which
-errors until you add one extra word to the query.
+### Decided: keep a copy of the ox libraries — YOUR ACTION, not code
 
-Fixing it for **new** installs is free. Fixing it for **your existing**
-database means rewriting every table, which on your biggest table is slow
-and needs a quiet moment.
+Save a copy of the `ox_lib`, `ox_target`, `oxmysql` and `ox_inventory`
+versions you currently run into a backup folder. They went unmaintained for
+about a year before the original team returned; they are active now. This
+is insurance against a repeat, not a fix for anything broken. Nothing in
+the code changes.
 
-**Recommendation: fix it going forward only.** Existing installs stay as
-they are unless you specifically want it, in which case it ships as an
-optional extra you run when you choose.
-
-### 1.4 Keep a copy of the ox libraries
-
-Not a bug — insurance. This resource needs `ox_lib`, `ox_target`,
-`oxmysql` and `ox_inventory` to start at all. Those went unmaintained for
-about a year (April 2025 to April 2026) before the original team came back.
-They are active now — last commit checked was eight days ago.
-
-**Recommendation: save a copy of the versions you currently run** to a
-backup folder, so a repeat of that quiet year cannot strand you. No code
-change; purely something to keep somewhere safe.
-
-*Reassess only if one of those four repositories is archived again, or six
-months pass with no commits. Not before.*
-
----
+*Reassess only if one of those four is archived again, or six months pass
+with no commits. Not before.*
 
 ## 2. Known limitations
 

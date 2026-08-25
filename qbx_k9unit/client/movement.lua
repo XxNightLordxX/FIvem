@@ -1284,7 +1284,16 @@ if not Config.Features.AgilityBasicJump then
 
     CreateThread(function()
         while true do
-            if IsOwnModelK9() then
+            -- OWNER'S DECISION, 2026-08-25: MODEL, not role. A player holding
+            -- the K9 role on a HUMAN body keeps jump and crouch.
+            -- This suppression exists because a quadruped has no jump or
+            -- crouch animation -- it is a consequence of the body, not of the
+            -- job. Applying it to a human-shaped role-holder would be a rule
+            -- copied past its own reason, taking away movement they never had
+            -- cause to lose. So this stays IsEntityModelK9(PlayerPedId())
+            -- deliberately, and must NOT be "corrected" to IsOwnModelK9()
+            -- (which now answers role-OR-model) by a future any-ped sweep.
+            if IsEntityModelK9(PlayerPedId()) then
                 DisableControlAction(0, INPUT_JUMP, true)
                 DisableControlAction(0, INPUT_DUCK, true)
                 Wait(0) -- must disable every frame while active, per DisableControlAction's own contract

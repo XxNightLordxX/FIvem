@@ -233,6 +233,15 @@ local function newFixture(opts)
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
+    -- real K9Store -- server/permissions.lua's own RefreshPermissionCache/
+    -- IsPermissionRowConfirmedActive/GrantPermission/RevokePermission/
+    -- ListActivePermissionsForCitizenId/ListPermissionRoster all read/write
+    -- through this now, never their own SafeQuery+raw-SQL pair.
+    -- DatabaseEnabled() fails safe to true (real-DB mode) since this
+    -- fixture's Config has no Config.Database, so K9Store routes through
+    -- this fixture's own `mysql` stub above exactly like the
+    -- pre-migration code did.
+    Sandbox.loadInto('../server/datastore.lua', env)
     Sandbox.loadInto('../server/permissions.lua', env)
 
     return {

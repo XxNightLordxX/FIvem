@@ -577,8 +577,31 @@ end
 --- @return boolean
 local function CallerHasConsoleAccess(source, callerCitizenid, isHighCommandCaller)
     if isHighCommandCaller then return true end
+
+    -- OWNER'S DECISION, 2026-08-25: NARROWED to high command, or an explicit
+    -- 'k9.audit' grant. This used to admit any caller with ANY non-empty
+    -- effective permission, and 'k9.access' resolves true for every ordinary
+    -- certified handler -- so a base-rank officer could look up any citizen
+    -- id and read that person's certification history, their XP, and, worst,
+    -- WHICH PEOPLE HOLD 'k9.certify'/'k9.audit'/'k9.givexp'. Read-only, so
+    -- never an escalation, but it let rank-and-file enumerate who the
+    -- powerful people in the department were.
+    --
+    -- 'k9.audit' is kept alongside high command deliberately, and this is
+    -- not a loophole in "restrict it to high command": that capability is
+    -- granted BY high command, to one named person, for exactly this
+    -- purpose. Dropping it would leave the permission defined, grantable,
+    -- documented -- and inert, which is its own bug class. What is closed is
+    -- the 'k9.access' path, which was never a decision anyone made; it was a
+    -- side effect of asking "do they have ANY permission at all".
+    --
+    -- Not affected: tabletRequestMyRecord. Every handler can still see their
+    -- OWN record, which is a different question from looking up someone else.
     local activePermSet = QueryActivePermissionSet(callerCitizenid)
-    return #ResolveEffectivePermissions(source, activePermSet, false) > 0
+    for _, key in ipairs(ResolveEffectivePermissions(source, activePermSet, false)) do
+        if key == 'k9.audit' then return true end
+    end
+    return false
 end
 
 --- Does `citizenid` currently have K9 access, for a target that may be
