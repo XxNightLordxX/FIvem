@@ -1094,3 +1094,18 @@ Clean. No regressions. One unreviewed commit reviewed, two stale SPEC claims cor
 - **Dependencies**: re-verified against live sources earlier this same day — all five exact matches to the recorded "last verified", Overextended canonical, CommunityOx archived. Not re-fetched this pass; no signal suggesting drift within the interval.
 - **SPEC.md audit — two stale claims found and corrected**: it still said none of `ProximityAudioFX`/`PropAttachments`/`FetchMechanic` were listed in `fxmanifest.lua` and that the bone tool was "also not yet wired". Both were overtaken by `faae5ff`, which registered propattachment (both halves), bonetool (both halves) and proximityaudio after their security review cleared. Fetch is now the only unregistered one. Worth noting the paragraph had explicitly warned the reader to verify `fxmanifest.lua` directly if time had passed — that warning did its job.
 - **Both XP farms are now CLOSED** (`09b52b2` contraband-search, `e6bc0f4` track-source). Pass #1's log entry listing them as open is superseded.
+
+## 2026-08-25 (00:45 UTC) — Watchdog pass #3 (scheduled trigger)
+
+No regressions. Two stale wiring claims corrected, one of them written by the previous watchdog pass.
+
+- **Since pass #2 (`04e28c0`)**: 8 commits, all reviewed at the time they were made — no unreviewed drop-ins this pass (unlike #2, where `09b52b2` had slipped through). They cover: fetch registration, three stale comments, the `DECISIONS_NEEDED.md` rewrite, wellbeing retuning, the fetch remote-steal and registry-desync fixes, two default-install gating fixes, and the hesitation cap.
+- **Syntax/lint**: `luac5.4 -p` on all 48 `.lua` files — all parse. `luacheck` 0 warnings / 0 errors. Working tree clean at pass start.
+- **Regression spot-checks — all five intact.** `AgilityBasicJump` gate present; both `LeashPairs` writes carry `isK9`; `RevokeCertificationOffline` still calls `RefreshCertificationCache`; `client/vehicle.lua`'s `onResourceStop` present; `lib.registerRadial`/`lib.addRadialItem` split still has 4 real code calls.
+  - **Method note, because this bit me twice today**: my first `LeashPairs` count returned 1, not 2, and looked like a regression. It wasn't — my character class was `[a-zA-Z]+` and one of the two variables is `k9Src`, which contains a digit. Earlier in the day a different sloppy regex undercounted the feature flags as 38 when there are 40. **In both cases the grep was wrong, not the code.** Verify a suspicious count by reading the lines before believing it.
+- **Bark audio gap (SPEC.md §7): STILL OPEN, unchanged.** Zero `.ogg`/`.wav`/`.awc` anywhere; `html/sounds/` holds only `CREDITS.md`.
+- **Dependencies**: no re-fetch this pass. Last verified against live `main` branches ~12h ago, all five exact matches, Overextended canonical. No signal suggesting drift in that interval.
+- **SPEC.md / README.md audit — two stale claims found, both about manifest wiring, both corrected**:
+  - `SPEC.md` said `FetchMechanic` was "the only one still unregistered". **That sentence was written by watchdog pass #2 and was overtaken about an hour later by `933eb9e`**, which registered it. Worth naming plainly: the previous watchdog's own correction went stale faster than the claim it replaced.
+  - `README.md`'s Known Issues table had **four** rows still marked "Not in `fxmanifest.lua`" — every one of them is registered. Its `client/audio.lua` row also justified "no caller yet" on `client/proximityaudio.lua` being unregistered, which is likewise no longer true.
+- **Standing conclusion**: every `.lua` file on disk is now referenced by the manifest, so "built but not wired" is no longer a category in this resource. Any doc still describing something that way is stale by definition.

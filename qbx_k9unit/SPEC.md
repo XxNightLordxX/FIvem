@@ -103,10 +103,10 @@ which is stale at the source-file level. **Two of the three are now wired**
 `fxmanifest.lua` once a security review cleared them — that review closed an
 arbitrary-entity delete and moved registration behind the feature flag rather
 than letting handlers self-reject. `FetchMechanic` (`client/fetch.lua` +
-`server/fetch.lua`) is the only one still unregistered, and it is held for
-process reasons rather than any unresolved finding: both files were being
-actively edited when the registration pass ran, and the security sweep that
-covered them found them clean. All three still ship `false`. See `README.md`'s
+`server/fetch.lua`) was registered shortly afterwards, in `933eb9e` — the
+sentence here previously called it "the only one still unregistered", which was
+true for about an hour. **All three are now wired**, and every `.lua` file on
+disk is referenced by the manifest. All three still ship `false`. See `README.md`'s
 Known Issues section for the current, fast-moving state.
 `CameraFeedPiP` remains uncoded and confirmed infeasible — unchanged. A
 further research pass (`phase2_notes/phase5_remaining_features_research.md`)
