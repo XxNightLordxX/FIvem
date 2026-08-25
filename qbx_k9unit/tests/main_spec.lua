@@ -1,7 +1,8 @@
 --[[
     tests/main_spec.lua
 
-    First client-side spec in this suite (REFACTOR_ROADMAP_2.md item 3).
+    First client-side spec in this suite (REFACTOR_ROADMAP.md Part B item 3
+    -- formerly REFACTOR_ROADMAP_2.md, merged 2026-08-25).
     Direct tests of client/main.lua's small pure-logic cluster against the
     REAL, unmodified production file: IsEntityModelK9, IsOwnModelK9,
     HasK9Access (and its TTL debounce cache -- SPEC.md's own "checked... on

@@ -558,12 +558,13 @@ proximity/cooldown checks. There is still no **exported** `k9_search_log`
 read-back or "list all K9 citizenids"/"list all active partnerships"
 accessor — both would require new query/authorization logic
 `server/exports.lua`'s own header deliberately did not invent unreviewed.
-(As of this pass there is now other, ACE-gated precedent for reading
-`k9_search_log` back inside this resource — see `server/admin.lua`'s
-`/k9auditsearch` command under [Commands](#commands) — but that is a
-console/ACE-authorized admin command, not a public export any resource
-can call, and does not by itself justify adding one without the same
-access-scope review `server/exports.lua`'s header calls for.)
+(As of this pass there is now other, police-job-rank-gated precedent for
+reading `k9_search_log` back inside this resource — see `server/admin.lua`'s
+`/k9auditsearch` command under [Commands](#commands), corrected 2026-08-25
+to no longer use ACE at all — but that is still a console/rank-authorized
+admin command, not a public export any resource can call, and does not by
+itself justify adding one without the same access-scope review
+`server/exports.lua`'s header calls for.)
 
 **All six outbound events are now wired and firing.** An earlier draft of
 this section said a `qbx_k9unit:events:*` namespace
@@ -698,35 +699,54 @@ never even registered while its flag is `false`):
 
 ### Admin/audit commands (`Config.Features.AdminAuditCommands`)
 
-`server/admin.lua` — read-only, ACE-gated wrappers over `k9_certifications`,
+`server/admin.lua` — read-only wrappers over `k9_certifications`,
 `k9_partnerships`, `k9_search_log`, and `k9_progression`, replacing "an
-admin runs raw SQL by hand" with four in-game commands. **None of these
-four commands are registered at all unless `Config.Features.AdminAuditCommands`
+admin runs raw SQL by hand" with five in-game commands. **None of these
+five commands are registered at all unless `Config.Features.AdminAuditCommands`
 is `true`** (checked once, at resource start) — the flag being `false`
 means the commands don't exist, not merely that they're hidden. Zero
 mutation paths exist anywhere in this file: every query is a `SELECT`.
 
-This is this resource's **first ACE-gated surface** — unlike every other
-command above, authorization has nothing to do with department membership
-or K9 certification:
+**Corrected 2026-08-25 — this is no longer an ACE-gated surface.** It was,
+originally; the project owner directed a change to **police job rank**
+instead, on the reasoning that "who may review K9 certification/
+partnership/search history" is a question for senior officers in-game, the
+same authority model every other gated action in this resource already
+uses, not a server-console/ACE trust boundary:
 
-- The caller must pass `IsPlayerAceAllowed(source, Config.AdminAudit.AcePermission)`
-  (default ACE principal: `'k9unit.admin'`). Set this deliberately before
-  enabling — these commands expose **who searched whom, and when**, so this
-  is a privacy boundary as well as an admin one.
-- All four commands share one per-caller cooldown, `Config.AdminAudit.CommandCooldownMs`
+- The caller must hold a `job.name` that is a key in `Config.Departments`,
+  and either be that department's boss (`job.isboss == true`) or sit at or
+  above that department's own `Config.Departments[job.name].auditGrade`
+  (a field separate from `certifierGrade`, so a server owner can set the
+  audit bar independently of who can grant/revoke certifications — both
+  default to the same value per department on day one). **There is no ACE
+  permission to grant for these commands at all any more** —
+  `Config.AdminAudit.AcePermission` has been removed from `config.lua`.
+  This is a **more permissive** default than the old ACE gate: any
+  sufficiently senior officer can already run these the moment the flag is
+  on, with no separate staff grant step. These commands expose **who
+  searched whom, and when**, so treat `auditGrade` as a privacy boundary,
+  not just an admin one.
+- All five commands share one per-caller cooldown, `Config.AdminAudit.CommandCooldownMs`
   (default `3000`ms).
 - The server console (`source == 0`) is **not** trusted by default
   (`Config.AdminAudit.TrustConsole`, default `false`). In FiveM, `source == 0`
   is not only the real console — it's also an RCON client (authenticated by
   `rcon_password` alone) and **any other resource on the server** calling
   `ExecuteCommand`, since these commands are registered unrestricted.
-  Turning `TrustConsole` on accepts all three as trusted equally. Prefer
-  granting a genuine console operator the ACE directly, or querying the
-  database yourself, over flipping this on.
+  Turning `TrustConsole` on accepts all three as trusted equally. A job-rank
+  check has no job to compare for the console at all, so without this
+  explicit opt-in, console access would be structurally impossible rather
+  than a deliberate default. Prefer granting a genuine officer the rank, or
+  querying the database yourself, over flipping this on.
 - Every invocation — allowed, denied, rate-limited, or malformed — is
   printed to the server console, so the audit surface itself has an audit
   trail.
+
+**`/k9bonetool` (below) is a separate feature and is still genuinely
+ACE-gated** — a dev tool unrelated to police rank, deliberately kept on a
+different mechanism so granting audit access to an officer never also hands
+them a tool that spawns and attaches props to peds.
 
 | Command | Usage | Notes |
 |---|---|---|
@@ -734,6 +754,7 @@ or K9 certification:
 | `/k9auditpartner` | `/k9auditpartner [citizenid] [limit]` | Full partnership history (active and historical) for one citizenid, in **either** the K9 or handler role. Same default/clamp behavior, using `MaxResults.Partnerships`. |
 | `/k9auditsearch` | `/k9auditsearch <officer\|plate\|person\|recent> [value] [limit]` | `officer <citizenid>` — searches **performed by** that citizenid; `plate <plate>` — searches **of** that vehicle; `person <citizenid>` — searches **of** that person; `recent` — the N most recent searches of any kind (no `value` argument). All modes order most-recent-first. Same default/clamp behavior, using `MaxResults.SearchLog`. |
 | `/k9auditxp` | `/k9auditxp [citizenid]` | Current persisted XP total for one citizenid, from `k9_progression`. A single-row point lookup — no `[limit]`. Reports the raw `xp` integer only, not a derived tier; compare it against `Config.XPTiers` yourself. |
+| `/k9auditdept` | `/k9auditdept [job] [limit]` | Current **active** certified-handler roster for one department (a `Config.Departments` key), most recently **granted** first. Active-only, not full history — see `/k9auditcert` above for a per-citizenid history view instead. Same default/clamp behavior, using `MaxResults.Certifications`. |
 
 ### Dev-only tooling (`Config.Features.BoneSweepDevTool`)
 
@@ -748,11 +769,15 @@ resource-wide, including on this server if this config file has reached
 one.** Check `config.lua` and set this back to `false` (then restart the
 resource — see the one-way-door note below) if that's the case here.
 `Config.Features.BoneSweepDevTool` spawns and attaches real objects on
-command, and must stay `false` outside a dev session. It is additionally gated on its own ACE
-(`Config.BoneSweepTool.AcePermission`, default `'k9unit.bonesweep'` —
-**deliberately a different principal** from the admin-audit ACE above, so
-granting one never grants the other) — but treat the feature flag itself
-as the real switch, not the ACE.
+command, and must stay `false` outside a dev session. It is additionally
+gated on its own ACE (`Config.BoneSweepTool.AcePermission`, default
+`'k9unit.bonesweep'`) — this is the **only** ACE-gated surface left in this
+resource as of 2026-08-25, since the admin/audit commands above were
+switched from ACE to police job rank. `k9unit.bonesweep` is deliberately
+its own, separate principal (not tied to anything the audit commands use),
+so granting audit access to an officer never also hands them a tool that
+spawns and attaches props to peds — but treat the feature flag itself as
+the real switch, not the ACE.
 
 **Disabling the flag and restarting are two different things.** Like every
 command in this resource, `/k9bonetool` is registered once, at load. Flipping

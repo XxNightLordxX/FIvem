@@ -138,9 +138,28 @@ local function GetCurrentResourceName()
     return 'qbx_k9unit'
 end
 
-local aceGrants = {}
-local function IsPlayerAceAllowed(sourceIdStr, _ace)
-    return aceGrants[sourceIdStr] == true
+-- server/bonetool.lua switched from an ACE grant to police job rank on
+-- 2026-08-25, so an ACE stub here would authorize nothing. A source is
+-- authorized by having a resolvable qbx_core player whose job is a
+-- configured department and who is either a boss of it or at/above its
+-- auditGrade. Register a shape here, then drive the command.
+local boneToolPlayersBySource = {}
+local boneToolExportsStub = {
+    qbx_core = {
+        GetPlayer = function(_self, src) return boneToolPlayersBySource[src] end,
+    },
+}
+
+--- The dev tool now requires a SECOND, explicit opt-in on top of
+--- Config.Features.BoneSweepDevTool: an operator must deliberately set a
+--- convar too, so "all features enabled" alone cannot expose it. These two
+--- cases are about the NotifyPlayer wrapper, not the gate, so the convar
+--- reads as set -- tests/bonetool_spec.lua owns the gate's own coverage.
+local boneToolConvars = { qbx_k9unit_enable_bone_dev_tool = 1 }
+local function GetConvarInt(name, default)
+    local v = boneToolConvars[name]
+    if v == nil then return default end
+    return v
 end
 
 local boneToolCapturedClientEvents = {}
@@ -155,8 +174,12 @@ end
 
 local Config = {
     Features = { BoneSweepDevTool = true },
+    -- IsAuthorizedBoneTool resolves the caller's own department threshold
+    -- from this, the same way server/admin.lua's IsAuthorizedAdmin does.
+    Departments = {
+        police = { label = 'Los Santos Police Department', certifierGrade = 4, auditGrade = 4, autoAccessGrade = nil },
+    },
     BoneSweepTool = {
-        AcePermission = 'k9unit.bonetool',
         TestPropModel = 'prop_test_model',
         MaxBoneIndex = 200,
         TestOffsetX = 0, TestOffsetY = 0, TestOffsetZ = 0,
@@ -171,7 +194,8 @@ local boneToolEnv = Sandbox.newEnv({
     RegisterCommand = RegisterCommand,
     AddEventHandler = AddEventHandler,
     GetCurrentResourceName = GetCurrentResourceName,
-    IsPlayerAceAllowed = IsPlayerAceAllowed,
+    exports = boneToolExportsStub,
+    GetConvarInt = GetConvarInt,
     GetGameTimer = GetGameTimerForBoneTool,
     print = printStubBoneTool,
     Config = Config,
@@ -192,7 +216,9 @@ t.isNotNil(registeredCommands.k9bonetool, 'onResourceStart must register k9bonet
 t.test('bonetool local NotifyPlayer: delegates to the REAL notify.lua global with its OWN title, no recursion', function()
     boneToolCapturedClientEvents = {}
     local src = 5001
-    aceGrants[tostring(src)] = false -- unauthorized -> hits the local NotifyPlayer wrapper
+    -- Unauthorized: no resolvable player record at all -> the authorization
+    -- check fails closed and hits the local NotifyPlayer wrapper.
+    boneToolPlayersBySource[src] = nil
     -- If this ever regresses to a bare `NotifyPlayer(...)` call inside
     -- bonetool.lua's own local wrapper, this line hangs/stack-overflows
     -- instead of returning -- that IS the regression signal.
@@ -210,7 +236,12 @@ t.test('bonetool local NotifyPlayer: an authorized "help" invocation also carrie
     boneToolCapturedClientEvents = {}
     boneToolFakeNow = boneToolFakeNow + 1000
     local src = 5002
-    aceGrants[tostring(src)] = true
+    boneToolPlayersBySource[src] = {
+        PlayerData = {
+            citizenid = 'CITBONE',
+            job = { name = 'police', isboss = true, grade = { level = 4 } },
+        },
+    }
     registeredCommands.k9bonetool(src, { 'help' })
     t.equals(#boneToolCapturedClientEvents, 1)
     t.equals(boneToolCapturedClientEvents[1][3].title, 'K9 Unit — Bone Tool')

@@ -629,6 +629,21 @@ local ContrabandXpMintCooldown = NewCooldown()
 ContrabandXpMintCooldown.RegisterPlayerDropped()
 local CONTRABAND_XP_MINT_COOLDOWN_MS = 60000
 
+-- EIGHTH XP-FARM FIX, CROSS-FILE POINTER (red-team-flagged compound-farm
+-- follow-up, this pass): this cooldown's own 1,500 XP/hr ceiling is real and
+-- unchanged, but it was never summed against server/tracking.lua's
+-- TrackTicketMintCooldown (1,200 XP/hr) or server/combat.lua's
+-- BiteHoldXpMintCooldown/TakedownXpMintCooldown (1,200 + 1,800 XP/hr) --
+-- all four keyed by the same acting player, combining to 5,700 XP/hr
+-- uncapped. CLOSED by server/progression.lua's new SHARED, cross-mechanic
+-- XP mint budget (XP_MINT_BUDGET_CAP_XP/XP_MINT_BUDGET_WINDOW_MS, consulted
+-- inside AwardXP itself) -- see that file's own declaration comment for the
+-- full derivation. Nothing in THIS file needed to change for that half of
+-- the fix: AwardXP is the single chokepoint this file's own award call site
+-- already goes through. ContrabandXpMintCooldown above is KEPT, unchanged
+-- -- it still shapes how often THIS mechanic can mint; the shared budget in
+-- server/progression.lua caps the TOTAL across mechanics.
+
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a local
 -- function (see its own extensive "DELIBERATE IMPLEMENTATION CHOICE" doc
 -- comment, now preserved verbatim on server/entities.lua's copy). It was

@@ -118,13 +118,35 @@
     own ACCESS MODEL section; restated here because this file is the one
     that actually runs the draw thread and registers the event handler):
     this file's own registration gate (the `if Config.Features and
-    Config.Features.BoneSweepDevTool == true then` a few lines below) is
-    evaluated ONCE, when this file loads. Flipping the flag off and back on
-    WITHOUT a resource restart does not un-register anything on THIS
-    client either — same "gate at registration, not inside the handler"
-    tradeoff server/bonetool.lua's own command registration makes, applied
-    here to the event handler/draw thread/cleanup hooks. Never treat "the
-    flag is off now" as sufficient by itself without also restarting.
+    Config.Features.BoneSweepDevTool == true and GetConvarInt(...) == 1
+    then` a few lines below) is evaluated ONCE, when this file loads.
+    Flipping the flag or the convar off and back on WITHOUT a resource
+    restart does not un-register anything on THIS client either — same
+    "gate at registration, not inside the handler" tradeoff
+    server/bonetool.lua's own command registration makes, applied here to
+    the event handler/draw thread/cleanup hooks. Never treat "the flag/
+    convar is off now" as sufficient by itself without also restarting.
+
+    SECOND, EXPLICIT OPT-IN — CONVAR (coder-security, this pass; see
+    server/bonetool.lua's own header SECOND, EXPLICIT OPT-IN section for
+    the full "why" writeup, not re-derived here): this file's own
+    registration gate now ALSO requires `GetConvarInt('qbx_k9unit_enable_bone_dev_tool',
+    0) == 1`, not just the feature flag — WHY THIS FILE NEEDS ITS OWN COPY
+    OF THAT CHECK, not merely relying on the server never sending
+    'qbx_k9unit:client:boneToolCommand' when it's unset: without it, EVERY
+    client on a server that ships Config.Features.BoneSweepDevTool = true
+    but has not opted in via the convar would still register this file's
+    RegisterNetEvent handler and start its per-frame preview draw thread
+    (harmless in effect — the SOURCE-ORIGIN GUARD below means a client can
+    never trigger its own handler, and the server-side command that would
+    ever dispatch this event does not exist in that configuration — but
+    genuinely pointless: a permanently-idle thread and a permanently-dead
+    event registered on every connected player's client for a feature that
+    can never fire). Requiring the SAME convar here closes that gap
+    entirely rather than leaving it "harmless but wasteful." This is why
+    server/bonetool.lua's own header insists on a REPLICATED (`setr`, not
+    `set`) convar: a plain `set` convar is only ever visible server-side,
+    and this file could not read it at all without one.
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls `AttachPropToOwnPed`/`DetachAndDeleteProp`, both
@@ -164,6 +186,15 @@ local MARKER_COLOR = { r = 255, g = 40, b = 40, a = 200 }
 local LABEL_TEXT_SCALE = 0.35
 local LABEL_TEXT_FONT = 4
 local LABEL_HEIGHT_OFFSET = 0.45
+
+-- SECOND, EXPLICIT OPT-IN (coder-security, this pass) — see this file's
+-- header SECOND, EXPLICIT OPT-IN section, and server/bonetool.lua's own
+-- header, for the full "why" writeup. MUST be the exact same literal as
+-- server/bonetool.lua's own BONE_DEV_TOOL_ENABLE_CONVAR constant — the two
+-- are duplicated per-file (see that file's own comment on this constant)
+-- rather than shared, but both must resolve to one REPLICATED (`setr`)
+-- convar for this file to ever see the same value the server used.
+local BONE_DEV_TOOL_ENABLE_CONVAR = 'qbx_k9unit_enable_bone_dev_tool'
 
 -- This client's own state — all local-only, never read from another file.
 local sweepActive = false
@@ -216,7 +247,7 @@ end
 -- (same "layered checks" posture as the SOURCE-ORIGIN GUARD immediately
 -- below it).
 -- ======================================================================
-if Config.Features and Config.Features.BoneSweepDevTool == true then
+if Config.Features and Config.Features.BoneSweepDevTool == true and GetConvarInt(BONE_DEV_TOOL_ENABLE_CONVAR, 0) == 1 then
 
 --- On-screen 3D text label at a world position — shows the current bone
 --- index directly next to the preview marker, so a human doesn't have to
@@ -418,11 +449,12 @@ RegisterNetEvent('qbx_k9unit:client:boneToolCommand', function(subcommand, arg)
     if source ~= 65535 then return end
 
     -- FEATURE GATE — this handler must never fire real effects while the
-    -- flag is off, even though server/bonetool.lua only ever sends this
-    -- event from behind its own flag+ACE gate; defense in depth, matching
-    -- every other gated handler's own per-handler convention in this
-    -- resource.
+    -- flag or the convar is off, even though server/bonetool.lua only ever
+    -- sends this event from behind its own flag+convar (registration-time)
+    -- and job-rank (per-invocation) gates; defense in depth, matching every
+    -- other gated handler's own per-handler convention in this resource.
     if not (Config.Features and Config.Features.BoneSweepDevTool == true) then return end
+    if GetConvarInt(BONE_DEV_TOOL_ENABLE_CONVAR, 0) ~= 1 then return end
 
     local maxIndex = (Config.BoneSweepTool and Config.BoneSweepTool.MaxBoneIndex) or currentBoneIndex
 

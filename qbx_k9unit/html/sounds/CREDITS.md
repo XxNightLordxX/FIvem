@@ -2,10 +2,30 @@
 
 Author: technology-scout pass, 2026-08-24, jlwood17190665@gmail.com.
 
-**Status: NO audio files were added in this pass.** This file is a sourcing
-brief, not a credits log — there is nothing to credit yet. That is a
-deliberate, honest outcome, not an oversight: see "Why no files shipped"
-below before assuming this is unfinished work someone forgot to do.
+**Merge note, docs-consolidation pass, 2026-08-25:** the separate
+`AUDIO_SOURCING.md` (root of the resource) has been folded into this file.
+That document was a second, corroborating pass over the same licensing
+question — it could not reach this file's own curl-verified sources
+directly (its `WebFetch` tool was egress-blocked against the same audio
+hosts), so it cross-checked this file's findings with independent
+`WebSearch` queries and reached the same conclusions (see "Independent
+corroboration" under the licence section below), plus it caught one real
+gap this file had missed: a fifth required sound file, `growl_ambient.ogg`
+(now added to the table below), and a legal-reasoning note on the scope of
+CC BY-SA's share-alike clause (see "On CC BY-SA's share-alike scope" further
+down). No licence statement from either source document was reworded in
+this merge — every licence name below is quoted exactly as the source page
+or API returned it. `AUDIO_SOURCING.md` itself has been deleted; this file
+is now the single, authoritative record for every sound asset this resource
+ships or needs.
+
+**Status: NO audio files were added in this pass** (2026-08-24, the
+original brief below). This file is a sourcing brief, not a credits log —
+there was nothing to credit yet at that point. That was a deliberate,
+honest outcome, not an oversight: see "Why no files shipped" below before
+assuming this was unfinished work someone forgot to do. **This has since
+changed — see "AUDIO SHIP PASS — 2026-08-25" further down: `bark.ogg` is
+now sourced, shipped, and credited.**
 
 **Confidence convention** (same standard `phase2_notes/dependency_and_audio_status.md`
 already uses in this resource): a claim below is marked CONFIRMED only when
@@ -27,6 +47,9 @@ resolved relative to `html/index.html`, i.e. under `html/sounds/`):
 | `bark_alert.ogg` | `'Bark_Alert'` — `config.lua`'s `Config.AdvancedBarkRadial` | Sharper, attention-getting bark |
 | `bark_aggressive.ogg` | `'Bark_Aggressive'` — `config.lua`'s `Config.AdvancedBarkRadial` | Growl-tinged / threatening bark |
 | `bark_calm.ogg` | `'Bark_Calm'` — `config.lua`'s `Config.AdvancedBarkRadial` | Soft, single low bark/chuff |
+| `growl_ambient.ogg` | `'Growl_Ambient'` — `client/proximityaudio.lua`'s `PROXIMITY_SOUND_NAME`, sourced from `Config.ProximityAudioFX.soundName` | **Not a one-shot** — played with `loop = true` (`client/proximityaudio.lua` calls `PlayK9Sound(netId, PROXIMITY_SOUND_NAME, { loop = true })`). Needs a seamlessly-loopable ambient growl/breathing bed, not a single bark — a different sourcing target than the four rows above, not a byproduct of whichever bark clip gets picked. Added to this table 2026-08-25 (folded in from `AUDIO_SOURCING.md`, which caught that this file's original four-row table omitted it) — sourcing not yet done. |
+
+**The one duration/size rule above that does not apply to `growl_ambient.ogg`:** "well under 2 seconds, not a loop" is correct for the four bark files only. `growl_ambient.ogg` is deliberately a loop — see its own row above.
 
 Practical constraints, from reading `client/audio.lua` directly (it plays
 these as one-shot, non-looping sounds today — nothing in this resource
@@ -282,16 +305,22 @@ prior passes concluded.
 - **File size:** 6,951 bytes (well under 1 MB)
 - **Filename and path, derived from code (not assumed):** `html/sounds/bark.ogg`. `client/audio.lua`'s `SOUND_NAME_TO_FILE_KEY` maps sound name `'Bark'` (`client/main.lua`'s `BARK_SOUND_NAME`) to file key `'bark'`; `html/app.js`'s `loadSoundBuffer()` does `fetch('sounds/' + key + '.ogg')`, resolved relative to `html/index.html` — i.e. `html/sounds/bark.ogg`.
 
-## Outstanding follow-up (outside this file's scope — `html/sounds/` only)
+## Outstanding follow-up — corrected, docs-consolidation pass, 2026-08-25
 
-`fxmanifest.lua`'s `files{}` block does not yet list `html/sounds/bark.ogg`
-(verified by reading it directly this pass — only `html/index.html`,
-`html/style.css`, `html/app.js`, `locales/en.json` are listed). Per
-`AUDIO_SOURCING.md`'s own note, this resource's manifest convention is
-explicit entries, not globs. **The file will not actually reach clients
-until `'html/sounds/bark.ogg'` is added to that block** — flagged here for
-whoever owns `fxmanifest.lua`, since this pass's scope is `html/sounds/`
-only and does not touch it.
+**This section previously said `fxmanifest.lua`'s `files{}` block did not
+yet list `html/sounds/bark.ogg`. That is no longer true, and re-checking it
+directly just now confirms it hasn't been true for a while:**
+`fxmanifest.lua`'s `files{}` block lists `'html/sounds/bark.ogg'` explicitly,
+alongside `html/index.html`, `html/style.css`, `html/app.js`, and
+`locales/en.json` — this resource's manifest convention is explicit
+entries, not globs, and this file follows it. `bark.ogg` reaches clients
+today. Nothing outstanding here.
+
+The four remaining sound files (`bark_alert.ogg`, `bark_aggressive.ogg`,
+`bark_calm.ogg`, `growl_ambient.ogg`) are **not yet in `fxmanifest.lua`**
+because they don't exist yet — add each one's `'html/sounds/<name>.ogg'`
+line to that block at the same time it's actually dropped into this
+folder, not before.
 
 # LICENCE VERIFICATION PASS — 2026-08-25
 
@@ -348,3 +377,76 @@ checklist above still apply, and the attribution must be recorded in this file.
 Note the format gap: every verified candidate is `.ogg`/`.oga`/`.wav`, while the
 NUI bridge expects `.ogg`. The Wikimedia files already qualify; the OpenGameArt
 ones are `.wav` and would need converting.
+
+---
+
+# On CC BY-SA's share-alike scope (carried over from `AUDIO_SOURCING.md`, 2026-08-25)
+
+A second, independent pass (unable to reach these hosting sites directly
+this session; corroborated the licence findings above via separate
+`WebSearch` queries instead — see "Independent corroboration" note below)
+raised one point worth keeping even though it did not change what's
+shipped: whether CC BY-SA's share-alike clause would actually reach into
+this resource's own code if the Wikimedia files were ever used.
+
+**Independent corroboration, for the record:** a `WebSearch` for `"Barking
+of a dog.ogg" wikimedia commons license`, run without first reading this
+file's own text, independently returned "Creative Commons
+Attribution-Share Alike 3.0 Unported" — matching the Commons-API-verified
+finding above. The same pass's search for the OpenGameArt asset returned a
+snippet claiming "OGA-BY 3.0 **and** CC0" in the same sentence — i.e. it
+independently reproduced the exact name-vs-licence-field trap described
+above, from a different tool and a differently-worded query. Treat this as
+corroboration, not a fresh independent proof.
+
+**The reasoning itself, stated with the same hedge its author gave it —
+this is reasoning about how CC BY-SA is structured, not a claim verified
+against the primary licence text:**
+
+> CC BY-SA's ShareAlike clause (as CC licenses are generally structured)
+> attaches to the *Licensed Material* and *Adapted Material* — i.e., it
+> requires anything you *modify and redistribute* to carry the same
+> licence. It does not require unrelated software that is merely
+> *aggregated alongside* an unmodified copy of the licensed file (a
+> "Collection," in Creative Commons' own terminology) to be relicensed.
+> Bundling an unmodified `.ogg` into this resource's `html/sounds/` folder
+> reads like the "Collection" case, not the "Adapted Material" case —
+> which would mean CC BY-SA's copyleft does not reach into `qbx_k9unit`'s
+> own code at all, only into the audio file itself (and only bites if the
+> audio file is later remixed/re-edited and redistributed as a
+> modification). **The CC BY-SA 3.0/4.0 legal code itself was not fetched
+> to confirm this reading against the primary licence text** —
+> `creativecommons.org` was not tried — so this is reasoning about how
+> CC BY-SA is structured, not a verified claim. It should be confirmed
+> against the actual licence text before relying on it for the Wikimedia
+> files specifically.
+
+**Net effect on the recommendation above: none.** `bark.ogg` is already
+shipped under OGA-BY 3.0, which carries no such open question at all — this
+section only matters if a future pass considers the Wikimedia CC BY-SA
+files for one of the four still-missing sounds, in which case confirm this
+reading against the primary licence text first rather than assuming it.
+
+## Routes flagged as "don't pursue casually" for whoever sources the remaining four files
+
+Carried over from `AUDIO_SOURCING.md` so this caution isn't lost:
+
+- **Freesound.org, filtered to the CC0 licence facet**, surfaced several
+  named candidates (e.g. AleXZavesa's "Dog Bark" pack, nick121087's "Dog
+  Barking") — the filter mechanism is legitimate, but no specific result
+  page has been opened to confirm a per-file licence tag. Do not treat any
+  Freesound URL as cleared without opening its page directly.
+- **OpenGameArt collections literally titled "CC0 Sound Effects" / "80 CC0
+  creature SFX"** — unverified leads only. The `dog-barking-mono` case
+  above is a direct demonstration that a collection *title* containing
+  "CC0" is not proof of the *licence field* being CC0 — open and check the
+  licence field on each specific asset page before use.
+- **Internet Archive 78rpm-era "dog effects" recordings** — not recommended
+  as a route at all, not just "unconfirmed." US pre-1972 sound recordings
+  have their own copyright timeline (pre-1923 recordings entered the public
+  domain 2022-01-01 under the Music Modernization Act; 1923-1946 recordings
+  have a longer, staggered term) that is independent of whether
+  Archive.org hosts the file — hosting is not itself evidence of
+  public-domain status, and confirming it needs the specific recording's
+  real production date. Not a quick win; don't pursue without dedicated
+  recording-date research.

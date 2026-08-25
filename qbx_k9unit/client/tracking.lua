@@ -179,8 +179,9 @@ end
 --- @param trackType 'scent'|'blood'|'gunpowder'
 local function StartTrack(trackType)
     if not CanShowK9UI() then
-        -- Migrated to the shared client/main.lua helper (REFACTOR_ROADMAP_2.md
-        -- item 1) — this was the last raw inline copy of the
+        -- Migrated to the shared client/main.lua helper (REFACTOR_ROADMAP.md
+        -- Part B item 1 -- formerly REFACTOR_ROADMAP_2.md, merged 2026-08-25)
+        -- — this was the last raw inline copy of the
         -- common.no_k9_access lib.notify() pattern; DenyK9UIAccess()'s own
         -- payload (title/description/type) is byte-identical to what this
         -- call site used to build directly.

@@ -5,8 +5,9 @@
     file's own header: "a FOUNDATION only... zero gameplay consequence
     wired to it yet") a real, modest gameplay payoff: a handler+K9 pair who
     STAY partnered accrue tenure, and crossing a tenure threshold grants a
-    one-time, flat XP bonus to the K9-role party -- COMPLEMENTARY_FEATURES.md
-    §7 ("Partnership-tenure bonuses"), the #3 item in that pass's "Top 3"
+    one-time, flat XP bonus to the K9-role party -- FEATURE_IDEAS.md Part B
+    §7 ("Partnership-tenure bonuses") -- formerly COMPLEMENTARY_FEATURES.md,
+    merged 2026-08-25, the #3 item in that pass's "Top 3"
     specifically because the registry already carries everything this file
     needs (`established_at`, `GetActivePartnerCitizenId`) with zero new
     subsystem required.
@@ -44,7 +45,7 @@
     written under a hard constraint -- every OTHER existing `.lua` file in
     this resource (server/partnership.lua, server/progression.lua,
     server/wellbeing.lua, client/movement.lua included) is OFF LIMITS, not
-    just "prefer not to touch." COMPLEMENTARY_FEATURES.md §7's own "Needs"
+    just "prefer not to touch." FEATURE_IDEAS.md Part B §7's own "Needs"
     paragraph assumed a coder who COULD edit server/wellbeing.lua to add one
     more key to the existing Mood-regen/K9MoveRateModifiers composer -- that
     path is genuinely closed here, since `WellbeingStats` is `local` to that
@@ -85,7 +86,7 @@
     2. FEED THE EXISTING PROGRESSION, OR GRANT SOMETHING CATEGORICALLY
        DIFFERENT? -- Feeds the existing progression, deliberately, and NOT
        by choice alone: `Config.XPTiers`' speedMultiplier/scentRangeMultiplier are the
-       "categorically different" alternative COMPLEMENTARY_FEATURES.md §7
+       "categorically different" alternative FEATURE_IDEAS.md Part B §7
        itself names (a Mood-regen bonus, a raised Fatigue cap) -- both of
        which require write access to server/wellbeing.lua's `local`
        WellbeingStats / client/movement.lua's K9MoveRateModifiers, both off
@@ -147,7 +148,7 @@
              file's tick takes to notice, and logs back off has cleared it.
              That is an accepted, disclosed limitation, not an oversight --
              a stronger bar (e.g. "credit only after a joint search," per
-             COMPLEMENTARY_FEATURES.md §10's separate, NOT-built-here idea)
+             FEATURE_IDEAS.md Part B §10's separate, NOT-built-here idea)
              would require hooking server/search.lua's own success path,
              which is off limits this pass for the same SCOPE BOUNDARY
              reason as wellbeing.lua/movement.lua above. Given the reward's
@@ -373,7 +374,8 @@
 -- profile, same accepted shape as server/certifications.lua's own
 -- `Certifications` cache and server/progression.lua's own `K9XP` cache.
 --
--- ITEM 4 CLOSURE (REFACTOR_ROADMAP_2.md item 4 / tests/README.md "What's NOT
+-- ITEM 4 CLOSURE (REFACTOR_ROADMAP.md Part B item 4 -- formerly
+-- REFACTOR_ROADMAP_2.md, merged 2026-08-25 / tests/README.md "What's NOT
 -- covered" / tests/tenure_spec.lua's own DISCREPANCY case -- this is the
 -- fourth pass over this exact question; this section exists specifically so
 -- there is no fifth. Dated: 2026-08-25.):

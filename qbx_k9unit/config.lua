@@ -160,7 +160,17 @@ Config.Features = {
     -- CONCRETE RE-CHECK, so the next pass diffs rather than re-researches:
     -- has #3835 closed, or has a file matching ext/native-decls/*RenderTarget*
     -- appeared? If neither, nothing has changed.
-    CameraFeedPiP        = true,
+    -- DELIBERATELY FALSE, and the only flag in this table that is.
+    -- The 2026-08-25 pass enabled every other feature at the owner's
+    -- request; this one is excluded because there is NO IMPLEMENTING CODE
+    -- ANYWHERE IN THIS RESOURCE for it -- grep the tree, it is referenced
+    -- only here. It is not an unfinished feature, it is a placeholder for
+    -- one the engine cannot currently support (see the research notes
+    -- above). Setting it true would not switch anything on; it would only
+    -- tell an operator reading this file that a picture-in-picture camera
+    -- feed exists, which it does not. Flip it to true only in the same
+    -- change that adds the code, never before.
+    CameraFeedPiP        = false,
 }
 
 -- ======================================================================
@@ -1249,7 +1259,43 @@ Config.Wellbeing = {
         jumpBlockThreshold      = 20, -- below this, jump input is blocked
         speedPenaltyMultiplier  = 0.80, -- RAISED 0.7 -> 0.80, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.injury)
         damageDecayAmount       = 10, -- flat decrement per logged damage event -- independent value from Mood's own damageDecayAmount, same detection source
-        passiveRegenPerTick     = 0.1, -- deliberately very slow -- K9Medkit (Config.K9Medkit, via RestoreInjury) is the intended primary recovery path, not natural regen
+        -- RAISED 0.1 -> 1.0. K9Medkit was documented as "the intended
+        -- primary recovery path," but at 0.1/tick a K9 dropped to 0 Injury
+        -- (a handful of hits in one firefight, at damageDecayAmount 10 each)
+        -- took ~16.7 real minutes to clear jumpBlockThreshold and ~25
+        -- minutes to clear sprintBlockThreshold -- and client/wellbeing.lua
+        -- HARD-BLOCKS sprint and jump input the entire time, with no server
+        -- override. The medkit escape hatch also depends on an operator
+        -- having actually registered Config.K9Medkit.itemName in their own
+        -- ox_inventory, which this resource cannot guarantee (hence the new
+        -- startup warning in server/wellbeing.lua). That combination is a
+        -- stuck player, not a tuning choice. Same precedent and reasoning as
+        -- Mood.passiveRegenPerTick's own 0.2 -> 1.0 raise above -- applied
+        -- here because Injury's penalty is a hard INPUT BLOCK, a stronger
+        -- case for parity than Mood's soft speed multiplier, not a weaker
+        -- one. Now: jump clears in ~1.67 min, sprint in ~2.5 min, a full
+        -- 0->100 climb in ~8.33 min, identical to Mood's adopted rate.
+        passiveRegenPerTick     = 1.0,
+
+        -- DEATH/RESPAWN RESTORE. Added to Injury the tick
+        -- server/wellbeing.lua first observes a tracked K9's native health
+        -- recover above its dead-health threshold after having been at or
+        -- below it -- i.e. the K9 died and was revived. 100 = Injury.max, a
+        -- FULL reset: the ped's real health is already restored to full by
+        -- whatever laststand/ambulance system handles revival, so a virtual
+        -- Injury value surviving that same event untouched was the real
+        -- inconsistency.
+        -- CONFIGURABLE: set to 0 to disable entirely (a supported no-op, for
+        -- an operator who wants "still limping after respawn" for realism),
+        -- or any value in [0, Injury.max] for a partial restore.
+        -- DISCLOSED RESIDUAL RISK this resource cannot close alone: the
+        -- health transition is read SERVER-side so it cannot be spoofed, but
+        -- a player can still choose to die and be revived on purpose. The
+        -- real cost of using that as a free Injury reset is bounded only by
+        -- whatever minimum downed-duration or fee YOUR ambulance/laststand
+        -- system imposes, which this resource has no visibility into. If
+        -- your revive flow is instant and free, set this lower than 100.
+        deathRespawnRestoreAmount = 100,
     },
 }
 

@@ -1246,6 +1246,115 @@ t.test('breakPartnership: a thrown DB error is caught and reported, not a hard c
     t.isTrue(notifiedExactly(f, 10, locale('partnership.break_error'), 'error'))
 end)
 
+-- ----------------------------------------------------------------------
+-- REGRESSION (dependency-verification pass): oxmysql's `.await` funnels
+-- every query through one shared `await(fn, query, parameters)` whose
+-- callback does `if error then return p:reject(error) end`, and a
+-- REJECTED promise raises via `error(promise.value, 2)` inside
+-- `Citizen.Await` -- a real DB error THROWS out of a bare `.await` call,
+-- it does not return nil. The test directly above already covers
+-- DoBreakPartnership's SELECT throwing; the three cases below specifically
+-- drive its UPDATE (the "half-succeeds" case this file's own doc comment
+-- on DoBreakPartnership calls out: the SELECT worked, and now the ONLY
+-- write throws) through a REAL, unmodified DoBreakPartnership, and assert
+-- (1) the thrown error never propagates, (2) the caller is told something
+-- sensible, and (3) neither the in-memory cache nor any broadcast ever
+-- diverges from what the DB actually ended up persisting.
+-- ----------------------------------------------------------------------
+
+t.test('breakPartnership: REGRESSION -- a throwing UPDATE that genuinely never committed (reconciliation confirms still active) is caught, notifies break_error, and leaves the partnership COMPLETELY intact -- no partial state', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-UPD1', 20, 'K9-UPD1')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-UPD1', handler_citizenid = 'OFF-UPD1' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+    t.isTrue(f.env.GetActivePartnerCitizenId('K9-UPD1') ~= nil, 'sanity: really partnered first')
+
+    -- DoBreakPartnership's own pre-UPDATE SELECT still sees the real active
+    -- row; the UPDATE itself throws.
+    f.mysql.single.await = function() return { id = 1, k9_citizenid = 'K9-UPD1', handler_citizenid = 'OFF-UPD1' } end
+    f.mysql.update.await = function() error('simulated connection drop mid-UPDATE') end
+    -- The reconciliation read (MySQL.scalar.await, a DIFFERENT method from
+    -- the SELECT above) confirms the row is STILL active (1).
+    f.mysql.scalar.await = function() return 1 end
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:breakPartnership', 10)
+    t.isTrue(ok, 'the event handler must never propagate a thrown DB error')
+
+    t.isTrue(notifiedExactly(f, 10, locale('partnership.break_error'), 'error'), 'the caller must see a sensible error notification, not silence')
+    t.equals(f.env.GetActivePartnerCitizenId('OFF-UPD1'), 'K9-UPD1', 'NO PARTIAL STATE: the cache must still report the real partnership active, matching the DB (the UPDATE never committed)')
+    t.equals(f.env.GetActivePartnerCitizenId('K9-UPD1'), 'OFF-UPD1')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnershipEnded'), 0, 'nobody must be told a partnership ended that never actually did')
+
+    local endedFired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:partnershipEnded' then endedFired = true end
+    end
+    t.isFalse(endedFired, 'no outbound partnershipEnded event for a break that never actually happened')
+end)
+
+t.test('breakPartnership: REGRESSION -- a throwing UPDATE that ACTUALLY committed (ack lost after a real commit) is confirmed via reconciliation and reported as the genuine success it was -- caches and broadcasts match the confirmed DB truth, never left diverging', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-UPD2', 20, 'K9-UPD2')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-UPD2', handler_citizenid = 'OFF-UPD2' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    -- Same "the stub must reflect the UPDATE's own effect" technique as the
+    -- full-success test above: DoBreakPartnership's own pre-UPDATE SELECT
+    -- must still see the active row, but the reconciliation read AND the
+    -- two post-reconciliation RefreshPartnershipCache calls must now see it
+    -- as gone -- modeling the row having genuinely flipped in the DB
+    -- despite the client-side error.
+    local rowActive = true
+    f.mysql.single.await = function(_sql, _params)
+        if not rowActive then return nil end
+        return { id = 1, k9_citizenid = 'K9-UPD2', handler_citizenid = 'OFF-UPD2' }
+    end
+    f.mysql.update.await = function() error('simulated ack lost after a real commit') end
+    f.mysql.scalar.await = function() rowActive = false; return 0 end -- reconciliation: confirmed inactive
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:breakPartnership', 10)
+    t.isTrue(ok, 'must not propagate: reconciled success must still return normally')
+
+    t.isNil((f.env.GetActivePartnerCitizenId('OFF-UPD2')), 'the cache must reflect the CONFIRMED true outcome (ended), never the failed client-side call alone')
+    t.isNil((f.env.GetActivePartnerCitizenId('K9-UPD2')))
+
+    local sawK9, sawOfficer = false, false
+    for _, e in ipairs(f.clientEvents) do
+        if e.event == 'qbx_k9unit:client:partnershipEnded' then
+            if e.target == 20 then sawK9 = true; t.equals(e.args[1], 'broken') end
+            if e.target == 10 then sawOfficer = true; t.equals(e.args[1], 'broken') end
+        end
+    end
+    t.isTrue(sawK9 and sawOfficer, 'both parties must be told the partnership genuinely ended, since it genuinely did')
+
+    local endedFired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:partnershipEnded' and ev[2] == 'K9-UPD2' and ev[3] == 'OFF-UPD2' and ev[4] == 'broken' then endedFired = true end
+    end
+    t.isTrue(endedFired)
+end)
+
+t.test('breakPartnership: REGRESSION -- the reconciliation read ITSELF also failing (true outcome unknown) still degrades safely, never propagates, and never claims success it cannot confirm', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-UPD3', 20, 'K9-UPD3')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-UPD3', handler_citizenid = 'OFF-UPD3' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    f.mysql.single.await = function() return { id = 1, k9_citizenid = 'K9-UPD3', handler_citizenid = 'OFF-UPD3' } end
+    f.mysql.update.await = function() error('simulated connection drop mid-UPDATE') end
+    f.mysql.scalar.await = function() error('simulated: DB still unreachable for the reconciliation read too') end
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:breakPartnership', 10)
+    t.isTrue(ok, 'must not propagate even when BOTH the UPDATE and the reconciliation read throw')
+
+    t.isTrue(notifiedExactly(f, 10, locale('partnership.break_error'), 'error'), 'an unconfirmable outcome must still notify an honest error, never silence')
+    t.equals(f.env.GetActivePartnerCitizenId('OFF-UPD3'), 'K9-UPD3', 'an unconfirmed outcome must never flip the cache toward "ended" on a guess')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnershipEnded'), 0)
+end)
+
 -- ========================================================================
 -- ForceBreakPartnershipForCitizenId -- citizenid-keyed, OFFLINE-CAPABLE by
 -- design (server/certifications.lua's own call sites depend on this).
@@ -1302,6 +1411,62 @@ t.test('ForceBreakPartnershipForCitizenId: a thrown DB error is caught and retur
     local ok, ended = pcall(f.env.ForceBreakPartnershipForCitizenId, 'K9-FERR', 'x')
     t.isTrue(ok)
     t.isFalse(ended)
+end)
+
+t.test('ForceBreakPartnershipForCitizenId: REGRESSION -- a throwing UPDATE that never committed (reconciliation confirms still active) returns false without propagating, and leaves the partnership COMPLETELY intact -- no partial state', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-FU1', 20, 'K9-FU1')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-FU1', handler_citizenid = 'OFF-FU1' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+    f.disconnectPlayer(10)
+    f.disconnectPlayer(20) -- BOTH now genuinely offline -- this is the offline-capable call site
+
+    f.mysql.single.await = function() return { id = 1, k9_citizenid = 'K9-FU1', handler_citizenid = 'OFF-FU1' } end
+    f.mysql.update.await = function() error('simulated connection drop mid-UPDATE') end
+    f.mysql.scalar.await = function() return 1 end -- reconciliation: confirmed STILL active
+
+    local ok, ended = pcall(f.env.ForceBreakPartnershipForCitizenId, 'K9-FU1', 'certification_revoked')
+    t.isTrue(ok, 'must never propagate: ' .. tostring(ended))
+    t.isFalse(ended, 'a genuinely failed break must report false, not a guessed true')
+    t.equals(f.env.GetActivePartnerCitizenId('K9-FU1'), 'OFF-FU1', 'NO PARTIAL STATE: the cache must still reflect the real, still-active partnership')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnershipEnded'), 0, 'nobody is online to tell, and nothing actually ended either way')
+
+    local endedFired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:partnershipEnded' then endedFired = true end
+    end
+    t.isFalse(endedFired, 'no outbound event for a break that never actually happened')
+end)
+
+t.test('ForceBreakPartnershipForCitizenId: REGRESSION -- a throwing UPDATE that ACTUALLY committed (ack lost) is confirmed via reconciliation and reported as the genuine success it was', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-FU2', 20, 'K9-FU2')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-FU2', handler_citizenid = 'OFF-FU2' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+    f.disconnectPlayer(10)
+    f.disconnectPlayer(20)
+
+    local rowActive = true
+    f.mysql.single.await = function(_sql, _params)
+        if not rowActive then return nil end
+        return { id = 1, k9_citizenid = 'K9-FU2', handler_citizenid = 'OFF-FU2' }
+    end
+    f.mysql.update.await = function() error('simulated ack lost after a real commit') end
+    f.mysql.scalar.await = function() rowActive = false; return 0 end -- reconciliation: confirmed inactive
+
+    local ok, ended = pcall(f.env.ForceBreakPartnershipForCitizenId, 'K9-FU2', 'certification_revoked')
+    t.isTrue(ok, 'must not propagate: ' .. tostring(ended))
+    t.isTrue(ended, 'the confirmed-genuine success must be reported as true, not a false negative from the client-side error alone')
+    t.isNil((f.env.GetActivePartnerCitizenId('K9-FU2')), 'the cache must reflect the CONFIRMED true outcome (ended)')
+    t.isNil((f.env.GetActivePartnerCitizenId('OFF-FU2')))
+
+    local endedFired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:partnershipEnded' and ev[4] == 'certification_revoked' then endedFired = true end
+    end
+    t.isTrue(endedFired)
 end)
 
 -- ========================================================================

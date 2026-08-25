@@ -10,12 +10,15 @@ time; it may no longer match the code, and `config.lua` plus the actual
 `.lua` files are always the final word on what the resource does today.
 
 **The single most important fact not obvious from file names:** as of
-2026-08-25, **every one of this resource's 40 `Config.Features` flags is
-switched on** (verified directly against `config.lua`). Several documents
-below were written when only five were on and have been updated to say so;
-`PROJECT_STATUS.md` has the full, current, plain-language picture,
-including one setting (`Config.Features.BoneSweepDevTool`) that should not
-stay on and is explained there.
+2026-08-25, **39 of this resource's 40 `Config.Features` flags are
+switched on** (verified directly against `config.lua`). The one exception,
+`CameraFeedPiP`, has no implementing code at all and was corrected back to
+`false` after briefly being swept to `true` with everything else — it
+changes nothing in-game either way. Several documents below were written
+when only five were on and have been updated to say so; `PROJECT_STATUS.md`
+has the full, current, plain-language picture, including one setting
+(`Config.Features.BoneSweepDevTool`) that should not stay on and is
+explained there.
 
 ## Start here, depending on who you are
 
@@ -63,6 +66,10 @@ stay on and is explained there.
   features — both are explained without jargon and without softening that
   they're unresolved. **Current** as of its own stated date; treat it as a
   snapshot, not a live dashboard, the same caveat it gives about itself.
+- **`DECISIONS_NEEDED.md`** — **now a redirect stub.** Its content (every
+  decision item, D1 through D13) lives in `PROJECT_STATUS.md` above. Left
+  behind only because the tooling used for the merge could not delete a
+  file outright; whoever next has shell access should remove it.
 
 ## History
 
@@ -150,20 +157,19 @@ one harder to find, not easier.
 
 ## Audio
 
-- **`html/sounds/CREDITS.md`** — the authoritative, up-to-date record of
-  which sound files actually exist in this resource and under what license.
-  Check this file, not assumptions, before trusting any claim about bark
-  audio working. **Current.** Outside this documentation pass's editable
-  scope (owned by whoever maintains `html/`).
-- **`AUDIO_SOURCING.md`** — a decision document weighing licensing options
-  for bark sound files, and the record of shipping the one sound file this
-  resource actually ships today (`bark.ogg`, under an attribution-only
-  license). Its own recommendation has since been carried out — see its
-  closing note. **This document is a good candidate to fold into
-  `html/sounds/CREDITS.md`** (the same licensing decision, split across two
-  files); not done as part of this pass because `CREDITS.md` is outside
-  this pass's editable scope. Whoever owns that file should do this merge
-  next.
+- **`html/sounds/CREDITS.md`** — **merged, 2026-08-25** (technical-writer
+  pass): now also contains everything that used to live in the separate
+  `AUDIO_SOURCING.md` (the licensing decision, the CC BY-SA share-alike
+  reasoning, and the `bark.ogg` sourcing/attribution record), plus a fifth
+  required-sound row (`growl_ambient.ogg`) that neither document's table
+  previously listed. The authoritative, up-to-date record of which sound
+  files actually exist in this resource and under what license — check
+  this file, not assumptions, before trusting any claim about bark audio
+  working. **Current.**
+- **`AUDIO_SOURCING.md`** — **now a redirect stub.** Its content lives in
+  `html/sounds/CREDITS.md` above. Left behind only because the tooling
+  used for the merge could not delete a file outright; whoever next has
+  shell access should remove it.
 
 ## Developer process docs
 

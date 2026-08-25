@@ -185,6 +185,251 @@ local K9XP = {}
 -- a player source.
 local AwardXPCooldown = NewNestedCooldown(500)
 
+-- ==========================================================================
+-- EIGHTH XP-FARM FIX (this pass, coder-backend, red-team-flagged COMPOUND-
+-- FARM follow-up to the SEVENTH fix -- every number below independently
+-- re-verified against the real, currently-shipped source before acting, not
+-- taken on the report alone; see this file's own report for the full
+-- arithmetic). The four per-mechanic MINT cooldowns this codebase already
+-- built (server/combat.lua's BiteHoldXpMintCooldown/TakedownXpMintCooldown,
+-- server/search.lua's ContrabandXpMintCooldown, server/tracking.lua's
+-- TrackTicketMintCooldown -- see each one's own declaration comment for its
+-- own "SEVENTH XP-FARM FIX" writeup) are each a real, independently correct
+-- per-ACTOR ceiling for ITS OWN mechanic -- but every one of them is keyed
+-- by the SAME acting player's source/citizenid, and nothing before this pass
+-- ever summed the four together. A single player round-robining all four --
+-- bite-hold one NPC, takedown a different NPC, run their own
+-- self-controlled contraband stash, resolve their own track -- is blocked
+-- by NONE of them, because each cooldown only ever sees its own single
+-- mechanic's calls.
+--
+-- RE-DERIVED FROM THE REAL SHIPPED CONSTANTS (not copied from the report):
+--   biteHoldSuccess:       20 XP / BITE_HOLD_XP_MINT_COOLDOWN_MS  (60000ms) = 1,200 XP/hr
+--   takedownSuccess:       30 XP / TAKEDOWN_XP_MINT_COOLDOWN_MS   (60000ms) = 1,800 XP/hr
+--   searchContrabandFound: 25 XP / CONTRABAND_XP_MINT_COOLDOWN_MS (60000ms) = 1,500 XP/hr
+--   trackSourceResolved:   10 XP / TRACK_TICKET_MINT_COOLDOWN_MS  (30000ms) = 1,200 XP/hr
+--   SUM (uncapped, structurally independent today) .................. = 5,700 XP/hr
+-- Config.XPTiers' own economy comment (config.lua) was retuned specifically
+-- so the worst-case farmable ceiling takes "over 2 hours" to reach the
+-- 9,000-XP Elite tier. At the uncapped 5,700 XP/hr sum above, Elite is
+-- reachable in 9000/5700 = 1.579 hours (~1h 35m) -- BELOW that floor, and
+-- reachable with close to zero real police work once server/combat.lua's
+-- own NPC-mint gate (Config.XP.mintXpForNpcCombatTargets, see that file) is
+-- also accounted for.
+--
+-- FIX: a SHARED, cross-mechanic budget, keyed by citizenid (matching
+-- Config.XP.scopePerCitizenidOrJob -- asserted 'citizenid' by the
+-- onResourceStart handler below -- the same identity every award in this
+-- file is already scoped by), consulted by EVERY AwardXP call regardless of
+-- actionKey. This is the single chokepoint every mechanic's award already
+-- passes through (that is the whole point of AwardXP being resource-global
+-- and the sole write path to K9XP), so putting the shared budget HERE, once,
+-- is sufficient -- no call site in server/combat.lua, server/search.lua, or
+-- server/tracking.lua needs to change for this budget itself to apply to it.
+--
+-- NOT A REPLACEMENT for the four per-mechanic mint cooldowns -- kept
+-- unchanged, deliberately (do not weaken or remove either half alongside
+-- this): they shape WHICH mechanic can mint and at what per-mechanic
+-- cadence (e.g. takedownSuccess's own 1,800 XP/hr ceiling is still the
+-- right number for takedown ALONE); this budget caps the TOTAL across all
+-- of them combined. Removing either half reopens a real gap the other half
+-- cannot cover on its own: without the per-mechanic cooldowns, a single
+-- mechanic could burn the ENTIRE shared budget in seconds (the exact
+-- runaway-caller shape AwardXPCooldown above already exists to catch --
+-- this budget is not a substitute for that floor either); without this
+-- shared budget, the four independent ceilings simply never interact, which
+-- is exactly the gap this section exists to close.
+--
+-- IMPLEMENTATION: a per-citizenid TOKEN BUCKET, not a fixed-window counter
+-- that resets to 0 on a wall-clock boundary. A fixed window has a
+-- well-known boundary-doubling flaw for exactly this use case: a player
+-- could spend their full budget in the last instant of window N, then spend
+-- a full budget again in the first instant of window N+1, mint 2x the
+-- intended cap within a couple of real seconds around every window edge. A
+-- token bucket has no edge to exploit -- capacity refills continuously at a
+-- constant rate, so the enforced ceiling (XP_MINT_BUDGET_CAP_XP per
+-- XP_MINT_BUDGET_WINDOW_MS) holds over ANY rolling window of that length,
+-- not just ones aligned to a reset boundary. A brand-new citizenid's bucket
+-- starts FULL (capacity == the intended hourly ceiling, by design -- see the
+-- two constants' own ratio below), not empty: this is the standard, correct
+-- token-bucket initialization for "at most N per any window," and starting
+-- empty would only needlessly punish a legitimate new player's first hour
+-- for no security benefit (the realistic legitimate rate this resource's own
+-- config.lua comment documents, ~500 XP/hr, sits far enough below the cap
+-- that a full-from-the-start bucket never meaningfully matters for real
+-- play).
+--
+-- NUMBERS CHOSEN (XP_MINT_BUDGET_CAP_XP / XP_MINT_BUDGET_WINDOW_MS below):
+-- 3,600 XP per 3,600,000ms (1 hour). Needed: strictly below 4,500 XP/hr
+-- (9000 / 4500 = exactly 2.0 hours -- the retuned floor requires MORE than 2
+-- hours, so the cap must clear that with real margin, not sit on the
+-- boundary). 3,600 gives Elite (9,000 XP) at 9000/3600 = 2.5 hours -- a
+-- clean, round number both as a ceiling (3,600 XP in 3,600,000ms) and as a
+-- margin (30 minutes / 25% above the 2-hour floor). Recomputed tier times at
+-- this REAL post-fix ceiling, reported to whoever owns config.lua for that
+-- file's own Config.XPTiers economy comment (not edited by this pass):
+--   Trained (1,250 XP): 1250/3600 = 0.347h  (~20m 50s)
+--   Veteran (4,000 XP): 4000/3600 = 1.111h  (~1h 6m 40s)
+--   Elite   (9,000 XP): 9000/3600 = 2.5h    (2h 30m -- clears the floor)
+--
+-- FILE-LOCAL CONSTANTS, NOT CONFIG KEYS -- same reasoning as every one of
+-- the four per-mechanic mint cooldowns' own "FILE-LOCAL CONSTANTS, NOT
+-- CONFIG KEYS" comment (server/combat.lua, server/search.lua,
+-- server/tracking.lua): this is a security floor, not an operator-tunable
+-- balance knob, and a merely-too-low operator-set value would pass every
+-- existing validity check while silently reopening the exact farm this
+-- exists to close. The only way to weaken it is to edit this file's own
+-- source under code review.
+-- ==========================================================================
+local XP_MINT_BUDGET_CAP_XP    = 3600     -- XP -- also the bucket's max capacity (burst allowance == the steady-state cap, standard token-bucket sizing)
+local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: the bucket goes from empty to full over exactly this many real ms
+
+--- Shared validity test, deliberately mirroring server/cooldowns.lua's own
+--- IsValidThreshold (identical rejection list: non-number, NaN, non-
+--- positive) -- NOT calling that function directly (this file has no
+--- `local` access to it -- it is an internal helper of that file's own two
+--- constructors, correctly not exposed as a resource-global), duplicated
+--- here rather than newly invented.
+--- @param value any
+--- @return boolean
+local function IsValidBudgetParam(value)
+    return type(value) == 'number' and value == value and value > 0
+end
+
+-- CRITICAL DESIGN CHOICE, READ BEFORE EVER CHANGING EITHER CONSTANT ABOVE:
+-- FAIL OPEN HERE, DELIBERATELY -- THE OPPOSITE DIRECTION FROM
+-- server/cooldowns.lua's OWN IsOnCooldown, AND FROM EVERY PER-MECHANIC MINT
+-- COOLDOWN ABOVE.
+--
+-- server/cooldowns.lua's own header documents the "Config.Recall footgun"
+-- shape at length: a non-positive threshold there silently means
+-- "permanently blocked," never "no cooldown," and that fail-CLOSED choice is
+-- the RIGHT one for a single-mechanic cooldown, because the blast radius of
+-- getting it wrong is contained -- one action, for players who happen to
+-- touch that one mechanic, recoverable by a targeted fix. THIS budget is
+-- different in kind, not just degree: it is consulted by EVERY AwardXP
+-- call, for EVERY actionKey, for EVERY citizenid, resource-wide --
+-- server/search.lua, server/tracking.lua, server/combat.lua,
+-- server/tenure.lua's partnership milestones, and any future caller.
+-- Reusing cooldowns.lua's fail-closed convention here would mean a single
+-- bad constant (a future edit that typos XP_MINT_BUDGET_WINDOW_MS to 0, or
+-- a future refactor that starts reading either constant from Config without
+-- re-deriving the same validation this file's own onResourceStart guards
+-- already apply to Config.XPTiers) could silently and PERMANENTLY block ALL
+-- XP progression for the ENTIRE server, forever, until a restart -- a far
+-- larger and far less visible outcome than this one security floor going
+-- temporarily unenforced while the four independent per-mechanic mint
+-- cooldowns above (unaffected by this flag either way) keep doing their own
+-- job. Explicit, not accidental: when either constant fails validation,
+-- this budget is DISABLED (never denies, never mutates XPMintBudget, never
+-- touches the timer at all) and says so loudly exactly once, rather than
+-- silently doing either extreme.
+local XPMintBudgetEnabled = IsValidBudgetParam(XP_MINT_BUDGET_CAP_XP) and IsValidBudgetParam(XP_MINT_BUDGET_WINDOW_MS)
+if not XPMintBudgetEnabled then
+    print(
+        ('[qbx_k9unit] progression: XP_MINT_BUDGET_CAP_XP/XP_MINT_BUDGET_WINDOW_MS are invalid ' ..
+         '(capXp=%s, windowMs=%s) -- the SHARED cross-mechanic XP mint budget is DISABLED for this ' ..
+         'entire session (fail OPEN, deliberately -- see this file\'s own comment on XPMintBudgetEnabled ' ..
+         'for why this is the opposite of server/cooldowns.lua\'s usual fail-closed convention). The four ' ..
+         'independent per-mechanic mint cooldowns (server/combat.lua, server/search.lua, ' ..
+         'server/tracking.lua) are UNAFFECTED and keep enforcing their own limits regardless. Fix these ' ..
+         'two constants in server/progression.lua.'):format(tostring(XP_MINT_BUDGET_CAP_XP), tostring(XP_MINT_BUDGET_WINDOW_MS))
+    )
+end
+
+-- XPMintBudget[citizenid] = { tokens = number, lastRefillAt = gameTimerMs }.
+-- DELIBERATELY NOT cleared on playerDropped (unlike K9XP/AwardXPCooldown
+-- below -- see the playerDropped handler's own comment near the bottom of
+-- this file for the full reasoning): clearing this on disconnect would let
+-- a farmer reset their own budget early simply by reconnecting, defeating
+-- the entire point of this section. Bounded instead by the periodic sweep
+-- below, which only ever evicts an entry once it would already have
+-- refilled to full capacity anyway -- behaviorally identical to leaving it
+-- in place, just reclaiming memory for a citizenid that has been inactive
+-- for a full window.
+local XPMintBudget = {}
+
+--- Refills `bucket` in place for the elapsed time since its own last
+--- refill, capped at XP_MINT_BUDGET_CAP_XP (a token bucket's capacity is
+--- also its max burst allowance -- see this section's header for why that
+--- is fine here). `now` is a single GetGameTimer() value the caller already
+--- captured, never re-read here, mirroring server/cooldowns.lua's own
+--- IsOnCooldown `now` parameter convention.
+---
+--- GetGameTimer() WRAPAROUND CAVEAT (same disclosed, not-fixed-here issue as
+--- server/cooldowns.lua's own IsOnCooldown -- see that file's header for the
+--- full writeup): if `elapsed` reads negative (the ~24.85-day int32 wrap),
+--- this function does nothing rather than let a negative elapsed *
+--- refillRate corrupt `tokens` -- the safe direction here is "skip this
+--- refill," not "guess," since briefly under-refilling is recoverable and
+--- over-refilling is not (it would hand out budget that was never earned).
+--- @param bucket table
+--- @param now number
+local function RefillMintBudget(bucket, now)
+    local elapsed = now - bucket.lastRefillAt
+    if elapsed <= 0 then return end
+    local refillRate = XP_MINT_BUDGET_CAP_XP / XP_MINT_BUDGET_WINDOW_MS -- XP per ms
+    bucket.tokens = math.min(XP_MINT_BUDGET_CAP_XP, bucket.tokens + elapsed * refillRate)
+    bucket.lastRefillAt = now
+end
+
+-- Bounds XPMintBudget's memory growth WITHOUT resetting any citizenid's
+-- remaining budget early (see XPMintBudget's own declaration comment above
+-- for why playerDropped cannot be used here the way K9XP/AwardXPCooldown
+-- use it). An entry is only ever dropped once `now - lastRefillAt >=
+-- XP_MINT_BUDGET_WINDOW_MS` -- the exact point at which RefillMintBudget
+-- would have clamped it back to a full bucket had anyone looked -- so
+-- dropping it here and letting AwardXP recreate a fresh, full bucket on that
+-- citizenid's next award is observably identical to leaving the old entry
+-- in place. Sweep interval (5 minutes) is well under the window (1 hour) so
+-- no entry lingers long past the point it became safe to drop; not built on
+-- server/cooldowns.lua's own :StartSweep helper since this tracker's shape
+-- (tokens + lastRefillAt, not a single timestamp) does not fit that
+-- constructor's isStaleFn(now, loggedAt) signature. Only started when the
+-- budget itself is enabled -- when disabled, XPMintBudget is never written
+-- to at all, so a sweep thread would just be an empty no-op loop forever.
+if XPMintBudgetEnabled then
+    CreateThread(function()
+        while true do
+            Wait(300000)
+            local now = GetGameTimer()
+            for citizenid, bucket in pairs(XPMintBudget) do
+                if (now - bucket.lastRefillAt) >= XP_MINT_BUDGET_WINDOW_MS then
+                    XPMintBudget[citizenid] = nil
+                end
+            end
+        end
+    end)
+end
+
+-- STRUCTURAL GUARD (this pass): if the budget is enabled, verify at resource
+-- start that its cap can never make a single genuine award un-payable. A cap
+-- below some Config.XP.awards[key] value would mean even a FULLY refilled
+-- bucket (tokens == cap) is smaller than that one award's own amount, so
+-- `bucket.tokens < amount` inside AwardXP below would be true FOREVER for
+-- that actionKey, for every citizenid, regardless of how long they wait --
+-- a self-inflicted version of exactly the "permanently blocked" footgun this
+-- section's own fail-OPEN choice above otherwise avoids for a BAD CONSTANT,
+-- but which a bad constant RELATIONSHIP (cap too small relative to a real
+-- award) would still reintroduce. Fails loudly at resource start, matching
+-- this file's existing Config.XPTiers/scopePerCitizenidOrJob asserts below.
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    if not XPMintBudgetEnabled then return end
+    if type(Config.XP) ~= 'table' or type(Config.XP.awards) ~= 'table' then return end -- defensive only -- every other AwardXP call site in this file already assumes this table exists
+
+    for actionKey, amount in pairs(Config.XP.awards) do
+        assert(
+            type(amount) ~= 'number' or amount <= XP_MINT_BUDGET_CAP_XP,
+            ('[qbx_k9unit] progression: Config.XP.awards.%s (%s XP) exceeds XP_MINT_BUDGET_CAP_XP (%d XP) -- ' ..
+             'a single award larger than the shared budget\'s own full capacity could never be paid, for any ' ..
+             'citizenid, ever, regardless of how long they wait between awards. Raise XP_MINT_BUDGET_CAP_XP ' ..
+             '(server/progression.lua) to at least this amount.')
+                :format(tostring(actionKey), tostring(amount), XP_MINT_BUDGET_CAP_XP)
+        )
+    end
+end)
+
 -- CONFIG-SAFETY GUARD (config audit finding, this pass — same precedent as
 -- server/inventory.lua's `Config.K9Inventory.accessScope` assert and
 -- server/main.lua's `nudgeRequiresUnlocked` assert). This file's own header
@@ -462,6 +707,35 @@ function AwardXP(citizenid, actionKey)
         return
     end
 
+    -- EIGHTH XP-FARM FIX -- see the XP_MINT_BUDGET_*/XPMintBudget
+    -- declarations above this function for the full derivation and the
+    -- fail-OPEN reasoning. Checked AFTER the actionKey-validity and
+    -- per-(citizenid, actionKey) rate-floor checks above (an already-
+    -- rejected call must never spend this shared budget either), BEFORE any
+    -- cache/DB mutation below -- same "reject before touching state" order
+    -- this function already follows throughout.
+    if XPMintBudgetEnabled then
+        local budgetNow = GetGameTimer()
+        local bucket = XPMintBudget[citizenid]
+        if not bucket then
+            bucket = { tokens = XP_MINT_BUDGET_CAP_XP, lastRefillAt = budgetNow }
+            XPMintBudget[citizenid] = bucket
+        else
+            RefillMintBudget(bucket, budgetNow)
+        end
+        if bucket.tokens < amount then
+            -- Silent no-op on trip -- same convention as every per-mechanic
+            -- mint cooldown's own Consume-fails-silently posture. Unlike
+            -- AwardXPCooldown's own trip above, this is the EXPECTED
+            -- steady-state outcome for a citizenid genuinely farming at or
+            -- near the combined ceiling, not a caller-bug signal -- logging
+            -- every occurrence here would spam console under exactly the
+            -- sustained-farming behavior this section exists to bound.
+            return
+        end
+        bucket.tokens = bucket.tokens - amount
+    end
+
     local oldXp = K9XP[citizenid] or 0
     local oldTier = ResolveTier(oldXp)
 
@@ -656,5 +930,15 @@ AddEventHandler('playerDropped', function(_reason)
         -- earn XP fresh), same bounded-memory-growth rationale as the K9XP
         -- eviction above it.
         AwardXPCooldown.Clear(citizenid)
+
+        -- XPMintBudget (the EIGHTH-XP-farm-fix shared cross-mechanic budget)
+        -- is DELIBERATELY NOT cleared here, unlike K9XP/AwardXPCooldown
+        -- immediately above -- see that tracker's own declaration comment
+        -- for the full reasoning. Clearing it on disconnect would hand a
+        -- farmer a fresh, full budget just by reconnecting, defeating the
+        -- entire point of the fix this pass exists to close. It is bounded
+        -- for memory instead by its own periodic sweep thread, which only
+        -- evicts an entry once it would already have refilled to full
+        -- capacity anyway.
     end
 end)

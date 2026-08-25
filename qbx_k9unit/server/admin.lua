@@ -4,7 +4,8 @@
     In-game admin/audit surface over the tables this resource already
     writes but, until now, only ever exposed as a raw SQL query an admin ran
     by hand (README.md's own documented "admin listing" queries;
-    COMPLEMENTARY_FEATURES.md top-3 item 2 / §9): `k9_certifications`
+    FEATURE_IDEAS.md Part B top-3 item 2 / §9 -- formerly COMPLEMENTARY_FEATURES.md,
+    merged 2026-08-25): `k9_certifications`
     (server/certifications.lua), `k9_partnerships` (server/partnership.lua),
     `k9_search_log` (server/search.lua), `k9_progression`
     (server/progression.lua). THIS FILE COMPUTES NOTHING NEW — it is a
@@ -74,7 +75,7 @@
     ======================================================================
     ACCESS MODEL — REVISED (project-owner-directed design change, this
     pass): this surface was originally the first ACE-gated action in this
-    resource (COMPLEMENTARY_FEATURES.md §9's own "precedent-setting choice,
+    resource (FEATURE_IDEAS.md Part B §9's own "precedent-setting choice,
     not a blocker" flag), on the reasoning that "can this connected
     principal read the search/cert/partnership audit trail" is
     SERVER-OPERATOR tooling, unrelated to department membership or K9

@@ -55,6 +55,21 @@ read_globals = {
     -- component is the shared Lua runtime, so both globals exist on client and
     -- server alike -- no per-side qualification needed.
     "promise", "SetTimeout",
+    -- GetConvarInt: server/bonetool.lua reads the second, explicit opt-in
+    --   convar that must be set on top of Config.Features.BoneSweepDevTool
+    --   before the dev-only /k9bonetool command will register at all.
+    -- NetworkGetEntityOwner: server/propattachment.lua verifies which client
+    --   actually owns a networked entity, so a client-supplied netId cannot
+    --   be pointed at another player's real object.
+    -- Both VERIFIED server-callable on 2026-08-25, not assumed: fetching
+    -- citizenfx/fivem ext/native-decls/<Name>.md returns HTTP 200 with
+    -- `ns: CFX` and `apiset: shared` for each. This matters because FXServer
+    -- does NOT throw on an unregistered native -- the result buffer is never
+    -- written, so the call returns zero/nil forever with nothing logged. Six
+    -- such silent no-ops have already been found in this resource, including
+    -- four death-check gates that had never once fired. Never allowlist a
+    -- native here on an assumption; run the check.
+    "GetConvarInt", "NetworkGetEntityOwner",
     -- GET_RESOURCE_STATE. Used by server/tracking.lua's ox_inventory
     -- capability probe as the first gate, because accessing an export on a
     -- resource that is not started can throw rather than return nil.

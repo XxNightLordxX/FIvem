@@ -675,6 +675,28 @@ local TakedownXpMintCooldown = NewCooldown()
 TakedownXpMintCooldown.RegisterPlayerDropped()
 local TAKEDOWN_XP_MINT_COOLDOWN_MS = 60000
 
+-- EIGHTH XP-FARM FIX, CROSS-FILE POINTER (this pass, red-team-flagged
+-- compound-farm follow-up to the SEVENTH fix immediately above): the two
+-- per-holder mint cooldowns declared above, server/search.lua's
+-- ContrabandXpMintCooldown, and server/tracking.lua's TrackTicketMintCooldown
+-- are each keyed by the SAME acting player but were never summed -- a
+-- player round-robining all four mechanics was blocked by none of them
+-- (1,200 + 1,800 + 1,500 + 1,200 = 5,700 XP/hr combined, uncapped, reaching
+-- the 9,000-XP Elite tier in ~1h 35m -- BELOW config.lua's own "over 2
+-- hours" retuning goal). CLOSED by server/progression.lua's new SHARED,
+-- cross-mechanic XP mint budget (XP_MINT_BUDGET_CAP_XP/
+-- XP_MINT_BUDGET_WINDOW_MS, consulted inside AwardXP itself) -- see that
+-- file's own declaration comment for the full derivation. Nothing in THIS
+-- file needed to change for that half of the fix: AwardXP is the single
+-- chokepoint both of this file's award call sites already went through, so
+-- the shared budget applies to them automatically. BiteHoldXpMintCooldown/
+-- TakedownXpMintCooldown above are KEPT, unchanged -- they still shape
+-- WHICH mechanic can mint and at what per-mechanic cadence; the shared
+-- budget in server/progression.lua caps the TOTAL across mechanics. This
+-- file's OWN half of the compound-farm fix is the NPC-eligibility gate at
+-- both AwardXP call sites below (Config.XP.mintXpForNpcCombatTargets) --
+-- see each call site's own comment.
+
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
 -- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
@@ -1110,7 +1132,36 @@ local function EndHold(targetNetId, reason)
                 -- entirely unaffected by whether this Consume succeeds -- a
                 -- K9 out of mint budget still gets its hold/release/relay
                 -- exactly as before, it just is not paid for this one.
-                if type(AwardXP) == 'function'
+                --
+                -- EIGHTH XP-FARM FIX, NPC-ELIGIBILITY HALF (this pass,
+                -- red-team-flagged compounding factor -- server/progression.lua
+                -- owns the OTHER half, the shared cross-mechanic budget):
+                -- ValidateCombatRequest's NPC branch (this file, above) never
+                -- calls IsPlayerWantedEligible at all -- Config.Combat.
+                -- RequireWantedStatus's own comment already documents that
+                -- field as NOT affecting NPC targets. An ambient, non-wanted,
+                -- non-dangerous NPC pedestrian was therefore a fully
+                -- qualifying biteHoldSuccess source requiring zero real
+                -- police work. Config.XP.mintXpForNpcCombatTargets
+                -- (config.lua; boolean; default false/unset) gates the MINT
+                -- ONLY -- it does NOT gate whether NPC bite-hold itself is
+                -- ALLOWED (Config.Features.BiteAndHold, unaffected; the
+                -- owner's standing decision that K9 combat targets players
+                -- AND NPCs is not re-litigated here). Checked FIRST in this
+                -- `and` chain, before BiteHoldXpMintCooldown.Consume, for the
+                -- same "never burn the mint budget on something that was
+                -- never going to pay anyway" reasoning this comment already
+                -- states for the duration floor above it -- a K9 that only
+                -- ever engages ineligible NPCs must not find its OWN mint
+                -- budget spent when a genuinely eligible target later comes
+                -- along. `Config.XP and ...` guards a fixture/test sandbox
+                -- that never sets up Config.XP at all; production's real
+                -- config.lua always defines Config.XP, so this is a pure
+                -- defensive no-op there. `nil == true` is false in Lua, so
+                -- this already defaults to the recommended "off" behavior
+                -- even before config.lua adds the key.
+                if (hold.isPlayerTarget or (Config.XP and Config.XP.mintXpForNpcCombatTargets == true))
+                    and type(AwardXP) == 'function'
                     and BiteHoldXpMintCooldown.Consume(hold.holderSrc, BITE_HOLD_XP_MINT_COOLDOWN_MS) then
                     local holderPlayer = exports.qbx_core:GetPlayer(hold.holderSrc)
                     local holderCitizenid = holderPlayer and holderPlayer.PlayerData and holderPlayer.PlayerData.citizenid
@@ -1275,6 +1326,79 @@ end)
 
 --[[ ================= NON-COMPLIANCE DETECTION ================= ]]
 
+--- ACE->JOB-RANK REWRITE (this pass, project-owner-directed, mirroring
+--- server/admin.lua's IsAuthorizedAdmin -- same shape, deliberately not
+--- reinvented): the notify_staff fan-out below used to gate on
+--- `IsPlayerAceAllowed(tostring(playerId), 'command')`. Config.AdminAudit.
+--- AcePermission is now dead config (removed from config.lua per that
+--- file's own admin-audit ACE->job-rank pass), and this call site was a
+--- second, independent ACE check this file still owned on top of it.
+---
+--- Same Config.Departments[job.name] membership requirement, same
+--- job.isboss short-circuit, same explicit `type(job.grade.level) ==
+--- 'number'` guard before ever comparing it, as IsAuthorizedAdmin -- applied
+--- against a NEW, SEPARATE threshold, Config.Departments[job.name].
+--- nonComplianceAlertGrade, deliberately NOT Config.Departments[job.name].
+--- auditGrade. These two concerns are not the same principal: auditGrade
+--- gates the k9_search_log/k9_progression AUDIT TRAIL (who searched whom,
+--- and when) -- a genuine privacy boundary, appropriately set to a senior
+--- rank. A non-compliance alert carries no citizen-identifying search
+--- history at all (`targetLabel` below is only ever a raw player source
+--- number or NPC netId, never a citizenid or search result) and is
+--- operational, real-time situational awareness about a K9 UNIT's own
+--- conduct during an active bite-hold/takedown/drag -- closer in kind to a
+--- dispatch/BOLO broadcast than to pulling someone's audit history. Reusing
+--- auditGrade would gate it behind the SAME high bar as full audit-log
+--- access for no privacy reason, and would mean on-duty officers below that
+--- rank never see a live "this K9 interaction might not be compliant"
+--- signal that could matter in the moment. Recommended (to whoever owns
+--- config.lua -- not added here): Config.Departments[job].
+--- nonComplianceAlertGrade, a new NUMBER field per department, same
+--- semantics as auditGrade/certifierGrade (job.isboss always qualifies;
+--- otherwise job.grade.level >= this value). Suggested default: 0 (any
+--- sworn member of a configured department sees these -- operational, not
+--- privacy-sensitive, per the reasoning above); raise it per-department if
+--- a server wants this restricted to supervisors instead. This is a product
+--- call, disclosed rather than silently decided -- the operator may prefer
+--- a higher default.
+---
+--- FAILS CLOSED on every path where a job cannot be fully resolved: no
+--- Player, no PlayerData, no job, job.name not a configured department, no
+--- dept.nonComplianceAlertGrade (or a non-number one), no job.grade, or a
+--- non-number job.grade.level all return false -- none of them ever reach
+--- the `>=` comparison, so none of them can throw. Matches IsAuthorizedAdmin
+--- exactly on this point.
+---
+--- PERFORMANCE (coordinator-flagged, this pass): this resolves one
+--- exports.qbx_core:GetPlayer(...) call per online player, same as the ACE
+--- check it replaces did per online player (that one paid GetPlayers()
+--- itself, unchanged here). NOT cached/memoized -- measured against how
+--- often this loop can actually run before adding that complexity: every
+--- FlagNonCompliance call site (SampleCompliance, below) guards on
+--- `hold.compliance.flagged`, a single boolean set true on the FIRST
+--- violation of ANY kind for a given hold and never reset -- so this
+--- notify_staff loop fires AT MOST ONCE per ActiveHolds entry for its
+--- entire lifetime, not once per sampling tick. A per-tick cost concern
+--- does not apply; a cache would add real complexity (staleness on
+--- job/grade change, eviction on disconnect) for a code path that already
+--- cannot repeat for the same hold.
+--- @param playerId number
+--- @return boolean
+local function IsAuthorizedForNonComplianceAlert(playerId)
+    local player = exports.qbx_core:GetPlayer(playerId)
+    if not player or not player.PlayerData then return false end
+
+    local job = player.PlayerData.job
+    if not job or not Config.Departments[job.name] then return false end
+
+    if job.isboss then return true end
+
+    local dept = Config.Departments[job.name]
+    if type(dept.nonComplianceAlertGrade) ~= 'number' then return false end
+
+    return job.grade ~= nil and type(job.grade.level) == 'number' and job.grade.level >= dept.nonComplianceAlertGrade
+end
+
 --- @param hold table -- an ActiveHolds entry
 --- @param targetNetId number
 --- @param kind string
@@ -1306,7 +1430,7 @@ local function FlagNonCompliance(hold, targetNetId, kind, detail)
         local message = locale('combat.noncompliance_message', kind, targetLabel, detail)
         for _, playerIdStr in ipairs(GetPlayers()) do
             local playerId = tonumber(playerIdStr)
-            if playerId and IsPlayerAceAllowed(tostring(playerId), 'command') then
+            if playerId and IsAuthorizedForNonComplianceAlert(playerId) then
                 TriggerClientEvent('ox_lib:notify', playerId, {
                     title = locale('combat.noncompliance_notify_title'),
                     description = message,
@@ -2009,7 +2133,19 @@ local function HandleTakedownRequest(src, targetNetId)
     -- unaffected by whether this Consume succeeds -- a K9 out of mint budget
     -- still performs a fully normal takedown, it just is not paid for this
     -- one.
-    if type(AwardXP) == 'function'
+    --
+    -- EIGHTH XP-FARM FIX, NPC-ELIGIBILITY HALF -- see EndHold's own bite-hold
+    -- branch (above in this file) for the full writeup; identical reasoning
+    -- applied to takedownSuccess. Checked FIRST in this `and` chain, before
+    -- TakedownXpMintCooldown.Consume, for the same reason every other
+    -- condition on this line is already ordered this way: a target that was
+    -- never going to pay out anyway must never burn this per-holder mint
+    -- budget, or a K9 that only ever gets ambient NPCs could exhaust its own
+    -- real budget on takedowns that were never eligible to pay, then find
+    -- itself falsely "out of budget" the next time a genuinely eligible
+    -- wanted player comes along.
+    if (isPlayerTarget2 or (Config.XP and Config.XP.mintXpForNpcCombatTargets == true))
+        and type(AwardXP) == 'function'
         and TakedownXpMintCooldown.Consume(src, TAKEDOWN_XP_MINT_COOLDOWN_MS) then
         local holderPlayer = exports.qbx_core:GetPlayer(src)
         local holderCitizenid = holderPlayer and holderPlayer.PlayerData and holderPlayer.PlayerData.citizenid

@@ -186,6 +186,18 @@ local function newFixture(opts)
     local entityModels = {} -- handle -> hash (used for both peds and prop objects)
     local function GetEntityModel(handle) return entityModels[handle] end
 
+    -- NETWORK-OWNERSHIP GUARD mock (coder-security, race-hardening pass) --
+    -- handle -> src of whichever connection currently, per this mock's own
+    -- OneSync stand-in, "owns" that networked object. Defaults to nil (no
+    -- known owner) for any handle registerEntity's caller doesn't explicitly
+    -- assign one to -- deliberately FAIL CLOSED, matching the real
+    -- NetworkGetEntityOwner check's own `~= src` comparison (nil never
+    -- equals a real numeric src), so a test that wants a confirm to reach
+    -- PAST this guard must say so explicitly via registerEntity's own
+    -- `owner` field rather than relying on an implicit default.
+    local entityOwners = {} -- handle -> src
+    local function NetworkGetEntityOwner(handle) return entityOwners[handle] end
+
     local deletedEntities = {} -- handle -> true
     local function DeleteEntity(handle) deletedEntities[handle] = true end
 
@@ -220,6 +232,7 @@ local function newFixture(opts)
         DoesEntityExist = DoesEntityExist,
         GetEntityType = GetEntityType,
         GetEntityModel = GetEntityModel,
+        NetworkGetEntityOwner = NetworkGetEntityOwner,
         DeleteEntity = DeleteEntity,
         Config = config,
     })
@@ -250,9 +263,11 @@ local function newFixture(opts)
             existingEntities[handle] = ropts.exists ~= false
             entityTypes[handle] = ropts.entityType or 3
             entityModels[handle] = ropts.model or PROP_HASH
+            entityOwners[handle] = ropts.owner -- nil (no owner) unless the caller says otherwise -- see entityOwners' own declaration comment above
             local c = ropts.coords or { x = 0, y = 0, z = 0 }
             coordsByHandle[handle] = { x = c.x, y = c.y, z = c.z }
         end,
+        setEntityOwner = function(handle, src) entityOwners[handle] = src end,
         removeExistence = function(handle) existingEntities[handle] = false end,
         dispatchNetEvent = function(eventName, src, ...)
             env.source = src
@@ -334,7 +349,11 @@ local function attachSuccessfully(f, src, citizenid, pedHandle, pedCoords)
     assert(instruction, 'requestToggleK9PropAttachment (ADD) did not send an attachK9Prop instruction')
     local netId = freshNetId()
     local handle = netId + 500000
-    f.registerEntity(netId, handle, { coords = pedCoords })
+    -- owner = src: an honest client's confirm always names the object IT
+    -- ITSELF just created (client/propattachment.lua's own myVestEntity/netId
+    -- pairing) -- see the NETWORK-OWNERSHIP GUARD mock's own declaration
+    -- comment for why this must be explicit rather than an implicit default.
+    f.registerEntity(netId, handle, { coords = pedCoords, owner = src })
     f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', src, netId)
     return netId, handle
 end
@@ -523,7 +542,10 @@ t.test('cancelPropAttachRequest: a cancel from a mismatched source does not clea
 
     -- The real pending must have survived: src 1 can still confirm it.
     local netId = freshNetId()
-    f.registerEntity(netId, netId + 500000, { coords = { x = 0, y = 0, z = 0 } })
+    -- owner = 1: this confirm must pass the NETWORK-OWNERSHIP GUARD too,
+    -- not just be resolvable/right-model -- see that mock's own declaration
+    -- comment.
+    f.registerEntity(netId, netId + 500000, { coords = { x = 0, y = 0, z = 0 }, owner = 1 })
     f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.attached_success'))
 end)
@@ -573,7 +595,10 @@ t.test('confirmPropAttached: a confirm from a source that does not match the pen
     t.equals(#f.clientEvents, before, 'never trust an unsolicited confirm from a different source than the one that started this toggle')
 
     local netId = freshNetId()
-    f.registerEntity(netId, netId + 500000, { coords = { x = 0, y = 0, z = 0 } })
+    -- owner = 1: this confirm must pass the NETWORK-OWNERSHIP GUARD too,
+    -- not just be resolvable/right-model -- see that mock's own declaration
+    -- comment.
+    f.registerEntity(netId, netId + 500000, { coords = { x = 0, y = 0, z = 0 }, owner = 1 })
     f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.attached_success'))
 end)
@@ -736,7 +761,7 @@ t.test('confirmPropAttached: the documented fallback model is also accepted, not
     f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
 
     local netId = freshNetId()
-    f.registerEntity(netId, netId + 500000, { coords = { x = 0, y = 0, z = 0 }, model = FALLBACK_HASH })
+    f.registerEntity(netId, netId + 500000, { coords = { x = 0, y = 0, z = 0 }, model = FALLBACK_HASH, owner = 1 })
     f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.attached_success'))
 end)
@@ -778,20 +803,114 @@ t.test('confirmPropAttached: exactly at the distance tolerance boundary succeeds
     -- Just UNDER the tolerance -- floating point exact-boundary equality is
     -- not asserted here (the handler's own check is `dist >
     -- confirmDistanceTolerance`, i.e. rejects ONLY when strictly greater).
-    f.registerEntity(netId, netId + 500000, { coords = { x = CONFIRM_DISTANCE_TOLERANCE - 0.01, y = 0, z = 0 } })
+    f.registerEntity(netId, netId + 500000, { coords = { x = CONFIRM_DISTANCE_TOLERANCE - 0.01, y = 0, z = 0 }, owner = 1 })
     f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.attached_success'))
 end)
 
 -- ----------------------------------------------------------------------
--- GENUINE, DISCLOSED FINDING: confirmPropAttached has NO equivalent of
--- server/fetch.lua's FindOtherByNetId / GLOBAL NETID-UNIQUENESS INVARIANT
--- check. Reproduced directly, not assumed.
+-- FIRST-WRITER-WINS PROP-HIJACK RACE (exploit-tester finding #2) -- FOUND
+-- AND CLOSED (coder-security, race-hardening pass). See
+-- server/propattachment.lua's own header "FIRST-WRITER-WINS PROP-HIJACK
+-- RACE" section for the full trace this suite reproduces below:
+-- position+model tolerance alone cannot tell "this is genuinely my own
+-- object" apart from "I am simply standing near someone else's", which
+-- previously let a SECOND citizen's bogus confirm win the GLOBAL
+-- NETID-UNIQUENESS race by arriving BEFORE the genuine (FIRST) citizen's
+-- own confirm -- leaving the genuine citizen's own, later, entirely
+-- legitimate confirm the one rejected as "already tracked", which sent
+-- THEM 'qbx_k9unit:client:rejectK9PropAttach' -- deleting their own real,
+-- just-created object. The NETWORK-OWNERSHIP GUARD closes this at the
+-- root: it rejects a confirm naming an entity the caller does not
+-- currently, per OneSync, own -- BEFORE the collision check ever runs --
+-- regardless of which of two racing confirms' own network messages happens
+-- to reach this server first.
 -- ----------------------------------------------------------------------
 
-t.test('confirmPropAttached REJECTS a netId that already belongs to a DIFFERENT citizenid, even when the caller is standing close enough for every other check to pass', function()
+t.test('confirmPropAttached: NETWORK-OWNERSHIP GUARD rejects a real, right-model, in-range object the caller does not currently own -- independent of any registry collision', function()
     local f = newFixture()
-    local netId1 = attachSuccessfully(f, 1, 'AAA111', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+
+    local netId = freshNetId()
+    local handle = netId + 500000
+    -- Right model, well within tolerance -- but owned (per this mock's own
+    -- NetworkGetEntityOwner stand-in) by an entirely unrelated connection,
+    -- not tied to any OTHER citizen's PropAttachmentState entry at all. This
+    -- isolates the NEW guard from the pre-existing GLOBAL NETID-UNIQUENESS
+    -- guard below it.
+    f.registerEntity(netId, handle, { coords = { x = 0, y = 0, z = 0 }, owner = 999 })
+    f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 1, netId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.attach_failed_unconfirmed'))
+    t.isNil(f.deletedEntities[handle], 'this handler never calls DeleteEntity itself')
+    local reject = lastClientEvent(f, 'qbx_k9unit:client:rejectK9PropAttach')
+    t.isNotNil(reject)
+    t.equals(reject.target, 1)
+end)
+
+t.test('confirmPropAttached: the RACE itself is closed -- an attacker confirming a victim\'s real, not-yet-confirmed netId FIRST is rejected, the victim\'s own later confirm still succeeds, and the victim\'s real object is never deleted', function()
+    local f = newFixture()
+
+    -- Victim opens their own pending confirm; their client creates the REAL
+    -- object (exactly what requestToggleK9PropAttachment's ADD branch
+    -- instructs) but the victim's OWN confirmPropAttached has NOT been sent
+    -- to this server yet -- reproducing the exact window the finding
+    -- describes: the object already exists (and is already visible to a
+    -- nearby client via ordinary OneSync entity replication) before this
+    -- server has been told about it.
+    f.setAccess(10, true)
+    f.setPlayer(10, 'VICTIM01')
+    f.setPed(10, 9010, { x = 100.0, y = 200.0, z = 30.0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 10)
+    local victimNetId = freshNetId()
+    local victimHandle = victimNetId + 500000
+    -- The victim's OWN client created this object -- it is real and owned
+    -- by src 10, never by the attacker below.
+    f.registerEntity(victimNetId, victimHandle, { coords = { x = 100.0, y = 200.0, z = 30.0 }, owner = 10 })
+
+    -- Attacker independently opens their OWN pending confirm (a real
+    -- certified handler, standing within confirmDistanceTolerance of the
+    -- victim), then races their OWN confirmPropAttached in FIRST, reporting
+    -- the VICTIM's real netId as if it were their own.
+    f.setAccess(20, true)
+    f.setPlayer(20, 'ATTACKER1')
+    f.setPed(20, 9020, { x = 101.0, y = 200.0, z = 30.0 }) -- 1.0m from the victim's own object -- well within tolerance
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 20)
+    f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 20, victimNetId)
+
+    -- Attacker's bogus confirm is rejected -- and 'qbx_k9unit:client:rejectK9PropAttach'
+    -- targets the CALLER's own locally-tracked object (never a
+    -- server-supplied netId, per this handler's own established contract),
+    -- so this can never reach out and touch the victim's real object.
+    t.equals(f.notifyCalls[#f.notifyCalls].notifyType, 'error')
+    local attackerReject = lastClientEvent(f, 'qbx_k9unit:client:rejectK9PropAttach')
+    t.isNotNil(attackerReject)
+    t.equals(attackerReject.target, 20)
+    t.isNil(f.deletedEntities[victimHandle], 'the victim\'s real object must survive the attacker\'s rejected confirm untouched')
+
+    -- The victim's own, genuine confirm -- arriving SECOND -- succeeds
+    -- normally: the attacker's confirm never wrote anything into
+    -- PropAttachmentState, so there is nothing left for the victim's own
+    -- confirm to collide with.
+    f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 10, victimNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.attached_success'))
+    t.isNil(f.deletedEntities[victimHandle], 'the victim\'s real object must never be deleted by this whole race')
+
+    -- HARD CONSTRAINT check -- not stranded either: the victim can still
+    -- remove their own, now-properly-registered attachment through the
+    -- ordinary single-owner toggle-off path.
+    f.advance(TOGGLE_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 10)
+    t.isTrue(f.deletedEntities[victimHandle], 'still a single, clean, removable owner -- no stranding')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.removed_success'))
+end)
+
+t.test('confirmPropAttached: the REVERSE-order attack (attacker confirms an ALREADY-confirmed different citizen\'s netId) is also rejected by the NETWORK-OWNERSHIP GUARD, before the GLOBAL NETID-UNIQUENESS check is even reached', function()
+    local f = newFixture()
+    local netId1, handle1 = attachSuccessfully(f, 1, 'AAA111', 5001, { x = 0, y = 0, z = 0 })
 
     -- Citizen 2 stands right next to citizen 1 and opens their own toggle.
     f.advance(TOGGLE_COOLDOWN_MS + 1)
@@ -801,26 +920,62 @@ t.test('confirmPropAttached REJECTS a netId that already belongs to a DIFFERENT 
     f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 2)
 
     -- Citizen 2's client reports CITIZEN 1's own real, already-tracked
-    -- netId instead of a genuinely new object. Every OTHER check passes:
-    -- the model is right, and the entity is genuinely close to citizen 2's
-    -- own ped. Only the ownership guard stands between this and a
-    -- cross-citizen registry collision.
+    -- netId instead of a genuinely new object. Model and position both
+    -- pass (it really is a configured prop, really close to citizen 2's own
+    -- ped) -- only ownership (citizen 1's client, not citizen 2's, actually
+    -- created/owns this object) stands between this and a cross-citizen
+    -- registry collision.
+    f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 2, netId1)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description,
+        locale('propattachment.attach_failed_unconfirmed'),
+        'the NETWORK-OWNERSHIP GUARD catches this before the GLOBAL NETID-UNIQUENESS check below even runs')
+    local reject = lastClientEvent(f, 'qbx_k9unit:client:rejectK9PropAttach')
+    t.isNotNil(reject, 'and the caller is told to reclaim their own object')
+    t.equals(reject.target, 2)
+    t.isNil(f.deletedEntities[handle1])
+
+    -- Citizen 1 still solely owns the entity, so toggling it off is still a
+    -- clean single-owner operation rather than one half of a shared-entity
+    -- desync.
+    f.advance(TOGGLE_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
+    t.isTrue(f.deletedEntities[handle1], 'citizen 1 still owns and can remove it')
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.removed_success'))
+end)
+
+t.test('confirmPropAttached: GLOBAL NETID-UNIQUENESS GUARD still hard-rejects (never adopts/evicts) a collision even when the second confirm ALSO independently passes the NETWORK-OWNERSHIP GUARD -- the disclosed, harder ownership-migration/theft edge case', function()
+    local f = newFixture()
+    local netId1, handle1 = attachSuccessfully(f, 1, 'AAA111', 5001, { x = 0, y = 0, z = 0 })
+
+    f.advance(TOGGLE_COOLDOWN_MS + 1)
+    f.setAccess(2, true)
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 })
+    f.setPlayer(2, 'BBB222')
+    f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 2)
+
+    -- Simulate the disclosed harder edge case the NETWORK-OWNERSHIP GUARD's
+    -- own comment names: OneSync ownership of the SAME already-tracked
+    -- entity has, somehow, migrated to src 2 by the time src 2 confirms
+    -- (e.g. an active client-side NetworkRequestControlOfEntity theft) -- so
+    -- src 2's own NETWORK-OWNERSHIP GUARD check now ALSO passes.
+    f.setEntityOwner(handle1, 2)
+
     f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 2, netId1)
 
     t.equals(f.notifyCalls[#f.notifyCalls].description,
         locale('propattachment.attach_failed_already_tracked'),
-        'a netId another citizen already owns is refused, not adopted')
+        'the registry collision is still a hard reject, never an adopt-and-evict -- adopting here would hand a successful ownership thief a path to later delete citizen 1\'s real prop via their own ordinary toggle-off')
     local reject = lastClientEvent(f, 'qbx_k9unit:client:rejectK9PropAttach')
-    t.isNotNil(reject, 'and the caller is told to reclaim their own object')
+    t.isNotNil(reject)
     t.equals(reject.target, 2)
+    t.isNil(f.deletedEntities[handle1])
 
-    -- The guard's whole point: citizen 1 still solely owns the entity, so
-    -- toggling it off is still a clean single-owner operation rather than
-    -- one half of a shared-entity desync.
+    -- Citizen 1 still solely owns it on record and can still remove it --
+    -- not stranded by this edge case either.
     f.advance(TOGGLE_COOLDOWN_MS + 1)
     f.dispatchNetEvent('qbx_k9unit:server:requestToggleK9PropAttachment', 1)
-    t.isTrue(f.deletedEntities[netId1 + 500000], 'citizen 1 still owns and can remove it')
-    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.removed_success'))
+    t.isTrue(f.deletedEntities[handle1])
 end)
 
 -- ----------------------------------------------------------------------
@@ -903,7 +1058,10 @@ t.test('playerDropped: a mismatched-source pending is untouched by an unrelated 
     f.firePlayerDropped(2) -- unrelated disconnect, different citizenid entirely
 
     local netId = freshNetId()
-    f.registerEntity(netId, netId + 500000, { coords = { x = 0, y = 0, z = 0 } })
+    -- owner = 1: see the NETWORK-OWNERSHIP GUARD mock's own declaration
+    -- comment -- this confirm must pass that guard too, not just be
+    -- resolvable/right-model.
+    f.registerEntity(netId, netId + 500000, { coords = { x = 0, y = 0, z = 0 }, owner = 1 })
     f.dispatchNetEvent('qbx_k9unit:server:confirmPropAttached', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('propattachment.attached_success'), 'src 1\'s own pending must have survived an unrelated disconnect')
 end)

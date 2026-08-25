@@ -6,13 +6,15 @@ does, or for the full list of every config flag, see `README.md`. For the
 open decisions only a server owner can make, see `PROJECT_STATUS.md`; this
 runbook turns several of those decisions into concrete steps.
 
-**Read this before anything else below: as of 2026-08-25, every one of this
-resource's 40 feature flags is switched on** (checked directly in
-`config.lua`, not assumed). Every "before you enable X" instruction in this
-document below is now "X is already enabled — do this now, not before you
-flip a switch that's already flipped." One flag in particular,
-`BoneSweepDevTool`, is dangerous to leave on — see section 4 immediately if
-you haven't already turned it back off.
+**Read this before anything else below: as of 2026-08-25, 39 of this
+resource's 40 feature flags are switched on** (checked directly in
+`config.lua`, not assumed). The one exception, `CameraFeedPiP`, has no
+implementing code at all and was corrected back to `false` — nothing to do
+about that one. Every "before you enable X" instruction in this document
+below is now "X is already enabled — do this now, not before you flip a
+switch that's already flipped." One flag in particular, `BoneSweepDevTool`,
+is dangerous to leave on — see section 4 immediately if you haven't
+already turned it back off.
 
 **This file needs no `fxmanifest.lua` entry.** Documentation files are never
 loaded by the resource — do not add `OPERATOR_RUNBOOK.md` (or `README.md`)
@@ -91,7 +93,36 @@ one, never delete the audit row) before re-running it.
 4. Open `config.lua` and set `Config.Departments`, `Config.Peds`, and
    `Config.K9Vehicles` for your server (see `README.md`'s own
    [Installation](README.md#installation) section for the full list).
-5. Certify your first handler (`README.md`'s
+5. **Create the item/object dependencies below.** Every one of these backs
+   a feature that ships `true` by default, and every one is a bare
+   placeholder name in `config.lua` — none of them exist in a fresh
+   `ox_inventory`/world install on their own, and a missing one doesn't
+   error, it just silently never works (`GetItemCount`-style checks return
+   0 forever, which reads to a player as "this feature is broken," not
+   "this feature is unconfigured"):
+   - **`k9_medkit`** (`Config.K9Medkit.itemName`) — an `ox_inventory` item.
+     Needed for `K9Medkit` (Treat K9).
+   - **`k9_treat`** (`Config.Wellbeing.Mood.feedItemName`) — an
+     `ox_inventory` item. Needed for `MoodSystem`'s "Feed K9" action (Pet
+     K9 needs no item).
+   - **`k9_meat_bait`** (`Config.Wellbeing.Distraction.meatBaitItemName`)
+     and **`k9_ultrasonic_whistle`**
+     (`Config.Wellbeing.Distraction.whistleItemName`) — both `ox_inventory`
+     items. Needed for `DistractionSystem` (`/k9meatbait`, `/k9whistle`).
+   - **A `water_bowl`-modeled world object** (`Config.Wellbeing.Fatigue.restSources`)
+     — not an inventory item, an actual placed object/prop your server's
+     map or a placement resource puts in the world. Needed for
+     `FatigueSystem`'s rest-recovery bonus specifically (fatigue still
+     regenerates slowly without one; a K9 just never gets the faster
+     near-a-rest-source rate). `'water_bowl'` is itself an unverified guess
+     at a real model name — confirm it against your own server's assets, or
+     change `restSources` to a model you know exists.
+
+   Add each item to your server's own `ox_inventory` items table (the exact
+   step depends on your `ox_inventory` setup — see its own documentation)
+   before enabling the corresponding feature in front of real players, not
+   after.
+6. Certify your first handler (`README.md`'s
    [How certification works, day one](README.md#how-certification-works-day-one)).
 
 Only after all of the above is in place should you start working through
@@ -150,10 +181,14 @@ If you want to fix it, on a **dev server only**:
    confirm your dev server's own copy of `config.lua` still has it set)
    and restart.
 2. Grant yourself `Config.BoneSweepTool.AcePermission` (default
-   `k9unit.bonesweep` — deliberately a *different* ACE principal from the
-   admin-audit one below) via your server's normal ACE/principal setup in
+   `k9unit.bonesweep`) via your server's normal ACE/principal setup in
    `server.cfg` (e.g. `add_ace identifier.<yours> k9unit.bonesweep allow`,
-   or via a principal group).
+   or via a principal group). This is the only ACE permission left anywhere
+   in this resource as of 2026-08-25 — the admin/audit commands (`/k9auditcert`
+   and friends) no longer use ACE at all, they check police job rank
+   instead, so there is no "admin-audit ACE" to keep this one separate
+   from any more; `k9unit.bonesweep` still deliberately stands alone as its
+   own principal.
 3. Connect and play as a K9-modeled ped.
 4. Run `/k9bonetool help` for the full workflow, then `/k9bonetool known`
    for a candidate shortlist, `/k9bonetool goto <index>` /
@@ -313,8 +348,10 @@ distribute, that obligation travels with every copy of it.
 
 **This section originally recommended enabling flags gradually, starting
 with the lowest-risk group and leaving combat for last, if at all.** That
-recommendation has been overtaken: all 40 flags, including combat, are
-already `true` (see the top of this document). The advice below is kept,
+recommendation has been overtaken: 39 of 40 flags, including combat, are
+already `true` (see the top of this document; the one exception,
+`CameraFeedPiP`, has no code behind it and isn't relevant here). The advice
+below is kept,
 rewritten as a checklist of what to verify now that everything is live at
 once, rather than a rollout plan — the original reasoning for *why* each
 item matters is unchanged, only the tense.

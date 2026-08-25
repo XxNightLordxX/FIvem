@@ -65,16 +65,19 @@
       - client/combat.lua is untested here -- client-only natives, no
         server-side equivalent to sandbox against, same blanket exclusion
         tests/README.md already states for every client/*.lua file.
-      - NonComplianceDetection (the log-only movement-sampling thread) is
-        left disabled (Config.Combat.NonComplianceDetection.enabled =
-        false, the real shipped default) throughout this whole file and is
-        NOT separately exercised -- it is explicitly non-punitive/
-        detection-only (never gates a single server-authoritative outcome
-        this suite's own "what matters most" brief cares about) and adds a
-        second maintenance thread's worth of stubbing (GetPlayers/
-        IsPlayerAceAllowed staff-notify fan-out) for a feature this task's
-        brief does not name. Disclosed here as a real, deliberate scope cut,
-        not a silent gap.
+      - NonComplianceDetection's own movement-sampling HEURISTICS (bite-hold
+        idle/speed tolerance, takedown net displacement, drag gap) are left
+        disabled (Config.Combat.NonComplianceDetection.enabled = false, the
+        real shipped default) through every OTHER test in this file and are
+        NOT separately exercised as an exhaustive suite -- it is explicitly
+        non-punitive/detection-only (never gates a single server-
+        authoritative outcome this suite's own "what matters most" brief
+        cares about). Disclosed here as a real, deliberate scope cut, not a
+        silent gap. ONE dedicated section near the bottom of this file DOES
+        enable it, narrowly, to cover the notify_staff fan-out's ACE->job-
+        rank rewrite (IsAuthorizedForNonComplianceAlert, project-owner-
+        directed, this pass) using the simplest possible violation trigger
+        -- that is a permission-boundary test, not heuristics coverage.
       - PropDragging gets a materially lighter pass than BiteAndHold/
         NonLethalTakedown (a handful of smoke tests near the bottom of this
         file) -- it shares this file's own EndHold/maintenance-thread/
@@ -229,8 +232,6 @@ local function newCombatFixture(opts)
         return out
     end
 
-    local function IsPlayerAceAllowed(_src, _perm) return false end -- staff-notify fan-out is not this spec's focus -- NonComplianceDetection stays disabled throughout, see this file's own header
-
     local awardCalls = {}
     local function awardXPFn(citizenid, awardKey)
         awardCalls[#awardCalls + 1] = { citizenid = citizenid, awardKey = awardKey }
@@ -255,6 +256,13 @@ local function newCombatFixture(opts)
             BiteAndHold = opts.biteAndHoldCfg or baselineBiteAndHoldConfig(),
             NonLethalTakedown = opts.takedownCfg or baselineTakedownConfig(),
         },
+        -- Only read by IsAuthorizedForNonComplianceAlert's job-rank check
+        -- (ACE->job-rank rewrite, this pass) -- every other check in this
+        -- file (HasK9Access, RequireWantedStatus/IsPlayerWantedEligible)
+        -- is stubbed/config'd independently and never touches this table.
+        -- Default shape here is deliberately arbitrary -- override via
+        -- opts.departmentsCfg for tests that care about the exact threshold.
+        Departments = opts.departmentsCfg or { police = { nonComplianceAlertGrade = 2 } },
     }
 
     local envOverrides = {
@@ -278,7 +286,6 @@ local function newCombatFixture(opts)
         GetEntityType = GetEntityType,
         IsPedRagdoll = IsPedRagdoll,
         GetPlayers = GetPlayers,
-        IsPlayerAceAllowed = IsPlayerAceAllowed,
         Config = config,
     }
     if opts.withAwardXP ~= false then envOverrides.AwardXP = awardXPFn end
@@ -344,6 +351,11 @@ local function newCombatFixture(opts)
         setPlayer = function(src, shape)
             playersBySource[src] = {
                 citizenid = shape.citizenid,
+                -- job is ONLY read by IsAuthorizedForNonComplianceAlert's
+                -- job-rank check (ACE->job-rank rewrite, this pass) -- every
+                -- other test in this file leaves it nil, which is exactly
+                -- the "no job at all" shape that check must fail closed on.
+                job = shape.job,
                 metadata = {
                     wanted = shape.wanted == true,
                     iswanted = shape.iswanted == true,
@@ -947,10 +959,22 @@ end)
 -- (always, floor never applies). 'target_died'/'holder_died' are already
 -- pinned as zero-payout above; this section covers released/timeout/
 -- disconnect.
+--
+-- EIGHTH-XP-FARM-FIX NOTE: these tests use an NPC target purely for wiring
+-- convenience (this section's own focus is the DURATION FLOOR/timeout
+-- logic, not player-vs-NPC eligibility) but server/combat.lua's real
+-- default is now Config.XP.mintXpForNpcCombatTargets = false/unset, which
+-- would make every one of these read as 0 regardless of the floor logic
+-- being tested. Each test below therefore explicitly opts an NPC target
+-- INTO minting (`f.config.XP = { mintXpForNpcCombatTargets = true }`) so it
+-- keeps isolating the floor/timeout behavior it was written to check. See
+-- the dedicated "NPC XP-MINT ELIGIBILITY" section further below for direct
+-- coverage of the real default (false) and the opt-in flag itself.
 -- ========================================================================
 
 t.test('released after >= 3000ms held is paid biteHoldSuccess exactly once', function()
     local f = newCombatFixture()
+    f.config.XP = { mintXpForNpcCombatTargets = true } -- isolates the duration floor from the separate NPC-eligibility gate -- see this section's header
     wireK9(f, K9_SRC, { citizenid = 'K9-CID' })
     wireNpcTarget(f, 500)
     f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
@@ -963,6 +987,7 @@ end)
 
 t.test('released at EXACTLY the 3000ms floor is paid (>=, not strictly >)', function()
     local f = newCombatFixture()
+    f.config.XP = { mintXpForNpcCombatTargets = true } -- isolates the duration floor from the separate NPC-eligibility gate -- see this section's header
     wireK9(f, K9_SRC)
     wireNpcTarget(f, 500)
     f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
@@ -992,12 +1017,58 @@ end)
 
 t.test('a genuine timeout always pays biteHoldSuccess, even when maxDurationMs is BELOW the 3000ms anti-farm floor -- timeout bypasses that floor entirely', function()
     local f = newCombatFixture({ biteAndHoldCfg = { range = 2.5, maxDurationMs = 1000, cooldownMs = 20000, targetCooldownMs = 35000 } })
+    f.config.XP = { mintXpForNpcCombatTargets = true } -- isolates timeout-bypasses-the-floor from the separate NPC-eligibility gate -- see this section's header
     wireK9(f, K9_SRC)
     wireNpcTarget(f, 500)
     f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
     f.advance(1000)
     f.runOneTick()
     t.equals(#f.awardCalls, 1, 'reason == timeout must pay regardless of held duration')
+end)
+
+-- ========================================================================
+-- EIGHTH XP-FARM FIX: NPC XP-mint eligibility (Config.XP.
+-- mintXpForNpcCombatTargets). ValidateCombatRequest's NPC branch never
+-- checks RequireWantedStatus at all (Config.Combat.RequireWantedStatus's
+-- own comment documents this), so an ambient, non-wanted NPC was a fully
+-- qualifying biteHoldSuccess/takedownSuccess source. These tests pin the
+-- real default (false/unset -- no payout for an NPC target) and the opt-in
+-- override, for bite-hold; the parallel takedown coverage lives inline in
+-- the NonLethalTakedown section below (near its own award call site).
+-- ========================================================================
+
+t.test('released after >= 3000ms held against an NPC target does NOT pay biteHoldSuccess by default (EIGHTH XP-farm fix)', function()
+    local f = newCombatFixture() -- Config.XP.mintXpForNpcCombatTargets left at its real default (unset -- falsy)
+    wireK9(f, K9_SRC, { citizenid = 'K9-CID' })
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    f.advance(3000)
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    t.equals(#f.awardCalls, 0, 'an ambient NPC target must not mint biteHoldSuccess unless the operator opts in')
+end)
+
+t.test('with Config.XP.mintXpForNpcCombatTargets explicitly true, the SAME NPC scenario above now pays biteHoldSuccess', function()
+    local f = newCombatFixture()
+    f.config.XP = { mintXpForNpcCombatTargets = true }
+    wireK9(f, K9_SRC, { citizenid = 'K9-CID' })
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    f.advance(3000)
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    t.equals(#f.awardCalls, 1)
+    t.equals(f.awardCalls[1].awardKey, 'biteHoldSuccess')
+end)
+
+t.test('released after >= 3000ms held against a WANTED PLAYER target pays biteHoldSuccess regardless of Config.XP.mintXpForNpcCombatTargets (default false/unset)', function()
+    local f = newCombatFixture() -- real default -- no NPC opt-in configured at all
+    wireK9(f, K9_SRC, { citizenid = 'K9-CID' })
+    wirePlayerTarget(f, 501, TARGET_SRC, { wanted = true })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+    f.advance(3000)
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    t.equals(#f.awardCalls, 1, 'a genuinely eligible player target must still pay -- this gate only narrows NPC targets, never player targets')
+    t.equals(f.awardCalls[1].citizenid, 'K9-CID')
+    t.equals(f.awardCalls[1].awardKey, 'biteHoldSuccess')
 end)
 
 t.test('target_died never pays (re-confirmed alongside the other three exclusions for a single, explicit side-by-side comparison)', function()
@@ -1181,7 +1252,7 @@ t.test('requestTakedown: a target that does not move during the sample window is
     t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcTakedown'), 1, 'a genuinely fleeing target must still succeed -- proving the earlier not_fleeing rejections never consumed either cooldown')
 end)
 
-t.test('requestTakedown: a target that moves fast enough during the sample window succeeds, relaying to the K9 for an NPC target and paying takedownSuccess', function()
+t.test('requestTakedown: a target that moves fast enough during the sample window succeeds, relaying to the K9 for an NPC target -- but NPC targets do NOT pay takedownSuccess by default (EIGHTH XP-farm fix)', function()
     local f = newCombatFixture()
     wireK9(f, K9_SRC, { citizenid = 'K9-CID', x = 0, y = 0, z = 0 })
     local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
@@ -1189,9 +1260,32 @@ t.test('requestTakedown: a target that moves fast enough during the sample windo
         f.setCoords(ped, 1, 1.2, 0)
     end)
     local ev = lastClientEvent(f, 'qbx_k9unit:client:applyNpcTakedown')
-    t.isNotNil(ev)
+    t.isNotNil(ev, 'the takedown itself must still fully succeed -- this gate only withholds XP, never the mechanic')
     t.equals(ev.target, K9_SRC)
+    t.equals(#f.awardCalls, 0, 'Config.XP.mintXpForNpcCombatTargets defaults to false/unset -- an ambient NPC target must not mint takedownSuccess')
+end)
+
+t.test('requestTakedown: with Config.XP.mintXpForNpcCombatTargets explicitly true, the SAME NPC scenario above now pays takedownSuccess', function()
+    local f = newCombatFixture()
+    f.config.XP = { mintXpForNpcCombatTargets = true }
+    wireK9(f, K9_SRC, { citizenid = 'K9-CID', x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
     t.equals(#f.awardCalls, 1)
+    t.equals(f.awardCalls[1].awardKey, 'takedownSuccess')
+end)
+
+t.test('requestTakedown: a fleeing, wanted PLAYER target pays takedownSuccess regardless of Config.XP.mintXpForNpcCombatTargets (default false/unset)', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { citizenid = 'K9-CID', x = 0, y = 0, z = 0 })
+    local ped = wirePlayerTarget(f, 501, TARGET_SRC, { wanted = true, x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 501 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+    t.equals(#f.awardCalls, 1, 'a genuinely eligible player target must still pay -- this gate only narrows NPC targets, never player targets')
+    t.equals(f.awardCalls[1].citizenid, 'K9-CID')
     t.equals(f.awardCalls[1].awardKey, 'takedownSuccess')
 end)
 
@@ -1335,6 +1429,86 @@ t.test('DragExceedsMaxDistance safety valve: the maintenance thread force-ends a
     f.setCoords(k9Ped, 0, 0, 0)
     f.runOneTick()
     t.equals(countClientEvents(f, 'qbx_k9unit:client:dragEnded'), 1)
+end)
+
+-- ========================================================================
+-- NON-COMPLIANCE DETECTION: notify_staff fan-out ACE->job-rank rewrite
+-- (project-owner-directed, this pass). Narrow, permission-boundary-only
+-- coverage -- see this file's header for why the sampling HEURISTICS
+-- themselves stay out of this file's scope. Uses the simplest possible
+-- violation trigger (an NPC target that teleports on the very first sample,
+-- with biteHoldViolationSamples = 1 and zero idle/speed tolerance) purely
+-- to reach FlagNonCompliance's notify_staff branch once -- the movement
+-- math itself is not this section's concern.
+-- ========================================================================
+
+t.test('NonComplianceDetection notify_staff: ACE->job-rank rewrite -- job.isboss always qualifies, grade >= Config.Departments[job].nonComplianceAlertGrade qualifies, below-threshold/unconfigured-department/no-player-record all fail closed', function()
+    local f = newCombatFixture({
+        nonComplianceDetectionCfg = {
+            enabled = true,
+            positionSampleWindowMs = 500,
+            biteHoldIdleCeiling = 0,
+            biteHoldSpeedTolerance = 0,
+            biteHoldViolationSamples = 1,
+            takedownNetDisplacementMeters = 3.0,
+            action = 'notify_staff',
+            OnViolationOverride = nil,
+            dragComplianceSlackMeters = 4.0,
+        },
+        departmentsCfg = { police = { nonComplianceAlertGrade = 2 } },
+    })
+
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+
+    -- Five online candidates, one per branch of
+    -- IsAuthorizedForNonComplianceAlert (server/combat.lua):
+    f.setPlayer(30, { citizenid = 'SUP',   job = { name = 'police',  isboss = false, grade = { level = 2 } } }) -- grade == threshold -- qualifies
+    f.addOnline(30)
+    f.setPlayer(31, { citizenid = 'JR',    job = { name = 'police',  isboss = false, grade = { level = 1 } } }) -- below threshold -- fails closed
+    f.addOnline(31)
+    f.setPlayer(32, { citizenid = 'CHIEF', job = { name = 'police',  isboss = true,  grade = { level = 0 } } }) -- isboss bypass -- qualifies regardless of grade
+    f.addOnline(32)
+    f.setPlayer(33, { citizenid = 'OUT',   job = { name = 'sheriff', isboss = false, grade = { level = 99 } } }) -- department not in Config.Departments -- fails closed
+    f.addOnline(33)
+    f.addOnline(34) -- online, but never setPlayer'd -- no resolvable Player record at all -- fails closed
+
+    f.setCoords(ped, 500, 0, 0) -- obvious teleport -- an unambiguous movement violation on the very first sample
+    f.advance(500) -- matches positionSampleWindowMs so the sampling thread's own dtSeconds > 0 when it wakes
+    f.runOneTick()
+
+    local notified = {}
+    for _, e in ipairs(f.clientEvents) do
+        if e.event == 'ox_lib:notify' then notified[e.target] = true end
+    end
+    t.isTrue(notified[30] == true, 'grade == threshold (2) must qualify')
+    t.isNil(notified[31], 'grade below threshold (1 < 2) must not qualify')
+    t.isTrue(notified[32] == true, 'job.isboss must always qualify regardless of grade')
+    t.isNil(notified[33], 'a department not listed in Config.Departments must fail closed')
+    t.isNil(notified[34], 'an online id with no resolvable Player record must fail closed')
+end)
+
+t.test('NonComplianceDetection notify_staff: the OLD ACE check is gone -- IsPlayerAceAllowed is never read, even when left entirely undefined in the sandbox', function()
+    -- newCombatFixture never provides IsPlayerAceAllowed at all (see this
+    -- file's own envOverrides above) -- if server/combat.lua still called
+    -- it anywhere, this would error with "attempt to call a nil value"
+    -- the moment the notify_staff branch ran. It not erroring IS the proof.
+    local f = newCombatFixture({
+        nonComplianceDetectionCfg = {
+            enabled = true, positionSampleWindowMs = 500,
+            biteHoldIdleCeiling = 0, biteHoldSpeedTolerance = 0, biteHoldViolationSamples = 1,
+            takedownNetDisplacementMeters = 3.0, action = 'notify_staff', OnViolationOverride = nil,
+            dragComplianceSlackMeters = 4.0,
+        },
+    })
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    f.setCoords(ped, 500, 0, 0)
+    f.advance(500)
+    local ok = pcall(f.runOneTick)
+    t.isTrue(ok, 'the notify_staff fan-out must never call the removed IsPlayerAceAllowed')
 end)
 
 os.exit(t.summary())

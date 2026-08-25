@@ -50,20 +50,26 @@ document says how, item by item).
 
 ## The one-paragraph version
 
-**Every one of this resource's 40 feature flags is now switched on** —
+**39 of this resource's 40 feature flags are now switched on** —
 confirmed by reading `config.lua` directly on the date above, not assumed
 from an older note. That includes features this project had deliberately
 kept off pending a safety/balance review, most importantly the three
 combat features and a developer-only tool that its own code comment says
 should never run on a live server (see the next section — read it first).
-Two open safety questions about the combat features (D3 and D13, below)
-still have **no answer**. Turning the flag on did not answer them — it
-just means whatever risk they describe is live on your server now, not
-hypothetical. Automated tests still pass in full (698 checks across 17
-files, plus clean lint/syntax, all confirmed by running them directly on
-the date above), which tells you the code does what its authors intended —
-it does not tell you the two open questions below are resolved, because
-neither is something a test can check.
+The one exception is `CameraFeedPiP`, which has no implementing code at all
+(see the table below) and has been corrected back to `false` after briefly
+being swept to `true` along with everything else — flipping it either way
+changes nothing in-game. Two open safety questions about the combat features
+(D3 and D13, below) still have **no answer**. Turning the flag on did not
+answer them — it just means whatever risk they describe is live on your
+server now, not hypothetical. This resource's test suite has grown to 23
+spec files (up from 17); re-run `tests/run.sh` yourself for a current
+pass/fail count and `luacheck`/`luac5.4 -p` for lint/syntax — this document
+was written without shell access and could not re-execute either itself
+this pass, only confirm the file count directly. Passing tests tell you the
+code does what its authors intended — they do not tell you the two open
+questions below are resolved, because neither is something a test can
+check.
 
 ---
 
@@ -94,8 +100,9 @@ single most urgent item in this whole document.
 
 ## What's live right now, grouped by area
 
-All 40 flags are `true`. Grouping them tells you more than a flat list —
-some groups are low-risk now that they're on, some carry real, still-open
+39 of the 40 flags are `true` (the exception, `CameraFeedPiP`, is explained
+in its own row below). Grouping them tells you more than a flat list — some
+groups are low-risk now that they're on, some carry real, still-open
 questions.
 
 | Group | What it covers | Should you worry? |
@@ -105,8 +112,8 @@ questions.
 | **Combat** | Bite & Hold, Non-Lethal Takedown, Dragging, Handler-Down Defense, the Handler Partnership registry, Recall | **Yes — see D3 and D13 below before treating this as safe.** A cheater can already shrug off the restraining half of these mechanics on a modified client; that's disclosed and accepted by turning them on, not a new problem. What's *not* settled is whether the security check meant to stop a different exploit (self-granted invincibility) actually works the way this project believes, and whether a griefing exploit against `FearStressSystem` (also now on) is something you're willing to live with. |
 | **Inventory, XP, wellbeing** | K9 gear stash, K9 medkit, XP progression, Fatigue/Mood/Fear-Stress/Distraction/Injury | Low risk to other players, but every number driving these (XP awards, thresholds) is still an unreviewed placeholder — see "placeholder numbers are now live money" below. |
 | **Audio, props, kennel** | Advanced bark variants, proximity audio, cosmetic vest, fetch, deployable kennel | Low. Two are cosmetic-only and known to look wrong until a one-time dev task is done (D8/D9 below); most bark/ambient sounds are still silent because the audio files don't exist yet (see D7). |
-| **Admin & developer tools** | The read-only admin/audit commands, the bone-sweep dev tool | The audit commands are safe by design (read-only, and nobody can use them until you grant the `k9unit.admin` ACE permission). **The bone-sweep tool is not safe — see the urgent warning above.** |
-| **Not really a feature** | `CameraFeedPiP` | Flipping this to `true` does nothing at all — no code exists behind it. The idea (a live camera feed) has been confirmed genuinely impossible with the game engine's current capabilities, not just unbuilt. Harmless either way. |
+| **Admin & developer tools** | The read-only admin/audit commands, the bone-sweep dev tool | The audit commands are safe by design (read-only) and are gated by **police job rank**, not an ACE permission — a senior-enough rank in a department listed in `Config.Departments` (or that department's boss) can already run them, with no separate staff grant needed at all. This changed 2026-08-25; there is no more ACE permission to configure for these specifically. **The bone-sweep tool is different and is still ACE-gated** (a separate permission, unrelated to police rank, because it's a dev tool, not a police capability) — see the urgent warning above; that one is genuinely not safe to leave on. |
+| **Not really a feature** | `CameraFeedPiP` | Currently `false` again after briefly being swept to `true` along with everything else — corrected because no code exists behind it either way. The idea (a live camera feed) has been confirmed genuinely impossible with the game engine's current capabilities, not just unbuilt. Harmless regardless of which way this flag is set. |
 
 ---
 
@@ -270,12 +277,16 @@ server. Worth a look before this runs unattended for weeks.
 
 ---
 
-## What's actually been tested, verified today
+## What's actually been tested, as of the last time someone ran it
 
-- **Automated tests:** 698 individual checks across 17 files, all passing
-  — run directly to produce this line, not copied from a comment.
-- **Lint and syntax:** clean across every `.lua` file in the resource —
-  also run directly.
+- **Automated tests:** the test suite has grown to 23 spec files (this
+  document's own earlier "698 checks across 17 files" line was stale — file
+  count re-verified directly by listing `tests/*_spec.lua` on the date
+  above). This pass had no shell access to re-run `tests/run.sh` itself, so
+  it cannot personally certify a current pass/fail count — run it yourself
+  if that matters to you right now.
+- **Lint and syntax:** run `luacheck` and `luac5.4 -p` yourself for a
+  current answer; not re-run by this pass for the same reason as above.
 - **Nothing is dead code:** every `.lua` file on disk is wired into
   `fxmanifest.lua`, the file that tells the game which scripts to actually
   send to players.
@@ -284,6 +295,48 @@ None of this tells you the two open decisions above are resolved — a test
 suite checks that code does what its own author intended, not whether the
 underlying design choice (D3, D13) is safe. Keep them separate in your own
 head, because it's easy to read "all tests pass" as "everything is fine."
+
+---
+
+## Mistakes this project has made before (so you know the pattern)
+
+Carried over from `DECISIONS_NEEDED.md`'s own retrospective section, so this
+doesn't get lost when that file is deleted. None of these are still open —
+they're listed because a document that only reports successes isn't worth
+trusting, and because the next thing built on this resource is more likely
+to repeat one of these than invent a new mistake:
+
+- **A setting once claimed to restrict access when it didn't.** A config
+  comment said a K9 gear-stash setting limited access to that K9's own
+  player. It never actually did, because the check it relied on doesn't
+  look at identity at all. It's now impossible to even set that value —
+  the resource refuses to start rather than silently grant broader access
+  than documented.
+- **A file's own comment claimed a certification revoke automatically ended
+  that handler's partnership.** The code to do that existed, but nothing
+  ever called it, so it silently never happened until someone checked the
+  claim against the code and wired the missing calls in.
+- **A commit message described a fix that wasn't actually in that commit.**
+  The bug it claimed to fix had already been fixed moments earlier by a
+  different, unrelated change. No bug ever reached a player, but it's a
+  reminder that a commit message saying "fixed" isn't proof the fix is in
+  that specific commit.
+- **A code comment said a screen effect applied to the wrong player.** It
+  said a contraband-search visual effect applied to the *searched* person's
+  screen; the code has always applied it to the *searching* K9's own
+  handler, as feedback for them, not a penalty on a suspect. The comment
+  was wrong, not the code — but trusting the comment alone could have led
+  someone to "fix" working code into penalizing the wrong player.
+- **A shipped feature referenced a visual effect that didn't exist**, so it
+  would have run with no error and no visible effect, forever, with nothing
+  in any log explaining why. Found by checking the name against the game's
+  own data directly, not by trusting the code comment; fixed to the real
+  name.
+- **A security bug, once fixed, reappeared in a copy-pasted file.** An
+  unguarded "delete this object" handler let a forged message delete any
+  object in the world, not just the one it was supposed to. Fixed once in
+  the original feature, then found and fixed again in a newer feature that
+  had copied the same pattern — including its bug.
 
 ---
 

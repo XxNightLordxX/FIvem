@@ -53,6 +53,50 @@
     reachable by a future DeleteEntity call).
     ======================================================================
 
+    ======================================================================
+    FIRST-WRITER-WINS PROP-HIJACK RACE — FOUND AND CLOSED (coder-security,
+    race-hardening pass, exploit-tester finding #2): the GLOBAL NETID-
+    UNIQUENESS GUARD below (FindOtherPropAttachmentByNetId) only rejects a
+    netId ALREADY present in `PropAttachmentState` — i.e. only ever catches
+    a collision against an entry some EARLIER confirm already wrote. It has
+    no way to stop a SECOND, certified handler standing within
+    Config.PropAttachments.confirmDistanceTolerance of a FIRST handler who
+    is mid-handshake (server already told them to attachK9Prop; their
+    client already created+attached a REAL networked object; their own
+    confirmPropAttached has not yet reached this server) from observing
+    that real object appear nearby — ordinary OneSync entity-relevance
+    replication, independent of and frequently faster than the FIRST
+    handler's own queued TriggerServerEvent actually arriving here — and
+    racing their OWN confirmPropAttached in FIRST, reporting the FIRST
+    handler's genuine netId as their own. Model and position both pass (it
+    really is a configured prop, really within tolerance of the SECOND
+    handler, who simply chose to stand close) — proximity alone can never
+    tell "this is genuinely my own object" apart from "I am standing near
+    someone else's". Before the fix below, that bogus SECOND-handler
+    confirm landed FIRST and therefore won the GLOBAL NETID-UNIQUENESS
+    check outright (nothing had claimed the netId yet), and the FIRST
+    handler's own, entirely legitimate, later confirm was the one that then
+    hit "already tracked" and was rejected — sending THEM
+    'qbx_k9unit:client:rejectK9PropAttach', which deletes THEIR OWN real,
+    just-created object. A guard built to stop a hijack had inverted into a
+    denial-of-service against the genuine owner instead.
+    THE FIX — HandleConfirmPropAttached's NETWORK-OWNERSHIP GUARD (see that
+    function's own comment for the full trace and native-verification
+    notes): every confirm that has already passed the model+position checks
+    must additionally prove the caller is the reported entity's own CURRENT
+    OneSync network owner (NetworkGetEntityOwner(entity) == src), BEFORE the
+    GLOBAL NETID-UNIQUENESS check and the final registry write. Since
+    a networked object is owned by the client that created it (this
+    feature's own client/propattachment.lua AttachPropToOwnPed call), the
+    SECOND handler's bogus confirm now fails at THIS check — before it can
+    ever write into `PropAttachmentState` — regardless of which of the two
+    confirms' own network messages happens to reach this server first. The
+    FIRST handler's later, genuine confirm therefore never encounters
+    anything already claiming their netId at all: the race is closed at its
+    root (the bogus write can no longer happen), not papered over after the
+    fact.
+    ======================================================================
+
     EVENT/CALLBACK CONTRACT:
     Server events (RegisterNetEvent, client->server):
     1. 'qbx_k9unit:server:requestToggleK9PropAttachment' () [THIS FILE]
@@ -65,9 +109,13 @@
     2. 'qbx_k9unit:server:confirmPropAttached' (netId: number) [THIS FILE]
        Client reports the network id of the object it actually created in
        response to event 3. Re-validates everything event 1 already
-       checked, PLUS the object's model (allowlist) and live position
-       (tolerance against the caller's own live ped coords) — see
-       HandleConfirmPropAttached.
+       checked, PLUS the object's model (allowlist), live position
+       (tolerance against the caller's own live ped coords), AND (coder-
+       security, race-hardening pass) that the caller is the object's own
+       CURRENT OneSync network owner — see HandleConfirmPropAttached's own
+       NETWORK-OWNERSHIP GUARD comment for why position+model tolerance
+       alone cannot distinguish "this is genuinely my own object" from "I
+       am simply standing near someone else's".
     3. 'qbx_k9unit:server:cancelPropAttachRequest' () [THIS FILE]
        Client reports its own attach attempt failed (model never loaded) —
        frees the pending slot immediately, mirrors
@@ -213,6 +261,34 @@ local PropAttachmentModelHashes
 --- the already-active check above already rejects that race — but this
 --- keeps the shape identical to fetch.lua's own reusable helper rather
 --- than hand-rolling a narrower one-off).
+---
+--- RACE-HARDENING NOTE (coder-security, this pass — see this file's header
+--- FIRST-WRITER-WINS PROP-HIJACK RACE section for the full writeup): this
+--- scan can ONLY ever catch a collision against an entry an EARLIER confirm
+--- already wrote — it has no visibility into a still-in-flight OTHER
+--- citizen's pending confirm, which carries no netId at all until it
+--- actually arrives. It therefore could not, by itself, stop a bogus
+--- confirm that arrives BEFORE the genuine owner's own confirm — the
+--- genuine owner's LATER confirm was the one left hitting this check
+--- instead. HandleConfirmPropAttached's own NETWORK-OWNERSHIP GUARD (run
+--- BEFORE this check) closes that gap at its root: a caller who is not the
+--- reported entity's current OneSync network owner is rejected before ever
+--- reaching this scan, so this scan should now be effectively unreachable
+--- in practice for any confirm using this feature's own established
+--- create-then-report flow. It stays in place, unweakened, as the same
+--- "layered checks over a single point of failure" defense-in-depth this
+--- file's other guards already establish — including for the residual,
+--- harder case the ownership guard's own comment discloses (an attacker
+--- who additionally, actively steals OneSync control of an already-active
+--- vest via the client-side NetworkRequestControlOfEntity native): a
+--- genuine hit here still means two DIFFERENT citizens' confirms both
+--- independently satisfied ownership for the SAME entity at their own
+--- respective times, which is unresolvable ambiguity, not proof the second
+--- claimant is the rightful one — rejecting (never adopting/evicting the
+--- other citizen's entry) is the correct, conservative response, since
+--- adopting would hand a successful ownership-theft attacker a path to
+--- later delete the true owner's real, active prop via their own ordinary
+--- toggle-off.
 --- @param netId number
 --- @param excludeCitizenId string?
 --- @return string? otherCitizenId
@@ -492,6 +568,51 @@ RegisterNetEvent('qbx_k9unit:server:confirmPropAttached', function(netId)
     local dist = math.sqrt(dx * dx + dy * dy + dz * dz)
     if dist > Config.PropAttachments.confirmDistanceTolerance then
         NotifyPlayer(src, locale('propattachment.attach_failed_too_far'), 'error')
+        TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
+        return
+    end
+
+    -- NETWORK-OWNERSHIP GUARD (coder-security, race-hardening pass — closes
+    -- the FIRST-WRITER-WINS PROP-HIJACK RACE, see this file's own header
+    -- section for the full trace). Model + live-position tolerance above
+    -- can both be satisfied by a client that merely stands near someone
+    -- ELSE's real, already-networked object — neither one proves the
+    -- reported netId is the confirming caller's OWN creation. This check
+    -- asks the one question that does: is `src` the entity's CURRENT
+    -- OneSync network owner right now? A networked object created via
+    -- client/propattachment.lua's own AttachPropToOwnPed call is owned, at
+    -- creation, by the client that created it — never by a merely-nearby
+    -- OTHER client, no matter how quickly that other client reacts or how
+    -- close it stands.
+    --
+    -- NATIVE VERIFICATION (this pass, not assumed from memory): the more
+    -- direct question this check would ideally ask — "is `entity` CURRENTLY
+    -- attached to MY OWN ped" (GetEntityAttachedTo) — is CLIENT-ONLY per the
+    -- official CFX native docs (https://docs.fivem.net/natives/?_0x48C2BED9180FE123=),
+    -- confirmed via WebSearch this pass, NOT callable here. NetworkGetEntityOwner
+    -- IS documented as callable SERVER-side, returning the server id of the
+    -- entity's current network owner
+    -- (https://docs.fivem.net/natives/?_0x55E86AF2712B36A1=). Confidence:
+    -- MEDIUM-HIGH (official CFX docs), not independently re-verified
+    -- in-engine this pass — same confidence class already attached to this
+    -- resource's own SOURCE-ORIGIN GUARD precedent
+    -- (client/propattachment.lua's own `source ~= 65535` check).
+    --
+    -- DISCLOSED RESIDUAL GAP, not silently assumed away (see the GLOBAL
+    -- NETID-UNIQUENESS GUARD's own RACE-HARDENING NOTE below for how this
+    -- file responds if it is ever actually hit): OneSync entity ownership
+    -- CAN migrate, and any client can explicitly ask to become an entity's
+    -- owner via the client-side NetworkRequestControlOfEntity native
+    -- (client/combat.lua's own header documents this native's real,
+    -- best-effort-not-guaranteed behavior in this exact codebase). A
+    -- sufficiently active attacker — one who additionally, deliberately
+    -- calls that native against another player's already-active vest,
+    -- rather than merely observing and reporting a nearby netId — could in
+    -- principle still pass this check. That is a materially harder, more
+    -- expensive attack than the "sniff a nearby netId and report it" race
+    -- this check closes, and is not what this pass's fix targets.
+    if NetworkGetEntityOwner(entity) ~= src then
+        NotifyPlayer(src, locale('propattachment.attach_failed_unconfirmed'), 'error')
         TriggerClientEvent('qbx_k9unit:client:rejectK9PropAttach', src)
         return
     end

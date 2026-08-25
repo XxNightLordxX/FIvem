@@ -1124,4 +1124,318 @@ t.test('CROSS-CHECK: all nine client-recognized reason strings are exercised som
     t.equals(#reasons, 9)
 end)
 
+-- ========================================================================
+-- STUCK-K9 SOFTLOCK FIX (this task), part C: STARTUP VALIDATION FOR
+-- Config.K9Medkit.itemName.
+--
+-- This check's IMPLEMENTATION lives in server/wellbeing.lua, NOT here --
+-- see that file's own header, STUCK-K9 SOFTLOCK FIX item 3, for the full
+-- "why is a K9Medkit check in a file that doesn't implement K9Medkit"
+-- writeup. This task's own file-ownership boundary explicitly forbids
+-- editing server/medkit.lua, so the fix could not be added at its most
+-- natural home; server/wellbeing.lua reads the same global Config.K9Medkit
+-- table every other file in this resource already reads freely, introducing
+-- no new coupling that did not already exist.
+--
+-- This section is the one place in THIS file that loads server/medkit.lua
+-- ALONGSIDE the real, unmodified server/wellbeing.lua (the exact
+-- fxmanifest.lua server_scripts order: medkit.lua before wellbeing.lua) so
+-- this genuinely cross-file behavior is exercised end-to-end, not merely
+-- asserted about in the abstract or left to wellbeing_spec.lua's own
+-- (necessarily medkit.lua-free) coverage of the same WarnIfItemMissing
+-- helper. Every other wellbeing.lua-owned placeholder item (k9_treat,
+-- k9_meat_bait, k9_ultrasonic_whistle) is covered ONLY in
+-- tests/wellbeing_spec.lua -- duplicating that coverage here would test
+-- server/wellbeing.lua's own logic a second time for no new information;
+-- this section's own value is specifically the CROSS-FILE wiring.
+--
+-- This fixture DOES support a real qbx_k9unit:server:useK9Medkit call (via
+-- the same wireUsingPlayer/wireTargetK9 helpers this file's earlier
+-- sections already use), unlike a bare load-and-fire-onResourceStart-only
+-- shape, specifically so the final test below can prove the new startup
+-- warning and the EXISTING, unmodified runtime 'no_item' rejection both
+-- fire from the exact same real callback chain in one pass -- not two
+-- independently-asserted facts stitched together after the fact.
+-- ========================================================================
+
+--- @param opts table? -- { k9Medkit, k9MedkitCfg }
+--- @return table fixture
+local function newMedkitPlusWellbeingStartupFixture(opts)
+    opts = opts or {}
+
+    local fakeNow = 0
+    local function GetGameTimer() return fakeNow end
+
+    -- No thread in this section is ever stepped -- every StartSweep/gated
+    -- TickWellbeing CreateThread call at either file's own load time only
+    -- needs to not error when CALLED, never to actually run its body.
+    local function CreateThread(_fn) end
+    local function Wait(_ms) end
+
+    local eventHandlers = {} -- eventName -> { handler, ... }
+    local function AddEventHandler(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+    local function RegisterNetEvent(eventName, handler)
+        if handler then AddEventHandler(eventName, handler) end
+    end
+
+    local callbacks = {} -- name -> handler
+    local lib = { callback = { register = function(name, handler) callbacks[name] = handler end } }
+
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
+    local RESOURCE_NAME = 'qbx_k9unit'
+    local function GetCurrentResourceName() return RESOURCE_NAME end
+
+    -- exports.ox_inventory:Items(itemName) -- same shape as
+    -- wellbeing_spec.lua's own stub (see that file for the full
+    -- confirmation writeup against ox_inventory's real
+    -- modules/items/server.lua source).
+    local registeredItems = {}
+    local throwOnItemsExport = false
+    local function oxItems(_self, itemName)
+        if throwOnItemsExport then
+            error('simulated native failure: ox_inventory Items()')
+        end
+        if registeredItems[itemName] then return { name = itemName } end
+        return nil
+    end
+
+    -- Same shape as newMedkitFixture's own oxGetItemCount/oxRemoveItem
+    -- above -- a genuinely UNREGISTERED item (never added via
+    -- registerInventoryItem) can never carry a count above 0 regardless of
+    -- what a caller tries to set, matching a real ox_inventory install
+    -- where an unknown item name cannot be given to anyone.
+    local itemCounts = {}
+    local function oxGetItemCount(_self, src, itemName)
+        return (itemCounts[src] and itemCounts[src][itemName]) or 0
+    end
+    local function oxRemoveItem(_self, src, itemName, count)
+        local have = (itemCounts[src] and itemCounts[src][itemName]) or 0
+        if have < count then return false end
+        itemCounts[src][itemName] = have - count
+        return true
+    end
+
+    local playersBySource = {}
+    local function qbxGetPlayer(_self, src)
+        local p = playersBySource[src]
+        if not p then return nil end
+        return { PlayerData = p }
+    end
+
+    local pedBySource = {}
+    local function GetPlayerPed(src) return pedBySource[src] or 0 end
+
+    local coordsByPed = {}
+    local function GetEntityCoords(ped) return coordsByPed[ped] or vec3(0, 0, 0) end
+
+    local healthByPed = {}
+    local function GetEntityHealth(ped) return healthByPed[ped] or 200 end
+
+    local maxHealthByPed = {}
+    local function GetEntityMaxHealth(ped) return maxHealthByPed[ped] or 200 end
+
+    local modelByPed = {}
+    local function GetEntityModel(ped) return modelByPed[ped] or 0 end
+
+    local k9Models = {}
+    local function IsConfiguredK9Model(model) return k9Models[model] == true end
+
+    local config = {
+        Features = {
+            K9Medkit          = opts.k9Medkit ~= false,
+            FatigueSystem     = false,
+            MoodSystem        = false,
+            FearStressSystem  = false,
+            DistractionSystem = false,
+            InjuryLimping     = false,
+        },
+        Departments = baselineDepartments(),
+        K9Medkit = opts.k9MedkitCfg or baselineK9MedkitConfig(),
+        -- Minimal shape server/wellbeing.lua's own file-load-time code
+        -- needs to not error: HESITATION_MAX_CONTINUOUS_MS is computed
+        -- UNCONDITIONALLY at load (`Config.Wellbeing.FearStress
+        -- .hesitationDurationMs * 8`), regardless of any feature flag.
+        -- Every OTHER Config.Wellbeing.* sub-table this file reads is
+        -- reached only from inside a feature-flag-gated function body,
+        -- never at load time -- deliberately omitted here since every
+        -- wellbeing feature flag above is false and this section never
+        -- calls into any of those handlers.
+        Wellbeing = { FearStress = { hesitationDurationMs = 8000 } },
+    }
+
+    local env = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer,
+        CreateThread = CreateThread,
+        Wait = Wait,
+        AddEventHandler = AddEventHandler,
+        RegisterNetEvent = RegisterNetEvent,
+        lib = lib,
+        print = printStub,
+        GetCurrentResourceName = GetCurrentResourceName,
+        exports = {
+            qbx_core = { GetPlayer = qbxGetPlayer },
+            ox_inventory = { Items = oxItems, GetItemCount = oxGetItemCount, RemoveItem = oxRemoveItem },
+        },
+        GetPlayerPed = GetPlayerPed,
+        GetPlayers = function() return {} end,
+        GetEntityCoords = GetEntityCoords,
+        GetEntityModel = GetEntityModel,
+        GetEntityHealth = GetEntityHealth,
+        GetEntityMaxHealth = GetEntityMaxHealth,
+        IsConfiguredK9Model = IsConfiguredK9Model,
+        GetAllObjects = function() return {} end,
+        GetAllVehicles = function() return {} end,
+        GetHashKey = function(name) return name end,
+        NotifyPlayer = function(...) end,
+        TriggerClientEvent = function(...) end,
+        Config = config,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/entities.lua', env)
+    Sandbox.loadInto('../server/medkit.lua', env)
+    Sandbox.loadInto('../server/wellbeing.lua', env)
+
+    return {
+        config = config,
+        printedLines = printedLines,
+        registerInventoryItem = function(itemName) registeredItems[itemName] = true end,
+        setThrowOnItemsExport = function(v) throwOnItemsExport = v end,
+        setPlayer = function(src, shape) playersBySource[src] = shape end,
+        setPed = function(src, ped) pedBySource[src] = ped end,
+        setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
+        setHealth = function(ped, hp) healthByPed[ped] = hp end,
+        setMaxHealth = function(ped, hp) maxHealthByPed[ped] = hp end,
+        setModel = function(ped, model) modelByPed[ped] = model end,
+        setIsK9Model = function(model, isK9) k9Models[model] = isK9 end,
+        setItemCount = function(src, itemName, n)
+            itemCounts[src] = itemCounts[src] or {}
+            itemCounts[src][itemName] = n
+        end,
+        --- @param resourceName string?
+        fireResourceStart = function(resourceName)
+            for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
+                handler(resourceName or RESOURCE_NAME)
+            end
+        end,
+        invokeCallback = function(name, source, ...)
+            assert(callbacks[name], 'no callback registered for ' .. name)
+            return callbacks[name](source, ...)
+        end,
+    }
+end
+
+t.test('CROSS-FILE STARTUP VALIDATION: K9Medkit enabled + the shipped default item name (k9_medkit) is NOT registered in ox_inventory -- server/wellbeing.lua\'s onResourceStart warns, naming both the item and Config.K9Medkit.itemName, without server/medkit.lua itself needing any change', function()
+    local f = newMedkitPlusWellbeingStartupFixture()
+    -- k9_medkit deliberately never registered
+
+    local ok = pcall(f.fireResourceStart)
+    t.isTrue(ok, 'a missing item must produce a WARNING, never a thrown resource-start failure')
+
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('k9_medkit', 1, true) and line:find('Config.K9Medkit.itemName', 1, true) then
+            found = true
+        end
+    end
+    t.isTrue(found, 'expected a warning naming both the missing item and the exact config path an operator needs to fix')
+end)
+
+t.test('CROSS-FILE STARTUP VALIDATION: K9Medkit enabled + k9_medkit IS registered -- no warning, and the item still works normally through the real server/medkit.lua callback', function()
+    local f = newMedkitPlusWellbeingStartupFixture()
+    f.registerInventoryItem('k9_medkit')
+
+    f.fireResourceStart()
+    for _, line in ipairs(f.printedLines) do
+        t.isFalse(line:find('k9_medkit', 1, true) ~= nil, 'a correctly-registered item must never be warned about')
+    end
+end)
+
+t.test('CROSS-FILE STARTUP VALIDATION: K9Medkit disabled -- Config.K9Medkit.itemName is never even checked', function()
+    local f = newMedkitPlusWellbeingStartupFixture({ k9Medkit = false })
+
+    f.fireResourceStart()
+    t.equals(#f.printedLines, 0, 'a disabled feature must produce zero startup output for its own item')
+end)
+
+t.test('CROSS-FILE STARTUP VALIDATION: an operator-CUSTOMIZED Config.K9Medkit.itemName (not the shipped default) is checked by ITS OWN configured name, never a hardcoded "k9_medkit" literal', function()
+    local cfg = baselineK9MedkitConfig()
+    cfg.itemName = 'custom_k9_firstaid'
+    local f = newMedkitPlusWellbeingStartupFixture({ k9MedkitCfg = cfg })
+
+    f.fireResourceStart()
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('custom_k9_firstaid', 1, true) then found = true end
+    end
+    t.isTrue(found, 'the warning must name whatever item name is actually configured, not a hardcoded default')
+end)
+
+t.test('CROSS-FILE STARTUP VALIDATION: exports.ox_inventory:Items() erroring is caught -- a distinct warning, never a thrown resource-start failure', function()
+    local f = newMedkitPlusWellbeingStartupFixture()
+    f.setThrowOnItemsExport(true)
+
+    local ok = pcall(f.fireResourceStart)
+    t.isTrue(ok, 'an ox_inventory export error must never crash resource start')
+
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('errored', 1, true) then found = true end
+    end
+    t.isTrue(found, 'an export failure must still produce some loud, distinct warning, not silence')
+end)
+
+t.test('CROSS-FILE STARTUP VALIDATION: onResourceStart fired for a DIFFERENT resource is ignored -- no warning even though k9_medkit is missing', function()
+    local f = newMedkitPlusWellbeingStartupFixture()
+
+    f.fireResourceStart('some_other_resource')
+    t.equals(#f.printedLines, 0, 'a foreign resourceName must produce zero output')
+end)
+
+t.test('CROSS-FILE STARTUP VALIDATION + EXISTING RUNTIME BEHAVIOR TOGETHER: a missing k9_medkit BOTH warns loudly at startup AND still fails a real treat attempt at runtime as the existing, unchanged no_item reason -- the startup warning explains the failure, it does not replace or change it', function()
+    local f = newMedkitPlusWellbeingStartupFixture()
+    f.fireResourceStart() -- the new startup diagnostic fires first, as it would on a real server
+
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('k9_medkit', 1, true) then found = true end
+    end
+    t.isTrue(found, 'the startup warning must have fired')
+
+    -- server/medkit.lua's own REAL, entirely unmodified callback: an
+    -- authorized using player who genuinely carries none of the
+    -- (never-registered) item still resolves 'no_item', exactly as before
+    -- this task -- proving the new startup diagnostic is purely additive
+    -- and changes nothing about the existing runtime rejection.
+    local usingSrc, targetSrc = 10, 20
+    f.setPlayer(usingSrc, { citizenid = 'USER-CID', job = { name = 'police', grade = { level = 0 } } })
+    f.setPed(usingSrc, 9001)
+    f.setCoords(9001, 0, 0, 0)
+    -- Deliberately no f.setItemCount call -- the item was never registered
+    -- in ox_inventory at all, so no amount of "carrying" it is meaningful;
+    -- GetItemCount can only ever read 0 for a name ox_inventory itself
+    -- never recognizes.
+
+    f.setPlayer(targetSrc, { citizenid = 'K9-CID' })
+    f.setPed(targetSrc, 9002)
+    f.setModel(9002, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9002, 0, 0, 0)
+    f.setHealth(9002, 200)
+    f.setMaxHealth(9002, 200)
+
+    local result = f.invokeCallback('qbx_k9unit:server:useK9Medkit', usingSrc, targetSrc)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'no_item', 'the existing runtime rejection reason must be completely unchanged by the new startup warning')
+end)
+
 os.exit(t.summary())

@@ -2,7 +2,8 @@
     qbx_k9unit/server/exports.lua
 
     PUBLIC API SURFACE — coder-architect pass, 2026-08-24. See
-    COMPLEMENTARY_FEATURES.md §1 ("Give this resource a real export/event
+    FEATURE_IDEAS.md Part B §1 (formerly COMPLEMENTARY_FEATURES.md, merged
+    2026-08-25; "Give this resource a real export/event
     API — prerequisite, not optional") for why this file exists: before this
     pass, fxmanifest.lua declared zero exports and README.md said so
     explicitly ("integration by other resources is currently limited to
@@ -137,7 +138,7 @@
     happens at the owning files' own success points, which was always the
     intended design, not a placeholder); what changed is that those four
     files' owners have since done the wiring this section originally
-    described as still needed. COMPLEMENTARY_FEATURES.md §1's ask (outbound
+    described as still needed. FEATURE_IDEAS.md Part B §1's ask (outbound
     events other resources can react to — certification granted/revoked, a
     partnership formed/broken, a contraband search completing, an XP tier
     crossing) is therefore now fully delivered, not merely specified.
@@ -221,7 +222,7 @@
     Every payload above uses ONLY values the owning file already computes
     for its own internal purposes (a DB column just written, or an existing
     TriggerClientEvent's own arguments) — wiring this in is arithmetic-free,
-    matching COMPLEMENTARY_FEATURES.md's own "Effort: small" assessment for
+    matching FEATURE_IDEAS.md Part B's own "Effort: small" assessment for
     this item.
     ======================================================================
 

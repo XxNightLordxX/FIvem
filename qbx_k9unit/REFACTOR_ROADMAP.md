@@ -870,8 +870,10 @@ is next opened for any reason; not worth a dedicated pass on its own.
   count: confirmed exactly 40 leaf flags, exactly 5 `true`
   (`LeashMechanics`, `RadialMenu`, `VehicleEntryExit`, `BasicBarkSounds`,
   `AgilityBasicJump`). **Docs-pass note (2026-08-25): stale as a live
-  count.** All 40 flags are `true` as of this document's own merge date —
-  see `PROJECT_STATUS.md`. The structural conclusion below (every real
+  count.** 39 of 40 flags are `true` as of this document's own merge date
+  (the one exception, `CameraFeedPiP`, has no implementing code and was
+  corrected back to `false`) — see `PROJECT_STATUS.md`. The structural
+  conclusion below (every real
   cross-flag dependency found was enforced by a runtime guard, not left to
   operator memory) is unaffected by that and still holds; only the specific
   "5 true" snapshot is out of date. Checked every place a real cross-flag

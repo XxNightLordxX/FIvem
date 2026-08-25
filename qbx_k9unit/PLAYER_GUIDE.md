@@ -37,18 +37,24 @@ A few words come up a lot below. Here's what they mean in plain English:
   server ID. Used for commands that need to work on someone who isn't
   online right now.
 - **ACE permission** — a permission flag server owners grant to specific
-  people (usually staff). A few commands near the end of this guide need
-  one; regular players won't have it and won't be able to use those
-  commands.
+  people, separate from any in-game job or rank. As of 2026-08-25, only one
+  command in this guide needs one (`/k9bonetool`, the developer-only tool
+  near the end). The staff audit commands listed alongside it use a
+  different check instead — a high-enough police/sheriff/BCSO rank (see
+  "Staff-only and developer-only commands" below) — so a senior officer can
+  already use those with no separate staff grant at all.
 
 ## Is this stuff even turned on for me?
 
 This resource ships with roughly forty separate pieces, each with its own
 on/off switch, that your server's staff controls. **As of this guide's last
-check (2026-08-25), every single one of them is turned on** — including
+check (2026-08-25), essentially all of them are turned on** — including
 tracking, searching, combat, gear, health/mood systems, fetch, kennels,
 vests, and XP. That's a change: earlier versions of this guide said only
-five were on by default, and that used to be true. It no longer is.
+five were on by default, and that used to be true. It no longer is. (The
+one exception, a picture-in-picture camera feature, has no code behind it
+at all yet either way, so there's nothing to notice as a player regardless
+of its switch position.)
 
 **Your server's staff can still turn any individual piece back off at any
 time**, so if you try something below and nothing happens, or the game
@@ -109,10 +115,11 @@ nothing if Fear/Stress has been switched off.
 
 ### Staff-only and developer-only commands
 
-You'll probably never be able to run these — they check for a special staff
-permission, or (for `/k9bonetool`) are something server owners are told
-never to turn on for regular play at all. Listed here only for
-completeness.
+You'll probably never be able to run these — the audit commands (all but
+the last row) check for a high-enough rank in an eligible department, not
+a special staff permission; `/k9bonetool` is different and is something
+server owners are told never to turn on for regular play at all. Listed
+here only for completeness.
 
 | Command | What it does |
 |---|---|
@@ -289,14 +296,19 @@ mentioned below, it's switched off — not missing by mistake.
 Bark is turned on. As of when this guide was last checked, a
 real, properly-licensed bark sound file has been added and is confirmed to
 actually reach your game client, so a plain Bark should genuinely play a
-sound. Three extra bark sounds used only by the "different bark
-styles" feature (also turned on, along with everything else in this
-resource — see the top of this guide) do not exist yet, so that specific
-feature stays silent even though it's switched on. This resource is actively
-being worked on by multiple people at once, so if Bark is ever silent for
-you, that's worth reporting to your server's staff rather than assuming
-it's expected — check `html/sounds/CREDITS.md` in this resource's files for
-the current, up-to-date record of exactly which sounds exist.
+sound.
+
+Two related, *also switched-on* features stay silent, and that's expected,
+not a bug: the "different bark styles" feature (three extra bark variants
+— Alert/Aggressive/Calm) shows its options in the radial menu and does
+nothing audible when picked, and a separate ambient "K9 presence" sound
+that's supposed to play continuously based on how close you are to a K9
+also has no sound behind it. Both are switched on; neither has its sound
+file supplied yet. This resource is actively being worked on by multiple
+people at once, so if Bark itself (the plain, single bark) is ever silent
+for you, that's worth reporting to your server's staff rather than
+assuming it's expected — check `html/sounds/CREDITS.md` in this resource's
+files for the current, up-to-date record of exactly which sounds exist.
 
 ---
 

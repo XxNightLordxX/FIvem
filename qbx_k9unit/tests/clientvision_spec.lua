@@ -14,7 +14,8 @@
     the task this file was written under asked for a test proving "the
     `source ~= 65535` origin guard rejects a forged local trigger" in this
     file, with a comment noting that a green test here does not settle
-    open decision D3 (DECISIONS_NEEDED.md -- the resource-wide question of
+    open decision D3 (PROJECT_STATUS.md -- formerly DECISIONS_NEEDED.md,
+    merged 2026-08-25 -- the resource-wide question of
     whether the client-event origin check can fail open at the engine
     level). That premise does not hold for THIS file, and no such test
     exists below -- fabricating one would mean asserting behavior this
@@ -26,7 +27,7 @@
         `65535` returns zero matches. There is no event handler here at
         all for a forged trigger to reach -- no `source` global is ever
         read, so there is nothing for a 65535 check to guard.
-      - DECISIONS_NEEDED.md's own D3 write-up names the actual affected
+      - PROJECT_STATUS.md's own D3 write-up names the actual affected
         surface: client/combat.lua, client/medkit.lua, client/wellbeing.lua,
         client/partnership.lua, client/kennel.lua, client/fetch.lua,
         client/propattachment.lua, client/bonetool.lua, client/screenfx.lua,
