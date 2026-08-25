@@ -504,7 +504,15 @@ Config.Combat = {
     -- "NON-COMPLIANCE DETECTION" section for the full design writeup this
     -- table's fields map onto.
     NonComplianceDetection = {
-        enabled                = true,
+        -- DEFAULT CHANGED true -> false. This flag is independent of
+        -- BiteAndHold/NonLethalTakedown/PropDragging/HandlerDownDefense, which
+        -- all default false -- so at `true` it span up a 500ms sampling thread
+        -- on every default install, forever, sweeping a table that stays empty
+        -- until a combat feature is actually enabled. The cost was negligible
+        -- and the principle is not: nobody should pay a thread for a feature
+        -- they have not switched on. Turn this on together with whichever
+        -- combat mechanic you enable.
+        enabled                = false,
         positionSampleWindowMs = 500,   -- how often the shared sampling thread re-reads every active hold/ragdoll's target position
         biteHoldIdleCeiling    = 0.3,   -- m/s -- a compliant BiteAndHold target is near-stationary (may turn in place); observed speed above (idleCeiling + biteHoldSpeedTolerance) is a candidate violation. UNTUNED placeholder, per item 8's own numbers.
         biteHoldSpeedTolerance = 0.5,   -- m/s -- item 8's own tightened recommendation for BiteAndHold specifically. Item 8's generic speedTolerance=1.0 baseline was flagged as too loose stacked on a 0.3 m/s idle ceiling, and has been deleted from this table entirely -- an audit confirmed it had no reader anywhere in the resource, under any feature flag; every effect type carries its own dedicated threshold instead. UNTUNED.
@@ -577,7 +585,14 @@ Config.Combat = {
     -- ALL NUMERIC VALUES BELOW ARE UNREVIEWED PLACEHOLDERS pending a
     -- balance pass, same status as every other Phase 3 tuning number here.
     HandlerDownDefense = {
-        handlerHealthThreshold   = 100,   -- fallback-only signal; the override above is the real check
+        -- RAISED 100 -> 140. 100 is GTA's own player-ped "already dying"
+        -- boundary -- this resource documents it as exactly that where
+        -- NonLethalTakedown uses it as a health FLOOR, which is correct there.
+        -- As a TRIGGER for "alert my partner K9, my handler is in trouble" it
+        -- meant the alert only fired once the handler was already at the death
+        -- line, leaving no lead time for the K9 to actually respond -- the
+        -- number was right for its original use and wrong for this one.
+        handlerHealthThreshold   = 140,   -- fallback-only signal; the override above is the real check
         triggerRadius            = 15.0,  -- how close the partner K9 must be to be prompted
         hostileLookbackSeconds   = 10,    -- how far back an attacker hint stays relevant
         pollIntervalMs           = 1000,
@@ -1003,7 +1018,14 @@ Config.Wellbeing = {
         restRadius              = 5.0,
         restSources             = { 'water_bowl' }, -- PLACEHOLDER, not wired to any real detection this pass
         speedPenaltyThreshold   = 30,   -- fatigue below this value triggers the penalty
-        speedPenaltyMultiplier  = 0.85, -- fed into RecomputeK9MoveRate() (client/movement.lua, K9MoveRateModifiers.fatigue), never a standalone SetPedMoveRateOverride call
+        -- RAISED 0.85 -> 0.90. These three wellbeing penalties MULTIPLY:
+        -- client/movement.lua's own comment computes the worst case as
+        -- Injury 0.7 * Fatigue 0.85 * Mood 0.9 ~= 0.535. That is the ordinary
+        -- aftermath of one bad gunfight, and at those values an Elite K9
+        -- (1.15x tier bonus) nets 0.615x -- SLOWER than a healthy Recruit.
+        -- Three independently-reviewed "mild" penalties compounded into half
+        -- speed because nobody reviewed them together. New worst case ~0.684.
+        speedPenaltyMultiplier  = 0.90, -- fed into RecomputeK9MoveRate() (client/movement.lua, K9MoveRateModifiers.fatigue), never a standalone SetPedMoveRateOverride call
         -- NOT in PHASE4_SPEC.md §13.2's sketch verbatim -- added here
         -- because "sprinting" needs a concrete speed cutoff to classify
         -- from a server-side rolling position-sample (meters travelled per
@@ -1023,17 +1045,40 @@ Config.Wellbeing = {
         petCooldownMs                = 30000, -- per (interactor, target) pair -- stops repeat-pet spam
         feedRegenAmount              = 20,  -- per configured food item use
         feedItemName                 = 'k9_treat', -- PLACEHOLDER item name, needs to exist in the target server's ox_inventory items table
-        passiveRegenPerTick          = 0.2,
+        -- RAISED 0.2 -> 1.0. This is the ONLY recovery path for a solo
+        -- handler: server/wellbeing.lua rejects targetPed == usingPed for both
+        -- Pet and Feed, so a K9 can never pet or feed itself. At 0.2 per 5s
+        -- tick, Mood 0 -> full took ~42 minutes with nobody else online --
+        -- long enough that most players would never see it move and would
+        -- read the meter as broken. Now ~8.3 minutes, still leaving Pet/Feed
+        -- (instant 10/20) clearly worth doing.
+        passiveRegenPerTick          = 1.0,
         performancePenaltyThreshold  = 25,
-        performancePenaltyMultiplier = 0.9, -- fed into RecomputeK9MoveRate() (K9MoveRateModifiers.mood) -- resolves PHASE4_SPEC.md §13.4.3.2 open question 1 by taking reading (a), the document's own tentative recommendation (a movement-speed multiplier via the shared composer, not a success-chance penalty on a security-critical callback)
+        performancePenaltyMultiplier = 0.95, -- RAISED 0.9 -> 0.95, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.mood) -- resolves PHASE4_SPEC.md §13.4.3.2 open question 1 by taking reading (a), the document's own tentative recommendation (a movement-speed multiplier via the shared composer, not a success-chance penalty on a security-critical callback)
     },
     FearStress = {
         max                      = 100,
         gunfireRadius            = 20.0, -- meters -- reuses Phase 2's relayWeaponFire relay (server/tracking.lua also consumes it), new CONSUMER not new native
         gunfireLookbackSeconds   = 15,
-        risePerNearbyShotPerTick = 5.0,
+        -- LOWERED 5.0 -> 3.0. At 5.0 with a 5s tick, continuous fire from ONE
+        -- shooter crossed hesitationThreshold in ~70 seconds -- i.e. one
+        -- ordinary firefight, which is precisely the situation BiteAndHold and
+        -- NonLethalTakedown exist for. passiveDecayPerTick then needed ~6 more
+        -- minutes to clear. See also the forgeability note on hesitationThreshold.
+        risePerNearbyShotPerTick = 3.0,
         passiveDecayPerTick      = 1.0,
-        hesitationThreshold      = 70,
+        -- RAISED 70 -> 85, alongside the rise-rate cut above.
+        -- SECURITY, READ BEFORE ENABLING FearStressSystem TOGETHER WITH
+        -- BiteAndHold OR NonLethalTakedown: server/combat.lua's
+        -- ValidateCombatRequest rejects a bite/takedown while the K9
+        -- IsHesitating(). Hesitation is driven by relayWeaponFire, which
+        -- server/wellbeing.lua documents as deliberately payload-less and
+        -- therefore FORGEABLE. That disclosure was written when nothing
+        -- consumed IsHesitating(); combat.lua does now. So a hostile client
+        -- can re-touch that event to hold a specific K9 in hesitation
+        -- indefinitely and lock out its combat actions. Two correct reviews,
+        -- one emergent hole. Tuning these numbers does NOT close it.
+        hesitationThreshold      = 85,
         hesitationDurationMs     = 8000,  -- how long a rejected Phase 3 combat-command attempt stays refused before the K9 may retry, absent a manual calm-down
         calmDownReduceAmount     = 40,    -- "Calm Down" command's effect (self-only, see server/wellbeing.lua)
         calmDownCooldownMs       = 15000,
@@ -1052,7 +1097,7 @@ Config.Wellbeing = {
         max                     = 100,
         sprintBlockThreshold    = 30, -- below this, sprint input is blocked (client-local, see PHASE4_SPEC.md §13.0 Decision 3's disclosed bounded limitation)
         jumpBlockThreshold      = 20, -- below this, jump input is blocked
-        speedPenaltyMultiplier  = 0.7, -- fed into RecomputeK9MoveRate() (K9MoveRateModifiers.injury)
+        speedPenaltyMultiplier  = 0.80, -- RAISED 0.7 -> 0.80, see Fatigue.speedPenaltyMultiplier's note on compounding. Fed into RecomputeK9MoveRate() (K9MoveRateModifiers.injury)
         damageDecayAmount       = 10, -- flat decrement per logged damage event -- independent value from Mood's own damageDecayAmount, same detection source
         passiveRegenPerTick     = 0.1, -- deliberately very slow -- K9Medkit (Config.K9Medkit, via RestoreInjury) is the intended primary recovery path, not natural regen
     },

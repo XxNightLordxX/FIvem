@@ -756,8 +756,14 @@ end
 --- findTrackableSource's 'scent' branch always falls through to
 --- `{ found = false }` further down, exactly as if no scent source had ever
 --- existed. Deliberately NOT an `assert`: this resource reserves hard
---- asserts for actively-dangerous states (server/certifications.lua's two,
---- both access-control invariants) — a missing hook here makes the feature
+--- asserts for actively-dangerous states. (An earlier revision of this
+--- sentence cited "server/certifications.lua's two, both access-control
+--- invariants". That file contains ZERO asserts -- the claim appears to have
+--- conflated it with certifications.lua's two REVOKE PATHS, a different
+--- "two" entirely. The real inventory is 25 assert sites across 8 files,
+--- each either behind a default-false feature flag or validating a config
+--- value config.lua already ships in the safe shape. Corrected because this
+--- wrong claim was read as fact and fed straight into a review brief.) — a missing hook here makes the feature
 --- silently INERT, never silently EXPLOITABLE, so blocking this entire
 --- resource's startup over one disabled-by-default cosmetic feature would
 --- be a disproportionate response, mirroring server/combat.lua's own

@@ -11,7 +11,151 @@ Nothing yet.
 
 ## [0.2.0] - 2026-08-24
 
-**Release-manager summary (read this before the detailed entry below):**
+**Release-manager re-assessment — 2026-08-24 (later same day, HEAD `933eb9e`):**
+The previous release-manager pass below (still preserved unedited beneath
+this note, per this file's own "layer corrections, don't rewrite history"
+convention — see the `NotifyPlayer` writeup in `REFACTOR_ROADMAP.md` for
+where that convention comes from) named five concrete blockers. All five
+were re-verified against code and git history, not against docs, and all
+five are now closed:
+
+1. **Both XP farms are closed**, independently verified by reading the
+   actual award logic, not just the commit messages describing it.
+   `server/search.lua`'s `ContrabandXpState` (introduced in `0020c2b`,
+   documented/finalized in `09b52b2`) now pays contraband-search XP only
+   the first time a given resolved target is found holding contraband, or
+   again once its total weight genuinely changes — re-searching an
+   untouched stash pays nothing. `server/tracking.lua`'s track-source
+   award (the `ticketIssued` flag + distance-derived `minElapsedMs`,
+   landed in `faae5ff`, correctly attributed to that commit rather than
+   `e6bc0f4` by `e6bc0f4`'s own commit message) now rations one XP ticket
+   per logged trackable entry, ever, and requires real elapsed travel time
+   at a generous 25 m/s ceiling before that ticket can be redeemed.
+   Legitimate earning is preserved in both cases: a genuinely new
+   contraband find, a stash whose contents actually change, or arrival at
+   a freshly-logged blood/gunpowder/scent entry all still pay normally.
+2. **`use_experimental_fxv2_oal` — the flag was right to flag, the original
+   premise was wrong.** OAL is "One Argument List" (an experimental native
+   calling-convention change), not an object/asset loader. Independently
+   re-verified against live `main`-branch manifests: `qbx_core`, `ox_lib`,
+   `ox_target`, and `ox_inventory` (fetched directly from
+   `raw.githubusercontent.com`, 2026-08-24) all set this same flag
+   themselves, so a server capable of running this resource's declared
+   dependencies already needs OAL-capable build support regardless of what
+   this resource sets. `fxmanifest.lua`'s own comment on the flag now
+   records this reasoning plus the one real, checked hazard: the single
+   `GetShapeTestResult` call site (`client/movement.lua`'s vault sweep)
+   reads only `resultCode, hit` — confirmed by reading the call site
+   directly — never `endCoords`/`surfaceNormal`, the vector-return fields
+   reported broken by lua54+fxv2_oal on some builds.
+3. **Every file on disk is now registered.** All 46 `client/*.lua` and
+   `server/*.lua` files (48 including `config.lua`/`fxmanifest.lua` itself)
+   appear in `fxmanifest.lua`'s script lists, confirmed by a two-way diff
+   between disk contents and manifest entries — nothing extra, nothing
+   missing. This closes the "code that exists but does not run" class of
+   finding entirely; the last two holdouts, `client/fetch.lua` and
+   `server/fetch.lua`, were registered in `933eb9e` (this branch's current
+   `HEAD`). The "not yet referenced anywhere in `fxmanifest.lua`" caveat in
+   the "Be honest" list below (about `client/screenfx.lua`,
+   `client/propattachment.lua`, `server/propattachment.lua`) is now stale
+   and superseded by this — left in place unedited, corrected here instead.
+4. **The dead scent-range XP bonus is fixed.** `Config.XPTiers[*].scentRange`
+   was applied as a `math.max` floor (5.0–10.0) against each track type's
+   own `maxRange` default (40.0) — structurally incapable of ever taking
+   effect, for any tier, from the moment it shipped. It is now
+   `scentRangeMultiplier`, applied as a genuine multiplier over each
+   type's own configured `maxRange`, renamed consistently across every
+   reader (`config.lua`, `server/tracking.lua`, `server/progression.lua`,
+   `server/tenure.lua`, `client/progression.lua`, `client/exports.lua`,
+   `server/exports.lua` — verified by grep; the only surviving `scentRange`
+   mentions are comments narrating this history). Base tier is `1.00`, so
+   a base-tier K9's range is byte-identical to before the change.
+5. **Two documentation-vs-code defects were corrected**, verified against
+   the actual code they describe: (a) `SPEC.md` had described
+   `ContrabandScreenFX`'s shipped timecycle modifier name as "an unverified
+   candidate" — it is verified, and the originally-shipped
+   `drug_wobbly_shroom` does not exist in a real 2806+-entry timecycle
+   modifier extraction; only `drug_wobbly` does, and `config.lua` now ships
+   that value. (b) `config.lua`'s own `Config.ContrabandScreenFX` header
+   said the effect "lands on the SEARCHED player's own screen" — it never
+   did; `server/search.lua` fires it at `source`, the searching officer.
+   Confirmed by reading the actual `TriggerClientEvent` call site. The
+   comment is corrected in `config.lua`.
+
+**Still open, unchanged by this pass:**
+- **No audio ships.** `html/sounds/` holds only `CREDITS.md` (a sourcing
+  brief recording an egress-blocked attempt and four unverified CC0
+  leads). The four `.ogg` files (`bark.ogg`, `bark_alert.ogg`,
+  `bark_aggressive.ogg`, `bark_calm.ogg`) must be supplied by the
+  operator; every play call degrades to a silent no-op until they are.
+- **Unreviewed numeric config placeholders remain** across
+  `Config.Wellbeing`, `Config.K9Medkit`, `Config.K9Inventory`, and
+  `Config.Combat` (cooldowns, ranges, thresholds, XP amounts) — a
+  config-validator pass is assessing these concurrently with this review;
+  its findings are not reflected here yet.
+- **`CameraFeedPiP` is infeasible**, not deferred — no native exists to
+  render a secondary camera feed into an NUI texture, confirmed against an
+  open upstream `citizenfx/fivem` issue. Ships `false` with no code behind
+  it.
+- **Three features need a one-time dev-server check before enabling**,
+  independent of shipping `false` by default: the `ox_inventory`
+  `swapItems` `registerHook` shape backing `ScentTracking` (defensively
+  existence-guarded, never independently confirmed against a live
+  install), `DeployableKennel`'s `prop_doghouse_01` prop model (a
+  single-source, unconfirmed name with a confirmed-real fallback), and
+  `PropAttachments`/`FetchMechanic`'s `boneIndex` (still the placeholder
+  `0`/root bone — `client/bonetool.lua` + `server/bonetool.lua` now exist
+  to perform this exact sweep, dev-server/ACE-gated, but the sweep itself
+  has not yet been run against a live install, so the placeholder value is
+  still what ships).
+- **This resource has still not been through a correctness-overseer or
+  qa-tester sign-off pass on the current `HEAD` equivalent to what `0.1.0`
+  received before it shipped.** The five items above are independently
+  re-verified against code by this release-manager pass, and per-commit
+  self-review ("watchdog" passes, one commit-scoped "QA pass and security
+  pass" note on the Phase 4 economy work) exists in `WATCHDOG_LOG.md` and
+  commit history — but no single consolidated review has exercised the
+  full current feature surface (Phase 3 combat/defense/recall/partnership,
+  Phase 4 wellbeing/medkit/inventory/progression, Phase 5
+  propattachment/bonetool/fetch/kennel/proximityaudio,
+  `server/admin.lua`/`server/exports.lua`) the way Phase 1 was reviewed
+  before it shipped. Both `correctness-overseer` and `qa-tester` were
+  contacted for a status check while writing this entry and neither was
+  reachable as a live session at the time; this gap is reported rather
+  than assumed closed.
+
+Debug/leftover sweep of the newly-registered files (`server/notify.lua`,
+`client/propattachment.lua`, `server/propattachment.lua`,
+`client/bonetool.lua`, `server/bonetool.lua`, `client/proximityaudio.lua`,
+`client/fetch.lua`, `server/fetch.lua`, `client/screenfx.lua`) found
+nothing to strip: every `print()` call in this set is either an
+established `[qbx_k9unit]`-prefixed error/warning/startup-confirmation log
+matching this codebase's own convention used in every other server file,
+or (`client/bonetool.lua`/`server/bonetool.lua`) part of the deliberately
+dev-only, flag-and-ACE-gated bone-sweep tool's own operator-facing output
+— not debug residue. No hardcoded test coordinates/player IDs, no
+commented-out old implementations, and no test-only event handlers were
+found in this set; the "test"/"Test*" identifiers present
+(`client/bonetool.lua`'s `RunAttachTest`/`testEntity`,
+`Config.BoneSweepTool.TestPropModel`/`TestOffsetX/Y/Z`) are the bone
+tool's own real "test" subcommand (`CreateObject`+`AttachEntityToEntity`
+at a candidate bone index), not leftovers. `luac5.4 -p` parses all 48
+files clean; `luacheck` reports 0 warnings / 0 errors across 47 checked
+files, matching every commit's own stated verification.
+
+**Version recommendation: `0.2.0` stands.** `fxmanifest.lua` still reads
+`version '0.1.0'` as of this `HEAD` — the bump itself has not been applied
+yet (this release-manager does not edit `fxmanifest.lua`; see this
+resource's own release-manager charter). Everything shipped since `0.1.0`
+remains additive and flag-gated `false` by default except the new
+`server/exports.lua`/`client/exports.lua` public export/event surface,
+which is a real compatibility contract other resources can now build
+against — that alone is enough to justify a minor bump over a patch, and
+nothing in this pass changes that reasoning.
+
+---
+
+**Original release-manager summary (read this before the detailed entry below):**
 Phases 2 through 5 land on top of the Phase 1 (`0.1.0`) vertical slice.
 Every feature added since `0.1.0` ships behind its own independent
 `Config.Features.*` flag, and **every one of those flags still defaults to
