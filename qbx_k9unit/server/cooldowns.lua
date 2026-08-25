@@ -158,6 +158,26 @@ function NewCooldown(defaultThresholdMs)
             -- loudly. Never let a bad threshold turn into unlimited spam.
             return true
         end
+        -- CAVEAT, not fixed here (documentation only — see this pass's own
+        -- report to coder-architect before this math is ever changed):
+        -- GetGameTimer() is FXServer's process-uptime millisecond counter,
+        -- reported to have gone negative on some long-uptime servers
+        -- (consistent with the underlying native being a 32-bit signed
+        -- counter that wraps after ~24.85 days of continuous uptime,
+        -- well within a real server's lifetime between restarts). This
+        -- naive `now - lastAt` subtraction is NOT wraparound-safe: a `key`
+        -- touched shortly before a wrap would read as still on cooldown
+        -- (elapsed appears deeply negative, and negative < any positive
+        -- threshold is true) until enough real wall-clock time passes for
+        -- `now` to numerically catch back up — up to ~24.85 days, not just
+        -- until the configured threshold elapses. Every call site in this
+        -- resource already tolerates "cooldown briefly stuck on" as a
+        -- fail-safe direction (never "cooldown silently disabled"), so this
+        -- is flagged as a known caveat for a resource restarted well under
+        -- monthly, not silently patched — a wraparound-safe rewrite of this
+        -- subtraction changes observable timing behavior across every one
+        -- of this file's 16 call-time consumers and needs a reported,
+        -- coordinated pass, not a quiet fix buried in an audit.
         return ((now or GetGameTimer()) - lastAt) < threshold
     end
 
@@ -253,6 +273,9 @@ function NewNestedCooldown(defaultThresholdMs)
             -- disable this cooldown.
             return true
         end
+        -- Same GetGameTimer() wraparound caveat as NewCooldown's
+        -- IsOnCooldown above (see its doc comment for the full writeup) —
+        -- this subtraction is not wraparound-safe either.
         return ((now or GetGameTimer()) - lastAt) < threshold
     end
 
@@ -301,6 +324,36 @@ end
 --- Per-key mutex (boolean held-flag, no timestamp/threshold at all). See
 --- this file's header for why this is a separate constructor from
 --- NewCooldown rather than a cooldown with an infinite threshold.
+---
+--- DEADLOCK VERDICT (audited): TryAcquire/Release themselves cannot
+--- deadlock — both are single synchronous table operations with no
+--- internal Wait/await, and FXServer's Lua execution is cooperative
+--- (never preempted between two non-yielding statements), so there is no
+--- window where two callers can interleave inside TryAcquire itself. This
+--- mutex also has NO built-in timeout/expiry — a `key` that is TryAcquire'd
+--- and never Release'd stays held FOREVER (silently disabling whatever it
+--- guards for that key, with no error), by design, matching every other
+--- primitive in this file: a mutex "expiring" would defeat the point of a
+--- mutex. That makes "is a mutex ever left held with no way to release it"
+--- entirely a caller-discipline question, not something this constructor
+--- can enforce — audited across all 5 current call sites (server/search.lua
+--- SearchMutex, server/combat.lua TakedownMutex, server/inventory.lua
+--- K9InventoryOpenMutex, server/medkit.lua MedkitMutex,
+--- server/partnership.lua PartnershipEstablishMutex): every one wraps its
+--- entire critical section (including any yielding `await` calls inside
+--- it) in `pcall(...)` and unconditionally calls `:Release(key)` on the
+--- very next line after the pcall returns, regardless of success/failure —
+--- so a thrown error mid-critical-section is already covered by every
+--- existing caller. `:RegisterPlayerDropped()` is a second, independent
+--- backstop for the subset of these keyed by player source (SearchMutex,
+--- TakedownMutex, K9InventoryOpenMutex — all `RegisterPlayerDropped()`ed at
+--- their own declaration) so a source that disconnects mid-critical-section
+--- (rather than erroring) still gets its held key cleared; the two callers
+--- keyed by something else (MedkitMutex by targetCitizenid,
+--- PartnershipEstablishMutex by a fixed constant key) do NOT call
+--- RegisterPlayerDropped, correctly, since neither key is a player source —
+--- their sole release path is the pcall-guaranteed one, which does not
+--- depend on any player staying connected.
 --- @return table mutex
 function NewMutex()
     local held = {}

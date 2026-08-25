@@ -9,17 +9,36 @@
     the ped model — so it isn't stubbed here beyond the AgilityBasicJump
     note near the bottom.
 
-    PHASE 3 ADDITION (this pass, coder-architect): also owns
-    Config.Features.AgilityAdvanced (fence/window vault approximation, see
-    the ADVANCED AGILITY block near the bottom) — PHASE3_SPEC.md §12.5.5,
-    §12.1 sub-phase 3a. Entirely client-local, self-body movement only, no
-    target ped/player involved anywhere, unaffected by PHASE3_SPEC.md
-    §12.0 item 8's still-open (as of this pass) client-relay question,
-    which only concerns effects applied to a DIFFERENT entity. Every other
-    Phase 3 sub-feature (BiteAndHold/NonLethalTakedown/PropDragging/
-    HandlerDownDefense) is deliberately NOT touched by this pass — see
-    config.lua's own Config.Combat header comment for exactly why each one
-    is still blocked.
+    PHASE 3 ADDITION (that pass, coder-architect): also owned
+    Config.Features.AgilityAdvanced (fence/window vault approximation) —
+    PHASE3_SPEC.md §12.5.5, §12.1 sub-phase 3a. Entirely client-local,
+    self-body movement only, no target ped/player involved anywhere,
+    unaffected by PHASE3_SPEC.md §12.0 item 8's still-open (as of that
+    pass) client-relay question, which only concerns effects applied to a
+    DIFFERENT entity. Every other Phase 3 sub-feature (BiteAndHold/
+    NonLethalTakedown/PropDragging/HandlerDownDefense) is deliberately NOT
+    touched here — see config.lua's own Config.Combat header comment for
+    exactly why each one is still blocked.
+
+    EXTRACTED (this pass): the ADVANCED AGILITY block above has moved out
+    to its own file, client/agility.lua — see that file's own header for
+    the full "why this one, not the rest of this file" reasoning. Short
+    version: it was the one concern in this file that shared no local
+    state with anything else here and had no other file depending on its
+    locals, confirmed by reading this whole file and grepping the tree
+    before moving it. Every OTHER concern this file still owns (camera
+    toggle, Sit self-emote, the leash mechanic, the move-rate composer,
+    AgilityBasicJump's suppression thread, door interaction) was
+    deliberately left in place — none of them stand alone the same way
+    (the move-rate composer alone is read by three other files, and the
+    leash pull-back thread/door-interaction canInteract checks/vault all
+    shared the exact same IsInK9Vehicle()-tucked-K9 exclusion, evidence
+    they're one connected "own-body movement gating" concern, not several
+    independent ones). "This file is the largest client file" was
+    deliberately NOT treated as its own reason to split further — a prior
+    refactor pass already advised against cosmetic restructuring of this
+    codebase's long files, and every remaining section here earns its
+    place through real cross-references to the others, not just proximity.
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — certification events are documented in full
@@ -53,9 +72,9 @@
     silently swallowed every wellbeing speed-penalty write instead. See the
     "MOVE-RATE COMPOSER" block below (near AgilityBasicJump) for the full
     writeup: composition rule, clamp range and why, the check that this
-    doesn't fight AgilityBasicJump/the leash pull-back/AgilityAdvanced's
-    vault, and an honest confidence grading on `SetPedMoveRateOverride`
-    itself.
+    doesn't fight AgilityBasicJump/the leash pull-back/client/agility.lua's
+    AgilityAdvanced vault, and an honest confidence grading on
+    `SetPedMoveRateOverride` itself.
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes resource-global (no `local`) functions consumed by
@@ -804,12 +823,13 @@ exports.ox_target:addGlobalPlayer({
 --     to how far it's allowed to drift from its partner) is unaffected by
 --     leash state and is expected to keep responding normally to whatever
 --     this composer computes.
---   - AgilityAdvanced's vault further below drives an instantaneous
---     velocity impulse via SetEntityVelocity, a one-shot native distinct
---     from the persistent move-rate override this composer maintains --
---     no interaction (a vault's brief arc is an externally-applied
---     velocity kick, not ground-locomotion animation speed, which is the
---     documented scope of SetPedMoveRateOverride).
+--   - client/agility.lua's AgilityAdvanced vault (extracted from this file,
+--     this pass — see this file's own "EXTRACTED" header note) drives an
+--     instantaneous velocity impulse via SetEntityVelocity, a one-shot
+--     native distinct from the persistent move-rate override this
+--     composer maintains -- no interaction (a vault's brief arc is an
+--     externally-applied velocity kick, not ground-locomotion animation
+--     speed, which is the documented scope of SetPedMoveRateOverride).
 --   - This resource's ONLY call site for SetPedMoveRateOverride, anywhere,
 --     is RecomputeK9MoveRate() below (confirmed by grep before writing
 --     this) -- exactly PHASE4_SPEC.md §13.0 Decision 2's "one and only
@@ -842,7 +862,8 @@ exports.ox_target:addGlobalPlayer({
 -- "silently wrong forever." A native-api-assistant pass to independently
 -- confirm exact persistence semantics is recommended before this ships to
 -- a live server, same standard this file already applies to its own
--- AgilityAdvanced/door-interaction natives.
+-- door-interaction natives (and client/agility.lua applies to its own
+-- AgilityAdvanced natives).
 -- ======================================================================
 
 --- Named multiplier contributions toward the K9's own single effective
@@ -853,6 +874,34 @@ exports.ox_target:addGlobalPlayer({
 --- identically to 1.0 (no effect) by the compose loop below, so a
 --- contributing system whose owning Config.Features flag is disabled
 --- simply never touches its key and never affects the product.
+---
+--- SCOPE, CONFIRMED (re-checked this pass, still true): RecomputeK9MoveRate()
+--- below is HARD-GATED on IsOwnModelK9() -- it resets to neutral and returns
+--- early for any ped that is not currently a recognized K9 model (see that
+--- function's own `if not IsOwnModelK9() then ... return end` branch). This
+--- is BY DESIGN, not a bug to fix here, for two reasons taken together: (1)
+--- RecomputeK9MoveRate() takes no ped argument at all -- it only ever reads
+--- PlayerPedId(), the CALLING CLIENT's own currently-controlled ped, never
+--- an arbitrary target entity; (2) every modifier key in this table is
+--- itself only ever written by a caller when THAT SAME client is playing a
+--- K9 character (client/wellbeing.lua and client/progression.lua both scope
+--- their writes to a K9 model first) -- there is no modifier here that
+--- would ever mean anything on a human ped in the first place. A caller
+--- that genuinely needs to set a DIFFERENT (non-K9, or not-necessarily-K9)
+--- ped's move rate cannot route through this composer at all -- it must
+--- call SetPedMoveRateOverride directly on that ped instead. This already
+--- happened once: client/combat.lua's PropDragging runs its speed-limit
+--- handler on the dragged TARGET's own client (each client only reliably
+--- controls its own ped, same reasoning this file's leash pull-back thread
+--- above documents), and the overwhelmingly common target is a human
+--- suspect, not another K9 -- see that file's own "MOVE-RATE COMPOSER
+--- SCOPE" header comment for the full resolution it shipped (route through
+--- this composer only when IsOwnModelK9() is true for the applying client,
+--- call SetPedMoveRateOverride directly otherwise). Restated here, at the
+--- source, so a FUTURE caller doesn't have to independently re-derive that
+--- from combat.lua's comment the way this one did: don't widen this gate to
+--- accept an arbitrary ped, and don't remove it -- it exists because every
+--- modifier this table can ever hold is meaningless off a K9 model.
 --- @type table<string, number>
 K9MoveRateModifiers = {
     fatigue = 1.0,  -- client/wellbeing.lua, Config.Features.FatigueSystem
@@ -1420,195 +1469,11 @@ RegisterNetEvent('qbx_k9unit:client:playDoorScratch', function(doorNetId)
     PlaySoundFromEntity(-1, DOOR_SCRATCH_SOUND_NAME, entity, DOOR_SCRATCH_SOUND_SET, false, 0)
 end)
 
--- ======================================================================
--- ADVANCED AGILITY -- fence/window vault approximation
--- (Config.Features.AgilityAdvanced). PHASE3_SPEC.md §12.5.5, §12.0 item 3
--- (DECIDED: capsule-sweep raycast, detectionMethod = 'raycast', as the
--- Phase 3 default -- unaffected by Revision 3's PvP scope reversal), §12.1
--- sub-phase 3a ("independent, start immediately -- pure client-local
--- own-body movement, does not touch target/combat logic at all"), §12.3's
--- file/module plan (this file's own row: "Extends... AgilityAdvanced's
--- vault trigger and multi-height capsule-sweep detection").
---
--- SCOPE NOTE, checked explicitly before writing this block: this feature
--- NEVER resolves, targets, or applies any effect to another ped/player --
--- it only reads world geometry (via a capsule shape-test sweep) and
--- repositions the K9's OWN ped. It is therefore entirely UNAFFECTED by
--- PHASE3_SPEC.md §12.0 item 8 (the still-open, coder-security-owned
--- client-relay/non-cooperating-target-client question), which only
--- concerns effects a K9 applies to a DIFFERENT entity (BiteAndHold /
--- NonLethalTakedown / PropDragging). Do not conflate this feature with
--- those three just because they share the same Phase 3 config table.
---
--- EVENT/CALLBACK CONTRACT: NONE. No TriggerServerEvent, no callback,
--- nothing server-authoritative touched anywhere in this block -- matches
--- PHASE3_SPEC.md §12.5.5's own "Event/callback contract: unchanged --
--- minimal, entirely client-local" framing exactly.
---
--- GATING CHOICE: gated on CanShowK9UI() (not just the cheap, local
--- IsOwnModelK9() check the camera toggle/AgilityBasicJump suppression
--- above use) -- this is a genuinely new, opt-in-by-default-off Phase 3
--- capability layered ON TOP of native locomotion, not baseline behavior
--- inherent to the ped model the way jump/crouch are. This matches every
--- other self-initiated GRANTED capability elsewhere in this file (K9Sit,
--- RequestLeashAttach), not the baseline-QoL camera/native-locomotion
--- carve-out client/main.lua's own OPEN QUESTION note documents above.
--- ======================================================================
-if Config.Features.AgilityAdvanced then
-    local agilityCfg = Config.Combat.AgilityAdvanced
-
-    -- Fail loudly, not silently, if a server sets detectionMethod to
-    -- anything other than the one Phase 3 default actually implemented
-    -- here. PHASE3_SPEC.md §12.2/§12.5.5 document 'taggedProp' as a
-    -- theoretical per-server override SHAPE, but no such detection path
-    -- is built in this codebase -- same "assert rather than silently
-    -- no-op a field that looks load-bearing" posture this file's own
-    -- Config.DoorInteraction.nudgeRequiresUnlocked assertion above uses.
-    assert(agilityCfg.detectionMethod == 'raycast',
-        ("qbx_k9unit: Config.Combat.AgilityAdvanced.detectionMethod = '%s' is not implemented -- " ..
-         "only 'raycast' (the PHASE3_SPEC.md §12.0 item 3 Phase 3 default, a multi-height capsule " ..
-         "sweep) is built in client/movement.lua. Set it back to 'raycast', or implement the " ..
-         "'taggedProp' path with a reviewed code change before shipping this value."):format(tostring(agilityCfg.detectionMethod)))
-
-    -- Capsule-sweep TUNING CONSTANTS -- deliberately plain local constants,
-    -- NOT promoted into config.lua, because PHASE3_SPEC.md §12.5.5's own
-    -- "Open questions" list names the exact height bands/capsule radius/
-    -- forward distance as in-engine TUNING work still to be done against
-    -- real map geometry, not a settled design choice -- promoting untested
-    -- numbers into a server-owner-facing config table would imply a
-    -- confidence this file doesn't have yet. Revisit alongside
-    -- maxVaultHeight/vaultCooldownMs once an in-engine tuning pass happens.
-    local SWEEP_FORWARD_DISTANCE = 1.0                  -- meters ahead of the K9 to sweep toward
-    local SWEEP_CAPSULE_RADIUS = 0.25                   -- meters, capsule thickness
-    local SWEEP_HEIGHT_BANDS = { 0.3, 0.6, 0.9, 1.2 }   -- meters above the K9's own feet, each swept independently (see DetectVaultableObstacleHeight below for why one sweep per band, not one sweep total)
-    -- Shape-test intersect flag bit for "world/map geometry only" (not
-    -- peds/vehicles/objects) -- CONFIDENCE: MEDIUM. This is the
-    -- widely-used ecosystem convention for START_SHAPE_TEST_*'s flags
-    -- argument (bit 1 = IntersectMap), but unlike StartShapeTestCapsule/
-    -- GetShapeTestResult's own hash/signature (HIGH confidence, verified
-    -- directly against raw.githubusercontent.com/citizenfx/natives per
-    -- phase2_notes/phase3_combat_natives.md §5), the exact flag-bit
-    -- MEANINGS were not independently re-verified against that same
-    -- canonical source this session -- if the sweep reports hits against
-    -- unexpected entity types (or misses static fences/walls) in testing,
-    -- this is the first value to have native-api-assistant re-confirm.
-    local SHAPE_TEST_FLAG_INTERSECT_MAP = 1
-
-    --- Multi-height capsule sweep: fires one shape test per configured
-    --- height band, forward from the K9's current position, and returns
-    --- the TALLEST band that still reports a hit as this obstacle's
-    --- approximate climbable height. A single capsule sweep only reports
-    --- "hit or not" for the exact line it was cast along -- it doesn't by
-    --- itself tell you how tall the thing it hit is -- so sweeping several
-    --- level bands and taking the tallest one that still connects
-    --- approximates "solid up to at least this height," which is the
-    --- actual question `maxVaultHeight` needs answered (distinguishing a
-    --- low curb from a full wall).
-    ---
-    --- CONFIDENCE: the underlying natives are HIGH confidence (see above).
-    --- This specific multi-band-sweep ALGORITHM built on top of them is
-    --- this file's own construction, not verified in-engine this session --
-    --- exactly the "in-engine tuning... against real map geometry"
-    --- PHASE3_SPEC.md §12.5.5 already lists as open, unresolved TUNING
-    --- work, not a design fork. Treat the returned height as an
-    --- approximation to be validated against real fences/windows in
-    --- testing, not a precise measurement.
-    --- @param ped number
-    --- @return number obstacleHeight -- 0.0 if nothing detected in any band
-    local function DetectVaultableObstacleHeight(ped)
-        local pedCoords = GetEntityCoords(ped)
-        local forward = GetEntityForwardVector(ped)
-        local tallestHit = 0.0
-
-        for _, height in ipairs(SWEEP_HEIGHT_BANDS) do
-            -- Level sweep at THIS band's height -- start and end share the
-            -- same Z, forward.z is deliberately never applied to either
-            -- endpoint, so every band stays level regardless of the K9's
-            -- current ground pitch/slope.
-            local startX, startY, startZ = pedCoords.x, pedCoords.y, pedCoords.z + height
-            local endX = startX + forward.x * SWEEP_FORWARD_DISTANCE
-            local endY = startY + forward.y * SWEEP_FORWARD_DISTANCE
-
-            local shapeTestHandle = StartShapeTestCapsule(
-                startX, startY, startZ, endX, endY, startZ,
-                SWEEP_CAPSULE_RADIUS, SHAPE_TEST_FLAG_INTERSECT_MAP, ped, 0
-            )
-
-            -- GET_SHAPE_TEST_RESULT's own documented contract (confirmed,
-            -- phase2_notes/phase3_combat_natives.md §5): poll until it
-            -- returns 0 (invalid handle) or 2 (complete) -- 1 means "still
-            -- processing," NOT a single guaranteed-synchronous call. A
-            -- capsule sweep this short against static world geometry
-            -- typically resolves within the same or next frame, but this
-            -- loop does not assume that -- it keeps polling (yielding a
-            -- frame between attempts) until the handle itself reports done.
-            local resultCode, hit
-            repeat
-                resultCode, hit = GetShapeTestResult(shapeTestHandle)
-                if resultCode == 1 then Wait(0) end
-            until resultCode ~= 1
-
-            if resultCode == 2 and hit then
-                tallestHit = height
-            end
-        end
-
-        return tallestHit
-    end
-
-    local lastVaultAt = -math.huge -- GetGameTimer()-scale; never on cooldown for the very first attempt
-
-    --- Shared implementation behind the vault keybind below. Re-checks
-    --- access/cooldown/obstacle every call -- there is no separate
-    --- "canInteract"-style predicate for a keybind the way ox_target
-    --- options above get one, so all of that lives directly here.
-    local function TryVault()
-        if not CanShowK9UI() then
-            lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
-            return
-        end
-
-        local now = GetGameTimer()
-        if (now - lastVaultAt) < agilityCfg.vaultCooldownMs then
-            return -- silent -- a cooldown-rejected keypress retry isn't worth a notification every time, mirrors AgilityBasicJump's own no-notification-spam posture above
-        end
-
-        local ped = PlayerPedId()
-        if IsPedInAnyVehicle(ped, false) or (IsInK9Vehicle and IsInK9Vehicle()) then
-            return -- nothing to vault over while seated/tucked, same exclusion the leash pull-back thread and door-interaction options above already apply for this exact state
-        end
-
-        local obstacleHeight = DetectVaultableObstacleHeight(ped)
-        if obstacleHeight <= 0.0 or obstacleHeight > agilityCfg.maxVaultHeight then
-            return -- nothing vaultable detected in range, or it's taller than configured -- silent, same reasoning as the cooldown branch above
-        end
-
-        lastVaultAt = now
-
-        -- Scripted arc over the detected obstacle. PHASE3_SPEC.md
-        -- §12.5.5's own wording correction applies here: there is no
-        -- dedicated ped "jump" TASK native (confirmed absent,
-        -- phase2_notes/phase3_combat_natives.md §5) -- this arc is driven
-        -- directly via SET_ENTITY_VELOCITY (confirmed real,
-        -- 0x1C99BB7B6E96D16F, HIGH confidence), an upward+forward impulse
-        -- scaled by the detected obstacle's height, not a task/input
-        -- simulation layered on native jump.
-        --
-        -- CONFIDENCE on the arc feel itself (verticalSpeed/forwardSpeed
-        -- formula below): LOW/UNTUNED -- this is a first-pass placeholder
-        -- shape, not derived from any confirmed source, and is exactly the
-        -- kind of "in-engine tuning against real map geometry" work
-        -- PHASE3_SPEC.md §12.5.5 already flags as open. Revisit after an
-        -- in-engine pass, same as the sweep tuning constants above.
-        local forward = GetEntityForwardVector(ped)
-        local verticalSpeed = 4.0 + obstacleHeight * 2.0 -- taller obstacle -> slightly higher arc
-        local forwardSpeed = 3.5
-        SetEntityVelocity(ped, forward.x * forwardSpeed, forward.y * forwardSpeed, verticalSpeed)
-    end
-
-    RegisterCommand('qbx_k9unit:vault', function()
-        TryVault()
-    end, false)
-
-    RegisterKeyMapping('qbx_k9unit:vault', 'K9 Advanced Agility Vault (fence/window)', 'keyboard', 'X')
-end
+-- The ADVANCED AGILITY block (Config.Features.AgilityAdvanced's fence/
+-- window vault approximation) used to live here. EXTRACTED (this pass) to
+-- its own file, client/agility.lua, since it shares no local state with
+-- anything above and nothing else in this resource depends on its locals
+-- (confirmed by grep before moving it) -- see this file's own header
+-- "EXTRACTED" note and client/agility.lua's own header for the full
+-- reasoning. No behavior change: same feature flag, same command/keybind
+-- name, same natives, same constants.

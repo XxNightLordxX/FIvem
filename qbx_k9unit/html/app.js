@@ -48,6 +48,31 @@
             stamina: <number>,  // 0-100
             hunger:  <number>,  // 0-100
             thirst:  <number>,  // 0-100
+
+            // WELLBEING / XP TIER EXTENSION — added this pass, same
+            // message/action, no new push (see client/hud.lua's header
+            // "WELLBEING / XP TIER EXTENSION" section for the full
+            // rationale/data-source writeup, authoritative for this
+            // contract). `wellbeing` and `xpTier` are ALWAYS present as
+            // objects; each individual KEY inside them is present ONLY
+            // while its owning Config.Features flag is on (and, for
+            // xpTier.label, only once a tier snapshot has actually been
+            // received) — a MISSING key, not a zeroed/false/empty-string
+            // value, is how a disabled feature is signaled. This file
+            // must render that row as genuinely absent (CSS
+            // `display: none` via the `k9hud-row--hidden` class), never
+            // as a blank/zero placeholder — see applyGatedBarStat()/
+            // applyDistractionStatus()/applyXPTierStatus() below.
+            wellbeing: {
+              fatigue:    <number>,   // 0-100, KEY ABSENT unless FatigueSystem is on
+              mood:       <number>,   // 0-100, KEY ABSENT unless MoodSystem is on
+              fearStress: <number>,   // 0-100, KEY ABSENT unless FearStressSystem is on
+              injury:     <number>,   // 0-100, KEY ABSENT unless InjuryLimping is on
+              distracted: <boolean>,  // KEY ABSENT unless DistractionSystem is on
+            },
+            xpTier: {
+              label: <string>,  // KEY ABSENT unless XPProgression is on AND a tier is known
+            },
           }
         }
 
@@ -186,9 +211,26 @@
 (function () {
     'use strict';
 
-    /** @type {Record<'health'|'stamina'|'hunger'|'thirst', { fill: HTMLElement, value: HTMLElement }>} */
+    /** @type {Record<'health'|'stamina'|'hunger'|'thirst'|'fatigue'|'mood'|'fearStress'|'injury', { row: HTMLElement, fill: HTMLElement, value: HTMLElement }>} */
     var statEls = {};
+
+    /** Status-text rows (distraction, xpTier) — no bar/fill, see
+     * index.html's own comments on each for why a percentage bar would be
+     * misleading for either one.
+     * @type {Record<'distraction'|'xpTier', { row: HTMLElement, value: HTMLElement }>} */
+    var statusEls = {};
+
     var rootEl = null;
+
+    /** Bar-row stat keys whose owning Config.Features flag can be off,
+     * i.e. every row added this pass except the original four vitals
+     * (health/stamina/hunger/thirst are gated only by
+     * Config.Features.HealthStaminaHUD, which this whole page being
+     * visible at all already implies — see client/hud.lua's own "GATING"
+     * note). Iterated by handleUpdateVitals() below, one applyGatedBarStat()
+     * call per entry.
+     * @type {Array<'fatigue'|'mood'|'fearStress'|'injury'>} */
+    var GATED_BAR_STATS = ['fatigue', 'mood', 'fearStress', 'injury'];
 
     /**
      * Clamp a value into the 0-100 range and coerce anything non-numeric
@@ -211,7 +253,7 @@
 
     /**
      * Applies one stat's value to its bar fill width + numeric readout.
-     * @param {'health'|'stamina'|'hunger'|'thirst'} stat
+     * @param {'health'|'stamina'|'hunger'|'thirst'|'fatigue'|'mood'|'fearStress'|'injury'} stat
      * @param {*} rawValue
      */
     function applyStat(stat, rawValue) {
@@ -224,6 +266,73 @@
     }
 
     /**
+     * Shows or hides ONE bar row based on whether its value key was
+     * present in this push's `wellbeing` object — see this file's header
+     * "WELLBEING / XP TIER EXTENSION" contract note: a MISSING key means
+     * that row's owning Config.Features flag is off, and this row must be
+     * genuinely absent (CSS `display: none` via `k9hud-row--hidden`), not
+     * merely left at a stale/zeroed value. Only touches the fill/value DOM
+     * when actually visible, mirroring handleUpdateVitals' own
+     * "don't bother touching bar DOM while hidden" posture for the
+     * original four stats.
+     * @param {'fatigue'|'mood'|'fearStress'|'injury'} stat
+     * @param {*} rawValue -- typeof 'number' means present; anything else (undefined, since Lua omits the key entirely) means absent
+     */
+    function applyGatedBarStat(stat, rawValue) {
+        var els = statEls[stat];
+        if (!els) return;
+
+        var present = typeof rawValue === 'number';
+        els.row.classList.toggle('k9hud-row--hidden', !present);
+        if (!present) return;
+
+        applyStat(stat, rawValue);
+    }
+
+    /**
+     * Handles the Distraction status row — see index.html's own comment on
+     * why this is text, not a bar: `distracted` is a boolean, not a
+     * continuous magnitude. Absent key (feature off) hides the row
+     * entirely, same as applyGatedBarStat above.
+     * @param {*} rawDistracted
+     */
+    function applyDistractionStatus(rawDistracted) {
+        var els = statusEls.distraction;
+        if (!els) return;
+
+        var present = typeof rawDistracted === 'boolean';
+        els.row.classList.toggle('k9hud-row--hidden', !present);
+        if (!present) return;
+
+        // textContent only -- see this file's header "NO SetNuiFocus"
+        // block's sibling rule (not restated there, but followed
+        // identically throughout this file): never innerHTML, this is a
+        // fixed, code-authored string, never a value echoed from the
+        // network payload verbatim.
+        els.value.textContent = rawDistracted ? 'Distracted' : 'Clear';
+    }
+
+    /**
+     * Handles the XP tier status row. `xpTier` is always an object per
+     * the contract, but `xpTier.label` (a string) is present only once
+     * Config.Features.XPProgression is on AND a real tier snapshot has
+     * been received client-side (client/hud.lua's ReadXPTierLabel() own
+     * comment) -- absent otherwise, hiding this row exactly like every
+     * other gated row above.
+     * @param {*} rawLabel
+     */
+    function applyXPTierStatus(rawLabel) {
+        var els = statusEls.xpTier;
+        if (!els) return;
+
+        var present = typeof rawLabel === 'string' && rawLabel.length > 0;
+        els.row.classList.toggle('k9hud-row--hidden', !present);
+        if (!present) return;
+
+        els.value.textContent = rawLabel; // textContent only -- see applyDistractionStatus's own note; this string DOES come from the network (server-authoritative Config.XPTiers label), which is exactly why textContent (never innerHTML) matters here
+    }
+
+    /**
      * Handles one `hud:updateVitals` payload. Per
      * phase4_hud_bridge_design.md §3: `visible` and the four numeric
      * fields always arrive together in one message (never split), and
@@ -232,8 +341,12 @@
      * `visible: false`, not zeroed out, specifically so a later
      * false->true flip doesn't show a stale-zero flash — but that's only
      * meaningful if this function actually skips rendering them while
-     * hidden, so it does).
-     * @param {{ visible: boolean, health: number, stamina: number, hunger: number, thirst: number }} data
+     * hidden, so it does). The `wellbeing`/`xpTier` objects added this
+     * pass follow the identical "skip touching DOM while root is hidden"
+     * rule -- their own PER-ROW gating (applyGatedBarStat/
+     * applyDistractionStatus/applyXPTierStatus) is a SEPARATE, additional
+     * layer on top of this, not a replacement for it.
+     * @param {{ visible: boolean, health: number, stamina: number, hunger: number, thirst: number, wellbeing?: object, xpTier?: object }} data
      */
     function handleUpdateVitals(data) {
         if (!data || !rootEl) return;
@@ -248,6 +361,16 @@
         applyStat('stamina', data.stamina);
         applyStat('hunger', data.hunger);
         applyStat('thirst', data.thirst);
+
+        var wellbeing = data.wellbeing || {};
+        for (var i = 0; i < GATED_BAR_STATS.length; i++) {
+            var stat = GATED_BAR_STATS[i];
+            applyGatedBarStat(stat, wellbeing[stat]);
+        }
+        applyDistractionStatus(wellbeing.distracted);
+
+        var xpTier = data.xpTier || {};
+        applyXPTierStatus(xpTier.label);
     }
 
     // ------------------------------------------------------------------
@@ -590,20 +713,54 @@
         rootEl = document.getElementById('k9hud');
         statEls = {
             health: {
+                row: document.querySelector('[data-stat-row="health"]'),
                 fill: document.querySelector('[data-fill="health"]'),
                 value: document.querySelector('[data-value="health"]'),
             },
             stamina: {
+                row: document.querySelector('[data-stat-row="stamina"]'),
                 fill: document.querySelector('[data-fill="stamina"]'),
                 value: document.querySelector('[data-value="stamina"]'),
             },
             hunger: {
+                row: document.querySelector('[data-stat-row="hunger"]'),
                 fill: document.querySelector('[data-fill="hunger"]'),
                 value: document.querySelector('[data-value="hunger"]'),
             },
             thirst: {
+                row: document.querySelector('[data-stat-row="thirst"]'),
                 fill: document.querySelector('[data-fill="thirst"]'),
                 value: document.querySelector('[data-value="thirst"]'),
+            },
+            fatigue: {
+                row: document.querySelector('[data-stat-row="fatigue"]'),
+                fill: document.querySelector('[data-fill="fatigue"]'),
+                value: document.querySelector('[data-value="fatigue"]'),
+            },
+            mood: {
+                row: document.querySelector('[data-stat-row="mood"]'),
+                fill: document.querySelector('[data-fill="mood"]'),
+                value: document.querySelector('[data-value="mood"]'),
+            },
+            fearStress: {
+                row: document.querySelector('[data-stat-row="fearStress"]'),
+                fill: document.querySelector('[data-fill="fearStress"]'),
+                value: document.querySelector('[data-value="fearStress"]'),
+            },
+            injury: {
+                row: document.querySelector('[data-stat-row="injury"]'),
+                fill: document.querySelector('[data-fill="injury"]'),
+                value: document.querySelector('[data-value="injury"]'),
+            },
+        };
+        statusEls = {
+            distraction: {
+                row: document.querySelector('[data-stat-row="distraction"]'),
+                value: document.querySelector('[data-status="distraction"]'),
+            },
+            xpTier: {
+                row: document.querySelector('[data-stat-row="xpTier"]'),
+                value: document.querySelector('[data-status="xpTier"]'),
             },
         };
 

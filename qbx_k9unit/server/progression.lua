@@ -128,6 +128,63 @@
 -- and its own "nothing outside this file should read it directly" rule.
 local K9XP = {}
 
+-- CHOKEPOINT-LEVEL RATE FLOOR (audit finding, this pass). Every anti-farm
+-- defence that exists today (server/search.lua's contraband-weight-change
+-- dedup, server/tracking.lua's travel-distance/minimum-elapsed-time arrival
+-- gate, server/combat.lua's MIN_BITE_HOLD_XP_DURATION_MS) was built
+-- per-call-site, tailored to that action's own semantics — and each of
+-- those is a BETTER fit for its own action than anything generic could be
+-- (only server/tracking.lua's own pending-arrival state knows what "genuine
+-- travel time" means for a track resolution; only server/search.lua's own
+-- ContrabandXpState knows what "a materially different search result"
+-- means). This tracker is NOT trying to replace or re-litigate any of
+-- those — it exists for the failure mode none of them can cover: a FUTURE
+-- call site (a new Config.XP.awards key, a new subsystem calling AwardXP
+-- the same soft-dependency way server/search.lua and server/tracking.lua
+-- already do) that simply forgets to add its own rate limiting at all,
+-- e.g. a bug that lets a per-tick/per-frame handler re-fire the same
+-- successful action every server tick instead of once. Without a floor
+-- HERE, that class of bug has no ceiling whatsoever — AwardXP itself
+-- imposes none, and a caller bug is exactly the situation where "the caller
+-- is expected to have already handled it" fails.
+--
+-- Keyed by (citizenid, actionKey) via NewNestedCooldown, NOT a blanket
+-- per-citizenid floor — server/tenure.lua's CheckTenureMilestonesForK9
+-- legitimately calls AwardXP more than once for the SAME citizenid within
+-- the SAME server tick (a K9 reunited after a long absence can cross
+-- several milestone thresholds in one pass, per that file's own "pays every
+-- newly-crossed milestone" comment), each with a DIFFERENT actionKey
+-- (partnershipTenure1Day/7Day/30Day) — a per-citizenid-any-action floor
+-- would silently drop the 2nd/3rd milestone's XP in exactly that legitimate
+-- case, the same class of silent-loss bug this pass was asked to rule out
+-- elsewhere. Per-(citizenid, actionKey) never collides with that: each
+-- milestone key is touched at most once ever per partnership (non-repeating
+-- by tenure.lua's own design), so this floor is never even reached there.
+--
+-- THRESHOLD (500ms) chosen against every real call site's own already-
+-- established minimum real-world spacing between two GENUINE awards of the
+-- SAME actionKey for the SAME citizenid, so a real player can never
+-- perceive this floor: searchContrabandFound (Config.SearchZones.
+-- searchCooldownMs = 10000ms per target — a different target still needs
+-- physical travel time between two genuine finds), trackSourceResolved
+-- (TRACK_ARRIVAL_REPORT_COOLDOWN_MS = 2000ms, plus its own minElapsedMs
+-- travel gate), biteHoldSuccess (MIN_BITE_HOLD_XP_DURATION_MS = 3000ms),
+-- takedownSuccess (Config.Combat.NonLethalTakedown.targetCooldownMs =
+-- 30000ms per target), tenure milestones (one-time, never repeating). 500ms
+-- sits comfortably below all of those, so it only ever bites a call pattern
+-- no genuine player action can produce — a runaway/looping caller bug (or a
+-- future actionKey added without its own gate) — while still turning
+-- "unbounded per tick" into "at most 2/second," a bounded, investigable
+-- ceiling instead of an open one.
+--
+-- Cleaned up in the playerDropped handler below (NewNestedCooldown's
+-- :Clear(primaryKey) drops every actionKey entry for that citizenid in one
+-- call, mirroring server/tracking.lua's own LastTrackQueryAt[src] = nil
+-- shape) rather than via :RegisterPlayerDropped(), since that helper clears
+-- by the raw `source` value and this tracker's primaryKey is citizenid, not
+-- a player source.
+local AwardXPCooldown = NewNestedCooldown(500)
+
 -- CONFIG-SAFETY GUARD (config audit finding, this pass — same precedent as
 -- server/inventory.lua's `Config.K9Inventory.accessScope` assert and
 -- server/main.lua's `nudgeRequiresUnlocked` assert). This file's own header
@@ -166,6 +223,81 @@ AddEventHandler('onResourceStart', function(resourceName)
         "other than 'citizenid' would silently keep citizenid-scoped behaviour with no " ..
         'warning, misleading an operator who believes they configured job-scoped progression.'
     )
+
+    -- TIER-SHAPE GUARD (audit finding, this pass). ResolveTier/GetXPTier's
+    -- own doc comments both promise "always returns a real Config.XPTiers
+    -- entry, never nil" — but nothing ever checked that promise against the
+    -- config's actual shape; it has only ever been true because
+    -- Config.XPTiers (config.lua, still marked "placeholder numbers pending
+    -- economy-balance-agent review") happens to already be well-formed
+    -- today. ResolveTier's own walk (`for _, tier in ipairs(...) do if xp >=
+    -- tier.xp then resolvedTier = tier end end`, no `break`) has two
+    -- load-bearing assumptions this guard verifies at resource start rather
+    -- than silently trusting:
+    --   1. Config.XPTiers is non-empty AND its first entry's `xp` is
+    --      exactly 0. If either fails, `Config.XPTiers[1]` (ResolveTier's
+    --      pre-loop default) is either nil (an EMPTY table) or a non-zero
+    --      floor (some xp > 0 could then resolve to no tier if the loop
+    --      body somehow still ran zero times, and more importantly a
+    --      brand-new citizenid at 0 XP would incorrectly inherit whatever
+    --      that first entry's speedMultiplier/scentRangeMultiplier is,
+    --      rather than the neutral 1.0 baseline every other file in this
+    --      resource assumes "unknown citizenid" means).
+    --   2. Every `xp` threshold is a number, in STRICTLY ASCENDING order.
+    --      ResolveTier never `break`s early — it keeps overwriting
+    --      `resolvedTier` with EVERY entry whose `xp` the current total
+    --      already clears, in ARRAY order, not threshold order. That is
+    --      only equivalent to "the tier with the highest threshold not
+    --      exceeding xp" (the intended, documented semantics) if the array
+    --      is sorted ascending by `xp` — exactly the same caller-maintained-
+    --      order contract Config.ContrabandAlertTiers and
+    --      server/tenure.lua's own milestone walk already require and
+    --      document for the identical reason. An out-of-order or
+    --      non-numeric entry would not crash this loop, but would silently
+    --      resolve some XP totals to the WRONG tier — directly changing a
+    --      K9's real movement speed and scent range, this file's header's
+    --      own definition of a "live gameplay effect," with no error or log
+    --      line anywhere to reveal it.
+    -- Fails loudly at resource start (same posture as the assert above) —
+    -- a malformed Config.XPTiers should block startup, not quietly hand out
+    -- wrong-tier gameplay effects to every K9 for the rest of the session.
+    assert(
+        type(Config.XPTiers) == 'table' and #Config.XPTiers > 0,
+        '[qbx_k9unit] Config.XPTiers must be a non-empty array -- ResolveTier/GetXPTier ' ..
+        '(server/progression.lua) fall back to Config.XPTiers[1] as their mandatory base-tier ' ..
+        'default, which does not exist if this table is empty or malformed.'
+    )
+    assert(
+        type(Config.XPTiers[1].xp) == 'number' and Config.XPTiers[1].xp == 0,
+        '[qbx_k9unit] Config.XPTiers[1].xp must be exactly 0 -- it is this resource-wide ' ..
+        "\"unknown/uncached citizenid\" and \"brand-new K9\" baseline (every file's own " ..
+        '"unknown state defaults to least privilege" convention applied to XP), read by ' ..
+        'ResolveTier (server/progression.lua) before its ascending walk even runs.'
+    )
+    for i = 1, #Config.XPTiers do
+        local tier = Config.XPTiers[i]
+        assert(
+            type(tier) == 'table' and type(tier.xp) == 'number'
+                and type(tier.speedMultiplier) == 'number' and type(tier.scentRangeMultiplier) == 'number',
+            ('[qbx_k9unit] Config.XPTiers[%d] must be a table with numeric xp/speedMultiplier/' ..
+                'scentRangeMultiplier fields -- ResolveTier compares `xp >= tier.xp` directly ' ..
+                'against every entry with no type check of its own, and a non-numeric ' ..
+                'speedMultiplier/scentRangeMultiplier would feed straight into a live movement/' ..
+                'scent-range effect via client/progression.lua and server/tracking.lua.'):format(i)
+        )
+        if i > 1 then
+            assert(
+                tier.xp > Config.XPTiers[i - 1].xp,
+                ('[qbx_k9unit] Config.XPTiers must be strictly ascending by xp -- entry %d ' ..
+                    '(xp=%s) does not exceed entry %d (xp=%s). ResolveTier walks this array ' ..
+                    'with no `break` and no threshold-order re-sort of its own, relying entirely ' ..
+                    'on this caller-maintained ascending order (same contract ' ..
+                    'Config.ContrabandAlertTiers and server/tenure.lua\'s milestone walk already ' ..
+                    'require) to resolve the HIGHEST qualifying tier rather than an arbitrary ' ..
+                    'array-order one.'):format(i, tostring(tier.xp), i - 1, tostring(Config.XPTiers[i - 1].xp))
+            )
+        end
+    end
 end)
 
 --- Resolves `xp` to the matching entry in Config.XPTiers. Identical walk
@@ -313,6 +445,23 @@ function AwardXP(citizenid, actionKey)
         return
     end
 
+    -- CHOKEPOINT-LEVEL RATE FLOOR — see AwardXPCooldown's own declaration
+    -- comment above for the full reasoning/threshold justification. Gated
+    -- AFTER the actionKey validity check above (a malformed/unknown-key call
+    -- is already rejected and should not consume this budget), BEFORE any
+    -- cache mutation or DB write below — this is a pure entry guard, no
+    -- state has been touched yet if this returns early. Silent no-op on
+    -- trip (consistent with every existing per-site cooldown's own "still on
+    -- cooldown = quiet no-op" convention, e.g. server/tracking.lua's
+    -- TrackArrivalReportCooldown), but logged — unlike those per-site
+    -- cooldowns, a real player's own normal play can never trip this one
+    -- (see threshold reasoning above), so a trip here is itself a signal
+    -- worth surfacing to server console rather than staying silent forever.
+    if not AwardXPCooldown.Consume(citizenid, actionKey, 500) then
+        print(('[qbx_k9unit] progression: AwardXP rate floor tripped for citizenid %s actionKey %q -- this should never happen from genuine play; investigate the calling code path'):format(citizenid, actionKey))
+        return
+    end
+
     local oldXp = K9XP[citizenid] or 0
     local oldTier = ResolveTier(oldXp)
 
@@ -323,20 +472,65 @@ function AwardXP(citizenid, actionKey)
     -- on this line, never on DB round-trip latency.
     K9XP[citizenid] = newXp
 
-    -- Non-blocking, atomic UPSERT — same fire-and-forget posture as
-    -- server/search.lua's LogSearchAttempt (a slow/contended DB write must
-    -- never delay or risk whatever server-side success path just called
-    -- this function), pcall-wrapped for the same reason: a logging/
-    -- persistence failure here must never surface as (or cause) a failure
-    -- in the caller's own action. `amount` (the delta), not `newXp` (the
-    -- new total), is the second bound parameter — `VALUES(xp)` on the
-    -- ON DUPLICATE KEY branch refers to the just-inserted delta, giving a
-    -- single-statement atomic increment-or-create with no separate
-    -- SELECT-then-UPDATE round trip (phase2_notes/phase4_xp_schema_notes.md §4).
-    pcall(MySQL.insert, [[
-        INSERT INTO k9_progression (citizenid, xp) VALUES (?, ?)
-          ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp), updated_at = CURRENT_TIMESTAMP
-    ]], { citizenid, amount })
+    -- Non-blocking, atomic UPSERT — never delays or risks whatever
+    -- server-side success path just called this function. `amount` (the
+    -- delta), not `newXp` (the new total), is the second bound parameter —
+    -- `VALUES(xp)` on the ON DUPLICATE KEY branch refers to the
+    -- just-inserted delta, giving a single-statement atomic
+    -- increment-or-create with no separate SELECT-then-UPDATE round trip
+    -- (phase2_notes/phase4_xp_schema_notes.md §4). CONCURRENCY: this is safe
+    -- against a lost update even with several of these in flight at once for
+    -- the SAME citizenid (e.g. two award paths landing in the same tick) —
+    -- MySQL/MariaDB serializes concurrent UPSERTs against the same unique
+    -- key via row-level locking, and `xp = xp + VALUES(xp)` is evaluated
+    -- inside that same locked, single statement, so there is no read-then-
+    -- write gap for a second statement to race into. The in-memory K9XP
+    -- cache write above is ALSO safe under concurrency for a more basic
+    -- reason: FXServer's Lua VM is single-threaded/cooperatively
+    -- scheduled, and AwardXP contains no `await`/yield point before that
+    -- line, so two calls for the same citizenid can never interleave
+    -- between the read of `oldXp` and the write of `K9XP[citizenid]`.
+    --
+    -- SILENT-FAILURE FIX, this pass (audit finding): this used to be
+    -- `pcall(MySQL.insert, [[...]], {...})` — a fire-and-forget call with NO
+    -- callback at all. That pcall is decorative, not protective: oxmysql's
+    -- non-`.await` entry point (server/cooldowns.lua's sibling files'
+    -- comments call this "Non-blocking (`MySQL.insert(...)` WITHOUT
+    -- `.await`)") returns to the caller the instant the query is HANDED OFF
+    -- to oxmysql's own async worker, before the query has actually run
+    -- against the database — a real failure (a missing `k9_progression`
+    -- table from an unapplied migration, a constraint violation, a
+    -- transient connection drop) surfaces later, asynchronously, entirely
+    -- outside this pcall's stack frame. Worse, oxmysql only forwards a
+    -- query's error into a caller-supplied callback when
+    -- `return_callback_errors` is enabled (fxmanifest.lua's own
+    -- `mysql_option` metadata — grepped this resource's fxmanifest.lua
+    -- before writing this comment: not set anywhere), which the original
+    -- callback-less call never opted into either way. Net effect: a broken
+    -- `k9_progression` table could make every single award silently fail to
+    -- persist forever, while every in-memory/gameplay effect (tier bonuses,
+    -- the xpTierChanged push) kept working normally — completely invisible
+    -- until someone happened to compare a player's real DB row against
+    -- their session's tier. FIXED by moving the write into its own
+    -- CreateThread and using `MySQL.insert.await` inside it: `.await`
+    -- (server/oxmysql's own promise-based wrapper) unconditionally requests
+    -- error propagation regardless of the `return_callback_errors` resource
+    -- metadata setting, so a real query failure now raises a genuine Lua
+    -- error that this pcall actually catches and logs. The CreateThread
+    -- wrapper is what keeps this non-blocking for AwardXP's own caller:
+    -- `.await` yields the coroutine it runs IN, and running it inside a
+    -- freshly spawned thread means the coroutine that suspends is this
+    -- write's own, never the search/tracking/combat/tenure call site's own
+    -- execution path — AwardXP itself still returns immediately either way.
+    CreateThread(function()
+        local insertOk, insertErr = pcall(MySQL.insert.await, [[
+            INSERT INTO k9_progression (citizenid, xp) VALUES (?, ?)
+              ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp), updated_at = CURRENT_TIMESTAMP
+        ]], { citizenid, amount })
+        if not insertOk then
+            print(('[qbx_k9unit] progression: AwardXP UPSERT failed for citizenid %s -- %d XP for actionKey %q was NOT persisted to k9_progression (in-memory tier/session effects already applied and are unaffected): %s'):format(citizenid, amount, actionKey, tostring(insertErr)))
+        end
+    end)
 
     local newTier = ResolveTier(newXp)
     if newTier ~= oldTier then
@@ -453,5 +647,14 @@ AddEventHandler('playerDropped', function(_reason)
     local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
     if citizenid then
         K9XP[citizenid] = nil
+        -- Drops every actionKey entry AwardXPCooldown holds for this
+        -- citizenid in one call (NewNestedCooldown's :Clear(primaryKey)
+        -- shape) — see that tracker's own declaration comment for why this
+        -- is a per-citizenid prune rather than :RegisterPlayerDropped().
+        -- Not a correctness requirement (a stale entry for an offline
+        -- citizenid is simply never read again until they reconnect and
+        -- earn XP fresh), same bounded-memory-growth rationale as the K9XP
+        -- eviction above it.
+        AwardXPCooldown.Clear(citizenid)
     end
 end)

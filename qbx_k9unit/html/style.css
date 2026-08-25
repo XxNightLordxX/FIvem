@@ -77,6 +77,35 @@ body {
     display: none;
 }
 
+/* Per-row feature gate — added this pass for the five wellbeing rows plus
+   the XP tier row. Distinct from `#k9hud.hidden` above (that one hides the
+   WHOLE overlay; this one hides ONE row whose owning Config.Features flag
+   is off, or whose value has genuinely never arrived yet). `display: none`
+   here is deliberate, not `visibility: hidden` or opacity: 0 — a
+   feature-disabled row must be genuinely ABSENT (no layout box at all,
+   nothing to accidentally show through), not merely invisible-but-present,
+   per this HUD's own "must be absent, not blank or zeroed" requirement.
+   Toggled in app.js's applyGatedBarStat()/applyDistractionStatus()/
+   applyXPTierStatus(); see that file for which payload key's absence maps
+   to which row. */
+.k9hud-row.k9hud-row--hidden {
+    display: none;
+}
+
+/* Distraction and XP tier are status-text rows, not track+fill bars (see
+   index.html's own comments on each for why) — no `.k9hud-bar-track`
+   child, so this fixes their value column to the same visual weight as a
+   bar row's numeric readout without needing the bar-track's own width. */
+.k9hud-row--status .k9hud-status-value {
+    flex: 1 1 auto;
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .k9hud-row {
     display: flex;
     align-items: center;
@@ -133,6 +162,33 @@ body {
 
 .k9hud-bar-fill--thirst {
     background: #6fd6d6;
+}
+
+/* Wellbeing bar colors — added this pass, same "placeholder guess,
+   deliberately distinct hues" posture as the four above (TODO(coder-ui)
+   note above still applies to these too). Fatigue/Mood/Injury are
+   higher-is-better stats, same semantic direction as Health/Stamina/
+   Hunger/Thirst above (a full bar is good) — greenish/warm hues chosen
+   only for visual distinction from the core four, not to imply anything
+   about good/bad by hue (the core four already establish that hue here is
+   decorative, not semantic — e.g. Health is red despite full=good).
+   fearStress is the one inverted stat (a FULL bar means highly stressed,
+   the bad direction) — given a distinct amber/red-leaning hue so a glance
+   at a filling Stress bar reads as a warning, not an achievement. */
+.k9hud-bar-fill--fatigue {
+    background: #9bd17f;
+}
+
+.k9hud-bar-fill--mood {
+    background: #d1b37f;
+}
+
+.k9hud-bar-fill--fearStress {
+    background: #e08a5c;
+}
+
+.k9hud-bar-fill--injury {
+    background: #c17fd1;
 }
 
 .k9hud-value {

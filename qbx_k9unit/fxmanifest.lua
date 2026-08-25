@@ -71,6 +71,7 @@ client_scripts {
     '@qbx_core/modules/playerdata.lua',
     'client/main.lua',
     'client/movement.lua',
+    'client/agility.lua', -- AgilityAdvanced (fence/window vault), extracted from client/movement.lua. Self-contained: no shared local state with its old home, and nothing else in the resource read its locals. No load-order dependency -- calls CanShowK9UI()/IsOwnModelK9() at call time only.
     'client/radial.lua',
     'client/vehicle.lua',
     'client/tracking.lua', -- Phase 2
@@ -87,7 +88,7 @@ client_scripts {
     'client/defense.lua', -- Phase 3 HandlerDownDefense client half -- soft dependency on client/combat.lua's IsBiteHoldEngaged via a runtime existence guard, so no hard load-order requirement
     'client/propattachment.lua', -- Phase 5 R&D (PropAttachments). Also owns the generic AttachPropToOwnPed/DetachAndDeleteProp mechanic that client/bonetool.lua and client/fetch.lua both reuse rather than hand-rolling a third copy.
     'client/bonetool.lua',       -- Dev-only bone-index sweep (BoneSweepDevTool). Placed here for topical grouping only; calls propattachment's globals at runtime, so no load-order requirement.
-    'client/fetch.lua',          -- Phase 5 (FetchMechanic). Loaded AFTER client/propattachment.lua deliberately: it reuses that file's AttachPropToOwnPed/DetachAndDeleteProp rather than hand-rolling a third prop-attach copy. THIS ORDERING IS A HARD REQUIREMENT, not a preference: an earlier version of this comment claimed the calls were runtime existence-guarded, and a QA pass found they are not -- client/fetch.lua has zero type() guards, and those two globals are only DEFINED inside client/propattachment.lua's own PropAttachments feature gate. Enabling FetchMechanic with mouthCarryMode='attach' while PropAttachments stays off calls a nil global. Being fixed; until then treat the two flags as coupled. Note what this feature is NOT -- the K9 does not walk the ball back on its own; it cannot, because the K9 is a connected player's character and nothing here scripts a player's ped movement. The return leg is a real, server-validated player action.
+    'client/fetch.lua',          -- Phase 5 (FetchMechanic). Loaded AFTER client/propattachment.lua deliberately: it reuses that file's AttachPropToOwnPed/DetachAndDeleteProp rather than hand-rolling a third prop-attach copy. A QA pass added a note here claiming this ordering was a HARD REQUIREMENT because the two globals are only defined inside propattachment's feature gate, making the flags coupled. THAT IS WRONG and is corrected here rather than left standing: AttachPropToOwnPed and DetachAndDeleteProp are defined at propattachment.lua:79 and :123, UNCONDITIONALLY -- the PropAttachments gate is at :174, after both, and that file's own header states plainly that neither function is gated. So the globals exist whenever the file loads, regardless of the flag. It IS true that client/fetch.lua calls them without a type() guard, so the load ORDER above still matters; the flags are NOT coupled and no nil-global call is reachable. Note what this feature is NOT -- the K9 does not walk the ball back on its own; it cannot, because the K9 is a connected player's character and nothing here scripts a player's ped movement. The return leg is a real, server-validated player action.
     'client/screenfx.lua', -- Phase 4 (ContrabandScreenFX). Held out of this manifest until its two timecycle natives were verified against primary source (no native is allowlisted here on an unverified assertion); both are now confirmed client-only. Registers its OWN handler for qbx_k9unit:client:applyContrabandScreenFx rather than extending client/search.lua -- an additional consumer, the same pattern server/wellbeing.lua and server/tracking.lua use for relayDamageEvent. No load-order dependency.
     'client/audio.lua', -- Phase 5 NUI audio bridge. PLUMBING ONLY -- no audio files ship with this resource (html/sounds/CREDITS.md records an egress-blocked sourcing attempt and four unverified CC0 leads). Every play against a not-yet-supplied html/sounds/<key>.ogg degrades to a silent no-op end to end. Has no caller yet: client/main.lua's PlaySoundOnNetworkEntity is deliberately still on the RAGE path, so this loads inert.
     'client/proximityaudio.lua', -- Phase 5 (ProximityAudioFX). Distance-scaled gain over client/audio.lua's NUI bridge, so it loads after it. Registers no net-event handlers at all -- a security sweep confirmed the forged-event class does not apply. Silent until an operator supplies html/sounds/<key>.ogg, by design.
@@ -232,7 +233,8 @@ lua54 'yes'
 --
 -- This resource's own calls are already OAL-safe: every coordinate-taking
 -- native is passed manually unpacked x/y/z, never a bare vector3. The one
--- GetShapeTestResult call (client/movement.lua's vault sweep) reads only
+-- GetShapeTestResult call (client/agility.lua's vault sweep -- moved there
+-- from client/movement.lua) reads only
 -- resultCode and hit -- never endCoords or surfaceNormal, the exact vector
 -- returns reported broken by lua54 + fxv2_oal together on some builds.
 -- If a future call here needs to read a shape-test or raycast vector result,

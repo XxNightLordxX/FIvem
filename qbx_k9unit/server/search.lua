@@ -46,8 +46,15 @@
          - Blocking: broadcast payload carries `netId` + `alertTier` ONLY —
            never `totalWeight`/`contrabandFound` (§1).
          - Flat per-source cooldown on `searchTarget` (ANY target),
-           independent of the existing per-(source, target) cooldown (§2).
-         - Per-pair cooldown timestamp written BEFORE the awaited
+           independent of the existing per-TARGET cooldown (§2). CORRECTION
+           (config audit, this pass): TargetSearchCooldown below is keyed
+           purely on the resolved target identity (plate/citizenid) — it
+           carries NO searcher dimension at all, so this is genuinely a
+           per-target lock shared across every searcher, not a per-(source,
+           target) pair as SPEC.md's original text and earlier comments in
+           this file described. See HandleSearchTarget's own doc comment
+           (§5 below) for the corrected, accurate description.
+         - Per-target cooldown timestamp written BEFORE the awaited
            ox_inventory read, not after (§3).
          - Resolved entity's REAL type cross-validated against the claimed
            `targetType`; for 'person', confirmed to resolve to a
@@ -386,7 +393,9 @@ TargetSearchCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, functi
 end)
 
 -- ECONOMY-AUDIT FIX (this pass): Config.SearchZones.searchCooldownMs (the
--- per-(K9,target) cooldown above) and Config.SearchZones.sniffAnimDurationMs
+-- per-TARGET-ONLY cooldown above — CORRECTION, config audit this pass: no
+-- searcher dimension at all, shared across every source) and
+-- Config.SearchZones.sniffAnimDurationMs
 -- (the flat per-source cooldown at HandleSearchTarget's own callback
 -- registration below) exist ONLY to keep repeat searches from harassing the
 -- same target or flooding this callback — neither was ever a
@@ -563,7 +572,8 @@ end
 ---      server-wide "scan any vehicle for drugs" oracle).
 ---   4. Derive the resolved, STABLE cooldown identity (plate/citizenid,
 ---      never the raw client-supplied targetNetId) and check the
----      per-(K9, target) cooldown.
+---      per-TARGET-ONLY cooldown (TargetSearchCooldown — no searcher
+---      dimension; shared across every source, see §5 below).
 ---   5. Stamp BOTH cooldowns (flat per-source AND per-target) NOW, BEFORE
 ---      the awaited ox_inventory call below (BLOCKING, security review
 ---      §3 / contract doc §3 step 13) — writing the cooldown after an
@@ -571,7 +581,13 @@ end
 ---      source/target can interleave before the first stamps anything,
 ---      causing a double-search/double-broadcast.
 ---   6. Derive the real inventory id server-side ONLY now — never
----      anything client-supplied.
+---      anything client-supplied. For a vehicle target, step 7's query also
+---      forwards the ALREADY-VALIDATED `targetNetId` (resolved to `entity`
+---      and cross-checked by steps 1-3 above, not freshly trusted here) so
+---      ox_inventory resolves the exact same entity instead of its own
+---      plate-substring fallback scan — see step 7's own pcall for why that
+---      scan is a real correctness hazard on an uncached trunk, confirmed
+---      against the real ox_inventory source.
 ---   7. Query contents via ox_inventory, pcall-wrapped — a caught error or
 ---      a `nil` result is `search_failed`, NEVER collapsed into
 ---      `contrabandFound = false` (conflating "we couldn't check" with
@@ -597,17 +613,29 @@ end
 ---  11. Return the full result (including totalWeight) to the CALLER
 ---      ONLY — this is the one place totalWeight is allowed to appear.
 ---
---- EXPLICIT DECISION, not a silent default (security review §5): this
---- implementation does NOT add a per-target-ONLY backstop cooldown
---- independent of searcher identity. Multiple distinct, legitimately
---- certified K9 officers can each search the same target once their own
---- per-pair cooldown allows — treated as intended behavior (multiple
---- units working a scene should each be able to verify independently),
---- not a gap, now that finding §1 (distance-filtered, tier-only broadcast)
---- means a repeat search never leaks more information to bystanders than
---- a single search already did. Flagged here explicitly for
---- coder-security to confirm or override, per the security review's own
---- framing that either answer is defensible.
+--- EXPLICIT DECISION, not a silent default (security review §5) — CORRECTED
+--- this pass (config audit finding): TargetSearchCooldown above IS the
+--- per-target-ONLY backstop cooldown security review §5 asked about — it is
+--- keyed purely on the resolved target identity (plate/citizenid), with NO
+--- searcher dimension folded in, so it is shared across EVERY source, not a
+--- per-(source, target) pair. An earlier pass of this comment claimed the
+--- opposite (that this file deliberately did NOT add such a backstop, and
+--- that "multiple distinct K9 officers can each search the same target once
+--- their own per-pair cooldown allows") — that was never true of the code
+--- actually shipped here: there is no separate per-pair cooldown at all,
+--- so a SECOND officer searching the SAME target within searchCooldownMs of
+--- a FIRST officer's search gets `on_cooldown` too, same as the first
+--- officer would on their own repeat. Kept this way deliberately (not
+--- re-opened this pass): it is the simpler of the two designs security
+--- review §5 flagged as defensible, it closes the exact "rotate several
+--- officers against one target to fish for a different roll" harassment
+--- vector §5 raised without needing a second cooldown layer, and — now that
+--- finding §1 (distance-filtered, tier-only broadcast) means a repeat
+--- search never leaks more information to bystanders than a single search
+--- already did — a second officer being briefly unable to independently
+--- re-confirm the same target costs nothing operationally beyond a short
+--- wait. Flagged here explicitly for coder-security to confirm or override,
+--- same as before.
 ---
 --- Search-action audit logging (contract doc §6's last bullet: who
 --- searched what/whom, when, result) is NOT an open question — db-schema
@@ -738,7 +766,36 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- therefore stay inside this callback's own execution context (the one
     -- FiveM already set `source` to = the requesting K9 player) so the
     -- lazy-load asks the correct client, not an arbitrary/unpredictable one.
+    -- SECURITY FIX (this pass): confirmed against the real
+    -- overextended/ox_inventory source (modules/inventory/server.lua) that
+    -- `GetInventoryItems(inv, owner)` forwards `inv` straight to
+    -- `Inventory(inv)` WITHOUT collapsing it to `{id, owner}` when `inv` is
+    -- already a table — so a table `inv` can carry a `netid` field through
+    -- to `loadInventoryData`. That matters because, on an UNCACHED vehicle
+    -- trunk (`Inventories[data.id]` not yet populated), `loadInventoryData`
+    -- ONLY uses `NetworkGetEntityFromNetworkId(data.netid)` when `data.netid`
+    -- is present; otherwise it falls back to looping EVERY vehicle on the
+    -- server (`GetAllVehicles()`) and matching by `plateText:find(plate)` —
+    -- a Lua PATTERN SUBSTRING match, not an exact-string comparison, taking
+    -- the FIRST hit in a nondeterministic enumeration order. That fallback
+    -- is entirely decoupled from `entity`/`targetNetId` above: two vehicles
+    -- sharing a plate, or one plate merely containing another's as a
+    -- substring, could resolve this read to a DIFFERENT vehicle than the
+    -- one this function already proximity/type-validated — while
+    -- BroadcastContrabandAlert below still reports the result under THIS
+    -- `entity`'s own coords/netId regardless, producing a false alert about
+    -- (or false clean bill for) a vehicle that was never actually read.
+    -- Passing `netid = targetNetId` here does NOT reintroduce client trust:
+    -- `targetNetId` was already resolved to `entity` and cross-validated by
+    -- steps 1-3 above with no yield since, so this only PINS ox_inventory's
+    -- resolution to the exact entity already vetted, closing off its own
+    -- ambiguous scan rather than opening a new one. A person target's
+    -- `inventoryId` (their own live numeric server id) has no equivalent
+    -- ambiguity, so the table form is applied ONLY for targetType == 'vehicle'.
     local queryOk, items = pcall(function()
+        if targetType == 'vehicle' then
+            return exports.ox_inventory:GetInventoryItems({ id = inventoryId, netid = targetNetId })
+        end
         return exports.ox_inventory:GetInventoryItems(inventoryId)
     end)
 
@@ -936,9 +993,15 @@ lib.callback.register('qbx_k9unit:server:searchTarget', function(source, targetT
 
     -- Flat per-source cooldown (ANY target) — BLOCKING per
     -- contraband_search_security_review.md §2, not present in SPEC.md
-    -- §11.4's original text (which only specified a per-(source, target)
-    -- cooldown). Closes the "sweep every vehicle in a parking lot with
-    -- zero delay" flood vector a per-pair-only cooldown leaves open.
+    -- §11.4's original text (which describes a per-(source, target)
+    -- cooldown — CORRECTION, config audit this pass: what actually shipped
+    -- as TargetSearchCooldown below is per-TARGET ONLY, no searcher
+    -- dimension at all, a divergence from that original spec text worth
+    -- flagging to whoever owns SPEC.md, not something this file's comments
+    -- should keep restating as fact). Closes the "sweep every vehicle in a
+    -- parking lot with zero delay" flood vector a per-target-only cooldown
+    -- leaves open, since TargetSearchCooldown alone never limits how many
+    -- DIFFERENT targets one source can hit back-to-back.
     if SearchCooldown.IsOnCooldown(source, Config.SearchZones.sniffAnimDurationMs, requestedAt) then
         SearchMutex.Release(source)
         return { ok = false, reason = 'on_cooldown' }

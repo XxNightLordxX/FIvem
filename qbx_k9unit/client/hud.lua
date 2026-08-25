@@ -55,6 +55,89 @@
        poll tick lands.
     ======================================================================
 
+    ======================================================================
+    WELLBEING / XP TIER EXTENSION — added this pass. Same message action,
+    same single combined push (`hud:updateVitals`) as above — no new
+    action name, no second message, per the same "never split, so a
+    dropped message can't desync fields" rationale the original four
+    vitals already follow. The payload's `data` object gains two new keys,
+    ALWAYS present as tables (possibly with some/all of their own keys
+    absent), sent alongside `visible`/health/stamina/hunger/thirst on
+    every push:
+
+        data.wellbeing = {
+          fatigue    = <number 0-100>,  -- KEY ABSENT unless Config.Features.FatigueSystem
+          mood       = <number 0-100>,  -- KEY ABSENT unless Config.Features.MoodSystem
+          fearStress = <number 0-100>,  -- KEY ABSENT unless Config.Features.FearStressSystem
+          injury     = <number 0-100>,  -- KEY ABSENT unless Config.Features.InjuryLimping
+          distracted = <boolean>,       -- KEY ABSENT unless Config.Features.DistractionSystem
+        }
+        data.xpTier = {
+          label = <string>,  -- KEY ABSENT unless Config.Features.XPProgression AND a
+                              -- tier snapshot has actually been received client-side
+        }
+
+    A key's ABSENCE (not a zeroed/false/empty-string value) is how a
+    disabled feature — or, for xpTier.label, a not-yet-known tier — is
+    signaled. html/app.js must render that element as genuinely gone from
+    the DOM (its row hidden), never as a blank/zero placeholder, per this
+    task's own "must be absent, not blank or zeroed" requirement. This
+    mirrors the flag-gated inertness client/wellbeing.lua and
+    client/progression.lua already both apply to their OWN gating (a
+    disabled feature's section is inert, not merely quiet).
+
+    DATA SOURCE — NO NEW SERVER ROUND TRIP, EITHER FOR WELLBEING OR XP:
+      - Wellbeing (fatigue/mood/fearStress/injury/distracted): this file
+        registers its OWN independent RegisterNetEvent handler on
+        'qbx_k9unit:client:wellbeingUpdate' — the SAME event
+        client/wellbeing.lua's own handler already consumes (FiveM allows
+        multiple independent handlers per event name; RegisterNetEvent's
+        two-argument form both (re-)registers the event name and attaches
+        a NEW handler each time it's called, it does not replace a prior
+        handler). This file's handler only mirrors the payload into a
+        local read-only `wellbeingCache` for display — it never calls
+        client/wellbeing.lua's ApplyWellbeingSnapshot, never touches
+        K9MoveRateModifiers, and never itself calls the
+        'qbx_k9unit:server:getWellbeingSnapshot' callback
+        client/wellbeing.lua already owns. See `wellbeingCache`'s own
+        comment below for the one disclosed consequence of this approach
+        (bounded staleness right after a K9-model transition, before the
+        first periodic tick broadcast lands — client/wellbeing.lua's own
+        on-demand catch-up fetch for that moment is applied locally inside
+        that file only, never re-broadcast as this same event).
+      - XP tier (xpTier.label): read via `GetCurrentXPTier()`, the
+        resource-global client/progression.lua already exposes for exactly
+        this "future HUD/display need" (see that file's own header) —
+        called behind a `type(GetCurrentXPTier) == 'function'` guard, this
+        codebase's established soft-dependency convention (mirrors
+        client/progression.lua's own guard on RecomputeK9MoveRate), even
+        though the symbol is already declared in .luacheckrc's `globals`
+        list — the guard covers the real runtime case where
+        Config.Features.XPProgression is false and client/progression.lua
+        returns at its own top-of-file gate before ever defining the
+        function at all.
+
+    CROSS-FILE COORDINATION NOTE FOR WHOEVER NEXT TOUCHES
+    client/wellbeing.lua: this file deliberately does NOT ask that file for
+    a new accessor — see the "NO NEW SERVER ROUND TRIP" note above for why
+    the existing net-event is sufficient. No .luacheckrc change and no
+    wellbeing.lua change are required for this HUD extension to work as
+    written.
+
+    PER-TICK COST of this extension (same 250ms/1000ms cadence as
+    before — no new thread, no tightened interval): a handful of local
+    table field reads (`wellbeingCache.*`, already up to date from the
+    push-driven event listener above, not polled), up to 5 extra
+    `math.abs`/equality comparisons in the existing change-detection check
+    below (skipped entirely per-field when that field's owning flag is
+    off, via short-circuited `and`), one optional resource-global function
+    call (`GetCurrentXPTier()`, itself just a table field return — no
+    network, no native call), and two small extra sub-tables added to the
+    SAME SendNUIMessage payload this thread already constructs every push.
+    No new native calls, no new network round trips, no new allocations
+    beyond those two small sub-tables.
+    ======================================================================
+
     GATING — "gate at registration, not just inside the loop":
     mirrors client/movement.lua's AgilityBasicJump thread
     (`if not Config.Features.AgilityBasicJump then CreateThread(...) end`)
@@ -151,21 +234,110 @@ if not Config.Features.HealthStaminaHUD then return end
 local HUD_POLL_TICK_MS = 250   -- design note §5.1: active poll cadence while visible
 local HUD_IDLE_TICK_MS = 1000  -- design note §5.4: idle backoff while not visible
 local HUD_HEARTBEAT_MS = 1000  -- design note §5.3: forced re-push ceiling even with no real change
-local HUD_CHANGE_EPSILON = 0.5 -- design note §5.2: per-field change threshold (0-100 scale) before re-pushing
+local HUD_CHANGE_EPSILON = 0.5 -- design note §5.2: per-field change threshold (0-100 scale) before re-pushing; reused unchanged for the wellbeing numeric fields below (same 0-100 contract)
+
+-- Which of the five wellbeing HUD elements are live, computed ONCE at
+-- file-load time (see this file's header "GATING" note — the same
+-- check-once-not-every-tick posture applies here) so the poll thread below
+-- never re-reads Config.Features.* per field per tick. Independent of
+-- Config.Features.HealthStaminaHUD itself (already guaranteed true, since
+-- this whole file returned early above if it weren't) — these five flags
+-- gate each wellbeing ROW independently, per this task's own "gated so
+-- each element only appears when its own feature is enabled" requirement.
+local WELLBEING_ELEMENT_ENABLED = {
+    fatigue = Config.Features.FatigueSystem,
+    mood = Config.Features.MoodSystem,
+    fearStress = Config.Features.FearStressSystem,
+    injury = Config.Features.InjuryLimping,
+    distraction = Config.Features.DistractionSystem,
+}
+local ANY_WELLBEING_ELEMENT_ENABLED = WELLBEING_ELEMENT_ENABLED.fatigue
+    or WELLBEING_ELEMENT_ENABLED.mood
+    or WELLBEING_ELEMENT_ENABLED.fearStress
+    or WELLBEING_ELEMENT_ENABLED.injury
+    or WELLBEING_ELEMENT_ENABLED.distraction
+
+-- Same "computed once, not every tick" posture for the XP tier row.
+local XP_TIER_ELEMENT_ENABLED = Config.Features.XPProgression
 
 -- Last-pushed snapshot, also doubling as the "last real known values" the
 -- design note §3 requires be resent (never zeroed) alongside a
 -- visible = false push. Seeded at 100 for every stat so an unlikely
 -- push-before-any-real-read edge case (shouldn't happen — hud:ready
--- always reads fresh values first) never shows a false "empty" bar.
+-- always reads fresh values first) never shows a false "empty" bar. The
+-- wellbeing fields below follow the identical seeding posture (100/100/0/
+-- 100 healthy defaults, matching client/wellbeing.lua's own `lastStats`
+-- seed exactly) — a disabled wellbeing element's slot here simply never
+-- moves off this seed and is never read or sent (see
+-- WELLBEING_ELEMENT_ENABLED above), so it is harmless either way.
 local hudState = {
     visible = false,
     health = 100.0,
     stamina = 100.0,
     hunger = 100.0,
     thirst = 100.0,
+    fatigue = 100.0,
+    mood = 100.0,
+    fearStress = 0.0,
+    injury = 100.0,
+    distracted = false,
+    xpTierLabel = nil, -- string|nil; nil means "no tier known yet" (XPProgression disabled, or no snapshot received this session yet) — rendered as an absent row in that case, per the header's "absence, not blank" rule
     lastPushAt = -HUD_HEARTBEAT_MS, -- forces the very first real push to count as heartbeat-due
 }
+
+-- Local read-only mirror of the server-pushed wellbeing snapshot,
+-- populated ONLY by observing 'qbx_k9unit:client:wellbeingUpdate' below —
+-- this file never calls the 'qbx_k9unit:server:getWellbeingSnapshot'
+-- callback itself (see this file's header "WELLBEING / XP TIER EXTENSION"
+-- section for why: client/wellbeing.lua already owns that on-demand
+-- fetch, and this file must not add a second round trip for the same
+-- data). Seeded at each stat's healthy default (mirrors
+-- client/wellbeing.lua's own `lastStats` seed exactly), so a not-yet-
+-- received snapshot never displays as empty/critical.
+--
+-- DISCLOSED LIMITATION: this cache only updates on the periodic server
+-- tick broadcast (Config.Wellbeing.tickIntervalMs, 5000ms by default),
+-- NOT on client/wellbeing.lua's own one-shot on-demand catch-up fetch for
+-- the moment this client's ped first becomes K9-modeled (that fetch's
+-- result is applied only LOCALLY inside client/wellbeing.lua via a direct
+-- function call, never re-broadcast as this same event) — so these HUD
+-- rows may lag up to one tick interval behind client/wellbeing.lua's own
+-- already-applied state right after a K9 model change. Bounded and
+-- self-healing (the same heartbeat philosophy the rest of this file
+-- already relies on for the four core vitals), not a silent gap.
+local wellbeingCache = {
+    fatigue = 100.0,
+    mood = 100.0,
+    fearStress = 0.0,
+    injury = 100.0,
+    distractedUntil = 0,
+}
+
+if ANY_WELLBEING_ELEMENT_ENABLED then
+    -- Deliberately a SEPARATE, independent listener on the SAME event
+    -- client/wellbeing.lua's own RegisterNetEvent('qbx_k9unit:client:wellbeingUpdate', ...)
+    -- already consumes — see this file's header for why this is not a new
+    -- round trip. Gated at registration (not just in the loop body) so
+    -- this file registers zero extra listeners when no wellbeing element
+    -- is enabled, matching this file's own "GATING" convention.
+    RegisterNetEvent('qbx_k9unit:client:wellbeingUpdate', function(stats)
+        -- SOURCE-ORIGIN GUARD — same check, same reasoning, same
+        -- confidence grading as client/wellbeing.lua's own identical guard
+        -- on this exact event (see that file's header for the full
+        -- writeup) — duplicated here rather than shared, matching this
+        -- codebase's established per-file guard convention
+        -- (client/combat.lua, client/progression.lua, client/wellbeing.lua
+        -- each keep their own copy rather than sharing one).
+        if source ~= 65535 then return end
+        if type(stats) ~= 'table' then return end
+
+        wellbeingCache.fatigue = tonumber(stats.fatigue) or wellbeingCache.fatigue
+        wellbeingCache.mood = tonumber(stats.mood) or wellbeingCache.mood
+        wellbeingCache.fearStress = tonumber(stats.fearStress) or wellbeingCache.fearStress
+        wellbeingCache.injury = tonumber(stats.injury) or wellbeingCache.injury
+        wellbeingCache.distractedUntil = tonumber(stats.distractedUntil) or wellbeingCache.distractedUntil
+    end)
+end
 
 --- Clamps a single stat value to the 0-100 range this HUD's payload
 --- contract uses for all four fields (design note §3). Refactor pass
@@ -226,6 +398,53 @@ local function ReadVitals()
     return health, stamina, hunger, thirst
 end
 
+--- Reads the five wellbeing display fields fresh from `wellbeingCache`
+--- (itself only ever updated by the push-driven event listener above —
+--- see this file's header, no network read happens here), returning nil
+--- for any field whose owning Config.Features flag is off. A nil return
+--- here is what ultimately makes that field's KEY ABSENT from the
+--- SendNUIMessage payload (see PushVitals below) — the mechanism behind
+--- this task's "must be absent, not blank or zeroed" requirement.
+--- @return number|nil fatigue, number|nil mood, number|nil fearStress, number|nil injury, boolean|nil distracted
+local function ReadWellbeingForDisplay()
+    local fatigue, mood, fearStress, injury, distracted = nil, nil, nil, nil, nil
+
+    if WELLBEING_ELEMENT_ENABLED.fatigue then
+        fatigue = clamp01to100(wellbeingCache.fatigue)
+    end
+    if WELLBEING_ELEMENT_ENABLED.mood then
+        mood = clamp01to100(wellbeingCache.mood)
+    end
+    if WELLBEING_ELEMENT_ENABLED.fearStress then
+        fearStress = clamp01to100(wellbeingCache.fearStress)
+    end
+    if WELLBEING_ELEMENT_ENABLED.injury then
+        injury = clamp01to100(wellbeingCache.injury)
+    end
+    if WELLBEING_ELEMENT_ENABLED.distraction then
+        distracted = wellbeingCache.distractedUntil > GetGameTimer()
+    end
+
+    return fatigue, mood, fearStress, injury, distracted
+end
+
+--- Reads the current XP tier's label, or nil if XPProgression is off, the
+--- client/progression.lua accessor doesn't exist (soft-dependency guard —
+--- see this file's header), or no tier snapshot has been received this
+--- session yet (GetCurrentXPTier() itself returning nil, which is its own
+--- documented behavior before the first 'qbx_k9unit:client:xpTierChanged'
+--- event lands).
+--- @return string|nil
+local function ReadXPTierLabel()
+    if not XP_TIER_ELEMENT_ENABLED then return nil end
+    if type(GetCurrentXPTier) ~= 'function' then return nil end
+
+    local tier = GetCurrentXPTier()
+    if type(tier) ~= 'table' or type(tier.label) ~= 'string' then return nil end
+
+    return tier.label
+end
+
 --- Sends one hud:updateVitals push and updates hudState to match — the
 --- single choke point every call site below routes through, so
 --- "what did we last actually send" (used both for the epsilon comparison
@@ -236,7 +455,13 @@ end
 --- @param stamina number
 --- @param hunger number
 --- @param thirst number
-local function PushVitals(visible, health, stamina, hunger, thirst)
+--- @param fatigue number|nil
+--- @param mood number|nil
+--- @param fearStress number|nil
+--- @param injury number|nil
+--- @param distracted boolean|nil
+--- @param xpTierLabel string|nil
+local function PushVitals(visible, health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel)
     SendNUIMessage({
         action = 'hud:updateVitals',
         data = {
@@ -245,6 +470,21 @@ local function PushVitals(visible, health, stamina, hunger, thirst)
             stamina = stamina,
             hunger = hunger,
             thirst = thirst,
+            -- See this file's header "WELLBEING / XP TIER EXTENSION" —
+            -- any of these five keys being nil above means it is simply
+            -- ABSENT here (a Lua table never stores a nil-valued key),
+            -- which is exactly the "absent, not blank/zeroed" signal
+            -- html/app.js keys its per-row show/hide off of.
+            wellbeing = {
+                fatigue = fatigue,
+                mood = mood,
+                fearStress = fearStress,
+                injury = injury,
+                distracted = distracted,
+            },
+            xpTier = {
+                label = xpTierLabel,
+            },
         },
     })
 
@@ -253,6 +493,12 @@ local function PushVitals(visible, health, stamina, hunger, thirst)
     hudState.stamina = stamina
     hudState.hunger = hunger
     hudState.thirst = thirst
+    hudState.fatigue = fatigue
+    hudState.mood = mood
+    hudState.fearStress = fearStress
+    hudState.injury = injury
+    hudState.distracted = distracted
+    hudState.xpTierLabel = xpTierLabel
     hudState.lastPushAt = GetGameTimer()
 end
 
@@ -270,7 +516,9 @@ RegisterNUICallback('hud:ready', function(_, cb)
     cb({})
 
     local health, stamina, hunger, thirst = ReadVitals()
-    PushVitals(CanShowK9UI(), health, stamina, hunger, thirst)
+    local fatigue, mood, fearStress, injury, distracted = ReadWellbeingForDisplay()
+    local xpTierLabel = ReadXPTierLabel()
+    PushVitals(CanShowK9UI(), health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel)
 end)
 
 -- ----------------------------------------------------------------------
@@ -296,16 +544,22 @@ CreateThread(function()
         if not canShow then
             if hudState.visible then
                 -- true -> false transition: push immediately (design note
-                -- §5.5), reusing the LAST KNOWN good vitals already sitting
-                -- in hudState — never a fresh read, never zeroed — per
-                -- design note §3's "so the JS doesn't have to wait out a
-                -- stale-zero flash" rule.
-                PushVitals(false, hudState.health, hudState.stamina, hudState.hunger, hudState.thirst)
+                -- §5.5), reusing the LAST KNOWN good vitals AND wellbeing/
+                -- xpTier fields already sitting in hudState — never a
+                -- fresh read, never zeroed — per design note §3's "so the
+                -- JS doesn't have to wait out a stale-zero flash" rule,
+                -- extended here to the wellbeing/xpTier fields for the
+                -- identical reason.
+                PushVitals(false, hudState.health, hudState.stamina, hudState.hunger, hudState.thirst,
+                    hudState.fatigue, hudState.mood, hudState.fearStress, hudState.injury, hudState.distracted,
+                    hudState.xpTierLabel)
             end
 
             Wait(HUD_IDLE_TICK_MS) -- design note §5.4: idle backoff while not currently relevant
         else
             local health, stamina, hunger, thirst = ReadVitals()
+            local fatigue, mood, fearStress, injury, distracted = ReadWellbeingForDisplay()
+            local xpTierLabel = ReadXPTierLabel()
             local becameVisible = not hudState.visible
             local now = GetGameTimer()
 
@@ -313,13 +567,23 @@ CreateThread(function()
                 or math.abs(stamina - hudState.stamina) > HUD_CHANGE_EPSILON
                 or math.abs(hunger - hudState.hunger) > HUD_CHANGE_EPSILON
                 or math.abs(thirst - hudState.thirst) > HUD_CHANGE_EPSILON
+                -- Each wellbeing comparison below short-circuits on its own
+                -- enabled flag BEFORE ever touching hudState's (possibly
+                -- nil, if disabled) slot for that field — see
+                -- WELLBEING_ELEMENT_ENABLED's own comment above.
+                or (WELLBEING_ELEMENT_ENABLED.fatigue and math.abs(fatigue - hudState.fatigue) > HUD_CHANGE_EPSILON)
+                or (WELLBEING_ELEMENT_ENABLED.mood and math.abs(mood - hudState.mood) > HUD_CHANGE_EPSILON)
+                or (WELLBEING_ELEMENT_ENABLED.fearStress and math.abs(fearStress - hudState.fearStress) > HUD_CHANGE_EPSILON)
+                or (WELLBEING_ELEMENT_ENABLED.injury and math.abs(injury - hudState.injury) > HUD_CHANGE_EPSILON)
+                or (WELLBEING_ELEMENT_ENABLED.distraction and distracted ~= hudState.distracted)
+                or xpTierLabel ~= hudState.xpTierLabel
             local heartbeatDue = (now - hudState.lastPushAt) >= HUD_HEARTBEAT_MS
 
             -- becameVisible short-circuits straight to a push (design note
             -- §5.5's false -> true immediate-push rule), independent of
             -- both the epsilon check and the heartbeat ceiling.
             if becameVisible or changedEnough or heartbeatDue then
-                PushVitals(true, health, stamina, hunger, thirst)
+                PushVitals(true, health, stamina, hunger, thirst, fatigue, mood, fearStress, injury, distracted, xpTierLabel)
             end
 
             Wait(HUD_POLL_TICK_MS) -- design note §5.1: active poll cadence while visible

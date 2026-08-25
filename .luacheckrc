@@ -100,7 +100,8 @@ read_globals = {
     "ClearPedTasksImmediately", "TaskStartScenarioInPlace", "IsPedShooting",
     "PlaySoundFromEntity", "SetFollowPedCamViewMode",
     "GetPlayerSprintStaminaRemaining",
-    -- AgilityAdvanced capsule-sweep vault (client/movement.lua, Phase 3,
+    -- AgilityAdvanced capsule-sweep vault (client/agility.lua, extracted from
+    -- client/movement.lua, Phase 3,
     -- PHASE3_SPEC.md §12.5.5/§12.0 item 3) -- confirmed real natives per
     -- phase2_notes/phase3_combat_natives.md §5
     "StartShapeTestCapsule", "GetShapeTestResult", "SetEntityVelocity",

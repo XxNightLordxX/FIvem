@@ -22,13 +22,25 @@
 
     This is a plain HTML/CSS/JS page, no framework, no build step — see
     phase4_hud_early_design.md §2's reasoning (nothing else in this
-    resource has any JS tooling; this is a receive-only four-bar readout,
-    not a component tree that benefits from a reactive framework).
+    resource has any JS tooling; this is a receive-only readout, not a
+    component tree that benefits from a reactive framework).
 
     Structure: one root container (#k9hud) holding four labeled
-    track+fill bar rows (health/stamina/hunger/thirst) plus a numeric
-    readout per row. No interactive elements anywhere on this page — see
-    style.css's header comment for why every element here carries
+    track+fill bar rows (health/stamina/hunger/thirst), four additional
+    wellbeing track+fill bar rows (fatigue/mood/fearStress/injury), one
+    Distraction status-text row (no continuous magnitude, only an
+    active/inactive+countdown state, see app.js's applyDistractionStatus()),
+    and one XP tier status-text row (app.js's applyXPTierStatus()) — each
+    of these five additive rows starts with the `k9hud-row--hidden` class
+    already applied (style.css), a row-scoped sibling of the `#k9hud.hidden`
+    class the root itself uses: app.js's applyGatedBarStat()/
+    applyDistractionStatus()/applyXPTierStatus() toggle this same class on
+    a row per-message, based on whether that row's value key is present in
+    the payload (present only while its owning Config.Features flag is
+    on) — feature-gated absence, not merely a CSS-hidden default, since a
+    disabled row can never receive a value to display in the first place.
+    No interactive elements anywhere on this page — see style.css's
+    header comment for why every element here carries
     `pointer-events: none`.
 -->
 <html lang="en">
@@ -79,6 +91,75 @@
                 <div class="k9hud-bar-fill k9hud-bar-fill--thirst" data-fill="thirst"></div>
             </div>
             <span class="k9hud-value" data-value="thirst">--</span>
+        </div>
+
+        <!--
+            WELLBEING ROWS — added this pass. Each one starts with the
+            `k9hud-row--hidden` class already applied (belt-and-suspenders
+            with app.js's own applyGatedBarStat()/applyDistractionStatus()/
+            applyXPTierStatus(), which also toggle this same class per
+            payload): before the FIRST `hud:updateVitals` payload ever
+            arrives, there is no way yet to know whether this row's owning
+            Config.Features flag is on, so it defaults to hidden rather
+            than briefly flashing an unstyled/zeroed bar. See app.js's own
+            header for the full "wellbeing" payload contract these
+            data-fill/data-value/data-stat-row hooks bind to.
+        -->
+        <div class="k9hud-row k9hud-row--hidden" data-stat-row="fatigue">
+            <span class="k9hud-label">Fatigue</span>
+            <div class="k9hud-bar-track">
+                <div class="k9hud-bar-fill k9hud-bar-fill--fatigue" data-fill="fatigue"></div>
+            </div>
+            <span class="k9hud-value" data-value="fatigue">--</span>
+        </div>
+
+        <div class="k9hud-row k9hud-row--hidden" data-stat-row="mood">
+            <span class="k9hud-label">Mood</span>
+            <div class="k9hud-bar-track">
+                <div class="k9hud-bar-fill k9hud-bar-fill--mood" data-fill="mood"></div>
+            </div>
+            <span class="k9hud-value" data-value="mood">--</span>
+        </div>
+
+        <div class="k9hud-row k9hud-row--hidden" data-stat-row="fearStress">
+            <span class="k9hud-label">Stress</span>
+            <div class="k9hud-bar-track">
+                <div class="k9hud-bar-fill k9hud-bar-fill--fearStress" data-fill="fearStress"></div>
+            </div>
+            <span class="k9hud-value" data-value="fearStress">--</span>
+        </div>
+
+        <div class="k9hud-row k9hud-row--hidden" data-stat-row="injury">
+            <span class="k9hud-label">Injury</span>
+            <div class="k9hud-bar-track">
+                <div class="k9hud-bar-fill k9hud-bar-fill--injury" data-fill="injury"></div>
+            </div>
+            <span class="k9hud-value" data-value="injury">--</span>
+        </div>
+
+        <!--
+            Distraction — NOT a track+fill bar, deliberately: the
+            underlying data (server/wellbeing.lua's `distractedUntil`) is
+            an active/inactive+countdown state, not a continuous 0-100
+            magnitude, so a bar here would be misleading. Status text only
+            (set via textContent — never innerHTML, see app.js's own
+            "NO innerHTML" note).
+        -->
+        <div class="k9hud-row k9hud-row--hidden k9hud-row--status" data-stat-row="distraction">
+            <span class="k9hud-label">Distraction</span>
+            <span class="k9hud-status-value" data-status="distraction">--</span>
+        </div>
+
+        <!--
+            XP tier — text-only, same reasoning as Distraction above: the
+            raw XP count is never sent to the client at all (server-
+            authoritative, see client/progression.lua's own header), only
+            the current tier's label, so a bar/percentage would be
+            fabricating a magnitude that doesn't exist client-side.
+        -->
+        <div class="k9hud-row k9hud-row--hidden k9hud-row--status" data-stat-row="xpTier">
+            <span class="k9hud-label">K9 Tier</span>
+            <span class="k9hud-status-value" data-status="xpTier">--</span>
         </div>
     </div>
 

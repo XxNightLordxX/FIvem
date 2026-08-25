@@ -113,8 +113,75 @@
 ---   'vehicle'/'person', which branches into further person-only
 ---   resolution logic) is NOT passed as expectedEntityType here and stays
 ---   entirely at that call site — see server/search.lua's own comment.
+--- SECURITY BOUNDARY -- exactly what this function does and does not
+--- guarantee, spelled out explicitly since every caller layers its own
+--- additional checks on top of this one and needs to know where this
+--- function's own guarantee ends (audited as a security primitive, not
+--- just a convenience wrapper, per REFACTOR_ROADMAP.md item 2's own
+--- "resolve a client-claimed netId defensively" framing):
+---
+--- GUARANTEES (enforced, not advisory -- every one of these is a hard
+--- `return nil`, never a soft/logged pass-through):
+---   - `netId` is actually a number (rejects a client payload of the wrong
+---     Lua type outright -- see NOTE below on what "a number" does NOT mean).
+---   - The entity EXISTS AT THE INSTANT OF THIS CALL (DoesEntityExist,
+---     checked in addition to NetworkGetEntityFromNetworkId's own `~= 0`
+---     result -- this is a real strengthening over one of the two original
+---     pre-extraction call sites, see the doc comment below).
+---   - IF `expectedEntityType` is supplied, GetEntityType(entity) matches it
+---     EXACTLY. This is enforced, not a hint: a mismatch is a hard `nil`
+---     return, identical to a nonexistent entity. There is no partial/
+---     advisory mode -- a caller either passes the type it needs and gets a
+---     hard reject on mismatch, or omits it and gets zero type filtering at
+---     all (see server/search.lua's HandleSearchTarget, which deliberately
+---     omits it to run its own richer targetType-vs-GetEntityType branch).
+---
+--- DOES NOT GUARANTEE (every one of these is the CALLER's own
+--- responsibility, and every current caller in this resource does layer
+--- its own check for whichever of these it actually needs -- see each call
+--- site's own "expectedEntityType = N" / proximity-check comment):
+---   - Ownership or proximity. This function has no concept of "belongs to
+---     the requesting player" or "is anywhere near the requesting player" --
+---     a client can name ANY currently-networked entity of the right type
+---     anywhere on the map (another player's vehicle, another player's own
+---     ped if expectedEntityType = 1, a prop on the far side of the map) and
+---     this function will happily resolve it. Every caller that needs
+---     "near me" (server/main.lua's relayDoorScratch) or "belongs to a
+---     specific player" (server/combat.lua's self-target reject,
+---     server/search.lua's ResolveConnectedPlayerFromPed cross-check) adds
+---     that check itself, separately, AFTER this call succeeds.
+---   - A specific model/allowlist. GetEntityType only distinguishes
+---     ped/vehicle/object (1/2/3) -- it says nothing about WHICH ped model,
+---     vehicle model, or object model. Every caller that needs "specifically
+---     a K9" (IsConfiguredK9Model) or "specifically a door prop" layers that
+---     model check on top, separately, after this call succeeds. Passing
+---     expectedEntityType = 1 (ped) narrows "any networked entity" down to
+---     "any networked ped" -- it does NOT narrow it to "a K9" or "a specific
+---     player's ped".
+---   - Continued existence AFTER this call returns. The returned handle is
+---     only proven live at the instant this function checked it. It is NOT
+---     re-checked, and this function has no way to re-check it later -- a
+---     caller that yields (Wait, an `await`ed DB/inventory call) between
+---     calling this and actually USING the handle must re-resolve or
+---     otherwise re-validate before that later use if the gap matters for
+---     its own correctness. Several callers in this resource already do
+---     this explicitly (e.g. server/combat.lua's HandleTakedownRequest
+---     re-running its full ValidateCombatRequest, including a fresh
+---     ResolveNetworkEntity, after its own Wait(); server/search.lua's
+---     HandleSearchTarget re-checking `GetPlayerPed(targetServerId) ~=
+---     entity` immediately after its own awaited ox_inventory call for the
+---     'person' branch) -- that re-validation is the CALLER's job, not
+---     something this function can retroactively provide.
+---   - That a numeric `netId` is a sane/in-range network id. `type(netId)
+---     == 'number'` rejects the wrong Lua type only (a string, a table, nil)
+---     -- it does not range-check, floor a non-integer float, or reject a
+---     negative number. Any of those simply fail to resolve to a real
+---     entity via NetworkGetEntityFromNetworkId (which returns 0 for
+---     anything it doesn't recognize) and fall through to this function's
+---     own `entity == 0` guard below, so they're still rejected -- just via
+---     the existence check, not the type check.
 --- @param netId number
---- @param expectedEntityType number? -- 1 = ped, 2 = vehicle, 3 = object (GetEntityType); omit to skip this check
+--- @param expectedEntityType number? -- 1 = ped, 2 = vehicle, 3 = object (GetEntityType); omit to skip this check. Enforced (hard reject on mismatch), not advisory -- see this doc comment's GUARANTEES section above.
 --- @return number? entity
 function ResolveNetworkEntity(netId, expectedEntityType)
     if type(netId) ~= 'number' then return nil end
