@@ -1,0 +1,1382 @@
+--[[
+    tests/partnership_spec.lua
+
+    Direct + indirect tests of server/partnership.lua -- the mutually-
+    consented "K9 partnership" registry (PHASE3_SPEC.md §12.0 item 7) --
+    against the REAL, unmodified production file. Loads the real
+    server/cooldowns.lua (hard file-load-time dependency: NewCooldown for
+    PartnerRequestCooldown, NewMutex for PartnershipEstablishMutex) and
+    server/entities.lua (fxmanifest.lua's own load-order neighbor for
+    cooldowns.lua; server/partnership.lua itself never calls
+    ResolveNetworkEntity/ResolveConnectedPlayerFromPed, loaded anyway to
+    mirror the real server_scripts order exactly, per this task's own
+    instruction -- harmless, since entities.lua defines its functions
+    unconditionally at load time with no natives required until CALL time).
+
+    server/certifications.lua is DELIBERATELY NEVER loaded here.
+    server/partnership.lua consumes HasK9Access and IsConfiguredK9Model as
+    plain resource-globals (no runtime-existence guard on THOSE two --
+    unlike GetActivePartnerCitizenId/EndActiveEffectForHolder in
+    server/recall.lua, this file's own header states these are a hard,
+    load-order-guaranteed dependency, not an optional one), so this spec
+    controls both as test-supplied stubs -- exactly the same "this file's
+    job is server/partnership.lua's OWN eligibility/consent/mutex logic,
+    not a second copy of server/certifications.lua's already-covered
+    HasK9Access/IsConfiguredK9Model" discipline kennel_spec.lua/
+    combat_spec.lua already established for the identical shape.
+
+    locale() is NEVER stubbed (this suite's own convention) -- every
+    NotifyPlayer(..., locale('partnership.xxx'), ...) call exercised below
+    resolves for real against locales/en.json, so this spec also doubles as
+    a regression check that every 'partnership.*'/'common.*' key it reaches
+    still exists there.
+
+    ONE FRESH SANDBOX PER TEST (never shared) -- Partnerships,
+    PendingPartnershipRequests, and PartnershipEstablishMutex are all
+    file-lifetime `local` upvalues; reusing one sandbox across unrelated
+    cases would leak state, same discipline every other spec in this suite
+    follows.
+
+    YIELDING EVENT HANDLERS: the accept branch of respondPartnerUp
+    (RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', ...)) makes real
+    MySQL.scalar.await/MySQL.insert.await calls inside a pcall-wrapped
+    critical section guarded by PartnershipEstablishMutex -- exactly the
+    kind of check-then-act sequence spanning two yielding awaits that a
+    real FXServer coroutine could genuinely interleave two callers through.
+    Every test in the "MUTEX" section below dispatches through REAL Lua
+    coroutines (matching certifications_spec.lua's own
+    "LOAD-BEARING -- two overlapping grants... through a yielding MySQL
+    stub" technique and combat_spec.lua's dispatchStepped/startCoroutine
+    shape) so the lock's exclusion is demonstrated by the test harness
+    genuinely being unable to interleave past it, not by fixture luck or
+    sequencing that happens to avoid the race.
+]]
+
+local t = dofile('testkit.lua')
+local Sandbox = dofile('fixtures/sandbox.lua')
+local locale = Sandbox.locale
+
+-- ----------------------------------------------------------------------
+-- Vector3-alike stub -- CheckPartnershipEligibility's proximity check does
+-- `#(GetEntityCoords(a) - GetEntityCoords(b))`, so both the `-` and `#`
+-- metamethods must be modeled, same shape certifications_spec.lua/
+-- combat_spec.lua already use for the identical native.
+-- ----------------------------------------------------------------------
+
+local Vec3MT = {}
+Vec3MT.__index = Vec3MT
+Vec3MT.__sub = function(a, b)
+    return setmetatable({ x = a.x - b.x, y = a.y - b.y, z = a.z - b.z }, Vec3MT)
+end
+Vec3MT.__len = function(v)
+    return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
+end
+local function vec3(x, y, z)
+    return setmetatable({ x = x, y = y, z = z }, Vec3MT)
+end
+
+local K9_MODEL_HASH = 111
+local NON_K9_MODEL_HASH = 0
+
+-- Real, shipped config.lua values -- see config.lua's own Config.Partnership
+-- block. Boundary/timing tests below advance against THESE numbers, not
+-- arbitrary round test constants, matching this suite's established
+-- convention (combat_spec.lua's baseline*Config() functions).
+local PROXIMITY_METERS = 5.0
+local REQUEST_TTL_MS = 30000
+local REQUEST_COOLDOWN_MS = 1000
+
+-- ----------------------------------------------------------------------
+-- Sandbox setup
+-- ----------------------------------------------------------------------
+
+--- @param opts table? { handlerPartnership: boolean (default true), departments: table (default { police = true, sheriff = true }) }
+--- @return table fixture
+local function newFixture(opts)
+    opts = opts or {}
+
+    local state = { now = 1000000 }
+    local function GetGameTimer() return state.now end
+
+    local notifyLog = {} -- { {source=, message=, kind=}, ... }
+    local function NotifyPlayer(src, message, kind)
+        notifyLog[#notifyLog + 1] = { source = src, message = message, kind = kind }
+    end
+
+    local clientEvents = {} -- { {event=, target=, args={...}}, ... }
+    local function TriggerClientEvent(eventName, target, ...)
+        clientEvents[#clientEvents + 1] = { event = eventName, target = target, args = { ... } }
+    end
+
+    local outboundEvents = {} -- { {eventName, ...}, ... }
+    local function TriggerEvent(eventName, ...)
+        outboundEvents[#outboundEvents + 1] = { eventName, ... }
+    end
+
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
+
+    local playersBySource, playersByCitizenId = {}, {}
+    --- @param src number
+    --- @param citizenid string
+    --- @param job table? -- { name = string } -- omit entirely for a pure K9-role party with no job relevance
+    local function registerPlayer(src, citizenid, job)
+        local p = { PlayerData = { citizenid = citizenid, source = src, job = job } }
+        playersBySource[src] = p
+        playersByCitizenId[citizenid] = p
+        return p
+    end
+    local function disconnectPlayer(src)
+        local p = playersBySource[src]
+        if not p then return end
+        playersBySource[src] = nil
+        playersByCitizenId[p.PlayerData.citizenid] = nil
+    end
+
+    local exportsStub = {
+        qbx_core = {
+            GetPlayer = function(_self, src) return playersBySource[src] end,
+            GetPlayerByCitizenId = function(_self, citizenid) return playersByCitizenId[citizenid] end,
+        },
+    }
+
+    local pedBySource, coordsByPed, modelByPed = {}, {}, {}
+    local function GetPlayerPed(src) return pedBySource[src] or 0 end
+    local function GetEntityCoords(ped) return coordsByPed[ped] or vec3(0, 0, 0) end
+    local function GetEntityModel(ped) return modelByPed[ped] or NON_K9_MODEL_HASH end
+
+    --- @param src number
+    --- @param pedHandle number
+    --- @param coords table? -- vec3(x,y,z), default origin
+    --- @param isK9Model boolean? -- default false
+    local function setPed(src, pedHandle, coords, isK9Model)
+        pedBySource[src] = pedHandle
+        coordsByPed[pedHandle] = coords or vec3(0, 0, 0)
+        modelByPed[pedHandle] = isK9Model and K9_MODEL_HASH or NON_K9_MODEL_HASH
+    end
+
+    local hasAccessBySource = {}
+    local function HasK9Access(src) return hasAccessBySource[src] == true end
+    local function IsConfiguredK9Model(hash) return hash == K9_MODEL_HASH end
+
+    local mysql = {
+        single = { await = function(_sql, _params) return nil end }, -- RefreshPartnershipCache / DoBreakPartnership SELECT: default "no active row"
+        scalar = { await = function(_sql, _params) return nil end }, -- establish critical section pre-INSERT checks: default "not already partnered"
+        insert = { await = function(_sql, _params) return 1 end },   -- default: insert succeeds, fake id 1
+        update = { await = function(_sql, _params) return 1 end },   -- default: exactly one row affected
+    }
+
+    local capturedEvents = {}
+    local function RegisterNetEvent(name, fn) capturedEvents[name] = fn end
+
+    local eventHandlers = {}
+    local function AddEventHandler(name, fn)
+        eventHandlers[name] = eventHandlers[name] or {}
+        eventHandlers[name][#eventHandlers[name] + 1] = fn
+    end
+
+    local capturedCallbacks = {}
+    local libStub = { callback = { register = function(name, fn) capturedCallbacks[name] = fn end } }
+
+    local onlineIds = {}
+    local function GetPlayers()
+        local out = {}
+        for id in pairs(onlineIds) do out[#out + 1] = tostring(id) end
+        return out
+    end
+
+    local function GetCurrentResourceName() return 'qbx_k9unit' end
+
+    local Config = {
+        Features = { HandlerPartnership = opts.handlerPartnership ~= false },
+        Departments = opts.departments or { police = true, sheriff = true },
+        Partnership = {
+            ProximityMeters = PROXIMITY_METERS,
+            RequestTTLMs = REQUEST_TTL_MS,
+            RequestCooldownMs = REQUEST_COOLDOWN_MS,
+        },
+    }
+
+    local overrides = {
+        Config = Config,
+        GetGameTimer = GetGameTimer,
+        NotifyPlayer = NotifyPlayer,
+        TriggerClientEvent = TriggerClientEvent,
+        TriggerEvent = TriggerEvent,
+        print = printStub,
+        exports = exportsStub,
+        GetPlayerPed = GetPlayerPed,
+        GetEntityCoords = GetEntityCoords,
+        GetEntityModel = GetEntityModel,
+        HasK9Access = HasK9Access,
+        IsConfiguredK9Model = IsConfiguredK9Model,
+        MySQL = mysql,
+        RegisterNetEvent = RegisterNetEvent,
+        AddEventHandler = AddEventHandler,
+        lib = libStub,
+        GetPlayers = GetPlayers,
+        GetCurrentResourceName = GetCurrentResourceName,
+    }
+
+    local env = Sandbox.newEnv(overrides)
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/entities.lua', env)
+    Sandbox.loadInto('../server/partnership.lua', env)
+
+    --- Drives `netEvents[eventName]` to completion inside a real coroutine,
+    --- auto-resuming through any yield with no interaction -- correct for
+    --- every handler/branch that never actually yields (which is most of
+    --- them), and for the accept branch too when a test does not need to
+    --- interleave anything else mid-flight.
+    --- @param eventName string
+    --- @param src number
+    --- @param args table
+    local function dispatchStepped(eventName, src, args)
+        env.source = src
+        local handler = capturedEvents[eventName]
+        assert(handler, 'no handler registered for ' .. eventName)
+        local co = coroutine.create(handler)
+        local first = true
+        for _ = 1, 50 do
+            local result
+            if first then
+                result = { coroutine.resume(co, table.unpack(args)) }
+                first = false
+            else
+                result = { coroutine.resume(co) }
+            end
+            if not result[1] then
+                error(('dispatch(%s) coroutine error: %s'):format(eventName, tostring(result[2])))
+            end
+            if coroutine.status(co) == 'dead' then return end
+        end
+        error(('dispatch(%s) did not complete after repeated resumes -- unexpected extra yield?'):format(eventName))
+    end
+
+    return {
+        env = env,
+        config = Config,
+        notifyLog = notifyLog,
+        clientEvents = clientEvents,
+        outboundEvents = outboundEvents,
+        printLog = printLog,
+        mysql = mysql,
+        events = capturedEvents,
+        eventHandlers = eventHandlers,
+        callbacks = capturedCallbacks,
+        registerPlayer = registerPlayer,
+        disconnectPlayer = disconnectPlayer,
+        setPed = setPed,
+        setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
+        addOnline = function(id) onlineIds[id] = true end,
+        setSource = function(src) env.source = src end,
+        advance = function(ms) state.now = state.now + ms end,
+        dispatchNetEvent = function(eventName, src, ...)
+            dispatchStepped(eventName, src, { ... })
+        end,
+        --- Manual, caller-driven coroutine over a single net event handler --
+        --- the only way to interleave a SECOND, fully independent dispatch
+        --- while the first is still parked mid-yield (the mutex tests below).
+        --- @param eventName string
+        --- @param src number
+        --- @param args table
+        --- @return table handle -- { resume = fun(), isDead = fun(): boolean }
+        startCoroutine = function(eventName, src, args)
+            env.source = src
+            local handler = capturedEvents[eventName]
+            assert(handler, 'no handler registered for ' .. eventName)
+            local co = coroutine.create(handler)
+            local started = false
+            return {
+                resume = function()
+                    local result
+                    if not started then
+                        started = true
+                        result = { coroutine.resume(co, table.unpack(args)) }
+                    else
+                        result = { coroutine.resume(co) }
+                    end
+                    if not result[1] then
+                        error('startCoroutine resume error: ' .. tostring(result[2]))
+                    end
+                end,
+                isDead = function() return coroutine.status(co) == 'dead' end,
+            }
+        end,
+        firePlayerDropped = function(src)
+            env.source = src
+            for _, h in ipairs(eventHandlers['playerDropped'] or {}) do h() end
+        end,
+        fireResourceStart = function(resourceName)
+            for _, h in ipairs(eventHandlers['onResourceStart'] or {}) do h(resourceName) end
+        end,
+        firePlayerLoaded = function(player)
+            for _, h in ipairs(eventHandlers['QBCore:Server:PlayerLoaded'] or {}) do h(player) end
+        end,
+    }
+end
+
+--- @param f table
+--- @param src number
+--- @return table? -- the LAST notifyLog entry for that source, or nil
+local function lastNotifyFor(f, src)
+    local found
+    for _, entry in ipairs(f.notifyLog) do
+        if entry.source == src then found = entry end
+    end
+    return found
+end
+
+--- @param f table
+--- @param src number
+--- @param message string
+--- @param kind string
+--- @return boolean
+local function notifiedExactly(f, src, message, kind)
+    local entry = lastNotifyFor(f, src)
+    return entry ~= nil and entry.message == message and entry.kind == kind
+end
+
+--- @param f table
+--- @param eventName string
+--- @return table?
+local function lastClientEvent(f, eventName)
+    for i = #f.clientEvents, 1, -1 do
+        if f.clientEvents[i].event == eventName then return f.clientEvents[i] end
+    end
+    return nil
+end
+
+--- @param f table
+--- @param eventName string
+--- @return integer
+local function countClientEvents(f, eventName)
+    local n = 0
+    for _, e in ipairs(f.clientEvents) do
+        if e.event == eventName then n = n + 1 end
+    end
+    return n
+end
+
+--- Wires one fully-eligible K9-officer pair at mutual proximity, ready for
+--- a request+accept round trip. Returns both srcs for convenience.
+--- @param f table
+--- @param officerSrc number
+--- @param officerCid string
+--- @param k9Src number
+--- @param k9Cid string
+--- @param opts table? { job: string (default 'police'), coords: table (default vec3(0,0,0) for both) }
+local function wirePair(f, officerSrc, officerCid, k9Src, k9Cid, opts)
+    opts = opts or {}
+    local job = opts.job or 'police'
+    f.registerPlayer(officerSrc, officerCid, { name = job })
+    f.registerPlayer(k9Src, k9Cid, nil)
+    f.setPed(officerSrc, officerSrc * 100, opts.coords or vec3(0, 0, 0), false)
+    f.setPed(k9Src, k9Src * 100, opts.coords or vec3(0, 0, 0), true)
+    f.setAccess(k9Src, true)
+end
+
+-- ========================================================================
+-- Sanity: the file loaded and registered what its own header documents.
+-- ========================================================================
+
+t.test('server/partnership.lua registers exactly its 3 documented server net events', function()
+    local f = newFixture()
+    local count = 0
+    for name in pairs(f.events) do count = count + 1 end
+    t.equals(count, 3)
+    for _, name in ipairs({
+        'qbx_k9unit:server:requestPartnerUp',
+        'qbx_k9unit:server:respondPartnerUp',
+        'qbx_k9unit:server:breakPartnership',
+    }) do
+        t.isTrue(f.events[name] ~= nil, name .. ' must be registered')
+    end
+end)
+
+t.test('server/partnership.lua registers exactly its 1 documented callback', function()
+    local f = newFixture()
+    t.isTrue(type(f.callbacks['qbx_k9unit:server:getPartnershipState']) == 'function')
+end)
+
+t.test('server/partnership.lua registers playerDropped, onResourceStart, and QBCore:Server:PlayerLoaded handlers', function()
+    local f = newFixture()
+    -- 2, not 1: PartnerRequestCooldown's own :RegisterPlayerDropped() PLUS
+    -- this file's own explicit AddEventHandler('playerDropped', ...) for
+    -- pending-request/cache cleanup -- same "multiple independent handlers
+    -- for the same event name" shape combat_spec.lua/kennel_spec.lua's own
+    -- equivalent sanity tests already document for their own files.
+    t.equals(#(f.eventHandlers['playerDropped'] or {}), 2)
+    t.equals(#(f.eventHandlers['onResourceStart'] or {}), 1)
+    t.equals(#(f.eventHandlers['QBCore:Server:PlayerLoaded'] or {}), 1)
+end)
+
+-- ========================================================================
+-- CheckPartnershipEligibility, exercised via requestPartnerUp.
+-- ========================================================================
+
+t.test('requestPartnerUp: feature disabled is rejected', function()
+    local f = newFixture({ handlerPartnership = false })
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.feature_disabled'), 'error'))
+end)
+
+t.test('requestPartnerUp: a non-number targetServerId is rejected before any eligibility check', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 'not-a-number')
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.invalid_target'), 'error'))
+end)
+
+t.test('requestPartnerUp: targeting yourself is invalid_target', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 1)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.invalid_target'), 'error'))
+end)
+
+t.test('requestPartnerUp: either party offline (GetPlayerPed == 0) is rejected', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'OFF1', { name = 'police' }) -- no setPed -> GetPlayerPed(1) == 0
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('common.target_no_longer_online'), 'error'))
+end)
+
+t.test('requestPartnerUp: an already-partnered INITIATOR is rejected by the cache pre-check', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    -- Seed OFF1 as already actively partnered with someone else entirely.
+    f.mysql.single.await = function() return { k9_citizenid = 'SOMEONE-ELSE', handler_citizenid = 'OFF1' } end
+    f.env.RefreshPartnershipCache('OFF1')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.reject_already_partnered'), 'error'))
+end)
+
+t.test('requestPartnerUp: an already-partnered TARGET is rejected by the cache pre-check', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.mysql.single.await = function() return { k9_citizenid = 'K91', handler_citizenid = 'SOMEONE-ELSE' } end
+    f.env.RefreshPartnershipCache('K91')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.reject_already_partnered'), 'error'))
+end)
+
+t.test('requestPartnerUp: beyond Config.Partnership.ProximityMeters is too_far', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.setPed(2, 200, vec3(100, 0, 0), true) -- 100m away
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.too_far'), 'error'))
+end)
+
+t.test('requestPartnerUp: neither party is a K9 model is no_k9_party', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'OFF1', { name = 'police' })
+    f.registerPlayer(2, 'OFF2', { name = 'police' })
+    f.setPed(1, 100, vec3(0, 0, 0), false)
+    f.setPed(2, 200, vec3(0, 0, 0), false)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('common.no_k9_party'), 'error'))
+end)
+
+t.test('requestPartnerUp: the K9-role party lacking HasK9Access is not_certified', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.setAccess(2, false)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('common.k9_not_certified'), 'error'))
+end)
+
+t.test('requestPartnerUp: the officer-role party not in any configured department is officer_not_in_department', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91', { job = 'taxi' })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('common.handler_not_in_department'), 'error'))
+end)
+
+t.test('requestPartnerUp: the officer-role party needs mere department membership, NOT their own HasK9Access (asymmetric eligibility, mirrors leash)', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.setAccess(1, false) -- the OFFICER has no cert of their own -- must not matter
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.partner_request_sent'), 'inform'))
+end)
+
+t.test('requestPartnerUp: when BOTH are K9-modeled, the REQUEST TARGET defaults to the K9 role (tie-break, mirrors leash)', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'K9-INITIATOR', { name = 'police' })
+    f.registerPlayer(2, 'K9-TARGET', { name = 'police' })
+    f.setPed(1, 100, vec3(0, 0, 0), true) -- both K9-modeled
+    f.setPed(2, 200, vec3(0, 0, 0), true)
+    f.setAccess(2, true) -- only the TARGET (the one that must resolve to k9Src) is certified
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.partner_request_sent'), 'inform'), 'if the INITIATOR had been picked as the K9 role instead, HasK9Access(1)==false would have rejected this as not_certified')
+end)
+
+-- ========================================================================
+-- requestPartnerUp: pending-request discipline (single slot per TARGET,
+-- rate limit, TTL).
+-- ========================================================================
+
+t.test('requestPartnerUp: success sends the prompt to the target and acks the initiator', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    local ev = lastClientEvent(f, 'qbx_k9unit:client:partnerUpRequest')
+    t.isNotNil(ev)
+    t.equals(ev.target, 2)
+    t.equals(ev.args[1], 1)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.partner_request_sent'), 'inform'))
+end)
+
+t.test('requestPartnerUp: a second, DIFFERENT initiator targeting the SAME target while a live pending request exists is rejected outright, not silently overwritten', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.registerPlayer(3, 'OFF3', { name = 'police' })
+    f.setPed(3, 300, vec3(0, 0, 0), false)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2) -- OFF1's request is pending against K91
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 3, 2) -- OFF3 tries to target the same K91
+    t.isTrue(notifiedExactly(f, 3, locale('partnership.pending_request_exists'), 'error'))
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnerUpRequest'), 1, 'K91 must never have seen a second prompt overwriting the first')
+end)
+
+t.test('requestPartnerUp: a rejected "pending already exists" attempt does NOT burn the rejected caller\'s own rate-limit cooldown', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.registerPlayer(3, 'OFF3', { name = 'police' })
+    f.registerPlayer(4, 'K94', nil)
+    f.setPed(3, 300, vec3(0, 0, 0), false)
+    f.setPed(4, 400, vec3(0, 0, 0), true)
+    f.setAccess(4, true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2) -- occupies K91's pending slot
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 3, 2) -- OFF3 rejected: pending_request_exists
+
+    -- Same instant -- if the rejection above had wrongly consumed OFF3's own
+    -- cooldown, this legitimate, UNRELATED request would be silently
+    -- swallowed instead of reaching the target.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 3, 4)
+    t.isTrue(notifiedExactly(f, 3, locale('partnership.partner_request_sent'), 'inform'))
+end)
+
+t.test('requestPartnerUp: a second immediate request from the same initiator (no other target contention) is silently rate-limited', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.registerPlayer(5, 'K95', nil)
+    f.setPed(5, 500, vec3(0, 0, 0), true)
+    f.setAccess(5, true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    local countAfter = #f.notifyLog
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 5) -- different target -- but SAME initiator, same instant
+    t.equals(#f.notifyLog, countAfter, 'the per-initiator rate limit must still apply even against a completely different target')
+end)
+
+t.test('requestPartnerUp: once the previous pending request\'s TTL has genuinely expired, a fresh request against the SAME target succeeds', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.registerPlayer(3, 'OFF3', { name = 'police' })
+    f.setPed(3, 300, vec3(0, 0, 0), false)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    f.advance(REQUEST_TTL_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 3, 2)
+    t.isTrue(notifiedExactly(f, 3, locale('partnership.partner_request_sent'), 'inform'), 'an expired pending entry must not block a fresh request against the same target')
+end)
+
+-- ========================================================================
+-- respondPartnerUp: verified-match + TTL discipline BEFORE any notify
+-- referencing the client-supplied fromServerId (SECURITY -- mirrors
+-- server/main.lua's respondLeashAttach precedent, restated here for
+-- server/partnership.lua's own copy of the same shape).
+-- ========================================================================
+
+t.test('respondPartnerUp: a non-number fromServerId is a silent no-op', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 2, 'not-a-number', true)
+    t.equals(#f.notifyLog, 0)
+end)
+
+t.test('respondPartnerUp: no pending request at all self-rejects, and does NOT notify the claimed fromServerId', function()
+    local f = newFixture()
+    f.registerPlayer(99, 'BYSTANDER', { name = 'police' })
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 2, 99, true)
+    t.isTrue(notifiedExactly(f, 2, locale('partnership.request_no_longer_valid_self'), 'error'))
+    t.isNil(lastNotifyFor(f, 99), 'an unverified/spoofed fromServerId must never receive a notification of its own')
+end)
+
+t.test('SECURITY: a MISMATCHED fromServerId (the real pending exists, but from a DIFFERENT initiator) self-rejects only -- the impostor id is never notified, closing the arbitrary-target-notify class of bug', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.registerPlayer(77, 'IMPOSTOR', { name = 'police' })
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2) -- real pending: from = 1
+
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 2, 77, true) -- K91 claims fromServerId = 77 (wrong)
+    t.isTrue(notifiedExactly(f, 2, locale('partnership.request_no_longer_valid_self'), 'error'))
+    t.isNil(lastNotifyFor(f, 77), 'the spoofed id must never be notified about a request it was never actually part of')
+
+    -- DISCLOSED, OBSERVED BEHAVIOR (mirrors server/main.lua's identical,
+    -- already-reviewed respondLeashAttach shape, not a new gap introduced
+    -- here): the mismatched claim above ALSO consumes the real pending slot
+    -- (`PendingPartnershipRequests[src] = nil` runs unconditionally on this
+    -- branch, regardless of whether the claim matched) -- so the REAL
+    -- initiator (1) is left with no way to have their original request
+    -- accepted anymore, even though nothing was established with the
+    -- impostor either. Self-limiting in the same sense the leash precedent
+    -- describes: the only party who loses anything here is K91 (the target
+    -- who mis-cited fromServerId), never a third party, and never a forged
+    -- established partnership.
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 2, 1, true) -- K91 tries again, this time with the TRUE original initiator
+    t.isTrue(notifiedExactly(f, 2, locale('partnership.request_no_longer_valid_self'), 'error'), 'the real pending was already consumed by the earlier mismatched attempt -- OFF1 must now send a fresh request')
+end)
+
+t.test('respondPartnerUp: an expired (TTL) pending request is treated as gone -- both sides are told, and it is NOT established', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    f.advance(REQUEST_TTL_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 2, 1, true)
+    t.isTrue(notifiedExactly(f, 2, locale('partnership.request_no_longer_valid_self'), 'error'))
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.request_no_longer_valid_initiator'), 'error'), 'unlike a spoofed id, a VERIFIED-but-expired match must still tell the real initiator')
+end)
+
+t.test('respondPartnerUp: decline notifies the initiator and establishes nothing', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 2, 1, false)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.request_declined'), 'inform'))
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnershipEstablished'), 0)
+end)
+
+-- ========================================================================
+-- MUST-MATTER: distance is RE-CHECKED at accept time, not just at request
+-- time -- classic TOCTOU the file's own header calls out explicitly.
+-- ========================================================================
+
+t.test('respondPartnerUp: eligibility re-runs LIVE at accept time -- a party who moved far away after the request was sent is rejected, not established', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2) -- both at (0,0,0) -- passes
+
+    f.setPed(2, 200, vec3(500, 0, 0), true) -- K91 wanders far away before responding
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 2, 1, true)
+
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.too_far'), 'error'))
+    t.isTrue(notifiedExactly(f, 2, locale('partnership.too_far'), 'error'))
+    t.isFalse(insertCalled, 'a TOCTOU distance violation must never reach the INSERT')
+end)
+
+t.test('respondPartnerUp: eligibility re-run at accept time also re-checks HasK9Access, department membership, and the K9-model check -- not just distance', function()
+    local f = newFixture()
+    wirePair(f, 1, 'OFF1', 2, 'K91')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
+
+    f.setAccess(2, false) -- K91's certification revoked between request and accept
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 2, 1, true)
+    t.isTrue(notifiedExactly(f, 1, locale('common.k9_not_certified'), 'error'))
+end)
+
+-- ========================================================================
+-- Successful establishment -- exact wiring.
+-- ========================================================================
+
+t.test('respondPartnerUp accept: full success -- INSERT fires with (k9, handler, established_by=initiator), cache reflects both roles immediately, both parties notified, outbound event fired', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-A', 20, 'K9-A')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 5 end
+    -- Same call-counter technique certifications_spec.lua uses: the pre-INSERT
+    -- scalar checks must see "nobody already partnered" (nil), and the
+    -- POST-insert RefreshPartnershipCache single.await must see the row this
+    -- INSERT just created.
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-A', handler_citizenid = 'OFF-A' } end
+
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    t.equals(insertParams[1], 'K9-A')
+    t.equals(insertParams[2], 'OFF-A')
+    t.equals(insertParams[3], 'OFF-A', 'established_by must be the INITIATOR (10, OFF-A) never the accepter')
+
+    local k9Partner, k9IsK9 = f.env.GetActivePartnerCitizenId('K9-A')
+    t.equals(k9Partner, 'OFF-A')
+    t.isTrue(k9IsK9)
+    local offPartner, offIsK9 = f.env.GetActivePartnerCitizenId('OFF-A')
+    t.equals(offPartner, 'K9-A')
+    t.isFalse(offIsK9)
+
+    local establishedToK9 = lastClientEvent(f, 'qbx_k9unit:client:partnershipEstablished')
+    t.isNotNil(establishedToK9)
+
+    local sawK9Side, sawOfficerSide = false, false
+    for _, e in ipairs(f.clientEvents) do
+        if e.event == 'qbx_k9unit:client:partnershipEstablished' then
+            if e.target == 20 then t.equals(e.args[1], 10); t.isTrue(e.args[2]); sawK9Side = true end
+            if e.target == 10 then t.equals(e.args[1], 20); t.isFalse(e.args[2]); sawOfficerSide = true end
+        end
+    end
+    t.isTrue(sawK9Side and sawOfficerSide)
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:partnershipEstablished' and ev[2] == 'K9-A' and ev[3] == 'OFF-A' then fired = true end
+    end
+    t.isTrue(fired)
+end)
+
+t.test('respondPartnerUp accept: when the INITIATOR is the K9-role party, established_by is still the initiator\'s own citizenid (not always the handler)', function()
+    local f = newFixture()
+    -- K9 (src 20) initiates to the officer (src 10) this time.
+    wirePair(f, 10, 'OFF-B', 20, 'K9-B')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 20, 10)
+
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 6 end
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-B', handler_citizenid = 'OFF-B' } end
+
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 10, 20, true)
+    t.equals(insertParams[3], 'K9-B')
+end)
+
+t.test('a duplicate-key error thrown by the INSERT (DB backstop) is treated as already_partnered, not a hard error, and both caches are refreshed', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-C', 20, 'K9-C')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.insert.await = function() error({ errno = 1062, message = 'Duplicate entry' }) end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+    t.isTrue(notifiedExactly(f, 10, locale('partnership.reject_already_partnered'), 'error'))
+    t.isTrue(notifiedExactly(f, 20, locale('partnership.reject_already_partnered'), 'error'))
+end)
+
+-- ========================================================================
+-- ITEM 1: pending-request leak on disconnect for BOTH parties -- server ids
+-- are recycled; a new occupant of a freed id must inherit NOTHING.
+-- ========================================================================
+
+t.test('playerDropped (INITIATOR side): disconnecting the initiator clears the pending slot it occupies against its target', function()
+    local f = newFixture()
+    wirePair(f, 60, 'OFF-INIT', 61, 'K9-TARGET')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 60, 61) -- pending[61] = { from = 60 }
+
+    f.disconnectPlayer(60)
+    f.firePlayerDropped(60)
+
+    -- The real target tries to accept, citing the (now-disconnected)
+    -- original initiator -- must be cleanly rejected, no establishment.
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 61, 60, true)
+    t.isTrue(notifiedExactly(f, 61, locale('partnership.request_no_longer_valid_self'), 'error'))
+end)
+
+t.test('playerDropped (INITIATOR side): a RECYCLED occupant of the freed initiator id inherits NOTHING -- a stray accept citing that id is safely rejected, not silently attributed to the new player', function()
+    local f = newFixture()
+    wirePair(f, 60, 'OFF-INIT', 61, 'K9-TARGET')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 60, 61)
+    f.disconnectPlayer(60)
+    f.firePlayerDropped(60)
+
+    -- id 60 is now recycled to a BRAND NEW, unrelated connection.
+    f.registerPlayer(60, 'BRAND-NEW-OCCUPANT', { name = 'sheriff' })
+    f.setPed(60, 6099, vec3(0, 0, 0), false)
+
+    -- Snapshot BEFORE the respond attempt: source 60 already legitimately
+    -- received its own 'partner_request_sent' ack from the ORIGINAL,
+    -- successful request above -- the claim under test is "no NEW
+    -- notification reaches the recycled occupant", not "source 60 has never
+    -- been notified of anything, ever".
+    local notifyCountBefore = #f.notifyLog
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 61, 60, true)
+
+    t.isTrue(notifiedExactly(f, 61, locale('partnership.request_no_longer_valid_self'), 'error'))
+    local newNotifyToRecycledOccupant = false
+    for i = notifyCountBefore + 1, #f.notifyLog do
+        if f.notifyLog[i].source == 60 then newNotifyToRecycledOccupant = true end
+    end
+    t.isFalse(newNotifyToRecycledOccupant, 'the new occupant of id 60 must never be drawn into a request they never sent')
+    t.isFalse(insertCalled, 'the recycled id must never let a stale request establish a partnership involving the wrong citizenid')
+end)
+
+t.test('playerDropped (INITIATOR side): disconnecting an initiator with MULTIPLE outstanding requests to DIFFERENT targets clears ALL of them, not just one', function()
+    local f = newFixture()
+    f.registerPlayer(70, 'OFF-MULTI', { name = 'police' })
+    f.setPed(70, 7000, vec3(0, 0, 0), false)
+    f.registerPlayer(71, 'K9-X', nil)
+    f.setPed(71, 7100, vec3(0, 0, 0), true)
+    f.setAccess(71, true)
+    f.registerPlayer(72, 'K9-Y', nil)
+    f.setPed(72, 7200, vec3(0, 0, 0), true)
+    f.setAccess(72, true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 70, 71)
+    f.advance(REQUEST_COOLDOWN_MS + 1) -- clear the per-initiator cooldown so the SECOND request below isn't rejected by it
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 70, 72)
+
+    f.disconnectPlayer(70)
+    f.firePlayerDropped(70)
+
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 71, 70, true)
+    t.isTrue(notifiedExactly(f, 71, locale('partnership.request_no_longer_valid_self'), 'error'))
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 72, 70, true)
+    t.isTrue(notifiedExactly(f, 72, locale('partnership.request_no_longer_valid_self'), 'error'))
+end)
+
+t.test('playerDropped (TARGET side): disconnecting the target clears the pending slot addressed to it directly', function()
+    local f = newFixture()
+    wirePair(f, 80, 'OFF-T', 81, 'K9-T')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 80, 81)
+
+    f.disconnectPlayer(81)
+    f.firePlayerDropped(81)
+
+    -- id 81 is recycled to a completely different-shaped occupant (an
+    -- OFFICER this time, not a K9 at all) -- if anything had leaked, this
+    -- occupant could never sensibly "accept" a K9-role request anyway; the
+    -- sharpest proof is that a stray accept citing the ORIGINAL initiator
+    -- is still safely rejected with nothing established.
+    f.registerPlayer(81, 'RECYCLED-OFFICER', { name = 'sheriff' })
+    f.setPed(81, 8199, vec3(0, 0, 0), false)
+
+    local insertCalled = false
+    f.mysql.insert.await = function() insertCalled = true; return 1 end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 81, 80, true)
+
+    t.isTrue(notifiedExactly(f, 81, locale('partnership.request_no_longer_valid_self'), 'error'))
+    t.isFalse(insertCalled, 'the recycled target id must never inherit the original K9-role request')
+end)
+
+t.test('playerDropped (TARGET side): the original initiator can send a genuinely FRESH request to the recycled target id afterward, independent of any stale state', function()
+    local f = newFixture()
+    wirePair(f, 80, 'OFF-T', 81, 'K9-T')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 80, 81)
+    f.disconnectPlayer(81)
+    f.firePlayerDropped(81)
+
+    f.registerPlayer(81, 'K9-NEW', nil)
+    f.setPed(81, 8198, vec3(0, 0, 0), true)
+    f.setAccess(81, true)
+
+    f.advance(REQUEST_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 80, 81)
+    t.isTrue(notifiedExactly(f, 80, locale('partnership.partner_request_sent'), 'inform'), 'a fresh request to the recycled id must work exactly like any other first-time request')
+end)
+
+t.test('playerDropped: only the disconnecting citizenid\'s in-memory CACHE entry is dropped -- an established partnership row is NOT torn down, and the still-online partner keeps full access to it (documented divergence from leash)', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-D', 20, 'K9-D')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-D', handler_citizenid = 'OFF-D' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+    t.isTrue(f.env.GetActivePartnerCitizenId('K9-D') ~= nil, 'sanity: really partnered first')
+
+    -- Fire playerDropped WITHOUT first removing the K9 from the exportsStub
+    -- lookup maps: this handler's own citizenid-cache-drop branch calls
+    -- exports.qbx_core:GetPlayer(src) itself, expecting it to still resolve
+    -- at the moment the event fires -- exactly the same assumption every
+    -- other playerDropped-citizenid-resolving handler in this resource
+    -- (server/certifications.lua's own included) already relies on.
+    -- disconnectPlayer() below (AFTER firing the event) is what represents
+    -- "now genuinely gone", for the later RefreshPartnershipCache call.
+    f.firePlayerDropped(20)
+    f.disconnectPlayer(20)
+
+    t.isNil((f.env.GetActivePartnerCitizenId('K9-D')), 'the DISCONNECTING citizenid\'s own in-memory cache entry is dropped immediately')
+
+    -- The still-online handler's OWN cache entry is untouched by the K9's
+    -- disconnect -- proving the DB row itself was never torn down (a fresh
+    -- RefreshPartnershipCache for the K9 -- the cheap rebuild this file's
+    -- header promises -- still finds the real, still-active row).
+    local officerPartner = f.env.GetActivePartnerCitizenId('OFF-D')
+    t.equals(officerPartner, 'K9-D')
+    local rebuiltPartner = f.env.RefreshPartnershipCache('K9-D')
+    t.equals(rebuiltPartner, 'OFF-D', 'a fresh DB read for the disconnected K9 must still find the real, still-active partnership row')
+end)
+
+-- ========================================================================
+-- ITEM 2: double-accept fails closed.
+-- ========================================================================
+
+t.test('double-accept (sequential, after full completion): a second accept for the same (now-consumed) pending is rejected cleanly, no second INSERT, no duplicate establishment notice', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-E', 20, 'K9-E')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    local insertCount = 0
+    f.mysql.insert.await = function() insertCount = insertCount + 1; return insertCount end
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-E', handler_citizenid = 'OFF-E' } end
+
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true) -- succeeds
+    t.equals(insertCount, 1)
+
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true) -- double-fire
+    t.equals(insertCount, 1, 'a second accept after the pending was already consumed must never reach a second INSERT')
+    t.isTrue(notifiedExactly(f, 20, locale('partnership.request_no_longer_valid_self'), 'error'))
+end)
+
+t.test('double-accept (RACING, interleaved mid-flight through a yielding MySQL stub): the second accept sees the pending already consumed and never reaches a query', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-F', 20, 'K9-F')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+
+    local scalarCallCount, insertCount = 0, 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        coroutine.yield()
+        return nil
+    end
+    f.mysql.insert.await = function() insertCount = insertCount + 1; return insertCount end
+
+    -- PendingPartnershipRequests[20] is cleared SYNCHRONOUSLY, before any
+    -- yield, on the very first line of the verified-match branch -- so even
+    -- a second call arriving while the first is still parked mid-flight
+    -- must already see it gone.
+    local co1 = f.startCoroutine('qbx_k9unit:server:respondPartnerUp', 20, { 10, true })
+    co1.resume() -- runs synchronously up through pending-consumption + eligibility + TryAcquire, then yields inside the first MySQL.scalar.await
+    t.isFalse(co1.isDead())
+
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true) -- the racing double-fire -- must complete in one shot, no yield of its own
+    t.isTrue(notifiedExactly(f, 20, locale('partnership.request_no_longer_valid_self'), 'error'))
+    t.equals(scalarCallCount, 1, 'the racing double-fire must never have reached MySQL at all -- the one call so far is attributable to co1 alone')
+
+    while not co1.isDead() do co1.resume() end
+    t.equals(insertCount, 1, 'exactly one INSERT despite the interleaved double-accept')
+end)
+
+-- ========================================================================
+-- ITEM 4: PartnershipEstablishMutex around the already-partnered check +
+-- the INSERT.
+-- ========================================================================
+
+t.test('MUTEX, LOAD-BEARING: two overlapping accepts for COMPLETELY UNRELATED pairs, interleaved through a yielding MySQL stub, serialize through the single global lock -- the second never reaches a query while the first holds it', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-A', 20, 'K9-A')
+    wirePair(f, 30, 'OFF-B', 40, 'K9-B')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 30, 40)
+
+    local scalarCallCount, insertCount = 0, 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        coroutine.yield()
+        return nil -- nobody already partnered, in every call, for this test
+    end
+    f.mysql.insert.await = function() insertCount = insertCount + 1; return insertCount end
+    f.mysql.single.await = function(_sql, params)
+        -- Used by the post-insert RefreshPartnershipCache re-query --
+        -- distinguish pair A vs pair B by the citizenid parameter.
+        local cid = params[1]
+        if cid == 'K9-A' or cid == 'OFF-A' then return { k9_citizenid = 'K9-A', handler_citizenid = 'OFF-A' } end
+        if cid == 'K9-B' or cid == 'OFF-B' then return { k9_citizenid = 'K9-B', handler_citizenid = 'OFF-B' } end
+        return nil
+    end
+
+    -- A: K9-A (src 20) accepts, gets as far as its own FIRST yielding
+    -- MySQL.scalar.await call -- at this point A already holds
+    -- PartnershipEstablishMutex synchronously (TryAcquire happened before
+    -- this yield), and is suspended.
+    local coA = f.startCoroutine('qbx_k9unit:server:respondPartnerUp', 20, { 10, true })
+    coA.resume()
+    t.isFalse(coA.isDead())
+    t.equals(scalarCallCount, 1)
+
+    -- B: an entirely UNRELATED pair's K9-B (src 40) accepts. Its own
+    -- eligibility check is independently fine (different citizenids
+    -- entirely), so if the mutex were per-citizenid rather than a single
+    -- global lock, this would proceed unimpeded. It is a SINGLE global
+    -- lock (by design -- see PartnershipEstablishMutex's own doc comment),
+    -- so B must be rejected at TryAcquire and complete in ONE resume,
+    -- never touching MySQL at all.
+    local coB = f.startCoroutine('qbx_k9unit:server:respondPartnerUp', 40, { 30, true })
+    coB.resume()
+    t.isTrue(coB.isDead(), 'B must run to completion in a single resume -- proving it never reached (and therefore never yielded at) a MySQL call')
+    t.equals(scalarCallCount, 1, 'B must never have called MySQL.scalar.await at all')
+    t.isTrue(notifiedExactly(f, 30, locale('partnership.setup_busy'), 'error'))
+    t.isTrue(notifiedExactly(f, 40, locale('partnership.setup_busy'), 'error'))
+
+    -- Drain A to completion.
+    while not coA.isDead() do coA.resume() end
+    t.equals(insertCount, 1, 'exactly one INSERT -- pair A\'s own')
+    t.isTrue(countClientEvents(f, 'qbx_k9unit:client:partnershipEstablished') == 2, 'pair A must have genuinely established (both parties notified) despite pair B contending for the same global lock')
+    local aPartner = f.env.GetActivePartnerCitizenId('K9-A')
+    t.equals(aPartner, 'OFF-A')
+end)
+
+t.test('MUTEX, LOAD-BEARING: the lock RELEASES afterward -- pair B (rejected above with setup_busy) is NOT permanently blocked; a fresh request+accept for it succeeds once the lock is free', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-A', 20, 'K9-A')
+    wirePair(f, 30, 'OFF-B', 40, 'K9-B')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 30, 40)
+
+    f.mysql.scalar.await = function()
+        coroutine.yield()
+        return nil
+    end
+    local insertCount = 0
+    f.mysql.insert.await = function() insertCount = insertCount + 1; return insertCount end
+    f.mysql.single.await = function(_sql, params)
+        local cid = params[1]
+        if cid == 'K9-A' or cid == 'OFF-A' then return { k9_citizenid = 'K9-A', handler_citizenid = 'OFF-A' } end
+        if cid == 'K9-B' or cid == 'OFF-B' then return { k9_citizenid = 'K9-B', handler_citizenid = 'OFF-B' } end
+        return nil
+    end
+
+    local coA = f.startCoroutine('qbx_k9unit:server:respondPartnerUp', 20, { 10, true })
+    coA.resume() -- A holds the lock, suspended
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 40, 30, true) -- B: rejected, setup_busy (mutex held by A)
+    t.isTrue(notifiedExactly(f, 40, locale('partnership.setup_busy'), 'error'))
+    while not coA.isDead() do coA.resume() end -- A completes, releases the lock
+    t.equals(insertCount, 1)
+
+    -- B's OWN pending slot was already consumed by the rejected accept
+    -- above (same "consumed either way" discipline as every other
+    -- respondPartnerUp branch) -- a fresh round trip for the SAME pair must
+    -- now succeed cleanly, proving the lock was not left permanently held.
+    f.advance(REQUEST_COOLDOWN_MS + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 30, 40)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 40, 30, true)
+    t.equals(insertCount, 2, 'pair B must be able to establish normally once the lock is free -- it must never be permanently denied by the earlier contention')
+    t.equals(f.env.GetActivePartnerCitizenId('K9-B'), 'OFF-B')
+end)
+
+t.test('MUTEX, LOAD-BEARING: the lock RELEASES even when the critical section throws an unexpected error, so a thrown error can never permanently block ALL future establishments', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-G', 20, 'K9-G')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+
+    local shouldThrow = true
+    f.mysql.scalar.await = function()
+        if shouldThrow then error('simulated connection drop mid-flight') end
+        return nil
+    end
+    local insertCount = 0
+    f.mysql.insert.await = function() insertCount = insertCount + 1; return insertCount end
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-G', handler_citizenid = 'OFF-G' } end
+
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true) -- errors inside the pcall-wrapped critical section
+    t.isTrue(notifiedExactly(f, 10, locale('partnership.establish_error'), 'error'))
+    t.isTrue(notifiedExactly(f, 20, locale('partnership.establish_error'), 'error'))
+    t.equals(insertCount, 0)
+
+    -- If the mutex had leaked (never released on the thrown-error path), a
+    -- SECOND, entirely UNRELATED pair's establishment attempt would be
+    -- rejected forever with setup_busy, never reaching MySQL at all --
+    -- exactly the permanent-denial-of-the-whole-feature regression this
+    -- test guards against.
+    shouldThrow = false
+    wirePair(f, 30, 'OFF-H', 40, 'K9-H')
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-H', handler_citizenid = 'OFF-H' } end
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 30, 40)
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 40, 30, true)
+    t.equals(insertCount, 1, 'a completely unrelated pair must be able to establish normally after the earlier thrown error -- proving the lock was genuinely released, not left held')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnershipEstablished'), 2, 'the second pair must have genuinely established -- both parties get the partnershipEstablished client event')
+end)
+
+-- ========================================================================
+-- ITEM 5: GetActivePartnerCitizenId / IsActivePartnerOf -- public
+-- resource-global accessors; pin their exact contracts directly.
+-- ========================================================================
+
+t.test('GetActivePartnerCitizenId: an unknown/never-refreshed citizenid returns nil, nil', function()
+    local f = newFixture()
+    local partner, isK9 = f.env.GetActivePartnerCitizenId('NEVER-SEEN')
+    t.isNil(partner)
+    t.isNil(isK9)
+end)
+
+t.test('GetActivePartnerCitizenId: the K9-role party of an active partnership resolves the handler citizenid with isK9 == true', function()
+    local f = newFixture()
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-CONTRACT', handler_citizenid = 'OFF-CONTRACT' } end
+    f.env.RefreshPartnershipCache('K9-CONTRACT')
+    local partner, isK9 = f.env.GetActivePartnerCitizenId('K9-CONTRACT')
+    t.equals(partner, 'OFF-CONTRACT')
+    t.isTrue(isK9)
+end)
+
+t.test('GetActivePartnerCitizenId: the handler-role party of the SAME active partnership resolves the K9 citizenid with isK9 == false', function()
+    local f = newFixture()
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-CONTRACT', handler_citizenid = 'OFF-CONTRACT' } end
+    f.env.RefreshPartnershipCache('OFF-CONTRACT')
+    local partner, isK9 = f.env.GetActivePartnerCitizenId('OFF-CONTRACT')
+    t.equals(partner, 'K9-CONTRACT')
+    t.isFalse(isK9)
+end)
+
+t.test('GetActivePartnerCitizenId: fail-closed after a query error never leaves a stale/unknown cache entry readable as active', function()
+    local f = newFixture()
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-FAIL', handler_citizenid = 'OFF-FAIL' } end
+    f.env.RefreshPartnershipCache('K9-FAIL')
+    t.isTrue(f.env.GetActivePartnerCitizenId('K9-FAIL') ~= nil, 'sanity: really partnered first')
+
+    f.mysql.single.await = function() error('connection lost') end
+    local returnedPartner = f.env.RefreshPartnershipCache('K9-FAIL')
+    t.isNil(returnedPartner, 'the return value itself must report the fail-closed result')
+    t.isNil((f.env.GetActivePartnerCitizenId('K9-FAIL')))
+end)
+
+t.test('IsActivePartnerOf: true only for the GENUINE current partner, false for an unrelated citizenid, false when not partnered at all', function()
+    local f = newFixture()
+    t.isFalse(f.env.IsActivePartnerOf('NEVER-SEEN', 'ANYONE'))
+
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-IAO', handler_citizenid = 'OFF-IAO' } end
+    f.env.RefreshPartnershipCache('K9-IAO')
+    t.isTrue(f.env.IsActivePartnerOf('K9-IAO', 'OFF-IAO'))
+    t.isFalse(f.env.IsActivePartnerOf('K9-IAO', 'SOMEONE-ELSE'))
+end)
+
+t.test('RefreshPartnershipCache: type-guards its own input -- nil/empty-string citizenid is a defensive no-op returning nil, nil, never a crash', function()
+    local f = newFixture()
+    t.isNil((f.env.RefreshPartnershipCache(nil)))
+    t.isNil((f.env.RefreshPartnershipCache('')))
+end)
+
+t.test('RefreshPartnershipCache: no active row at all (nil) clears any prior cache entry and returns nil, nil', function()
+    local f = newFixture()
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-CLR', handler_citizenid = 'OFF-CLR' } end
+    f.env.RefreshPartnershipCache('K9-CLR')
+    t.isTrue(f.env.GetActivePartnerCitizenId('K9-CLR') ~= nil)
+
+    f.mysql.single.await = function() return nil end
+    local partner = f.env.RefreshPartnershipCache('K9-CLR')
+    t.isNil(partner)
+    t.isNil((f.env.GetActivePartnerCitizenId('K9-CLR')))
+end)
+
+-- ========================================================================
+-- breakPartnership -- zero-consent teardown, either party, at any time.
+-- ========================================================================
+
+t.test('breakPartnership: an unpartnered caller is a distinguishable no-op, not an error', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'LONE-CID', { name = 'police' })
+    f.dispatchNetEvent('qbx_k9unit:server:breakPartnership', 1)
+    t.isTrue(notifiedExactly(f, 1, locale('partnership.not_partnered_with_anyone'), 'inform'))
+end)
+
+t.test('breakPartnership: a disconnected caller (unresolvable citizenid) is a silent no-op', function()
+    local f = newFixture()
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:breakPartnership', 9999)
+    t.isTrue(ok)
+    t.equals(#f.notifyLog, 0)
+end)
+
+t.test('breakPartnership: full success -- both parties online -- UPDATE fires, both caches clear, BOTH clients told, outbound event fired with reason "broken"', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-BRK', 20, 'K9-BRK')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-BRK', handler_citizenid = 'OFF-BRK' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+    t.isTrue(f.env.GetActivePartnerCitizenId('K9-BRK') ~= nil, 'sanity: really partnered first')
+
+    -- The stub must reflect the UPDATE's own effect: DoBreakPartnership's
+    -- own pre-UPDATE SELECT must still see the active row, but the TWO
+    -- RefreshPartnershipCache calls that run AFTER the UPDATE (one per
+    -- citizenid) must now see it as gone -- a static "always return the
+    -- active row" stub would wrongly leave both caches still reporting
+    -- active afterward, a fixture bug, not a real production one.
+    local rowActive = true
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; rowActive = false; return 1 end
+    f.mysql.single.await = function(_sql, _params)
+        if not rowActive then return nil end
+        return { id = 1, k9_citizenid = 'K9-BRK', handler_citizenid = 'OFF-BRK' }
+    end
+
+    f.dispatchNetEvent('qbx_k9unit:server:breakPartnership', 10) -- the OFFICER initiates the break, zero consent needed
+
+    t.equals(updateParams[1], 'OFF-BRK', 'ended_by must be the BREAKING party\'s own citizenid for a self-initiated break')
+    t.equals(updateParams[2], 1)
+    t.isNil((f.env.GetActivePartnerCitizenId('OFF-BRK')))
+    t.isNil((f.env.GetActivePartnerCitizenId('K9-BRK')))
+
+    local sawK9, sawOfficer = false, false
+    for _, e in ipairs(f.clientEvents) do
+        if e.event == 'qbx_k9unit:client:partnershipEnded' then
+            if e.target == 20 then sawK9 = true; t.equals(e.args[1], 'broken') end
+            if e.target == 10 then sawOfficer = true; t.equals(e.args[1], 'broken') end
+        end
+    end
+    t.isTrue(sawK9 and sawOfficer)
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:partnershipEnded' and ev[2] == 'K9-BRK' and ev[3] == 'OFF-BRK' and ev[4] == 'broken' then fired = true end
+    end
+    t.isTrue(fired)
+end)
+
+t.test('breakPartnership: only the currently-online party of the two is sent partnershipEnded -- the offline one is skipped, not erroring', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-OFFLN', 20, 'K9-OFFLN')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-OFFLN', handler_citizenid = 'OFF-OFFLN' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    f.disconnectPlayer(20) -- the K9 goes offline; the row itself remains active
+    f.mysql.single.await = function() return { id = 1, k9_citizenid = 'K9-OFFLN', handler_citizenid = 'OFF-OFFLN' } end
+    f.mysql.update.await = function() return 1 end
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:breakPartnership', 10)
+    t.isTrue(ok)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnershipEnded'), 1, 'only the still-online officer can be told directly')
+    local ev = lastClientEvent(f, 'qbx_k9unit:client:partnershipEnded')
+    t.equals(ev.target, 10)
+end)
+
+t.test('breakPartnership: a thrown DB error is caught and reported, not a hard crash', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-ERR', 20, 'K9-ERR')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-ERR', handler_citizenid = 'OFF-ERR' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    f.mysql.single.await = function() error('connection lost') end
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:breakPartnership', 10)
+    t.isTrue(ok)
+    t.isTrue(notifiedExactly(f, 10, locale('partnership.break_error'), 'error'))
+end)
+
+-- ========================================================================
+-- ForceBreakPartnershipForCitizenId -- citizenid-keyed, OFFLINE-CAPABLE by
+-- design (server/certifications.lua's own call sites depend on this).
+-- ========================================================================
+
+t.test('ForceBreakPartnershipForCitizenId: works for a GENUINELY OFFLINE citizenid -- the DB row is torn down even with no live client to notify', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-FORCE', 20, 'K9-FORCE')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-FORCE', handler_citizenid = 'OFF-FORCE' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    f.disconnectPlayer(10)
+    f.disconnectPlayer(20) -- BOTH now genuinely offline
+
+    local updateParams
+    f.mysql.update.await = function(_sql, params) updateParams = params; return 1 end
+    f.mysql.single.await = function() return { id = 1, k9_citizenid = 'K9-FORCE', handler_citizenid = 'OFF-FORCE' } end
+
+    local ended = f.env.ForceBreakPartnershipForCitizenId('K9-FORCE', 'certification_revoked')
+    t.isTrue(ended)
+    t.equals(updateParams[1], 'system:certification_revoked', 'ended_by must carry the system: sentinel, never the raw reason alone')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:partnershipEnded'), 0, 'nobody is online to tell -- must not error trying')
+
+    local fired = false
+    for _, ev in ipairs(f.outboundEvents) do
+        if ev[1] == 'qbx_k9unit:events:partnershipEnded' and ev[4] == 'certification_revoked' then fired = true end
+    end
+    t.isTrue(fired, 'the broadcastReason passed to the outbound event must be the UNPREFIXED reason, distinct from the DB\'s system:-prefixed ended_by')
+end)
+
+t.test('ForceBreakPartnershipForCitizenId: a citizenid with no active partnership at all is a clean no-op returning false', function()
+    local f = newFixture()
+    t.isFalse(f.env.ForceBreakPartnershipForCitizenId('NEVER-PARTNERED', 'department_changed'))
+end)
+
+t.test('ForceBreakPartnershipForCitizenId: type-guards its own input -- non-string/empty citizenid returns false without touching the DB', function()
+    local f = newFixture()
+    local dbTouched = false
+    f.mysql.single.await = function() dbTouched = true end
+    t.isFalse(f.env.ForceBreakPartnershipForCitizenId(nil, 'x'))
+    t.isFalse(f.env.ForceBreakPartnershipForCitizenId('', 'x'))
+    t.isFalse(dbTouched)
+end)
+
+t.test('ForceBreakPartnershipForCitizenId: a thrown DB error is caught and returns false rather than propagating', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-FERR', 20, 'K9-FERR')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-FERR', handler_citizenid = 'OFF-FERR' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    f.mysql.single.await = function() error('boom') end
+    local ok, ended = pcall(f.env.ForceBreakPartnershipForCitizenId, 'K9-FERR', 'x')
+    t.isTrue(ok)
+    t.isFalse(ended)
+end)
+
+-- ========================================================================
+-- getPartnershipState callback -- server-authoritative, always a fresh read.
+-- ========================================================================
+
+t.test('getPartnershipState callback: unpartnered caller reports false, nil, nil', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'LONE-CB', { name = 'police' })
+    local isPartnered, partnerServerId, isK9 = f.callbacks['qbx_k9unit:server:getPartnershipState'](1)
+    t.isFalse(isPartnered)
+    t.isNil(partnerServerId)
+    t.isNil(isK9)
+end)
+
+t.test('getPartnershipState callback: a genuinely partnered, online caller resolves the LIVE partner server id via a fresh DB read, not a stale local flag', function()
+    local f = newFixture()
+    wirePair(f, 10, 'OFF-CB', 20, 'K9-CB')
+    f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 10, 20)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-CB', handler_citizenid = 'OFF-CB' } end
+    f.dispatchNetEvent('qbx_k9unit:server:respondPartnerUp', 20, 10, true)
+
+    local isPartnered, partnerServerId, isK9 = f.callbacks['qbx_k9unit:server:getPartnershipState'](20)
+    t.isTrue(isPartnered)
+    t.equals(partnerServerId, 10)
+    t.isTrue(isK9)
+end)
+
+-- ========================================================================
+-- onResourceStart backfill + QBCore:Server:PlayerLoaded -- structural gap
+-- fill for a resource restart while players are already online.
+-- ========================================================================
+
+t.test('onResourceStart: with HandlerPartnership disabled, the backfill loop never touches MySQL at all (performance fix)', function()
+    local f = newFixture({ handlerPartnership = false })
+    f.registerPlayer(1, 'CID1', { name = 'police' })
+    f.addOnline(1)
+    local touched = false
+    f.mysql.single.await = function() touched = true end
+    f.fireResourceStart('qbx_k9unit')
+    t.isFalse(touched)
+end)
+
+t.test('onResourceStart: with HandlerPartnership enabled, already-connected players\' partnership cache is backfilled from the DB', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CID-BACKFILL', { name = 'police' })
+    f.addOnline(1)
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-BACKFILL', handler_citizenid = 'CID-BACKFILL' } end
+    f.fireResourceStart('qbx_k9unit')
+    t.equals(f.env.GetActivePartnerCitizenId('CID-BACKFILL'), 'K9-BACKFILL')
+end)
+
+t.test('onResourceStart: ignores a different resource restarting', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'CID-OTHER', { name = 'police' })
+    f.addOnline(1)
+    local touched = false
+    f.mysql.single.await = function() touched = true end
+    f.fireResourceStart('some_other_resource')
+    t.isFalse(touched)
+end)
+
+t.test('QBCore:Server:PlayerLoaded: refreshes that player\'s own partnership cache immediately on load', function()
+    local f = newFixture()
+    f.mysql.single.await = function() return { k9_citizenid = 'K9-PL', handler_citizenid = 'OFF-PL' } end
+    f.firePlayerLoaded({ PlayerData = { citizenid = 'OFF-PL' } })
+    t.equals(f.env.GetActivePartnerCitizenId('OFF-PL'), 'K9-PL')
+end)
+
+t.test('QBCore:Server:PlayerLoaded: tolerates a malformed Player object without erroring', function()
+    local f = newFixture()
+    local ok = pcall(f.firePlayerLoaded, nil)
+    t.isTrue(ok)
+    local ok2 = pcall(f.firePlayerLoaded, { PlayerData = nil })
+    t.isTrue(ok2)
+end)
+
+os.exit(t.summary())
