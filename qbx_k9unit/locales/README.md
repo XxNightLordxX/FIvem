@@ -48,6 +48,43 @@ per-key breakdown, the cross-file `movement.*` key reuse in
 `client/hud.lua` was also reviewed this pass and confirmed to need **no**
 migration — see its own section below and the updated "What's left" count.
 
+**Update (fifth migration pass):** `client/radial.lua`, `client/search.lua`,
+`client/tracking.lua`, `client/wellbeing.lua`, `client/progression.lua`,
+`client/medkit.lua`, and `client/bonetool.lua` are now also migrated (new
+`radial.*`/`search.*`/`tracking.*`/`wellbeing.*`/`progression.*`/`medkit.*`/
+`bonetool.*` groups below, plus one new `common.*` key — see "The
+`common.too_far_from_k9` promotion" in each of `wellbeing.*`/`medkit.*`'s
+own sections below). This pass closes out both of the fourth pass's own
+flagged reuse opportunities: `client/radial.lua`'s `'Partner Up'` label now
+calls `locale('partnership.partner_up_target_label')` instead of minting a
+duplicate, and `client/tracking.lua`'s `DenyK9UIAccess`-shaped rejection now
+calls `common.no_k9_access` instead of hardcoding a fourth copy of "You
+cannot use K9 features right now." — see each file's own section below for
+the exact call sites. `client/radial.lua`'s own opener item label is the
+first use of ox_lib's `${other.key}` cross-reference syntax anywhere in this
+resource (`radial.menu_open_label` = `"${common.notify_title}"`) rather than
+a fourth "K9 Unit" string under a new name — see the "Format" section below
+for what that syntax does. `client/bonetool.lua`'s strings are kept under
+their own `bonetool.*` group deliberately, NOT folded into `common.*` or any
+other feature group: per this file's own task instructions, that file is a
+dev-only diagnostic tool (a bone-index sweep), and its strings guide a human
+through using the tool rather than describing anything a normal player ever
+sees — a translator working through this resource's locale keys should be
+able to tell at a glance that `bonetool.*` is tooling, not in-fiction UI,
+without having to open the Lua file to find out. **A THIRD concatenation
+instance was found and fixed**, per this pass's own explicit instruction to
+expect one: `client/bonetool.lua`'s preview-label draw code built
+`labelText .. ' (TEST PROP ATTACHED)'` — the exact same "build a
+player/dev-facing string by appending a literal suffix to a dynamic value
+with `..`" pattern the two earlier passes' own `'Officer #' .. serverId`
+findings already exist to close. Fixed the same way this migration fixed
+those: not a template + concatenation, but two independent full-sentence
+keys (`bonetool.bone_index_label` / `bonetool.bone_index_label_test_attached`),
+matching the established "on/off-shaped state words don't collapse cleanly
+into one template" reasoning already used for `movement.camera_first_person`/
+`camera_third_person` and `partnership.now_partnered_as_handler`/
+`now_partnered_as_k9`.
+
 ## Format (verified against ox_lib source, not assumed)
 
 Checked directly against `overextended/ox_lib`
@@ -323,6 +360,175 @@ open K9 gear: %s" message — doing so would erase the distinction between
 trying to understand what to do next, and would make each cause
 individually untranslatable as a complete sentence.
 
+### `radial.*` / `search.*` / `tracking.*` / `wellbeing.*` / `progression.*` / `medkit.*` / `bonetool.*` (fifth migration pass)
+
+`radial.*` (`client/radial.lua`, 23 leaf keys): every `lib.addRadialItem`/
+`lib.registerRadial` item `label` in this file, plus the two
+"no nearby candidate" `lib.notify` descriptions
+(`no_leash_candidate`/`no_partner_candidate`). Full leaf list: `sit_label`,
+`bark_label` (shared by both the plain-Bark item and, when
+`AdvancedBarkRadial` is on, the Bark submenu's own opener item — same
+literal "Bark" either way, one key), `leash_toggle_label`,
+`no_leash_candidate`, `vehicle_toggle_label`, `track_scent_label`,
+`track_blood_label`, `track_gunpowder_label`, `bite_hold_toggle_label`,
+`takedown_label`, `drag_toggle_label`, `break_partnership_label`,
+`no_partner_candidate`, `defense_menu_label`, `defense_bite_label`,
+`defense_takedown_label`, `fetch_menu_label`, `fetch_throw_label`,
+`fetch_recall_label`, `toggle_vest_label`, `deploy_kennel_label`,
+`recall_label` (the "Recall K9" item — do not confuse with
+`fetch_recall_label`, a different item/feature), and `menu_open_label`.
+**`k9_partner_up`'s label does NOT get a new key** — it calls
+`locale('partnership.partner_up_target_label')` directly, closing the
+fourth pass's own flagged reuse opportunity (see that pass's "Found, NOT
+touched" note, now resolved). **`menu_open_label`'s value is
+`"${common.notify_title}"`**, not a fourth independent "K9 Unit" string —
+this is the first use anywhere in this resource of ox_lib's own
+`${other.key}` cross-reference syntax (see "Format" above), chosen because
+this opener's label is byte-for-byte the same "K9 Unit" text every
+`lib.notify` title in this resource already uses, and every other
+`lib.notify` call this file makes was pointed at the existing
+`common.notify_title` key rather than a per-file title copy, matching every
+other file this migration has touched.
+
+`search.*` (`client/search.lua`, 9 leaf keys): `nothing_to_search`,
+`progress_vehicle_label`/`progress_person_label` (the `lib.progressBar`
+label, kept as two full sentences rather than one `"Searching %s..."`
+template interpolated with a bare noun — same "a state/category word
+doesn't translate uniformly by simple substitution" reasoning already
+established for `vision.thermal_on`/`thermal_off` and every other on/off- or
+category-shaped pair in this file), `failed` (used at BOTH of this file's
+two "the search could not be completed" call sites — the `reason ==
+'search_failed'` branch and the outer `pcall` failure branch — confirmed
+byte-identical text before pointing both at one key rather than two),
+`generic_denied`, `contraband_found`, `nothing_found`, and
+`vehicle_target_label`/`person_target_label` (the "Search Vehicle"/"Search
+Person" `ox_target` option labels). None of these nine were found
+duplicated elsewhere in this resource (confirmed by grep before minting).
+
+`tracking.*` (`client/tracking.lua`, 4 leaf keys): `already_tracking`
+("Already tracking something — stop first.") and `starting_in_progress`
+("Already starting a track — please wait.") are the two similar-looking but
+genuinely distinct rejection messages this file's task instructions flagged
+by name — kept separate per this migration's standing "distinct failure
+causes stay distinct messages" rule, same reasoning as
+`inventory.*`'s six `reason_*` keys. Also `nothing_to_track` and
+`trail_lost_water`. **`StartTrack()`'s `CanShowK9UI()` rejection does NOT
+get a new key** — it now calls `common.no_k9_access` directly, closing the
+exact reuse this file's own hardcoded copy was flagged for back in the
+third pass's own "What's left" notes (confirmed by grep: this was the
+fourth verbatim copy of "You cannot use K9 features right now." found
+across this resource's migration so far, now pointed at the shared key
+instead of becoming a fifth).
+
+`wellbeing.*` (`client/wellbeing.lua`, 18 leaf keys): the four
+distraction/hesitation state-transition notifies (`distracted`, `refocused`,
+`hesitating`, `settled`), the "Pet K9"/"Feed K9" `ox_target` labels
+(`pet_target_label`/`feed_target_label`) and their success notifies
+(`pet_success`/`feed_success`), five `reason_*` keys for the Pet/Feed
+rejection table (`reason_feature_disabled`, `reason_invalid_target`,
+`reason_on_cooldown`, `reason_no_item`, `reason_generic` — the unrecognized-
+reason fallback), and for the separate meat-bait/whistle distraction path:
+`distraction_used`, `reason_invalid_item`, `reason_use_generic` (shared by
+BOTH that table's own `invalid_target` entry and its unrecognized-reason
+fallback — confirmed byte-identical text before collapsing to one key,
+same as `search.failed` above), and `reason_no_meat_bait`/`reason_no_whistle`
+(the two distinct "you don't have the item" messages passed in as
+`failDescription` by the `/k9meatbait`/`/k9whistle` commands respectively —
+kept apart since a future translator might reasonably want each item named
+differently depending on grammatical gender/article, even though the
+underlying `no_item` reason code is shared).
+
+### The `common.too_far_from_k9` promotion (fifth migration pass)
+
+`client/wellbeing.lua`'s Pet/Feed rejection table and `client/medkit.lua`'s
+Treat rejection table each independently had `too_far = 'Get closer to the
+K9 first.'` — byte-for-byte identical text, confirmed by grep before
+minting anything, in two different files THIS SAME PASS happened to touch
+together. Rather than mint `wellbeing.reason_too_far` and
+`medkit.reason_too_far` as two drifting copies of the same sentence (the
+exact anti-pattern this migration's `common.*` group exists to prevent —
+see the original `common.notify_title`/`common.not_k9_model` reasoning at
+the top of this file), both now call `locale('common.too_far_from_k9')`
+directly. Not the same sentence as `inventory.reason_too_far` ("You are too
+far away to access that K9's gear.") — that one stays its own key, a
+longer, feature-specific sentence for a different rejection context, not a
+verbatim duplicate.
+
+`progression.*` (`client/progression.lua`, 1 leaf key): `tier_up`
+("Your K9 has reached the %s tier!" — `%s`-interpolated with
+`tostring(newTier.label)`, replacing the previous
+`('...'):format(...)`-built string; the format/interpolation mechanism was
+already correct here, only the literal moved into `locales/en.json`). This
+is the only player-facing string anywhere in this file — everything else is
+server-authoritative state bookkeeping with no local notify/label of its
+own, confirmed by reading the file in full per this migration's own
+step-1 checklist.
+
+`medkit.*` (`client/medkit.lua`, 10 leaf keys): `treated_success`, nine
+`reason_*`/lookup keys for the Treat-K9 rejection table
+(`reason_feature_disabled`, `reason_no_access`, `reason_invalid_target`,
+`reason_target_dead`, `reason_on_cooldown`, `reason_no_item`,
+`reason_treatment_in_progress`, `reason_medkit_failed` — this last one
+shared by BOTH the table's own `medkit_failed` entry and the unrecognized-
+reason fallback, confirmed byte-identical before collapsing, same pattern
+as `search.failed`/`wellbeing.reason_use_generic` above), plus
+`treat_target_label` (the "Treat K9" `ox_target` option) and `no_nearby_k9`
+(`RequestTreatNearestK9()`'s own "no candidate" rejection). **`too_far`
+does NOT get a `medkit.*` key** — see "The `common.too_far_from_k9`
+promotion" immediately above. **`RequestTreatNearestK9()`'s own
+`Config.Features.K9Medkit` guard reuses `medkit.reason_feature_disabled`**
+rather than minting a second "K9 medkit is not enabled." key — confirmed
+byte-identical to the rejection table's own `feature_disabled` entry before
+reusing it.
+
+`bonetool.*` (`client/bonetool.lua`, 9 leaf keys — kept in their own group,
+NOT folded into `common.*`, per this file's own task instructions: this is
+a dev-only diagnostic tool, and its strings are instructions for running a
+bone-index sweep, not in-fiction player copy, so a translator should be
+able to tell that at a glance from the key group alone): `notify_title`
+("K9 Unit — Bone Tool" — a DIFFERENT title from `common.notify_title`'s
+plain "K9 Unit", used by every `lib.notify` call in this file instead of
+the shared one, since this tool's notifications are visibly a distinct
+sub-brand within the resource, not standard player-facing K9 Unit
+messaging), `preview_bone_index` (the multi-line "Previewing bone index:
+%d..." instructional notify, `%d`-interpolated), `bone_index_label` /
+`bone_index_label_test_attached` (the on-screen 3D text label drawn next to
+the preview marker — see "A third concatenation instance" below for why
+this is two keys, not one template), `test_prop_load_failed`,
+`test_attached` (the multi-line "Test-attached at bone index %d..."
+instructional notify), and `known_sweep_header`/`known_sweep_line`/
+`known_sweep_footer` (the three pieces `RunKnownBoneSweep()` assembles via
+`table.concat(lines, '\n')` into one `lib.notify` description —
+`known_sweep_line` is `%s`-interpolated three times per candidate,
+`('  %s (0x%X) -> %s')`, note the `%X` hex specifier passes through
+`string.format` inside `locale()` exactly as it did before migration). This
+file's own `print()` calls (the operator breadcrumb in `SetPreviewBoneIndex`
+and the console echo in `RunKnownBoneSweep`) are correctly left untouched,
+per this migration's standing print()-is-out-of-scope rule — the latter's
+own `'[qbx_k9unit] bonetool known-name sweep:\n' .. message` string
+concatenation is fine to leave as-is even though it uses `..`, since it's
+building an operator-console string, not a player-facing one, and `message`
+itself is already fully composed from `locale()`-sourced lines by the time
+this concatenation runs.
+
+**A third concatenation instance, found and fixed, per this pass's own
+explicit instruction to expect one:** `client/bonetool.lua`'s preview-draw
+loop built its on-screen bone-index label as
+`labelText = ('Bone Index: %d'):format(currentBoneIndex)` followed
+conditionally by `labelText = labelText .. ' (TEST PROP ATTACHED)'` — the
+same "append a literal suffix onto a dynamic string with `..`" shape the
+two earlier passes' own `'Officer #' .. serverId` findings (now both fixed,
+see `movement.officer_fallback_name`/its `client/partnership.lua` reuse
+above) already exist to close. Fixed the same way those were: NOT a
+`"Bone Index: %d%s"` template interpolated with a conditional suffix
+argument (that would still be templating a state-dependent clause onto a
+sentence, the exact thing this migration's `leash_detached`/
+`leash_detached_partner_disconnected` precedent already rejected for the
+identical reason), but two independent, complete-sentence keys —
+`bone_index_label` ("Bone Index: %d") and `bone_index_label_test_attached`
+("Bone Index: %d (TEST PROP ATTACHED)") — selected by a plain `if/else` in
+the Lua rather than built by concatenation or a partial template.
+
 ## Why no interpolation was used for the vision on/off strings
 
 `vision.thermal_on` / `vision.thermal_off` (and the `night_*` pair) are
@@ -366,36 +572,44 @@ specific language.
 
 ## What's left (honest count)
 
-As of this (fourth) pass, **11 of roughly 48 Lua files** in this
+As of this (fifth) pass, **18 of roughly 48 Lua files** in this
 resource's `client/` + `server/` trees have actually needed a `locale()`
 migration — `client/vision.lua`, `client/vehicle.lua`, `client/kennel.lua`,
 `client/main.lua`, `client/movement.lua`, `client/agility.lua`,
-`client/inventory.lua`, and now `client/partnership.lua`,
-`client/defense.lua`, `client/fetch.lua`, and `client/propattachment.lua`.
+`client/inventory.lua`, `client/partnership.lua`, `client/defense.lua`,
+`client/fetch.lua`, `client/propattachment.lua`, and now `client/radial.lua`,
+`client/search.lua`, `client/tracking.lua`, `client/wellbeing.lua`,
+`client/progression.lua`, `client/medkit.lua`, and `client/bonetool.lua`.
 Five files (`client/screenfx.lua`, `client/audio.lua`,
-`client/proximityaudio.lua`, `client/recall.lua`, and now `client/hud.lua`)
+`client/proximityaudio.lua`, `client/recall.lua`, and `client/hud.lua`)
 have been checked and confirmed to have **no player-facing strings at
 all**, so they need no `locale()` calls — don't re-check them again from
 scratch, but do re-check if you add new player-facing UI to any of them
-later. That's 16 of ~48 files actually checked one way or the other.
+later. That's 23 of ~48 files actually checked one way or the other.
 
-Every other file — `client/radial.lua`, `client/tracking.lua`,
-`client/search.lua`, `client/medkit.lua`, `client/wellbeing.lua`,
-`client/progression.lua`, `client/combat.lua`, `client/bonetool.lua`,
-`client/exports.lua`, and every file under `server/` — is UNCHECKED by
-this pass and should be assumed to still have 100% hardcoded English for
-any player-facing string it contains (server-side strings sent to players
-via `lib.notify`/`exports.qbx_core:Notify`/similar are just as in scope as
-client-side ones; only `print()`/comments are out of scope). This file
-establishes the pattern and the shared `common.*` keys; it does not claim
-to have finished the job.
+Every other file — `client/combat.lua`, `client/exports.lua`, and every
+file under `server/` — is UNCHECKED by this pass and should be assumed to
+still have 100% hardcoded English for any player-facing string it contains
+(server-side strings sent to players via `lib.notify`/
+`exports.qbx_core:Notify`/similar are just as in scope as client-side ones;
+only `print()`/comments are out of scope). This file establishes the
+pattern and the shared `common.*` keys; it does not claim to have finished
+the job.
+
+**Both of the fourth pass's own flagged reuse notes were resolved by THIS
+(fifth) pass, not left stale:**
+- `client/radial.lua`'s `label = 'Partner Up'` now calls
+  `locale('partnership.partner_up_target_label')` directly — no new key
+  minted for it.
+- `client/tracking.lua`'s `'You cannot use K9 features right now.'` now
+  calls `common.no_k9_access` directly — no fifth verbatim copy minted for
+  it (see "The `common.no_k9_access` promotion" above for the running
+  count).
 
 **Notes for whoever migrates these specific still-unchecked files, found
-by this pass while grepping for duplicates (see the fourth-pass sections
-above for full detail):**
-- `client/radial.lua`: hardcodes `label = 'Partner Up'` verbatim identical
-  to the now-migrated `partnership.partner_up_target_label` — reuse that
-  key, don't mint a new one.
+by earlier passes while grepping for duplicates (see the fourth-pass
+sections above for full detail — still open, NOT touched by this fifth
+pass, since none of them are files this pass owns):**
 - `server/partnership.lua`: hardcodes `'Partner request sent.'` verbatim
   identical to `partnership.partner_request_sent` (reuse it), and a
   DIFFERENT, NOT-identical `already_partnered = 'One of you is already
@@ -405,12 +619,6 @@ above for full detail):**
 - `server/combat.lua`: hardcodes `already_engaged = 'You are already
   engaged with another target.'` verbatim identical to the now-migrated
   `defense.already_engaged` — reuse that key.
-
-**Note for whoever migrates `client/tracking.lua`:** confirmed by grep
-during the third pass, that file also hardcodes `'You cannot use K9
-features right now.'` verbatim — point it at `common.no_k9_access` (now a
-real, migrated key — see "The `common.no_k9_access` promotion" above)
-rather than minting a duplicate.
 
 **Note for whoever migrates `server/kennel.lua`:** that file has its own
 `NotifyPlayer(src, '...', 'error')` strings ("Kennel placement failed —

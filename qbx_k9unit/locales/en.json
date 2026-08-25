@@ -1,94 +1,266 @@
 {
-    "common": {
-        "notify_title": "K9 Unit",
-        "not_k9_model": "This only works while playing a K9 character.",
-        "no_k9_access": "You cannot use K9 features right now."
-    },
-    "vision": {
-        "thermal_on": "Thermal vision on.",
-        "thermal_off": "Thermal vision off.",
-        "night_on": "Night vision on.",
-        "night_off": "Night vision off.",
-        "thermal_keybind_label": "Toggle K9 Thermal Vision",
-        "night_keybind_label": "Toggle K9 Night Vision"
-    },
-    "vehicle": {
-        "no_vehicle_nearby": "No K9 vehicle nearby.",
-        "loaded": "Loaded into the vehicle.",
-        "released": "Released from the vehicle.",
-        "target_enter_label": "Load K9 Into Vehicle",
-        "target_exit_label": "Release K9 From Vehicle"
-    },
-    "kennel": {
-        "already_deployed": "You already have a kennel deployed.",
-        "prop_load_failed": "Kennel prop failed to load.",
-        "placement_failed": "Kennel placement failed.",
-        "no_suitable_ground": "No suitable ground to place the kennel here.",
-        "pickup_target_label": "Pick Up Kennel"
-    },
-    "movement": {
-        "camera_first_person": "First-person view.",
-        "camera_third_person": "Third-person view.",
-        "toggle_camera_keybind_label": "Toggle K9 First/Third Person Camera",
-        "already_leashed": "You are already leashed.",
-        "leash_request_sent": "Leash request sent.",
-        "leash_request_header": "K9 Leash Request",
-        "leash_request_content": "%s wants to attach a leash to you. Accept?",
-        "officer_fallback_name": "Officer #%d",
-        "accept_label": "Accept",
-        "decline_label": "Decline",
-        "leash_now_leashed": "You are now leashed.",
-        "leash_now_anchoring": "You are now anchoring the leash.",
-        "leash_detached": "Leash detached.",
-        "leash_detached_partner_disconnected": "Leash detached — your partner disconnected.",
-        "leash_snapped_too_far": "Leash snapped — you got too far from your handler.",
-        "attach_leash_target_label": "Attach Leash",
-        "certify_handler_target_label": "Certify K9 Handler",
-        "revoke_certification_target_label": "Revoke K9 Certification",
-        "nothing_to_scratch": "Nothing there to scratch at.",
-        "nothing_to_nudge": "Nothing there to nudge.",
-        "scratch_door_target_label": "Scratch to Alert",
-        "nudge_door_target_label": "Nudge Door"
-    },
-    "agility": {
-        "vault_keybind_label": "K9 Advanced Agility Vault (fence/window)"
-    },
-    "inventory": {
-        "open_gear_target_label": "Open K9 Gear",
-        "reason_feature_disabled": "K9 gear access is disabled on this server.",
-        "reason_invalid_target": "That is not a working K9.",
-        "reason_no_access": "That K9 is not currently certified for duty.",
-        "reason_too_far": "You are too far away to access that K9's gear.",
-        "reason_not_authorized": "You are not authorized to access that K9's gear.",
-        "reason_stash_failed": "Unable to open K9 gear right now.",
-        "unable_to_open_generic": "Unable to open K9 gear."
-    },
-    "partnership": {
-        "already_partnered": "You are already partnered.",
-        "partner_request_sent": "Partner request sent.",
-        "partner_request_header": "K9 Partner Request",
-        "partner_request_content": "%s wants to partner up with you. Accept?",
-        "now_partnered_as_handler": "You are now partnered with your handler.",
-        "now_partnered_as_k9": "You are now partnered with your K9.",
-        "ended_generic": "Partnership ended.",
-        "ended_with_reason": "Partnership ended (%s).",
-        "partner_up_target_label": "Partner Up"
-    },
-    "defense": {
-        "handler_under_attack": "Your handler is under attack! Press %s to respond, or use the radial menu.",
-        "no_active_alert": "No active handler-down alert.",
-        "already_engaged": "You are already engaged with another target.",
-        "no_hostile_detected": "No hostile detected -- select a target from the radial menu instead.",
-        "confirm_keybind_label": "K9 Handler-Down Defense (confirm pre-selected target)"
-    },
-    "fetch": {
-        "prop_load_failed": "Fetch ball prop failed to load.",
-        "throw_failed": "Fetch ball throw failed.",
-        "carry_failed": "Could not carry the fetch item.",
-        "pickup_target_label": "Pick Up Ball",
-        "deliver_target_label": "Deliver Fetch Item"
-    },
-    "propattachment": {
-        "vest_prop_load_failed": "K9 vest prop failed to load."
-    }
+  "agility": {
+    "vault_keybind_label": "K9 Advanced Agility Vault (fence/window)"
+  },
+  "bonetool": {
+    "notify_title": "K9 Unit — Bone Tool",
+    "preview_bone_index": "Previewing bone index: %d\nLooks right? Record it in config.lua: Config.PropAttachments.boneIndex (vest) or Config.FetchMechanic.mouthBoneIndex (fetch mouth carry).\nRun /k9bonetool test to confirm with a real attach first.",
+    "bone_index_label": "Bone Index: %d",
+    "bone_index_label_test_attached": "Bone Index: %d (TEST PROP ATTACHED)",
+    "test_prop_load_failed": "Test prop failed to load.",
+    "test_attached": "Test-attached at bone index %d.\nWalk/turn around and, for a mouth-carry candidate, bark or pant to check for clipping before recording it.",
+    "known_sweep_header": "K9 Bone Tool — known-name candidates (raw + UNFILTERED, read the last line):",
+    "known_sweep_line": "  %s (0x%X) -> %s",
+    "known_sweep_footer": "GetPedBoneIndex's own not-found return value is NOT confirmed against primary source -- every value above is raw. Run /k9bonetool goto <n> on anything promising and look with your own eyes before trusting it."
+  },
+  "certifications": {
+    "grant_error": "An error occurred while certifying the target.",
+    "grant_success_granter": "Target has been certified as a K9 handler.",
+    "grant_success_target": "You have been certified as a K9 handler.",
+    "invalid_department": "'%s' is not a configured department.",
+    "invalid_target": "Invalid target.",
+    "not_authorized_to_certify": "You are not authorized to certify K9 handlers.",
+    "not_authorized_to_revoke": "You are not authorized to revoke K9 certifications.",
+    "offline_target_not_certified": "That citizen does not hold an active certification for that department.",
+    "revoke_success": "K9 certification revoked.",
+    "revoked_notice_job_change": "Your K9 certification has been revoked — you are no longer employed by %s.",
+    "revoked_notice_online": "Your K9 certification has been revoked.",
+    "self_certification_disabled": "Self-certification is disabled on this server.",
+    "target_already_certified": "Target already holds an active certification for this department.",
+    "target_must_be_online": "Target must be online to be certified.",
+    "target_no_department_cert": "Target does not hold a certification for an eligible department.",
+    "target_not_actively_certified": "Target does not hold an active certification for this department.",
+    "target_not_in_department": "Target is not employed by an eligible department.",
+    "target_not_k9_model": "Target is not playing a recognized K9 model.",
+    "target_offline_use_decertify_offline": "That player is not currently connected; use /k9decertifyoffline [citizenid] [job] to revoke an offline handler.",
+    "target_online_use_decertify_command": "That citizen is currently online (server id %d) — use /k9decertify [server id] instead, which enforces the proximity check.",
+    "target_too_far_to_certify": "Target is too far away to certify.",
+    "target_too_far_to_revoke": "Target is too far away to revoke their certification.",
+    "usage_certify": "Usage: /k9certify [server id]",
+    "usage_decertify": "Usage: /k9decertify [server id]",
+    "usage_decertify_offline": "Usage: /k9decertifyoffline [citizenid] [job]"
+  },
+  "common": {
+    "handler_not_in_department": "The handler must be employed by an eligible department.",
+    "k9_not_certified": "The K9 is not certified for K9 duty.",
+    "no_k9_access": "You cannot use K9 features right now.",
+    "no_k9_party": "Neither party is playing a recognized K9 model.",
+    "not_k9_model": "This only works while playing a K9 character.",
+    "notify_title": "K9 Unit",
+    "target_no_longer_online": "That player is no longer online.",
+    "too_far_from_k9": "Get closer to the K9 first.",
+    "unable_to_resolve_citizenid": "Unable to resolve your own citizen ID."
+  },
+  "defense": {
+    "handler_under_attack": "Your handler is under attack! Press %s to respond, or use the radial menu.",
+    "no_active_alert": "No active handler-down alert.",
+    "already_engaged": "You are already engaged with another target.",
+    "no_hostile_detected": "No hostile detected -- select a target from the radial menu instead.",
+    "confirm_keybind_label": "K9 Handler-Down Defense (confirm pre-selected target)"
+  },
+  "fetch": {
+    "prop_load_failed": "Fetch ball prop failed to load.",
+    "throw_failed": "Fetch ball throw failed.",
+    "carry_failed": "Could not carry the fetch item.",
+    "pickup_target_label": "Pick Up Ball",
+    "deliver_target_label": "Deliver Fetch Item"
+  },
+  "inventory": {
+    "open_gear_target_label": "Open K9 Gear",
+    "reason_feature_disabled": "K9 gear access is disabled on this server.",
+    "reason_invalid_target": "That is not a working K9.",
+    "reason_no_access": "That K9 is not currently certified for duty.",
+    "reason_not_authorized": "You are not authorized to access that K9's gear.",
+    "reason_stash_failed": "Unable to open K9 gear right now.",
+    "reason_too_far": "You are too far away to access that K9's gear.",
+    "stash_label": "K9 Gear",
+    "unable_to_open_generic": "Unable to open K9 gear."
+  },
+  "kennel": {
+    "already_active_deployed": "You already have an active kennel deployed — pick it up before deploying another.",
+    "already_deployed": "You already have a kennel deployed.",
+    "deployed_success": "Kennel deployed.",
+    "no_suitable_ground": "No suitable ground to place the kennel here.",
+    "not_authorized_to_deploy": "You are not authorized to deploy a K9 kennel.",
+    "not_owner": "You do not own that kennel.",
+    "picked_up_success": "Kennel picked up.",
+    "pickup_target_label": "Pick Up Kennel",
+    "placement_already_in_progress": "A kennel placement is already in progress.",
+    "placement_failed": "Kennel placement failed.",
+    "placement_failed_already_claimed": "Kennel placement failed — that object is already claimed.",
+    "placement_failed_too_far": "Kennel placement failed — placed too far from the assigned spot.",
+    "placement_failed_unconfirmed": "Kennel placement failed — the object could not be confirmed.",
+    "placement_failed_wrong_model": "Kennel placement failed — unexpected object model.",
+    "placement_timed_out": "Kennel placement timed out — try again.",
+    "prop_load_failed": "Kennel prop failed to load."
+  },
+  "leash": {
+    "already_leashed": "One of you is already leashed to someone else.",
+    "feature_disabled": "Leash mechanics are disabled on this server.",
+    "invalid_target": "Invalid leash target.",
+    "pending_request_exists": "That player already has a pending leash request.",
+    "reject_fallback": "Unable to attach leash.",
+    "request_declined": "Your leash request was declined.",
+    "request_no_longer_valid_initiator": "Your leash request is no longer valid.",
+    "request_no_longer_valid_self": "That leash request is no longer valid.",
+    "request_sent": "Leash request sent.",
+    "too_far": "You are too far apart to attach a leash."
+  },
+  "medkit": {
+    "treated_success": "K9 treated.",
+    "reason_feature_disabled": "K9 medkit is not enabled.",
+    "reason_no_access": "You are not authorized to treat a K9.",
+    "reason_invalid_target": "That is not a valid K9 to treat.",
+    "reason_target_dead": "That K9 needs a real revive, not a medkit.",
+    "reason_on_cooldown": "This K9 was treated too recently.",
+    "reason_no_item": "You do not have a K9 medkit.",
+    "reason_treatment_in_progress": "This K9 is already being treated.",
+    "reason_medkit_failed": "Unable to treat the K9 right now.",
+    "no_nearby_k9": "No nearby K9 to treat.",
+    "treat_target_label": "Treat K9"
+  },
+  "movement": {
+    "camera_first_person": "First-person view.",
+    "camera_third_person": "Third-person view.",
+    "toggle_camera_keybind_label": "Toggle K9 First/Third Person Camera",
+    "already_leashed": "You are already leashed.",
+    "leash_request_sent": "Leash request sent.",
+    "leash_request_header": "K9 Leash Request",
+    "leash_request_content": "%s wants to attach a leash to you. Accept?",
+    "officer_fallback_name": "Officer #%d",
+    "accept_label": "Accept",
+    "decline_label": "Decline",
+    "leash_now_leashed": "You are now leashed.",
+    "leash_now_anchoring": "You are now anchoring the leash.",
+    "leash_detached": "Leash detached.",
+    "leash_detached_partner_disconnected": "Leash detached — your partner disconnected.",
+    "leash_snapped_too_far": "Leash snapped — you got too far from your handler.",
+    "attach_leash_target_label": "Attach Leash",
+    "certify_handler_target_label": "Certify K9 Handler",
+    "revoke_certification_target_label": "Revoke K9 Certification",
+    "nothing_to_scratch": "Nothing there to scratch at.",
+    "nothing_to_nudge": "Nothing there to nudge.",
+    "scratch_door_target_label": "Scratch to Alert",
+    "nudge_door_target_label": "Nudge Door"
+  },
+  "partnership": {
+    "already_partnered": "You are already partnered.",
+    "break_error": "An error occurred while ending the partnership.",
+    "ended_generic": "Partnership ended.",
+    "ended_with_reason": "Partnership ended (%s).",
+    "establish_error": "An error occurred while setting up the partnership.",
+    "feature_disabled": "Handler partnership is disabled on this server.",
+    "invalid_target": "Invalid partner target.",
+    "not_partnered_with_anyone": "You are not currently partnered with anyone.",
+    "now_partnered_as_handler": "You are now partnered with your handler.",
+    "now_partnered_as_k9": "You are now partnered with your K9.",
+    "partner_request_content": "%s wants to partner up with you. Accept?",
+    "partner_request_header": "K9 Partner Request",
+    "partner_request_sent": "Partner request sent.",
+    "partner_up_target_label": "Partner Up",
+    "pending_request_exists": "That player already has a pending partner request.",
+    "reject_already_partnered": "One of you is already partnered with someone else.",
+    "reject_fallback": "Unable to set up partnership.",
+    "request_declined": "Your partner request was declined.",
+    "request_no_longer_valid_initiator": "Your partner request is no longer valid.",
+    "request_no_longer_valid_self": "That partner request is no longer valid.",
+    "setup_busy": "Partner setup is busy, please try again in a moment.",
+    "too_far": "You are too far apart to partner up."
+  },
+  "progression": {
+    "tier_up": "Your K9 has reached the %s tier!"
+  },
+  "propattachment": {
+    "vest_prop_load_failed": "K9 vest prop failed to load."
+  },
+  "radial": {
+    "sit_label": "Sit",
+    "bark_label": "Bark",
+    "leash_toggle_label": "Attach/Detach Leash",
+    "no_leash_candidate": "No nearby player to leash to.",
+    "vehicle_toggle_label": "Enter/Exit Vehicle",
+    "track_scent_label": "Track Scent",
+    "track_blood_label": "Track Blood",
+    "track_gunpowder_label": "Track Gunpowder",
+    "bite_hold_toggle_label": "Bite & Hold / Release",
+    "takedown_label": "Non-Lethal Takedown",
+    "drag_toggle_label": "Drag / Release",
+    "break_partnership_label": "Break Partnership",
+    "no_partner_candidate": "No nearby player to partner with.",
+    "defense_menu_label": "Handler-Down Response",
+    "defense_bite_label": "Bite & Hold Attacker",
+    "defense_takedown_label": "Non-Lethal Takedown Attacker",
+    "fetch_menu_label": "Fetch",
+    "fetch_throw_label": "Throw/Drop Fetch Ball",
+    "fetch_recall_label": "Recall Fetch Ball",
+    "recall_label": "Recall K9",
+    "toggle_vest_label": "Toggle K9 Vest",
+    "deploy_kennel_label": "Deploy Kennel",
+    "menu_open_label": "${common.notify_title}"
+  },
+  "recall": {
+    "not_engaged": "Your K9 is not currently engaged with a target.",
+    "not_partnered_to_recall": "You are not currently partnered with a K9 to recall.",
+    "partner_not_online": "Your K9 partner is not currently online.",
+    "partnership_unavailable": "Handler partnership is not available on this server.",
+    "recall_issued": "Recall issued -- your K9 has been called back.",
+    "recalled_notice": "You have been recalled by your handler."
+  },
+  "search": {
+    "nothing_to_search": "Nothing there to search.",
+    "progress_vehicle_label": "Searching vehicle...",
+    "progress_person_label": "Searching person...",
+    "failed": "The search could not be completed — try again.",
+    "generic_denied": "Unable to search right now.",
+    "contraband_found": "Contraband detected!",
+    "nothing_found": "Nothing found.",
+    "vehicle_target_label": "Search Vehicle",
+    "person_target_label": "Search Person"
+  },
+  "tenure": {
+    "milestone_reached": "Your partnership has reached a new tenure milestone."
+  },
+  "tracking": {
+    "already_tracking": "Already tracking something — stop first.",
+    "starting_in_progress": "Already starting a track — please wait.",
+    "nothing_to_track": "Nothing to track right now.",
+    "trail_lost_water": "The trail is lost at the water's edge."
+  },
+  "vehicle": {
+    "no_vehicle_nearby": "No K9 vehicle nearby.",
+    "loaded": "Loaded into the vehicle.",
+    "released": "Released from the vehicle.",
+    "target_enter_label": "Load K9 Into Vehicle",
+    "target_exit_label": "Release K9 From Vehicle"
+  },
+  "vision": {
+    "thermal_on": "Thermal vision on.",
+    "thermal_off": "Thermal vision off.",
+    "night_on": "Night vision on.",
+    "night_off": "Night vision off.",
+    "thermal_keybind_label": "Toggle K9 Thermal Vision",
+    "night_keybind_label": "Toggle K9 Night Vision"
+  },
+  "wellbeing": {
+    "calm_down_on_cooldown": "Your K9 needs a moment before calming down again.",
+    "calm_down_success": "Your K9 calms down.",
+    "distracted": "Your K9 is distracted!",
+    "distraction_used": "Used.",
+    "feed_success": "You feed the K9.",
+    "feed_target_label": "Feed K9",
+    "hesitating": "Your K9 hesitates, too stressed to act.",
+    "pet_success": "You pet the K9.",
+    "pet_target_label": "Pet K9",
+    "reason_feature_disabled": "That is not enabled right now.",
+    "reason_generic": "Unable to do that right now.",
+    "reason_invalid_item": "That item is not usable this way.",
+    "reason_invalid_target": "That is not a valid K9.",
+    "reason_no_item": "You do not have the right item.",
+    "reason_no_meat_bait": "You do not have any meat bait.",
+    "reason_no_whistle": "You do not have an ultrasonic whistle.",
+    "reason_on_cooldown": "Try again in a moment.",
+    "reason_use_generic": "Unable to use that right now.",
+    "refocused": "Your K9 refocuses.",
+    "settled": "Your K9 settles down."
+  }
 }

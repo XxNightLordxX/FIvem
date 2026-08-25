@@ -229,7 +229,7 @@ local k9SubmenuItems = {
     --- other Phase 1 item here).
     {
         id = 'k9_sit',
-        label = 'Sit',
+        label = locale('radial.sit_label'),
         icon = 'couch',
         onSelect = function()
             if not CanShowK9UI() then
@@ -294,14 +294,14 @@ if Config.Features.BasicBarkSounds then
         -- its own on purpose.
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_bark',
-            label = 'Bark',
+            label = locale('radial.bark_label'),
             icon = 'volume-high',
             menu = 'k9unit_bark',
         }
     else
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_bark',
-            label = 'Bark',
+            label = locale('radial.bark_label'),
             icon = 'volume-high',
             onSelect = function()
                 if not CanShowK9UI() then
@@ -327,7 +327,7 @@ end
 if Config.Features.LeashMechanics then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_leash',
-        label = 'Attach/Detach Leash',
+        label = locale('radial.leash_toggle_label'),
         icon = 'link',
         onSelect = function()
             -- Detach never requires consent/access — always available
@@ -344,7 +344,7 @@ if Config.Features.LeashMechanics then
 
             local candidateServerId = FindNearestLeashCandidate()
             if not candidateServerId then
-                lib.notify({ title = 'K9 Unit', description = 'No nearby player to leash to.', type = 'error' })
+                lib.notify({ title = locale('common.notify_title'), description = locale('radial.no_leash_candidate'), type = 'error' })
                 return
             end
 
@@ -363,7 +363,7 @@ end
 if Config.Features.VehicleEntryExit then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_vehicle',
-        label = 'Enter/Exit Vehicle',
+        label = locale('radial.vehicle_toggle_label'),
         icon = 'car',
         onSelect = function()
             if not CanShowK9UI() then
@@ -403,7 +403,7 @@ end
 if Config.Features.ScentTracking then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_track_scent',
-        label = 'Track Scent',
+        label = locale('radial.track_scent_label'),
         icon = 'wind',
         onSelect = function()
             if GetActiveTrackType() == 'scent' then
@@ -424,7 +424,7 @@ end
 if Config.Features.BloodTracking then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_track_blood',
-        label = 'Track Blood',
+        label = locale('radial.track_blood_label'),
         icon = 'droplet',
         onSelect = function()
             if GetActiveTrackType() == 'blood' then
@@ -445,7 +445,7 @@ end
 if Config.Features.GunpowderSniffing then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_track_gunpowder',
-        label = 'Track Gunpowder',
+        label = locale('radial.track_gunpowder_label'),
         icon = 'crosshairs',
         onSelect = function()
             if GetActiveTrackType() == 'gunpowder' then
@@ -498,7 +498,7 @@ end
 if Config.Features.BiteAndHold then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_bite_hold',
-        label = 'Bite & Hold / Release',
+        label = locale('radial.bite_hold_toggle_label'),
         icon = 'paw',
         onSelect = function()
             -- Release is NOT gated on CanShowK9UI(), matching the Detach
@@ -554,7 +554,7 @@ end
 if Config.Features.NonLethalTakedown then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_takedown',
-        label = 'Non-Lethal Takedown',
+        label = locale('radial.takedown_label'),
         icon = 'zzz',
         onSelect = function()
             if not CanShowK9UI() then
@@ -598,7 +598,7 @@ end
 if Config.Features.PropDragging then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_drag',
-        label = 'Drag / Release',
+        label = locale('radial.drag_toggle_label'),
         icon = 'hand',
         onSelect = function()
             -- Release is NOT gated on CanShowK9UI() — see this item's
@@ -701,7 +701,7 @@ end
 if Config.Features.HandlerPartnership then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_break_partnership',
-        label = 'Break Partnership',
+        label = locale('radial.break_partnership_label'),
         icon = 'handshake-slash',
         onSelect = function()
             -- type(...) == 'function' guard per this codebase's established
@@ -763,7 +763,11 @@ end
 if Config.Features.HandlerPartnership then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_partner_up',
-        label = 'Partner Up',
+        -- Reuses the already-migrated partnership.* key rather than minting
+        -- a fourth-pass-flagged duplicate — see locales/README.md's
+        -- "Found, NOT touched" note on this exact label (byte-for-byte
+        -- identical to client/partnership.lua's own ox_target option text).
+        label = locale('partnership.partner_up_target_label'),
         icon = 'handshake',
         onSelect = function()
             if not CanShowK9UI() then
@@ -773,7 +777,7 @@ if Config.Features.HandlerPartnership then
 
             local candidateServerId = FindNearestPartnerCandidate()
             if not candidateServerId then
-                lib.notify({ title = 'K9 Unit', description = 'No nearby player to partner with.', type = 'error' })
+                lib.notify({ title = locale('common.notify_title'), description = locale('radial.no_partner_candidate'), type = 'error' })
                 return
             end
 
@@ -815,7 +819,7 @@ end
 if Config.Features.Recall then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_recall',
-        label = 'Recall K9',
+        label = locale('radial.recall_label'),
         icon = 'circle-down',
         onSelect = function()
             if type(RequestRecall) == 'function' then
@@ -862,7 +866,7 @@ if Config.Features.HandlerDownDefense then
         items = {
             {
                 id = 'k9_defense_bite',
-                label = 'Bite & Hold Attacker',
+                label = locale('radial.defense_bite_label'),
                 icon = 'paw',
                 onSelect = function()
                     if not CanShowK9UI() then
@@ -877,7 +881,7 @@ if Config.Features.HandlerDownDefense then
             },
             {
                 id = 'k9_defense_takedown',
-                label = 'Non-Lethal Takedown Attacker',
+                label = locale('radial.defense_takedown_label'),
                 icon = 'zzz',
                 onSelect = function()
                     if not CanShowK9UI() then
@@ -895,7 +899,7 @@ if Config.Features.HandlerDownDefense then
 
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_defense',
-        label = 'Handler-Down Response',
+        label = locale('radial.defense_menu_label'),
         icon = 'user-shield',
         menu = 'k9unit_defense',
     }
@@ -947,7 +951,7 @@ if Config.Features.FetchMechanic then
         items = {
             {
                 id = 'k9_fetch_throw',
-                label = 'Throw/Drop Fetch Ball',
+                label = locale('radial.fetch_throw_label'),
                 icon = 'baseball',
                 onSelect = function()
                     if type(IsFetchCarryEngaged) == 'function' and IsFetchCarryEngaged() then
@@ -969,7 +973,7 @@ if Config.Features.FetchMechanic then
             },
             {
                 id = 'k9_fetch_recall',
-                label = 'Recall Fetch Ball',
+                label = locale('radial.fetch_recall_label'),
                 icon = 'circle-down',
                 onSelect = function()
                     if type(RequestRecallFetchBall) == 'function' then
@@ -982,7 +986,7 @@ if Config.Features.FetchMechanic then
 
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_fetch',
-        label = 'Fetch',
+        label = locale('radial.fetch_menu_label'),
         icon = 'baseball',
         menu = 'k9unit_fetch',
     }
@@ -1012,7 +1016,7 @@ end
 if Config.Features.PropAttachments then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_prop_attachment',
-        label = 'Toggle K9 Vest',
+        label = locale('radial.toggle_vest_label'),
         icon = 'vest',
         onSelect = function()
             if not CanShowK9UI() then
@@ -1049,7 +1053,7 @@ end
 if Config.Features.DeployableKennel then
     k9SubmenuItems[#k9SubmenuItems + 1] = {
         id = 'k9_deploy_kennel',
-        label = 'Deploy Kennel',
+        label = locale('radial.deploy_kennel_label'),
         icon = 'house-chimney',
         onSelect = function()
             if not CanShowK9UI() then
@@ -1081,7 +1085,13 @@ if Config.Features.RadialMenu then
     lib.addRadialItem({
         {
             id = 'k9unit_open',
-            label = 'K9 Unit',
+            -- '${common.notify_title}' — ox_lib's own cross-reference
+            -- syntax (resolved once at lib.locale() load time), not a
+            -- coincidence: this opener's label and every lib.notify title
+            -- in this resource are the same "K9 Unit" string, so this
+            -- embeds that existing key rather than minting a byte-identical
+            -- duplicate under a different name (see locales/README.md).
+            label = locale('radial.menu_open_label'),
             icon = 'dog',
             menu = 'k9unit',
         },

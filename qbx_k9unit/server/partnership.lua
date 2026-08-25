@@ -538,20 +538,20 @@ end
 --- `reason` return value. Mirrors server/main.lua's LEASH_REJECT_MESSAGES
 --- shape exactly.
 local PARTNERSHIP_REJECT_MESSAGES = {
-    feature_disabled          = 'Handler partnership is disabled on this server.',
-    invalid_target            = 'Invalid partner target.',
-    already_partnered         = 'One of you is already partnered with someone else.',
-    offline                   = 'That player is no longer online.',
-    too_far                   = 'You are too far apart to partner up.',
-    no_k9_party               = 'Neither party is playing a recognized K9 model.',
-    not_certified             = 'The K9 is not certified for K9 duty.',
-    officer_not_in_department = 'The handler must be employed by an eligible department.',
+    feature_disabled          = locale('partnership.feature_disabled'),
+    invalid_target            = locale('partnership.invalid_target'),
+    already_partnered         = locale('partnership.reject_already_partnered'),
+    offline                   = locale('common.target_no_longer_online'),
+    too_far                   = locale('partnership.too_far'),
+    no_k9_party               = locale('common.no_k9_party'),
+    not_certified             = locale('common.k9_not_certified'),
+    officer_not_in_department = locale('common.handler_not_in_department'),
 }
 
 --- @param reason string?
 --- @return string
 local function PartnershipRejectReasonMessage(reason)
-    return PARTNERSHIP_REJECT_MESSAGES[reason] or 'Unable to set up partnership.'
+    return PARTNERSHIP_REJECT_MESSAGES[reason] or locale('partnership.reject_fallback')
 end
 
 --- Shared eligibility/proximity checks for establishing a partnership, run
@@ -692,7 +692,7 @@ RegisterNetEvent('qbx_k9unit:server:requestPartnerUp', function(targetServerId)
     local src = source
 
     if type(targetServerId) ~= 'number' then
-        NotifyPlayer(src, 'Invalid partner target.', 'error')
+        NotifyPlayer(src, locale('partnership.invalid_target'), 'error')
         return
     end
 
@@ -720,7 +720,7 @@ RegisterNetEvent('qbx_k9unit:server:requestPartnerUp', function(targetServerId)
     -- burn the caller's own cooldown allowance.
     local existingPending = PendingPartnershipRequests[targetServerId]
     if existingPending and GetGameTimer() <= existingPending.expiresAt then
-        NotifyPlayer(src, 'That player already has a pending partner request.', 'error')
+        NotifyPlayer(src, locale('partnership.pending_request_exists'), 'error')
         return
     end
 
@@ -731,7 +731,7 @@ RegisterNetEvent('qbx_k9unit:server:requestPartnerUp', function(targetServerId)
     PendingPartnershipRequests[targetServerId] = { from = src, expiresAt = GetGameTimer() + Config.Partnership.RequestTTLMs }
 
     TriggerClientEvent('qbx_k9unit:client:partnerUpRequest', targetServerId, src)
-    NotifyPlayer(src, 'Partner request sent.', 'inform')
+    NotifyPlayer(src, locale('partnership.partner_request_sent'), 'inform')
 end)
 
 --- Step 2 of the consent handshake: target's response. Mirrors
@@ -755,9 +755,9 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
 
     if not verifiedMatch or GetGameTimer() > pending.expiresAt then
         PendingPartnershipRequests[src] = nil -- drop a stale/expired entry, if any
-        NotifyPlayer(src, 'That partner request is no longer valid.', 'error')
+        NotifyPlayer(src, locale('partnership.request_no_longer_valid_self'), 'error')
         if verifiedMatch then
-            NotifyPlayer(fromServerId, 'Your partner request is no longer valid.', 'error')
+            NotifyPlayer(fromServerId, locale('partnership.request_no_longer_valid_initiator'), 'error')
         end
         return
     end
@@ -765,7 +765,7 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
     PendingPartnershipRequests[src] = nil -- consumed either way, accept or decline, now that it's confirmed genuine
 
     if not accepted then
-        NotifyPlayer(fromServerId, 'Your partner request was declined.', 'inform')
+        NotifyPlayer(fromServerId, locale('partnership.request_declined'), 'inform')
         return
     end
 
@@ -786,8 +786,8 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         -- pair are already consumed at this point either way, so the only
         -- recovery is a fresh request; tell both parties plainly rather
         -- than silently dropping the accept.
-        NotifyPlayer(fromServerId, 'Partner setup is busy, please try again in a moment.', 'error')
-        NotifyPlayer(src, 'Partner setup is busy, please try again in a moment.', 'error')
+        NotifyPlayer(fromServerId, locale('partnership.setup_busy'), 'error')
+        NotifyPlayer(src, locale('partnership.setup_busy'), 'error')
         return
     end
 
@@ -914,14 +914,14 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
 
     if not ranOk then
         print(('[qbx_k9unit] Partnership establish critical section errored for k9=%s handler=%s: %s'):format(k9Citizenid, officerCitizenid, tostring(outcomeOrErr)))
-        NotifyPlayer(fromServerId, 'An error occurred while setting up the partnership.', 'error')
-        NotifyPlayer(src, 'An error occurred while setting up the partnership.', 'error')
+        NotifyPlayer(fromServerId, locale('partnership.establish_error'), 'error')
+        NotifyPlayer(src, locale('partnership.establish_error'), 'error')
         return
     end
 
     if outcomeOrErr == 'insert_failed' then
-        NotifyPlayer(fromServerId, 'An error occurred while setting up the partnership.', 'error')
-        NotifyPlayer(src, 'An error occurred while setting up the partnership.', 'error')
+        NotifyPlayer(fromServerId, locale('partnership.establish_error'), 'error')
+        NotifyPlayer(src, locale('partnership.establish_error'), 'error')
         return
     elseif outcomeOrErr ~= 'ok' then
         -- Covers 'already_partnered' plus the TOCTOU-fix critical-section
@@ -1028,11 +1028,11 @@ RegisterNetEvent('qbx_k9unit:server:breakPartnership', function()
     local ok, brokeOrErr = pcall(DoBreakPartnership, citizenid, citizenid, 'broken')
     if not ok then
         print(('[qbx_k9unit] breakPartnership failed for %s: %s'):format(citizenid, tostring(brokeOrErr)))
-        NotifyPlayer(src, 'An error occurred while ending the partnership.', 'error')
+        NotifyPlayer(src, locale('partnership.break_error'), 'error')
         return
     end
     if not brokeOrErr then
-        NotifyPlayer(src, 'You are not currently partnered with anyone.', 'inform')
+        NotifyPlayer(src, locale('partnership.not_partnered_with_anyone'), 'inform')
     end
     -- On success, TriggerClientEvent already fired inside DoBreakPartnership
     -- (via TellCitizenIdPartnershipEnded) -- no separate NotifyPlayer here,

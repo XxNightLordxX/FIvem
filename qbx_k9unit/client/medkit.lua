@@ -84,29 +84,36 @@ local function RequestTreatK9(targetServerId)
     if not result then return end
 
     if result.ok then
-        lib.notify({ title = 'K9 Unit', description = 'K9 treated.', type = 'success' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('medkit.treated_success'), type = 'success' })
     else
         -- Mirrors client/search.lua's own "unrecognized reason ->
         -- plain error notify" fallback discipline — no client-side
         -- change is required if server/medkit.lua ever adds a new
-        -- reason value.
+        -- reason value. 'medkit_failed' and the unrecognized-reason
+        -- fallback share the identical English sentence (confirmed before
+        -- minting) and both point at medkit.reason_medkit_failed rather
+        -- than duplicating it under a second key. `too_far` reuses
+        -- common.too_far_from_k9 -- byte-for-byte identical to
+        -- client/wellbeing.lua's own too_far rejection text (confirmed by
+        -- grep before minting), promoted to common.* rather than kept as
+        -- two drifting per-file copies.
         local reasonLabel = ({
-            feature_disabled      = 'K9 medkit is not enabled.',
-            no_access             = 'You are not authorized to treat a K9.',
-            invalid_target        = 'That is not a valid K9 to treat.',
+            feature_disabled      = locale('medkit.reason_feature_disabled'),
+            no_access             = locale('medkit.reason_no_access'),
+            invalid_target        = locale('medkit.reason_invalid_target'),
             -- 'target_dead' — server/medkit.lua's own correctness
             -- pass: a medkit heals an injured, ALIVE K9, never
             -- revives a dead one (that's a real laststand/EMS
             -- system's job, not a plain consumable's).
-            target_dead           = 'That K9 needs a real revive, not a medkit.',
-            too_far               = 'Get closer to the K9 first.',
-            on_cooldown           = 'This K9 was treated too recently.',
-            no_item               = 'You do not have a K9 medkit.',
-            treatment_in_progress = 'This K9 is already being treated.',
-            medkit_failed         = 'Unable to treat the K9 right now.',
-        })[result.reason] or 'Unable to treat the K9 right now.'
+            target_dead           = locale('medkit.reason_target_dead'),
+            too_far               = locale('common.too_far_from_k9'),
+            on_cooldown           = locale('medkit.reason_on_cooldown'),
+            no_item               = locale('medkit.reason_no_item'),
+            treatment_in_progress = locale('medkit.reason_treatment_in_progress'),
+            medkit_failed         = locale('medkit.reason_medkit_failed'),
+        })[result.reason] or locale('medkit.reason_medkit_failed')
 
-        lib.notify({ title = 'K9 Unit', description = reasonLabel, type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = reasonLabel, type = 'error' })
     end
 end
 
@@ -114,7 +121,7 @@ exports.ox_target:addGlobalPlayer({
     {
         name = 'qbx_k9unit:treatK9',
         icon = 'fas fa-kit-medical',
-        label = 'Treat K9',
+        label = locale('medkit.treat_target_label'),
         distance = Config.K9Medkit.range,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.K9Medkit then return false end
@@ -185,13 +192,16 @@ function RequestTreatNearestK9()
     end
 
     if not Config.Features.K9Medkit then
-        lib.notify({ title = 'K9 Unit', description = 'K9 medkit is not enabled.', type = 'error' })
+        -- Byte-for-byte identical to the reasonLabel table's own
+        -- feature_disabled entry above (confirmed by grep before minting) --
+        -- reused rather than duplicated under a second key.
+        lib.notify({ title = locale('common.notify_title'), description = locale('medkit.reason_feature_disabled'), type = 'error' })
         return
     end
 
     local targetServerId = FindNearestTreatableK9()
     if not targetServerId then
-        lib.notify({ title = 'K9 Unit', description = 'No nearby K9 to treat.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('medkit.no_nearby_k9'), type = 'error' })
         return
     end
 

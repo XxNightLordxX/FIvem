@@ -488,8 +488,8 @@ local function CheckTenureMilestonesForK9(k9Src, k9Citizenid)
     -- server/partnership.lua's TellCitizenIdPartnershipEnded, which must
     -- tolerate an offline party; this code path cannot reach here with
     -- either party offline).
-    NotifyPlayer(k9Src, 'Your partnership has reached a new tenure milestone.')
-    NotifyPlayer(handlerSrc, 'Your partnership has reached a new tenure milestone.')
+    NotifyPlayer(k9Src, locale('tenure.milestone_reached'))
+    NotifyPlayer(handlerSrc, locale('tenure.milestone_reached'))
 end
 
 --- One pass over currently-connected players per tick, mirroring

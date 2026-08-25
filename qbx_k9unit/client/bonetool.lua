@@ -191,8 +191,8 @@ local function SetPreviewBoneIndex(boneIndex)
     currentBoneIndex = boneIndex
     sweepActive = true
     lib.notify({
-        title = 'K9 Unit — Bone Tool',
-        description = ('Previewing bone index: %d\nLooks right? Record it in config.lua: Config.PropAttachments.boneIndex (vest) or Config.FetchMechanic.mouthBoneIndex (fetch mouth carry).\nRun /k9bonetool test to confirm with a real attach first.'):format(boneIndex),
+        title = locale('bonetool.notify_title'),
+        description = locale('bonetool.preview_bone_index', boneIndex),
         type = 'inform',
     })
     print(('[qbx_k9unit] bonetool: previewing bone index %d'):format(boneIndex))
@@ -290,9 +290,20 @@ CreateThread(function()
                     MARKER_COLOR.r, MARKER_COLOR.g, MARKER_COLOR.b, MARKER_COLOR.a,
                     false, false, 2, false, nil, nil, false
                 )
-                local labelText = ('Bone Index: %d'):format(currentBoneIndex)
+                -- LOCALIZATION FIX (this pass): was `labelText .. ' (TEST
+                -- PROP ATTACHED)'` -- exactly the untranslatable
+                -- Lua-concatenation pattern this whole migration exists to
+                -- close (see locales/README.md's "Format" section and its
+                -- running "expect a third instance" note). Two full-sentence
+                -- keys instead, same "on/off-shaped state words don't
+                -- translate uniformly via concatenation/templating" reasoning
+                -- already established for movement.camera_first_person/
+                -- camera_third_person and partnership.now_partnered_as_*.
+                local labelText
                 if testEntity and DoesEntityExist(testEntity) then
-                    labelText = labelText .. ' (TEST PROP ATTACHED)'
+                    labelText = locale('bonetool.bone_index_label_test_attached', currentBoneIndex)
+                else
+                    labelText = locale('bonetool.bone_index_label', currentBoneIndex)
                 end
                 Draw3DText(pos.x, pos.y, pos.z + LABEL_HEIGHT_OFFSET, labelText)
             end
@@ -320,14 +331,14 @@ local function RunAttachTest()
     )
 
     if not obj then
-        lib.notify({ title = 'K9 Unit — Bone Tool', description = 'Test prop failed to load.', type = 'error' })
+        lib.notify({ title = locale('bonetool.notify_title'), description = locale('bonetool.test_prop_load_failed'), type = 'error' })
         return
     end
 
     testEntity = obj
     lib.notify({
-        title = 'K9 Unit — Bone Tool',
-        description = ('Test-attached at bone index %d.\nWalk/turn around and, for a mouth-carry candidate, bark or pant to check for clipping before recording it.'):format(currentBoneIndex),
+        title = locale('bonetool.notify_title'),
+        description = locale('bonetool.test_attached', currentBoneIndex),
         type = 'inform',
     })
 end
@@ -376,16 +387,22 @@ local KNOWN_BONE_CANDIDATES = {
 --- "worth a look."
 local function RunKnownBoneSweep()
     local ped = PlayerPedId()
-    local lines = { 'K9 Bone Tool — known-name candidates (raw + UNFILTERED, read the last line):' }
+    local lines = { locale('bonetool.known_sweep_header') }
     for _, candidate in ipairs(KNOWN_BONE_CANDIDATES) do
         local resolved = GetPedBoneIndex(ped, candidate.id)
-        lines[#lines + 1] = ('  %s (0x%X) -> %s'):format(candidate.name, candidate.id, tostring(resolved))
+        lines[#lines + 1] = locale('bonetool.known_sweep_line', candidate.name, candidate.id, tostring(resolved))
     end
-    lines[#lines + 1] = 'GetPedBoneIndex\'s own not-found return value is NOT confirmed against primary source -- every value above is raw. Run /k9bonetool goto <n> on anything promising and look with your own eyes before trusting it.'
+    lines[#lines + 1] = locale('bonetool.known_sweep_footer')
 
+    -- table.concat below joins already-localized `lines` entries with '\n'
+    -- -- this is not the "rebuild a sentence with .." pattern the migration
+    -- guards against, since none of the individual locale() results
+    -- themselves get concatenated onto each other's TEXT, only assembled as
+    -- separate lines. The print() one line down stays untouched (operator
+    -- diagnostic), same as everywhere else in this migration.
     local message = table.concat(lines, '\n')
     print('[qbx_k9unit] bonetool known-name sweep:\n' .. message)
-    lib.notify({ title = 'K9 Unit — Bone Tool', description = message, type = 'inform' })
+    lib.notify({ title = locale('bonetool.notify_title'), description = message, type = 'inform' })
 end
 
 --- Server-issued instruction — see server/bonetool.lua's own EVENT

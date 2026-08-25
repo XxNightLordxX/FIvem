@@ -428,7 +428,7 @@ local function ResolveGranterCitizenId(granterSrc)
     local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
     local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
     if not granterCitizenid then
-        NotifyPlayer(granterSrc, 'Unable to resolve your own citizen ID.', 'error')
+        NotifyPlayer(granterSrc, locale('common.unable_to_resolve_citizenid'), 'error')
         return nil
     end
     return granterCitizenid
@@ -439,12 +439,12 @@ end
 --- @param targetServerId number
 local function GrantCertification(granterSrc, targetServerId)
     if type(targetServerId) ~= 'number' then
-        NotifyPlayer(granterSrc, 'Invalid target.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.invalid_target'), 'error')
         return
     end
 
     if not IsEligibleCertifier(granterSrc) then
-        NotifyPlayer(granterSrc, 'You are not authorized to certify K9 handlers.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_certify'), 'error')
         return
     end
 
@@ -455,7 +455,7 @@ local function GrantCertification(granterSrc, targetServerId)
     -- §4.1: self-certification only allowed if the flag is enabled.
     local isSelfCert = granterSrc == targetServerId
     if isSelfCert and not Config.AllowSelfCertification then
-        NotifyPlayer(granterSrc, 'Self-certification is disabled on this server.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.self_certification_disabled'), 'error')
         return
     end
 
@@ -463,7 +463,7 @@ local function GrantCertification(granterSrc, targetServerId)
     -- §4.3's flow table explicitly documents as working offline.
     local targetPlayer = exports.qbx_core:GetPlayer(targetServerId)
     if not targetPlayer or not targetPlayer.PlayerData then
-        NotifyPlayer(granterSrc, 'Target must be online to be certified.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.target_must_be_online'), 'error')
         return
     end
 
@@ -473,7 +473,7 @@ local function GrantCertification(granterSrc, targetServerId)
     -- the granter. Do not silently restrict to same-department.
     local targetJob = targetPlayer.PlayerData.job
     if not targetJob or not Config.Departments[targetJob.name] then
-        NotifyPlayer(granterSrc, 'Target is not employed by an eligible department.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.target_not_in_department'), 'error')
         return
     end
 
@@ -484,7 +484,7 @@ local function GrantCertification(granterSrc, targetServerId)
         local targetPed = GetPlayerPed(targetServerId)
         local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
         if dist > Config.CertifyProximityMeters then
-            NotifyPlayer(granterSrc, 'Target is too far away to certify.', 'error')
+            NotifyPlayer(granterSrc, locale('certifications.target_too_far_to_certify'), 'error')
             return
         end
     end
@@ -493,7 +493,7 @@ local function GrantCertification(granterSrc, targetServerId)
     -- target's LIVE server-side ped model must be a configured K9 model.
     local targetModel = GetEntityModel(GetPlayerPed(targetServerId))
     if not IsConfiguredK9Model(targetModel) then
-        NotifyPlayer(granterSrc, 'Target is not playing a recognized K9 model.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.target_not_k9_model'), 'error')
         return
     end
 
@@ -507,7 +507,7 @@ local function GrantCertification(granterSrc, targetServerId)
         targetCitizenid, jobName,
     })
     if existingId then
-        NotifyPlayer(granterSrc, 'Target already holds an active certification for this department.', 'inform')
+        NotifyPlayer(granterSrc, locale('certifications.target_already_certified'), 'inform')
         return
     end
 
@@ -526,12 +526,12 @@ local function GrantCertification(granterSrc, targetServerId)
             -- to the normal "already certified" no-op, not as an
             -- unhandled error.
             RefreshCertificationCache(targetCitizenid, jobName)
-            NotifyPlayer(granterSrc, 'Target already holds an active certification for this department.', 'inform')
+            NotifyPlayer(granterSrc, locale('certifications.target_already_certified'), 'inform')
             return
         end
 
         print(('[qbx_k9unit] GrantCertification INSERT failed for %s/%s: %s'):format(targetCitizenid, jobName, tostring(insertResultOrErr)))
-        NotifyPlayer(granterSrc, 'An error occurred while certifying the target.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.grant_error'), 'error')
         return
     end
 
@@ -553,8 +553,8 @@ local function GrantCertification(granterSrc, targetServerId)
     -- this field to HasK9Access or any other gate.
     targetPlayer.Functions.SetMetaData('k9certified', true)
 
-    NotifyPlayer(granterSrc, 'Target has been certified as a K9 handler.', 'success')
-    NotifyPlayer(targetServerId, 'You have been certified as a K9 handler.', 'success')
+    NotifyPlayer(granterSrc, locale('certifications.grant_success_granter'), 'success')
+    NotifyPlayer(targetServerId, locale('certifications.grant_success_target'), 'success')
 end
 
 --- SPEC.md §4.2/§4.3 revoke flow (manual). Called by both event 3 and
@@ -564,12 +564,12 @@ end
 --- @param targetServerId number
 local function RevokeCertification(granterSrc, targetServerId)
     if type(targetServerId) ~= 'number' then
-        NotifyPlayer(granterSrc, 'Invalid target.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.invalid_target'), 'error')
         return
     end
 
     if not IsEligibleCertifier(granterSrc) then
-        NotifyPlayer(granterSrc, 'You are not authorized to revoke K9 certifications.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_revoke'), 'error')
         return
     end
 
@@ -579,7 +579,7 @@ local function RevokeCertification(granterSrc, targetServerId)
 
     local isSelfCert = granterSrc == targetServerId
     if isSelfCert and not Config.AllowSelfCertification then
-        NotifyPlayer(granterSrc, 'Self-certification is disabled on this server.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.self_certification_disabled'), 'error')
         return
     end
 
@@ -598,7 +598,7 @@ local function RevokeCertification(granterSrc, targetServerId)
             local targetPed = GetPlayerPed(targetServerId)
             local dist = #(GetEntityCoords(granterPed) - GetEntityCoords(targetPed))
             if dist > Config.CertifyProximityMeters then
-                NotifyPlayer(granterSrc, 'Target is too far away to revoke their certification.', 'error')
+                NotifyPlayer(granterSrc, locale('certifications.target_too_far_to_revoke'), 'error')
                 return
             end
         end
@@ -622,12 +622,12 @@ local function RevokeCertification(granterSrc, targetServerId)
         -- a server id for exactly this reason. This function simply
         -- reports the mismatch back to the granter so they know to use
         -- that command instead of assuming this one silently worked.
-        NotifyPlayer(granterSrc, 'That player is not currently connected; use /k9decertifyoffline [citizenid] [job] to revoke an offline handler.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.target_offline_use_decertify_offline'), 'error')
         return
     end
 
     if not targetJobName or not Config.Departments[targetJobName] then
-        NotifyPlayer(granterSrc, 'Target does not hold a certification for an eligible department.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.target_no_department_cert'), 'error')
         return
     end
 
@@ -642,7 +642,7 @@ local function RevokeCertification(granterSrc, targetServerId)
     )
 
     if not affectedRows or affectedRows == 0 then
-        NotifyPlayer(granterSrc, 'Target does not hold an active certification for this department.', 'inform')
+        NotifyPlayer(granterSrc, locale('certifications.target_not_actively_certified'), 'inform')
         return
     end
 
@@ -656,7 +656,7 @@ local function RevokeCertification(granterSrc, targetServerId)
         RefreshCertificationCache(targetCitizenid, targetJobName)
         -- HUD display mirror only (SPEC.md §4.3) — never read for authorization.
         targetPlayer.Functions.SetMetaData('k9certified', false)
-        NotifyPlayer(targetServerId, 'Your K9 certification has been revoked.', 'error')
+        NotifyPlayer(targetServerId, locale('certifications.revoked_notice_online'), 'error')
 
         -- QA finding fix: an active leash pairing must not outlive the
         -- K9-role party's certification (SPEC.md §1/§4.4 "immediately") —
@@ -687,7 +687,7 @@ local function RevokeCertification(granterSrc, targetServerId)
         end
     end
 
-    NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')
+    NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
 end
 
 --- SPEC.md §4.3 offline-capable revoke flow (manual). Called only by the
@@ -711,7 +711,7 @@ end
 --- @param job string
 local function RevokeCertificationOffline(granterSrc, citizenid, job)
     if not IsEligibleCertifier(granterSrc) then
-        NotifyPlayer(granterSrc, 'You are not authorized to revoke K9 certifications.', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.not_authorized_to_revoke'), 'error')
         return
     end
 
@@ -720,14 +720,14 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
     end
 
     if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
-        NotifyPlayer(granterSrc, 'Usage: /k9decertifyoffline [citizenid] [job]', 'error')
+        NotifyPlayer(granterSrc, locale('certifications.usage_decertify_offline'), 'error')
         return
     end
 
     -- Reject a typo'd/unconfigured job outright rather than silently
     -- no-opping against a job name that could never have an active row.
     if not Config.Departments[job] then
-        NotifyPlayer(granterSrc, ("'%s' is not a configured department."):format(job), 'error')
+        NotifyPlayer(granterSrc, locale('certifications.invalid_department', job), 'error')
         return
     end
 
@@ -755,7 +755,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
     -- caveat as this file's other qbx_core-export notes.
     local onlineCheckTarget = exports.qbx_core:GetPlayerByCitizenId(citizenid)
     if onlineCheckTarget and onlineCheckTarget.PlayerData and onlineCheckTarget.PlayerData.source then
-        NotifyPlayer(granterSrc, ('That citizen is currently online (server id %d) — use /k9decertify [server id] instead, which enforces the proximity check.'):format(onlineCheckTarget.PlayerData.source), 'error')
+        NotifyPlayer(granterSrc, locale('certifications.target_online_use_decertify_command', onlineCheckTarget.PlayerData.source), 'error')
         return
     end
 
@@ -769,7 +769,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
     if not affectedRows or affectedRows == 0 then
         -- Distinguish "no matching active cert" from success — a granter
         -- typo'ing a citizenid should not look identical to a real revoke.
-        NotifyPlayer(granterSrc, 'That citizen does not hold an active certification for that department.', 'inform')
+        NotifyPlayer(granterSrc, locale('certifications.offline_target_not_certified'), 'inform')
         return
     end
 
@@ -836,7 +836,7 @@ local function RevokeCertificationOffline(granterSrc, citizenid, job)
         ForceBreakPartnershipForCitizenId(citizenid, 'certification_revoked')
     end
 
-    NotifyPlayer(granterSrc, 'K9 certification revoked.', 'success')
+    NotifyPlayer(granterSrc, locale('certifications.revoke_success'), 'success')
 end
 
 --- SPEC.md §4.4 (NEW): automatic revoke when actually leaving the
@@ -926,7 +926,7 @@ AddEventHandler('QBCore:Server:OnJobUpdate', function(source, job)
     Player.Functions.SetMetaData('k9certified', false)
 
     local deptLabel = (Config.Departments[oldJob] and Config.Departments[oldJob].label) or oldJob
-    NotifyPlayer(source, ('Your K9 certification has been revoked — you are no longer employed by %s.'):format(deptLabel), 'error')
+    NotifyPlayer(source, locale('certifications.revoked_notice_job_change', deptLabel), 'error')
 
     -- QA finding fix (SPEC.md §1/§4.4 "immediately"): this player is
     -- online by definition (OnJobUpdate fired for their live `source`), so
@@ -969,7 +969,7 @@ RegisterCommand('k9certify', function(source, args)
     -- forwarding nil.
     local targetServerId = tonumber(args[1])
     if not targetServerId then
-        NotifyPlayer(source, 'Usage: /k9certify [server id]', 'error')
+        NotifyPlayer(source, locale('certifications.usage_certify'), 'error')
         return
     end
     GrantCertification(source, targetServerId)
@@ -979,7 +979,7 @@ RegisterCommand('k9decertify', function(source, args)
     -- Same arg validation as k9certify above.
     local targetServerId = tonumber(args[1])
     if not targetServerId then
-        NotifyPlayer(source, 'Usage: /k9decertify [server id]', 'error')
+        NotifyPlayer(source, locale('certifications.usage_decertify'), 'error')
         return
     end
     RevokeCertification(source, targetServerId)
@@ -993,7 +993,7 @@ RegisterCommand('k9decertifyoffline', function(source, args)
     local citizenid = args[1]
     local job = args[2]
     if type(citizenid) ~= 'string' or citizenid == '' or type(job) ~= 'string' or job == '' then
-        NotifyPlayer(source, 'Usage: /k9decertifyoffline [citizenid] [job]', 'error')
+        NotifyPlayer(source, locale('certifications.usage_decertify_offline'), 'error')
         return
     end
     RevokeCertificationOffline(source, citizenid, job)

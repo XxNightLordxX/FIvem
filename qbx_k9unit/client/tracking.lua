@@ -179,7 +179,11 @@ end
 --- @param trackType 'scent'|'blood'|'gunpowder'
 local function StartTrack(trackType)
     if not CanShowK9UI() then
-        lib.notify({ title = 'K9 Unit', description = 'You cannot use K9 features right now.', type = 'error' })
+        -- Reuses common.no_k9_access rather than minting a duplicate — this
+        -- exact string was flagged for reuse by locales/README.md's
+        -- "common.no_k9_access promotion" note, confirmed by grep before
+        -- this pass ever touched this file.
+        lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
         return
     end
 
@@ -197,7 +201,7 @@ local function StartTrack(trackType)
     -- self-service StopTracking() affordance wired into client/radial.lua
     -- yet to clear it manually).
     if IsTracking() and not trackingState.brokenByWater then
-        lib.notify({ title = 'K9 Unit', description = 'Already tracking something — stop first.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('tracking.already_tracking'), type = 'error' })
         return
     end
 
@@ -207,7 +211,7 @@ local function StartTrack(trackType)
     -- startInFlight/trackRequestGeneration declaration comment above for
     -- the full race description.
     if startInFlight then
-        lib.notify({ title = 'K9 Unit', description = 'Already starting a track — please wait.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('tracking.starting_in_progress'), type = 'error' })
         return
     end
 
@@ -233,7 +237,7 @@ local function StartTrack(trackType)
     -- (phase2_notes/scent_blood_tracking.md §2.4) — ship one generic
     -- message, don't invent a distinction the server doesn't give data for.
     if not result or not result.found then
-        lib.notify({ title = 'K9 Unit', description = 'Nothing to track right now.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('tracking.nothing_to_track'), type = 'error' })
         return
     end
 
@@ -494,8 +498,8 @@ CreateThread(function()
                             -- searchCooldownMs) is required to re-acquire.
                             trackingState.brokenByWater = true
                             lib.notify({
-                                title = 'K9 Unit',
-                                description = 'The trail is lost at the water\'s edge.',
+                                title = locale('common.notify_title'),
+                                description = locale('tracking.trail_lost_water'),
                                 type = 'error',
                             })
                         end

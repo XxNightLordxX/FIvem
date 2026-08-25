@@ -587,20 +587,20 @@ end
 --- Human-readable rejection messages for CheckLeashEligibility's `reason`
 --- return value.
 local LEASH_REJECT_MESSAGES = {
-    feature_disabled          = 'Leash mechanics are disabled on this server.',
-    invalid_target            = 'Invalid leash target.',
-    already_leashed           = 'One of you is already leashed to someone else.',
-    offline                   = 'That player is no longer online.',
-    too_far                   = 'You are too far apart to attach a leash.',
-    no_k9_party               = 'Neither party is playing a recognized K9 model.',
-    not_certified             = 'The K9 is not certified for K9 duty.',
-    officer_not_in_department = 'The handler must be employed by an eligible department.',
+    feature_disabled          = locale('leash.feature_disabled'),
+    invalid_target            = locale('leash.invalid_target'),
+    already_leashed           = locale('leash.already_leashed'),
+    offline                   = locale('common.target_no_longer_online'),
+    too_far                   = locale('leash.too_far'),
+    no_k9_party               = locale('common.no_k9_party'),
+    not_certified             = locale('common.k9_not_certified'),
+    officer_not_in_department = locale('common.handler_not_in_department'),
 }
 
 --- @param reason string?
 --- @return string
 local function LeashRejectReasonMessage(reason)
-    return LEASH_REJECT_MESSAGES[reason] or 'Unable to attach leash.'
+    return LEASH_REJECT_MESSAGES[reason] or locale('leash.reject_fallback')
 end
 
 --- Shared eligibility/proximity checks for forming a leash pair, run at
@@ -686,7 +686,7 @@ RegisterNetEvent('qbx_k9unit:server:requestLeashAttach', function(targetServerId
     local src = source
 
     if type(targetServerId) ~= 'number' then
-        NotifyPlayer(src, 'Invalid leash target.', 'error')
+        NotifyPlayer(src, locale('leash.invalid_target'), 'error')
         return
     end
 
@@ -720,7 +720,7 @@ RegisterNetEvent('qbx_k9unit:server:requestLeashAttach', function(targetServerId
     -- own cooldown allowance.
     local existingPending = PendingLeashRequests[targetServerId]
     if existingPending and GetGameTimer() <= existingPending.expiresAt then
-        NotifyPlayer(src, 'That player already has a pending leash request.', 'error')
+        NotifyPlayer(src, locale('leash.pending_request_exists'), 'error')
         return
     end
 
@@ -732,7 +732,7 @@ RegisterNetEvent('qbx_k9unit:server:requestLeashAttach', function(targetServerId
     PendingLeashRequests[targetServerId] = { from = src, expiresAt = GetGameTimer() + LEASH_REQUEST_TTL_MS }
 
     TriggerClientEvent('qbx_k9unit:client:leashAttachRequest', targetServerId, src)
-    NotifyPlayer(src, 'Leash request sent.', 'inform')
+    NotifyPlayer(src, locale('leash.request_sent'), 'inform')
 end)
 
 --- Step 2 of the consent handshake: target's response.
@@ -765,14 +765,14 @@ RegisterNetEvent('qbx_k9unit:server:respondLeashAttach', function(fromServerId, 
 
     if not verifiedMatch or GetGameTimer() > pending.expiresAt then
         PendingLeashRequests[src] = nil -- drop a stale/expired entry, if any, so it doesn't linger
-        NotifyPlayer(src, 'That leash request is no longer valid.', 'error')
+        NotifyPlayer(src, locale('leash.request_no_longer_valid_self'), 'error')
         -- Only echo the "no longer valid" notice back to fromServerId when
         -- it's a VERIFIED match to a real (if now-expired) pending request
         -- from that exact id — never for an unmatched/spoofed claim, or
         -- this reintroduces the same arbitrary-target notify the fix above
         -- closes.
         if verifiedMatch then
-            NotifyPlayer(fromServerId, 'Your leash request is no longer valid.', 'error')
+            NotifyPlayer(fromServerId, locale('leash.request_no_longer_valid_initiator'), 'error')
         end
         return
     end
@@ -780,7 +780,7 @@ RegisterNetEvent('qbx_k9unit:server:respondLeashAttach', function(fromServerId, 
     PendingLeashRequests[src] = nil -- consumed either way, accept or decline, now that it's confirmed genuine
 
     if not accepted then
-        NotifyPlayer(fromServerId, 'Your leash request was declined.', 'inform')
+        NotifyPlayer(fromServerId, locale('leash.request_declined'), 'inform')
         return
     end
 

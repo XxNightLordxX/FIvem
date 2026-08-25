@@ -40,12 +40,92 @@ local Sandbox = {}
 --- not the real process globals.
 --- @param overrides table<string, any>
 --- @return table env
+--- Minimal JSON reader, sufficient for `locales/*.json`: nested objects
+--- whose leaves are all strings. Deliberately NOT a general JSON parser --
+--- it rejects anything outside that shape loudly rather than guessing, so a
+--- locale file that grows arrays or numbers fails the suite instead of
+--- silently half-loading.
+local function parseJsonObject(text, pos)
+    local out = {}
+    pos = text:find('%S', pos)
+    assert(text:sub(pos, pos) == '{', 'expected { at ' .. pos)
+    pos = pos + 1
+    while true do
+        pos = text:find('%S', pos)
+        assert(pos, 'unterminated object')
+        local char = text:sub(pos, pos)
+        if char == '}' then return out, pos + 1 end
+        if char == ',' then
+            pos = pos + 1
+        else
+            assert(char == '"', 'expected key string at ' .. pos)
+            local keyStart = pos
+            local key
+            key, pos = text:match('^"([^"\\]*)"()', pos)
+            assert(key, 'unsupported escape in object key at ' .. keyStart)
+            pos = text:find('%S', pos)
+            assert(text:sub(pos, pos) == ':', 'expected : after key ' .. key)
+            pos = text:find('%S', pos + 1)
+            if text:sub(pos, pos) == '{' then
+                out[key], pos = parseJsonObject(text, pos)
+            else
+                assert(text:sub(pos, pos) == '"', 'locale leaves must be strings; got non-string for ' .. key)
+                -- Consume a JSON string with escapes, one char at a time.
+                local buf, index = {}, pos + 1
+                while true do
+                    local c = text:sub(index, index)
+                    assert(c ~= '', 'unterminated string for ' .. key)
+                    if c == '\\' then
+                        local nextChar = text:sub(index + 1, index + 1)
+                        local simple = ({ n = '\n', t = '\t', r = '\r', b = '\b', f = '\f',
+                                          ['"'] = '"', ['\\'] = '\\', ['/'] = '/' })[nextChar]
+                        assert(simple, 'unsupported escape \\' .. nextChar .. ' in ' .. key)
+                        buf[#buf + 1] = simple
+                        index = index + 2
+                    elseif c == '"' then
+                        index = index + 1
+                        break
+                    else
+                        buf[#buf + 1] = c
+                        index = index + 1
+                    end
+                end
+                out[key] = table.concat(buf)
+                pos = index
+            end
+        end
+    end
+end
+
+--- Loads `../locales/en.json` once (specs run with cwd = tests/, the same
+--- convention every `Sandbox.loadInto('../server/...')` call already uses) and returns an ox_lib-shaped `locale()`.
+--- Unlike ox_lib (which returns the key itself when a key is missing, so a
+--- missing key shows up only as odd text in-game), this DELIBERATELY raises.
+--- Every spec that exercises a code path through a `locale()` call therefore
+--- doubles as a check that the key really exists in `en.json` -- the exact
+--- failure a live server-side migration pass shipped once already.
+local localeDict
+function Sandbox.locale(key, ...)
+    if not localeDict then
+        local handle = assert(io.open('../locales/en.json', 'r'))
+        local text = handle:read('a')
+        handle:close()
+        localeDict = (parseJsonObject(text, 1))
+    end
+    local group, leaf = key:match('^([^.]+)%.(.+)$')
+    local value = group and localeDict[group] and localeDict[group][leaf] or localeDict[key]
+    assert(type(value) == 'string', "locale key missing from locales/en.json: " .. tostring(key))
+    if select('#', ...) > 0 then return value:format(...) end
+    return value
+end
+
 function Sandbox.newEnv(overrides)
     local env = {}
     for key, value in pairs(_G) do
         env[key] = value
     end
     env._G = env
+    env.locale = Sandbox.locale
     for key, value in pairs(overrides or {}) do
         env[key] = value
     end

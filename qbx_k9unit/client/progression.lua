@@ -196,8 +196,8 @@ RegisterNetEvent('qbx_k9unit:client:xpTierChanged', function(newTier)
     -- forever).
     if hasReceivedInitialTier and previousTier ~= newTier and previousTier and previousTier.label ~= newTier.label then
         lib.notify({
-            title = 'K9 Unit',
-            description = ('Your K9 has reached the %s tier!'):format(tostring(newTier.label)),
+            title = locale('common.notify_title'),
+            description = locale('progression.tier_up', tostring(newTier.label)),
             type = 'success',
         })
     end

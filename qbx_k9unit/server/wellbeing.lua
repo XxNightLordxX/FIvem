@@ -678,7 +678,7 @@ RegisterNetEvent('qbx_k9unit:server:calmDownK9', function()
     if ped == 0 or not isK9 then return end
 
     if CalmDownCooldown.IsOnCooldown(src, Config.Wellbeing.FearStress.calmDownCooldownMs) then
-        NotifyPlayer(src, 'Your K9 needs a moment before calming down again.', 'error')
+        NotifyPlayer(src, locale('wellbeing.calm_down_on_cooldown'), 'error')
         return
     end
     CalmDownCooldown.Touch(src)
@@ -688,7 +688,7 @@ RegisterNetEvent('qbx_k9unit:server:calmDownK9', function()
 
     local stats = EnsureStats(citizenid)
     stats.fearStress = Clamp(stats.fearStress - Config.Wellbeing.FearStress.calmDownReduceAmount, 0, Config.Wellbeing.FearStress.max)
-    NotifyPlayer(src, 'Your K9 calms down.', 'success')
+    NotifyPlayer(src, locale('wellbeing.calm_down_success'), 'success')
 end)
 
 -- ======================================================================

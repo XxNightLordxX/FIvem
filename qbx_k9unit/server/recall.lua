@@ -201,7 +201,7 @@ RegisterNetEvent('qbx_k9unit:server:requestRecall', function()
     -- Runtime existence guard, not a load-order assumption -- see this
     -- file's own FILE-TO-FILE CONTRACT above.
     if type(GetActivePartnerCitizenId) ~= 'function' then
-        NotifyPlayer(src, 'Handler partnership is not available on this server.', 'error')
+        NotifyPlayer(src, locale('recall.partnership_unavailable'), 'error')
         return
     end
 
@@ -213,7 +213,7 @@ RegisterNetEvent('qbx_k9unit:server:requestRecall', function()
     -- event -- never gate on HasK9Access either.
     local k9Citizenid, callerIsK9 = GetActivePartnerCitizenId(citizenid)
     if not k9Citizenid or callerIsK9 == true then
-        NotifyPlayer(src, 'You are not currently partnered with a K9 to recall.', 'error')
+        NotifyPlayer(src, locale('recall.not_partnered_to_recall'), 'error')
         return
     end
 
@@ -226,7 +226,7 @@ RegisterNetEvent('qbx_k9unit:server:requestRecall', function()
     local k9Player = exports.qbx_core:GetPlayerByCitizenId(k9Citizenid)
     local k9Src = k9Player and k9Player.PlayerData and k9Player.PlayerData.source
     if not k9Src then
-        NotifyPlayer(src, 'Your K9 partner is not currently online.', 'inform')
+        NotifyPlayer(src, locale('recall.partner_not_online'), 'inform')
         return
     end
 
@@ -236,16 +236,16 @@ RegisterNetEvent('qbx_k9unit:server:requestRecall', function()
     -- NonLethalTakedown/PropDragging flag at all, in which case there is
     -- nothing for Recall to ever end anyway.
     if type(EndActiveEffectForHolder) ~= 'function' then
-        NotifyPlayer(src, 'Your K9 is not currently engaged with a target.', 'inform')
+        NotifyPlayer(src, locale('recall.not_engaged'), 'inform')
         return
     end
 
     local ended = EndActiveEffectForHolder(k9Src)
     if not ended then
-        NotifyPlayer(src, 'Your K9 is not currently engaged with a target.', 'inform')
+        NotifyPlayer(src, locale('recall.not_engaged'), 'inform')
         return
     end
 
-    NotifyPlayer(src, 'Recall issued -- your K9 has been called back.', 'success')
-    NotifyPlayer(k9Src, 'You have been recalled by your handler.', 'inform')
+    NotifyPlayer(src, locale('recall.recall_issued'), 'success')
+    NotifyPlayer(k9Src, locale('recall.recalled_notice'), 'inform')
 end)

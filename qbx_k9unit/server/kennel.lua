@@ -256,7 +256,7 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
     if not Config.Features.DeployableKennel then return end -- silent no-op, matches every other feature-flag gate in this resource
 
     if not HasK9Access(src) then
-        NotifyPlayer(src, 'You are not authorized to deploy a K9 kennel.', 'error')
+        NotifyPlayer(src, locale('kennel.not_authorized_to_deploy'), 'error')
         return
     end
 
@@ -267,17 +267,17 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
     local player = exports.qbx_core:GetPlayer(src)
     local citizenid = player and player.PlayerData and player.PlayerData.citizenid
     if not citizenid then
-        NotifyPlayer(src, 'Unable to resolve your own citizen ID.', 'error')
+        NotifyPlayer(src, locale('common.unable_to_resolve_citizenid'), 'error')
         return
     end
 
     if Kennels[citizenid] then
-        NotifyPlayer(src, 'You already have an active kennel deployed — pick it up before deploying another.', 'error')
+        NotifyPlayer(src, locale('kennel.already_active_deployed'), 'error')
         return
     end
 
     if PendingKennelPlacements[citizenid] then
-        NotifyPlayer(src, 'A kennel placement is already in progress.', 'error')
+        NotifyPlayer(src, locale('kennel.placement_already_in_progress'), 'error')
         return
     end
 
@@ -376,7 +376,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     PendingKennelPlacements[citizenid] = nil -- consumed either way, success or rejected below
 
     if GetGameTimer() > pending.expiresAt then
-        NotifyPlayer(src, 'Kennel placement timed out — try again.', 'error')
+        NotifyPlayer(src, locale('kennel.placement_timed_out'), 'error')
         return
     end
 
@@ -410,7 +410,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     -- precedent on HandleSearchTarget's existence-check strengthening).
     local entity = ResolveNetworkEntity(netId, 3)
     if not entity then
-        NotifyPlayer(src, 'Kennel placement failed — the object could not be confirmed.', 'error')
+        NotifyPlayer(src, locale('kennel.placement_failed_unconfirmed'), 'error')
         return
     end
 
@@ -432,7 +432,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
         -- reintroducing the exact bug class this handler's whole
         -- ResolveNetworkEntity/KennelModelHashes design was hardened
         -- against. Fail closed: refuse to track it, touch nothing else.
-        NotifyPlayer(src, 'Kennel placement failed — unexpected object model.', 'error')
+        NotifyPlayer(src, locale('kennel.placement_failed_wrong_model'), 'error')
         return
     end
 
@@ -468,7 +468,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
         -- in this file's header for why both).
         DeleteEntity(entity)
         TriggerClientEvent('qbx_k9unit:client:removeKennel', -1, netId)
-        NotifyPlayer(src, 'Kennel placement failed — placed too far from the assigned spot.', 'error')
+        NotifyPlayer(src, locale('kennel.placement_failed_too_far'), 'error')
         return
     end
 
@@ -491,7 +491,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     -- have nothing left in the world to pick up to clear it.
     for otherCitizenid, otherKennel in pairs(Kennels) do
         if otherKennel.netId == netId and otherCitizenid ~= citizenid then
-            NotifyPlayer(src, 'Kennel placement failed — that object is already claimed.', 'error')
+            NotifyPlayer(src, locale('kennel.placement_failed_already_claimed'), 'error')
             return
         end
     end
@@ -502,7 +502,7 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
         createdAt = GetGameTimer(),
     }
 
-    NotifyPlayer(src, 'Kennel deployed.', 'success')
+    NotifyPlayer(src, locale('kennel.deployed_success'), 'success')
 end)
 
 --- Client reports its own placement attempt failed (model never loaded,
@@ -536,12 +536,12 @@ RegisterNetEvent('qbx_k9unit:server:requestPickupKennel', function(netId)
 
     local kennel = Kennels[citizenid]
     if not kennel or kennel.netId ~= netId then
-        NotifyPlayer(src, 'You do not own that kennel.', 'error')
+        NotifyPlayer(src, locale('kennel.not_owner'), 'error')
         return
     end
 
     RemoveKennelForCitizenid(citizenid)
-    NotifyPlayer(src, 'Kennel picked up.', 'success')
+    NotifyPlayer(src, locale('kennel.picked_up_success'), 'success')
 end)
 
 -- Handler-disconnect cleanup (task requirement: kennels must not leak

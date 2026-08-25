@@ -139,7 +139,7 @@ local function PerformSearch(targetType, targetEntity)
     if searchInProgress then return end
 
     if not DoesEntityExist(targetEntity) then
-        lib.notify({ title = 'K9 Unit', description = 'Nothing there to search.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('search.nothing_to_search'), type = 'error' })
         return
     end
 
@@ -171,7 +171,7 @@ local function PerformSearch(targetType, targetEntity)
     -- this call, not new plumbing.
     local completed = lib.progressBar({
         duration = Config.SearchZones.sniffAnimDurationMs,
-        label = targetType == 'vehicle' and 'Searching vehicle...' or 'Searching person...',
+        label = targetType == 'vehicle' and locale('search.progress_vehicle_label') or locale('search.progress_person_label'),
         useWhileDead = false,
         canCancel = true,
         disable = { move = true, combat = true },
@@ -200,7 +200,7 @@ local function PerformSearch(targetType, targetEntity)
                 -- Kept structurally distinct from a clean result — NEVER the
                 -- same copy as contrabandFound = false, per this file's
                 -- EVENT/CALLBACK CONTRACT above.
-                lib.notify({ title = 'K9 Unit', description = 'The search could not be completed — try again.', type = 'error' })
+                lib.notify({ title = locale('common.notify_title'), description = locale('search.failed'), type = 'error' })
             elseif reason == 'on_cooldown' or reason == 'search_in_progress' then -- luacheck: ignore 542
                 -- Low-key / no notification, per the contract note's Rejection UX note.
                 -- Deliberately empty branch (silent no-op UX), not a missed implementation.
@@ -209,7 +209,7 @@ local function PerformSearch(targetType, targetEntity)
                 -- or an unrecognized/missing reason: a plain error notify is
                 -- fine, these are not expected to be routine traffic the way
                 -- cooldown is.
-                lib.notify({ title = 'K9 Unit', description = 'Unable to search right now.', type = 'error' })
+                lib.notify({ title = locale('common.notify_title'), description = locale('search.generic_denied'), type = 'error' })
             end
 
             return
@@ -227,8 +227,8 @@ local function PerformSearch(targetType, targetEntity)
             -- language, must NOT) trigger any broadcast itself from the client
             -- side.
             lib.notify({
-                title = 'K9 Unit',
-                description = 'Contraband detected!',
+                title = locale('common.notify_title'),
+                description = locale('search.contraband_found'),
                 type = 'success',
             })
         else
@@ -240,8 +240,8 @@ local function PerformSearch(targetType, targetEntity)
             -- who asked and already has the answer in hand"). Do NOT leave
             -- this case silent.
             lib.notify({
-                title = 'K9 Unit',
-                description = 'Nothing found.',
+                title = locale('common.notify_title'),
+                description = locale('search.nothing_found'),
                 type = 'inform',
             })
         end
@@ -253,7 +253,7 @@ local function PerformSearch(targetType, targetEntity)
         -- mid-search is indistinguishable from the server reporting
         -- search_failed, so it gets the same non-silent, distinct-from-
         -- "nothing found" treatment.
-        lib.notify({ title = 'K9 Unit', description = 'The search could not be completed — try again.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('search.failed'), type = 'error' })
     end
 
     searchInProgress = false
@@ -270,7 +270,7 @@ exports.ox_target:addGlobalVehicle({
     {
         name = 'qbx_k9unit:searchVehicle',
         icon = 'fas fa-magnifying-glass',
-        label = 'Search Vehicle',
+        label = locale('search.vehicle_target_label'),
         distance = Config.SearchZones.vehicleSearchDistance,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.SearchZones then return false end
@@ -299,7 +299,7 @@ exports.ox_target:addGlobalPlayer({
     {
         name = 'qbx_k9unit:searchPerson',
         icon = 'fas fa-magnifying-glass',
-        label = 'Search Person',
+        label = locale('search.person_target_label'),
         distance = Config.SearchZones.personSearchDistance,
         canInteract = function(entity, distance, coords, name)
             if not Config.Features.SearchZones then return false end

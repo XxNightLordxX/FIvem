@@ -143,9 +143,9 @@ local function ApplyWellbeingSnapshot(stats)
     if Config.Features.DistractionSystem then
         local isDistractedNow = lastStats.distractedUntil > GetGameTimer()
         if isDistractedNow and not wasDistracted then
-            lib.notify({ title = 'K9 Unit', description = 'Your K9 is distracted!', type = 'error' })
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.distracted'), type = 'error' })
         elseif wasDistracted and not isDistractedNow then
-            lib.notify({ title = 'K9 Unit', description = 'Your K9 refocuses.', type = 'inform' })
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.refocused'), type = 'inform' })
         end
         wasDistracted = isDistractedNow
     end
@@ -153,9 +153,9 @@ local function ApplyWellbeingSnapshot(stats)
     if Config.Features.FearStressSystem then
         local isHesitatingNow = lastStats.hesitatingUntil > GetGameTimer()
         if isHesitatingNow and not wasHesitating then
-            lib.notify({ title = 'K9 Unit', description = 'Your K9 hesitates, too stressed to act.', type = 'error' })
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.hesitating'), type = 'error' })
         elseif wasHesitating and not isHesitatingNow then
-            lib.notify({ title = 'K9 Unit', description = 'Your K9 settles down.', type = 'inform' })
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.settled'), type = 'inform' })
         end
         wasHesitating = isHesitatingNow
     end
@@ -253,26 +253,26 @@ if Config.Features.MoodSystem then
     local function NotifyResult(result, okDescription)
         if not result then return end
         if result.ok then
-            lib.notify({ title = 'K9 Unit', description = okDescription, type = 'success' })
+            lib.notify({ title = locale('common.notify_title'), description = okDescription, type = 'success' })
             return
         end
 
         local reasonLabel = ({
-            feature_disabled = 'That is not enabled right now.',
-            invalid_target   = 'That is not a valid K9.',
-            too_far          = 'Get closer to the K9 first.',
-            on_cooldown      = 'Try again in a moment.',
-            no_item          = 'You do not have the right item.',
-        })[result.reason] or 'Unable to do that right now.'
+            feature_disabled = locale('wellbeing.reason_feature_disabled'),
+            invalid_target   = locale('wellbeing.reason_invalid_target'),
+            too_far          = locale('common.too_far_from_k9'),
+            on_cooldown      = locale('wellbeing.reason_on_cooldown'),
+            no_item          = locale('wellbeing.reason_no_item'),
+        })[result.reason] or locale('wellbeing.reason_generic')
 
-        lib.notify({ title = 'K9 Unit', description = reasonLabel, type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = reasonLabel, type = 'error' })
     end
 
     exports.ox_target:addGlobalPlayer({
         {
             name = 'qbx_k9unit:petK9',
             icon = 'fas fa-hand-holding-heart',
-            label = 'Pet K9',
+            label = locale('wellbeing.pet_target_label'),
             distance = 3.0,
             canInteract = function(entity)
                 if not Config.Features.MoodSystem then return false end
@@ -283,13 +283,13 @@ if Config.Features.MoodSystem then
                 if not targetServerId then return end
 
                 local result = lib.callback.await('qbx_k9unit:server:petK9', false, targetServerId)
-                NotifyResult(result, 'You pet the K9.')
+                NotifyResult(result, locale('wellbeing.pet_success'))
             end,
         },
         {
             name = 'qbx_k9unit:feedK9',
             icon = 'fas fa-bone',
-            label = 'Feed K9',
+            label = locale('wellbeing.feed_target_label'),
             distance = 3.0,
             canInteract = function(entity)
                 if not Config.Features.MoodSystem then return false end
@@ -300,7 +300,7 @@ if Config.Features.MoodSystem then
                 if not targetServerId then return end
 
                 local result = lib.callback.await('qbx_k9unit:server:feedK9', false, targetServerId)
-                NotifyResult(result, 'You feed the K9.')
+                NotifyResult(result, locale('wellbeing.feed_success'))
             end,
         },
     })
@@ -336,25 +336,29 @@ if Config.Features.DistractionSystem then
         if not result then return end
 
         if result.ok then
-            lib.notify({ title = 'K9 Unit', description = 'Used.', type = 'success' })
+            lib.notify({ title = locale('common.notify_title'), description = locale('wellbeing.distraction_used'), type = 'success' })
             return
         end
 
+        -- 'invalid_target' and the unrecognized-reason fallback below share
+        -- the identical English sentence in this table (confirmed before
+        -- minting) -- both point at the same wellbeing.reason_use_generic
+        -- key rather than duplicating it under a second name.
         local reasonLabel = ({
-            feature_disabled = 'That is not enabled right now.',
-            invalid_item     = 'That item is not usable this way.',
-            invalid_target   = 'Unable to use that right now.',
+            feature_disabled = locale('wellbeing.reason_feature_disabled'),
+            invalid_item     = locale('wellbeing.reason_invalid_item'),
+            invalid_target   = locale('wellbeing.reason_use_generic'),
             no_item          = failDescription,
-        })[result.reason] or 'Unable to use that right now.'
+        })[result.reason] or locale('wellbeing.reason_use_generic')
 
-        lib.notify({ title = 'K9 Unit', description = reasonLabel, type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = reasonLabel, type = 'error' })
     end
 
     RegisterCommand('k9meatbait', function()
-        UseDistractionItem('meatBait', 'You do not have any meat bait.')
+        UseDistractionItem('meatBait', locale('wellbeing.reason_no_meat_bait'))
     end, false)
 
     RegisterCommand('k9whistle', function()
-        UseDistractionItem('whistle', 'You do not have an ultrasonic whistle.')
+        UseDistractionItem('whistle', locale('wellbeing.reason_no_whistle'))
     end, false)
 end

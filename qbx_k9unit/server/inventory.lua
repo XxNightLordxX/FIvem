@@ -625,7 +625,7 @@ local function EnsureK9Stash(citizenid)
 
     local owner, groups = ResolveStashOwnerAndGroups(citizenid)
     local stashId = ('k9inv-%s'):format(citizenid)
-    local label = 'K9 Gear'
+    local label = locale('inventory.stash_label')
 
     local ok, err = pcall(function()
         exports.ox_inventory:RegisterStash(stashId, label, Config.K9Inventory.slots, Config.K9Inventory.maxWeight, owner, groups)
