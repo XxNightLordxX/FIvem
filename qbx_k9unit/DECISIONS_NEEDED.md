@@ -234,10 +234,35 @@ in, currently silent), which drops the requirement from "author RAGE
 `.awc`/`dat151`/`dat54` audio banks" to "supply four short, genuinely Ogg
 Vorbis `.ogg` files."
 
-**Your call**: source or commission four `.ogg` files (see
-`html/sounds/CREDITS.md` for the exact filenames and a few unverified
-leads), or accept that barks and proximity audio stay silent and drop
-`AdvancedBarkRadial`/`ProximityAudioFX` from your enable list.
+**This decision got sharper on 2026-08-25.** The leads were previously
+unverified snippets and every audio host looked unreachable. Both turned out to
+be tooling problems, not real ones — plain `curl` reaches all of them — so the
+candidates have now been checked against each asset's own page or API. Full
+table in `html/sounds/CREDITS.md`. Two headlines:
+
+- **Nothing usable is public domain.** The Wikimedia files a previous note
+  called "public domain" are **CC BY-SA 3.0/4.0**. The OpenGameArt file called
+  "CC0" is **OGA-BY 3.0**. Kenney has no animal audio pack at all, and the
+  Commons CC0 category has no genuine bark — its hits are the London place name
+  "Barking" and spoken-word clips.
+- **The OpenGameArt one is an active trap.** Searching that page for "CC0" does
+  return a hit, because the file sits in a collection *named* "CC0 Audio". The
+  licence field says OGA-BY 3.0. A quick text-search confirmation gets a false
+  positive and ships an attribution-licensed asset as public domain — which is
+  almost certainly how the original claim went wrong.
+
+**Your call, now between three concrete options rather than an unknown:**
+
+1. **Accept OGA-BY 3.0** — attribution only, no share-alike. Lightest real
+   obligation, and the most likely fit. Files are `.wav` and need converting.
+2. **Accept CC BY-SA** — attribution *plus share-alike*. Share-alike is the part
+   worth pausing on: it is a copyleft term applied to audio you would ship
+   inside a resource distributed to other server owners. Already `.ogg`.
+3. **Commission or record your own**, or accept silence and drop
+   `AdvancedBarkRadial`/`ProximityAudioFX` from your enable list.
+
+Nothing was downloaded, because options 1 and 2 are licensing commitments about
+your project and are not ours to make on your behalf.
 
 ### D8. Run the bone-index sweep — it now finishes two features that are otherwise shipped, rather than unblocking work that doesn't exist yet.
 

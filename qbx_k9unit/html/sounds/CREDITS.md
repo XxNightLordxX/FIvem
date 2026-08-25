@@ -208,3 +208,62 @@ added, record it here in this format:
 - Verified Ogg Vorbis (OggS magic bytes): yes/no
 - File size:
 ```
+
+
+---
+
+# LICENCE VERIFICATION PASS — 2026-08-25
+
+The leads listed above were recorded from search snippets and explicitly marked
+UNCONFIRMED. They have now been checked directly against each asset's own page
+or API. **Two of the four were mislicensed in the brief above.** Nothing was
+downloaded and nothing was added to this resource.
+
+Why this pass could go further than the last one: earlier attempts had only a
+fetch tool that returns an AI summary of a page, and every audio host came back
+blocked. Plain `curl` through the environment's proxy reaches all of them. The
+hosts were never the obstacle — the tool was.
+
+## Verified findings
+
+| Candidate | Brief claimed | **Actually licensed** | Verified how |
+|---|---|---|---|
+| `File:Barking of a dog.ogg` (Wikimedia) | public domain | **CC BY-SA 3.0** | Commons API `extmetadata.LicenseShortName` |
+| `File:Barking of a dog 2.ogg` | — | **CC BY-SA 3.0** | same |
+| `File:Perro ladrando.ogg` | — | **CC BY-SA 4.0** | same |
+| `File:Rottweiler Barking.oga` | — | **CC BY-SA 4.0** | same |
+| `File:Barking dog in Rome.ogg` | — | **CC BY-SA 3.0** | same |
+| OpenGameArt "Dog barking mono" (HaelDB) | CC0 | **OGA-BY 3.0** | the asset page's own licence field |
+| Kenney animal/audio pack | CC0, dog unconfirmed | **no animal or dog audio pack found** | site asset search |
+| Commons `incategory:CC-Zero` + dog audio | — | **no genuine bark** | every hit is either the London place name "Barking" or a spoken-word pronunciation |
+
+## The OpenGameArt one is a trap, and worth understanding before re-checking it
+
+Searching that page for "CC0" **does** return a hit — because the file belongs
+to a user-curated collection *named* "CC0 Audio - Uploader: HaelDB". The
+licence field itself says OGA-BY 3.0. Anyone confirming the brief's claim with a
+quick text search, human or otherwise, gets a false positive and ships an
+attribution-licensed asset believing it is public domain.
+
+That is almost certainly how the original snippet-sourced claim went wrong.
+
+## Where this leaves the decision
+
+Real, usable dog-bark audio is obtainable. **None of it is public domain.**
+Every candidate found carries an obligation:
+
+- **CC BY-SA** (the Wikimedia files) — attribution *plus share-alike*. Share-alike
+  is the significant one: it is a copyleft term, and applying it to audio
+  shipped inside a resource distributed to server owners is a licensing
+  commitment about this project, not a formality.
+- **OGA-BY 3.0** (OpenGameArt) — attribution only, no share-alike. Materially
+  lighter than CC BY-SA, and the more likely fit.
+
+This is the owner's call, not one to make on their behalf, which is why nothing
+was downloaded. Whichever way it goes, the four filenames
+`html/sounds/{bark,bark_alert,bark_aggressive,bark_calm}.ogg` and the pre-drop
+checklist above still apply, and the attribution must be recorded in this file.
+
+Note the format gap: every verified candidate is `.ogg`/`.oga`/`.wav`, while the
+NUI bridge expects `.ogg`. The Wikimedia files already qualify; the OpenGameArt
+ones are `.wav` and would need converting.
