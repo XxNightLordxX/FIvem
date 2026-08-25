@@ -46,14 +46,14 @@
     and now also confirmed for qb-target/qtarget/sleepless_interact -- see
     shared/compat/target.lua's own per-adapter comments for the full,
     per-backend confirmation record this method goes through since this
-    pass (coder-backend). Which model, and any idle scenario it plays, is
+    pass). Which model, and any idle scenario it plays, is
     fully operator-configurable (Config.K9EquipmentShop.pedModel/
     pedHeading/pedScenario, or a per-location override of any of those three
     plus `label`) -- never hardcoded, and never validated against
     Config.Peds, since a shop attendant is not a K9.
 
     ======================================================================
-    COMPAT LAYER (this pass, coder-backend). Both third-party calls this
+    COMPAT LAYER (this pass). Both third-party calls this
     file makes -- targeting the ped, and opening the shop UI -- now go
     through `K9Compat.Get(...)` (shared/compat/core.lua) instead of a direct
     `exports.ox_target`/`exports.ox_inventory` call, so this feature keeps

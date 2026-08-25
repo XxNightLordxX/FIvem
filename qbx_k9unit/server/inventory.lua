@@ -453,26 +453,27 @@ if Config.K9Inventory.allowedItems then
     end
 end
 
---- RUNTIME CAPABILITY CHECK for the ox_inventory `registerHook` export the
---- item-filter hook below depends on. A small LOCAL duplicate of
---- server/tracking.lua's `IsOxInventoryHookCapable` of the exact same name/
---- shape/reasoning (see that file's own doc comment on it for the full
---- "why a runtime check, not a `dependencies` version pin, and why
---- GetResourceState must be checked before any export access is attempted"
---- writeup — not re-derived here) — NOT extracted to a shared
---- resource-global because this task's scope is this file pair only; see
---- this file's header FILE-TO-FILE CONTRACT for the explicit
---- non-consolidation note.
---- @return boolean
-local function IsOxInventoryHookCapable()
-    if GetResourceState('ox_inventory') ~= 'started' then
-        return false
-    end
-
-    local ok, hookExport = pcall(function() return exports.ox_inventory.registerHook end)
-    return ok and type(hookExport) == 'function'
-end
-
+--- COMPAT-LAYER MIGRATION (this pass, coder-backend): the local
+--- `IsOxInventoryHookCapable()` runtime-capability probe that used to live
+--- here (a byte-for-byte duplicate of server/tracking.lua's function of the
+--- same name — `GetResourceState('ox_inventory') == 'started'` +
+--- pcall'd export-access, run BEFORE the actual `registerHook` call below)
+--- is DELETED outright, not kept alongside the new call. `K9Compat.Get('inventory').RegisterHook`
+--- (shared/compat/core.lua's RequiredMethods.inventory.server.RegisterHook,
+--- registered against real signatures in shared/compat/inventory.lua)
+--- already performs the identical capability check internally, per-adapter,
+--- for WHATEVER inventory backend Config.Compat actually resolved — a
+--- second, ox_inventory-only copy here would answer the wrong question on a
+--- qb-inventory server (ox_inventory not started -> always `false`, even
+--- when qb-inventory's own real hook mechanism IS available), so it is not
+--- kept as defense-in-depth, it is removed as a hardcoded-backend
+--- regression waiting to happen. `RegisterK9InventoryItemFilterHook` below
+--- now reads `RegisterHook`'s own boolean return value to decide whether to
+--- print the "unenforced" warning, preserving the exact "warn once, whitelist
+--- genuinely unenforced, stash itself keeps working" behavior this file's
+--- own header already documents — see that function's own doc comment for
+--- the full updated writeup.
+---
 --- Config.K9Inventory.allowedItems ENFORCEMENT (this pass). GATED AT
 --- REGISTRATION, same "config-gated registration, not just config-gated
 --- behavior" convention server/tracking.lua's ScentTracking block already
@@ -529,16 +530,31 @@ local function RegisterK9InventoryItemFilterHook()
     if not Config.Features.K9Inventory then return end -- nothing to gate for; do not probe/warn about a disabled-by-default feature
     if not K9InventoryAllowedItemSet then return end -- no whitelist configured -- Config.K9Inventory.allowedItems' own documented `nil` meaning; inert by config choice, not by missing capability, so no warning either
 
-    if not IsOxInventoryHookCapable() then
-        print('[qbx_k9unit] WARNING: Config.K9Inventory.allowedItems is configured but ' ..
-            'ox_inventory\'s registerHook export is unavailable (ox_inventory is missing, not ' ..
-            'started, or this build does not support hook registration) -- the K9 gear stash ' ..
-            'item whitelist is NOT enforced. The stash itself still functions normally (any ' ..
-            'item can be deposited); only the allowedItems restriction is disabled.')
-        return
-    end
-
-    exports.ox_inventory:registerHook('swapItems', function(payload)
+    -- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+    -- shared/compat/core.lua's RequiredMethods.inventory.server.RegisterHook
+    -- -- never a direct `exports.ox_inventory:registerHook` call. The
+    -- capability check that used to gate this call (`IsOxInventoryHookCapable()`,
+    -- deleted above) is now performed inside the adapter itself, per
+    -- whatever backend Config.Compat actually resolved -- `RegisterHook`
+    -- returns `false` (never throws) whenever nothing usable is available,
+    -- which is exactly what the warning below now branches on, preserving
+    -- the same "warn once, whitelist genuinely unenforced, stash itself
+    -- keeps working unfiltered" behavior this file's own header documents.
+    --
+    -- EVENT-NAME SCOPE, unchanged: 'swapItems' is the only event name any
+    -- non-ox_inventory adapter has a confirmed translation for (see
+    -- shared/compat/inventory.lua's own "RegisterHook VOCABULARY" section) --
+    -- this file already only ever registered for 'swapItems', so no change
+    -- was needed here on that front.
+    --
+    -- PAYLOAD SHAPE, unchanged: the callback body below reads
+    -- `payload.fromInventory`, `payload.toInventory`, `payload.fromSlot` --
+    -- exactly ox_inventory's own real 'swapItems' field names, which is also
+    -- the exact vocabulary every adapter's RegisterHook is contracted to
+    -- translate onto (never a reinvented shape) -- so this callback body
+    -- needed NO change to work against any backend's adapter, only the
+    -- registration call itself.
+    local registered = K9Compat.Get('inventory').RegisterHook('swapItems', function(payload)
         -- An item already inside a K9 stash moving to a DIFFERENT SLOT in
         -- that SAME stash (reorganizing/restacking) is not an incoming
         -- transfer from outside -- never re-filtered (header "WHAT IS
@@ -574,6 +590,14 @@ local function RegisterK9InventoryItemFilterHook()
             return false -- REJECT: not on Config.K9Inventory.allowedItems -- verified pre-mutation veto (see header)
         end
     end)
+
+    if not registered then
+        print('[qbx_k9unit] WARNING: Config.K9Inventory.allowedItems is configured but ' ..
+            'no compatible inventory backend hook registration succeeded (see /k9compat, if ' ..
+            'enabled, for exactly why) -- the K9 gear stash item whitelist is NOT enforced. The ' ..
+            'stash itself still functions normally (any item can be deposited); only the ' ..
+            'allowedItems restriction is disabled.')
+    end
 end
 
 -- LIFECYCLE FIX (this pass): dispatches to RegisterK9InventoryItemFilterHook()
@@ -582,9 +606,26 @@ end
 -- server/tracking.lua's identical fix for the identical export/gap).
 --
 -- Branch 1 (original, unchanged behavior): THIS resource's own start.
--- Branch 2 (NEW this pass -- closes a real gap): ox_inventory's OWN start.
+-- Branch 2 (COMPAT-LAYER MIGRATION, this pass): used to hardcode
+-- `resourceName == 'ox_inventory'` -- now asks K9Compat itself which
+-- resource actually backs the 'inventory' system, same pattern
+-- client/inventory.lua's own RegisterK9InventoryOxTargetOption dispatch
+-- already establishes for the 'target' system. `K9Compat.Redetect()` is
+-- forced here (not relying on shared/compat/core.lua's own
+-- onResourceStart redetect hook having already run for this SAME event)
+-- so this check is correct regardless of relative handler-registration
+-- order between the two files. Hardcoding 'ox_inventory' here would have
+-- silently reopened exactly the single-backend gap this whole pass exists
+-- to close: a qb-inventory server restarting qb-inventory would never
+-- re-trigger this branch at all.
 AddEventHandler('onResourceStart', function(resourceName)
-    if resourceName == GetCurrentResourceName() or resourceName == 'ox_inventory' then
+    if resourceName == GetCurrentResourceName() then
+        RegisterK9InventoryItemFilterHook()
+        return
+    end
+
+    K9Compat.Redetect()
+    if resourceName == K9Compat.Which('inventory') then
         RegisterK9InventoryItemFilterHook()
     end
 end)
@@ -653,10 +694,49 @@ end
 
 --- Idempotent (per server session) stash registration for `citizenid`. Only
 --- calls the (session-unverified, see this file's header) RegisterStash
---- export once per citizenid per session. pcall-wrapped since a bad/missing
---- ox_inventory install, or an unconfirmed export signature, must surface as
---- a clean `stash_failed` result to the caller, not an uncaught server
---- error.
+--- export once per citizenid per session.
+---
+--- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+--- shared/compat/core.lua's RequiredMethods.inventory.server.RegisterStash
+--- -- never a direct `exports.ox_inventory:RegisterStash` call.
+--- `K9Compat.Get('inventory').RegisterStash` already pcall-wraps the
+--- underlying export call (BuildSafeAdapter, shared/compat/core.lua) and
+--- returns a plain boolean -- the pcall this function used to wrap the raw
+--- export call in is no longer needed, but this also means a genuine
+--- underlying error's text is no longer available for the warning below
+--- (same disclosed trade-off as this file's RegisterShop-equivalent sibling,
+--- server/equipmentshop.lua).
+---
+--- STUB-DEGRADE ANALYSIS (this task's own explicit question, answered here
+--- since this is THE security-critical mutation this file grants):
+--- ox_inventory is a hard fxmanifest.lua dependency today, so this call has
+--- never had to survive it being absent. Routed through K9Compat, a fully
+--- undetected inventory (the no-op stub) makes RegisterStash return `nil`
+--- (falsy) -- this function returns `false`, HandleOpenK9Inventory's caller
+--- (lib.callback.register('qbx_k9unit:server:openK9Inventory', ...)) reports
+--- `{ ok = false, reason = 'stash_failed' }`, and client/inventory.lua's own
+--- K9_INVENTORY_REASON_MESSAGES table already has a `stash_failed` entry
+--- (`locale('inventory.reason_stash_failed')`) wired to a player-facing
+--- error notify -- a genuinely clean "feature switched off" degrade, not a
+--- hang or an uncaught error, and not a NEW code path either: this is the
+--- exact same reason value/notify this file already returned before this
+--- pass whenever the (previously ox_inventory-only) pcall'd RegisterStash
+--- call failed. On qb-inventory specifically (the other CONFIRMED backend),
+--- RegisterStash is REAL (composed onto `CreateInventory`, per
+--- shared/compat/inventory.lua's own qb-inventory section) so the K9
+--- stash itself is genuinely created -- but this file's own onResourceStart
+--- assert already hard-enforces `Config.K9Inventory.accessScope ==
+--- 'department'`, and qb-inventory's `groups`/`owner` arguments are silently
+--- discarded by that adapter (no per-inventory ACL concept exists on that
+--- backend at all, per that adapter's own header) -- meaning the real access
+--- boundary for a qb-inventory-backed K9 stash is ENTIRELY this file's own
+--- server-side checks (HasK9Access, IsAuthorizedForK9Inventory, proximity),
+--- never anything qb-inventory itself enforces. That is unchanged by this
+--- pass (those checks all ran before EnsureK9Stash is ever reached, and
+--- still do) -- flagged here only because it is the one place "which
+--- backend is active" changes what is actually the security boundary,
+--- which is worth a reader knowing explicitly rather than assuming
+--- ox_inventory's groups-based enforcement is universal.
 --- @param citizenid string
 --- @return boolean ok
 local function EnsureK9Stash(citizenid)
@@ -668,12 +748,10 @@ local function EnsureK9Stash(citizenid)
     local stashId = ('k9inv-%s'):format(citizenid)
     local label = locale('inventory.stash_label')
 
-    local ok, err = pcall(function()
-        exports.ox_inventory:RegisterStash(stashId, label, Config.K9Inventory.slots, Config.K9Inventory.maxWeight, owner, groups)
-    end)
+    local registered = K9Compat.Get('inventory').RegisterStash(stashId, label, Config.K9Inventory.slots, Config.K9Inventory.maxWeight, owner, groups)
 
-    if not ok then
-        print(('[qbx_k9unit] RegisterStash failed for %s: %s'):format(stashId, tostring(err)))
+    if not registered then
+        print(('[qbx_k9unit] RegisterStash failed for %s -- no compatible inventory backend is currently detected/running, or it rejected this stash (see /k9compat, if enabled).'):format(stashId))
         return false
     end
 

@@ -31,8 +31,12 @@
 
     FILE-TO-FILE CONTRACT:
     - THIS FILE calls the server's 'qbx_k9unit:server:openK9Inventory'
-      lib.callback and exports.ox_inventory:openInventory — see this file's
-      header CONFIDENCE NOTE below for the latter's verification status.
+      lib.callback and, via K9Compat.Get('inventory').OpenStash
+      (shared/compat/core.lua), whatever the operator's Config.Compat
+      resolves for the inventory system (ox_inventory's own
+      exports.ox_inventory:openInventory when that is what resolves) — see
+      this file's header CONFIDENCE NOTE below for the underlying call's
+      verification status.
     - This file's ox_target canInteract predicate below calls
       client/main.lua's resource-global `IsEntityModelK9(entity)`
       (DEVELOPER_REFERENCE.md item 3) rather than keeping its own small local
@@ -59,22 +63,34 @@
     ox_inventory pattern" — MEDIUM confidence, not independently
     re-verified against the real ox_inventory source or a live install this
     session (same status server/inventory.lua's header gives RegisterStash).
+    Still the exact call `K9Compat.Get('inventory').OpenStash` performs for
+    an ox_inventory backend -- see shared/compat/inventory.lua's own
+    OpenStash doc comment, which independently re-confirms this shape
+    against client/inventory.lua's own pre-existing call (this file, before
+    this pass).
 
-    RUNTIME EXISTENCE GUARD (this pass): OpenK9InventoryForNetId's call to
-    `exports.ox_inventory:openInventory` used to be a naked, unguarded
-    export call — the ONLY third-party-resource export call in this file
-    with no `type(x) == 'function'`-style existence check at all, unlike
-    this file's server-side counterpart (server/inventory.lua's
-    `IsOxInventoryHookCapable` around `registerHook`). Fixed: see
-    `IsOxInventoryOpenCapable()` immediately above OpenK9InventoryForNetId —
-    same `GetResourceState('ox_inventory') == 'started'` + pcall'd
-    export-access shape, so an ox_inventory restart/version mismatch after
-    THIS resource has already started degrades to a logged warning + a
-    player-facing `inventory.unable_to_open_generic` notify, never an
-    uncaught error out of an ox_target onSelect/RequestOpenOwnK9Inventory
-    call. The call itself is additionally pcall'd (existence is not proof
-    the call can't still throw for some other reason) with the same
-    fail-safe notify.
+    COMPAT LAYER (this pass): OpenK9InventoryForNetId's call to open the
+    stash UI, and its own runtime existence guard, now go through
+    `K9Compat.Get('inventory')`/`K9Compat.Which('inventory')`
+    (shared/compat/core.lua) instead of `exports.ox_inventory:openInventory`
+    directly -- this file's own target-side option (RegisterK9InventoryOption
+    below) was ALREADY routed through K9Compat.Get('target') from an earlier
+    pass; this closes the matching gap on the inventory side, found the same
+    way client/tablet.lua's useItem gap was found: by grepping for
+    `exports.ox_target:`/`exports.ox_inventory:` outside shared/compat/ and
+    checking every hit, rather than trusting that "the compat layer is
+    already wired everywhere" was actually true (see DEVELOPER_REFERENCE.md
+    §21's account of that exact false assumption recurring). `IsInventoryOpenCapable()`
+    immediately above OpenK9InventoryForNetId asks the compat layer's own
+    detection result (`K9Compat.Which('inventory') ~= nil`) rather than
+    probing `exports.ox_inventory` directly, so this guard -- and its
+    warning -- are correct for WHATEVER inventory Config.Compat resolved,
+    not only ox_inventory. `K9Compat.Get('inventory').OpenStash` is already
+    pcall-safe (see that method's own doc comment in
+    shared/compat/inventory.lua), so the separate `pcall` this file used to
+    wrap the raw export call in is no longer needed here -- the safety is
+    already built into what `K9Compat.Get` hands back, same as every other
+    consumer in this resource.
 ]]
 
 --- Human-readable rejection messages for the openK9Inventory callback's
@@ -104,27 +120,23 @@ local K9_INVENTORY_REASON_MESSAGES = {
     stash_failed      = locale('inventory.reason_stash_failed'),
 }
 
---- RUNTIME EXISTENCE GUARD for the ox_inventory `openInventory` export this
---- file calls below to actually present the stash UI once the server has
---- granted access. ox_inventory is a hard `fxmanifest.lua` `dependencies`
---- entry, which only guarantees it was RUNNING at the moment THIS resource
---- itself started — it does NOT guarantee the export still exists for the
---- rest of this resource's lifetime (an operator can `restart ox_inventory`
---- independently of this one, or run a fork/older build missing this
---- export), so this is a runtime check, never a load-order assumption —
---- same `GetResourceState` + pcall'd export-access shape as
---- server/inventory.lua's own `IsOxInventoryHookCapable` (the server-side
---- `registerHook` export); this is the client-side equivalent for
---- `openInventory`, per this project's "check `type(x) == 'function'`
---- before calling into another resource's global/export" rule.
+--- RUNTIME EXISTENCE GUARD for the K9Compat-detected inventory's OpenStash
+--- method, called below to actually present the stash UI once the server
+--- has granted access. Routed through `K9Compat.Get('inventory')`
+--- (shared/compat/core.lua) rather than `exports.ox_inventory:openInventory`
+--- directly this pass -- the same gap this resource's own contract-review
+--- pass found in client/tablet.lua's useItem call (see
+--- DEVELOPER_REFERENCE.md §21), fixed identically here: `K9Compat.Which`
+--- returns a non-nil resourceName only when a real, verified adapter is
+--- currently active for THIS realm, so this guard -- and its warning below
+--- -- are correct for WHATEVER inventory Config.Compat resolved, not only
+--- ox_inventory. `K9Compat.Get('inventory')` itself is NEVER nil (see
+--- core.lua's own header) so it cannot be used for this existence check on
+--- its own -- its no-op stub would silently satisfy a bare
+--- `type(...) == 'table'` test.
 --- @return boolean
-local function IsOxInventoryOpenCapable()
-    if GetResourceState('ox_inventory') ~= 'started' then
-        return false
-    end
-
-    local ok, openExport = pcall(function() return exports.ox_inventory.openInventory end)
-    return ok and type(openExport) == 'function'
+local function IsInventoryOpenCapable()
+    return K9Compat.Which('inventory') ~= nil
 end
 
 --- Shared "ask the server to open this stash, then open it client-side"
@@ -174,10 +186,10 @@ local function OpenK9InventoryForNetId(netId)
     -- re-litigation of access, so it always gets the same generic
     -- unable-to-open copy rather than any of K9_INVENTORY_REASON_MESSAGES
     -- (those are all server-decision reasons, not applicable here).
-    if not IsOxInventoryOpenCapable() then
-        print(('[qbx_k9unit] WARNING: server granted K9 stash %s but ox_inventory\'s ' ..
-            'openInventory export is unavailable client-side (ox_inventory is missing, not ' ..
-            'started, or this build does not support it) -- the stash UI could not be opened.')
+    if not IsInventoryOpenCapable() then
+        print(('[qbx_k9unit] WARNING: server granted K9 stash %s but no usable inventory ' ..
+            'adapter is currently detected (Config.Compat) -- the stash UI could not be opened. ' ..
+            'Run /k9compat (if enabled) to see why.')
             :format(tostring(result.stashId)))
         lib.notify({
             title = locale('common.notify_title'),
@@ -187,16 +199,12 @@ local function OpenK9InventoryForNetId(netId)
         return
     end
 
-    -- pcall'd defensively (not just existence-guarded above): the export
-    -- existing is not proof the call itself cannot throw for some other
-    -- reason (a malformed stashId, an internal ox_inventory error, etc) —
-    -- never let that propagate as an uncaught error out of an ox_target
-    -- onSelect/RequestOpenOwnK9Inventory call, same "never a naked
-    -- third-party export call with no fail path" discipline this file's
-    -- server-side counterpart applies to RegisterStash (EnsureK9Stash).
-    local openOk = pcall(function()
-        exports.ox_inventory:openInventory('stash', result.stashId)
-    end)
+    -- K9Compat.Get('inventory').OpenStash is already pcall-safe (see
+    -- shared/compat/inventory.lua's own OpenStash doc comment) and returns
+    -- `false` (never throws) if the underlying export call itself fails —
+    -- no additional pcall needed here beyond the IsInventoryOpenCapable()
+    -- check above, same posture as client/tablet.lua's own UseItem call.
+    local openOk = K9Compat.Get('inventory').OpenStash(result.stashId)
 
     if not openOk then
         lib.notify({

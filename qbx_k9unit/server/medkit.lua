@@ -502,7 +502,16 @@ local function RunUseK9MedkitMutation(usingPed, targetPed, source, targetServerI
     -- Item possession check — cheap, non-mutating, run before the cooldown
     -- is stamped so a player with no medkit never burns the target's
     -- cooldown window for nothing.
-    local carriedCount = exports.ox_inventory:GetItemCount(source, Config.K9Medkit.itemName)
+    --
+    -- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+    -- shared/compat/core.lua's RequiredMethods.inventory.server.GetItemCount
+    -- -- never a direct `exports.ox_inventory:GetItemCount` call. The
+    -- adapter already fails closed to `0` on any capability/call failure
+    -- (see shared/compat/inventory.lua's own GetItemCount doc comment on
+    -- both the ox_inventory and qb-inventory adapters), matching this file's
+    -- own pre-existing `not carriedCount or carriedCount < 1` guard exactly
+    -- -- no behavior change on either confirmed backend.
+    local carriedCount = K9Compat.Get('inventory').GetItemCount(source, Config.K9Medkit.itemName)
     if not carriedCount or carriedCount < 1 then
         return { ok = false, reason = 'no_item' }
     end

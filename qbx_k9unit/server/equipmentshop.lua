@@ -282,6 +282,32 @@
 -- WarnIfItemMissing -- see this file's header "THE WARNING PATTERN"
 -- section for the full precedent/reasoning. A WARNING ONLY -- never
 -- throws, never prevents resource start.
+--
+-- COMPAT-LAYER FINDING (this pass, coder-backend), DELIBERATELY NOT ROUTED:
+-- the `exports.ox_inventory:Items(itemName)` call below is left as a direct
+-- call, NOT `K9Compat.Get('inventory')...` -- shared/compat/core.lua's
+-- RequiredMethods.inventory table only lists `ItemExists` under the CLIENT
+-- realm (`client = { 'OpenStash', 'OpenShop', 'UseItem', 'ItemExists' }`),
+-- never under `server`. This function runs entirely server-side
+-- (onResourceStart), so there is no server-side accessor in the current
+-- contract this call could route through -- `K9Compat.Get('inventory')` on
+-- the server realm exposes no `ItemExists` method at all, on ANY backend,
+-- regardless of what is actually detected. Per this task's own explicit
+-- instruction ("if a call site has no clean accessor, that is a finding,
+-- not a licence to improvise"), this is reported rather than worked around:
+-- adding a server-side ItemExists to the contract is a real, plausible fix,
+-- but it is a contract change every adapter (ox_inventory, qb-inventory, and
+-- the five unconfirmed stubs in shared/compat/inventory.lua) would need to
+-- either implement or be silently skipped by verification -- exactly the
+-- "adding one means every adapter must implement it or be skipped" risk
+-- this task warns against taking unilaterally. Left alone here; reported to
+-- main. Practical consequence: on a non-ox_inventory backend, this
+-- item-existence pre-check simply never runs true (ox_inventory not
+-- started -> GetResourceState guard fails closed inside the direct call's
+-- own pcall below) -- the shop registration itself is now correctly
+-- backend-agnostic (see RegisterShop below), but this one operator-facing
+-- sanity warning stays ox_inventory-specific until the contract gains a
+-- server-side ItemExists.
 -- ======================================================================
 
 --- @param itemName any
@@ -392,21 +418,37 @@ AddEventHandler('onResourceStart', function(resourceName)
         if next(groups) == nil then groups = nil end
     end
 
-    local ok, err = pcall(function()
-        exports.ox_inventory:RegisterShop(shopConfig.shopType, {
-            name = type(shopConfig.label) == 'string' and shopConfig.label ~= '' and shopConfig.label or 'K9 Supply',
-            inventory = inventoryItems,
-            groups = groups,
-            -- Deliberately NO `locations`/`targets` field -- see this
-            -- file's header, point 2, for why: this resource's OWN
-            -- client/equipmentshop.lua builds the physical interaction
-            -- point instead, via ox_target, which is the only way an
-            -- externally-registered shop actually becomes reachable.
-        })
-    end)
+    -- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+    -- shared/compat/core.lua's RequiredMethods.inventory.server.RegisterShop
+    -- -- never a direct `exports.ox_inventory:RegisterShop` call. The
+    -- adapter's own argument shape is `{ label, items, groups }` (NOT
+    -- ox_inventory's native `{ name, inventory, groups }`) -- see
+    -- shared/compat/inventory.lua's own RegisterShop doc comment, which
+    -- translates this shape onto whatever the detected backend actually
+    -- expects (ox_inventory's own `{ name = shopDetails.label, inventory =
+    -- shopDetails.items, groups = shopDetails.groups }` for that adapter).
+    -- `K9Compat.Get('inventory').RegisterShop` already pcall-wraps the
+    -- underlying export call (BuildSafeAdapter, shared/compat/core.lua) and
+    -- returns a plain boolean success/failure -- this file no longer needs
+    -- its own pcall here, but also no longer has access to the underlying
+    -- export's own error text on failure (a real, disclosed loss of detail
+    -- in this file's own warning message below, traded for working on
+    -- whatever inventory backend an operator actually runs -- reported to
+    -- main as part of this pass).
+    local shopLabel = type(shopConfig.label) == 'string' and shopConfig.label ~= '' and shopConfig.label or 'K9 Supply'
+    local registered = K9Compat.Get('inventory').RegisterShop(shopConfig.shopType, {
+        label = shopLabel,
+        items = inventoryItems,
+        groups = groups,
+        -- Deliberately NO `locations`/`targets` field -- see this
+        -- file's header, point 2, for why: this resource's OWN
+        -- client/equipmentshop.lua builds the physical interaction
+        -- point instead, via ox_target, which is the only way an
+        -- externally-registered shop actually becomes reachable.
+    })
 
-    if not ok then
-        print(('[qbx_k9unit] equipmentshop: WARNING: exports.ox_inventory:RegisterShop failed -- the K9 Supply shop is NOT available this session. This can mean ox_inventory is missing, not started, or ships a different RegisterShop shape than this file was written against (see this file\'s header for the exact signature this was verified against). Error: %s'):format(tostring(err)))
+    if not registered then
+        print('[qbx_k9unit] equipmentshop: WARNING: RegisterShop failed -- the K9 Supply shop is NOT available this session. This can mean no compatible inventory backend is currently detected/running (see /k9compat, if enabled), or the detected backend rejected this shop\'s shape.')
         return
     end
 
