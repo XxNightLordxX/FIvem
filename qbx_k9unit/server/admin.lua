@@ -690,11 +690,12 @@ end
 --- this function does not rely on that assert alone: floor+clamp always
 --- runs here too, so `defaultValue` can never reach `string.format('...
 --- LIMIT %d', limit)` un-floored regardless of how it got here. Lua's `%d`
---- format specifier raises an UNCAUGHT error (outside SafeQuery's pcall —
---- the LIMIT is embedded before SafeQuery is ever called) on a float with a
---- fractional part, which would otherwise turn a config-shape gap into a
---- runtime crash on the very first invocation of any of these three
---- commands. See this file's
+--- format specifier raises an UNCAUGHT error on a float with a fractional
+--- part -- that `%d` embed now happens inside server/datastore.lua's own
+--- K9Store.* functions (this file no longer builds its own SQL text at
+--- all), OUTSIDE of and before that layer's own fail-closed pcall wrap,
+--- which would otherwise turn a config-shape gap into a runtime crash on
+--- the very first invocation of any of these three commands. See this file's
 --- header "SQL SAFETY" section for why the RETURNED integer (never
 --- `rawArg` itself, and now never a raw `defaultValue` either) is the only
 --- thing that ever reaches a query string.
@@ -771,29 +772,6 @@ local function LogAuditInvocation(source, commandName, detail, outcome)
         whoLabel = citizenid and ('citizenid=' .. citizenid) or ('unresolved-source=' .. tostring(source))
     end
     print(('[qbx_k9unit] AUDIT: %s ran %s(%s) -> %s'):format(whoLabel, commandName, detail, outcome))
-end
-
---- Fail-closed SELECT wrapper — pcall around MySQL.query.await, matching
---- RefreshCertificationCache/RefreshPartnershipCache's own "an unreadable
---- row must never be treated as [something it isn't]" discipline, applied
---- here as "a failed audit query returns zero rows to the caller, never a
---- raw Lua error/stack trace." CONFIDENCE NOTE: MySQL.query.await is
---- oxmysql's documented all-matching-rows method, the natural counterpart
---- to MySQL.scalar/.single/.update/.insert — all four already called
---- successfully elsewhere in this codebase (server/certifications.lua,
---- server/search.lua, server/partnership.lua) — but MySQL.query
---- specifically was not independently exercised against a live oxmysql
---- install in this sandbox.
---- @param sql string -- already fully hardcoded per call site below, never a caller-controlled fragment
---- @param params table
---- @return table rows -- always a table, empty on failure
-local function SafeQuery(sql, params)
-    local ok, rowsOrErr = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] admin.lua query failed: %s'):format(tostring(rowsOrErr)))
-        return {}
-    end
-    return rowsOrErr or {}
 end
 
 --- Merges two already-LIMITed row sets (one per unique index — see
@@ -944,12 +922,8 @@ end
 --- @param limit number -- already clamped by ClampLimit
 --- @return table rows
 local function QueryPartnershipHistory(citizenid, limit)
-    local columns = 'id, k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active'
-    local sqlAsK9 = ('SELECT %s FROM k9_partnerships WHERE k9_citizenid = ? ORDER BY id DESC LIMIT %d'):format(columns, limit)
-    local sqlAsHandler = ('SELECT %s FROM k9_partnerships WHERE handler_citizenid = ? ORDER BY id DESC LIMIT %d'):format(columns, limit)
-
-    local asK9 = SafeQuery(sqlAsK9, { citizenid })
-    local asHandler = SafeQuery(sqlAsHandler, { citizenid })
+    local asK9 = K9Store.Partner_GetHistoryByK9(citizenid, limit)
+    local asHandler = K9Store.Partner_GetHistoryByHandler(citizenid, limit)
 
     return MergeSortedByIdDesc(asK9, asHandler, limit)
 end
@@ -961,8 +935,7 @@ end
 --- @param limit number
 --- @return table rows
 local function QuerySearchLogByOfficer(citizenid, limit)
-    local sql = ('SELECT %s FROM k9_search_log WHERE searcher_citizenid = ? ORDER BY searched_at DESC LIMIT %d'):format(SEARCH_LOG_COLUMNS, limit)
-    return SafeQuery(sql, { citizenid })
+    return K9Store.SearchLog_GetByOfficer(citizenid, limit)
 end
 
 --- '/k9auditsearch plate' query — searches OF a vehicle plate, most recent
@@ -972,8 +945,7 @@ end
 --- @param limit number
 --- @return table rows
 local function QuerySearchLogByPlate(plate, limit)
-    local sql = ('SELECT %s FROM k9_search_log WHERE target_plate = ? ORDER BY searched_at DESC LIMIT %d'):format(SEARCH_LOG_COLUMNS, limit)
-    return SafeQuery(sql, { plate })
+    return K9Store.SearchLog_GetByPlate(plate, limit)
 end
 
 --- '/k9auditsearch person' query — searches OF a person citizenid, most
@@ -983,8 +955,7 @@ end
 --- @param limit number
 --- @return table rows
 local function QuerySearchLogByPerson(citizenid, limit)
-    local sql = ('SELECT %s FROM k9_search_log WHERE target_citizenid = ? ORDER BY searched_at DESC LIMIT %d'):format(SEARCH_LOG_COLUMNS, limit)
-    return SafeQuery(sql, { citizenid })
+    return K9Store.SearchLog_GetByPerson(citizenid, limit)
 end
 
 --- '/k9auditsearch recent' query — the N most recently logged searches of

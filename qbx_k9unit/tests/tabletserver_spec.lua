@@ -1036,6 +1036,7 @@ t.test('ROUND TRIP: revoking that same feature grant through the REAL tabletRevo
     for _, entry in ipairs(granted.myFeatures) do if entry.key == 'BiteAndHold' then grantedRow = entry end end
     t.equals(grantedRow.state, 'available')
 
+    f.advanceTime(2000) -- clear PermissionActionCooldown before the granter's second action
     local revokeResult = f.callbacks['qbx_k9unit:server:tabletRevokePermission'](hcSrc, 'TARGET1', 'feature.BiteAndHold')
     t.isTrue(revokeResult.ok)
 
@@ -1054,6 +1055,7 @@ t.test('ROUND TRIP: a BLOCK made through the REAL tabletGrantPermission (block.<
     local targetSrc = f.registerPlayer(2, 'TARGET1', { name = 'police', grade = { level = 1 } })
 
     t.isTrue(f.callbacks['qbx_k9unit:server:tabletGrantPermission'](hcSrc, 'TARGET1', 'feature.BiteAndHold').ok)
+    f.advanceTime(2000) -- clear PermissionActionCooldown before the granter's second action
     local blockResult = f.callbacks['qbx_k9unit:server:tabletGrantPermission'](hcSrc, 'TARGET1', 'block.BiteAndHold')
     t.isTrue(blockResult.ok, 'the fixed IsValidPermissionKey must accept block.BiteAndHold end to end')
 

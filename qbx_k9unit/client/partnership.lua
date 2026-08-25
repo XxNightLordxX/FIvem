@@ -529,28 +529,37 @@ end)
 -- complete writeup of this exact tradeoff.
 local PARTNER_TARGET_DISTANCE_FACTOR = 0.5
 
--- Register the "Partner Up" ox_target option on nearby player peds. This
+-- Register the "Partner Up" target option on nearby player peds. This
 -- is a DISPLAY optimization only -- the server independently re-validates
 -- everything for real in CheckPartnershipEligibility
 -- (server/partnership.lua), so this predicate doesn't need to be perfect
 -- (see this file's header "KNOWN CACHE-STALENESS GAP" for the one honest
 -- limitation of the IsPartnered() check below).
 --
+-- ROUTED THROUGH K9Compat.Get('target') (shared/compat/target.lua), never
+-- a direct `exports.ox_target` call -- this option's `canInteract(entity,
+-- distance, coords, name)`/`onSelect(data)` shapes are unchanged (still
+-- authored against ox_target's own convention, per that file's contract);
+-- an operator running qb-target/qtarget/sleepless_interact gets this
+-- option translated automatically instead of losing it outright.
+--
 -- LIFECYCLE FIX (this pass): extracted into a named function, sole call
 -- site the AddEventHandler('onResourceStart', ...) below, so this option
--- comes back after a bare `restart ox_target`, not just after this
--- resource's own restart -- ox_target keeps addGlobalPlayer's registry in
--- a plain file-local Lua table inside its own client chunk (confirmed by
--- reading ox_target's client/api.lua directly), reloaded empty on
--- ox_target's own restart with nothing else prompting a re-add. Mirrors
--- server/tracking.lua's RegisterScentInventoryHook /
+-- comes back after a bare restart of whatever resource actually backs the
+-- 'target' system, not just after this resource's own restart -- ox_target
+-- (and, per each adapter's own header in shared/compat/target.lua, every
+-- other supported target script too) keeps its own registry in a
+-- plain file-local Lua table inside its own client chunk, reloaded empty
+-- on THAT resource's own restart with nothing else prompting a re-add.
+-- Mirrors server/tracking.lua's RegisterScentInventoryHook /
 -- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
 -- identical bug class against ox_inventory. DUPLICATE-VS-REPLACE: the
--- option below always sets `name`, and ox_target's own `addTarget`
--- unconditionally removes any existing option with the same name+resource
--- before appending, so re-running this never duplicates the entry.
+-- option below always sets `name`, and every adapter's own registration
+-- primitive dedups/replaces by that same name (or label, for the target
+-- scripts that key on label instead -- see shared/compat/target.lua's own
+-- per-adapter notes), so re-running this never duplicates the entry.
 local function RegisterPartnerUpOxTargetOption()
-    exports.ox_target:addGlobalPlayer({
+    K9Compat.Get('target').AddGlobalPlayer({
         {
             name = 'qbx_k9unit:partnerUp',
             icon = 'fas fa-handshake',

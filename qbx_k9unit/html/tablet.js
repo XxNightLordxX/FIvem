@@ -409,6 +409,46 @@
         theme_reset_label: 'Reset to Default',
         theme_disabled_note: 'Tablet theming is disabled server-wide. The current theme still applies; these controls will not save.',
         theme_field_invalid: 'That value was rejected by the server.',
+
+        // ---- Certification tier editing (its own tab, high command
+        // only). Owner's own words: "Allow high command to edit the
+        // tiers trainee certified senior etc add more roles edit
+        // permissions for those roles etc." The catalogue itself is
+        // NEVER hardcoded here -- see loadCertTiers()'s own comment.
+        tab_cert_tiers: 'Certification Tiers',
+        cert_tiers_heading: 'Certification Tiers',
+        cert_tiers_add_label: 'Add New Tier',
+        cert_tier_key_label: 'Key',
+        cert_tier_key_placeholder: 'e.g. master',
+        cert_tier_label_label: 'Label',
+        cert_tier_capabilities_label: 'Capabilities',
+        cert_tier_no_capabilities: 'No capabilities selected.',
+        cert_tier_save_label: 'Save Tier',
+        cert_tier_cancel_label: 'Cancel',
+        cert_tier_edit_label: 'Edit',
+        cert_tier_delete_label: 'Delete',
+        cert_tier_move_up_label: '↑',
+        cert_tier_move_up_title: 'Move up (higher rank)',
+        cert_tier_move_down_label: '↓',
+        cert_tier_move_down_title: 'Move down (lower rank)',
+        column_position: 'Position',
+        column_key: 'Key',
+        column_label: 'Label',
+        column_capabilities: 'Capabilities',
+        cert_tier_error_denied: 'You are not authorized to manage certification tiers.',
+        cert_tier_error_rate_limited: 'Please wait a moment before trying again.',
+        cert_tier_error_invalid_key: 'That key is invalid -- use 2-20 lowercase letters, numbers, or underscores, starting with a letter.',
+        cert_tier_error_invalid_label: 'That label is invalid or too long (max 60 characters, no special markup characters).',
+        cert_tier_error_invalid_capabilities: 'One or more selected capabilities is not recognized.',
+        cert_tier_error_busy: 'This tier is being edited elsewhere right now -- try again in a moment.',
+        cert_tier_error_too_many_tiers: 'The maximum number of certification tiers has been reached.',
+        cert_tier_error_unknown_tier: 'That tier no longer exists.',
+        cert_tier_error_protected_tier: '"Certified" is a protected tier and can never be deleted.',
+        cert_tier_error_tier_in_use: 'This tier cannot be deleted -- {count} certification record(s) still reference it. Move them to a different tier first, then delete.',
+        cert_tier_error_must_include_every_tier: 'The new order must include every existing tier, with none missing or duplicated.',
+        cert_tier_error_invalid_key_set: 'The new order must include every existing tier, with none missing or duplicated.',
+        cert_tier_error_db_error: 'A database error occurred. Try again.',
+        cert_tier_error_invalid_payload: 'That request was malformed. Try again.',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -500,6 +540,20 @@
         themeError: null,
         themeDraft: null, // a WORKING COPY of `theme` the theme-editor screen's inputs mutate locally before Save -- never sent anywhere until the operator presses Save, and always reset from the authoritative `theme` on load/open/push so a stale edit can never silently linger across a reopen
         themeFieldError: null, // set to e.g. 'primaryColor' when the server's last tabletSetTheme response was reason='invalid_field' -- highlights which of the six inputs it rejected; cleared on the next Save attempt
+
+        // Certification tier editing -- server/certtiers.lua. The
+        // catalogue is NEVER hardcoded here (see loadCertTiers()'s own
+        // comment): `certTiers` is null until the first successful
+        // tablet:certTiersList, exactly like every other server-sourced
+        // list on this page (roster/personSummary/personFeatures/theme).
+        certTiers: null, // [{ key, label, ordinal, capabilities: {capKey:true} }, ...], already ordinal-sorted by the server
+        certTierCapabilityCatalog: {}, // { [capabilityKey]: { label } } -- server/certtiers.lua's own fixed, code-owned CAPABILITY_CATALOG, still FETCHED rather than hardcoded, so a future catalog entry needs no client change here
+        certTiersLoading: false,
+        certTiersError: null,
+        certTierWarning: null, // the non-optional retroactive-rerank warning from the LAST successful reorder (server/certtiers.lua's own HAZARD 3) -- rendered as its own prominent banner, not folded into the generic actionNotice, so it is never missed
+        certTierDraft: null, // { key, label, capabilities: {capKey:true}, isNew } -- the add/edit form's own working copy; null = form closed
+        certTierFieldError: null, // 'key' | 'label' | 'capabilities' | null -- which of the draft form's own inputs the server's last certTiersUpsert rejected
+        certTierActionError: null, // { key, text } -- a delete REFUSAL (tier_in_use/protected_tier) rendered inline on that specific row, not just the generic top-of-panel notice
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit
         actionNotice: null, // { kind: 'ok'|'error', text: string } -- transient, cleared on next navigation/reload
@@ -790,6 +844,8 @@
             panel.appendChild(buildPersonScreen());
         } else if (state.screen === 'theme' && state.viewer.isHighCommand) {
             panel.appendChild(buildThemeScreen());
+        } else if (state.screen === 'cert_tiers' && state.viewer.isHighCommand) {
+            panel.appendChild(buildCertTiersScreen());
         } else {
             panel.appendChild(buildMyRecordScreen());
         }
@@ -864,6 +920,24 @@
                 loadTheme();
             });
             tabs.appendChild(themeTab);
+
+            // Certification tier editing -- SAME high-command gate (this
+            // is a UX convenience only: CanManageCertTiers is re-verified
+            // server-side on every one of the four callbacks regardless of
+            // whether this tab was ever shown). Fresh entry into this
+            // screen clears any leftover draft/refusal/warning from a
+            // previous visit, exactly like every other tab switch on this
+            // page resets its own screen's transient state.
+            var certTiersTab = mkButton(S('tab_cert_tiers'), 'k9tablet-tab' + (state.screen === 'cert_tiers' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'cert_tiers';
+                state.certTierDraft = null;
+                state.certTierFieldError = null;
+                state.certTierActionError = null;
+                state.certTierWarning = null;
+                render();
+                loadCertTiers();
+            });
+            tabs.appendChild(certTiersTab);
         }
         return tabs;
     }

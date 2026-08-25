@@ -1,5 +1,14 @@
 -- =====================================================================
--- qbx_k9unit :: FULL UNINSTALL -- DROPS ALL SIX TABLES
+-- qbx_k9unit :: FULL UNINSTALL -- DROPS EVERY TABLE THIS RESOURCE OWNS
+--
+-- This header used to say "ALL SIX TABLES". It has said six for a long
+-- time; the real number passed six, then eleven, and migration 0010 took
+-- it to fourteen. A hardcoded count in a destructive script is a promise
+-- that silently rots every time a migration lands, so it is deliberately
+-- not restated as a number here. The DROP list below is the authority.
+-- If you add a table in a migration, add it here in the SAME change --
+-- and to preflight_check.sql and migration_status.sql, which have the
+-- same exposure.
 --
 -- #####################################################################
 -- #  THIS FILE PERMANENTLY DELETES DATA. THERE IS NO UNDO.            #

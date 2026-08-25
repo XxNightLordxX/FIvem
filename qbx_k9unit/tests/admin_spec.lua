@@ -174,7 +174,22 @@ local env = Sandbox.newEnv({
 -- server/admin.lua calls NewCooldown() at file-load time (AuditCooldown) --
 -- must load server/cooldowns.lua into the SAME env first, same load-order
 -- requirement fxmanifest.lua's own server_scripts list documents.
+--
+-- server/datastore.lua -- REAL, unmodified, loaded alongside (this file's
+-- own header: "the ONLY place in this resource that may name a `k9_*`
+-- table or call `MySQL.*` directly" -- server/admin.lua's own
+-- QueryCertificationHistory now reads through K9Store.Cert_GetHistory
+-- rather than a local SafeQuery+raw-SQL pair). fxmanifest.lua loads it
+-- before every other resource-owned server file for the same load-time-
+-- global reason cooldowns.lua does. Config.Database is deliberately absent
+-- from this fixture's Config table above -- K9Store's own DatabaseEnabled()
+-- fails safe to `true` (real-DB mode) on a missing Config.Database, which
+-- is exactly what makes Cert_GetHistory below run the SAME MySQL.query.await
+-- call (against this file's own MySQLStub) that QueryCertificationHistory
+-- built directly before this migration, so every existing assertion below
+-- keeps exercising the identical SQL/params shape unchanged.
 Sandbox.loadInto('../server/cooldowns.lua', env)
+Sandbox.loadInto('../server/datastore.lua', env)
 Sandbox.loadInto('../server/admin.lua', env)
 
 -- Fire 'onResourceStart' as FXServer would -- this is what actually
