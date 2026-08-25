@@ -185,18 +185,68 @@
       SetEntityCanBeDamaged" but is NOT independent primary-source
       confirmation — graded MEDIUM confidence / single indirect source,
       honestly, not upgraded to match the one native that WAS confirmed.
-    Rather than assert an unresolved server-side legitimacy for three
-    natives just to keep one code shape, or leave one bug fixed and three
-    others standing on an unverified assumption, ALL FOUR are relayed to
+    - SetEntityHealth (`ENTITY` namespace) — NEW FINDING, native-sweep
+      follow-up pass, coder-backend: the health-floor backstop below
+      (`if GetEntityHealth(targetPed2) < healthFloor then
+      SetEntityHealth(targetPed2, healthFloor) end`) was, until this pass,
+      the ONE remaining native in this exact NPC branch still called
+      directly server-side, on the strength of a claim (this file's own
+      prior comment, and .luacheckrc's) that "GetEntityHealth/SetEntityHealth's
+      server-side validity is not in question." That claim did not survive
+      the SAME verification method already applied to
+      IsEntityDead/IsPedDeadOrDying elsewhere in this file (see
+      PED_DEAD_HEALTH_THRESHOLD's own doc comment): `ext/native-decls` has
+      NO doc page for SetEntityHealth at all (unlike GetEntityHealth/
+      GetEntityMaxHealth, both of which have one with `apiset: server`),
+      and a full-text search of every native-registering file in
+      citizen-server-impl/src/state (the exact component that registers
+      GET_ENTITY_HEALTH/GET_ENTITY_MAX_HEALTH via `makeEntityFunction` +
+      `syncTree->GetPedHealth()/GetVehicleHealth()` reads) contains ZERO
+      occurrence of `SET_ENTITY_HEALTH`/`SET_PED_HEALTH`, or of the
+      substring `HEALTH` in any context other than a `GET_*` native.
+      Architecturally consistent with that absence, not just coincidental:
+      every health value this server reads comes from a sync-tree node
+      populated by the entity's OWNING CLIENT and ACKed to the server — the
+      server has a read path for that data but, unlike a getter, a "set"
+      would require injecting a value into a client-owned sync node from
+      the server side, a fundamentally different capability the getters'
+      own implementation gives no evidence of existing. GRADED THE SAME AS
+      SetEntityCanBeDamaged above: no confirmed server registration, so
+      this call is a SUSPECTED silent no-op — the health-floor top-up for
+      an already-low-health NPC target never actually applied. Fixed the
+      same way as the other three: moved to the REQUESTING K9's OWN client,
+      alongside the damage-bracket/ragdoll relay immediately below it in
+      HandleTakedownRequest — no new payload field needed on
+      `applyNpcTakedown` since `Config.Combat.NonLethalTakedown.healthFloor`
+      is already a `shared_scripts`-loaded config value client/combat.lua
+      can read directly. THIS FILE'S OWN HALF of that fix (stop calling the
+      suspect native server-side) is complete below; the CLIENT half (add
+      the actual `SetEntityHealth(npcPed, Config.Combat.NonLethalTakedown.healthFloor)`
+      call inside client/combat.lua's existing `applyNpcTakedown` handler,
+      guarded the same `< healthFloor` way) is OUT OF SCOPE for this file
+      and is flagged in this pass's own report for whoever owns
+      client/combat.lua — until that lands, the disclosed gap this file's
+      own comment already named ("NOT a sufficient substitute on its own...
+      cannot honestly cover sustained damage") widens slightly further (the
+      one-time top-up itself, not just its continuity, is currently
+      unapplied) — the damage-bracket/ragdoll relay (both independently
+      confirmed working, see above) remain the real protection during the
+      window.
+    Rather than assert an unresolved server-side legitimacy for these
+    natives just to keep one code shape, or leave one bug fixed and the
+    rest standing on an unverified assumption, ALL FIVE are relayed to
     the REQUESTING K9's OWN client instead — unambiguously a valid
-    execution context for all four regardless of their server-side status
+    execution context for all five regardless of their server-side status
     (their CLIENT-side validity was never in question; SetPedToRagdollWithFall
     is already independently confirmed client-callable by this same file's
     own player-target relay, applied via client/combat.lua's forceRagdoll
-    handler). This is not a weakening of server authority: the server has
-    already independently completed every real check (feature flag,
-    HasK9Access, live proximity, cooldowns, the speed gate for takedown)
-    BEFORE ever sending one of these four relay events — only the
+    handler, and SetEntityHealth is already independently confirmed
+    client-callable by server/medkit.lua's own applyMedkitHeal relay,
+    the identical "server decides the number, the entity's own client
+    writes it" pattern). This is not a weakening of server authority: the
+    server has already independently completed every real check (feature
+    flag, HasK9Access, live proximity, cooldowns, the speed gate for
+    takedown) BEFORE ever sending one of these five relay events — only the
     MECHANICAL "make the NPC do X" step moves client-side, to the one actor
     already fully trusted for this action, mirroring the exact posture this
     file already uses for a PLAYER target (relay to the target's own
@@ -407,6 +457,32 @@ TakedownCooldown.RegisterPlayerDropped()
 -- RegisterPlayerDropped.
 local TakedownTargetCooldown = NewCooldown(Config.Combat.NonLethalTakedown.targetCooldownMs)
 
+-- XP-FARM FIX (this pass, coder-backend -- coordinator-flagged, independently
+-- re-verified by re-reading requestBiteHold/HandleTakedownRequest side by
+-- side, not taken on the report alone): BiteAndHold, UNLIKE NonLethalTakedown
+-- immediately above, had ONLY a per-K9 cooldown (BiteHoldCooldown, keyed by
+-- `src`) and no per-TARGET cooldown at all. `ActiveHolds[targetNetId]`
+-- ('already_held' in ValidateCombatRequest) only blocks a DIFFERENT K9 from
+-- concurrently holding the same target while a hold is active -- it does
+-- NOT stop the SAME K9 from re-targeting the SAME already-released target
+-- again the instant its own per-K9 cooldown clears. Against one fixed,
+-- non-fleeing target (an NPC, or a wanted-but-stationary player), that meant
+-- an unlimited "hold >= MIN_BITE_HOLD_XP_DURATION_MS, release, wait
+-- BiteAndHold.cooldownMs, repeat" loop, each cycle minting
+-- Config.XP.awards.biteHoldSuccess XP for a few seconds of standing still --
+-- exactly the per-target throttle TakedownTargetCooldown already exists to
+-- prevent for the sibling mechanic, just never applied here. Mirrors
+-- TakedownTargetCooldown exactly: keyed by targetNetId (NOT a player
+-- source -- an NPC target has none, and a player target's own cooldown must
+-- outlive any one connection the same way TakedownTargetCooldown's already
+-- does), swept periodically below rather than RegisterPlayerDropped.
+-- Config.Combat.BiteAndHold.targetCooldownMs (config.lua) landed this pass
+-- at the coordinator's request -- see that key's own comment in config.lua
+-- for why it is set slightly above NonLethalTakedown's 30000 rather than
+-- copied verbatim (a bite hold can pay out repeatedly inside its 15s
+-- window; a takedown is one discrete event).
+local BiteHoldTargetCooldown = NewCooldown(Config.Combat.BiteAndHold.targetCooldownMs)
+
 -- Guards the SHORT yield inside HandleTakedownRequest (the server-computed
 -- speed-sample window) against the SAME K9 firing a second overlapping
 -- requestTakedown before the first one's wait resolves -- mirrors
@@ -491,6 +567,14 @@ local PED_DEAD_HEALTH_THRESHOLD = 100
 local TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS = 60000
 TakedownTargetCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
     return (now - loggedAt) > (Config.Combat.NonLethalTakedown.targetCooldownMs * 2)
+end)
+
+-- Same sweep shape, for the new BiteHoldTargetCooldown above (XP-farm fix,
+-- this pass) -- keyed by targetNetId, no per-connection cleanup hook, so it
+-- needs its own independent TTL sweep exactly like TakedownTargetCooldown's
+-- does immediately above.
+BiteHoldTargetCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
+    return (now - loggedAt) > (Config.Combat.BiteAndHold.targetCooldownMs * 2)
 end)
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
@@ -1302,10 +1386,26 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
         return
     end
 
-    if not BiteHoldCooldown.Consume(src, Config.Combat.BiteAndHold.cooldownMs) then
+    -- XP-FARM FIX (this pass) -- BOTH cooldowns are CHECKED first (read-only,
+    -- neither one stamped yet) before EITHER is consumed, same "cheapest
+    -- checks first, mutation last" discipline this file's own
+    -- ValidateCombatRequest doc comment already establishes, and the same
+    -- shape HandleTakedownRequest below already uses for its own per-K9 +
+    -- per-target cooldown pair. This matters here specifically because a
+    -- request that is ultimately rejected for being on ONE of the two
+    -- cooldowns must never consume the OTHER -- burning BiteHoldTargetCooldown
+    -- (a per-TARGET cooldown) for a request that never actually happened
+    -- would incorrectly penalize the NEXT K9 who tries this same target,
+    -- and burning BiteHoldCooldown (per-K9) here for nothing would cost this
+    -- K9 20s for a request that was never granted.
+    if BiteHoldCooldown.IsOnCooldown(src, Config.Combat.BiteAndHold.cooldownMs)
+        or BiteHoldTargetCooldown.IsOnCooldown(targetNetId, Config.Combat.BiteAndHold.targetCooldownMs) then
         NotifyPlayer(src, CombatRejectMessage('on_cooldown'), 'error')
         return
     end
+
+    BiteHoldCooldown.Touch(src)
+    BiteHoldTargetCooldown.Touch(targetNetId)
 
     local now = GetGameTimer()
     local expiresAt = now + Config.Combat.BiteAndHold.maxDurationMs
@@ -1579,15 +1679,41 @@ local function HandleTakedownRequest(src, targetNetId)
         -- session, so this sidesteps that open question entirely rather
         -- than resolve it by assertion, the same way the bite-hold NPC
         -- branch above does.
-        if GetEntityHealth(targetPed2) < Config.Combat.NonLethalTakedown.healthFloor then
-            -- Kept as a real, independently server-callable backstop
-            -- (GetEntityHealth/SetEntityHealth's server-side validity is
-            -- not in question — see .luacheckrc's own SetEntityHealth
-            -- comment) even though the K9's client now also applies the
-            -- damage bracket below — defense in depth costs nothing here.
-            SetEntityHealth(targetPed2, Config.Combat.NonLethalTakedown.healthFloor)
-        end
-
+        --
+        -- NATIVE-AVAILABILITY FIX (this pass, coder-backend, native-sweep
+        -- follow-up -- see this file's header "NPC-TARGET NATIVE EXECUTION
+        -- CONTEXT" section, SetEntityHealth bullet, for the full finding):
+        -- this branch used to ALSO call `SetEntityHealth(targetPed2, ...)`
+        -- directly, server-side, as a "real, independently server-callable
+        -- backstop" -- that claim did not survive verification. No
+        -- `ext/native-decls` doc page exists for SetEntityHealth at all
+        -- (unlike GetEntityHealth/GetEntityMaxHealth, both confirmed
+        -- `apiset: server`), and citizen-server-impl's own
+        -- ServerGameState_Scripting.cpp -- the exact file that registers
+        -- GET_ENTITY_HEALTH/GET_ENTITY_MAX_HEALTH -- registers no
+        -- SET_ENTITY_HEALTH/SET_PED_HEALTH handler anywhere. That call was
+        -- therefore a SUSPECTED silent no-op, the same class of bug already
+        -- fixed for SetEntityCanBeDamaged in this same branch above --
+        -- kept, it would have quietly done nothing while this comment
+        -- claimed otherwise. REMOVED here rather than left in as a harmless
+        -- guess: the health-floor top-up now belongs entirely to
+        -- client/combat.lua's own `applyNpcTakedown` handler, which already
+        -- receives this same NPC target and can read
+        -- `Config.Combat.NonLethalTakedown.healthFloor` directly (a
+        -- `shared_scripts`-loaded config value, no new payload field
+        -- needed on the TriggerClientEvent below) and self-apply
+        -- `SetEntityHealth` the same already-client-confirmed way
+        -- server/medkit.lua's applyMedkitHeal relay already does for a
+        -- player target. THIS FILE'S HALF of the fix is complete (no
+        -- longer calling a suspect native, no longer documenting it as
+        -- trustworthy); the CLIENT HALF (client/combat.lua actually adding
+        -- that self-apply call) is out of scope for this file -- flagged in
+        -- this pass's own report. Until that lands, the one-time top-up
+        -- itself is unapplied for an NPC target whose health was already
+        -- below the floor at ragdoll-open time -- the damage-bracket
+        -- (SetEntityCanBeDamaged) and the ragdoll itself, both relayed
+        -- below and both independently client-confirmed, remain the real
+        -- protection during the window regardless.
         TriggerClientEvent('qbx_k9unit:client:applyNpcTakedown', src, targetNetId, expiresAt)
     end
 
