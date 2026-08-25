@@ -276,39 +276,6 @@ t.test('CONSTRAINT CHECK: toggling the weight while the mint cooldown is still a
     t.equals(triggerClientEventCount, alertBefore + 1, 'the contraband alert broadcast must still fire -- this gate must never touch it')
 end)
 
-t.test('SILENT-FAILURE FIX: a k9_search_log audit INSERT that genuinely FAILS is caught and logged, never propagated into the search result', function()
-    -- Pins server/search.lua's LogSearchAttempt silent-failure fix. That write
-    -- moved from a decorative `pcall(MySQL.insert, ...)` (fire-and-forget: the
-    -- pcall returns before the query runs, so a real SQL failure could never
-    -- reach it) to `CreateThread(function() pcall(MySQL.insert.await, ...) end)`,
-    -- which DOES surface a genuine query error. This test drives that newly-real
-    -- error path with the four failure shapes a live MySQL/MariaDB actually
-    -- returns for this INSERT -- 1146 (k9_search_log missing: install.sql or a
-    -- migration never applied), 1265 (an ENUM value drift on result/target_type),
-    -- and 1406 (an over-length target_plate/alert_tier) -- and asserts the fix
-    -- kept its OTHER half of the contract: a logging failure must still never
-    -- surface as, or cause, a search failure for the requesting officer. Without
-    -- the pcall this raises straight out of the callback and result.ok is nil.
-    fakeNow = 200000 -- clear of every cooldown window armed by the tests above
-    local realInsert = env.MySQL.insert
-    for _, sqlError in ipairs({
-        "ERROR 1146 (42S02): Table 'k9.k9_search_log' doesn't exist",
-        "ERROR 1265 (01000): Data truncated for column 'result' at row 1",
-        "ERROR 1406 (22001): Data too long for column 'target_plate' at row 1",
-        "ERROR 1406 (22001): Data too long for column 'alert_tier' at row 1",
-    }) do
-        env.MySQL.insert = { await = function(_sql, _params) error(sqlError, 0) end }
-        local triggerBefore = triggerEventCount
-        local ok, result = pcall(searchVehicle, 501, 3003, 15)
-        t.isTrue(ok, 'a failing audit INSERT must never raise out of the searchTarget callback: ' .. sqlError)
-        t.isTrue(result.ok, 'the search itself must still succeed and report normally despite the audit write failing: ' .. sqlError)
-        t.equals(result.totalWeight, 15, 'the requester must still get the real weight even though the audit row was lost')
-        t.equals(triggerEventCount, triggerBefore + 1, 'the outbound searchCompleted event must still fire after a failed audit write')
-        fakeNow = fakeNow + 100000 -- fresh window for the next iteration's own search
-    end
-    env.MySQL.insert = realInsert
-end)
-
 t.test('past the mint cooldown window, the still-differing weight now pays -- the earlier skipped attempt was never silently treated as paid', function()
     fakeNow = 61000 -- 61s after the FIRST award at fakeNow=0, past CONTRABAND_XP_MINT_COOLDOWN_MS (60000ms)
     local awardsBefore = #awardCalls
@@ -390,6 +357,39 @@ t.test('GetContrabandAlertTier: never leaks a mutable reference that corrupts Co
     local original = Config.ContrabandAlertTiers[3].alert
     t.equals(tier, Config.ContrabandAlertTiers[3], 'current behavior: this wrapper returns the LIVE Config table entry, not a copy')
     Config.ContrabandAlertTiers[3].alert = original -- restore regardless (no mutation performed, just confirming identity)
+end)
+
+t.test('SILENT-FAILURE FIX: a k9_search_log audit INSERT that genuinely FAILS is caught and logged, never propagated into the search result', function()
+    -- Pins server/search.lua's LogSearchAttempt silent-failure fix. That write
+    -- moved from a decorative `pcall(MySQL.insert, ...)` (fire-and-forget: the
+    -- pcall returns before the query runs, so a real SQL failure could never
+    -- reach it) to `CreateThread(function() pcall(MySQL.insert.await, ...) end)`,
+    -- which DOES surface a genuine query error. This test drives that newly-real
+    -- error path with the four failure shapes a live MySQL/MariaDB actually
+    -- returns for this INSERT -- 1146 (k9_search_log missing: install.sql or a
+    -- migration never applied), 1265 (an ENUM value drift on result/target_type),
+    -- and 1406 (an over-length target_plate/alert_tier) -- and asserts the fix
+    -- kept its OTHER half of the contract: a logging failure must still never
+    -- surface as, or cause, a search failure for the requesting officer. Without
+    -- the pcall this raises straight out of the callback and result.ok is nil.
+    fakeNow = 10000000 -- far past every cooldown window any test above armed; this test runs LAST so it never moves the clock backwards for another test
+    local realInsert = env.MySQL.insert
+    for _, sqlError in ipairs({
+        "ERROR 1146 (42S02): Table 'k9.k9_search_log' doesn't exist",
+        "ERROR 1265 (01000): Data truncated for column 'result' at row 1",
+        "ERROR 1406 (22001): Data too long for column 'target_plate' at row 1",
+        "ERROR 1406 (22001): Data too long for column 'alert_tier' at row 1",
+    }) do
+        env.MySQL.insert = { await = function(_sql, _params) error(sqlError, 0) end }
+        local triggerBefore = triggerEventCount
+        local ok, result = pcall(searchVehicle, 501, 3003, 15)
+        t.isTrue(ok, 'a failing audit INSERT must never raise out of the searchTarget callback: ' .. sqlError)
+        t.isTrue(result.ok, 'the search itself must still succeed and report normally despite the audit write failing: ' .. sqlError)
+        t.equals(result.totalWeight, 15, 'the requester must still get the real weight even though the audit row was lost')
+        t.equals(triggerEventCount, triggerBefore + 1, 'the outbound searchCompleted event must still fire after a failed audit write')
+        fakeNow = fakeNow + 100000 -- fresh window for the next iteration's own search
+    end
+    env.MySQL.insert = realInsert
 end)
 
 os.exit(t.summary())

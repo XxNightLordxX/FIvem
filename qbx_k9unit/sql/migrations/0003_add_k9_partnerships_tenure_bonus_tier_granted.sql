@@ -24,9 +24,36 @@
 -- version compatibility" this migration must not gamble on. The pattern
 -- below (query INFORMATION_SCHEMA.COLUMNS, branch inside a stored
 -- procedure, ALTER only if missing, then drop the procedure) is supported
--- identically by MySQL 5.6+ and every MariaDB version this resource could
--- plausibly be run against, and produces the exact same idempotent
--- end state:
+-- identically by every MySQL/MariaDB version this resource can actually
+-- run on, and produces the exact same idempotent end state:
+--
+-- CORRECTION (verified by execution, not inspection, against real
+-- MySQL 5.6.51 / 5.7.44 / 8.0.46 and MariaDB 10.11.14 servers): an
+-- earlier revision of this comment claimed the guard pattern below is
+-- "supported identically by MySQL 5.6+". The guard pattern itself is --
+-- but MySQL 5.6 CANNOT RUN THIS RESOURCE'S SCHEMA AT ALL, so that floor
+-- was never reachable and is corrected here. sql/install.sql's own base
+-- `CREATE TABLE`s require INDEXED VIRTUAL GENERATED COLUMNS
+-- (`k9_certifications.active_cert_key`,
+-- `k9_partnerships.active_partner_k9_key`/`active_partner_handler_key`,
+-- each backing a UNIQUE KEY), a feature MySQL did not gain until 5.7.8
+-- and MariaDB not until 10.2. On a real MySQL 5.6.51 server, install.sql
+-- and this resource's migrations fail outright:
+--     ERROR 1064 (42000) at line 48: You have an error in your SQL syntax
+--     ... near 'GENERATED ALWAYS AS ( CASE WHEN `active` = 1'
+-- and leave the database HALF-BUILT -- only `k9_progression` (the one
+-- table with no generated column) gets created; `k9_certifications`,
+-- `k9_search_log` and `k9_partnerships` do not exist at all.
+--
+-- TRUE MINIMUM VERSIONS: MySQL >= 5.7.8, or MariaDB >= 10.2.
+-- Verified passing end-to-end on MySQL 5.7.44, MySQL 8.0.46 and
+-- MariaDB 10.11.14; verified FAILING on MySQL 5.6.51.
+--
+-- The stored-procedure guard below is still genuinely REQUIRED, and is
+-- not made redundant by that higher floor: `ADD COLUMN IF NOT EXISTS`
+-- still does not exist in MySQL 5.7 or in MySQL 8.0.0-8.0.28, both of
+-- which sit above the 5.7.8 floor and are still in the field. The
+-- reasoning above stands; only the "5.6" number was wrong.
 --   * Column already present (fresh install, or this migration already
 --     ran once before)      -> IF is false -> no ALTER runs -> no-op.
 --   * Column missing         -> IF is true  -> ALTER runs once, adds the

@@ -526,9 +526,49 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
     -- either unclaimed anywhere, or already claimed by THIS citizenid's own
     -- kennel -- never when it names a genuinely different feature's or
     -- citizen's real, live object.
+    --
+    -- PRE-CONFIRMATION-WINDOW FIX (coder-architect, urgent red-team finding
+    -- this pass): neither `FindKennelOwnerByNetId` NOR
+    -- `IsNetworkEntityClaimedByOther` can catch a netId BEFORE its genuine
+    -- owner's own confirm has ever reached this server -- both registries
+    -- are only ever written at the moment a confirm SUCCEEDS. A victim's
+    -- client CreateObject()s a real, networked entity, then still has to run
+    -- PlaceObjectOnGroundProperly/FreezeEntityPosition/
+    -- NetworkGetNetworkIdFromEntity before it ever calls
+    -- confirmKennelPlaced -- OneSync can (and, per this codebase's own
+    -- FIRST-WRITER-WINS PROP-HIJACK RACE finding in
+    -- server/propattachment.lua, often does) replicate that entity to a
+    -- nearby attacker FASTER than the victim's own multi-step client
+    -- sequence finishes. An attacker with their own pending slot already
+    -- open (never having created anything real) can read that netId off the
+    -- wire and confirm it before the victim does -- landing on either a
+    -- rejection branch (deleting the victim's real kennel with
+    -- `safeToCleanup` reading true, since NOTHING has claimed it yet) or, if
+    -- the attacker's own pending coords happen to be within
+    -- KENNEL_CONFIRM_DISTANCE_TOLERANCE of the victim's real object (two
+    -- handlers deploying near the same station, which this file's own
+    -- header already treats as an ordinary case), the plain SUCCESS path --
+    -- outright theft: `Kennels[attacker] = victim's real object`.
+    -- FIXED the same way server/propattachment.lua's own NETWORK-OWNERSHIP
+    -- GUARD closes the identical shape of race for that file (see that
+    -- file's own header FIRST-WRITER-WINS PROP-HIJACK RACE section for the
+    -- full trace this mirrors): `NetworkGetEntityOwner(entity) == src` asks
+    -- the one question a registry populated only-on-confirm structurally
+    -- cannot answer -- is `src` the reported entity's CURRENT OneSync
+    -- network owner RIGHT NOW, independent of whether anyone has confirmed
+    -- anything yet. A networked object is owned, at creation, by the client
+    -- that created it (client/kennel.lua's own CreateObject call) -- never
+    -- by a merely-nearby OTHER client, no matter how quickly that other
+    -- client reacts. NetworkGetEntityOwner is verified server-callable
+    -- (`.luacheckrc`'s own read_globals entry: apiset `shared`, same
+    -- verification propattachment.lua's own guard already relies on).
+    -- Layered ALONGSIDE the existing checks below, not instead of them --
+    -- see this function's own RejectPlacement for why a non-owner's
+    -- rejection must still notify but never delete.
     local entity = ResolveNetworkEntity(netId, 3)
     local safeToCleanup = entity ~= nil
         and KennelModelHashes[GetEntityModel(entity)]
+        and NetworkGetEntityOwner(entity) == src
         and not FindKennelOwnerByNetId(netId, citizenid)
         and not IsNetworkEntityClaimedByOther(netId, 'kennel', citizenid)
 
@@ -643,6 +683,27 @@ RegisterNetEvent('qbx_k9unit:server:confirmKennelPlaced', function(netId)
         -- otherwise see it) — the exact "every placed kennel must always be
         -- removable" requirement this feature is built to.
         RejectPlacement(locale('kennel.placement_failed_too_far'))
+        return
+    end
+
+    -- NETWORK-OWNERSHIP GUARD (coder-architect, urgent red-team finding this
+    -- pass — mirrors server/propattachment.lua's own guard, see
+    -- `safeToCleanup`'s own comment above for the full PRE-CONFIRMATION-
+    -- WINDOW trace). Model, type, and distance can ALL be satisfied by an
+    -- attacker naming a DIFFERENT, still-unconfirmed citizen's real kennel —
+    -- distance in particular is trivially satisfiable whenever two certified
+    -- handlers deploy near the same station (this file's own DEFENSE-IN-
+    -- DEPTH comment immediately below already calls that an ordinary case).
+    -- Without this, THAT is the outright-theft shape this finding described:
+    -- `FindKennelOwnerByNetId`/`IsNetworkEntityClaimedByOther` both read
+    -- "unclaimed" for an object nobody has successfully confirmed yet, so
+    -- the write below would otherwise proceed, registering the VICTIM's
+    -- real, live object as the ATTACKER's own kennel. `safeToCleanup`
+    -- already reads false here for a non-owner (see above), so routing this
+    -- through RejectPlacement is safe by construction: notifies, attempts no
+    -- delete.
+    if NetworkGetEntityOwner(entity) ~= src then
+        RejectPlacement(locale('kennel.placement_failed_unconfirmed'))
         return
     end
 

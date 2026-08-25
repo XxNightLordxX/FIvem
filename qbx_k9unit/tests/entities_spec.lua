@@ -259,4 +259,70 @@ t.test('ResolveConnectedPlayerFromPed: matches the correct player among several,
     t.equals(ResolveConnectedPlayerFromPed(333), 30)
 end)
 
+-- ----------------------------------------------------------------------
+-- CROSS-FEATURE NETID CLAIM REGISTRY: ClaimNetworkEntity /
+-- ReleaseNetworkEntity / IsNetworkEntityClaimedByOther. `ClaimedNetworkEntities`
+-- is one shared table for this entire loaded env (not reset between tests,
+-- unlike the native-stub tables above, since nothing in entities.lua exposes
+-- a reset hook for it and none is needed) -- every test below uses its own
+-- distinct netId so no test can observe another's claims.
+-- ----------------------------------------------------------------------
+
+t.test('IsNetworkEntityClaimedByOther: an unclaimed netId is never claimed by anyone', function()
+    t.isFalse(IsNetworkEntityClaimedByOther(70001, 'kennel', 'AAA111'))
+end)
+
+t.test('ClaimNetworkEntity then IsNetworkEntityClaimedByOther: the SAME (feature, ownerId) that claimed it is never "claimed by OTHER"', function()
+    ClaimNetworkEntity(70002, 'kennel', 'AAA111')
+    t.isFalse(IsNetworkEntityClaimedByOther(70002, 'kennel', 'AAA111'), 're-confirming/overwriting your OWN prior claim is never a collision with yourself')
+end)
+
+t.test('ClaimNetworkEntity then IsNetworkEntityClaimedByOther: a DIFFERENT ownerId under the SAME feature IS claimed by other', function()
+    ClaimNetworkEntity(70003, 'fetch', 'AAA111')
+    t.isTrue(IsNetworkEntityClaimedByOther(70003, 'fetch', 'BBB222'))
+end)
+
+t.test('ClaimNetworkEntity then IsNetworkEntityClaimedByOther: a DIFFERENT feature entirely IS claimed by other -- THE CROSS-FEATURE CASE this registry exists for', function()
+    ClaimNetworkEntity(70004, 'kennel', 'AAA111')
+    t.isTrue(IsNetworkEntityClaimedByOther(70004, 'fetch', 'AAA111'), 'same ownerId, different feature -- still a collision, exactly the shared-prop-model gap this registry closes')
+    t.isTrue(IsNetworkEntityClaimedByOther(70004, 'propattachment', 'AAA111'))
+end)
+
+t.test('ReleaseNetworkEntity: clears a claim when the (feature, ownerId) pair matches exactly', function()
+    ClaimNetworkEntity(70005, 'kennel', 'AAA111')
+    ReleaseNetworkEntity(70005, 'kennel', 'AAA111')
+    t.isFalse(IsNetworkEntityClaimedByOther(70005, 'fetch', 'ZZZ999'), 'unclaimed after release -- no longer collides with anyone')
+end)
+
+t.test('ReleaseNetworkEntity: does NOT clear a claim when ownerId does not match -- fails closed, never lets a stranger release someone else\'s claim', function()
+    ClaimNetworkEntity(70006, 'kennel', 'AAA111')
+    ReleaseNetworkEntity(70006, 'kennel', 'MALLORY')
+    t.isTrue(IsNetworkEntityClaimedByOther(70006, 'fetch', 'ZZZ999'), 'the real owner\'s claim must still stand')
+    t.isFalse(IsNetworkEntityClaimedByOther(70006, 'kennel', 'AAA111'), 'and the real owner still recognizes it as their own')
+end)
+
+t.test('ReleaseNetworkEntity: does NOT clear a claim when feature does not match, even with the correct ownerId', function()
+    ClaimNetworkEntity(70007, 'kennel', 'AAA111')
+    ReleaseNetworkEntity(70007, 'fetch', 'AAA111') -- same citizenid, wrong feature
+    t.isTrue(IsNetworkEntityClaimedByOther(70007, 'fetch', 'ZZZ999'), 'kennel\'s claim survives a mismatched-feature release attempt')
+end)
+
+t.test('ReleaseNetworkEntity: a no-op on a netId that was never claimed at all -- never errors', function()
+    ReleaseNetworkEntity(70008, 'kennel', 'AAA111')
+    t.isFalse(IsNetworkEntityClaimedByOther(70008, 'fetch', 'ZZZ999'))
+end)
+
+t.test('ClaimNetworkEntity: overwrites a prior claim for the SAME netId (last write wins) -- models re-claiming after a netId overwrite (confirmFetchBallCarried/Dropped\'s own release-then-claim pattern)', function()
+    ClaimNetworkEntity(70009, 'kennel', 'AAA111')
+    ClaimNetworkEntity(70009, 'fetch', 'BBB222')
+    t.isFalse(IsNetworkEntityClaimedByOther(70009, 'fetch', 'BBB222'), 'the new claim is now authoritative')
+    t.isTrue(IsNetworkEntityClaimedByOther(70009, 'kennel', 'AAA111'), 'the old claimant no longer owns it')
+end)
+
+t.test('ClaimNetworkEntity/ReleaseNetworkEntity/IsNetworkEntityClaimedByOther: a non-number netId is a silent no-op / always false, never an error', function()
+    ClaimNetworkEntity('not-a-number', 'kennel', 'AAA111') -- must not error, and must not affect anything
+    t.isFalse(IsNetworkEntityClaimedByOther('not-a-number', 'fetch', 'ZZZ999'))
+    ReleaseNetworkEntity('not-a-number', 'kennel', 'AAA111') -- must not error
+end)
+
 os.exit(t.summary())

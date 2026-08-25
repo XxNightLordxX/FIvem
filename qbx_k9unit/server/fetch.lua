@@ -469,9 +469,36 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
     -- right type/model, never recorded in `FetchBalls` at all, so it used
     -- to read as `safeToCleanup == true` here regardless.
     -- `IsNetworkEntityClaimedByOther` (server/entities.lua) closes that.
+    --
+    -- PRE-CONFIRMATION-WINDOW FIX (coder-architect, urgent red-team finding
+    -- this pass — mirrors server/kennel.lua's own confirmKennelPlaced fix
+    -- and server/propattachment.lua's original NETWORK-OWNERSHIP GUARD; see
+    -- either one's own comment for the full trace): NEITHER
+    -- `FindOtherBallByNetId` NOR `IsNetworkEntityClaimedByOther` can catch a
+    -- netId before ITS OWN genuine owner's confirm has ever reached this
+    -- server — both are only written on a SUCCESSFUL confirm, and a victim's
+    -- client networks its ball via CreateObject well before it finishes
+    -- ApplyForceToEntity/NetworkGetNetworkIdFromEntity and actually calls
+    -- confirmFetchBallThrown. THIS HANDLER IS STRICTLY WORSE THAN
+    -- server/kennel.lua's OWN EQUIVALENT HERE: this event has NO positional
+    -- check at all (see this handler's own doc comment above: a thrown,
+    -- physics-simulated ball's resting position legitimately moves, so
+    -- nothing here compares against the server-chosen spawn point) — so the
+    -- THEFT shape (not just the deletion shape) is the reachable-by-default
+    -- outcome, needing nothing but the netId and winning the race: an
+    -- attacker's own confirm names the victim's real, not-yet-confirmed
+    -- ball, passes every check below including model, and lands on the
+    -- plain SUCCESS path, `FetchBalls[attacker] = victim's real object`.
+    -- `NetworkGetEntityOwner(entity) == src` closes this the same way as
+    -- both of those other files' own guards: a networked object is owned,
+    -- at creation, by the client that created it, never by a merely-faster
+    -- OTHER client that only ever observed its netId over OneSync
+    -- replication. Verified server-callable (`.luacheckrc`'s read_globals
+    -- entry: apiset `shared`).
     local entity = ResolveNetworkEntity(netId, 3)
     local safeToCleanup = entity ~= nil
         and FetchBallModelHashes[GetEntityModel(entity)]
+        and NetworkGetEntityOwner(entity) == src
         and not FindOtherBallByNetId(netId, citizenid)
         and not IsNetworkEntityClaimedByOther(netId, 'fetch', citizenid)
 
@@ -528,7 +555,16 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallThrown', function(netId)
     -- all. The attacker's own very next requestRecallFetchBall (a clean,
     -- ordinary, already-audited call) would then delete the victim's real
     -- kennel/vest via THIS file's own EndFetchCycle.
-    if FindOtherBallByNetId(netId, citizenid) or IsNetworkEntityClaimedByOther(netId, 'fetch', citizenid) then
+    --
+    -- PRE-CONFIRMATION-WINDOW FIX (coder-architect, urgent red-team finding
+    -- this pass): `NetworkGetEntityOwner(entity) ~= src` is ALSO a hard
+    -- reject gating this exact write, not just part of `safeToCleanup`
+    -- above -- this is the actual outright-theft shape (a victim's
+    -- not-yet-confirmed real ball, thrown or otherwise, silently becoming
+    -- the attacker's own FetchBalls entry) this pass's finding described as
+    -- the DEFAULT outcome for this specific handler, since it has no
+    -- positional check at all to accidentally narrow the window.
+    if FindOtherBallByNetId(netId, citizenid) or IsNetworkEntityClaimedByOther(netId, 'fetch', citizenid) or NetworkGetEntityOwner(entity) ~= src then
         RejectThrow(locale('fetch.placement_failed_already_tracked'))
         return
     end
@@ -742,7 +778,17 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallCarried', function(netId)
     -- release/recall/deliver/expiry. `IsNetworkEntityClaimedByOther`
     -- (server/entities.lua) closes that the same way as every other write
     -- site this pass touched.
-    if FindOtherBallByNetId(netId, pending.throwerCitizenId) or IsNetworkEntityClaimedByOther(netId, 'fetch', pending.throwerCitizenId) then
+    --
+    -- PRE-CONFIRMATION-WINDOW FIX (coder-architect, urgent red-team finding
+    -- this pass): a victim's OWN not-yet-confirmed real object (kennel,
+    -- vest, or another citizen's own thrown/dropped ball) is unclaimed in
+    -- EVERY registry above until its genuine owner's own confirm lands --
+    -- `entity` is already confirmed non-nil by the guard above, so this is
+    -- safe to call unconditionally. `NetworkGetEntityOwner(entity) ~= src`
+    -- closes the theft shape the same way as confirmFetchBallThrown's own
+    -- identical addition -- see that handler's own comment for the full
+    -- trace.
+    if FindOtherBallByNetId(netId, pending.throwerCitizenId) or IsNetworkEntityClaimedByOther(netId, 'fetch', pending.throwerCitizenId) or NetworkGetEntityOwner(entity) ~= src then
         EndFetchCycle(pending.throwerCitizenId, ball)
         return
     end
@@ -866,9 +912,17 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallDropped', function(netId)
     -- `safeToCleanup` above -- see that handler's own comment for the full
     -- writeup, and server/entities.lua's header for the shared exploit this
     -- closes across all three of this resource's netId-confirm features.
+    --
+    -- PRE-CONFIRMATION-WINDOW FIX (coder-architect, urgent red-team finding
+    -- this pass): same NetworkGetEntityOwner addition as
+    -- confirmFetchBallThrown's own `safeToCleanup` above -- see that
+    -- handler's own comment for the full trace (neither FindOtherBallByNetId
+    -- nor IsNetworkEntityClaimedByOther can catch a netId before its own
+    -- genuine owner's confirm has ever reached this server).
     local entity = ResolveNetworkEntity(netId, 3)
     local safeToCleanup = entity ~= nil
         and FetchBallModelHashes[GetEntityModel(entity)]
+        and NetworkGetEntityOwner(entity) == src
         and not FindOtherBallByNetId(netId, pending.throwerCitizenId)
         and not IsNetworkEntityClaimedByOther(netId, 'fetch', pending.throwerCitizenId)
 
@@ -908,7 +962,12 @@ RegisterNetEvent('qbx_k9unit:server:confirmFetchBallDropped', function(netId)
     -- this exact model) would sail through this gate and get WRITTEN into
     -- `ball.netId` below, reachable for deletion by this citizenid's own
     -- very next release/recall/deliver.
-    if FindOtherBallByNetId(netId, pending.throwerCitizenId) or IsNetworkEntityClaimedByOther(netId, 'fetch', pending.throwerCitizenId) then
+    --
+    -- PRE-CONFIRMATION-WINDOW FIX (coder-architect, urgent red-team finding
+    -- this pass): same NetworkGetEntityOwner addition as
+    -- confirmFetchBallThrown's own pre-write gate -- `entity` is already
+    -- confirmed non-nil above, so this is safe to call unconditionally.
+    if FindOtherBallByNetId(netId, pending.throwerCitizenId) or IsNetworkEntityClaimedByOther(netId, 'fetch', pending.throwerCitizenId) or NetworkGetEntityOwner(entity) ~= src then
         RejectDrop()
         return
     end

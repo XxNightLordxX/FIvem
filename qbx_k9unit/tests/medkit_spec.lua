@@ -1263,13 +1263,16 @@ local function newMedkitPlusWellbeingStartupFixture(opts)
         -- Minimal shape server/wellbeing.lua's own file-load-time code
         -- needs to not error: HESITATION_MAX_CONTINUOUS_MS is computed
         -- UNCONDITIONALLY at load (`Config.Wellbeing.FearStress
-        -- .hesitationDurationMs * 8`), regardless of any feature flag.
-        -- Every OTHER Config.Wellbeing.* sub-table this file reads is
-        -- reached only from inside a feature-flag-gated function body,
-        -- never at load time -- deliberately omitted here since every
+        -- .hesitationDurationMs * 8`), and so is
+        -- MIN_DEATH_EPISODE_DURATION_MS (`math.max(Config.Wellbeing
+        -- .tickIntervalMs * 3, 60000)`, the death/respawn regression fix's
+        -- own minimum-episode-duration constant) -- both regardless of any
+        -- feature flag. Every OTHER Config.Wellbeing.* sub-table this file
+        -- reads is reached only from inside a feature-flag-gated function
+        -- body, never at load time -- deliberately omitted here since every
         -- wellbeing feature flag above is false and this section never
         -- calls into any of those handlers.
-        Wellbeing = { FearStress = { hesitationDurationMs = 8000 } },
+        Wellbeing = { FearStress = { hesitationDurationMs = 8000 }, tickIntervalMs = 5000 },
     }
 
     local env = Sandbox.newEnv({

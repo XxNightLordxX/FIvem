@@ -1,4 +1,34 @@
 -- =====================================================================
+-- qbx_k9unit :: DATABASE REQUIREMENTS -- READ FIRST
+--
+-- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
+--
+-- This is a hard requirement, not a recommendation. Three of the four
+-- tables below declare an INDEXED VIRTUAL GENERATED COLUMN backing a
+-- UNIQUE KEY (`k9_certifications.active_cert_key`,
+-- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`)
+-- -- the DB-level backstop for this resource's "at most one active
+-- certification per (citizenid, job)" and "at most one active partnership
+-- per party" invariants. Secondary indexes on virtual generated columns
+-- arrived in MySQL 5.7.8 and MariaDB 10.2; nothing older can parse these
+-- statements.
+--
+-- Verified BY EXECUTION against real servers, not by inspection:
+--   MySQL 5.6.51   -- FAILS. install.sql aborts at the first generated
+--                     column with `ERROR 1064 (42000) ... near 'GENERATED
+--                     ALWAYS AS ('`, and leaves the database HALF-BUILT:
+--                     only `k9_progression` is created. Do not attempt.
+--   MySQL 5.7.44   -- OK (install.sql + migrations 0001-0004 all clean).
+--   MySQL 8.0.46   -- OK.
+--   MariaDB 10.11  -- OK.
+--
+-- If your host runs MySQL 5.6, upgrade the database server before
+-- installing this resource; there is no supported downgrade path for the
+-- schema, because the uniqueness guarantees the resource's concurrency
+-- safety depends on cannot be expressed without these columns.
+-- =====================================================================
+
+-- =====================================================================
 -- qbx_k9unit :: k9_certifications
 --
 -- Source of truth for K9 handler certification grants/revocations.

@@ -327,27 +327,45 @@
        Reported to the task owner for config.lua; NOT applied here.
 
     2. DEATH/RESPAWN RESET — fixed below (`PED_DEAD_HEALTH_THRESHOLD`,
-       `injuryDiedWhileTracked`, and the death-transition block inside
-       TickWellbeing's `Config.Features.InjuryLimping` branch). DECISION:
-       a K9 that dies and is later revived/respawned is treated the same
-       way this resource already treats every OTHER measure of that ped's
-       condition across the exact same event — its REAL native health is
-       already reset to full by whatever laststand/ambulance system handles
-       revival/respawn (nothing in this resource, or in the game engine,
-       makes a fresh life inherit the previous one's wounds); a virtual
-       Injury value surviving that same event completely unmodified is the
-       actual inconsistency, not a deliberate design. `Config.Wellbeing
-       .Injury.deathRespawnRestoreAmount` (new field, reported to the task
-       owner for config.lua — recommended default 100, i.e. Injury.max, a
-       FULL reset) is added to Injury the tick this file's own maintenance
-       loop first observes a tracked K9's native health recover above
-       `PED_DEAD_HEALTH_THRESHOLD` after having been at or below it.
+       `MIN_DEATH_EPISODE_DURATION_MS`, `injuryDeathEpisodeStartedAt`, and
+       the death-episode block inside TickWellbeing's
+       `Config.Features.InjuryLimping` branch). DECISION: a K9 that dies and
+       is later revived/respawned is treated the same way this resource
+       already treats every OTHER measure of that ped's condition across the
+       exact same event — its REAL native health is already reset to full by
+       whatever laststand/ambulance system handles revival/respawn (nothing
+       in this resource, or in the game engine, makes a fresh life inherit
+       the previous one's wounds); a virtual Injury value surviving that
+       same event completely unmodified is the actual inconsistency, not a
+       deliberate design. `Config.Wellbeing.Injury.deathRespawnRestoreAmount`
+       (new field, reported to the task owner for config.lua — recommended
+       default 100, i.e. Injury.max, a FULL reset) is added to Injury once a
+       qualifying death EPISODE ends with the K9 observed alive again.
        CONFIGURABLE, per this task's own instruction: an operator who wants
        "still limping after respawn" for realism sets it to 0 (a genuine,
        supported no-op) or any partial value between 0 and Injury.max.
-       `IsEntityDead` is deliberately NOT used for this detection — that
-       native has NO FXServer server-side registration at all
-       (server/combat.lua's and server/medkit.lua's own, independently
+
+       READ THIS BEFORE TOUCHING THE DETECTION LOGIC — IT IS A HEURISTIC,
+       NOT AN EVENT. This resource has no server-authoritative "this ped
+       just died" or "this ped was just revived" signal of its own, and this
+       file's own established convention (CONFIDENCE GRADING item 5 above,
+       for flashbang immunity) is to refuse to guess at a third-party
+       ambulance/laststand resource's event name or payload shape rather
+       than invent one that would only ever fire on servers running that
+       exact resource. What this actually measures, honestly: has this K9's
+       native health been observed continuously at/below
+       `PED_DEAD_HEALTH_THRESHOLD` for at least
+       `MIN_DEATH_EPISODE_DURATION_MS`, sampled once per
+       `Config.Wellbeing.tickIntervalMs`. That is a real, if imperfect,
+       proxy for "was genuinely downed for a meaningful stretch" — it is NOT
+       a death event, cannot be made into one without a dependency this file
+       has already refused to guess at, and both KNOWN failure directions
+       are disclosed rather than hidden: it can miss a genuine, very fast
+       revive (rare — see the timing note below), and it can very rarely
+       credit a bizarre non-death cause of prolonged sub-threshold health
+       (also see below). `IsEntityDead` is deliberately NOT used for this
+       detection — that native has NO FXServer server-side registration at
+       all (server/combat.lua's and server/medkit.lua's own, independently
        confirmed "NATIVE-AVAILABILITY FIX" findings, both citing a direct
        search of citizenfx/fivem's own native-registration source; not
        re-verified a third time here, reused as already-established fact)
@@ -355,15 +373,92 @@
        THRESHOLD = 100` mirrors server/combat.lua's/server/medkit.lua's own
        identical constant and reasoning (a GTA ped is conventionally
        declared dead at 100 health, not 0 — the reason default max health
-       is 200). DISCLOSED LIMITATION: detection is polled once per
-       `Config.Wellbeing.tickIntervalMs` (5000ms default), so a death-then-
-       respawn cycle shorter than one tick interval would never be observed
-       as a transition and would not trigger this restore — not expected in
-       practice (every real QB/qbx laststand/ambulance flow this resource
-       is aware of takes minutes, not single-digit seconds), but stated
-       plainly rather than claimed away, matching this file's own house
-       style elsewhere (see the relayWeaponFire section's own residual-risk
-       writeup).
+       is 200).
+
+       FOLLOW-UP FIX #1 (regression pass, caught empirically against the
+       live resource): the first version of this detection used a plain
+       boolean ("was this ped observed dead as of the last tick") living in
+       the same per-citizenid `WellbeingStats` table this file's OWN header
+       documents as deliberately surviving a disconnect ("a K9 who logs off
+       tired should still be tired on reconnect") — but that persistence
+       rule was written for the four PERSISTED stats, and this boolean was
+       not one of them; it was a transient snapshot of "was THIS SPECIFIC
+       ped handle observed dead," meaningless the instant a reconnect hands
+       the citizenid a brand-new ped. A K9 could take damage, die,
+       DISCONNECT while dead (before any revive completed), and reconnect to
+       a fresh, genuinely-alive ped that never went through any revive/
+       ambulance flow at all — the next tick misread that as a real
+       transition and paid the full restore for free, repeatably. FIXED:
+       both places that already reset the OTHER field in this exact same
+       transient category (`lastCoords` — the `elseif ped ~= 0` branch
+       inside TickWellbeing, and the `playerDropped` handler) now ALSO reset
+       `injuryDeathEpisodeStartedAt` to 0 alongside it. See the
+       `WellbeingStats` struct comment (above `EnsureStats`) for the
+       now-explicit "persisted vs. transient ped-instance-scoped" category
+       split this bug fell through the seam of.
+
+       FOLLOW-UP FIX #2 (red-team pass, independently found, WORSE than #1):
+       the same boolean design paid out on ANY observed crossing of
+       `PED_DEAD_HEALTH_THRESHOLD`, not a genuine death-and-revival — no
+       disconnect, no ambulance flow, no delay of any kind required. A K9
+       grazed down to ~90 health (a serious wound by this codebase's own
+       health-threshold convention, but very much still an ordinary, ACTIVE
+       combat participant, not "dead" in any gameplay sense) that healed
+       back above 100 within the next `tickIntervalMs` — an ordinary
+       bandage, food, armor, or even vanilla passive regen, all well under
+       the 5s default poll interval — had that single boundary crossing read
+       as "died and was revived," paying the FULL `deathRespawnRestoreAmount`
+       (100 by default) for the cost of a bandage: strictly cheaper than
+       both recovery paths this whole fix was built around (the deliberately
+       slow `passiveRegenPerTick`, and K9Medkit's own `injuryRestore` of 40 —
+       this exploit was worth more than the item it was meant to sit
+       alongside). It also paid out ONCE PER CROSSING rather than once per
+       down episode, so a genuinely downed K9 whose health merely oscillated
+       near the threshold during one real laststand could collect several
+       full resets from a single down. FIXED by replacing the boolean with
+       `injuryDeathEpisodeStartedAt`, a `GetGameTimer()` timestamp (0 =
+       not currently in a candidate episode): set on the FIRST tick a
+       continuous sub-threshold stretch begins, left untouched while it
+       continues, and read — then unconditionally cleared to 0, whether or
+       not it qualifies — the moment the K9 is next observed alive. The
+       restore fires only if that episode's measured span reached
+       `MIN_DEATH_EPISODE_DURATION_MS`; an ordinary combat dip healed within
+       a tick or two never does, and clearing the timestamp unconditionally
+       on every alive-observation means each candidate episode is judged
+       exactly once, closing the oscillation/multi-payout case as a natural
+       consequence of the same fix rather than a second, separate patch.
+       `MIN_DEATH_EPISODE_DURATION_MS` is deliberately a LOCAL constant, not
+       a new Config field — same "small, disclosed, security-relevant value
+       lives in code, not an operator-tunable knob that could be set low
+       enough to reopen the exploit" reasoning this file's own
+       HESITATION_MAX_CONTINUOUS_MS below already established. See that
+       constant's own doc comment for the exact derivation and the residual
+       limitations this heuristic still, honestly, cannot close.
+
+       NOTE FOR CONFIG.LUA'S OWN disclosed-residual-risk COMMENT (task
+       owner, this is the update the coordinator asked for): the OLD text
+       covered only a player choosing to fully die and be revived through a
+       real ambulance system with real cost. It did not cover, and after
+       FOLLOW-UP FIX #2 no longer needs to worry about, ordinary combat
+       healing near the threshold (that path is now gated on
+       MIN_DEATH_EPISODE_DURATION_MS, ~60s minimum by default — see that
+       constant's own comment) or multiple payouts from one oscillating down
+       episode (now impossible — at most one payout per episode, by
+       construction). The residual risk that DOES remain, honestly: a player
+       who deliberately manufactures a real ≥60-second stretch at/below 100
+       health and then heals up still receives a full restore with no real
+       ambulance/laststand system involved at all — cheaper than a genuine
+       downed state in most real deployments (which typically run minutes,
+       not the ~60s floor here), but not free in the way the crossing-based
+       version was, and bounded to at most one payout per attempt rather
+       than one per graze. Recommended config.lua wording: replace the
+       existing disclosed-risk paragraph's scope from "a player choosing to
+       die and be revived" to "a player deliberately holding their K9's
+       health at or below 100 for at least MIN_DEATH_EPISODE_DURATION_MS
+       (server/wellbeing.lua, ~60s by default) and then healing normally,
+       with no real ambulance/laststand flow required" — same underlying
+       risk category, now bounded to a real minimum time cost per attempt
+       and to one payout per episode rather than unbounded/free.
 
     3. SILENT PLACEHOLDER-ITEM FAILURE — fixed below (`WarnIfItemMissing`,
        the trailing `AddEventHandler('onResourceStart', ...)` block).
@@ -422,8 +517,12 @@
 --                                              -- HESITATION_MAX_CONTINUOUS_MS below (coder-security,
 --                                              -- this pass) for why this exists.
 --     lastCoords,                             -- vector3? -- previous tick's sample, for Fatigue's sprint-speed calc
---     injuryDiedWhileTracked,                 -- boolean -- see this file's header, STUCK-K9 SOFTLOCK
---                                              -- FIX item 2 and its FOLLOW-UP note, for the full writeup.
+--     injuryDeathEpisodeStartedAt,            -- GetGameTimer() ms, 0 = not currently in a candidate
+--                                              -- continuous at/below-PED_DEAD_HEALTH_THRESHOLD episode --
+--                                              -- see this file's header, STUCK-K9 SOFTLOCK FIX item 2
+--                                              -- (both FOLLOW-UP notes) for the full history, and
+--                                              -- MIN_DEATH_EPISODE_DURATION_MS below for the qualifying
+--                                              -- duration this field's episode length is judged against.
 --
 -- TWO DIFFERENT CATEGORIES OF FIELD LIVE IN THIS SAME TABLE -- read this
 -- before adding a new one, since conflating them is exactly the bug class a
@@ -440,9 +539,9 @@
 --      after they reconnect, exactly as if they had stayed connected the
 --      whole time. Never reset these on playerDropped/a model switch.
 --   2. TRANSIENT, SESSION/PED-INSTANCE-SCOPED OBSERVATIONS (lastCoords,
---      injuryDiedWhileTracked): a snapshot of something true about THIS
---      SPECIFIC, CURRENTLY-LIVE ped handle as of the last tick this file
---      actually observed it -- meaningless the instant that ped handle
+--      injuryDeathEpisodeStartedAt): a snapshot of something true about
+--      THIS SPECIFIC, CURRENTLY-LIVE ped handle as of the last tick this
+--      file actually observed it -- meaningless the instant that ped handle
 --      stops being the one backing this citizenid (a disconnect, or a
 --      switch away from a K9 model while still connected), because the
 --      NEXT ped handle this citizenid is ever attached to (a reconnect's
@@ -450,23 +549,28 @@
 --      to whatever the old one's last-observed state was. lastCoords was
 --      already reset on both paths from this file's very first version of
 --      this logic (the "bogus sprint-speed on reconnect/model-swap" fix).
---      injuryDiedWhileTracked was NOT, when it was first added -- a
---      regression pass found this let a K9 disconnect while dead and
---      reconnect to a fresh, genuinely-alive ped, which this file's own
---      tick loop then misread as a real dead-to-alive TRANSITION and paid
---      out a full deathRespawnRestoreAmount for free, no revive/ambulance/
---      medkit/delay required, repeatably -- exactly the cost-free loop this
---      field's own config.lua comment's disclosed-risk paragraph assumed a
---      real revive flow's own friction would prevent. FIXED: both reset
---      sites below (the model-switch-away branch inside TickWellbeing, and
---      the playerDropped handler) now clear injuryDiedWhileTracked
---      alongside lastCoords -- same category, same fix shape, applied
+--      injuryDeathEpisodeStartedAt's PREDECESSOR (a plain boolean,
+--      `injuryDiedWhileTracked`) was NOT reset on either path when it was
+--      first added -- a regression pass found this let a K9 disconnect
+--      while dead and reconnect to a fresh, genuinely-alive ped, which this
+--      file's own tick loop then misread as a real dead-to-alive TRANSITION
+--      and paid out a full deathRespawnRestoreAmount for free, no revive/
+--      ambulance/medkit/delay required, repeatably. FIXED: both reset sites
+--      below (the model-switch-away branch inside TickWellbeing, and the
+--      playerDropped handler) now clear injuryDeathEpisodeStartedAt back to
+--      0 alongside lastCoords -- same category, same fix shape, applied
 --      consistently rather than only at the one site a regression test
---      happened to exercise first. A future field belongs in category 2,
---      and needs the SAME reset at BOTH sites, if it is ever a plain
---      boolean/non-timestamp snapshot of "what did I last see this ped
---      doing" rather than an absolute clock comparison or one of the four
---      genuinely-persisted stats themselves.
+--      happened to exercise first. NOTE THIS IS A TIMESTAMP, NOT A BOOLEAN,
+--      unlike its predecessor -- "reset" for this field specifically means
+--      set to 0 (its own "inactive" sentinel), never `false`/`nil`; see
+--      MIN_DEATH_EPISODE_DURATION_MS's own doc comment for why a second,
+--      independent bug (paying out on ANY brief health crossing, not a
+--      genuine down episode) required this field to become a duration
+--      measurement rather than stay a plain flag. A future field belongs in
+--      category 2, and needs the SAME reset at BOTH sites, if it is ever a
+--      snapshot of "what did I last see this ped doing" rather than an
+--      absolute clock comparison or one of the four genuinely-persisted
+--      stats themselves.
 -- }
 local WellbeingStats = {}
 
@@ -494,6 +598,54 @@ local RecentGunfire = {}
 --- substitute — a GTA ped is conventionally declared dead at 100 health,
 --- not 0 (the reason a ped's default max health is 200, not 100).
 local PED_DEAD_HEALTH_THRESHOLD = 100
+
+--- MINIMUM QUALIFYING DEATH-EPISODE DURATION (red-team fix, this pass —
+--- see this file's header, STUCK-K9 SOFTLOCK FIX item 2's FOLLOW-UP FIX #2,
+--- for the full exploit this closes). `PED_DEAD_HEALTH_THRESHOLD` alone
+--- cannot distinguish a genuine down/revive from an ordinary combat dip
+--- ("grazed to ~90, bandaged back above 100 a few seconds later" is a
+--- completely mundane firefight event, not a death) — TickWellbeing below
+--- now requires a candidate episode (continuous observed time at/below the
+--- threshold) to span AT LEAST this many milliseconds, measured between the
+--- tick it was first observed and the tick it was next observed alive,
+--- before `Config.Wellbeing.Injury.deathRespawnRestoreAmount` is paid.
+--- DELIBERATELY a LOCAL constant, not a new Config field: this is a
+--- security/exploit-boundary value, not a balance dial, same reasoning
+--- HESITATION_MAX_CONTINUOUS_MS below already established for this file --
+--- an operator-tunable value here could simply be set low enough to reopen
+--- the exact exploit this closes, and this file's own established
+--- convention for that class of value is to keep it in code rather than
+--- expose a footgun.
+---
+--- DERIVATION: `math.max(tickIntervalMs * 3, 60000)` -- at least 3 sample
+--- intervals (so a single unlucky one-tick sampling of an otherwise
+--- instantaneous dip can never alone qualify) AND at least a real 60
+--- seconds regardless of how short `Config.Wellbeing.tickIntervalMs` is
+--- configured. At the shipped default (5000ms), this evaluates to 60000ms
+--- (the 60s floor dominates). Chosen against real-world reference points,
+--- not arbitrarily: 60s comfortably exceeds any plausible ordinary-combat
+--- heal (a bandage/food/armor application is a matter of seconds), while
+--- staying well under "every real QB/qbx laststand/ambulance flow this
+--- resource is aware of takes minutes, not single-digit seconds" (this
+--- file's own already-established observation) -- so a genuine down/revive
+--- always qualifies, and an ordinary graze essentially never does.
+---
+--- HONEST LIMITS, STATED PLAINLY RATHER THAN CLAIMED AWAY (same "a 5-second
+--- poll against a health threshold is a heuristic for death, not a death
+--- event" framing this file's header now uses): (1) this does NOT make the
+--- restore free of gaming entirely -- a player who deliberately holds their
+--- K9 at/below 100 health for a real 60+ seconds and then heals normally
+--- still receives it, with no actual ambulance/laststand flow required; it
+--- is bounded to a real minimum time cost and to one payout per episode
+--- (see TickWellbeing's own unconditional-clear-on-alive-observation logic
+--- below), never free or unbounded, but not literally impossible either.
+--- (2) A GENUINE revive completed faster than this floor (unusual, but not
+--- impossible for an instant-revive item/command some servers run) would
+--- NOT trigger the restore -- accepted as the safer failure direction: a
+--- false negative here costs a K9 nothing it wasn't already going to
+--- recover from via ordinary passive regen; a false positive is the actual
+--- exploit this constant exists to close.
+local MIN_DEATH_EPISODE_DURATION_MS = math.max(Config.Wellbeing.tickIntervalMs * 3, 60000)
 
 --- @param value number
 --- @param min number
@@ -523,19 +675,21 @@ local function EnsureStats(citizenid)
             hesitatingUntil = 0,
             hesitationEpisodeStartedAt = 0,
             lastCoords = nil,
-            -- DEATH/RESPAWN RESET (this pass, coder-backend softlock fix):
-            -- true from the tick a tracked K9's native health is FIRST
-            -- observed at/below PED_DEAD_HEALTH_THRESHOLD until the tick it
-            -- is next observed genuinely alive again — see this file's
-            -- header, STUCK-K9 SOFTLOCK FIX item 2, and TickWellbeing's own
-            -- Injury branch below for the full read/reset cycle. Starts
-            -- false: a freshly-referenced citizenid has never been observed
-            -- dead by this tracker. TRANSIENT, PED-INSTANCE-SCOPED, NOT a
-            -- persisted value — see the WellbeingStats struct comment above
-            -- (category 2) for why this MUST be reset wherever lastCoords
-            -- is reset, and the FOLLOW-UP fix for the disconnect-while-dead
-            -- exploit that shipped without that reset the first time.
-            injuryDiedWhileTracked = false,
+            -- DEATH/RESPAWN RESET (this pass, coder-backend softlock fix,
+            -- since redesigned by two FOLLOW-UP fixes): GetGameTimer() ms
+            -- of the tick a tracked K9's native health is FIRST observed
+            -- continuously at/below PED_DEAD_HEALTH_THRESHOLD; 0 = not
+            -- currently in a candidate episode. See this file's header,
+            -- STUCK-K9 SOFTLOCK FIX item 2 (both FOLLOW-UP notes), and
+            -- TickWellbeing's own Injury branch below for the full
+            -- read/qualify/reset cycle, and MIN_DEATH_EPISODE_DURATION_MS
+            -- for the minimum episode span a restore requires. Starts 0: a
+            -- freshly-referenced citizenid has never been observed dead by
+            -- this tracker. TRANSIENT, PED-INSTANCE-SCOPED, NOT a persisted
+            -- value — see the WellbeingStats struct comment above
+            -- (category 2) for why this MUST be reset (to 0, not `false` —
+            -- this is a timestamp) wherever lastCoords is reset.
+            injuryDeathEpisodeStartedAt = 0,
         }
         WellbeingStats[citizenid] = stats
     end
@@ -1212,37 +1366,59 @@ local function TickWellbeing()
                     end
 
                     if Config.Features.InjuryLimping then
-                        -- DEATH/RESPAWN RESET (this pass, coder-backend
-                        -- softlock fix) — see this file's header, STUCK-K9
-                        -- SOFTLOCK FIX item 2, for the full decision
-                        -- writeup. `coords`/`ped` above already resolve this
-                        -- K9's own live, server-held state this tick; the
-                        -- one extra native call here (GetEntityHealth) is
-                        -- gated behind InjuryLimping specifically, per this
-                        -- file's own "never call/track anything a disabled
-                        -- flag hasn't activated" discipline.
+                        -- DEATH/RESPAWN RESET — see this file's header,
+                        -- STUCK-K9 SOFTLOCK FIX item 2 (read BOTH FOLLOW-UP
+                        -- notes before touching this block), and
+                        -- MIN_DEATH_EPISODE_DURATION_MS's own doc comment,
+                        -- for the full decision writeup and exactly what
+                        -- this heuristic does and does not detect.
+                        -- `coords`/`ped` above already resolve this K9's own
+                        -- live, server-held state this tick; the one extra
+                        -- native call here (GetEntityHealth) is gated behind
+                        -- InjuryLimping specifically, per this file's own
+                        -- "never call/track anything a disabled flag hasn't
+                        -- activated" discipline.
                         local isDeadNow = GetEntityHealth(ped) <= PED_DEAD_HEALTH_THRESHOLD
                         if isDeadNow then
-                            stats.injuryDiedWhileTracked = true
-                        elseif stats.injuryDiedWhileTracked then
-                            -- Transition observed: dead on a previous tick,
-                            -- genuinely alive again now (revived or
-                            -- respawned) — restore, then clear the flag so
-                            -- this only ever fires once per death.
-                            stats.injuryDiedWhileTracked = false
-                            local restoreAmount = tonumber(Config.Wellbeing.Injury.deathRespawnRestoreAmount)
-                            if restoreAmount and restoreAmount > 0 then
-                                stats.injury = Clamp(stats.injury + restoreAmount, 0, Config.Wellbeing.Injury.max)
+                            -- Mark the START of a candidate episode only
+                            -- once — a continuing dead stretch must not keep
+                            -- pushing this timestamp forward, or its
+                            -- measured span would never grow and could never
+                            -- qualify.
+                            if stats.injuryDeathEpisodeStartedAt == 0 then
+                                stats.injuryDeathEpisodeStartedAt = now
                             end
+                        elseif stats.injuryDeathEpisodeStartedAt ~= 0 then
+                            -- Alive again: this candidate episode is OVER
+                            -- either way, and is cleared UNCONDITIONALLY
+                            -- below regardless of whether it qualifies — a
+                            -- disqualified short episode must never be
+                            -- "topped up" by a later, separate one; each
+                            -- candidate is judged exactly once, at the
+                            -- instant it ends. Only a genuinely long-enough
+                            -- span (see MIN_DEATH_EPISODE_DURATION_MS) pays
+                            -- out — this is what stops an ordinary combat
+                            -- dip (grazed to ~90, healed a moment later)
+                            -- from reading as a real down-and-revive.
+                            if (now - stats.injuryDeathEpisodeStartedAt) >= MIN_DEATH_EPISODE_DURATION_MS then
+                                local restoreAmount = tonumber(Config.Wellbeing.Injury.deathRespawnRestoreAmount)
+                                if restoreAmount and restoreAmount > 0 then
+                                    stats.injury = Clamp(stats.injury + restoreAmount, 0, Config.Wellbeing.Injury.max)
+                                end
+                            end
+                            stats.injuryDeathEpisodeStartedAt = 0
                         end
 
                         -- Passive regen is deliberately SKIPPED for a tick
-                        -- where the K9 is observed genuinely dead
-                        -- (isDeadNow) — a corpse does not passively recover
-                        -- from its injuries; the restore above (when the
-                        -- transition to alive is observed) is the intended
-                        -- recovery moment, and normal passive regen resumes
-                        -- from the very same tick onward.
+                        -- where the K9 is observed at/below
+                        -- PED_DEAD_HEALTH_THRESHOLD (isDeadNow) — a K9 in
+                        -- that state does not passively recover from its
+                        -- injuries; the restore above (when a QUALIFYING
+                        -- episode ends) is the intended recovery moment for
+                        -- a genuine down/revive, and normal passive regen
+                        -- resumes from the very same tick a disqualified
+                        -- (too-short) episode ends, same as any other alive
+                        -- tick.
                         if not isDeadNow then
                             stats.injury = Clamp(stats.injury + Config.Wellbeing.Injury.passiveRegenPerTick, 0, Config.Wellbeing.Injury.max)
                         end
@@ -1348,38 +1524,41 @@ local function TickWellbeing()
                 -- bogus "sprint" speed and applying one wrong
                 -- sprintDecayPerTick hit. Only touches the TRANSIENT,
                 -- ped-instance-scoped observations (`lastCoords`,
-                -- `injuryDiedWhileTracked`) — never the four persisted stats
-                -- themselves (fatigue/mood/fearStress/injury deliberately
-                -- persist across a model switch or disconnect/reconnect
-                -- within the same server session, per this file's own
-                -- header). Reads `WellbeingStats` directly rather than
-                -- `EnsureStats` so this never creates a fresh entry for a
-                -- citizenid that has never actually been K9-modeled this
-                -- session.
+                -- `injuryDeathEpisodeStartedAt`) — never the four persisted
+                -- stats themselves (fatigue/mood/fearStress/injury
+                -- deliberately persist across a model switch or
+                -- disconnect/reconnect within the same server session, per
+                -- this file's own header). Reads `WellbeingStats` directly
+                -- rather than `EnsureStats` so this never creates a fresh
+                -- entry for a citizenid that has never actually been
+                -- K9-modeled this session.
                 --
-                -- `injuryDiedWhileTracked` RESET (FOLLOW-UP FIX, this pass):
-                -- see the WellbeingStats struct comment above (category 2)
-                -- for why this belongs in the SAME category as `lastCoords`
-                -- and needs the identical reset — a K9 that dies, switches
-                -- away from its K9 model while still connected (the same
-                -- rare appearance-swap edge case this comment already names
-                -- for the sprint-speed bug), and is later revived by
-                -- whatever unrelated means while non-K9-modeled would
-                -- otherwise carry a stale `true` back into the K9 branch the
-                -- moment it switches back — read there as a genuine
-                -- dead-to-alive transition it never actually observed, and
-                -- pay out a free deathRespawnRestoreAmount. This mirrors the
-                -- playerDropped handler's own identical reset immediately
-                -- below, for the disconnect-shaped version of the exact same
-                -- bug (that one was the one a regression pass actually
-                -- caught first — this branch is fixed alongside it rather
-                -- than left as a second, narrower instance of the same
-                -- root cause).
+                -- `injuryDeathEpisodeStartedAt` RESET (FOLLOW-UP FIX #1,
+                -- this pass): see the WellbeingStats struct comment above
+                -- (category 2) for why this belongs in the SAME category as
+                -- `lastCoords` and needs the identical reset (to 0, its own
+                -- "inactive" sentinel — this field is a timestamp, not a
+                -- boolean) — a K9 that dies, switches away from its K9
+                -- model while still connected (the same rare
+                -- appearance-swap edge case this comment already names for
+                -- the sprint-speed bug), and is later revived by whatever
+                -- unrelated means while non-K9-modeled would otherwise
+                -- carry a stale non-zero episode-start timestamp back into
+                -- the K9 branch the moment it switches back — read there as
+                -- a real, and by then very LONG, candidate episode (easily
+                -- exceeding MIN_DEATH_EPISODE_DURATION_MS) that this file
+                -- never actually observed, and pay out a free
+                -- deathRespawnRestoreAmount. This mirrors the playerDropped
+                -- handler's own identical reset immediately below, for the
+                -- disconnect-shaped version of the exact same bug (that one
+                -- was the one a regression pass actually caught first —
+                -- this branch is fixed alongside it rather than left as a
+                -- second, narrower instance of the same root cause).
                 local citizenid = ResolveCitizenid(src)
                 local stats = citizenid and WellbeingStats[citizenid]
                 if stats then
                     stats.lastCoords = nil
-                    stats.injuryDiedWhileTracked = false
+                    stats.injuryDeathEpisodeStartedAt = 0
                 end
             end
         end
@@ -1396,17 +1575,52 @@ end
 --- the reset above closes for the stay-connected case. `WellbeingStats`
 --- itself deliberately is NOT cleared here (this file's header: "a K9 who
 --- logs off tired should still be tired on reconnect within the same
---- server session") — only `lastCoords` is nulled, mirroring the reset
---- above exactly. `exports.qbx_core:GetPlayer(source)` is still resolvable
---- here — `playerDropped` fires before the framework fully tears down the
---- player object, same timing server/progression.lua's own `K9XP` eviction
---- handler and server/certifications.lua's own playerDropped handler
---- already rely on.
+--- server session") — the PERSISTED stats (fatigue/mood/fearStress/injury,
+--- distractedUntil/hesitatingUntil/hesitationEpisodeStartedAt) are
+--- untouched; only the TRANSIENT, ped-instance-scoped observations
+--- (`lastCoords`, `injuryDeathEpisodeStartedAt`) are reset here, mirroring
+--- the `elseif ped ~= 0` branch above exactly — see the WellbeingStats
+--- struct comment for the full category-1-vs-category-2 writeup.
+---
+--- `injuryDeathEpisodeStartedAt` RESET (FOLLOW-UP FIX #1, this pass — a
+--- regression pass caught this one for real, empirically, against the live
+--- resource): this field's PREDECESSOR, a plain boolean
+--- (`injuryDiedWhileTracked`), was NOT reset here when it first shipped,
+--- and this was the one of the two reset sites that actually mattered in
+--- practice — a K9 could take damage, drop to/below
+--- PED_DEAD_HEALTH_THRESHOLD (the flag set `true`), disconnect WHILE STILL
+--- DEAD before any revive completed (`lastCoords` was reset here, but the
+--- flag was not), and reconnect to a brand-new, genuinely-alive ped that
+--- had never been through any revive/ambulance flow at all. The very next
+--- TickWellbeing pass then read `isDeadNow == false` against the stale
+--- `true` flag as a real dead-to-alive TRANSITION and paid out a full
+--- `Config.Wellbeing.Injury.deathRespawnRestoreAmount` for free — cheaper
+--- than the passive regen climb this fix deliberately left in place, no
+--- medkit/ambulance/delay required, and trivially repeatable (disconnect
+--- while dead, reconnect, repeat). This is exactly the scenario that field's
+--- own config.lua comment's disclosed-residual-risk paragraph named and
+--- assumed a real revive flow's own friction would bound — the friction
+--- never applied, because no revive ever actually happened. `WellbeingStats`
+--- itself is still NOT cleared (same "a K9 who logs off tired should still
+--- be tired" rule) — only this one field, which was always meant to be
+--- reset alongside `lastCoords` as the same class of "meaningless the
+--- instant the underlying ped handle is gone" observation, not alongside
+--- the four genuinely-persisted stats it happened to be typo-adjacent to in
+--- this table. NOW A TIMESTAMP, NOT A BOOLEAN (FOLLOW-UP FIX #2 — see this
+--- file's header for the separate, worse bug that redesign closed): reset
+--- here means set to 0, its own "inactive" sentinel, exactly like every
+--- other candidate-episode timestamp this file uses.
+--- `exports.qbx_core:GetPlayer(source)` is still resolvable here —
+--- `playerDropped` fires before the framework fully tears down the player
+--- object, same timing server/progression.lua's own `K9XP` eviction handler
+--- and server/certifications.lua's own playerDropped handler already rely
+--- on.
 AddEventHandler('playerDropped', function(_reason)
     local citizenid = ResolveCitizenid(source)
     local stats = citizenid and WellbeingStats[citizenid]
     if stats then
         stats.lastCoords = nil
+        stats.injuryDeathEpisodeStartedAt = 0
     end
 end)
 

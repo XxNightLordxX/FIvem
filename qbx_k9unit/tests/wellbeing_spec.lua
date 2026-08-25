@@ -673,7 +673,27 @@ t.test('Each step() after priming executes exactly one TickWellbeing pass -- one
     t.equals(#f.clientEvents, 3)
 end)
 
-t.test('playerDropped resets ONLY lastCoords -- a disconnect-and-reconnect-elsewhere must not manufacture a bogus sprint-fatigue hit', function()
+t.test('playerDropped resets the TRANSIENT, ped-instance-scoped observations (lastCoords here; injuryDiedWhileTracked is proved separately in the DEATH/RESPAWN section below) -- a disconnect-and-reconnect-elsewhere must not manufacture a bogus sprint-fatigue hit', function()
+    -- RETITLED (this task, regression follow-up): this test's ORIGINAL title
+    -- claimed playerDropped resets "ONLY lastCoords". That was true when
+    -- written and stopped being true the moment injuryDiedWhileTracked
+    -- shipped WITHOUT the same reset -- a regression pass caught, live
+    -- against this resource, that a K9 could disconnect while dead and
+    -- reconnect to a fresh, genuinely-alive ped, which the stale flag then
+    -- misread as a real revival and paid a free deathRespawnRestoreAmount
+    -- for. server/wellbeing.lua's own WellbeingStats struct comment now
+    -- names the real distinction this test's old title glossed over: TWO
+    -- different categories of field live in that table (persisted
+    -- fatigue/mood/fearStress/injury + timestamp fields, vs. TRANSIENT
+    -- ped-instance-scoped observations like lastCoords AND
+    -- injuryDiedWhileTracked), and playerDropped resets every field in the
+    -- SECOND category, not just this one. This test still only exercises
+    -- the lastCoords/Fatigue half directly (that's what it was built to
+    -- prove, and duplicating the injuryDiedWhileTracked proof here would
+    -- just be a worse-fixtured copy of the dedicated regression test below)
+    -- -- but its TITLE must never again claim "ONLY lastCoords", so the next
+    -- editor does not read this test passing as license to "fix" a future
+    -- transient field's own missing reset back out.
     local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true } })
     f.setOnline({ 1 })
     f.setPlayer(1, 'K9-CID')
@@ -1304,6 +1324,134 @@ t.test('DEATH/RESPAWN: with InjuryLimping OFF, GetEntityHealth-driven death trac
     local ok = pcall(f.runOneTick)
     t.isTrue(ok, 'a disabled InjuryLimping must never crash on a dead ped')
     t.equals(#f.clientEvents, 0, 'TickWellbeing itself never even runs when every wellbeing flag is off')
+end)
+
+-- ------------------------------------------------------------------------
+-- REGRESSION (found empirically against the live resource, fixed this
+-- pass): injuryDiedWhileTracked is a TRANSIENT, ped-instance-scoped
+-- observation ("was THIS ped last seen dead"), not a persisted value -- but
+-- it shipped living in the same table this file's own header documents as
+-- deliberately surviving a disconnect, and was NOT reset by either of the
+-- two places that already reset lastCoords (the model-switch-away branch
+-- inside TickWellbeing, and playerDropped). That let a K9 disconnect WHILE
+-- DEAD and reconnect to a fresh, always-alive ped -- misread by the very
+-- next tick as a genuine revival, paying a full deathRespawnRestoreAmount
+-- for free, no revive/ambulance/medkit/delay required, repeatably. See
+-- server/wellbeing.lua's own header, STUCK-K9 SOFTLOCK FIX item 2's
+-- FOLLOW-UP note, and the WellbeingStats struct comment's category-1-vs-2
+-- split, for the full writeup this section's two tests below prove against.
+-- ------------------------------------------------------------------------
+
+t.test('DEATH/RESPAWN REGRESSION (FIXED): a K9 that dies, DISCONNECTS while still dead (no revive of any kind), and reconnects to a fresh always-alive ped must NOT receive a free restore -- playerDropped must clear the stale injuryDiedWhileTracked flag, not just lastCoords', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    local oldPed = wireOnlineInjuryK9(f, src) -- ped 100, default health 200 (alive)
+    dropInjuryBy(f, src, 10) -- Injury: 100 -> 90 (a real hit taken)
+
+    -- The ped's real health drops to/below PED_DEAD_HEALTH_THRESHOLD(100)
+    -- -- the K9 is dead.
+    f.setHealth(oldPed, 50)
+    f.advance(5000)
+    f.runOneTick() -- sets injuryDiedWhileTracked = true; no passive regen while dead
+    local snapDead = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapDead.injury, 90, 'still dead, no transition observed yet -- Injury unchanged')
+
+    -- DISCONNECT while still dead. No revive/ambulance/medkit flow of any
+    -- kind ever runs in this sequence.
+    f.setOnline({})
+    f.firePlayerDropped(src)
+
+    -- RECONNECT to a genuinely fresh ped handle (a real reconnect always
+    -- gets one) -- its default health (this fixture's own alive default,
+    -- 200) is exactly what a fresh spawn's real native health would be.
+    local newPed = 101
+    f.setPed(src, newPed)
+    f.setModel(newPed, 555)
+    f.setCoords(newPed, 0, 0, 0)
+    f.setOnline({ src })
+
+    f.advance(5000)
+    f.runOneTick()
+    local snapReconnected = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapReconnected.injury, 91, '90 + ordinary passive regen(1.0) ONLY. THE FIX: playerDropped clearing the stale flag means this always-alive fresh ped is never misread as a dead-to-alive TRANSITION. Before this fix this read 100 (90 + deathRespawnRestoreAmount(100), clamped) -- a full, free, repeatable restore with zero revive/ambulance/medkit/delay involved')
+end)
+
+t.test('DEATH/RESPAWN REGRESSION (FIXED): the SAME stale-flag bug via the OTHER reset site -- a K9 that dies, switches to a non-K9 model while STILL CONNECTED and dead, is revived by unrelated means while non-K9-modeled, then switches back to a K9 model must NOT receive a free restore', function()
+    local f = newWellbeingFixture({ featuresOverride = { InjuryLimping = true } })
+    local src = 1
+    local ped = wireOnlineInjuryK9(f, src)
+    dropInjuryBy(f, src, 20) -- Injury: 100 -> 80
+
+    f.setHealth(ped, 50) -- dead
+    f.advance(5000)
+    f.runOneTick() -- injuryDiedWhileTracked = true
+    local snapDead = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snapDead.injury, 80, 'still dead -- unchanged')
+
+    -- Switches away from the K9 model while STILL CONNECTED and still dead
+    -- -- the `elseif ped ~= 0` branch inside TickWellbeing, not a
+    -- disconnect. This branch already resets lastCoords for the identical
+    -- "stale ped-instance-scoped observation" reason; it must now ALSO
+    -- reset injuryDiedWhileTracked.
+    f.setModel(ped, 777) -- no longer a configured K9 model
+    f.setIsK9Model(777, false)
+    f.advance(5000)
+    f.runOneTick()
+
+    -- Revived by some entirely unrelated means (this resource's own real
+    -- laststand/EMS flow, outside this file's concern) WHILE non-K9-modeled
+    -- -- native health recovers before the model ever switches back.
+    f.setHealth(ped, 200)
+
+    -- Switches back to a K9 model, already alive.
+    f.setModel(ped, 555)
+    f.setIsK9Model(555, true)
+    f.advance(5000)
+    f.runOneTick()
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', src)
+    t.equals(snap.injury, 81, '80 + ordinary passive regen(1.0) ONLY -- the model-switch-away branch must have cleared the stale flag too, so switching back to a K9 model while already alive is never misread as a transition this file actually observed')
+end)
+
+t.test('AUDIT (this task\'s own item c -- checking the WHOLE struct, not just injuryDiedWhileTracked): the ABSOLUTE-TIMESTAMP fields (hesitatingUntil) are correctly LEFT ALONE by playerDropped -- GetGameTimer() keeps advancing while a player is offline, so a stored future timestamp is still a meaningful comparison after reconnect, which is why this field does NOT belong in the same "must reset on disconnect" category as injuryDiedWhileTracked', function()
+    local f = newWellbeingFixture({ featuresOverride = { FearStressSystem = true } })
+    local src = 1
+    f.setOnline({ src })
+    f.setPlayer(src, 'K9-CID')
+    f.setPed(src, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+    f.setPed(99, 9099)
+    f.setCoords(9099, 0, 0, 0)
+
+    -- Same derivation as this file's own HESITATION_MAX_CONTINUOUS_MS test:
+    -- risePerNearbyShotPerTick(3.0) first reaches hesitationThreshold(85) at
+    -- tick 29 (29*3=87), arming hesitatingUntil = now(145000) +
+    -- hesitationDurationMs(8000) = 153000.
+    for _ = 1, 29 do
+        f.dispatchNetEvent('qbx_k9unit:server:relayWeaponFire', 99)
+        f.advance(5000)
+        f.runOneTick()
+    end
+    t.isTrue(f.isHesitating('K9-CID'), 'sanity: hesitation must be active before disconnecting')
+
+    -- Disconnect WHILE hesitating.
+    f.setOnline({})
+    f.firePlayerDropped(src)
+
+    -- A short reconnect gap, still well inside the armed window -- must
+    -- STILL read as hesitating: the timestamp was correctly left alone.
+    f.advance(2000) -- now = 147000, hesitatingUntil(153000) still in the future
+    t.isTrue(f.isHesitating('K9-CID'), 'hesitatingUntil must survive the disconnect completely untouched -- this is CORRECT, unlike injuryDiedWhileTracked')
+
+    -- Enough real server uptime elapses (while the player was offline) for
+    -- the SAME absolute timestamp to genuinely lapse on its own -- proving
+    -- this is a real, live clock comparison across a disconnect, never a
+    -- stale flag frozen at disconnect-time the way injuryDiedWhileTracked
+    -- was before this pass's fix.
+    f.advance(10000) -- now = 157000, past hesitatingUntil(153000)
+    t.isFalse(f.isHesitating('K9-CID'), 'hesitatingUntil must lapse on its own real-world schedule regardless of connection state -- exactly why this field needs NO playerDropped reset at all')
 end)
 
 -- ------------------------------------------------------------------------

@@ -1313,6 +1313,21 @@ local function ScratchAtDoor(entity)
         return
     end
 
+    -- ISSUE-CLOSER FIX: canInteract below already excludes a K9 "tucked"
+    -- into a vehicle (client/vehicle.lua's IsInK9Vehicle, via
+    -- AttachEntityToEntity) from ever seeing this option — but per this
+    -- file's own established rule that canInteract is a DISPLAY optimization
+    -- only, the function itself must re-check too (exactly the posture the
+    -- comment above already claims for CanShowK9UI). CanShowK9UI() alone
+    -- does not catch this case: IsOwnModelK9() stays true and HasK9Access()
+    -- is unaffected while tucked into a vehicle, so without this re-check a
+    -- stale ox_target entry or a direct call could still play the scratch
+    -- scenario/sound on a ped that is currently attached inside a vehicle.
+    -- Existence-guarded exactly like the leash pull-back thread's own
+    -- identical exclusion elsewhere in this file — client/vehicle.lua loads
+    -- after this file, so IsInK9Vehicle may not exist yet at file-load time.
+    if IsInK9Vehicle and IsInK9Vehicle() then return end
+
     if not DoesEntityExist(entity) then
         lib.notify({ title = locale('common.notify_title'), description = locale('movement.nothing_to_scratch'), type = 'error' })
         return
@@ -1424,6 +1439,14 @@ local function NudgeDoor(entity)
         DenyK9UIAccess()
         return
     end
+
+    -- ISSUE-CLOSER FIX: same re-check as ScratchAtDoor's own identical fix
+    -- immediately above in this file — see that function's own comment for
+    -- the full reasoning. Doubly important here since nudge is fully
+    -- client-local (no server round trip to fall back on at all): without
+    -- this, a K9 currently attached inside a vehicle could still have a
+    -- forward impulse applied to its own ped.
+    if IsInK9Vehicle and IsInK9Vehicle() then return end
 
     if not DoesEntityExist(entity) then
         lib.notify({ title = locale('common.notify_title'), description = locale('movement.nothing_to_nudge'), type = 'error' })

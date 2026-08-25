@@ -26,6 +26,25 @@
     gate, malformed-citizenid rejection, the tier-crossing outbound event's
     defensive CopyTier (never leaking a live Config.XPTiers[n] reference),
     and the playerDropped cache-eviction fix.
+
+    EIGHTH XP-FARM FIX (this pass, red-team-flagged compound-farm follow-up)
+    -- a dedicated section near the bottom of this file covers the NEW
+    shared cross-mechanic XP mint budget: the compound-farm ceiling itself
+    (round-robining the four REAL shipped mechanics for a full simulated
+    hour must not exceed the shared budget, even though their four
+    independent per-mechanic ceilings sum higher), the non-positive-
+    threshold footgun (IsValidXpMintBudgetParam, a resource-global test seam
+    -- see server/progression.lua's own doc comment on it for why a `local`
+    validity function needed one), the memory-bounding sweep thread's own
+    eviction behavior, and the reconnect-does-not-reset-the-budget property.
+    That section uses its own FRESH, independent sandbox (newProgressionFixture,
+    with the REAL Config.XP.awards values from config.lua) rather than the
+    ONE shared env/Config every test above it already depends on, so it can
+    use real production numbers without perturbing any existing test's own
+    fictional Config.XP.awards-derived arithmetic (this file's shared
+    XP_MINT_BUDGET_STARTER_TOKENS is itself derived from whatever
+    Config.XP.awards happens to contain at load time -- see that constant's
+    own declaration comment in server/progression.lua).
 ]]
 
 local t = dofile('testkit.lua')
@@ -246,9 +265,24 @@ t.test('ResolveTier: accumulation across multiple AwardXP calls crosses a tier b
 end)
 
 t.test('ResolveTier: a high accumulated total resolves to the top tier, not the first match', function()
+    -- EIGHTH-XP-FARM-FIX INTERACTION: the shared cross-mechanic XP mint
+    -- budget (server/progression.lua) now also gates this loop's 10 calls
+    -- for the SAME citizenid -- unrelated to what THIS test actually checks
+    -- (ResolveTier's ascending tier walk), but real and unconditional (the
+    -- budget has no per-test/per-Config opt-out, by design -- see that
+    -- section's own "FILE-LOCAL CONSTANTS, NOT CONFIG KEYS" comment).
+    -- Advances the clock by far more than advancePastRateFloor()'s own
+    -- 501ms between each award specifically so the real
+    -- XP_MINT_BUDGET_CAP_XP/XP_MINT_BUDGET_WINDOW_MS refill rate (1 XP per
+    -- 1000ms, hardcoded in server/progression.lua, independent of this
+    -- spec's own Config.XP.awards values) keeps pace with this loop's
+    -- 100-XP-per-call demand, isolating ResolveTier's own tier-walk logic
+    -- from the separate budget concern (covered on its own, with the REAL
+    -- shipped award table and cadence, in the EIGHTH-XP-FARM-FIX section
+    -- below).
     for _ = 1, 10 do
         AwardXP('cid-veteran', 'exact100') -- 10 * 100 = 1000
-        advancePastRateFloor()
+        fakeNow = fakeNow + 500000 -- comfortably clears both the 500ms rate floor and the shared mint budget's own refill needs
     end
     t.equals(GetXP('cid-veteran'), 1000)
     t.equals(GetXPTier('cid-veteran').label, 'Veteran', 'must keep walking to the LAST tier whose xp threshold is met')
@@ -355,6 +389,346 @@ t.test('playerDropped: evicts the disconnecting source\'s K9XP cache entry', fun
     end
 
     t.equals(GetXP('cid-dropper'), 0, 'K9XP cache entry must be evicted on disconnect, resetting to the uncached baseline')
+end)
+
+-- ============================================================================
+-- EIGHTH XP-FARM FIX: shared cross-mechanic XP mint budget
+-- (server/progression.lua's XP_MINT_BUDGET_CAP_XP/XP_MINT_BUDGET_WINDOW_MS/
+-- XP_MINT_BUDGET_STARTER_TOKENS, consulted inside AwardXP). See this file's
+-- own header for why this section builds its own FRESH sandbox instead of
+-- reusing the shared `env` above.
+-- ============================================================================
+
+--- Builds a fresh, independent sandbox for server/progression.lua -- its own
+--- Config (with the REAL shipped Config.XP.awards/Config.XPTiers values from
+--- config.lua, not this file's shared toy award table), its own K9XP/
+--- XPMintBudget/AwardXPCooldown state, its own fake clock, and its own
+--- CreateThread/Wait capture for the mint-budget sweep thread (identical
+--- coroutine-capture technique to the one this file's shared `CreateThread`
+--- above already uses, and for the exact same reason -- see that one's own
+--- declaration comment for the full writeup: a plain `fn()` call would
+--- infinite-loop on the sweep thread's `while true do Wait(...) ... end`).
+--- @return table fixture
+local function newProgressionFixture()
+    local fakeNow2 = 0
+    local function GetGameTimer2() return fakeNow2 end
+
+    local eventHandlers2 = {}
+    local function AddEventHandler2(eventName, handler)
+        eventHandlers2[eventName] = eventHandlers2[eventName] or {}
+        eventHandlers2[eventName][#eventHandlers2[eventName] + 1] = handler
+    end
+
+    local function GetCurrentResourceName2() return 'qbx_k9unit' end
+    local function GetPlayers2() return {} end
+    local function TriggerEvent2(_eventName, ...) end
+    local function TriggerClientEvent2(_eventName, _target, ...) end
+
+    local capturedRecurringThreads2 = {}
+    local function CreateThread2(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('newProgressionFixture: a captured CreateThread body errored: %s'):format(tostring(err)))
+        end
+        if coroutine.status(co) ~= 'dead' then
+            capturedRecurringThreads2[#capturedRecurringThreads2 + 1] = co
+        end
+    end
+    local function Wait2(_ms) coroutine.yield() end
+    local function stepSweep2()
+        for _, co in ipairs(capturedRecurringThreads2) do
+            if coroutine.status(co) ~= 'dead' then
+                local ok, err = coroutine.resume(co)
+                if not ok then
+                    error(('newProgressionFixture: stepSweep: a captured thread errored: %s'):format(tostring(err)))
+                end
+            end
+        end
+    end
+
+    local printedLines2 = {}
+    local function printStub2(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines2[#printedLines2 + 1] = table.concat(parts, '\t')
+    end
+
+    local playerByCitizenId2 = {}
+    local exportsStub2 = {
+        qbx_core = {
+            GetPlayerByCitizenId = function(_self, citizenid) return playerByCitizenId2[citizenid] end,
+            GetPlayer = function(_self, src)
+                for _, p in pairs(playerByCitizenId2) do
+                    if p.PlayerData.source == src then return p end
+                end
+                return nil
+            end,
+        },
+    }
+
+    local MySQLStub2 = {
+        scalar = { await = function(_sql, _params) return nil end },
+        insert = { await = function(_sql, _params) return 1 end },
+    }
+
+    -- REAL shipped values (config.lua) -- not this file's shared toy table.
+    -- awards match Config.XP.awards exactly, INCLUDING the three
+    -- partnershipTenure milestone keys -- not just the four mechanics this
+    -- pass's own red-team finding named -- because
+    -- XP_MINT_BUDGET_STARTER_TOKENS (server/progression.lua) sums EVERY
+    -- Config.XP.awards value, and this section's own numbers must match
+    -- that real 240-XP sum (25+10+20+30+15+40+100), not a partial one.
+    -- XPTiers match Config.XPTiers exactly (0/1250/4000/9000) so this
+    -- section's own Elite-tier assertions are directly comparable to the
+    -- real economy, not an analogy.
+    local Config2 = {
+        Features = { XPProgression = true },
+        XP = {
+            scopePerCitizenidOrJob = 'citizenid',
+            awards = {
+                searchContrabandFound  = 25,
+                trackSourceResolved    = 10,
+                biteHoldSuccess        = 20,
+                takedownSuccess        = 30,
+                partnershipTenure1Day  = 15,
+                partnershipTenure7Day  = 40,
+                partnershipTenure30Day = 100,
+            },
+        },
+        XPTiers = {
+            { xp = 0,    label = 'Recruit K9', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 },
+            { xp = 1250, label = 'Trained K9', speedMultiplier = 1.05, scentRangeMultiplier = 1.05 },
+            { xp = 4000, label = 'Veteran K9', speedMultiplier = 1.10, scentRangeMultiplier = 1.10 },
+            { xp = 9000, label = 'Elite K9',   speedMultiplier = 1.15, scentRangeMultiplier = 1.20 },
+        },
+    }
+
+    local env2 = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer2,
+        AddEventHandler = AddEventHandler2,
+        GetCurrentResourceName = GetCurrentResourceName2,
+        GetPlayers = GetPlayers2,
+        TriggerEvent = TriggerEvent2,
+        TriggerClientEvent = TriggerClientEvent2,
+        CreateThread = CreateThread2,
+        Wait = Wait2,
+        exports = exportsStub2,
+        print = printStub2,
+        MySQL = MySQLStub2,
+        Config = Config2,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env2)
+    Sandbox.loadInto('../server/progression.lua', env2)
+    for _, handler in ipairs(eventHandlers2['onResourceStart'] or {}) do
+        handler('qbx_k9unit')
+    end
+
+    return {
+        AwardXP = env2.AwardXP,
+        GetXP = env2.GetXP,
+        GetXPTier = env2.GetXPTier,
+        printedLines = printedLines2,
+        setNow = function(ms) fakeNow2 = ms end,
+        now = function() return fakeNow2 end,
+        stepSweep = stepSweep2,
+        firePlayerDropped = function(citizenid, src)
+            playerByCitizenId2[citizenid] = { PlayerData = { citizenid = citizenid, source = src } }
+            env2.source = src
+            for _, handler in ipairs(eventHandlers2['playerDropped'] or {}) do
+                handler('some reason')
+            end
+        end,
+    }
+end
+
+--- Drives AwardXP for a single citizenid using the four REAL shipped mint
+--- cadences (server/combat.lua's BiteHoldXpMintCooldown/
+--- TakedownXpMintCooldown, server/search.lua's ContrabandXpMintCooldown --
+--- all 60000ms -- and server/tracking.lua's TrackTicketMintCooldown --
+--- 30000ms) round-robined together from t=0 up to `toMs` -- the exact
+--- compound-farm shape the red-team finding described. This spec calls
+--- AwardXP directly (server/combat.lua/search.lua/tracking.lua are not
+--- loaded here) -- the shared budget lives entirely inside AwardXP itself,
+--- so driving it directly exercises the REAL production gate with no
+--- re-implementation. Always starts a FRESH simulation from t=0 for
+--- whichever citizenid is passed in (never resumes a prior partial run),
+--- so two different `toMs` checkpoints are driven as two independent calls
+--- with two different citizenids, never as one paused-and-resumed run --
+--- simpler to get right than interleaving two differently-paced loops by
+--- hand at an arbitrary midpoint.
+--- @param f table
+--- @param citizenid string
+--- @param toMs number
+--- @return number uncappedTotal -- what the four independent per-mechanic ceilings would have summed to, ignoring the shared budget entirely
+local function roundRobinRealMechanics(f, citizenid, toMs)
+    local uncappedTotal = 0
+    for tms = 60000, toMs, 60000 do
+        f.setNow(tms)
+        f.AwardXP(citizenid, 'biteHoldSuccess');       uncappedTotal = uncappedTotal + 20
+        f.AwardXP(citizenid, 'takedownSuccess');       uncappedTotal = uncappedTotal + 30
+        f.AwardXP(citizenid, 'searchContrabandFound'); uncappedTotal = uncappedTotal + 25
+    end
+    for tms = 30000, toMs, 30000 do
+        f.setNow(tms)
+        f.AwardXP(citizenid, 'trackSourceResolved'); uncappedTotal = uncappedTotal + 10
+    end
+    return uncappedTotal
+end
+
+t.test('EIGHTH XP-FARM FIX: round-robining all four REAL award mechanics (biteHoldSuccess/takedownSuccess/searchContrabandFound/trackSourceResolved) at their real shipped cadence for one full simulated hour is capped at the shared budget, NOT the four independent per-mechanic ceilings\' uncapped sum', function()
+    local f = newProgressionFixture()
+    local citizenid = 'cid-compound-farm'
+
+    local uncappedTotal = roundRobinRealMechanics(f, citizenid, 3600000)
+
+    t.equals(uncappedTotal, 5700, 'sanity check on this test\'s own arithmetic -- the four independent per-mechanic ceilings really do sum to 5,700 XP/hr uncapped, matching this pass\'s own report')
+    t.equals(f.GetXP(citizenid), 3835, 'the shared budget (3,600 XP/hr cap + a 240-XP one-time starter allowance -- see XP_MINT_BUDGET_STARTER_TOKENS\'s own comment) is the binding constraint, not the uncapped 5,700 XP/hr sum -- exact value re-verified by direct simulation before asserting it here, not guessed')
+    t.isTrue(f.GetXP(citizenid) < uncappedTotal, 'the compound farm must be measurably closed, not merely renamed')
+end)
+
+t.test('EIGHTH XP-FARM FIX: the REAL combined ceiling still comfortably clears config.lua\'s own ">2 hours to Elite" retuning goal', function()
+    -- Two INDEPENDENT fixtures/citizenids, each a fresh from-t=0 simulation
+    -- to its own checkpoint -- see roundRobinRealMechanics's own doc comment
+    -- for why this is simpler and less error-prone than pausing one
+    -- simulation partway through to check an interim state.
+    local fAt2h = newProgressionFixture()
+    roundRobinRealMechanics(fAt2h, 'cid-elite-at-2h', 7200000)
+    t.isTrue(fAt2h.GetXP('cid-elite-at-2h') < 9000, 'at exactly 2 hours of maximal round-robin farming, Elite (9,000 XP) must NOT yet be reached -- this is the floor this whole fix exists to restore')
+    t.equals(fAt2h.GetXPTier('cid-elite-at-2h').label, 'Veteran K9', 'still Veteran, not Elite, at the 2-hour mark')
+
+    local fAt25h = newProgressionFixture()
+    roundRobinRealMechanics(fAt25h, 'cid-elite-at-2.5h', 9000000)
+    t.isTrue(fAt25h.GetXP('cid-elite-at-2.5h') >= 9000, 'by 2.5 simulated hours of maximal four-mechanic round-robin farming, Elite (9,000 XP) must be reached -- matching this pass\'s own report of ~2.44h as the real worst-case time')
+    t.equals(fAt25h.GetXPTier('cid-elite-at-2.5h').label, 'Elite K9')
+end)
+
+t.test('EIGHTH XP-FARM FIX FOOTGUN: IsValidXpMintBudgetParam (the exact validity check the shared budget\'s fail-OPEN decision is built on) rejects 0/negative/nil/NaN and accepts a real positive number', function()
+    -- Resource-global test seam (server/progression.lua's own doc comment on
+    -- IsValidXpMintBudgetParam explains why one was needed here) -- this
+    -- file's shared `env` from the top of this file already has it, no new
+    -- sandbox required. See server/progression.lua's own XPMintBudgetEnabled
+    -- comment for why this section cannot ALSO drive AwardXP's actual
+    -- disabled/fail-open code path from here: XP_MINT_BUDGET_CAP_XP/
+    -- XP_MINT_BUDGET_WINDOW_MS are file-local Lua literals (deliberately not
+    -- Config-driven -- same "FILE-LOCAL CONSTANT, NOT A CONFIG KEY" posture
+    -- as every per-mechanic mint cooldown), so no test, real config, or
+    -- runtime input can ever inject a bad value into them the way
+    -- server/cooldowns.lua's own Config-driven thresholds can be tested end
+    -- to end -- pinning the validity function itself (the ONLY moving part
+    -- this fail-open decision actually depends on) is the most direct
+    -- coverage structurally possible for this footgun without adding a
+    -- production behavior change purely to make it more testable.
+    local IsValidXpMintBudgetParam = env.IsValidXpMintBudgetParam
+    t.isNotNil(IsValidXpMintBudgetParam, 'server/progression.lua must define global IsValidXpMintBudgetParam')
+
+    t.isFalse(IsValidXpMintBudgetParam(0), '0 must never mean "no budget enforced" -- see server/cooldowns.lua\'s own identical rejection for the historical reason why')
+    t.isFalse(IsValidXpMintBudgetParam(-1))
+    t.isFalse(IsValidXpMintBudgetParam(-3600))
+    t.isFalse(IsValidXpMintBudgetParam(nil))
+    t.isFalse(IsValidXpMintBudgetParam('3600'), 'a numeric-looking STRING must not silently pass -- only a real Lua number')
+    t.isFalse(IsValidXpMintBudgetParam(0/0), 'NaN must be rejected -- `value > 0` alone does NOT catch it (every comparison against NaN is false), which would otherwise fail OPEN by accident')
+    t.isTrue(IsValidXpMintBudgetParam(3600), 'the real shipped XP_MINT_BUDGET_CAP_XP value must pass')
+    t.isTrue(IsValidXpMintBudgetParam(3600000), 'the real shipped XP_MINT_BUDGET_WINDOW_MS value must pass')
+    t.isTrue(IsValidXpMintBudgetParam(0.5), 'any finite positive number is valid, not just integers')
+end)
+
+--- Drains a fresh citizenid's shared-budget bucket to exactly 0 tokens by
+--- t=3,600,000ms, reusing the SAME proven-correct round-robin pattern (and
+--- the SAME exact numbers) as the 1-hour compound-farm test above -- that
+--- test already establishes (and asserts) this leaves 0 tokens remaining at
+--- that instant. Reusing it here rather than a new hand-rolled drain loop
+--- avoids re-deriving timing math that is easy to get subtly wrong (an
+--- earlier draft of this section did exactly that, repeatedly calling the
+--- SAME actionKey with no time advance between calls and tripping
+--- AwardXPCooldown's own pre-existing 500ms-per-actionKey floor instead of
+--- draining the budget at all).
+--- @param f table -- from newProgressionFixture()
+--- @param citizenid string
+local function drainToZeroOverOneHour(f, citizenid)
+    roundRobinRealMechanics(f, citizenid, 3600000)
+end
+
+--- Fires exactly 10 takedownSuccess (30 XP each) awards at the CURRENT
+--- fixture time with no further elapsed time between them (a burst probe --
+--- distinguishes "bucket refilled to ~1,800 XP over a real 30-minute idle
+--- gap" -- all 10 succeed, 300 XP total -- from "bucket was evicted and
+--- recreated at the 240-XP starter allowance" -- only 8 of 10 fit (240 XP),
+--- 2 are denied).
+--- @param f table
+--- @param citizenid string
+--- @return number grantedCount
+local function burstProbe10Takedowns(f, citizenid)
+    local before = f.GetXP(citizenid)
+    for _ = 1, 10 do
+        f.AwardXP(citizenid, 'takedownSuccess')
+    end
+    return (f.GetXP(citizenid) - before) / 30
+end
+
+t.test('EIGHTH XP-FARM FIX: the memory-bounding sweep does NOT evict a citizenid\'s bucket before a full XP_MINT_BUDGET_WINDOW_MS of inactivity has elapsed', function()
+    local f = newProgressionFixture()
+    local citizenid = 'cid-sweep-early'
+    drainToZeroOverOneHour(f, citizenid) -- ends at fakeNow=3,600,000, 0 tokens remaining
+
+    -- 30 more minutes of inactivity -- well UNDER the 1-hour window. The
+    -- bucket should have refilled to ~1,800 XP (30min * 3,600 XP/hr) via
+    -- lazy RefillMintBudget, NOT been evicted -- a sweep pass here must not
+    -- touch it early.
+    f.setNow(f.now() + 1800000)
+    f.stepSweep()
+
+    local grantedCount = burstProbe10Takedowns(f, citizenid)
+    t.equals(grantedCount, 10, 'a bucket refilled to ~1,800 XP over 30 real minutes must afford all 10 probe takedowns (300 XP) -- if the sweep had evicted it early, only 8 of 10 (240 XP, the fresh starter allowance) would have fit')
+end)
+
+t.test('EIGHTH XP-FARM FIX: the memory-bounding sweep DOES safely evict a citizenid\'s bucket once a full XP_MINT_BUDGET_WINDOW_MS of inactivity has elapsed, recreating it at the small starter allowance (not full capacity) on next use', function()
+    local f = newProgressionFixture()
+    local citizenid = 'cid-sweep-late'
+    drainToZeroOverOneHour(f, citizenid) -- ends at fakeNow=3,600,000, 0 tokens remaining
+
+    -- A full hour plus one ms of further inactivity -- now stale by this
+    -- section's own eviction rule (RefillMintBudget would already have
+    -- clamped this bucket to full capacity, 3,600 XP, had anyone looked).
+    -- Eviction here is the DESIGNED-CONSERVATIVE path -- see XPMintBudget's
+    -- sweep-thread comment for why recreating at the small starter
+    -- allowance afterward, rather than resuming from what would have been a
+    -- full 3,600-XP bucket, is deliberate and safe (strictly less budget,
+    -- never more).
+    f.setNow(f.now() + 3600001)
+    f.stepSweep()
+
+    local grantedCount = burstProbe10Takedowns(f, citizenid)
+    t.equals(grantedCount, 8, 'a swept-and-recreated bucket starts at the 240-XP starter allowance, not the 3,600-XP full capacity a non-evicted bucket would have held -- only 8 of 10 probe takedowns (240 XP) fit')
+end)
+
+t.test('EIGHTH XP-FARM FIX: reconnecting with a fresh player source never resets the shared budget (it is keyed by citizenid, not source)', function()
+    local f = newProgressionFixture()
+    local citizenid = 'cid-reconnect'
+    drainToZeroOverOneHour(f, citizenid) -- ends at fakeNow=3,600,000, 0 tokens remaining
+
+    -- Disconnect (source 111), "reconnect" as a DIFFERENT source (222) --
+    -- exactly what a real player reconnecting produces (a fresh FiveM
+    -- server-id each session; the citizenid is the only stable identity).
+    -- No further time advance -- the budget should still read as fully
+    -- spent (0 tokens, nothing has refilled).
+    f.firePlayerDropped(citizenid, 111)
+
+    -- K9XP's own in-memory cache IS intentionally evicted by playerDropped
+    -- (pre-existing, unrelated behavior -- the real total is reloaded from
+    -- k9_progression on the next PlayerLoaded in production, not simulated
+    -- by this fixture) -- GetXP reading 0 here is expected and is NOT what
+    -- this test is checking.
+    t.equals(f.GetXP(citizenid), 0, 'sanity check: K9XP cache eviction on disconnect is pre-existing, unrelated behavior -- not this test\'s own concern')
+
+    -- The real check: if XPMintBudget had been incorrectly reset by the
+    -- reconnect, this citizenid would behave like a brand-new one (240-XP
+    -- starter allowance) and this single takedownSuccess (30 XP) would be
+    -- granted. Since the real budget correctly survived (still at 0 tokens,
+    -- no time has passed to refill any), it must be denied.
+    f.AwardXP(citizenid, 'takedownSuccess')
+    t.equals(f.GetXP(citizenid), 0, 'a reconnect must never grant a fresh starter allowance on top of an already-fully-spent budget -- XPMintBudget is deliberately never cleared on playerDropped')
 end)
 
 os.exit(t.summary())

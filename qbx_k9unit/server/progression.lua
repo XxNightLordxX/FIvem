@@ -332,6 +332,37 @@ local AwardXPCooldown = NewNestedCooldown(500)
 local XP_MINT_BUDGET_CAP_XP    = 3600     -- XP -- the bucket's max capacity (a citizenid can never hold more than this many unspent tokens at once, however long they go without earning)
 local XP_MINT_BUDGET_WINDOW_MS = 3600000  -- 1 hour -- the refill PERIOD: a bucket held at 0 reaches full capacity after exactly this many real ms of continuous refill
 
+-- STARTER TOKENS -- see the "STARTING BALANCE" writeup above for the full
+-- reasoning (start-full and start-empty were both tried and rejected first,
+-- this pass, before landing here). Sized as the SUM of every configured
+-- Config.XP.awards value -- not the largest single one -- specifically to
+-- cover server/tenure.lua's documented multi-milestone-in-one-tick case
+-- (several one-time, non-repeating awards for the SAME citizenid in the SAME
+-- AwardXP-call-adjacent moment), computed once here from the REAL live
+-- config rather than hardcoded, so it can never silently drift out of sync
+-- if config.lua's award list changes shape later. Clamped to
+-- XP_MINT_BUDGET_CAP_XP so a starting balance can never itself violate this
+-- bucket's own "never more than CAP tokens at once" invariant (relevant only
+-- if a future award table's sum somehow exceeded the cap -- not true of any
+-- currently shipped value, but this constant is derived, not asserted, so it
+-- must clamp itself rather than rely on the assert below alone). Falls back
+-- to a safe, small, non-zero default (100) if Config.XP.awards is not yet a
+-- usable table at this file's OWN load time -- never 0, since 0 here would
+-- silently reintroduce the exact "first award always denied" regression this
+-- constant exists to fix, just for the narrower case of a malformed config.
+local XP_MINT_BUDGET_STARTER_TOKENS = 100
+if type(Config.XP) == 'table' and type(Config.XP.awards) == 'table' then
+    local sum = 0
+    for _, amount in pairs(Config.XP.awards) do
+        if type(amount) == 'number' and amount > 0 then
+            sum = sum + amount
+        end
+    end
+    if sum > 0 then
+        XP_MINT_BUDGET_STARTER_TOKENS = math.min(sum, XP_MINT_BUDGET_CAP_XP)
+    end
+end
+
 --- Shared validity test, deliberately mirroring server/cooldowns.lua's own
 --- IsValidThreshold (identical rejection list: non-number, NaN, non-
 --- positive) -- NOT calling that function directly (this file has no
@@ -455,17 +486,19 @@ end
 -- use it). An entry is only ever dropped once `now - lastRefillAt >=
 -- XP_MINT_BUDGET_WINDOW_MS` -- the exact point at which RefillMintBudget
 -- would have clamped it back to a FULL bucket had anyone looked. Dropping it
--- here and letting AwardXP recreate a fresh EMPTY bucket (see AwardXP's own
--- comment on why new/recreated buckets start at 0, not at capacity) on that
+-- here and letting AwardXP recreate a fresh bucket at
+-- XP_MINT_BUDGET_STARTER_TOKENS (see AwardXP's own comment on why a new/
+-- recreated bucket starts there, not at 0 and not at capacity) on that
 -- citizenid's next award is therefore CONSERVATIVE, not exactly identical to
 -- leaving the old (by then full) entry in place -- a citizenid who returns
--- right after this sweep evicted them starts back at 0 instead of resuming
--- from a full bucket. That is always the SAFE direction (strictly less
--- budget available, never more), and never actually reachable by a
--- genuinely legitimate player (see AwardXP's own comment: real play never
--- gets remotely close to a full bucket in the first place), so it costs
--- nothing in practice while keeping this sweep's own logic simple. Sweep
--- interval (5 minutes) is well under the window (1 hour) so no entry lingers
+-- right after this sweep evicted them starts back at the small starter
+-- allowance instead of resuming from a full bucket. That is always the SAFE
+-- direction (strictly less budget available than an always-resident
+-- implementation would have had, never more), and never actually reachable
+-- by a genuinely legitimate player (see AwardXP's own comment: real play
+-- never gets remotely close to a full bucket in the first place), so it
+-- costs nothing in practice while keeping this sweep's own logic simple.
+-- Sweep interval (5 minutes) is well under the window (1 hour) so no entry lingers
 -- long past the point it became safe to drop; not built on
 -- server/cooldowns.lua's own :StartSweep helper since this tracker's shape
 -- (tokens + lastRefillAt, not a single timestamp) does not fit that
@@ -802,19 +835,19 @@ function AwardXP(citizenid, actionKey)
         local budgetNow = GetGameTimer()
         local bucket = XPMintBudget[citizenid]
         if not bucket then
-            -- STARTS EMPTY (0), NEVER full -- see the XP_MINT_BUDGET_*
-            -- section's own "IMPLEMENTATION" comment above for the full
-            -- reasoning and the simulation numbers that made this pass
-            -- correct this from an earlier, wrong "starts full" draft:
-            -- starting full lets a fresh/returning citizenid stack a whole
-            -- extra cap's worth of unearned tokens on top of a full window's
-            -- worth of real accrual, up to ~2x this section's own intended
-            -- ceiling. Starting at 0 makes "cumulative XP granted by any
-            -- elapsed time T is at most CAP * T / WINDOW_MS" a hard, provable
-            -- bound instead of an approximation, and costs a genuine player
-            -- nothing (real play accrues into an empty bucket far faster
-            -- than it could ever spend it).
-            bucket = { tokens = 0, lastRefillAt = budgetNow }
+            -- Starts at XP_MINT_BUDGET_STARTER_TOKENS -- NEITHER 0 NOR the
+            -- full cap. See that constant's own declaration comment (and the
+            -- XP_MINT_BUDGET_* section's "STARTING BALANCE" writeup above
+            -- this function) for the full history: both other options were
+            -- tried and rejected THIS SAME PASS after simulation showed each
+            -- one broken in a different, serious way -- start-full re-opens
+            -- a burst-doubling exploit that defeats this section's own
+            -- >2-hour design goal; start-EMPTY-with-no-elapsed-time silently
+            -- denies every citizenid's very first-ever AwardXP call, every
+            -- session (caught live via tests/progression_spec.lua before
+            -- this shipped). Do not change this back to either without
+            -- re-reading that history first.
+            bucket = { tokens = XP_MINT_BUDGET_STARTER_TOKENS, lastRefillAt = budgetNow }
             XPMintBudget[citizenid] = bucket
         else
             RefillMintBudget(bucket, budgetNow)

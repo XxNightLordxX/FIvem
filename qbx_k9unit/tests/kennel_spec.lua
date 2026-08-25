@@ -191,6 +191,19 @@ local function newKennelFixture()
     local entityModels = {} -- handle -> hash
     local function GetEntityModel(handle) return entityModels[handle] end
 
+    -- NETWORK-OWNERSHIP GUARD mock (coder-architect, this pass -- mirrors
+    -- tests/propattachment_spec.lua's own identical mock, added there
+    -- first). handle -> src of whichever connection currently, per this
+    -- mock's own OneSync stand-in, "owns" that networked object. Defaults
+    -- to nil (no known owner) for any handle registerEntity's caller
+    -- doesn't explicitly assign one to -- deliberately FAIL CLOSED, matching
+    -- the real NetworkGetEntityOwner check's own `~= src` comparison (nil
+    -- never equals a real numeric src), so a test that wants a confirm to
+    -- reach PAST this guard must say so explicitly via registerEntity's own
+    -- `owner` field rather than relying on an implicit default.
+    local entityOwners = {} -- handle -> src
+    local function NetworkGetEntityOwner(handle) return entityOwners[handle] end
+
     local deletedEntities = {} -- handle -> true
     local function DeleteEntity(handle) deletedEntities[handle] = true end
 
@@ -222,6 +235,7 @@ local function newKennelFixture()
         DoesEntityExist = DoesEntityExist,
         GetEntityType = GetEntityType,
         GetEntityModel = GetEntityModel,
+        NetworkGetEntityOwner = NetworkGetEntityOwner,
         DeleteEntity = DeleteEntity,
         Config = config,
     })
@@ -251,8 +265,10 @@ local function newKennelFixture()
             existingEntities[handle] = opts.exists ~= false
             entityTypes[handle] = opts.entityType or 3
             entityModels[handle] = opts.model or PROP_HASH
+            entityOwners[handle] = opts.owner -- nil (no owner) unless the caller says otherwise -- see entityOwners' own declaration comment above
             coordsByHandle[handle] = opts.coords or { x = 0, y = 0, z = 0 }
         end,
+        setEntityOwner = function(handle, src) entityOwners[handle] = src end,
         removeExistence = function(handle) existingEntities[handle] = false end,
         dispatchNetEvent = function(eventName, src, ...)
             env.source = src
@@ -324,7 +340,11 @@ local function deploySuccessfully(f, src, citizenid, pedHandle, pedCoords)
     local x, y, z = instruction.args[1], instruction.args[2], instruction.args[3]
     local netId = freshNetId()
     local objectHandle = netId + 500000 -- arbitrary, distinct from any ped handle used in this file's tests
-    f.registerEntity(netId, objectHandle, { coords = { x = x, y = y, z = z } })
+    -- owner = src: an honest client's confirm always names the object IT
+    -- ITSELF just created (client/kennel.lua's own myKennelNetId pairing) --
+    -- see the NETWORK-OWNERSHIP GUARD mock's own declaration comment for why
+    -- this must be explicit rather than an implicit default.
+    f.registerEntity(netId, objectHandle, { coords = { x = x, y = y, z = z }, owner = src })
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', src, netId)
     return netId, objectHandle
 end
@@ -513,7 +533,7 @@ t.test('confirmKennelPlaced: a confirm from a source that does not match the pen
     -- mismatched attempt above did NOT consume the real pending entry.
     local instruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
     local netId = freshNetId()
-    f.registerEntity(netId, netId + 500000, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] } })
+    f.registerEntity(netId, netId + 500000, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] }, owner = 1 })
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.deployed_success'))
 end)
@@ -527,7 +547,7 @@ t.test('confirmKennelPlaced: an expired (TTL) placement notifies timed-out AND r
     local instruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
     local netId = freshNetId()
     local handle = netId + 500000
-    f.registerEntity(netId, handle, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] } })
+    f.registerEntity(netId, handle, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] }, owner = 1 })
 
     f.advance(PENDING_TTL_MS + 1)
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
@@ -559,7 +579,7 @@ t.test('confirmKennelPlaced: a feature flag toggled off mid-flight notifies AND 
     local instruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
     local netId = freshNetId()
     local handle = netId + 500000
-    f.registerEntity(netId, handle, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] } })
+    f.registerEntity(netId, handle, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] }, owner = 1 })
 
     -- The feature is disabled between the request and the client's confirm
     -- arriving -- a real, plausible race (an operator flips the flag, or a
@@ -582,7 +602,7 @@ t.test('confirmKennelPlaced: a certification revoked mid-flight notifies AND rec
     local instruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
     local netId = freshNetId()
     local handle = netId + 500000
-    f.registerEntity(netId, handle, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] } })
+    f.registerEntity(netId, handle, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] }, owner = 1 })
 
     f.setAccess(1, false) -- decertified between request and confirm
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
@@ -651,6 +671,7 @@ t.test('confirmKennelPlaced: the documented fallback model is also accepted, not
     f.registerEntity(netId, netId + 500000, {
         coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] },
         model = FALLBACK_HASH,
+        owner = 1,
     })
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.deployed_success'))
@@ -669,6 +690,7 @@ t.test('confirmKennelPlaced: placed too far from the assigned spot is rejected, 
         -- Comfortably past KENNEL_CONFIRM_DISTANCE_TOLERANCE (3.0m, local to
         -- server/kennel.lua) -- 10m off on X alone.
         coords = { x = instruction.args[1] + 10.0, y = instruction.args[2], z = instruction.args[3] },
+        owner = 1, -- genuinely THIS citizenid's own object -- safeToCleanup's deletion still depends on this even though the too-far REJECTION itself does not
     })
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_too_far'))
@@ -695,7 +717,17 @@ t.test('confirmKennelPlaced: a netId already claimed by a DIFFERENT citizenid\'s
     f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, netId1)
 
-    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_already_claimed'))
+    -- DISCLOSED MESSAGE CHANGE (coder-architect, this pass, urgent
+    -- PRE-CONFIRMATION-WINDOW fix): this used to reject via the
+    -- already_claimed pre-write check reached further down. The new
+    -- NETWORK-OWNERSHIP GUARD (mirrors server/propattachment.lua's own)
+    -- runs BEFORE that check and now catches this exact scenario first --
+    -- citizenid 2 is never netId1's real OneSync owner (citizenid 1's own
+    -- client created it) -- so the message is now the more generic
+    -- placement_failed_unconfirmed. The SECURITY OUTCOME this test actually
+    -- verifies (rejected, never deleted, the real owner keeps it) is
+    -- unchanged; only which specific check catches it first changed.
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_unconfirmed'))
     t.isNil(f.deletedEntities[handle1], 'the entity legitimately belongs to citizenid AAA111 -- this branch must never delete it out from under them')
 
     -- Player 1's own kennel is provably still intact and pickable.
@@ -840,6 +872,7 @@ t.test('confirmKennelPlaced: RED-TEAM FIX -- a legitimate owner\'s own too-far c
     local handle = netId + 500000
     f.registerEntity(netId, handle, {
         coords = { x = instruction.args[1] + 10.0, y = instruction.args[2], z = instruction.args[3] },
+        owner = 1, -- genuinely THIS citizenid's own object
     })
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
 
@@ -857,7 +890,7 @@ t.test('confirmKennelPlaced: RED-TEAM FIX -- a legitimate owner\'s own TTL-expir
     local instruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
     local netId = freshNetId()
     local handle = netId + 500000
-    f.registerEntity(netId, handle, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] } })
+    f.registerEntity(netId, handle, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] }, owner = 1 })
 
     f.advance(PENDING_TTL_MS + 1)
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
@@ -906,7 +939,7 @@ t.test('cancelKennelPlacement: a cancel from a mismatched source does not clear 
     -- The real pending must have survived: src 1 can still confirm it.
     local instruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
     local netId = freshNetId()
-    f.registerEntity(netId, netId + 500000, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] } })
+    f.registerEntity(netId, netId + 500000, { coords = { x = instruction.args[1], y = instruction.args[2], z = instruction.args[3] }, owner = 1 })
     f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 1, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.deployed_success'))
 end)
@@ -1050,6 +1083,320 @@ t.test('onResourceStop: a stale kennel entry (entity already gone) is skipped wi
     f.removeExistence(handle)
     f.fireResourceStop('qbx_k9unit') -- must not throw
     t.isNil(f.deletedEntities[handle], 'never resolved, so DeleteEntity is never called on it')
+end)
+
+-- ----------------------------------------------------------------------
+-- CROSS-FEATURE NETID GAP (coder-architect, this pass) -- server/kennel.lua
+-- and server/fetch.lua each already guard their OWN registry
+-- (FindKennelOwnerByNetId / FindOtherBallByNetId) against a same-feature
+-- collision, but neither could see the other's. config.lua configures
+-- Config.DeployableKennel.fallbackPropModel and Config.FetchMechanic.ballPropModel
+-- to the IDENTICAL 'prop_tennis_ball' model, so a netId naming another
+-- citizen's real, live FETCH BALL is a real object of the right type,
+-- wearing kennel's own accepted (fallback) model, that is simply absent
+-- from `Kennels` -- this section proves confirmKennelPlaced can no longer
+-- be used to (a) delete a victim's live fetch ball via a rejection branch,
+-- or (b) the more severe shape found auditing this pass: silently WRITE the
+-- victim's fetch ball into `Kennels[attacker]` on the plain SUCCESS path,
+-- reachable for deletion by the attacker's own subsequent
+-- requestPickupKennel.
+--
+-- newCombinedFixture() below loads the REAL, unmodified server/kennel.lua
+-- AND server/fetch.lua into ONE shared env (same load order fxmanifest.lua
+-- requires) so both genuinely share ONE server/entities.lua
+-- ClaimedNetworkEntities instance -- a fixture loading kennel.lua alone
+-- could never prove the cross-file sharing this fix depends on.
+-- ----------------------------------------------------------------------
+
+--- @return table fixture -- same shape as newKennelFixture()'s own return,
+--- so lastClientEvent/countClientEvents/deploySuccessfully/freshNetId/
+--- removalWasBroadcastFor above are all reusable unchanged.
+local function newCombinedFixture()
+    local fakeNow = 0
+    local function GetGameTimer() return fakeNow end
+
+    local eventHandlers = {}
+    local function AddEventHandler(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+
+    local netEvents = {}
+    local function RegisterNetEvent(eventName, handler)
+        netEvents[eventName] = handler
+    end
+
+    local function GetCurrentResourceName() return 'qbx_k9unit' end
+
+    local clientEvents = {}
+    local function TriggerClientEvent(eventName, target, ...)
+        clientEvents[#clientEvents + 1] = { event = eventName, target = target, args = { ... } }
+    end
+
+    local notifyCalls = {}
+    local function NotifyPlayer(target, description, notifyType)
+        notifyCalls[#notifyCalls + 1] = { target = target, description = description, notifyType = notifyType }
+    end
+
+    local hasAccessBySource = {}
+    local function HasK9Access(src) return hasAccessBySource[src] == true end
+
+    -- fetch.lua's own requestPickupFetchBall model check -- not exercised by
+    -- any test in this section (no pickup is driven here), but must exist so
+    -- server/fetch.lua loads without erroring.
+    local function IsConfiguredK9Model(_hash) return false end
+
+    local playersBySource = {}
+    local exportsStub = {
+        qbx_core = {
+            GetPlayer = function(_self, src)
+                local citizenid = playersBySource[src]
+                if not citizenid then return nil end
+                return { PlayerData = { citizenid = citizenid } }
+            end,
+        },
+    }
+
+    local pedBySource = {}
+    local function GetPlayerPed(src) return pedBySource[src] or 0 end
+
+    local coordsByHandle = {}
+    local function GetEntityCoords(handle) return coordsByHandle[handle] or { x = 0, y = 0, z = 0 } end
+
+    local headingByHandle = {}
+    local function GetEntityHeading(handle) return headingByHandle[handle] or 0.0 end
+
+    local networkEntities = {}
+    local function NetworkGetEntityFromNetworkId(netId) return networkEntities[netId] or 0 end
+
+    local existingEntities = {}
+    local function DoesEntityExist(handle) return existingEntities[handle] == true end
+
+    local entityTypes = {}
+    local function GetEntityType(handle) return entityTypes[handle] or 0 end
+
+    local entityModels = {}
+    local function GetEntityModel(handle) return entityModels[handle] end
+
+    -- NETWORK-OWNERSHIP GUARD mock -- see newKennelFixture()'s own identical
+    -- declaration comment above (mirrors tests/propattachment_spec.lua's
+    -- original). Fail-closed default (nil): a test must explicitly say
+    -- `owner = <src>` for a confirm to reach past either kennel.lua's or
+    -- fetch.lua's own NetworkGetEntityOwner guard.
+    local entityOwners = {}
+    local function NetworkGetEntityOwner(handle) return entityOwners[handle] end
+
+    local deletedEntities = {}
+    local function DeleteEntity(handle) deletedEntities[handle] = true end
+
+    -- fetch.lua's maintenance thread is never stepped in this section (no
+    -- test here needs it) -- a genuine no-op CreateThread, never calling its
+    -- argument, is simpler than wiring fetch_spec.lua's own coroutine-based
+    -- thread runner for a thread this section has no use for.
+    local function CreateThread(_fn) end
+
+    -- SHARED MODEL, DELIBERATELY: mirrors config.lua's own real
+    -- configuration exactly -- kennel's fallbackPropModel and fetch's
+    -- ballPropModel are the IDENTICAL 'prop_tennis_ball', which is the
+    -- entire precondition for the cross-feature gap this section proves
+    -- closed.
+    local config = {
+        Features = { DeployableKennel = true, FetchMechanic = true },
+        DeployableKennel = {
+            propModel = PROP_MODEL,
+            fallbackPropModel = FALLBACK_MODEL, -- 'prop_tennis_ball'
+            placementForwardOffsetMeters = 2.0,
+            deployCooldownMs = DEPLOY_COOLDOWN_MS,
+            pendingPlacementTtlMs = PENDING_TTL_MS,
+        },
+        FetchMechanic = {
+            ballPropModel = FALLBACK_MODEL, -- 'prop_tennis_ball' -- SAME string as kennel's fallback, on purpose
+            throwForwardOffsetMeters = 1.0,
+            throwUpOffsetMeters = 1.2,
+            throwForceForward = 12.0,
+            throwForceUp = 6.0,
+            throwCooldownMs = 5000,
+            pendingThrowTtlMs = 15000,
+            maxBallLifetimeMs = 300000,
+            pickupInteractDistanceMeters = 2.0,
+            deliverProximityMeters = 3.0,
+            maintenanceIntervalMs = 2000,
+            mouthCarryMode = 'fake',
+            mouthBoneIndex = 0,
+            mouthOffsetX = 0.0, mouthOffsetY = 0.0, mouthOffsetZ = 0.0,
+            pickupCooldownMs = 500,
+        },
+    }
+
+    local env = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer,
+        AddEventHandler = AddEventHandler,
+        RegisterNetEvent = RegisterNetEvent,
+        GetCurrentResourceName = GetCurrentResourceName,
+        TriggerClientEvent = TriggerClientEvent,
+        NotifyPlayer = NotifyPlayer,
+        HasK9Access = HasK9Access,
+        IsConfiguredK9Model = IsConfiguredK9Model,
+        exports = exportsStub,
+        GetPlayerPed = GetPlayerPed,
+        GetEntityCoords = GetEntityCoords,
+        GetEntityHeading = GetEntityHeading,
+        GetHashKey = GetHashKey,
+        NetworkGetEntityFromNetworkId = NetworkGetEntityFromNetworkId,
+        DoesEntityExist = DoesEntityExist,
+        GetEntityType = GetEntityType,
+        GetEntityModel = GetEntityModel,
+        DeleteEntity = DeleteEntity,
+        CreateThread = CreateThread,
+        Config = config,
+    })
+
+    -- Same load order fxmanifest.lua's server_scripts list requires:
+    -- cooldowns.lua, entities.lua, THEN kennel.lua and fetch.lua -- both
+    -- feature files sharing the ONE server/entities.lua instance loaded here
+    -- is the entire point of this fixture.
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/entities.lua', env)
+    Sandbox.loadInto('../server/kennel.lua', env)
+    Sandbox.loadInto('../server/fetch.lua', env)
+
+    return {
+        config = config,
+        clientEvents = clientEvents,
+        notifyCalls = notifyCalls,
+        deletedEntities = deletedEntities,
+        eventHandlerCount = function(name) return #(eventHandlers[name] or {}) end,
+        netEventNames = netEvents,
+        advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
+        setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
+        setPlayer = function(src, citizenid) playersBySource[src] = citizenid end,
+        setPed = function(src, pedHandle, coords, heading)
+            pedBySource[src] = pedHandle
+            coordsByHandle[pedHandle] = coords
+            headingByHandle[pedHandle] = heading or 0.0
+        end,
+        registerEntity = function(netId, handle, opts)
+            opts = opts or {}
+            networkEntities[netId] = handle
+            existingEntities[handle] = opts.exists ~= false
+            entityTypes[handle] = opts.entityType or 3
+            entityModels[handle] = opts.model or PROP_HASH
+            coordsByHandle[handle] = opts.coords or { x = 0, y = 0, z = 0 }
+        end,
+        removeExistence = function(handle) existingEntities[handle] = false end,
+        dispatchNetEvent = function(eventName, src, ...)
+            env.source = src
+            local handler = netEvents[eventName]
+            assert(handler, 'no handler registered for ' .. eventName)
+            return handler(...)
+        end,
+        firePlayerDropped = function(src, reason)
+            env.source = src
+            for _, handler in ipairs(eventHandlers['playerDropped'] or {}) do
+                handler(reason)
+            end
+        end,
+        fireResourceStop = function(resourceName)
+            for _, handler in ipairs(eventHandlers['onResourceStop'] or {}) do
+                handler(resourceName)
+            end
+        end,
+    }
+end
+
+--- Drives a full, successful requestThrowFetchBall -> confirmFetchBallThrown
+--- handshake against the REAL server/fetch.lua loaded into the SAME
+--- combined fixture, producing a genuine, live victim fetch ball this
+--- section's kennel-confirm attacks can then target by netId.
+--- @param f table
+--- @param src number
+--- @param citizenid string
+--- @param pedHandle number
+--- @param pedCoords table
+--- @return number netId, number entityHandle
+local function throwFetchBallSuccessfully(f, src, citizenid, pedHandle, pedCoords)
+    f.setAccess(src, true)
+    f.setPlayer(src, citizenid)
+    f.setPed(src, pedHandle, pedCoords, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestThrowFetchBall', src)
+    local instruction = lastClientEvent(f, 'qbx_k9unit:client:throwFetchBallAt')
+    assert(instruction, 'requestThrowFetchBall did not send a throwFetchBallAt instruction')
+    local x, y, z = instruction.args[1], instruction.args[2], instruction.args[3]
+    local netId = freshNetId()
+    local objectHandle = netId + 900000 -- distinct offset from deploySuccessfully's own +500000, so a kennel and a fetch ball in the same test never collide on entity handle
+    f.registerEntity(netId, objectHandle, { coords = { x = x, y = y, z = z } })
+    f.dispatchNetEvent('qbx_k9unit:server:confirmFetchBallThrown', src, netId)
+    return netId, objectHandle
+end
+
+t.test('CROSS-FEATURE: confirmKennelPlaced\'s too-far rejection naming a DIFFERENT citizenid\'s real, live FETCH BALL does NOT delete it (the exact case neither file\'s own same-feature fix covers)', function()
+    local f = newCombinedFixture()
+    local victimBallNetId, victimBallHandle = throwFetchBallSuccessfully(f, 1, 'VICTIM01', 5001, { x = 0, y = 0, z = 0 })
+
+    -- Attacker: opens their own kennel placement far away, creates nothing
+    -- client-side, then reports the VICTIM's real, live fetch ball's netId.
+    f.setAccess(2, true)
+    f.setPlayer(2, 'ATTACKER1')
+    f.setPed(2, 5002, { x = 5000, y = 5000, z = 500 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimBallNetId)
+
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_too_far'), 'the attacker still gets a genuine rejection, just never a destructive one')
+    t.isNil(f.deletedEntities[victimBallHandle], 'the victim\'s real, live fetch ball must survive an attacker naming it from a KENNEL confirm')
+    t.isTrue(not removalWasBroadcastFor(f, victimBallNetId), 'no removeKennel broadcast may ever be sent for an entity server/kennel.lua does not own')
+
+    -- The victim's ball is provably still intact and recallable through
+    -- server/fetch.lua's own, completely independent code path.
+    f.dispatchNetEvent('qbx_k9unit:server:requestRecallFetchBall', 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('fetch.recalled_success'))
+end)
+
+t.test('CROSS-FEATURE, THE MORE SEVERE SHAPE: confirmKennelPlaced\'s plain SUCCESS PATH must not silently register a victim\'s real, live FETCH BALL as the attacker\'s own kennel', function()
+    local f = newCombinedFixture()
+    local victimBallNetId, victimBallHandle = throwFetchBallSuccessfully(f, 1, 'VICTIM01', 5001, { x = 0, y = 0, z = 0 })
+
+    -- Attacker places their OWN kennel request at coords that happen to
+    -- match where the (unrelated) victim's ball physically sits -- passing
+    -- the distance-tolerance check too, so NO rejection branch fires at all;
+    -- this is the plain success path.
+    f.setAccess(2, true)
+    f.setPlayer(2, 'ATTACKER1')
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 }, 0.0)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 2)
+    f.dispatchNetEvent('qbx_k9unit:server:confirmKennelPlaced', 2, victimBallNetId)
+
+    -- Must be REJECTED (the shared IsNetworkEntityClaimedByOther check), not
+    -- silently written into Kennels as the attacker's own.
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.placement_failed_already_claimed'), 'must be rejected, not silently registered as a genuine new kennel')
+    t.isNil(f.deletedEntities[victimBallHandle])
+
+    -- PROOF the write never happened: the attacker's own requestPickupKennel
+    -- against this exact netId must say "not owner", never actually succeed
+    -- and delete the victim's real ball.
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 2, victimBallNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.not_owner'))
+    t.isNil(f.deletedEntities[victimBallHandle], 'the attacker must never be able to delete the victim\'s ball via a bogus "pickup" of their own non-existent kennel')
+
+    -- The victim's ball remains genuinely theirs, through server/fetch.lua's
+    -- own independent code path.
+    f.dispatchNetEvent('qbx_k9unit:server:requestRecallFetchBall', 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('fetch.recalled_success'))
+end)
+
+t.test('CROSS-FEATURE: a legitimate kennel confirm is entirely unaffected by an UNRELATED citizen\'s own live fetch ball existing elsewhere', function()
+    local f = newCombinedFixture()
+    throwFetchBallSuccessfully(f, 9, 'BYSTANDER9', 5009, { x = 9000, y = 9000, z = 0 })
+
+    -- An honest handler's own, genuine kennel placement must succeed exactly
+    -- as it does with no fetch ball in play at all -- the new cross-feature
+    -- check must never produce a false positive against a citizen's OWN,
+    -- correctly-claimed object.
+    local netId, handle = deploySuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.deployed_success'))
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupKennel', 1, netId)
+    t.isTrue(f.deletedEntities[handle])
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.picked_up_success'))
 end)
 
 os.exit(t.summary())
