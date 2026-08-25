@@ -196,6 +196,30 @@ local function boot(opts)
     })
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
+
+    -- server/datastore.lua -- REAL, unmodified, loaded alongside (this
+    -- file's own header: "the ONLY place in this resource that may name a
+    -- `k9_*` table or call `MySQL.*` directly" -- server/runtimecontrol.lua's
+    -- own SafeQuery/SafeWrite helpers are gone; every read/write below now
+    -- goes through K9Store.Override_*/OverrideAudit_Append/Theme_*/
+    -- ThemeAudit_Append). Config.Database is deliberately absent from this
+    -- fixture's `config`/`defaultConfig` tables above -- K9Store's own
+    -- DatabaseEnabled() fails safe to `true` (real-DB mode) on a missing
+    -- Config.Database, which is exactly what makes every K9Store call below
+    -- run the SAME MySQL.query.await call (against this file's own
+    -- makeQueryAwait(world) stub, assigned as env.MySQL above) that this
+    -- file's local SafeQuery/SafeWrite used to run directly, so every
+    -- existing assertion below keeps exercising the identical SQL/params
+    -- shape this fixture was written against. ONE INTENTIONAL EXCEPTION:
+    -- K9Store.OverrideAudit_Append always binds `new_value` as a 5th `?`
+    -- (nil for a reset), rather than this file's old two-shape SQL text
+    -- (a literal `NULL` in the reset-path INSERT with only 4 bound params)
+    -- -- functionally identical (both bind SQL NULL), and makeQueryAwait's
+    -- own INSERT INTO k9_runtime_override_audit branch already reads
+    -- params[4]/params[5] by direct index rather than by table length, so
+    -- it classifies a reset row (new_value = nil) correctly either way
+    -- without needing a fixture change of its own.
+    Sandbox.loadInto('../server/datastore.lua', env)
     Sandbox.loadInto('../server/runtimecontrol.lua', env)
 
     for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do

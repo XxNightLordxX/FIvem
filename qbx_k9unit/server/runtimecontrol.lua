@@ -754,36 +754,12 @@ local function LogAuditInvocation(source, action, detail, outcome)
     print(('[qbx_k9unit] AUDIT: %s ran %s(%s) -> %s'):format(whoLabel, action, detail, outcome))
 end
 
---- Fail-closed query wrapper -- pcall around MySQL.query.await, matching
---- server/admin.lua's/server/permissions.lua's own SafeQuery. A failed
---- read returns an empty table, never a raw Lua error.
---- @param sql string
---- @param params table
---- @return table rows
-local function SafeQuery(sql, params)
-    local ok, rowsOrErr = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] runtimecontrol.lua query failed: %s'):format(tostring(rowsOrErr)))
-        return {}
-    end
-    return rowsOrErr or {}
-end
-
---- pcall-wrapped write helper shared by every mutation below -- returns
---- true/false rather than throwing, and prints on failure. Every write in
---- this file is a plain INSERT/UPDATE/DELETE with `?`-bound parameters
---- only, never a caller-controlled fragment.
---- @param sql string
---- @param params table
---- @return boolean ok
-local function SafeWrite(sql, params)
-    local ok, err = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] runtimecontrol.lua write failed: %s'):format(tostring(err)))
-        return false
-    end
-    return true
-end
+-- server/datastore.lua's K9Store.Override_*/OverrideAudit_Append/Theme_*/
+-- ThemeAudit_Append now provide the SafeQuery/SafeWrite contract this
+-- file's own local wrappers used to (empty table / false on failure,
+-- never a raw Lua error) -- see that file's own header: "the ONLY place
+-- in this resource that may name a `k9_*` table or call `MySQL.*`
+-- directly". Every call site below reads/writes through K9Store now.
 
 -- ======================================================================
 -- APPLYING AN OVERRIDE TO THE LIVE Config TABLE
@@ -817,7 +793,7 @@ end
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
-    local overrideRows = SafeQuery('SELECT override_key, kind, value, updated_by, updated_at FROM k9_runtime_feature_overrides', {})
+    local overrideRows = K9Store.Override_GetAll()
     local appliedCount, skippedCount = 0, 0
 
     for _, row in ipairs(overrideRows) do
@@ -850,7 +826,7 @@ AddEventHandler('onResourceStart', function(resourceName)
         end
     end
 
-    local themeRows = SafeQuery('SELECT primary_color, accent_color, background_color, text_color, density, header_title FROM k9_tablet_theme WHERE id = 1', {})
+    local themeRows = K9Store.Theme_GetRows()
     if themeRows[1] then
         local loaded = {
             primaryColor    = themeRows[1].primary_color,
@@ -940,20 +916,13 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
     local overrideKey = 'feature:' .. name
     local valueStr = newValue and 'true' or 'false'
 
-    local wrote = SafeWrite(
-        'INSERT INTO k9_runtime_feature_overrides (override_key, kind, value, updated_by) VALUES (?, ?, ?, ?) ' ..
-        'ON DUPLICATE KEY UPDATE value = VALUES(value), updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
-        { overrideKey, 'feature', valueStr, citizenid or 'unknown' }
-    )
+    local wrote = K9Store.Override_Upsert(overrideKey, 'feature', valueStr, citizenid or 'unknown')
     if not wrote then
         LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s value=%s'):format(name, valueStr), 'db_error')
         return { ok = false, reason = 'db_error' }
     end
 
-    SafeWrite(
-        'INSERT INTO k9_runtime_override_audit (override_key, kind, old_value, new_value, changed_by) VALUES (?, ?, ?, ?, ?)',
-        { overrideKey, 'feature', tostring(oldValue), valueStr, citizenid or 'unknown' }
-    )
+    K9Store.OverrideAudit_Append(overrideKey, 'feature', tostring(oldValue), valueStr, citizenid or 'unknown')
 
     ApplyFeatureOverride(name, newValue)
     ActiveOverrides[overrideKey] = { kind = 'feature', value = valueStr, updatedBy = citizenid, updatedAt = os.date('%Y-%m-%d %H:%M:%S') }
@@ -994,11 +963,8 @@ lib.callback.register('qbx_k9unit:server:runtimeResetFeature', function(source, 
     local oldValue = Config.Features[name]
     local defaultValue = CONFIG_LUA_DEFAULT_FEATURES[name]
 
-    SafeWrite('DELETE FROM k9_runtime_feature_overrides WHERE override_key = ?', { overrideKey })
-    SafeWrite(
-        'INSERT INTO k9_runtime_override_audit (override_key, kind, old_value, new_value, changed_by) VALUES (?, ?, ?, NULL, ?)',
-        { overrideKey, 'feature', tostring(oldValue), citizenid or 'unknown' }
-    )
+    K9Store.Override_Delete(overrideKey)
+    K9Store.OverrideAudit_Append(overrideKey, 'feature', tostring(oldValue), nil, citizenid or 'unknown')
 
     ApplyFeatureOverride(name, defaultValue)
     ActiveOverrides[overrideKey] = nil
@@ -1080,20 +1046,13 @@ lib.callback.register('qbx_k9unit:server:runtimeSetTunable', function(source, ke
     local overrideKey = 'tuning:' .. key
     local valueStr = tostring(newValue)
 
-    local wrote = SafeWrite(
-        'INSERT INTO k9_runtime_feature_overrides (override_key, kind, value, updated_by) VALUES (?, ?, ?, ?) ' ..
-        'ON DUPLICATE KEY UPDATE value = VALUES(value), updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
-        { overrideKey, 'tuning', valueStr, citizenid or 'unknown' }
-    )
+    local wrote = K9Store.Override_Upsert(overrideKey, 'tuning', valueStr, citizenid or 'unknown')
     if not wrote then
         LogAuditInvocation(source, 'runtimeSetTunable', ('key=%s value=%s'):format(key, valueStr), 'db_error')
         return { ok = false, reason = 'db_error' }
     end
 
-    SafeWrite(
-        'INSERT INTO k9_runtime_override_audit (override_key, kind, old_value, new_value, changed_by) VALUES (?, ?, ?, ?, ?)',
-        { overrideKey, 'tuning', tostring(oldValue), valueStr, citizenid or 'unknown' }
-    )
+    K9Store.OverrideAudit_Append(overrideKey, 'tuning', tostring(oldValue), valueStr, citizenid or 'unknown')
 
     ApplyTunableOverride(key, newValue)
     ActiveOverrides[overrideKey] = { kind = 'tuning', value = valueStr, updatedBy = citizenid, updatedAt = os.date('%Y-%m-%d %H:%M:%S') }
@@ -1126,11 +1085,8 @@ lib.callback.register('qbx_k9unit:server:runtimeResetTunable', function(source, 
     local oldValue = GetConfigByPath(entry.path)
     local defaultValue = CONFIG_LUA_DEFAULT_TUNABLES[key]
 
-    SafeWrite('DELETE FROM k9_runtime_feature_overrides WHERE override_key = ?', { overrideKey })
-    SafeWrite(
-        'INSERT INTO k9_runtime_override_audit (override_key, kind, old_value, new_value, changed_by) VALUES (?, ?, ?, NULL, ?)',
-        { overrideKey, 'tuning', tostring(oldValue), citizenid or 'unknown' }
-    )
+    K9Store.Override_Delete(overrideKey)
+    K9Store.OverrideAudit_Append(overrideKey, 'tuning', tostring(oldValue), nil, citizenid or 'unknown')
 
     ApplyTunableOverride(key, defaultValue)
     ActiveOverrides[overrideKey] = nil
@@ -1196,23 +1152,13 @@ lib.callback.register('qbx_k9unit:server:tabletSetTheme', function(source, parti
         return { ok = false, reason = 'invalid_field', field = badField }
     end
 
-    local wrote = SafeWrite(
-        'INSERT INTO k9_tablet_theme (id, primary_color, accent_color, background_color, text_color, density, header_title, updated_by) ' ..
-        'VALUES (1, ?, ?, ?, ?, ?, ?, ?) ' ..
-        'ON DUPLICATE KEY UPDATE primary_color = VALUES(primary_color), accent_color = VALUES(accent_color), ' ..
-        'background_color = VALUES(background_color), text_color = VALUES(text_color), density = VALUES(density), ' ..
-        'header_title = VALUES(header_title), updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
-        { merged.primaryColor, merged.accentColor, merged.backgroundColor, merged.textColor, merged.density, merged.headerTitle, citizenid or 'unknown' }
-    )
+    local wrote = K9Store.Theme_Upsert(merged.primaryColor, merged.accentColor, merged.backgroundColor, merged.textColor, merged.density, merged.headerTitle, citizenid or 'unknown')
     if not wrote then
         LogAuditInvocation(source, 'tabletSetTheme', 'n/a', 'db_error')
         return { ok = false, reason = 'db_error' }
     end
 
-    SafeWrite(
-        'INSERT INTO k9_tablet_theme_audit (primary_color, accent_color, background_color, text_color, density, header_title, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        { merged.primaryColor, merged.accentColor, merged.backgroundColor, merged.textColor, merged.density, merged.headerTitle, citizenid or 'unknown' }
-    )
+    K9Store.ThemeAudit_Append(merged.primaryColor, merged.accentColor, merged.backgroundColor, merged.textColor, merged.density, merged.headerTitle, citizenid or 'unknown')
 
     CurrentTheme = merged
     LogAuditInvocation(source, 'tabletSetTheme', ('primary=%s accent=%s background=%s text=%s density=%s header=%q'):format(
@@ -1244,23 +1190,13 @@ lib.callback.register('qbx_k9unit:server:tabletResetTheme', function(source)
     local reset = {}
     for k, v in pairs(DEFAULT_THEME) do reset[k] = v end
 
-    local wrote = SafeWrite(
-        'INSERT INTO k9_tablet_theme (id, primary_color, accent_color, background_color, text_color, density, header_title, updated_by) ' ..
-        'VALUES (1, ?, ?, ?, ?, ?, ?, ?) ' ..
-        'ON DUPLICATE KEY UPDATE primary_color = VALUES(primary_color), accent_color = VALUES(accent_color), ' ..
-        'background_color = VALUES(background_color), text_color = VALUES(text_color), density = VALUES(density), ' ..
-        'header_title = VALUES(header_title), updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
-        { reset.primaryColor, reset.accentColor, reset.backgroundColor, reset.textColor, reset.density, reset.headerTitle, citizenid or 'unknown' }
-    )
+    local wrote = K9Store.Theme_Upsert(reset.primaryColor, reset.accentColor, reset.backgroundColor, reset.textColor, reset.density, reset.headerTitle, citizenid or 'unknown')
     if not wrote then
         LogAuditInvocation(source, 'tabletResetTheme', 'n/a', 'db_error')
         return { ok = false, reason = 'db_error' }
     end
 
-    SafeWrite(
-        'INSERT INTO k9_tablet_theme_audit (primary_color, accent_color, background_color, text_color, density, header_title, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        { reset.primaryColor, reset.accentColor, reset.backgroundColor, reset.textColor, reset.density, reset.headerTitle, citizenid or 'unknown' }
-    )
+    K9Store.ThemeAudit_Append(reset.primaryColor, reset.accentColor, reset.backgroundColor, reset.textColor, reset.density, reset.headerTitle, citizenid or 'unknown')
 
     CurrentTheme = reset
     LogAuditInvocation(source, 'tabletResetTheme', 'n/a', 'ok')

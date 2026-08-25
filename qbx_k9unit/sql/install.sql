@@ -47,6 +47,33 @@
 -- installing this resource; there is no supported downgrade path for the
 -- schema, because the uniqueness guarantees the resource's concurrency
 -- safety depends on cannot be expressed without these columns.
+--
+-- TEXT COLLATION (db-schema pass, 2026-08-25): every `CREATE TABLE` below
+-- now states `COLLATE=utf8mb4_unicode_ci` explicitly, matching qbx_core's
+-- own declared convention, instead of leaving it unstated and letting each
+-- table silently inherit whatever the server's schema/session default
+-- happens to be at CREATE time (`utf8mb4_general_ci` on some older
+-- defaults, `utf8mb4_0900_ai_ci` on stock MySQL 8, `utf8mb4_unicode_ci` on
+-- others) -- the same VARCHAR/TEXT column can therefore land with a
+-- different collation depending purely on which server it was installed
+-- on, which is the root problem, not any one wrong value. None of this
+-- resource's own lookups are affected either way -- every internal query
+-- stays within this schema's own now-consistent tables or goes through
+-- qbx_core's Lua exports, never a raw SQL join to `players` -- but an
+-- operator writing their own report that joins one of these tables to
+-- `players` on `citizenid` gets a hard `ERROR 1267: Illegal mix of
+-- collations` the moment the two sides disagree. A fresh install via this
+-- file now always lands on the same collation regardless of server
+-- default, at no cost to anyone. An EXISTING table created before this
+-- change keeps whatever collation it already has -- `CREATE TABLE IF NOT
+-- EXISTS` does not retroactively convert one, the same convergence rule
+-- this file's own header already documents for columns/indexes. Converting
+-- an existing table's stored collation is a full table rewrite (`CONVERT
+-- TO CHARACTER SET`), not a free metadata change, so it is deliberately an
+-- OPT-IN migration rather than part of the default upgrade path -- see
+-- `sql/migrations/0012_convert_charset_collation.sql` and that file's own
+-- header for the full cost/benefit disclosure, and `sql/rollback/README.md`
+-- for the plain-language version of "do I need to run this."
 -- =====================================================================
 
 -- =====================================================================
@@ -225,7 +252,7 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
   -- identically to the normal pre-check "already certified" no-op —
   -- it means another request won the race, not a real failure.
   UNIQUE KEY `uq_one_active_cert_per_job` (`active_cert_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
 -- qbx_k9unit :: k9_certification_specializations
@@ -302,7 +329,7 @@ CREATE TABLE IF NOT EXISTS `k9_certification_specializations` (
   -- `uq_one_active_cert_per_job` gives `k9_certifications` above, scoped
   -- to a 3-part key instead of a 2-part one.
   UNIQUE KEY `uq_one_active_spec_per_citizen_job` (`active_spec_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
 -- qbx_k9unit :: k9_search_log
@@ -436,7 +463,7 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
   --   SELECT * FROM k9_search_log
   --   WHERE target_citizenid = ? ORDER BY searched_at DESC;
   KEY `idx_target_citizenid_searched_at` (`target_citizenid`, `searched_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
 -- qbx_k9unit :: k9_partnerships
@@ -643,7 +670,7 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
   -- (see header comment: a certification's invariant is scoped to a
   -- single citizenid; a partnership's is scoped to TWO).
   UNIQUE KEY `uq_one_active_partnership_per_handler` (`active_partner_handler_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
 -- qbx_k9unit :: k9_progression
@@ -802,7 +829,7 @@ CREATE TABLE IF NOT EXISTS `k9_progression` (
   -- 0) and `/k9stats` has no WHERE clause to lead a composite key with (a
   -- global ranking, not a per-citizenid/per-job lookup).
   KEY `idx_xp` (`xp`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
 -- qbx_k9unit :: k9_permissions
@@ -977,7 +1004,7 @@ CREATE TABLE IF NOT EXISTS `k9_permissions` (
   -- `k9_certifications.uq_one_active_cert_per_job` closes it for
   -- certification grants.
   UNIQUE KEY `uq_one_active_permission_per_citizen` (`active_permission_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
 -- qbx_k9unit :: k9_runtime_feature_overrides / k9_runtime_override_audit /
@@ -1010,7 +1037,7 @@ CREATE TABLE IF NOT EXISTS `k9_runtime_feature_overrides` (
   `updated_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`override_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `k9_runtime_override_audit` (
   `id`            INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -1023,7 +1050,7 @@ CREATE TABLE IF NOT EXISTS `k9_runtime_override_audit` (
 
   PRIMARY KEY (`id`),
   KEY `idx_override_key_changed_at` (`override_key`, `changed_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `k9_tablet_theme` (
   `id`               TINYINT UNSIGNED NOT NULL,             -- always exactly one row, id = 1 -- see migration 0007's own header
@@ -1037,7 +1064,7 @@ CREATE TABLE IF NOT EXISTS `k9_tablet_theme` (
   `updated_at`       DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `k9_tablet_theme_audit` (
   `id`               INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -1051,7 +1078,7 @@ CREATE TABLE IF NOT EXISTS `k9_tablet_theme_audit` (
   `changed_at`       DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
 -- qbx_k9unit :: k9_ped_assignments
@@ -1082,7 +1109,7 @@ CREATE TABLE IF NOT EXISTS `k9_ped_assignments` (
 
   PRIMARY KEY (`citizenid`),
   KEY `idx_active` (`active`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================
 -- qbx_k9unit :: k9_certification_tiers / k9_certification_tier_capabilities
@@ -1112,7 +1139,7 @@ CREATE TABLE IF NOT EXISTS `k9_certification_tiers` (
   `updated_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`tier_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `k9_certification_tier_capabilities` (
   `tier_key`        VARCHAR(32) NOT NULL,
@@ -1121,7 +1148,7 @@ CREATE TABLE IF NOT EXISTS `k9_certification_tier_capabilities` (
   `granted_at`      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`tier_key`, `capability_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `k9_certification_tier_audit` (
   `id`           INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -1133,4 +1160,4 @@ CREATE TABLE IF NOT EXISTS `k9_certification_tier_audit` (
 
   PRIMARY KEY (`id`),
   KEY `idx_tier_key_changed_at` (`tier_key`, `changed_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

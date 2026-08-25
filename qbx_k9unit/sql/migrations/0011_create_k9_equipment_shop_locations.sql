@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS `k9_equipment_shop_locations` (
   `updated_at` DATETIME     DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
 -- k9_equipment_shop_locations_audit -- append-only "who changed what, from
@@ -156,4 +156,4 @@ CREATE TABLE IF NOT EXISTS `k9_equipment_shop_locations_audit` (
   -- -- the natural admin/audit query over this table, matching
   -- k9_runtime_override_audit's own idx_override_key_changed_at precedent.
   KEY `idx_location_id_changed_at` (`location_id`, `changed_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

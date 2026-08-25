@@ -3,8 +3,9 @@
 This is a step-by-step guide for the person standing this resource up on a
 real server — not a design document. For *why* something works the way it
 does, or for the full list of every config flag, see `README.md`. For the
-open decisions only a server owner can make, see `PROJECT_STATUS.md`; this
-runbook turns several of those decisions into concrete steps.
+open decisions only a server owner can make, see
+`DEVELOPER_REFERENCE.md` §17; this runbook turns several of those decisions
+into concrete steps.
 
 **Read this before anything else below: as of 2026-08-25, 39 of this
 resource's 40 feature flags are switched on** (checked directly in
@@ -302,6 +303,8 @@ suppression) only work at all if the target's own client executes them,
 and this guard is the only thing standing between "a modified client
 ignores the effect" (expected, disclosed) and "a modified client can grant
 itself the effect on demand" (a live exploit, if the guard doesn't hold).
+See `DEVELOPER_REFERENCE.md`'s D3 (§17) and §15 `#trust-boundary` for the
+full reasoning behind this guard.
 
 ---
 
@@ -401,10 +404,248 @@ this resource). Two things worth doing now that it's live:
 was the highest-risk group, recommended last "if at all." It's on. That
 doesn't mean the risk went away: a modified client can still ignore the
 restraining half of these mechanics regardless of config, and the two
-open questions in `PROJECT_STATUS.md` (D3, D13) are exactly about how much
-that should worry you. Run section 3's sequenced check now, and read
-`PROJECT_STATUS.md`'s D3/D13 write-ups if you haven't. Everything else in
-this resource (tracking, search, vision, inventory, wellbeing,
-progression, kennel, fetch, prop attachments, the admin/audit surface)
-carries no equivalent trust-boundary caveat and can be evaluated purely on
-whether you want the feature, not on whether it's safe to expose.
+open questions in `DEVELOPER_REFERENCE.md` §17 (D3, D13) are exactly about
+how much that should worry you. Run section 3's sequenced check now, and
+read those D3/D13 write-ups if you haven't. Everything else in this
+resource (tracking, search, vision, inventory, wellbeing, progression,
+kennel, fetch, prop attachments, the admin/audit surface) carries no
+equivalent trust-boundary caveat and can be evaluated purely on whether you
+want the feature, not on whether it's safe to expose.
+
+---
+
+## 6. Installing/upgrading with `k9_setup.sh` — the single entry point
+
+If you only remember one command for getting the database in shape, this
+is it:
+
+```bash
+cd qbx_k9unit/sql
+./k9_setup.sh -d your_database_name -u your_mysql_user           # do it
+./k9_setup.sh -d your_database_name -u your_mysql_user --dry-run  # just show the plan
+```
+
+(If it is not executable yet: `bash k9_setup.sh -d your_database_name -u
+your_mysql_user`.) It is safe to run on a brand-new database, and just as
+safe to run again on a server you already installed this on months ago —
+every piece it calls is individually safe to run more than once. Nothing
+in `sql/` ever runs on its own; you always choose to run something.
+
+Every time you run it (without `--dry-run`), in this exact order:
+
+1. **Checks** — right server version, no table-name conflicts, a sanity
+   check that this looks like a real qbx_core database
+   (`sql/preflight_check.sql`'s content). Stops here, untouched, if anything
+   comes back with `!!`.
+2. **Backs up your ENTIRE database, automatically, unconditionally** — not
+   just this resource's own tables, every table in the database
+   (`sql/rollback/backup_full_database.sh`). **This cannot be skipped, and
+   if it fails for any reason, nothing below it ever runs.**
+3. **Installs/upgrades** — `sql/install.sql`, then every file in
+   `sql/migrations/` in filename order. Every one of those files is
+   individually safe to run twice.
+4. **Reports** — every table found afterward, with its row count, and one
+   final line: `SUCCESS` or `FAILED`. Never a silent finish.
+
+`--dry-run` skips steps 2–3 and instead prints a read-only report of
+exactly what installing/upgrading right now would do — no backup is taken,
+because nothing is being written.
+
+**The two kinds of backup — do not confuse them:**
+
+| | `sql/rollback/backup_k9_tables.sh` | `sql/rollback/backup_full_database.sh` |
+|---|---|---|
+| Backs up | This resource's own tables only | **Every** table in the database |
+| Use before | Uninstalling / rolling back *this resource* | Installing or migrating (any schema change) |
+| Called automatically by | `sql/rollback/uninstall.sh` | `k9_setup.sh` |
+| File name starts with | `qbx_k9unit-backup-` | `qbx_k9unit-FULLDB-backup-` |
+
+**Honest limits.** This tooling makes a specific set of mistakes
+structurally impossible (running the uninstall by accident — it's inert
+until hand-armed and re-disarms itself every run; a schema change
+proceeding after its own backup silently failed; a "dry run" that
+secretly writes; a backup silently overwriting an earlier one), catches and
+refuses a second set with a specific reason instead of a bare SQL error
+(running a migration before its own dependency; installing on too old an
+engine or over a name conflict; a backup with too little free disk;
+mistaking a truncated backup for a complete one), and warns-but-doesn't-block
+on a third set that's a genuine judgment call (an unrecognized `k9_*` table
+that might belong to a different K9 resource sharing your database, or
+might mean this tooling's own table list is out of date — it can't tell
+which, so it warns loudly rather than guessing). What it cannot protect
+against, because no tool can: running the *armed* uninstall against the
+wrong database, restoring the wrong backup file, or a privileged user
+running raw SQL directly outside any of these scripts.
+
+---
+
+## 7. Uninstalling / rolling back the database
+
+**Installing or upgrading?** See section 6 above, not this one — everything
+here is about undoing something. Everything below is written to be run by
+hand, one file at a time, in phpMyAdmin, HeidiSQL, or the `mysql` CLI.
+Nothing here runs automatically, and the resource itself never runs any of
+it.
+
+**One rule above all others: do STEP 1 first.** Every other step assumes
+you already have a backup.
+
+### STEP 0 — Before you install anything: run the safety check
+
+Read-only, safe on a live server:
+
+```bash
+mysql -u YOUR_USER -p YOUR_DATABASE < sql/preflight_check.sql
+```
+
+Every line should start with `OK`. A line starting with `!!` means stop and
+fix that first — most commonly, a different resource already owns one of
+this resource's table names (a name conflict, not data damage either way).
+
+### STEP 1 — Back up first. Always. Every time.
+
+```bash
+cd qbx_k9unit/sql/rollback
+./backup_k9_tables.sh -d YOUR_DATABASE_NAME -u YOUR_MYSQL_USER
+```
+
+Saves every one of this resource's own tables into one timestamped file; it
+only reads, changes nothing. This backs up this resource's tables only —
+for a safety net before an *install or migration* (protecting your whole
+database), use `./backup_full_database.sh` instead, or just use
+`k9_setup.sh` (section 6), which runs that automatically. The two backup
+files are named differently on purpose (`qbx_k9unit-backup-...` vs.
+`qbx_k9unit-FULLDB-backup-...`) so you can't mix them up under pressure.
+
+A successful run prints a `BACKUP OK` block with the file path, size, and
+row counts, and the exact one-line command to restore it — copy that line
+somewhere safe. **If you do NOT see `BACKUP OK`, stop** and fix whatever
+failed before running anything else in this section. `k9_search_log`
+specifically is your only accountability trail of every contraband search
+anyone ever performed — it cannot be rebuilt from anything else.
+
+### STEP 2 — Work out what you actually want
+
+| Your situation | What you need | Deletes data? |
+|---|---|---|
+| "Installing gave me a **duplicate entry** error and I'm stuck" | STEP 5 | No |
+| "I want to undo the most recent schema change" | STEP 3 | No |
+| "I want to undo the tenure-bonus column too" | STEP 4 | Loses one column's values — read it first |
+| "I just want to stop using the resource" | Do nothing here — remove `ensure qbx_k9unit` from `server.cfg`. Tables sit there harmlessly. | No |
+| "I want the tables gone from my database for good" | STEP 7 | **Yes — everything** |
+| "I already broke something and want my data back" | STEP 8 | No (it restores) |
+
+### STEP 3 — Undo the newest change (migration 0004)
+
+```bash
+mysql -u YOUR_USER -p YOUR_DATABASE < sql/rollback/0004_down.sql
+```
+
+Removes the `active_cert_key` column and three indexes from
+`k9_certifications`. Deletes zero rows — that column is calculated, not
+stored. Safe to run twice. **Do not leave a live server in this state**:
+the `uq_one_active_cert_per_job` index it removes is what stops two staff
+members certifying the same officer at the same instant from both
+succeeding (tested: without it, 20 simultaneous requests produced 20 active
+certifications for one person, no error anywhere). Use this step to get
+unstuck, then STEP 6 to put it back.
+
+### STEP 4 — Also undo the tenure column (migration 0003)
+
+```bash
+mysql -u YOUR_USER -p YOUR_DATABASE < sql/rollback/0003_down.sql
+```
+
+Removes `tenure_bonus_tier_granted` from `k9_partnerships`. **This is the
+one file here that loses information** — no rows are deleted, but that
+column is the only record of which tenure bonuses have already been paid
+out; removing and restoring it resets every value to zero, which the
+resource reads as "never paid," so every long-running partnership gets its
+1-day/7-day/30-day bonuses paid all over again. Your STEP 1 backup is the
+only way back to the real values.
+
+### STEP 5 — "It said *Duplicate entry … for key uq_one_active_cert_per_job*"
+
+The most common reason to end up here. Your database already has the same
+officer certified twice for the same job at the same time — migration 0004
+exists to make that impossible going forward, but can't switch the rule on
+while the database already breaks it. Nothing is broken and nothing is
+lost:
+
+1. Roll back the half-applied migration: `mysql ... < sql/rollback/0004_down.sql`
+2. Find the duplicates: `SELECT citizenid, job, COUNT(*) AS dupes FROM k9_certifications WHERE active = 1 GROUP BY citizenid, job HAVING COUNT(*) > 1;`
+3. Fix them (keeps the newest, marks older extras revoked — **deletes
+   nothing**, the old rows stay as history):
+   ```sql
+   UPDATE k9_certifications c
+   JOIN (SELECT citizenid, job, MAX(id) AS keep_id FROM k9_certifications WHERE active = 1 GROUP BY citizenid, job) k
+     ON c.citizenid = k.citizenid AND c.job = k.job
+   SET c.active = 0, c.revoked_by = 'MIGRATION-DEDUPE', c.revoked_at = NOW()
+   WHERE c.active = 1 AND c.id <> k.keep_id;
+   ```
+4. Re-run step 2's query — it should return no rows.
+5. Retry the migration: `mysql ... < sql/migrations/0004_add_k9_certifications_active_cert_key.sql`
+
+### STEP 6 — Put a rollback back (go forward again)
+
+Rollbacks are not one-way. Re-run the matching migration from
+`sql/migrations/`, in number order, to restore what you undid. This
+round trip is tested: install → roll back → re-apply produces a schema
+byte-for-byte identical to where you started, with every row untouched
+(except STEP 4's caveat: the column's *values* come back as zero, not
+their originals — restore your backup if you need those).
+
+### STEP 7 — Delete everything (full uninstall)
+
+**Re-read STEP 2 first — you almost certainly do not need this.** To simply
+stop using the resource, remove `ensure qbx_k9unit` from `server.cfg` and
+leave the tables alone; they cost you nothing.
+
+Before deleting anything, run `sql/rollback/uninstall_all.sql`
+**unmodified** — it deletes nothing but prints a report of anything else in
+your database that depends on these tables (a foreign key, a view, a
+trigger, a stored routine, or an unrecognized `k9_*` table this file
+doesn't know about). An empty report means removal is clean; otherwise fix
+what it lists and re-run.
+
+If you genuinely want the tables gone: (1) do STEP 1, (2) open
+`uninstall_all.sql`, (3) find the commented-out
+`-- SET @K9_UNINSTALL_CONFIRM = 'YES-DELETE-ALL-MY-K9-DATA';` line near the
+top and uncomment it, (4) run the file. It prints `UNINSTALLED` on success
+or `REFUSED — NOTHING WAS DELETED` if you didn't uncomment the line — run
+unmodified, it does nothing at all, on purpose, so you cannot wipe your K9
+data by pasting the wrong file. It also refuses outright (deleting nothing)
+if anything else in your database still depends on these tables, rather
+than leaving you half-uninstalled.
+
+**Prefer the wrapper**, `sql/rollback/uninstall.sh` — it does STEP 1 for you
+automatically (a full-database backup), requires you to type your database
+name back as confirmation, and only then arms and runs the file above.
+
+### STEP 8 — Restore from your backup
+
+```bash
+mysql -h 127.0.0.1 -P 3306 -u YOUR_USER -p YOUR_DATABASE < qbx_k9unit-backup-....sql
+```
+
+Use the exact line the backup script printed in STEP 1. Puts every table
+back exactly as it was at backup time; anything written after the backup
+is not in it. Tested end to end: dropping every table and restoring from a
+backup returns every row, and every calculated column, exactly as it was.
+
+### What each rollback file undoes
+
+| File | Undoes | Deletes rows? |
+|---|---|---|
+| `backup_k9_tables.sh` / `backup_full_database.sh` | *(nothing — they save)* | No, read-only |
+| `0001_down.sql`, `0002_down.sql`, `0005_down.sql`, `0007_down.sql`, `0008_down.sql`, `0010_down.sql` | their matching migration | **No — does nothing on purpose** (each undoes "create a table"; only `uninstall_all.sql` ever drops one) |
+| `0003_down.sql` | migration 0003 | No rows, but loses one column's values (see STEP 4) |
+| `0004_down.sql`, `0009_down.sql` | migration 0004 / 0009 | No |
+| `0006_down.sql` | migration 0006 | No rows |
+| `uninstall.sh` | *(wrapper)* | Backs up first, then calls `uninstall_all.sql` |
+| `uninstall_all.sql` | the whole install | **Yes, every table** — inert until armed |
+
+### Requirements
+
+Same as install: **MySQL 5.7.8+ or MariaDB 10.2+.** Tested on MariaDB
+10.11, MySQL 5.7, and MySQL 8.0.

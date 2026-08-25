@@ -1998,3 +1998,869 @@ outcome per model.
 8. Real growl/pant/vest/harness/camera-housing audio and prop assets — bark
    and growl audio shipped (see `README.md`); vest/harness props remain
    operator-supplied (fork 3).
+
+---
+
+## 15. Research notes (native verification, security review, design research)
+
+Condensed from a research archive that itself had already been consolidated
+once from 24 separate per-topic files down to 12 anchors — the load-bearing
+finding from each was usually already restated in the `.lua` file it
+informed; this section keeps the parts that aren't fully duplicated
+elsewhere (native hash/signature facts worth a lookup, and items that are
+still open today). **If something here disagrees with the code, the code
+wins** — read the cited `.lua` file's own header comment for the
+authoritative, current version of anything that shipped. Anchor names
+(`#vision`, `#tracking`, etc.) are unchanged from the old
+`phase2_notes/RESEARCH_ARCHIVE.md` — only the filename changed.
+
+<a id="vision"></a>
+### Vision — thermal and night
+
+Implemented in `client/vision.lua`. Two confirmed, dedicated toggle natives
+— not the `SetTimecycleModifier` the original spec draft guessed:
+
+| Effect | Native | Hash | Getter |
+|---|---|---|---|
+| Thermal | `SetSeethrough(BOOL)` | `0x7E08924259E08CE0` | `IsSeethroughActive()` |
+| Night | `SetNightvision(BOOL)` | `0x18F621F7A5B1F85D` | `IsNightvisionActive()` |
+
+Both are genuine toggle-and-forget booleans (confirmed via the CitizenFX C#
+SDK's `Game.cs`, which wraps them as plain get/set properties). `SetTimecycleModifier`
+is a real, separate native correctly reserved for the unrelated contraband
+screen-filter effect (`ContrabandScreenFX`) — not used for vision at all.
+
+Access gate is `IsOwnModelK9()` only (not `CanShowK9UI()`): vision is framed
+as the K9's own innate perception, not a departmental privilege — the same
+reasoning that later informed the [Vitality HUD](#hud-bridge)'s *opposite*
+conclusion (a monitoring instrument, gated on `CanShowK9UI()`). Both
+natives need an explicit forced-off on every exit path (manual toggle,
+resource stop, death, losing K9 access) since neither one resets on its
+own.
+
+<a id="tracking"></a>
+### Tracking — scent, blood, water, gunpowder
+
+Implemented in `client/tracking.lua` / `server/tracking.lua`. Confirmed
+natives (all client-side; the server never runs game-event simulation or
+world/water geometry, so all of this is necessarily relayed):
+
+| Purpose | Native | Notes |
+|---|---|---|
+| Blood-trail source | `gameEventTriggered('CEventNetworkEntityDamage', ...)` | `data[1]` = victim entity handle (confirmed); does **not** fire for script-applied damage, only organic gameplay damage — a real, documented gap, not a bug. |
+| Gunpowder-trail source | `IsPedShooting(ped)` (`0x34616828CD07F1A1`), debounced false→true | Per-client self-poll, no nearby-ped scan needed. |
+| Breadcrumb rendering | `DrawMarker` | Per-frame, client-only; no native does "reveal a trail" as a concept. |
+| Water-crossing check | `GetWaterHeightNoWaves` (`0x8EE6B53CE13A9794`) preferred over `GetWaterHeight` | No-waves variant is frame-stable; plain `GetWaterHeight` is known-unreliable for shallow rivers. |
+| In-water state | `IsEntityInWater`, `IsPedSwimming` | Live-position checks only. |
+
+**Deliberate accepted risk, not a bug ("FORGED TRAIL DECISION"):**
+`relayDamageEvent`/`relayWeaponFire` are payload-less by design (the server
+never trusts a client-claimed coordinate, only re-derives the reporting
+client's own live position) — but that also means a modified client can
+fire either event with no real damage/shot having occurred, planting a
+fabricated trail source. Accepted: tracking grants no real capability, a
+false report just wastes an officer's time, and the only two candidate
+server-side corroboration checks (health delta, ammo delta) both have real
+false-negative risk against legitimate reports. Revisit only if a future
+feature ever conditions something server-authoritative on a resolved trail
+source. This does **not** apply to scent — see below.
+
+<a id="scent-source-resolution"></a>
+### Scent source resolution
+
+`ox_inventory` exposes a real, confirmed, server-to-server hook:
+`exports.ox_inventory:registerHook('swapItems', callback)`. It fires
+synchronously on every item move ox_inventory processes, including a
+ground-drop (`payload.toType == 'drop'`), and carries `payload.source` —
+ox_inventory's own resolved source for the request, not a client-relabelable
+value. This backs scent-trail source capture in `server/tracking.lua`, and
+is a **smaller** trust surface than blood/gunpowder: no client-triggerable
+path into this hook exists at all, so scent doesn't need a
+`relayCooldownMs`-style rate limit. The hook fires *before* the drop
+inventory/coords exist — resolve the dropping player's own live position
+instead (`GetEntityCoords(GetPlayerPed(payload.source))`).
+
+<a id="door-interaction"></a>
+### Door interaction — nudge-open and scratch-to-alert
+
+Implemented in `client/movement.lua` (both mechanics) and `server/main.lua`
+(`relayDoorScratch`).
+
+**GTA's native door system (`DOOR_SYSTEM_*`, `OBJECT` namespace) is real but
+narrow** — it only covers doors registered via `AddDoorToSystem`. Most
+FiveM door-lock resources do **not** use this system at all — they
+implement their own lock flag entirely outside `CDoor`. Reading "not
+registered" as "safe to nudge" would be a real way to violate
+`nudgeRequiresUnlocked`'s hard guarantee. `SetStateOfClosestDoorOfType` and
+`DoorControl` are both confirmed hardcoded to not work in multiplayer at
+all — don't reach for either.
+
+**The design that shipped avoids the whole problem deliberately**:
+nudge-open never reads or writes native lock state at all. It only plays a
+cosmetic push animation as the K9 passes through a door it can already
+physically walk through. `Config.DoorInteraction.nudgeRequiresUnlocked` is
+enforced by a resource-start `assert()` in `client/movement.lua` (fail
+loudly if anyone ever sets it to anything but `true`).
+
+**Scratch-to-alert's `doorNetId` is fully validated server-side** in
+`server/main.lua`: resolved, existence-checked, and proximity-checked
+against the caller's own live position before ever being broadcast —
+closing a confirmed harassment vector (a certified account naming any live
+entity's netId, including another player's own ped). There's also a second,
+independent cooldown keyed by the resolved `doorNetId` itself.
+
+<a id="contraband-search"></a>
+### Contraband search contract and security review
+
+Implemented in `server/search.lua`. Confirmed `ox_inventory` export surface:
+`GetInventoryItems`/`GetInventory`/`GetItemCount`/`GetContainerFromSlot`. A
+slot's `.weight` is already the *total* weight for that slot (`item.weight
+* count`, plus adjustments) — summing it directly across matching slots is
+correct; don't re-multiply by count. A vehicle's trunk inventory id is
+literally `'trunk' .. plate`, resolved live server-side, never from a
+client-supplied plate string.
+
+**Must-handle findings, all implemented in the shipped file:**
+- **Container recursion.** `GetInventoryItems` only returns top-level slots
+  — contraband hidden in a bag placed in a searched trunk is invisible to a
+  naive scan unless the search recurses into container slots to an
+  explicit max depth.
+- **The contraband-alert broadcast must be distance-filtered, never a
+  global `-1` broadcast the way `relayBark` is.** A global broadcast would
+  let anyone on the map (including the target's own accomplice) resolve who
+  just got flagged. The broadcast also carries `alertTier` only, never
+  `totalWeight`/`contrabandFound`.
+- **Mandatory, unconditional, first-class proximity check before any
+  inventory read** — without it, a modified client could supply any
+  vehicle/player's netId anywhere on the map and get back a real result,
+  turning the feature into a server-wide search oracle.
+- **Entity-type cross-check**: the resolved entity's real type is
+  independently re-derived, never trusted from the client's `targetType`
+  label.
+- **In-flight mutex plus a cooldown timestamp written before the awaited
+  ox_inventory call**, not after — closes a check-then-act race a cooldown
+  alone can't close once an `await` sits between the check and the result.
+- **`search_failed` is a distinct outcome from `contrabandFound = false`.**
+  Collapsing "we couldn't check" into "we checked and it's clean" is a
+  correctness bug with real in-fiction consequences.
+
+<a id="phase-3-combat"></a>
+### Phase 3 combat — natives and ecosystem research
+
+Native verification (against `citizenfx/natives`, cross-checked where a
+prior claim turned out wrong):
+
+| Feature | Key correction found |
+|---|---|
+| Bite-and-Hold | Mechanical hold (`SetBlockingOfNonTemporaryEvents`, `SetPedFleeAttributes`) is real and confirmed. No confirmed sustained "bite and hold" animation exists for any breed — `creatures@rottweiler@melee@streamed_core@`/`takedown_from_back` is a real, Rottweiler-only, **one-shot** takedown pose, not a loop, and needs in-engine preview before being treated as final. |
+| Non-Lethal Takedown | The real ragdoll native is `SET_PED_TO_RAGDOLL` (not `TaskRagdollPed`, which doesn't exist under that name). No dedicated fall-damage-suppression native/flag exists — the real, confirmed mechanism is bracketing the forced ragdoll with `SetEntityCanBeDamaged(target, false)` / `(target, true)`. `SetEntityInvincible` is explicitly **not** recommended — it suppresses ragdoll on at least one damage source, fighting the very effect this feature needs. |
+| Prop Dragging | `SetPedMoveRateOverride` (unlike the vision toggles above) is **not** fire-and-forget — its own doc text says "Needs to be looped," and must be re-asserted every tick the drag is active. |
+| Advanced Agility | No generic ped "jump" task native exists at all. `StartShapeTestCapsule`/`GetShapeTestResult` are the real, confirmed natives for obstacle detection; no quadruped vault/climb animation was found or is expected to exist as a reusable vanilla asset. |
+
+**Ecosystem research, headline finding:** the mainstream FiveM K9-script
+ecosystem (v-k9, QB-K9, ND-K9, Mato-K9, Rq-dogs) is built on a
+"handler-commands-an-NPC-dog" architecture, not a player playing the dog —
+so ecosystem precedent for the *NPC-target* half of every Phase 3 mechanic
+is strong, but there is **no existing precedent anywhere surveyed** for a
+*player-controlled* companion applying a hostile effect to another real
+player. Treat Phase 3's player-target combat work as original design.
+Separately: `bonz_parkour` is a concrete, shipped example of the exact
+"zero-validation vault" anti-pattern to avoid for Advanced Agility — it
+lets a player "vault" into open air or through a wall, with no raycast, no
+shape test, no allowlist at all.
+
+<a id="handler-partnership"></a>
+### Handler partnership decision (resolved)
+
+Two Phase 3 features (Bite-and-Hold's Recall actor, Handler-Down Defense's
+trigger) needed a "who is this K9's handler right now" answer independent
+of momentary leash state. Two options were weighed: reuse `LeashPairs`
+(cheap, but leaves the off-leash case with no defense support at all — its
+own disclosed, named primary use case), or a new, independent, DB-backed
+partnership registry. **Resolved: Option B** — `server/partnership.lua`, a
+`k9_partnerships` table, and a mutually-consented "Partner Up" action, all
+shipped behind `Config.Features.HandlerPartnership`. Reusing the leash table
+was rejected outright because it fails the primary use case it was being
+asked to serve.
+
+<a id="hud-bridge"></a>
+### Vitality HUD — Lua↔JS bridge design
+
+Implemented in `client/hud.lua` + `html/index.html`/`style.css`/`app.js`.
+
+**Naming**: NUI callback/message names use a `<surface>:<verbNoun>` shape
+(`hud:ready`, `hud:updateVitals`) rather than this resource's
+`qbx_k9unit:client:`/`qbx_k9unit:server:` net-event prefix — that prefix
+exists to avoid colliding with other *resources'* global event namespace,
+which doesn't apply to NUI.
+
+**Payload**: one combined message (`visible` plus all four vitals values
+together), not split into separate visibility/update messages — a split
+design has two moving parts that can desync if one message is ever dropped.
+`visible = false` still carries the last real values, not zeros.
+
+**Focus**: `SetNuiFocus` is never called for this HUD — it's a passive,
+non-interactive overlay. The CSS root container needs `pointer-events: none`.
+
+**Cadence**: poll every ~250ms, only actually push when a value moved past
+a small epsilon, force a heartbeat push at least every ~1000ms regardless
+so a dropped message self-heals, push immediately on any visibility
+transition, and push an immediate snapshot the moment `hud:ready` fires (a
+message sent before the page's JS has attached its listener is lost, not
+buffered).
+
+**Visibility gate: `CanShowK9UI()`, not `IsOwnModelK9()` alone** — the
+opposite conclusion from [Vision](#vision) above: the vitality HUD is a
+department-issued monitoring instrument, not the K9's own sense organs.
+
+**Still genuinely open:** whether a handler/officer partner should see
+*their* K9's vitals while nearby/leashed to them — not blocking; ship
+self-vitals first, extend additively later if confirmed in scope.
+
+<a id="xp-schema"></a>
+### XP / progression schema design
+
+Implemented in `sql/install.sql` (`k9_progression` table) and
+`server/progression.lua`. XP is real, mechanical, capability-adjacent state
+— crossing a tier threshold changes a K9's actual movement speed and scent
+range — which puts it in the same category as `k9_certifications`: it
+needs offline correction, atomic accumulation (`INSERT ... ON DUPLICATE KEY
+UPDATE xp = xp + ?`, avoiding a Lua-side read-modify-write race), and
+queryability without scanning every player's metadata blob.
+
+Schema: one row per `citizenid` (not per `citizenid, job`) — XP is scoped to
+the K9 character itself, deliberately reading "persists per-handler" as
+"survives a department change." This is a real, still-open design fork
+(`Config.XP.scopePerCitizenidOrJob`, currently only `'citizenid'` is
+implemented) — see §13.6 item 2 if this ever needs revisiting. The tier
+lookup deliberately is **not** computed in SQL — `Config.XPTiers` is
+code-side and config-driven, so baking its thresholds into a SQL `CASE`
+would create a second, driftable copy of the same boundaries.
+
+**Still open, not decided:** whether a separate, append-only `k9_xp_log`
+table is also worth adding for anti-cheat/dispute auditing, given XP is
+arguably more exploit-sensitive than a search.
+
+<a id="phase-5-research"></a>
+### Phase 5 features — native and ecosystem research
+
+`AdvancedBarkRadial` and `DeployableKennel` are implemented and shipped
+(five real `.ogg` files ship under `html/sounds/`, per
+`html/sounds/CREDITS.md`; `prop_doghouse_01` was refuted during
+implementation and replaced with the confirmed-real `prop_dog_cage_01`).
+`CameraFeedPiP` stays `false` and is expected to permanently: a true inset
+live-3D-video picture-in-picture is **not achievable** with stock FiveM
+natives (DUI/NUI textures render HTML, not the 3D scene), corroborated by a
+still-open upstream `citizenfx/fivem` GitHub issue (#3835). A full-screen
+K9-POV camera **takeover** (not an inset) is fully native-only and
+achievable (`CreateCam`/`RenderScriptCams`) if a future pass wants that
+narrower spike instead.
+
+**`PropAttachments`/`FetchMechanic` remain genuinely unresolved** and are
+why both still use the root-bone placeholder attach point pending the
+dev-only bone-index sweep (`client/bonetool.lua`/`server/bonetool.lua`).
+Key finding: a bone does **not** need a documented *name* for
+`AttachEntityToEntity` to work, only a numeric *index* —
+`GetWorldPositionOfEntityBone(entity, boneIndex)` takes a raw integer and
+works on any entity, human-named or not. No open-source FiveM script found
+in research ever attached a prop to an animal ped's own skeleton. This
+reframes the open item from "find a documented bone name" (blocked
+indefinitely) to "run a one-time in-engine sweep."
+
+**`FetchMechanic`'s pursue/carry logic is simpler than its one real
+precedent** (`fruitmob/murderface-pets`) once correctly re-scoped for a real
+player: the K9 player walks to the thrown ball using their own ordinary
+input, then presses an interact prompt, the same self-administered pattern
+`client/vehicle.lua`'s `EnterNearestK9Vehicle` already established.
+`server/kennel.lua`/`client/kennel.lua`'s existing spawn/track/cleanup
+pattern is a closer lifecycle template for the ball than porting the NPC
+precedent wholesale.
+
+**`ProximityAudioFX` needs two things that don't exist yet, not one volume
+knob**: (1) composing two independent distance factors rather than a single
+native call, and (2) a wholly new "hidden suspect" detection primitive —
+`server/tracking.lua`'s existing `findTrackableSource` is pull-based and
+resolves a historical logged *coordinate*, not a live, continuously-moving
+suspect ped. No FiveM script surveyed does proximity-scaled audio toward a
+third, hidden entity at all.
+
+<a id="dependencies-and-audio"></a>
+### Dependency maintenance and bark-audio sourcing
+
+Both findings here are now folded into `README.md`'s "Dependencies"
+section and `html/sounds/CREDITS.md` respectively — recorded here only for
+the reasoning behind them. Overextended (not CommunityOx) is the confirmed,
+current, actively-maintained home of `ox_lib`/`ox_target`/`oxmysql`/
+`ox_inventory`: Overextended briefly went dormant in 2025, CommunityOx
+existed as a temporary community fork during that gap, and CommunityOx's
+own GitHub org is now itself archived (marked so by GitHub, April 2026).
+`fxmanifest.lua`'s `dependencies` block has no version-pinning syntax at
+all — this is an engine limitation, not an oversight.
+
+For bark audio: the cheaper path (extending this resource's own
+already-working NUI bridge with real `.ogg` files, rather than authoring a
+full RAGE `.awc`/REL custom audio bank) was recommended and is the path
+that shipped — see `html/sounds/CREDITS.md` for the actual files and their
+licensing.
+
+<a id="trust-boundary"></a>
+### Client-event trust boundary (`source ~= 65535`)
+
+A client's own `TriggerEvent(name, ...)` call cannot forge a genuine
+server-origin marker — confirmed directly from the `TRIGGER_EVENT_INTERNAL`
+native declaration, which has no parameter for a caller to specify an
+origin. FiveM's own documentation states that the server sends net id
+`65535` for a server-originated event on the client — so a
+`RegisterNetEvent` handler that should only ever legitimately fire from a
+genuine server-sent trigger can and should guard on
+`if source ~= 65535 then return end` as its first statement.
+
+This closes a real, concrete gap: without it, a generic "trigger any event"
+cheat menu could self-trigger any of this resource's `qbx_k9unit:client:*`
+handlers directly — including, for the NPC-relay combat handlers, applying
+or removing an effect against an NPC a *different*, legitimately-certified
+K9 is mid-action against. This guard is applied to every
+`qbx_k9unit:client:*` `RegisterNetEvent` handler across the resource
+(`client/combat.lua`, `client/partnership.lua`, `client/wellbeing.lua`,
+`client/medkit.lua`, `client/screenfx.lua`, `client/bonetool.lua`,
+`client/main.lua`, `client/fetch.lua`, `client/kennel.lua`), each with its
+own inline "server-origin guard" comment pointing back to this explanation.
+
+**What this does not, and cannot, close**: a legitimately-targeted player's
+own client *honestly receiving* a genuine server-sent event and then simply
+choosing not to execute the restriction it applies. That is a structural
+property of FiveM — it is detectable, not preventable, and is accepted as a
+disclosed, guardrailed risk (§12.0 item 8), not something this guard was
+ever meant to address. **See `OPERATOR_RUNBOOK.md` §3 for the exact
+sequenced live test that checks whether this guard is actually holding on
+your server** — a naive one-shot test of this guard is worthless (a fresh
+client that has never received a genuine server event will read "clean"
+either way and prove nothing).
+
+---
+
+## 16. Technical debt / refactor roadmap
+
+Condensed from two independent audits of the same codebase. Item numbers
+below (`item 1`, `item 2`, `item 2b`, `item 3`, and Part B's `item 1`–`item
+4`) are cited directly in code and preserved as-is.
+
+**Status as of the last audit — all confirmed DONE and holding under
+continued concurrent editing:**
+- **Item 1 — shared cooldown/mutex helper (`server/cooldowns.lua`).** Every
+  file needing a cooldown or mutex uses `NewCooldown`/`NewNestedCooldown`/
+  `NewMutex`. The one item that has survived every subsequent pass without
+  regressing, because the helper was extracted early, before competing
+  hand-rolled copies had spread.
+- **Item 2 — shared netId→entity resolver (`ResolveNetworkEntity`,
+  `server/entities.lua` / `client/main.lua`).** Zero raw
+  `NetworkGetEntityFromNetworkId` call sites remain outside those two
+  files' own function bodies. A fresh regression of this exact pattern did
+  appear once, in a brand-new file (`client/propattachment.lua`) written
+  mid-audit — fixed; the lesson recorded is that extracting a shared helper
+  does not stop the pattern from recurring by itself, since every new
+  file's author still needs to know the helper exists.
+- **Item 2b — `ResolveConnectedPlayerFromPed` / `ResolvePlayerServerIdFromPed`.**
+  Defined once each (`server/entities.lua`, `client/main.lua`), no stray
+  local re-definitions remain.
+- **Item 3 — `IsEntityModelK9(entity)` / `K9ModelHashes`.** One
+  resource-global (`client/main.lua`) replaced six independent client-side
+  copies (one, in `client/partnership.lua`, was undocumented until this
+  extraction found it). `server/certifications.lua`'s own server-side
+  `K9ModelHashes`/`IsConfiguredK9Model` is correctly left alone — it can't
+  cross the realm boundary, and was never a duplicate of the client-side
+  version.
+- **`NotifyPlayer` extraction.** Was 13 independent hand-rolled copies (not
+  the "2, closed" an earlier revision believed), each with its own
+  deliberate "duplicated on purpose" comment — reasonable at 2-3 copies, not
+  at 13, since real drift had already appeared (a narrower signature in one
+  copy, deliberately different toast titles in several others). Extracted
+  to `server/notify.lua`; `server/admin.lua` and `server/bonetool.lua` keep
+  a thin one-line wrapper (different player-visible title per subsystem),
+  each calling `_G.NotifyPlayer(...)` explicitly.
+- **Flag-off-safety defect class.** Three client `RegisterNetEvent`
+  handlers for a server-issued instruction had no `Config.Features.X` gate
+  of their own, meaning a forged local `TriggerEvent` could reach them even
+  with the feature shipped disabled (`client/kennel.lua`'s
+  `deployKennelAt`/`removeKennel`, `client/medkit.lua`'s `applyMedkitHeal`,
+  `client/progression.lua`'s `xpTierChanged`). All three now gate on their
+  own flag first. Fixed.
+
+**Part B — items found by a second, independent audit:**
+- **Item 1 (near-term, trivial).** `client/tracking.lua`'s `StartTrack` had
+  the last raw, un-migrated copy of the `common.no_k9_access` `lib.notify()`
+  pattern that `client/main.lua`'s `DenyK9UIAccess()` was extracted to
+  replace — one call-site swap.
+- **Item 2 (near-term, trivial).** `tests/README.md`'s own coverage table
+  and file count were one spec file behind the real suite
+  (`tests/exports_spec.lua` existed and passed but wasn't listed anywhere).
+  Folded into §20 below; keep this document's own counts current rather
+  than trusting an old snapshot.
+- **Item 3 (medium-term).** A first, narrowly-scoped client-side test file
+  (`tests/main_spec.lua`) targeting `client/main.lua`'s small cluster of
+  pure-logic globals (`IsEntityModelK9`, `IsOwnModelK9`, `HasK9Access`,
+  `CanShowK9UI`, `DenyK9UIAccess`) — proving the existing sandbox pattern
+  generalizes to `client/*.lua`, not just `server/*.lua`. Landed; see §20.
+- **Item 4 (medium-term).** `server/tenure.lua`'s `TenureFullyCollected`
+  cache header claims it avoids re-running a SELECT that, by construction
+  (it's keyed on a value only known *after* that same SELECT returns),
+  cannot actually be avoided. Bounded performance cost only (one extra
+  indexed SELECT per online, fully-tenured K9 per tick) — the real
+  double-grant protection is a separate, persisted, optimistic-UPDATE
+  guard, unaffected either way. Disclosed in `tests/README.md`/§20, not yet
+  fixed; either re-key the cache on `k9Citizenid` (known before the SELECT)
+  or correct the header to describe what it actually does.
+
+**Explicitly not worth doing** (re-confirmed by both audits, still true):
+building a generic `ForEachPlayer(fn)` wrapper for the 6-file
+`GetPlayers()`/`tonumber` iteration idiom; trimming the 200+-line file
+headers on `server/combat.lua`/`client/combat.lua`/`server/partnership.lua`
+(they carry a file-to-file contract, design-decision record, and
+trust-boundary reasoning that would otherwise live nowhere — a direct check
+found zero cases of a header actively lying about current code); splitting
+those same three files on line-count grounds alone (each is one cohesive
+responsibility along its own already-documented module plan); a
+`DistanceBetween(a, b)` wrapper for the 17-site `#(GetEntityCoords(a) -
+GetEntityCoords(b))` idiom (no per-site logic to drift, unlike
+`NotifyPlayer`'s parameters before extraction).
+
+**The one durable lesson, worth restating for whoever next edits this
+section:** the most expensive recurring cost on this codebase has not been
+duplicated logic — it's been a correct fix landing in code faster than the
+comment/doc describing it gets updated (a fix marked "still open" for
+several revisions after it shipped, and, in the other direction, a real
+security fix that shipped with no roadmap entry at all for a while). Update
+the relevant item's status in the same commit as the fix, not on the next
+audit pass.
+
+---
+
+## 17. Status & operational decisions
+
+Condensed from a document that used to track "what's currently live and
+what needs a human decision" as a dated snapshot. **`README.md`'s config
+reference and `OPERATOR_RUNBOOK.md` are the current, maintained versions of
+"what's live" and "what to check"; treat everything below as the reasoning
+that produced today's defaults, not a substitute for reading those two
+files.**
+
+**The one-paragraph history:** this resource shipped with 5 of ~40 feature
+flags enabled and the rest off pending review. All flags (except
+`CameraFeedPiP`, which has no implementing code) were later switched on at
+once. Turning a flag on does not, by itself, answer an open safety
+question about that flag's feature — it just means whatever risk the
+question describes is live on a real server now, not hypothetical. Two such
+questions remain genuinely open (D3, D13 below); a test suite passing tells
+you the code does what its authors intended, not that either of these is
+resolved.
+
+### D3 — Does the client-event origin guard (§15 `#trust-boundary`) actually hold under a specific real-world sequence?
+
+**The check:** connect a test client, let it receive one genuine
+server-originated event, then — without reconnecting — fire a locally
+forged `TriggerEvent` against a guarded handler and see whether `source`
+still reads `65535`. Four attempts to settle this by reading FiveM's own
+source code have hit the same wall: the part that decides this isn't in any
+file readable from outside the engine's private build process. **As of this
+writing, nobody has run the live test.** See `OPERATOR_RUNBOOK.md` §3 for
+the exact, sequenced procedure — running it out of order or skipping the
+"receive one genuine event first" step tells you nothing.
+
+**What this blocks:** trusting `BiteAndHold`, `NonLethalTakedown`, and
+`PropDragging` as actually secure against a modified client — all three are
+enabled by default, leaning on this exact, unverified check.
+
+### D13 — Is a limited, repeatable griefing exploit against `FearStressSystem` acceptable on your server?
+
+Any player standing near a K9 — no relationship to it or its handler
+required — can repeatedly send a "there's gunfire nearby" signal and force
+that K9 to refuse `BiteAndHold`/`NonLethalTakedown` for about a minute at a
+time, for as long as they want to keep doing it, at essentially no cost to
+the attacker. **Fixed:** a single episode can no longer last forever — it
+resets after ~64 seconds. **Not fixed, and not fixable in code:** the
+*repeatable* version — the underlying "I heard gunfire nearby" signal has
+no way to verify who actually fired a gun, by design, the same tradeoff
+already accepted for scent tracking (§15 `#tracking`'s "FORGED TRAIL
+DECISION"). Whether this is an acceptable cost for the realism it buys is a
+judgment call about what kind of server you want to run, not something more
+code can answer.
+
+### The one setting that should not stay on
+
+**`Config.Features.BoneSweepDevTool`.** Its own code comment says, verbatim,
+never to enable this on a production server — it lets a department boss
+spawn and attach real objects in the world on demand. It requires both a
+boss-rank job check **and** a separate server-startup convar
+(`setr qbx_k9unit_enable_bone_dev_tool 1`) to be reachable at all. If this
+flag is `true` and/or that convar is set on a server with real players,
+turn both off and **restart the resource** (a flag flip alone does not
+unregister the `/k9bonetool` command — it stays reachable until the next
+restart). See `OPERATOR_RUNBOOK.md` §4 for the full procedure.
+
+### Mistakes this project has made before (so the pattern doesn't repeat)
+
+- A config comment once claimed a K9 gear-stash setting restricted access to
+  that K9's own player; the check it relied on never looked at identity at
+  all. Now structurally impossible to misconfigure this way — the resource
+  refuses to start rather than silently grant broader access than
+  documented.
+- A file's own comment once claimed a certification revoke automatically
+  ended that handler's partnership; the code to do that existed, but
+  nothing called it, so it silently never happened until someone checked
+  the claim against the code.
+- A code comment once said a contraband-search screen effect applied to the
+  *searched* person's screen; the code has always applied it to the
+  *searching* K9's own handler, as feedback, never a penalty on a suspect.
+- A shipped feature once referenced a visual effect (a timecycle modifier
+  name) that didn't exist in the game's own data — it would have run with
+  no error and no visible effect forever. Found by checking the name
+  against the game's own data directly, not by trusting the code comment.
+- A security bug (an unguarded "delete this object" handler that let a
+  forged message delete any object in the world) was fixed once, then
+  reappeared in a newer feature that had copied the same pattern —
+  including its bug.
+
+The common thread: a claim in a comment or doc is not proof of what the
+code does. This is exactly why the citation-repointing discipline in this
+document's own banner matters — an unverifiable claim is worse than no
+claim at all.
+
+---
+
+## 18. Feature ideation backlog
+
+Condensed from two brainstorm documents (ideation only — nothing below is
+approved or built just because it's listed here; `K9_IDEAS.md` is the
+separate, closer-to-committed backlog). Section labels (`Part A §N`, `Part A
+Tier X §N`, `Part B §N`/`Part B item N`) are cited directly in code and
+preserved. Items already shipped are marked so below rather than removed,
+since their reasoning is still what a citation is pointing at.
+
+### Part A — cross-phase feature brainstorm
+
+**Tier A (small effort, buildable against Phase 1 as shipped):**
+1. **K9 handler roster / admin listing UI** — `/k9roster` or an ox_target
+   option listing everyone certified in a department, with one-click
+   revoke. Closes a gap `§4.3`'s own rationale implied should exist.
+2. **Revoke reason code** — an optional `reason` on `/k9decertify`, stored
+   in a new nullable column. Deepens the audit trail `§4.3` already
+   justifies. **Shipped** — see `sql/migrations/0006_add_k9_certification_lifecycle.sql`.
+3. **Leash "Heel"/recall command** for the handler side of an active leash
+   pairing — the handler side currently can only detach, never actively
+   summon.
+4. **Give `Config.Peds`' breed data actual mechanical weight** (scent/speed/
+   bite bonuses per model) — the config already telegraphs this was
+   anticipated (`label` was unused for a long time) and never delivered.
+
+**Tier B (medium effort, time-sensitive before Phase 3 hard-codes a binary model):**
+5. **Tiered certification** (Trainee → Certified → Senior) instead of a
+   single active/inactive boolean — cheap to design before Phase 3's
+   combat gates all hard-code a flat boolean check in a dozen places,
+   expensive to retrofit after.
+6. **Training-mode/practice sandbox** distinct from live duty, so a search
+   or bite-hold's first live use isn't also a rookie's first attempt at the
+   mechanic. **Partially shipped** — see `server/training.lua`.
+7. **K9-down dispatch integration hook** — an event fired when a certified,
+   on-duty K9's health crosses a threshold, mirroring `HandlerDownDefense`'s
+   health-monitoring logic in the opposite direction. **Shipped** — see
+   `server/integrations.lua`.
+
+**Tier C (lower urgency):**
+8. Long-term handler/K9 partnership *preference* record (flavor, not a new
+   access rule).
+9. Certification expiry/periodic recertification.
+10. Handler leaderboard / `/k9stats` once XP persistence exists. **Shipped**
+    — see `server/leaderboard.lua`.
+
+### Part B — ecosystem integration & gameplay-depth ideas
+
+**Already shipped** (kept below as the original reasoning, not an open ask):
+1. **Real export/event API** — prerequisite for everything else in this
+   section. Shipped: `server/exports.lua`/`client/exports.lua`, six
+   outbound `qbx_k9unit:events:*` events — see `README.md`'s "Public API"
+   section for the current, authoritative list.
+2. **Dispatch integration** (`ps-dispatch` confirmed real/current;
+   `cd_dispatch`/`qs-dispatch` named by convention only, not independently
+   verified) — outbound alert on a contraband find; inbound via
+   `Config.Combat.WantedStatusCheckOverride`.
+3. **MDT/evidence integration** (`ps-mdt` confirmed real/current) — feeding
+   a completed search's result into an MDT's evidence/case system, since
+   `k9_search_log` today is otherwise only readable by hand-running SQL.
+6. **K9 equipment shop** — register a shop selling the item names this
+   codebase already invented and left as placeholders
+   (`k9_treat`/`k9_meat_bait`/`k9_ultrasonic_whistle`/`k9_medkit`).
+   **Shipped** — see `server/equipmentshop.lua`.
+7. **Partnership-tenure bonuses** — a passive bonus scaling with how long a
+   partnership has existed, reading `server/partnership.lua`'s
+   `established_at`. **Shipped** — see `server/tenure.lua`,
+   `Config.Features.PartnershipTenureBonus`.
+8. **XP tiers with real unlocks**, not just multipliers. **Shipped** — see
+   `server/progression.lua`.
+9. **In-game admin/audit surface** for certifications/partnerships/search
+   log, replacing "an admin runs raw SQL by hand." **Shipped** — see
+   `server/admin.lua`, `Config.Features.AdminAuditCommands`.
+10. **Cooperative search bonus** for partnered K9s working the same target.
+    **Shipped** — see `server/search.lua`'s partnership-aware award path.
+11. **Certification specializations** (narcotics/explosives/patrol) beyond
+    a single binary certified flag. **Shipped** — see
+    `sql/migrations/0006_add_k9_certification_lifecycle.sql`.
+
+**Considered and explicitly not recommended** (recorded so it isn't
+re-investigated expecting a different answer): a K9 obstacle-course
+leaderboard (defer until `AgilityAdvanced`'s own placeholder tuning gets a
+balance pass — building a leaderboard on unsettled numbers means re-tuning
+later invalidates it); a dedicated jail/corrections integration (the MDT
+integration above already covers the real use case better than a second,
+parallel path would); a cosmetic-only "K9 walk" idle activity (Pet/Feed
+already covers this ground with a real stat effect).
+
+---
+
+## 19. Locale / translation system
+
+Every player-facing string in this resource — every notification, menu
+label, keybind description, command-usage message — goes through `ox_lib`'s
+`locale()` function against `locales/en.json`. There are no `.lua` files
+with hardcoded English text a player would see (server-console-only
+`print()` lines are deliberately left as plain strings — nobody but a
+developer/admin ever sees them).
+
+**How the file is organized:** `locales/en.json` is plain JSON (no
+comments, no trailing commas — must stay strictly valid), organized as
+named top-level groups (mostly named after the `.lua` file whose text they
+hold), each holding one or more leaf keys, looked up as `group.key`:
+
+```json
+"combat": {
+  "no_target_in_range": "No eligible target in range."
+}
+```
+
+is looked up in Lua as `locale('combat.no_target_in_range')`. A value can
+reference another key with `${other.key}`, resolved once at load — used for
+`radial.menu_open_label = "${common.notify_title}"`.
+
+**Shared keys — check this list before adding a new one:**
+- `common.notify_title` ("K9 Unit") — the title used by nearly every
+  notification.
+- `common.no_k9_access` ("You cannot use K9 features right now.") — shown
+  by `client/main.lua`'s `DenyK9UIAccess()` helper. Most files call that
+  helper directly rather than calling `locale()` themselves.
+- `common.not_k9_model`, `common.too_far_from_k9` (shared by
+  `client/wellbeing.lua`/`client/medkit.lua`), `common.target_no_longer_online`,
+  `common.no_k9_party`, `common.k9_not_certified`,
+  `common.handler_not_in_department`, `common.unable_to_resolve_citizenid`.
+- `defense.already_engaged`, reused as-is by `server/combat.lua`.
+- `partnership.partner_up_target_label`, reused by `client/radial.lua`.
+- `movement.officer_fallback_name`/`.accept_label`/`.decline_label`, reused
+  by `client/partnership.lua`'s leash-style request prompt.
+
+**Similar-but-not-identical sentences are sometimes kept as separate keys
+on purpose** (e.g. two different "kennel placement failed" messages for two
+genuinely different reasons, or "on"/"off" state words that don't template
+safely across every language) — check whether either reason applies before
+merging two keys to reduce duplication.
+
+**Adding a new key:** list every piece of text a player would see in the
+file you're changing → check the shared-keys list and search `en.json` for
+your exact sentence first → add the key under a group named after the
+file it belongs to (or `common` if shared), `snake_case`, named after what
+the message *means* not its exact wording → replace the hardcoded string
+with `locale('group.key', ...)` (use `%s`/`%d` placeholders in the JSON
+string for dynamic values, never Lua string concatenation) → confirm
+`locales/en.json` is still valid JSON and `luac5.4 -p`/`luacheck` are clean
+on any `.lua` file you touched.
+
+**Manifest requirements:** `fxmanifest.lua` already declares `ox_lib
+'locale'` and lists `'locales/en.json'` explicitly (not a wildcard — a
+wildcard was found to behave unexpectedly here). Adding a second language
+file requires its own explicit line in that same `files{}` block; it is
+not picked up automatically.
+
+**What was deliberately not touched:** `print()` calls (developer/admin
+console output only) and non-text UI data (numbers, booleans).
+
+---
+
+## 20. Test suite
+
+Automated tests for this resource's Lua code — mostly server-side, plus a
+growing set of client-side files. Run them from `qbx_k9unit/tests`:
+
+```sh
+cd qbx_k9unit/tests
+./run.sh
+```
+
+Requires `lua5.4` on `PATH` (the same version real FXServer runs); set
+`LUA_BIN=/path/to/lua5.4` if it's installed elsewhere. A passing run ends
+with `ALL SPEC FILES PASSED (N file(s))`. Anything else needs attention —
+but see the two false alarms below before assuming a red run means a code
+regression.
+
+**Why plain `lua5.4` and not a framework like `busted`:** the only
+`busted` available in this environment targets Lua 5.1, and this resource
+runs on 5.4 (its `.luacheckrc` pins `std = "lua54"` to match real FXServer)
+— a suite running under a different Lua version than the real server can
+pass while hiding a real bug (e.g. `admin_spec.lua`'s `ClampLimit` NaN/
+infinity handling depends on this specific Lua build's `tonumber`
+behavior). Instead, each spec file is a small, self-contained script using
+`testkit.lua` (~100 lines: `test(name, fn)` plus `equals`/`isTrue`/`isNil`/
+`contains`-style checks), loads a real, unmodified production `.lua` file
+into a sandboxed environment (`fixtures/sandbox.lua` — pre-fills only the
+handful of FiveM natives that specific file actually calls), and exits 0/1.
+
+**Two false alarms, read before panicking at a red run:**
+1. **A half-finished spec file turns the whole suite red**, not just that
+   file — `run.sh` globs `*_spec.lua`. Run the file you actually care about
+   directly (`lua5.4 admin_spec.lua`) instead of trusting a full run while
+   someone's mid-edit in the folder.
+2. **A "locale key missing" failure can mean two different things**: (a)
+   `locales/en.json` is mid-edit (a concurrency artifact — re-run once
+   finished), or (b) the production code asks for a key that was never
+   added or was renamed/removed by mistake (a real bug — this has actually
+   happened and been caught this way). Check whether `en.json` looks
+   finished before assuming (a).
+
+**`locale()` inside the sandbox is real, not a stub** — it really reads
+`locales/en.json`, so every test that checks a notification message is
+also, for free, a check that the locale key behind it still exists. Build
+expected text with `Sandbox.locale('some.key')` rather than typing the
+English sentence by hand, so a test can't silently drift from what
+`en.json` actually says. One real limit: a `local function` can only be
+reached the way a real caller reaches it (a registered command/event) —
+tests never copy a local function's internal logic into the test itself;
+where there's genuinely no real way in, that's written up as a gap below,
+not worked around.
+
+**What's covered:** the shared cooldown/mutex helpers, entity/player
+resolvers, `NotifyPlayer`, the certification grant/revoke/cache/auto-revoke
+lifecycle, XP award/tier lookup, admin audit commands, kennel/combat/fetch/
+inventory/propattachment/wellbeing request→confirm→end lifecycles, every
+export this resource offers (`server/exports.lua`/`client/exports.lua`,
+tested against the real, registered functions), and a first slice of
+client-side pure logic (`client/main.lua`'s `IsEntityModelK9`/`HasK9Access`/
+`CanShowK9UI`, proving the sandbox pattern generalizes past `server/*.lua`
+— see §16 Part B item 3). Most spec files reach production code indirectly,
+through the real event/command handlers, checking the real observable
+result (a fired event, a notification, a SQL string) rather than a
+rewritten copy of the logic under test.
+
+**What's NOT covered, and why:**
+- Nothing here talks to a real database, `ox_inventory`, or `ox_lib` — every
+  boundary is faked, and what's checked is what the production code *does*
+  with a given fake response, never whether a real dependency would accept
+  it.
+- `server/cooldowns.lua`'s background sweep is tested for picking the right
+  entries, not for real-world timing accuracy (waiting is faked instantly).
+- `server/tenure.lua`'s `TenureFullyCollected` cache doesn't actually skip
+  the SELECT it claims to (§16 Part B item 4) — a test locks in this real
+  behavior rather than the header's claim; the actual double-grant guard is
+  a separate, unaffected DB-level check.
+- The larger client files (`client/movement.lua`, `client/combat.lua`,
+  `client/radial.lua`) have real logic interleaved with per-frame native
+  calls throughout, not segregated into an isolable pure core — a much
+  larger stubbing lift than `client/main.lua`'s cluster of pure globals.
+  Accepted as a real boundary, not a rewrite target.
+
+**Adding a new spec:** load `testkit.lua` and `fixtures/sandbox.lua` →
+build a small stub table for exactly the FiveM functions your target file
+calls (start empty; running the spec tells you what's missing) →
+`Sandbox.newEnv({...})` then `Sandbox.loadInto('../server/whatever.lua',
+env)` (load any real dependency file, e.g. `server/cooldowns.lua`, into the
+same sandbox first, in `fxmanifest.lua`'s own load order) → drive the file
+through its real functions/handlers and check the real observable result →
+end with `os.exit(t.summary())`. **Never change a production file just to
+make it easier to test** — write the gap up in "what's NOT covered"
+instead.
+
+**On stale counts:** this codebase is edited by several people at once;
+any specific file count or test total here will drift. Re-run `./run.sh`
+yourself before repeating a number from this section to anyone else,
+rather than trusting a snapshot.
+
+---
+
+## 21. Compat/adapter layer (`shared/compat`)
+
+Explains `Config.Compat` (bottom of `config.lua`) and the code that
+implements it (`shared/compat/*.lua`).
+
+**For server owners wanting to plug in an unrecognized resource:**
+
+```lua
+-- Pin to exactly one resource, no scanning, no fallback if it's not running:
+Config.Compat.Systems.inventory.override = 'my-custom-inventory'
+
+-- Or supply your own implementation outright — this wins over everything,
+-- including override. One table per system, every required method for
+-- BOTH realms in the same table (the running side only checks the half it
+-- needs; the other half is ignored, not an error):
+Config.Compat.Systems.inventory.custom = {
+    OpenStash = function(...) ... end, OpenShop = function(...) ... end,
+    UseItem = function(...) ... end, ItemExists = function(...) ... end,
+    GetInventoryItems = function(...) ... end, GetContainerFromSlot = function(...) ... end,
+    GetItemCount = function(...) ... end, RemoveItem = function(...) ... end,
+    RegisterStash = function(...) ... end, RegisterShop = function(...) ... end,
+    RegisterHook = function(...) ... end,
+}
+```
+
+**An incomplete `custom` table is rejected, never a silent partial
+success** — the exact missing function name(s) print at startup and in
+`/k9compat`, and that one system falls back to a safe "not working" state.
+`/k9compat` (restricted to High Command, since it names every script your
+server runs) reprints the detection summary and explains every rejected
+candidate. Restarting a resource this pack cares about re-runs detection
+automatically if `Config.Compat.redetectOnResourceRestart` is `true`
+(default).
+
+**For whoever maintains an adapter file** (`inventory.lua`, `target.lua`,
+`framework.lua`, `dispatch.lua`, `ambulance.lua` in this same folder): the
+one call every adapter makes is
+`K9Compat.RegisterAdapter(system, resourceName, factory)`, where `factory`
+is `function(realm) -> table | nil` (`realm` is `'client'` or `'server'`).
+Return a table shaped for that realm, or `nil` to mean "skip me, try the
+next candidate" — never crash. `core.lua` already confirms the named
+resource is `'started'` before calling your factory, and wraps every
+factory call in `pcall` (a throw is treated exactly like a `nil` return).
+
+**Required methods per system/realm** (the single source of truth is
+`K9Compat.RequiredMethods` in `core.lua` — if it and this section ever
+disagree, the code wins):
+
+| system | realm | required methods |
+|---|---|---|
+| `inventory` | `client` | `OpenStash`, `OpenShop`, `UseItem`, `ItemExists` |
+| `inventory` | `server` | `GetInventoryItems`, `GetContainerFromSlot`, `GetItemCount`, `RemoveItem`, `RegisterStash`, `RegisterShop`, `RegisterHook` |
+| `target` | `client` | `AddGlobalPlayer`, `AddGlobalVehicle`, `AddGlobalObject`, `AddModel`, `AddSphereZone`, `Remove` |
+| `target` | `server` | *(none)* |
+| `framework` | `client` | `GetPlayerData` |
+| `framework` | `server` | `GetPlayer`, `GetPlayerByCitizenId`, `GetCitizenId`, `GetJob` |
+| `dispatch` | `client` | *(none)* |
+| `dispatch` | `server` | `Alert` |
+| `ambulance` | `client` | *(none)* |
+| `ambulance` | `server` | `IsDowned` |
+
+Parameter shapes and return values for each method are **not** defined by
+this layer — `core.lua` is generic plumbing that only knows method names.
+Match the calling convention of the reference resource for that system
+(`ox_inventory`, `ox_target`, `qbx_core`) so every adapter stays
+interchangeable.
+
+**Resolution order (highest priority first):** `custom` (if it verifies) →
+`override` (if the named resource is started and verifies) → `.candidates`
+walked in array order, only when both `Config.Features.ResourceAutoDetect`
+and `Config.Compat.autoDetect` are `true` → the no-op stub (every required
+method exists, returns `nil`, logged once).
+
+`K9Compat.Get(system)` never returns `nil`, and every method on it is
+already `pcall`-safe — a throwing underlying resource yields `nil` back to
+your call instead of propagating an error, logged once per (system,
+resource, method).
+
+**Security note:** none of this (`RegisterAdapter`, `Get`, `Which`,
+`Report`, `Redetect`) is ever consulted by any rank, certification,
+ownership, or XP check anywhere in this resource. If an adapter is tempted
+to let a detected resource's answer influence an authorization decision,
+that belongs in the file that owns the authorization check, not here.

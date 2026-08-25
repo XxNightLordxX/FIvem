@@ -386,7 +386,7 @@ CREATE TABLE IF NOT EXISTS `k9_certification_specializations` (
   -- DB-level backstop for "at most one ACTIVE (citizenid, job,
   -- specialization) row" -- see this step's own header comment above.
   UNIQUE KEY `uq_one_active_spec_per_citizen_job` (`active_spec_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
 -- HOUSEKEEPING: clear any migration procedure left behind by an earlier

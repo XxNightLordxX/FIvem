@@ -72,7 +72,7 @@ commands for about a minute at a time. Neither is something you as a
 player can fix, and neither means the features are broken for normal play
 — they're mentioned here so you know this isn't a secret if you notice
 odd behavior. Ask your server's staff if you want the technical detail
-(it's written up in `PROJECT_STATUS.md`).
+(it's written up in `DEVELOPER_REFERENCE.md` §17).
 
 ---
 

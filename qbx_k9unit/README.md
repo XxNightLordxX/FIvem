@@ -30,10 +30,10 @@ layer on top of a player who is already playing as a dog.
 >    see `OPERATOR_RUNBOOK.md` §4) before reading anything else here.
 > 2. **The combat features (`BiteAndHold`, `NonLethalTakedown`,
 >    `PropDragging`) are live**, and the two open questions that were meant
->    to gate a decision to enable them (D3, D13 — see `PROJECT_STATUS.md`)
+>    to gate a decision to enable them (D3, D13 — see `DEVELOPER_REFERENCE.md` §17)
 >    are still unanswered. Turning the flag on did not answer them.
 >
-> For the full current picture in plain language, see `PROJECT_STATUS.md`.
+> For the full current picture in plain language, see `DEVELOPER_REFERENCE.md` §17.
 > This file's own content below was not rewritten for the flag change
 > beyond this notice and a few load-bearing corrections, per this
 > resource's own "layer a correction, don't rewrite history" documentation
@@ -64,13 +64,13 @@ layer on top of a player who is already playing as a dog.
 **Table below describes the shipped-default state of each phase, as
 originally written. As of 2026-08-25, every flag named below (and every
 other flag in this resource) is `true` — see the correction notice at the
-top of this file and `PROJECT_STATUS.md` for what's actually live today.**
+top of this file and `DEVELOPER_REFERENCE.md` §17 for what's actually live today.**
 
 | Phase | Area | State (as originally shipped) |
 |---|---|---|
 | 1 | Certification, leash, radial menu, vehicle load, bark | Feature-complete, enabled by default |
 | 2 | Tracking, search zones/contraband, vision, door interaction | Implemented, reviewed, shipped **disabled** — now enabled |
-| 3 | Bite & Hold, Non-Lethal Takedown, Prop Dragging, Advanced Agility, Handler Partnership, Handler-Down Defense | Implemented, shipped **disabled** — now enabled; combat mechanics have an open client-trust caveat, and two safety questions (D3/D13 in `PROJECT_STATUS.md`) are still unresolved despite being live |
+| 3 | Bite & Hold, Non-Lethal Takedown, Prop Dragging, Advanced Agility, Handler Partnership, Handler-Down Defense | Implemented, shipped **disabled** — now enabled; combat mechanics have an open client-trust caveat, and two safety questions (D3/D13 in `DEVELOPER_REFERENCE.md` §17) are still unresolved despite being live |
 | 4 | K9 Inventory, K9 Medkit, wellbeing (Fatigue/Mood/FearStress/Distraction/Injury), XP progression, vitality HUD | Implemented, shipped **disabled** — now enabled. `ContrabandScreenFX` is wired end-to-end (client file loaded, server-side trigger fires) |
 | 5 | Deployable kennel, advanced bark radial, prop attachments, fetch, proximity audio | Implemented (R&D-grade), shipped **disabled** — now enabled. `DeployableKennel`, `AdvancedBarkRadial`, `ProximityAudioFX`, `PropAttachments`, and `FetchMechanic` all have real client/server code and are **registered in `fxmanifest.lua`**, reachable via the radial menu (Deploy Kennel, Toggle K9 Vest, Fetch). `PropAttachments`/`FetchMechanic`'s attach point is still the root-bone placeholder pending the dev-only bone-index sweep (`client/bonetool.lua`/`server/bonetool.lua`, also registered, ACE-gated, and **also now `true` — see the top-of-file correction notice, this one must not stay on**) — see Known issues. `CameraFeedPiP` is confirmed impossible with current natives regardless of its flag value (see below) |
 
@@ -333,7 +333,7 @@ economy).**
 | `NightVision` | `false` | `J` key (default) toggles `SetNightvision`. | Same as Thermal; mutually exclusive with it. |
 | `DoorInteraction` | `false` | "Scratch to Alert" (server round-trip, cooldown-gated) and "Nudge Door" (100% client-local cosmetic push — never touches lock state). | `Config.DoorInteraction.nudgeRequiresUnlocked` is enforced only as a resource-start assertion; it must never become a real lock-state branch. |
 
-### Phase 3 — combat & agility (shipped `false`; all now `true` — the two open safety questions below are NOT resolved by that, see top-of-file notice and `PROJECT_STATUS.md`)
+### Phase 3 — combat & agility (shipped `false`; all now `true` — the two open safety questions below are NOT resolved by that, see top-of-file notice and `DEVELOPER_REFERENCE.md` §17)
 
 | Flag | Default | What it gates | Prerequisite / caveat |
 |---|---|---|---|
@@ -364,7 +364,7 @@ not verify a given invocation actually came from the server. **`BiteAndHold`,
 `NonLethalTakedown`, and `PropDragging` are enabled right now** (see the
 top-of-file correction notice) — this is no longer a "before you enable"
 warning, it's a description of a live, unresolved property of your running
-server. See `PROJECT_STATUS.md`'s D3 for the specific open question about
+server. See `DEVELOPER_REFERENCE.md` §17's D3 for the specific open question about
 whether the origin-guard half of this holds up, and D13 for a related,
 separate griefing exposure once `FearStressSystem` (also enabled) is
 combined with combat.
@@ -392,7 +392,7 @@ combined with combat.
 | `AdvancedBarkRadial` | `false` | Turns the single "Bark" radial item into a 3-way Alert/Aggressive/Calm submenu. | Requires `BasicBarkSounds` also enabled. All three variants now have real audio behind them — see [Bark sounds](#bark-sounds-now-ship-with-real-audio) below. |
 | `ProximityAudioFX` | `false` | Ambient K9 presence audio that scales with a listener's live distance, built on `client/audio.lua`'s bridge. | `client/proximityaudio.lua` and `Config.ProximityAudioFX` are real and **registered in `fxmanifest.lua`** — reachable the moment this flag is `true`, and audible: its ambient growl now has a real `.ogg` file behind it — see [Bark sounds](#bark-sounds-now-ship-with-real-audio). |
 | `PropAttachments` | `false` | Cosmetic prop (vest/harness) toggle on a K9's own ped, reachable from the radial menu ("Toggle K9 Vest"). | Real client+server code, config, and radial entry all exist and are registered. `Config.PropAttachments.boneIndex` is still the root-bone (`0`) placeholder pending the dev-only bone-index sweep (`BoneSweepDevTool`, `client/bonetool.lua`/`server/bonetool.lua`) — degrades to "visibly attached at the wrong point," never a crash. |
-| `FetchMechanic` | `false` | Throw a ball, the K9 fetches it, the handler collects it back manually — see `PHASE5_SPEC.md`. Reachable from the radial menu ("Fetch": Throw/Drop, Recall). | Real client+server code (`client/fetch.lua`/`server/fetch.lua`) is registered and reachable. Ships in `mouthCarryMode = 'delete-and-reappear'` mode rather than a real mouth-attach pending the same bone-index sweep as `PropAttachments`. Handler-disconnect and carrier-disconnect cleanup (`playerDropped`) end an in-progress cycle rather than leaking a networked ball into the world permanently. |
+| `FetchMechanic` | `false` | Throw a ball, the K9 fetches it, the handler collects it back manually — see `DEVELOPER_REFERENCE.md` §14.4.3. Reachable from the radial menu ("Fetch": Throw/Drop, Recall). | Real client+server code (`client/fetch.lua`/`server/fetch.lua`) is registered and reachable. Ships in `mouthCarryMode = 'delete-and-reappear'` mode rather than a real mouth-attach pending the same bone-index sweep as `PropAttachments`. Handler-disconnect and carrier-disconnect cleanup (`playerDropped`) end an in-progress cycle rather than leaking a networked ball into the world permanently. |
 | `CameraFeedPiP` | `false` | No code exists, and **confirmed impossible with currently-available natives**: there is no native to render a secondary camera feed into an NUI texture. Document this as impossible-today, not "coming soon." | — |
 
 #### Bark sounds now ship with real audio
@@ -460,7 +460,7 @@ survives a disconnect or resource restart**.
 - `Config.Partnership.ProximityMeters` (default `5.0`m), `.RequestTTLMs`
   (default `30000`ms), `.RequestCooldownMs` (default `1000`ms).
 - **No longer foundation-only.** `HandlerDownDefense` (above) reads this
-  registry to know who to notify, and `PHASE3_SPEC.md`'s Recall mechanic
+  registry to know who to notify, and `DEVELOPER_REFERENCE.md` §12's Recall mechanic
   (`Config.Features.Recall`, `server/recall.lua` + `client/recall.lua`, the
   `/k9recall` command) is also real, implemented code now — an earlier
   draft of this section said Recall "still has zero code," which is no
@@ -963,7 +963,7 @@ own.
   migrated; that was true early on and is long stale): every player-facing
   string in this resource goes through `locale()`, across all 47
   `client`/`server` `.lua` files, 311 keys total, cross-checked to zero
-  missing and zero unused. See `locales/README.md` for the pattern, the
+  missing and zero unused. See `DEVELOPER_REFERENCE.md` §19 for the pattern, the
   `common.*` shared-key convention, and how to re-verify these numbers
   yourself if time has passed.
 - `server/inventory.lua`, `client/inventory.lua` — the K9 gear stash
@@ -1002,15 +1002,15 @@ own.
   [Known issues](#known-issues--historical-now-resolved) for what used to be
   wrong here.
 
-See `SPEC.md`, `PHASE3_SPEC.md`, `PHASE4_SPEC.md`, `PHASE5_SPEC.md`
-(historical design documents, each now marked as such) for the full
-product spec and phased build plan, and `CHANGELOG.md` for a running
-history of what changed and why. See `OPERATOR_RUNBOOK.md` for the
-step-by-step guide to standing this resource up on a real server (install
-order including the SQL migrations, the dev-server checks for
+See `DEVELOPER_REFERENCE.md` (historical design documents §1–§14, each
+still marked as such) for the full product spec and phased build plan, and
+`CHANGELOG.md` for a running history of what changed and why. See
+`OPERATOR_RUNBOOK.md` for the step-by-step guide to standing this resource
+up on a real server (install order including the SQL migrations, the
+dev-server checks for
 `ScentTracking`/`PropAttachments`/`FetchMechanic`/`DeployableKennel`, the
 sequenced check for the client-event origin guard, and — now that every
-flag is `true` — what to verify given that), and `PROJECT_STATUS.md` for
-the open decisions only a server owner can make, plain-language, including
-the two (D3, D13) that specifically concern the combat features this
-resource now ships enabled.
+flag is `true` — what to verify given that, plus uninstalling), and
+`DEVELOPER_REFERENCE.md` §17 for the open decisions only a server owner can
+make, plain-language, including the two (D3, D13) that specifically concern
+the combat features this resource now ships enabled.

@@ -11,9 +11,9 @@
 
     PHASE 3 ADDITION (that pass, coder-architect): also owned
     Config.Features.AgilityAdvanced (fence/window vault approximation) —
-    PHASE3_SPEC.md §12.5.5, §12.1 sub-phase 3a. Entirely client-local,
+    DEVELOPER_REFERENCE.md §12.5.5, §12.1 sub-phase 3a. Entirely client-local,
     self-body movement only, no target ped/player involved anywhere,
-    unaffected by PHASE3_SPEC.md §12.0 item 8's still-open (as of that
+    unaffected by DEVELOPER_REFERENCE.md §12.0 item 8's still-open (as of that
     pass) client-relay question, which only concerns effects applied to a
     DIFFERENT entity. Every other Phase 3 sub-feature (BiteAndHold/
     NonLethalTakedown/PropDragging/HandlerDownDefense) is deliberately NOT
@@ -61,7 +61,7 @@
 
     PHASE 4 ADDITION (this pass, coder-frontend, real-bug fix): also owns
     the shared K9 move-rate composer, `K9MoveRateModifiers` (table) +
-    `RecomputeK9MoveRate()` (function) — PHASE4_SPEC.md §13.0 Decision 2.
+    `RecomputeK9MoveRate()` (function) — DEVELOPER_REFERENCE.md §13.0 Decision 2.
     QA had found client/wellbeing.lua unconditionally writing
     `K9MoveRateModifiers.fatigue`/`.injury`/`.mood` and calling
     `RecomputeK9MoveRate()` with neither symbol defined anywhere in this
@@ -88,7 +88,7 @@
         DetachLeash()
         IsLeashed() -> boolean
     - THIS FILE exposes the resource-global move-rate composer consumed by
-      client/wellbeing.lua and client/progression.lua (PHASE4_SPEC.md §13.0
+      client/wellbeing.lua and client/progression.lua (DEVELOPER_REFERENCE.md §13.0
       Decision 2), and reserves a slot for Phase 3's PropDragging
       (client/combat.lua) to use once that lands:
         K9MoveRateModifiers (table)  -- named multiplier contributions, one
@@ -102,19 +102,19 @@
             RecomputeK9MoveRate(), from Config.Peds[n].speedMultiplier for
             the ped's CURRENT model — see the "BREED MOVE-RATE WEIGHT"
             block near that function's own definition for the full
-            reasoning (FEATURE_IDEAS.md Part A §4).
+            reasoning (DEVELOPER_REFERENCE.md Part A §4).
         RecomputeK9MoveRate() -- composes every present modifier
             multiplicatively, clamps to [0.1, 2.0], and makes the single
             real SetPedMoveRateOverride call for the K9's own ped. Safe to
             call with no valid/K9 ped (no-op/neutral-reset, never an error).
     - THIS FILE calls client/main.lua's global CanShowK9UI() before
       initiating a request (radial.lua is also expected to gate
-      visibility, but per SPEC.md §3's "must not be triggerable by a
+      visibility, but per DEVELOPER_REFERENCE.md §3's "must not be triggerable by a
       modified client" spirit, don't rely solely on the caller having
       already checked — and the server re-validates independently anyway,
       see server/main.lua's CheckLeashEligibility).
     - THIS FILE registers the "Attach Leash" ox_target option on nearby
-      player peds (the SPEC.md §6.1 leash bullet's "either the K9 or a
+      player peds (the DEVELOPER_REFERENCE.md §6.1 leash bullet's "either the K9 or a
       nearby officer initiates 'Attach Leash' (ox_target) on the other").
       client/vehicle.lua owns the vehicle ox_target option instead; keep
       that split — this file should never touch vehicles, vehicle.lua
@@ -126,7 +126,7 @@
       radial) end up calling the SAME two functions — don't let a second,
       divergent leash-request code path grow in radial.lua.
     - THIS FILE also registers the "Certify K9 Handler" / "Revoke K9
-      Certification" ox_target options on nearby player peds (SPEC.md
+      Certification" ox_target options on nearby player peds (DEVELOPER_REFERENCE.md
       §4.3's flow table, §8 step 3 — the previously-missing entry point;
       the events themselves were always reachable via /k9certify /
       /k9decertify). These directly TriggerServerEvent the two events
@@ -138,7 +138,7 @@
       option's structure directly (display-only plausibility gate via
       IsEntityModelK9, server re-validates everything authoritatively).
     - THIS FILE also registers the "Scratch to Alert" ox_target option on
-      nearby door-shaped objects (Phase 2, SPEC.md §11.3's file/module plan
+      nearby door-shaped objects (Phase 2, DEVELOPER_REFERENCE.md §11.3's file/module plan
       row for this file) and the 'qbx_k9unit:client:playDoorScratch'
       broadcast receiver — see the DOOR INTERACTION block near the header
       above and the implementation near the bottom of this file. Exposes NO
@@ -157,7 +157,7 @@
       (same ox_target-only entry point shape as ScratchAtDoor above it).
 
     LEASH SUBSYSTEM DESIGN (per requester's confirmation, resolving
-    SPEC.md §9 item 3b — see server/main.lua's header for the full
+    DEVELOPER_REFERENCE.md §9 item 3b — see server/main.lua's header for the full
     rationale, repeated here only as it affects THIS file):
     1. Attach requires consent — RequestLeashAttach() only ever sends a
        request; the actual pairing is formed server-side after the OTHER
@@ -179,10 +179,10 @@
        reuse this exact function, don't build a second detach code path.
 
     ======================================================================
-    DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT + NUDGE-OPEN. SPEC.md
+    DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT + NUDGE-OPEN. DEVELOPER_REFERENCE.md
     §11.1 sub-phase 2a/2b, §11.3's file/module plan (this file's row), §11.4
     items 5/6, §11.5's door-interaction acceptance criteria;
-    phase2_notes/RESEARCH_ARCHIVE.md#door-interaction (the design note,
+    phase2_notes/DEVELOPER_REFERENCE.md#door-interaction (the design note,
     native verification, and security review that used to be three separate
     files are now merged into this one section; all three were read in full
     before this section was written — the security review in particular was
@@ -197,12 +197,12 @@
     design-note-flagged implementation paths was actually taken (the
     zero-gating cosmetic-only fallback, since a real "already passable"
     detection method was never confirmed to exist anywhere in
-    phase2_notes/RESEARCH_ARCHIVE.md#door-interaction).
+    phase2_notes/DEVELOPER_REFERENCE.md#door-interaction).
 
     Nudge-open has NO server event of its own — it is 100% client-local
     (ZERO TriggerServerEvent, ZERO callback, nothing server-authoritative
     touched at all), unlike scratch-to-alert below. Do not add one; that
-    would be a structural deviation from SPEC.md §11.3/§11.5/§11.6's
+    would be a structural deviation from DEVELOPER_REFERENCE.md §11.3/§11.5/§11.6's
     explicit, repeated framing, not a judgment call left open by this file.
 
     Server events (client->server):
@@ -211,7 +211,7 @@
       Structurally mirrors 'qbx_k9unit:server:relayBark' above, EXCEPT the
       payload names a DIFFERENT entity (the door) than the sender's own ped
       — the server independently resolves/existence-checks/proximity-checks
-      doorNetId before ever broadcasting it (closes SPEC.md §9 item 16, per
+      doorNetId before ever broadcasting it (closes DEVELOPER_REFERENCE.md §9 item 16, per
       server/main.lua's own header comment on that handler). This file's own
       pre-send checks (CanShowK9UI(), DoesEntityExist(entity)) are UX only,
       never the security boundary — the server re-validates everything
@@ -221,9 +221,9 @@
     - 'qbx_k9unit:client:playDoorScratch' (doorNetId: number) [THIS FILE]
       Mirrors client/main.lua's existing playBark handler exactly (resolve
       the network entity, no-op if not streamed in/nonexistent, play a
-      sound) — per SPEC.md §11.4 item 6. The resolve step calls
+      sound) — per DEVELOPER_REFERENCE.md §11.4 item 6. The resolve step calls
       client/main.lua's global ResolveNetworkEntity(netId)
-      (REFACTOR_ROADMAP.md near-term item 2) rather than re-implementing
+      (DEVELOPER_REFERENCE.md near-term item 2) rather than re-implementing
       it locally.
     ======================================================================
 ]]
@@ -238,9 +238,9 @@ local isFirstPersonK9View = false
 --- (and the top-level task's explicit direction) this does NOT gate on
 --- CanShowK9UI() (a QoL toggle, not a granted capability); it DOES gate on
 --- the cheap, local, free IsOwnModelK9() check, since "while playing their
---- K9 character" (SPEC.md §6.1 bullet 2) implies it's meaningless for a
+--- K9 character" (DEVELOPER_REFERENCE.md §6.1 bullet 2) implies it's meaningless for a
 --- human-model character, not that it requires job/cert.
---- SPEC.md §6.1 bullet 2, §8 step 5. Bound to a rebindable keymapping
+--- DEVELOPER_REFERENCE.md §6.1 bullet 2, §8 step 5. Bound to a rebindable keymapping
 --- (FiveM's own Settings > Key Bindings screen lets a player/server change
 --- the default) rather than a radial item — camera toggle isn't in the
 --- Phase 1 radial item list (Bark/Sit/Leash/Vehicle only, see
@@ -287,7 +287,7 @@ AddEventHandler('onResourceStop', function(resourceName)
     end
 end)
 
---- Self-emote "Sit" action triggered from the radial menu. SPEC.md §6.1
+--- Self-emote "Sit" action triggered from the radial menu. DEVELOPER_REFERENCE.md §6.1
 --- radial bullet, §8 step 7. Gated with CanShowK9UI() at the top (per
 --- radial.lua's own contract, every Phase 1 radial item is a real granted
 --- capability check, unlike camera/locomotion above) — return early (and
@@ -316,7 +316,7 @@ end)
 --- Precomputed model-hash -> scenario lookup, built once at file load.
 --- Mirrors the precomputed-hash-table convention already used elsewhere
 --- in this codebase (client/main.lua's K9ModelHashes, which also backs
---- IsEntityModelK9 per REFACTOR_ROADMAP.md item 3) rather than calling
+--- IsEntityModelK9 per DEVELOPER_REFERENCE.md item 3) rather than calling
 --- GetHashKey per lookup.
 local K9_SIT_SCENARIO_BY_MODEL_HASH = {}
 for model, scenario in pairs({
@@ -374,11 +374,11 @@ function RequestLeashAttach(targetPlayerServerId)
     -- writeup this one mirrors). This used to be an unconditional
     -- `if not CanShowK9UI() then` -- correct for client/radial.lua's
     -- "Attach/Detach Leash" item (a genuinely K9-only self-actions
-    -- submenu, SPEC.md's own radial item list), but WRONG for this
+    -- submenu, DEVELOPER_REFERENCE.md's own radial item list), but WRONG for this
     -- function's OTHER, equally-real caller: the "Attach Leash" ox_target
     -- option registered below, whose own canInteract predicate
     -- (`IsOwnModelK9() or IsEntityModelK9(entity)`) already permits an
-    -- OFFICER to target a nearby K9 and select it, and SPEC.md's own
+    -- OFFICER to target a nearby K9 and select it, and DEVELOPER_REFERENCE.md's own
     -- wording ("Either the K9 or a nearby officer initiates 'Attach
     -- Leash' (ox_target) on the other") requires exactly that to work.
     -- CanShowK9UI() == IsOwnModelK9() and HasK9Access(), which is false
@@ -601,7 +601,7 @@ CreateThread(function()
                     -- cruiser via client/vehicle.lua's attach-based load-in
                     -- (IsInK9Vehicle) to avoid fighting the AttachEntityToEntity
                     -- that's holding the ped in place — a defensive edge
-                    -- case, not spelled out in SPEC.md. The IsInK9Vehicle
+                    -- case, not spelled out in DEVELOPER_REFERENCE.md. The IsInK9Vehicle
                     -- existence check guards load order between these two
                     -- client scripts within the resource.
                     local excess = dist - pullZoneStart
@@ -656,7 +656,7 @@ end)
 -- generic Config.Peds-driven display-only check, since client/main.lua only
 -- exposed IsOwnModelK9() (not its private model-hash table) at the time
 -- this file was written. Promoted to a client/main.lua resource-global per
--- REFACTOR_ROADMAP.md item 3 — this file's own signature was the one
+-- DEVELOPER_REFERENCE.md item 3 — this file's own signature was the one
 -- promoted verbatim (see client/main.lua's own doc comment on
 -- IsEntityModelK9 for the full "5 independent copies" finding this
 -- consolidation closes). Every call site below now calls that shared
@@ -693,7 +693,7 @@ end)
 local LEASH_TARGET_DISTANCE_FACTOR = 0.5
 
 -- Register the "Attach Leash" ox_target option on nearby player peds
--- (SPEC.md §6.1 leash bullet's "either the K9 or a nearby officer
+-- (DEVELOPER_REFERENCE.md §6.1 leash bullet's "either the K9 or a nearby officer
 -- initiates 'Attach Leash' (ox_target) on the other"). This is a DISPLAY
 -- optimization only — the server independently re-validates everything
 -- for real in CheckLeashEligibility (server/main.lua), so this predicate
@@ -758,7 +758,7 @@ local function RegisterLeashOxTargetOption()
 end
 
 -- Register the "Certify K9 Handler" / "Revoke K9 Certification" ox_target
--- options on nearby player peds (SPEC.md §4.3's flow table, §8 step 3 —
+-- options on nearby player peds (DEVELOPER_REFERENCE.md §4.3's flow table, §8 step 3 —
 -- this is the gap integration-verifier flagged: the server-side grant/
 -- revoke system in server/certifications.lua was fully implemented and
 -- correct, but was only reachable via /k9certify [id] / /k9decertify [id],
@@ -768,7 +768,7 @@ end
 -- (IsEligibleCertifier), proximity (Config.CertifyProximityMeters), and
 -- (grant-only) the target's live model in GrantCertification /
 -- RevokeCertification — see server/certifications.lua's header for the
--- full contract and its quoted SPEC.md §4.3 security note. Deliberately
+-- full contract and its quoted DEVELOPER_REFERENCE.md §4.3 security note. Deliberately
 -- does NOT attempt to check "is the local player an eligible certifier"
 -- client-side: IsEligibleCertifier is a server-only check with no cheap
 -- client-side equivalent (it reads qbx_core job/grade data this client
@@ -780,7 +780,7 @@ end
 -- No Config.Features flag gates this pair, unlike every other ox_target
 -- option in this resource (LeashMechanics above, VehicleEntryExit in
 -- client/vehicle.lua, etc.): certify/revoke IS the access-control system
--- itself (SPEC.md hard requirement 2), not a togglable *feature area* sitting
+-- itself (DEVELOPER_REFERENCE.md hard requirement 2), not a togglable *feature area* sitting
 -- behind that system the way Phase 1+'s other leaf features are framed in
 -- §3's acceptance criteria ("every leaf feature... has a corresponding
 -- Config.Features.X"). config.lua has no Certifications/CertifyHandler
@@ -831,7 +831,7 @@ local function RegisterCertifyOxTargetOptions()
             canInteract = function(entity, distance, coords, name)
                 if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-cert stays command-only (/k9certify [own id]), matches the leash option's self-exclusion above
 
-                -- SPEC.md §4.2 condition 5: grant requires the TARGET's live
+                -- DEVELOPER_REFERENCE.md §4.2 condition 5: grant requires the TARGET's live
                 -- ped model to be a configured K9 model -- BUT ONLY when
                 -- Config.K9Appearance.requireK9ModelForRole is explicitly
                 -- true (K9 role/model decoupling, server/appearance.lua).
@@ -870,7 +870,7 @@ local function RegisterCertifyOxTargetOptions()
             canInteract = function(entity, distance, coords, name)
                 if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-decert stays command-only, matches certify above
 
-                -- SPEC.md §4.2.5: the model check applies to GRANT only, not
+                -- DEVELOPER_REFERENCE.md §4.2.5: the model check applies to GRANT only, not
                 -- revoke (revoking must remain possible even if the target has
                 -- already left K9 form) — but this predicate still reuses
                 -- IsEntityModelK9 as the display-only plausibility gate rather
@@ -902,7 +902,7 @@ local function RegisterCertifyOxTargetOptions()
 end
 
 -- ======================================================================
--- MOVE-RATE COMPOSER (PHASE4_SPEC.md §13.0 Decision 2) -- REAL BUG FIX,
+-- MOVE-RATE COMPOSER (DEVELOPER_REFERENCE.md §13.0 Decision 2) -- REAL BUG FIX,
 -- qa-tester finding: client/wellbeing.lua (Phase 4) writes
 -- K9MoveRateModifiers.fatigue/.injury/.mood and calls RecomputeK9MoveRate()
 -- unconditionally (no existence guard, unlike client/progression.lua's own
@@ -921,7 +921,7 @@ end
 --
 -- WHY THIS LIVES HERE: this file already owns every other "own body,
 -- native locomotion" concern (camera mode, AgilityBasicJump's suppression
--- below, the leash elastic pull-back above) -- PHASE4_SPEC.md §13.3's
+-- below, the leash elastic pull-back above) -- DEVELOPER_REFERENCE.md §13.3's
 -- file/module plan names this file as the composer's home for exactly
 -- that reason, not a new module.
 --
@@ -982,16 +982,16 @@ end
 --     speed, which is the documented scope of SetPedMoveRateOverride).
 --   - This resource's ONLY call site for SetPedMoveRateOverride, anywhere,
 --     is RecomputeK9MoveRate() below (confirmed by grep before writing
---     this) -- exactly PHASE4_SPEC.md §13.0 Decision 2's "one and only
+--     this) -- exactly DEVELOPER_REFERENCE.md §13.0 Decision 2's "one and only
 --     call" requirement.
 --
 -- CONFIDENCE NOTE ON SetPedMoveRateOverride ITSELF, stated honestly per
 -- this codebase's own convention (see client/hud.lua's "STAMINA NATIVE --
 -- CONFIDENCE NOTE" for the standard this follows): the native's
 -- NAME/existence as a real, callable FiveM ped native is HIGH confidence
--- (linked from phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat's own
+-- (linked from phase2_notes/DEVELOPER_REFERENCE.md#phase-3-combat's own
 -- natives-to-verify list, and independently named by both
--- PHASE3_SPEC.md §12.5.4 and PHASE4_SPEC.md §13.0 as the intended
+-- DEVELOPER_REFERENCE.md §12.5.4 and DEVELOPER_REFERENCE.md §13.0 as the intended
 -- mechanism for exactly this class of effect -- multiple independent
 -- planning passes converge on the same native). Its PRECISE runtime
 -- semantics -- specifically (a) whether a set value persists indefinitely
@@ -1000,7 +1000,7 @@ end
 -- player ped, the way DisableControlAction's own contract explicitly
 -- requires -- were NOT independently re-verified against
 -- raw.githubusercontent.com/citizenfx/natives or a live client this
--- session. PHASE3_SPEC.md §12.5.4 already flags an expectation that
+-- session. DEVELOPER_REFERENCE.md §12.5.4 already flags an expectation that
 -- PropDragging will need to "re-assert every tick" for this same native.
 -- This composer is written to be SAFE either way regardless of which is
 -- true: every real caller (client/wellbeing.lua on each pushed snapshot,
@@ -1017,7 +1017,7 @@ end
 -- ======================================================================
 
 --- Named multiplier contributions toward the K9's own single effective
---- move-rate override (PHASE4_SPEC.md §13.0 Decision 2). Every contributing
+--- move-rate override (DEVELOPER_REFERENCE.md §13.0 Decision 2). Every contributing
 --- system sets its OWN named key here and then calls RecomputeK9MoveRate()
 --- -- nothing should ever call SetPedMoveRateOverride directly except
 --- RecomputeK9MoveRate() itself, below. An absent/nil key is treated
@@ -1062,12 +1062,12 @@ K9MoveRateModifiers = {
     injury = 1.0,   -- client/wellbeing.lua, Config.Features.InjuryLimping
     mood = 1.0,     -- client/wellbeing.lua, Config.Features.MoodSystem
     xpTier = 1.0,   -- client/progression.lua, Config.Features.XPProgression
-    dragging = 1.0, -- RESERVED for Phase 3's PropDragging (client/combat.lua, PHASE3_SPEC.md §12.5.4) -- not yet a real contributor; present so that file's eventual composer write has a ready slot without needing to edit this table.
+    dragging = 1.0, -- RESERVED for Phase 3's PropDragging (client/combat.lua, DEVELOPER_REFERENCE.md §12.5.4) -- not yet a real contributor; present so that file's eventual composer write has a ready slot without needing to edit this table.
     breed = 1.0,    -- THIS FILE's own contribution -- see "BREED MOVE-RATE WEIGHT" below. Recomputed fresh on every RecomputeK9MoveRate() call from the CALLING client's own current ped model, never left stale across a model change the way a server-pushed modifier (xpTier) could be.
 }
 
 -- ======================================================================
--- BREED MOVE-RATE WEIGHT (FEATURE_IDEAS.md Part A §4 -- "give Config.Peds'
+-- BREED MOVE-RATE WEIGHT (DEVELOPER_REFERENCE.md Part A §4 -- "give Config.Peds'
 -- breed data actual mechanical weight"). Config.Peds entries carry no
 -- per-model stat today (README.md: every recognized K9 model is
 -- mechanically identical). This section gives ONE stat -- base move
@@ -1091,7 +1091,7 @@ K9MoveRateModifiers = {
 -- mirrors client/main.lua's own K9ModelHashes construction loop exactly
 -- (same source table, same per-entry GetHashKey call), but this is NOT a
 -- second copy of that file's consolidated "is this a recognized K9 model"
--- boolean set (REFACTOR_ROADMAP.md item 3, IsEntityModelK9/K9ModelHashes --
+-- boolean set (DEVELOPER_REFERENCE.md item 3, IsEntityModelK9/K9ModelHashes --
 -- six prior duplicates of THAT specific check were found and deleted; see
 -- client/main.lua's own header). This table answers a genuinely different
 -- question no existing table in this resource answers -- "what breed-
@@ -1165,7 +1165,7 @@ local MOVE_RATE_MAX = 2.0
 local lastAppliedMoveRate = 1.0
 
 --- The single, only call site for SetPedMoveRateOverride in this resource
---- (PHASE4_SPEC.md §13.0 Decision 2). Composes every entry currently in
+--- (DEVELOPER_REFERENCE.md §13.0 Decision 2). Composes every entry currently in
 --- K9MoveRateModifiers multiplicatively (see this section's header comment
 --- for why multiplicative, not additive), clamps the result defensively,
 --- and applies it once. Safe to call at any time, from any file, whether
@@ -1226,7 +1226,7 @@ end
 -- sped up/slowed down with no code left running to ever reverse it. Only
 -- resets when THIS resource actually applied a non-1.0 value, so an
 -- unrelated resource's own independent SetPedMoveRateOverride call (the
--- disclosed, pre-existing FiveM limitation PHASE4_SPEC.md §13.0 Decision 2
+-- disclosed, pre-existing FiveM limitation DEVELOPER_REFERENCE.md §13.0 Decision 2
 -- itself flags -- a single global-per-entity native this resource cannot
 -- fully own) is never clobbered by this handler.
 AddEventHandler('onResourceStop', function(resourceName)
@@ -1240,7 +1240,7 @@ AddEventHandler('onResourceStop', function(resourceName)
     end
 end)
 
--- AgilityBasicJump (Config.Features.AgilityBasicJump): SPEC.md §6.1 bullet
+-- AgilityBasicJump (Config.Features.AgilityBasicJump): DEVELOPER_REFERENCE.md §6.1 bullet
 -- 3 bundles jump AND crouch together ("The K9 player can run, jump, and
 -- crouch using the native quadruped locomotion..."), matching this flag's
 -- own inline comment ("native jump/crouch only, no fence-vault logic
@@ -1317,9 +1317,9 @@ end
 --
 -- NUDGE-OPEN — DESIGN PATH TAKEN (read this before touching NudgeDoor()):
 --
--- The hard, non-negotiable constraint (SPEC.md §11.5/§11.6,
--- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §0.5/§4,
--- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction Finding 3): nudge-open
+-- The hard, non-negotiable constraint (DEVELOPER_REFERENCE.md §11.5/§11.6,
+-- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §0.5/§4,
+-- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction Finding 3): nudge-open
 -- must NEVER consult GTA's native door-lock/CDoor system
 -- (DoorSystemGetDoorState / IsDoorClosed / GetStateOfClosestDoorOfType /
 -- etc.) as a safety check. An unregistered door — the common case, since
@@ -1342,17 +1342,17 @@ end
 --
 -- WHICH FALLBACK WAS ACTUALLY TAKEN — flagged explicitly per this task's
 -- own instruction, for exploit-tester to verify against: nothing in
--- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction ever settled on a
+-- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction ever settled on a
 -- confirmed "is this door already passable" detection method beyond
 -- distance.
 --   - The design note (§7/§8 in its original form) explicitly leaves "the exact model-hash
 --     list (or alternative detection method)" as "a real implementation
 --     task, not a design-note-level decision" — i.e. still open, not
 --     resolved.
---   - RESEARCH_ARCHIVE.md#door-interaction (§7 in its original form) explicitly flags "whether there's any
+--   - DEVELOPER_REFERENCE.md#door-interaction (§7 in its original form) explicitly flags "whether there's any
 --     lighter-weight way to detect 'this CObject is currently a
 --     swinging/hinged door' (vs. a static prop)... Not verified."
---   - RESEARCH_ARCHIVE.md#door-interaction (§4 in its original form)'s own "Practical recommendation" (the
+--   - DEVELOPER_REFERENCE.md#door-interaction (§4 in its original form)'s own "Practical recommendation" (the
 --     most concrete guidance that exists) describes the walk-through-able
 --     framing at a CONCEPTUAL level only ("play the K9's push animation as
 --     it passes through a door the player can already physically walk
@@ -1398,13 +1398,13 @@ end
 --- applies to IsEntityModelK9() for the leash/certify options above.
 ---
 --- No generic "is this entity a door" native/predicate exists (confirmed by
---- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction — GTA's native door SYSTEM only
+--- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction — GTA's native door SYSTEM only
 --- covers doors explicitly registered via AddDoorToSystem/IPL data, a small
 --- fraction of visible door props on a typical interior-heavy server, and
 --- is unsuitable here anyway since Scratch-to-alert must work "on any door
---- ... regardless of lock state" per SPEC.md §11.5, i.e. registered or not).
+--- ... regardless of lock state" per DEVELOPER_REFERENCE.md §11.5, i.e. registered or not).
 --- Rather than hand-maintain a model-hash allow-list of specific door prop
---- names (phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §3.1's "Option 1" — flagged
+--- names (phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §3.1's "Option 1" — flagged
 --- there as LOW-MEDIUM confidence and something that would need updating
 --- for every interior/MLO a server adds), this checks the entity's own
 --- model name STRING for the substring "door", via GetEntityArchetypeName —
@@ -1416,7 +1416,7 @@ end
 --- string) — not independently re-confirmed against a live client this
 --- session; LOW-MEDIUM that the substring check covers "most doors a player
 --- would expect this to work on" for the same reason
---- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §3.1 grades its own model-list approach
+--- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §3.1 grades its own model-list approach
 --- LOW-MEDIUM (door prop naming isn't fully standardized across the base
 --- map). If this predicate turns out to under/over-match badly in
 --- real-world testing, that's the first place to revisit — ideally with
@@ -1434,7 +1434,7 @@ end
 --- action's local visual cue on the K9 itself, built the exact same way
 --- K9_SIT_SCENARIO_BY_MODEL_HASH is above. No "dog scratches at a door"
 --- scenario has been confirmed to exist anywhere this session —
---- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2/§7 flags this explicitly ("no ...
+--- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2/§7 flags this explicitly ("no ...
 --- scenario/clipset name ... has been confirmed to exist at all this
 --- session — treat as unconfirmed, not assumed absent, same caveat
 --- movement.lua's Sit-action header already applies to its own scenario
@@ -1468,7 +1468,7 @@ local K9_DOOR_SCRATCH_DEFAULT_SCENARIO = 'WORLD_DOG_BARKING_SHEPHERD' -- fallbac
 -- placeholder soundset name ('qbx_k9unit_sounds') client/search.lua's
 -- contraband-alert sound already uses, rather than inventing a second
 -- placeholder soundset, since neither is a real shipped audio bank yet
--- either way (SPEC.md §7's bark-sounds asset-gap note applies identically
+-- either way (DEVELOPER_REFERENCE.md §7's bark-sounds asset-gap note applies identically
 -- here — this is not a zero-asset feature in the end, just not a scripting
 -- blocker).
 local DOOR_SCRATCH_SOUND_NAME = 'DoorScratch'
@@ -1515,7 +1515,7 @@ local function ScratchAtDoor(entity)
     local doorNetId = NetworkGetNetworkIdFromEntity(entity)
 
     -- Local visual/audio feedback cue on the ACTING player's own K9,
-    -- per phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2 ("Play a scratch/paw
+    -- per phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2 ("Play a scratch/paw
     -- animation + sound cue locally on the K9 ... TriggerServerEvent(...)").
     -- This plays immediately and unconditionally (unlike client/radial.lua's
     -- Bark item, which plays no local cue at all and relies entirely on the
@@ -1543,7 +1543,7 @@ end
 local DOOR_NUDGE_SOUND_NAME = 'DoorNudge'
 
 -- Feel/tuning knob for the cosmetic push impulse below — NOT a structural
--- decision (phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §8 explicitly lists "the exact
+-- decision (phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §8 explicitly lists "the exact
 -- push-force magnitude/direction tuning for a convincing nudge animation"
 -- as a tuning knob, not a design-level choice) and has zero bearing on this
 -- function's safety properties either way, since it only ever scales a
@@ -1579,7 +1579,7 @@ local NUDGE_IMPULSE_FORCE = 2.0
 ---   CanShowK9UI() — no reachability/"already passable" check of any kind.
 ---   This is the explicit fallback this file's header comment names: none
 ---   of what used to be three separate phase2_notes documents (now merged
----   into phase2_notes/RESEARCH_ARCHIVE.md#door-interaction) ever settled on
+---   into phase2_notes/DEVELOPER_REFERENCE.md#door-interaction) ever settled on
 ---   a confirmed method for
 ---   detecting "is this specific door object already passable" beyond the
 ---   conceptual framing itself, so there is nothing concrete to gate on
@@ -1595,7 +1595,7 @@ local NUDGE_IMPULSE_FORCE = 2.0
 --- (a very commonly used FiveM native with a well-established call shape in
 --- community scripts, but not independently re-verified against
 --- raw.githubusercontent.com/citizenfx/natives this session the way
---- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction verified the door-system
+--- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction verified the door-system
 --- natives) — worth a native-api-assistant pass before shipping if the feel
 --- is off in testing, same standard this file's own K9Sit()/ScratchAtDoor()
 --- scenario-name comments already apply to themselves. This has NO bearing
@@ -1656,7 +1656,7 @@ local function NudgeDoor(entity)
 end
 
 -- Register the "Scratch to Alert" ox_target option on nearby door-like
--- objects (SPEC.md §11.5: "available on any door within
+-- objects (DEVELOPER_REFERENCE.md §11.5: "available on any door within
 -- Config.DoorInteraction.interactDistance regardless of lock state").
 -- Config-gated AT REGISTRATION (the whole K9Compat.Get('target').AddGlobalObject
 -- call below is wrapped in `if Config.Features.DoorInteraction`), not just
@@ -1681,7 +1681,7 @@ end
 local function RegisterDoorInteractionOxTargetOptions()
     if Config.Features.DoorInteraction then
         -- Config.DoorInteraction.nudgeRequiresUnlocked "applied as a config
-        -- gate" (Finding 3, phase2_notes/RESEARCH_ARCHIVE.md#door-interaction):
+        -- gate" (Finding 3, phase2_notes/DEVELOPER_REFERENCE.md#door-interaction):
         -- per this file's "NUDGE-OPEN — DESIGN PATH TAKEN" header comment
         -- above, NudgeDoor() has no real lock-state read anywhere to build a
         -- runtime branch off this flag with — doing so would require exactly
@@ -1701,7 +1701,7 @@ local function RegisterDoorInteractionOxTargetOptions()
             'system, see this file\'s "NUDGE-OPEN" header comment) -- this ' ..
             'assertion exists solely to fail loudly if this field is ever ' ..
             'repurposed as a real gate without a reviewed code change. See ' ..
-            'phase2_notes/RESEARCH_ARCHIVE.md#door-interaction Finding 3.')
+            'phase2_notes/DEVELOPER_REFERENCE.md#door-interaction Finding 3.')
 
         K9Compat.Get('target').AddGlobalObject({
             {
@@ -1784,7 +1784,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 end)
 
 --- Broadcast receiver for the shared "door was scratched" alert cue —
---- mirrors client/main.lua's existing playBark handler EXACTLY per SPEC.md
+--- mirrors client/main.lua's existing playBark handler EXACTLY per DEVELOPER_REFERENCE.md
 --- §11.4 item 6 (resolve the network entity, no-op if not streamed in, play
 --- a sound), including the same defensive "0 or nonexistent" guard
 --- server/main.lua's own relayDoorScratch handler already applies to this
@@ -1794,7 +1794,7 @@ end)
 --- (streamed out between broadcast and receipt is a normal, expected race,
 --- not an error worth logging/notifying about). The resolve-and-guard
 --- sequence itself is now client/main.lua's shared ResolveNetworkEntity()
---- (REFACTOR_ROADMAP.md near-term item 2) — this was previously this
+--- (DEVELOPER_REFERENCE.md near-term item 2) — this was previously this
 --- file's own independent copy of the identical sequence.
 --- @param doorNetId number
 RegisterNetEvent('qbx_k9unit:client:playDoorScratch', function(doorNetId)

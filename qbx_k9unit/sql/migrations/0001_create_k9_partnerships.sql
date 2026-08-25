@@ -60,4 +60,4 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
   KEY `idx_handler_citizenid_active` (`handler_citizenid`, `active`),
   UNIQUE KEY `uq_one_active_partnership_per_k9` (`active_partner_k9_key`),
   UNIQUE KEY `uq_one_active_partnership_per_handler` (`active_partner_handler_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

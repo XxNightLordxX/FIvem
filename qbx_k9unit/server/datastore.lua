@@ -1308,6 +1308,138 @@ function K9Store.Appearance_SetOriginalHashIfMissing(citizenid, hash)
 end
 
 -- ======================================================================
+-- k9_equipment_shop_locations / k9_equipment_shop_locations_audit
+--
+-- Mirrored from server/equipmentshop.lua's own SafeQuery/SafeWrite/
+-- SafeInsert helpers (that file's RUNTIME SHOP LOCATIONS section --
+-- migration 0011, the newest table in this schema). Those three helpers
+-- are this resource's own bespoke wrapper contracts (a pcall'd
+-- boolean/empty-table-on-failure shape), NOT oxmysql's raw ones -- see
+-- this file's header "CONTRACT DISCIPLINE" for why the functions below
+-- keep that SAME bespoke contract rather than the raw scalar/insert/
+-- update one, exactly like the Cert_GetHistory/Perm_GetHistoryByCitizenId/
+-- etc. functions above already do for the identical reason.
+--
+-- k9_equipment_shop_locations is a current-state table (one row per
+-- tablet-added location, PRIMARY KEY id) -- the memory mirror is a plain
+-- id-keyed map, same shape as AssignmentRows above. Its audit companion
+-- is append-only, same bounded-in-memory-mode treatment as
+-- k9_runtime_override_audit/k9_tablet_theme_audit above and for the same
+-- reason (rare, high-command-gated admin action, not gameplay volume).
+-- ======================================================================
+local ShopLocationRows = {} -- id -> { x, y, z, heading, model, scenario, label, created_by, updated_by }
+local ShopLocationNextId = 0
+local SHOP_LOCATION_AUDIT_MEMORY_CAP = 200
+local ShopLocationAuditRows = {}
+
+--- Mirrors server/equipmentshop.lua's own SafeQuery contract (always a
+--- table, empty on failure, never throws). Replaces the boot-time
+--- `SELECT id, x, y, z, heading, model, scenario, label FROM
+--- k9_equipment_shop_locations` read.
+--- @return table rows
+function K9Store.ShopLocation_GetAll()
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT id, x, y, z, heading, model, scenario, label FROM k9_equipment_shop_locations', {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopLocation_GetAll query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for id, row in pairs(ShopLocationRows) do
+        out[#out + 1] = { id = id, x = row.x, y = row.y, z = row.z, heading = row.heading, model = row.model, scenario = row.scenario, label = row.label }
+    end
+    return out
+end
+
+--- Mirrors server/equipmentshop.lua's own SafeInsert contract (`ok,
+--- insertId` -- never throws, `ok = false` on failure). Replaces
+--- equipmentShopAddLocation's `INSERT INTO k9_equipment_shop_locations
+--- (...) VALUES (...)`.
+--- @return boolean ok, number? insertId
+function K9Store.ShopLocation_Insert(x, y, z, heading, model, scenario, label, createdBy)
+    if DatabaseEnabled() then
+        local ok, resultOrErr = pcall(MySQL.insert.await,
+            'INSERT INTO k9_equipment_shop_locations (x, y, z, heading, model, scenario, label, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            { x, y, z, heading, model, scenario, label, createdBy })
+        if not ok or type(resultOrErr) ~= 'number' then
+            print(('[qbx_k9unit] datastore: ShopLocation_Insert failed: %s'):format(tostring(resultOrErr)))
+            return false, nil
+        end
+        return true, resultOrErr
+    end
+    ShopLocationNextId = ShopLocationNextId + 1
+    ShopLocationRows[ShopLocationNextId] = { x = x, y = y, z = z, heading = heading, model = model, scenario = scenario, label = label, created_by = createdBy, updated_by = nil }
+    return true, ShopLocationNextId
+end
+
+--- Mirrors server/equipmentshop.lua's own SafeWrite contract (boolean,
+--- never throws). Replaces equipmentShopMoveLocation's `UPDATE
+--- k9_equipment_shop_locations SET ... WHERE id = ?`.
+--- @return boolean ok
+function K9Store.ShopLocation_Update(x, y, z, heading, model, scenario, label, updatedBy, id)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'UPDATE k9_equipment_shop_locations SET x = ?, y = ?, z = ?, heading = ?, model = ?, scenario = ?, label = ?, updated_by = ? WHERE id = ?',
+            { x, y, z, heading, model, scenario, label, updatedBy, id })
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopLocation_Update failed: %s'):format(tostring(err)))
+            return false
+        end
+        return true
+    end
+    local row = ShopLocationRows[id]
+    if row then
+        row.x, row.y, row.z, row.heading, row.model, row.scenario, row.label, row.updated_by = x, y, z, heading, model, scenario, label, updatedBy
+    end
+    return true
+end
+
+--- Mirrors server/equipmentshop.lua's own SafeWrite contract. Replaces
+--- equipmentShopRemoveLocation's `DELETE FROM k9_equipment_shop_locations
+--- WHERE id = ?`.
+--- @return boolean ok
+function K9Store.ShopLocation_Delete(id)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await, 'DELETE FROM k9_equipment_shop_locations WHERE id = ?', { id })
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopLocation_Delete failed: %s'):format(tostring(err)))
+            return false
+        end
+        return true
+    end
+    ShopLocationRows[id] = nil
+    return true
+end
+
+--- Mirrors server/equipmentshop.lua's own SafeWrite contract. Replaces
+--- every one of that file's identical `INSERT INTO
+--- k9_equipment_shop_locations_audit (...) VALUES (...)` calls (add/move/
+--- remove all share this one shape).
+--- @return boolean ok
+function K9Store.ShopLocationAudit_Insert(locationId, action, x, y, z, heading, model, scenario, label, changedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_equipment_shop_locations_audit (location_id, action, x, y, z, heading, model, scenario, label, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            { locationId, action, x, y, z, heading, model, scenario, label, changedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopLocationAudit_Insert failed: %s'):format(tostring(err)))
+            return false
+        end
+        return true
+    end
+    ShopLocationAuditRows[#ShopLocationAuditRows + 1] = {
+        location_id = locationId, action = action, x = x, y = y, z = z, heading = heading,
+        model = model, scenario = scenario, label = label, changed_by = changedBy, changed_at = FormatDateTime(NowUnix()),
+    }
+    while #ShopLocationAuditRows > SHOP_LOCATION_AUDIT_MEMORY_CAP do
+        table.remove(ShopLocationAuditRows, 1)
+    end
+    return true
+end
+
+-- ======================================================================
 -- BOOT LINE -- one console line stating which backend is live, so an
 -- operator (or QA) can confirm Config.Database.enabled took effect
 -- without reading code.

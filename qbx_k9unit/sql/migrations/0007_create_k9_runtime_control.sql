@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS `k9_runtime_feature_overrides` (
   `updated_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`override_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
 -- k9_runtime_override_audit -- append-only "who changed what, from what,
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS `k9_runtime_override_audit` (
   -- Backs "full change history for this one override key, most recent
   -- first" -- the natural admin/audit query over this table.
   KEY `idx_override_key_changed_at` (`override_key`, `changed_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
 -- k9_tablet_theme -- current tablet theme. Always exactly one row
@@ -170,7 +170,7 @@ CREATE TABLE IF NOT EXISTS `k9_tablet_theme` (
   `updated_at`       DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
 -- k9_tablet_theme_audit -- append-only, full-snapshot-per-change history.
@@ -192,4 +192,4 @@ CREATE TABLE IF NOT EXISTS `k9_tablet_theme_audit` (
   `changed_at`       DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

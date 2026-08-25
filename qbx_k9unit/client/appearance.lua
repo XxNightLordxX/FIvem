@@ -21,8 +21,10 @@
     this resource — see client/movement.lua's RecomputeK9MoveRate doc
     comment), which is exactly the "death reuses the same ped handle"
     hazard this resource has already been bitten by once (a K9 that died
-    in a vehicle respawned frozen/invisible/attached — see
-    WATCHDOG_LOG.md). A model swap is the SAME class of hazard: any
+    in a vehicle respawned frozen/invisible/attached — a past regression
+    caught and fixed; the underlying diary this was recorded in has since
+    been consolidated away, see DEVELOPER_REFERENCE.md §16). A model swap
+    is the SAME class of hazard: any
     resource-tracked per-ped state that assumes "this ped is a K9"
     (leashed, mid drag as either party, mid bite-hold, mid fetch-carry,
     inside a K9 vehicle) would silently carry over onto whatever the ped

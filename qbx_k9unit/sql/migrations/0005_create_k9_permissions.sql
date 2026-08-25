@@ -76,4 +76,4 @@ CREATE TABLE IF NOT EXISTS `k9_permissions` (
   KEY `idx_citizen_permission_active` (`citizenid`, `permission`, `active`),
   KEY `idx_permission_active` (`permission`, `active`),
   UNIQUE KEY `uq_one_active_permission_per_citizen` (`active_permission_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

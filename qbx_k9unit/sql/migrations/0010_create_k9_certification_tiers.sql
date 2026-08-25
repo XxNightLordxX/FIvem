@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS `k9_certification_tiers` (
   `updated_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`tier_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
 -- k9_certification_tier_capabilities -- current effective tier ->
@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS `k9_certification_tier_capabilities` (
   `granted_at`      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
   PRIMARY KEY (`tier_key`, `capability_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------
 -- k9_certification_tier_audit -- append-only "who changed the tier
@@ -262,4 +262,4 @@ CREATE TABLE IF NOT EXISTS `k9_certification_tier_audit` (
   -- first" -- the natural admin/audit query over this table, mirroring
   -- migration 0007's own idx_override_key_changed_at.
   KEY `idx_tier_key_changed_at` (`tier_key`, `changed_at`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

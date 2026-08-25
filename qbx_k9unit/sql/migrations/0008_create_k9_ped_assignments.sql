@@ -86,4 +86,4 @@ CREATE TABLE IF NOT EXISTS `k9_ped_assignments` (
 
   PRIMARY KEY (`citizenid`),
   KEY `idx_active` (`active`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
