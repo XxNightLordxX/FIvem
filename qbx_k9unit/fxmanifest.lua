@@ -84,6 +84,12 @@ ui_page 'html/index.html'
 files {
     'html/index.html',
     'html/style.css',
+    -- The server logo shown in the tablet header. A placeholder ships here
+    -- so this entry is never dangling; the operator replaces the FILE, not
+    -- this line. An image the manifest does not list is silently not sent
+    -- to clients -- it renders as nothing, with no error saying why -- which
+    -- is why the config tells anyone changing the path to add it here too.
+    'html/images/logo.png',
     'html/app.js',
     -- The NUI audio layer fetches 'sounds/<key>.ogg' relative to
     -- html/index.html, so every shipped sound needs its own entry here or it

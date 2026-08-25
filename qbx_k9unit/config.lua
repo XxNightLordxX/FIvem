@@ -827,6 +827,40 @@ Config.CommandTablet = {
     -- non-positive or non-number value falls back to the default rather
     -- than meaning "unlimited".
     maxRosterRows = 100,
+    -- ==================================================================
+    -- YOUR SERVER'S BRANDING ON THE TABLET.
+    --
+    -- TO USE YOUR OWN LOGO: save it as html/images/logo.png, replacing the
+    -- placeholder that ships there. Any square-ish image works; something
+    -- around 512x512 looks right. That is the only step -- you do not need
+    -- to edit anything else, and you do not need to restart anything other
+    -- than the resource.
+    --
+    -- If the file is missing or fails to load, the tablet falls back to
+    -- showing `serverName` as text. It never shows a broken image.
+    -- ==================================================================
+    branding = {
+        -- Shown beside the logo, and instead of it if the image cannot
+        -- load. Keep it short -- it sits in a header, not a paragraph.
+        serverName = 'Crimson Roleplay',
+
+        -- Where the logo lives. Change this only if you also add the new
+        -- path to fxmanifest.lua's files{} block -- an image the manifest
+        -- does not list is simply not sent to players, and shows as
+        -- nothing with no error to explain why.
+        logo = 'images/logo.png',
+
+        -- Starting colours, matched to the shipped logo. High command can
+        -- change all of these live from the tablet itself; these are just
+        -- what a fresh install looks like. Hex, six digits, with the #.
+        theme = {
+            primaryColor    = '#C8102E', -- crimson: headers, active tabs
+            accentColor     = '#FF2D2D', -- brighter red: buttons, highlights
+            backgroundColor = '#0B0B0D', -- near-black panel background
+            textColor       = '#F5F5F5', -- off-white body text
+        },
+    },
+
 }
 
 -- ======================================================================

@@ -470,6 +470,16 @@ globals = {
     -- because a divergence between two branches is a bug that only shows up
     -- on whichever one the operator happens to run.
     "K9Store",
+    -- server/cooldowns.lua -- reads an operator-set cooldown out of Config
+    -- and substitutes a safe fallback with a loud, key-naming warning when
+    -- it is non-positive, instead of the previous error() at file-load time.
+    -- That error was proportionate to nothing: setting one nested value to 0
+    -- -- which means "no cooldown" in almost every other script an operator
+    -- has ever configured -- crashed the whole file's top-level chunk, so
+    -- BiteAndHold, NonLethalTakedown and PropDragging all died together and
+    -- EndActiveEffectForHolder was never defined, leaving mid-hold players
+    -- with no termination path at all.
+    "ResolveConfiguredThresholdMs",
     -- server/certtiers.lua -- runtime-editable certification tiers. These
     -- answer questions ABOUT a tier (does it exist, what does it outrank,
     -- what does it grant); the tier a person HOLDS is still answered by

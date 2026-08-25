@@ -236,6 +236,14 @@ local function newSearchFixture(opts)
     -- config.lua's shipped default (currently true for every flag).
     env.Config.Features.SearchZones = opts.searchZones
     if opts.searchZones == nil then env.Config.Features.SearchZones = true end
+
+    -- Real K9Compat, real ox_target adapter -- see the oxTargetStub comment
+    -- above for why. Must load before client/search.lua, which reads the
+    -- `K9Compat` global inside RegisterSearchOxTargetOptions() (fired below
+    -- via the captured onResourceStart handler).
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/target.lua', env)
+
     Sandbox.loadInto('../client/search.lua', env)
 
     -- Mirrors a real resource start -- see this file's own header

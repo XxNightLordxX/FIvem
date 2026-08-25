@@ -185,17 +185,55 @@ local function newWellbeingFixture(opts)
     local recomputeCallCount = 0
     local function RecomputeK9MoveRate() recomputeCallCount = recomputeCallCount + 1 end
 
-    -- exports.ox_target:addGlobalPlayer -- same colon-call shape as
-    -- clientsearch_spec.lua's own oxTargetStub.
+    -- client/wellbeing.lua now routes its "Pet K9"/"Feed K9" options
+    -- through K9Compat.Get('target') (shared/compat/target.lua) rather than
+    -- calling `exports.ox_target` directly -- see that file's own header.
+    -- This fixture loads the REAL shared/compat/core.lua +
+    -- shared/compat/target.lua (never a hand-written fake translation
+    -- layer, which would just assert against itself) so K9Compat.Get
+    -- ('target') resolves to the REAL ox_target adapter, which is a
+    -- byte-for-byte pass-through of the options table -- captured below via
+    -- the exact same colon-call `exports.ox_target:addGlobalPlayer` stub as
+    -- before. ox_target is the ONLY candidate this fixture makes
+    -- `GetResourceState` report as 'started', so detection deterministically
+    -- resolves to it. Every REQUIRED_EXPORTS name (shared/compat/
+    -- target.lua's OxTargetFactory) must exist as a callable function or the
+    -- whole adapter is rejected as unverified and silently falls back to
+    -- the no-op stub -- the exports this file never actually exercises are
+    -- still stubbed as harmless no-ops so verification passes.
     local addGlobalPlayerCalls = {}
     local oxTargetStub = {}
     function oxTargetStub.addGlobalPlayer(_, defs) addGlobalPlayerCalls[#addGlobalPlayerCalls + 1] = defs end
+    function oxTargetStub.addGlobalVehicle() end
+    function oxTargetStub.addGlobalObject() end
+    function oxTargetStub.addModel() end
+    function oxTargetStub.addSphereZone() end
+    function oxTargetStub.removeGlobalPlayer() end
+    function oxTargetStub.removeGlobalVehicle() end
+    function oxTargetStub.removeGlobalObject() end
+    function oxTargetStub.removeModel() end
+    function oxTargetStub.removeZone() end
 
+    local function IsDuplicityVersion() return false end -- client realm, for shared/compat/core.lua
+    local function GetResourceState(resourceName)
+        return resourceName == 'ox_target' and 'started' or 'missing'
+    end
+
+    -- AddEventHandler -- captures EVERY event name (not just
+    -- 'onResourceStart'): shared/compat/core.lua also registers
+    -- 'onClientResourceStart'/'onClientResourceStop' handlers at load time
+    -- (client realm) that this fixture never fires, but must not reject.
+    -- `resourceStartHandlers` stays scoped to 'onResourceStart'
+    -- specifically, exactly as before.
     local resourceStartHandlers = {}
+    local otherEventHandlers = {}
     local function AddEventHandler(eventName, handler)
-        assert(eventName == 'onResourceStart',
-            ('clientwellbeing_spec: unexpected AddEventHandler(%q, ...)'):format(tostring(eventName)))
-        resourceStartHandlers[#resourceStartHandlers + 1] = handler
+        if eventName == 'onResourceStart' then
+            resourceStartHandlers[#resourceStartHandlers + 1] = handler
+        else
+            otherEventHandlers[eventName] = otherEventHandlers[eventName] or {}
+            otherEventHandlers[eventName][#otherEventHandlers[eventName] + 1] = handler
+        end
     end
 
     local function GetCurrentResourceName() return 'qbx_k9unit' end
@@ -232,6 +270,8 @@ local function newWellbeingFixture(opts)
         TriggerServerEvent = TriggerServerEvent,
         CreateThread = runner.CreateThread,
         Wait = runner.Wait,
+        IsDuplicityVersion = IsDuplicityVersion,
+        GetResourceState = GetResourceState,
     }
 
     local env = Sandbox.newEnv(overrides)
@@ -249,6 +289,13 @@ local function newWellbeingFixture(opts)
     for key, value in pairs(opts.features or {}) do
         env.Config.Features[key] = value
     end
+
+    -- Real K9Compat, real ox_target adapter -- see the oxTargetStub comment
+    -- above for why. Must load before client/wellbeing.lua, which reads the
+    -- `K9Compat` global inside RegisterMoodOxTargetOptions() (fired below
+    -- via the captured onResourceStart handler, when MoodSystem is on).
+    Sandbox.loadInto('../shared/compat/core.lua', env)
+    Sandbox.loadInto('../shared/compat/target.lua', env)
 
     Sandbox.loadInto('../client/wellbeing.lua', env)
 

@@ -452,55 +452,81 @@ end)
 
 -- ========================================================================
 -- The two cooldowns' fail-closed direction: NewCooldown treats a
--- non-positive threshold as PERMANENTLY on, never as "no cooldown" -- and
--- because defense.lua only ever constructs both trackers with the raw
--- Config value as their CONSTRUCTOR default (never a per-call override),
--- a bad value here is caught even earlier than that: at NewCooldown's own
--- construction-time AssertValidDefaultThreshold guard, before the file
--- finishes loading at all. (The runtime "still fails closed" branch inside
--- IsOnCooldown itself is for the OTHER call shape -- a threshold read fresh
--- from Config on every call -- which defense.lua's own two call sites never
--- use; see this file's own report for why exercising that branch here
--- would need a disproportionate, unrealistic stub rather than reflecting
--- how this file actually calls NewCooldown.)
+-- non-positive threshold as PERMANENTLY on, never as "no cooldown".
+--
+-- UPDATED, this pass (QA sandbox repro against server/combat.lua -- same
+-- mechanism applies here; see server/cooldowns.lua's header ADDENDUM): this
+-- section used to assert both cooldowns FAILED THE ENTIRE FILE'S LOAD on a
+-- bad value, "blamed on NewCooldown" at construction time. That was itself
+-- the bug: an uncaught error thrown from this file's own top-level chunk
+-- aborts THIS FILE's execution from that line onward -- not just the one
+-- misconfigured cooldown, but every RegisterNetEvent/AddEventHandler below
+-- it too (reportHandlerAttacker, onResourceStart, the maintenance thread).
+-- Both raw Config reads now go through ResolveConfiguredThresholdMs
+-- (server/cooldowns.lua) before ever reaching NewCooldown, so a bad value
+-- degrades to "this cooldown uses a safe built-in fallback, loudly warned
+-- about" instead of "this file never finishes loading."
 -- ========================================================================
 
-t.test('retriggerCooldownMs = 0 fails to load, blamed on NewCooldown -- never silently becomes "no cooldown"', function()
+t.test('retriggerCooldownMs = 0 no longer aborts this file\'s load -- clamps to the shipped 30000ms fallback and warns loudly, naming the exact key/value/substitute', function()
     local cfg = baselineHandlerDownDefenseConfig()
     cfg.retriggerCooldownMs = 0
-    local ok, err = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isFalse(ok)
-    t.contains(tostring(err), 'NewCooldown')
+    local f = newDefenseFixture({ handlerDownDefenseCfg = cfg })
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.Combat.HandlerDownDefense.retriggerCooldownMs', 1, true)
+            and line:find('found: 0', 1, true)
+            and line:find('30000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key, the value found, and the fallback substituted')
+    t.isNotNil(f.netEventNames['qbx_k9unit:server:reportHandlerAttacker'],
+        'the net event must still be registered -- the whole file kept loading past the bad value')
 end)
 
-t.test('attackerReportCooldownMs = -1 fails to load, blamed on NewCooldown', function()
+t.test('attackerReportCooldownMs = -1 no longer aborts this file\'s load -- clamps to the shipped 500ms fallback and warns loudly', function()
     local cfg = baselineHandlerDownDefenseConfig()
     cfg.attackerReportCooldownMs = -1
-    local ok, err = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isFalse(ok)
-    t.contains(tostring(err), 'NewCooldown')
+    local f = newDefenseFixture({ handlerDownDefenseCfg = cfg })
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.Combat.HandlerDownDefense.attackerReportCooldownMs', 1, true)
+            and line:find('found: -1', 1, true)
+            and line:find('500', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned)
+    t.isNotNil(f.netEventNames['qbx_k9unit:server:reportHandlerAttacker'])
 end)
 
-t.test('retriggerCooldownMs = NaN fails to load', function()
+t.test('retriggerCooldownMs = NaN no longer aborts this file\'s load', function()
     local cfg = baselineHandlerDownDefenseConfig()
     cfg.retriggerCooldownMs = 0 / 0
-    local ok = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isFalse(ok)
+    local f = newDefenseFixture({ handlerDownDefenseCfg = cfg })
+    t.isNotNil(f.netEventNames['qbx_k9unit:server:reportHandlerAttacker'])
 end)
 
-t.test('Both cooldown thresholds failing closed means a misconfigured server refuses to start this file at all, rather than granting unlimited-spam notifications', function()
+t.test('Both cooldown thresholds failing closed means a misconfigured value never becomes "no cooldown" -- but it also never takes this file, or its net event/onResourceStart/playerDropped handlers, down with it', function()
     -- Restates the fail-closed DIRECTION as one assertion: there is no
     -- config shape under which a bad threshold here degrades into "no
-    -- cooldown" -- it is always either a valid positive number, or the
-    -- whole file fails to load.
+    -- cooldown" (still structurally impossible -- IsOnCooldown's own
+    -- fail-closed handling guarantees that regardless of how the threshold
+    -- got here) NOR does it degrade into "the whole file stops loading"
+    -- (ResolveConfiguredThresholdMs's whole purpose) -- it always resolves
+    -- to a valid, positive, working cooldown.
     local cfg = baselineHandlerDownDefenseConfig()
     cfg.attackerReportCooldownMs = 0
-    local ok1 = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
+    local f1 = newDefenseFixture({ handlerDownDefenseCfg = cfg })
     cfg = baselineHandlerDownDefenseConfig()
     cfg.retriggerCooldownMs = -30000
-    local ok2 = pcall(newDefenseFixture, { handlerDownDefenseCfg = cfg })
-    t.isFalse(ok1)
-    t.isFalse(ok2)
+    local f2 = newDefenseFixture({ handlerDownDefenseCfg = cfg })
+    t.isNotNil(f1.netEventNames['qbx_k9unit:server:reportHandlerAttacker'])
+    t.isNotNil(f2.netEventNames['qbx_k9unit:server:reportHandlerAttacker'])
+    t.equals(f1.eventHandlerCount('onResourceStart'), 1, 'onResourceStart must still be registered even with a misconfigured cooldown')
 end)
 
 -- ========================================================================

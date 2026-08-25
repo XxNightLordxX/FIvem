@@ -54,6 +54,49 @@
 --                      erases the audit trail AND silently removes every
 --                      currently-active specialization.
 --
+--   k9_runtime_feature_overrides / k9_runtime_override_audit
+--                      Every currently-active runtime override high
+--                      command has made to a feature flag or tuning value
+--                      away from config.lua's own shipped default, plus
+--                      the full "who changed what, from what, to what"
+--                      trail for every override ever set or reset.
+--                      Dropping the first silently reverts every live
+--                      override to its config.lua default on the next
+--                      restart -- a real behavior change, not just an
+--                      audit-trail loss; the second is not recomputable
+--                      from anything else, since it holds history the
+--                      first table never does.
+--
+--   k9_tablet_theme / k9_tablet_theme_audit
+--                      The current K9 command tablet theme (colors,
+--                      density, header title) every connected player's
+--                      tablet renders, and the full history of every
+--                      theme change ever made as a complete snapshot per
+--                      change. Dropping the first silently reverts every
+--                      tablet to its hardcoded default theme on the next
+--                      read.
+--
+--   k9_ped_assignments Every citizenid's currently-applied K9 ped model
+--                      override, and the original model hash needed to
+--                      restore their real model. Not recomputable.
+--
+--   k9_certification_tiers / k9_certification_tier_capabilities /
+--   k9_certification_tier_audit
+--                      The full high-command-editable certification tier
+--                      catalog (trainee/certified/senior plus any custom
+--                      tier added or renamed since), exactly which
+--                      capabilities each tier currently grants, and the
+--                      full history of every tier-catalog create/rename/
+--                      reorder/delete ever made. Dropping the first two
+--                      silently reverts EVERY tier to config.lua's own
+--                      three defaults with NO capabilities granted at all
+--                      on the next restart -- including un-deleting a
+--                      tier high command deliberately tombstoned. A real
+--                      behavior change to a live server, not merely an
+--                      audit-trail loss. The audit table is not
+--                      recomputable from the other two, which only ever
+--                      hold current state.
+--
 -- ==> THE ONLY WAY BACK IS A BACKUP YOU TOOK BEFORE RUNNING THIS.
 --     Run sql/rollback/backup_k9_tables.sh first. It takes seconds.
 --     See sql/rollback/README.md step 1. If you have not run it, stop
@@ -68,8 +111,8 @@
 --
 -- Also note: you do NOT need to uninstall to stop using the resource.
 -- Removing `ensure qbx_k9unit` from server.cfg stops it completely, and
--- leaves all six tables intact and harmless on disk in case you ever
--- want them back. Just want permission grants specifically off?
+-- leaves every one of our tables intact and harmless on disk in case you
+-- ever want them back. Just want permission grants specifically off?
 -- `Config.Features.PermissionGrants = false` does that without touching
 -- any table at all -- see sql/rollback/0005_down.sql.
 -- =====================================================================
@@ -195,7 +238,7 @@ BEGIN
                'This view keeps existing after the uninstall but errors with "references invalid table(s)" whenever anything uses it. Drop or rewrite it.'
         FROM INFORMATION_SCHEMA.VIEWS
         WHERE TABLE_SCHEMA = DATABASE()
-          AND VIEW_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments)'
+          AND VIEW_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit)'
         UNION ALL
         SELECT 3,
                'WILL BE DELETED - trigger lives on one of our tables',
@@ -213,7 +256,45 @@ BEGIN
         FROM INFORMATION_SCHEMA.ROUTINES
         WHERE ROUTINE_SCHEMA = DATABASE()
           AND ROUTINE_NAME NOT LIKE 'qbx\_k9unit\_%'
-          AND ROUTINE_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments)'
+          AND ROUTINE_DEFINITION REGEXP 'k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit)'
+        UNION ALL
+        -- DRIFT CHECK (db-schema foolproofing pass, 2026-08-25): reproduced by
+        -- execution -- a real FK into `k9_certification_tiers` (a table this
+        -- file's own FK-blocker COUNT above did not yet know about) was
+        -- previously invisible to every check in this file, and an armed run
+        -- printed `UNINSTALLED` without ever mentioning it. That specific gap
+        -- is now closed (the three migration-0010 tables are named
+        -- everywhere above), but the SAME class of gap -- a future migration
+        -- adding a table here without also adding it to this file -- cannot
+        -- be closed the same way in advance, because this list is
+        -- deliberately hand-maintained, not a `k9\_%` pattern sweep (see the
+        -- OWNED TABLE LIST comment above this procedure's DECLARE for why a
+        -- pattern sweep is unsafe here specifically: DROP ordering and
+        -- other-resources'-tables sharing the same prefix). This branch is
+        -- the backstop instead: it runs UNCONDITIONALLY, every single time
+        -- this file is run, armed or not, as part of the one report every
+        -- operator already reads before anything else happens -- so the next
+        -- missed table announces itself here instead of hiding the way
+        -- migration 0010's three tables did. NOT a refusal/gate by itself
+        -- (unlike the FK-blocker check above): a `k9_%` table this file does
+        -- not recognize is EITHER a genuine drift bug in this file (report
+        -- it) OR another K9 resource's own, unrelated table legitimately
+        -- sharing this prefix (the "STILL PRESENT" report below and
+        -- backup_k9_tables.sh's own NOTE both document that second case as
+        -- real and expected) -- this file cannot tell those two apart from
+        -- INFORMATION_SCHEMA alone, so it surfaces the fact loudly and lets
+        -- a human decide, exactly like backup_k9_tables.sh's own drift guard
+        -- and this file's own "STILL PRESENT" residue report already do,
+        -- rather than guessing and either refusing a legitimate uninstall or
+        -- silently accepting a real drift.
+        SELECT 0,
+               'UNRECOGNIZED - k9_* table not in this file''s own table list',
+               TABLE_NAME,
+               'This table is NOT one of the tables this file knows how to check or drop. If it belongs to qbx_k9unit, this file is out of date -- a migration added a table without this file being updated in the same change (see the OWNED TABLE LIST comment above) -- report it before arming this file. If it belongs to a DIFFERENT K9 resource sharing this database, this is expected and safe to ignore; this file will never touch it.'
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME LIKE 'k9\_%'
+          AND TABLE_NAME NOT REGEXP '^k9_(certifications|search_log|partnerships|progression|permissions|certification_specializations|runtime_feature_overrides|runtime_override_audit|tablet_theme|tablet_theme_audit|ped_assignments|certification_tiers|certification_tier_capabilities|certification_tier_audit)$'
     ) deps
     ORDER BY ord, object_name;
 
@@ -242,6 +323,16 @@ BEGIN
         DROP TABLE IF EXISTS `k9_tablet_theme`;
         DROP TABLE IF EXISTS `k9_tablet_theme_audit`;
         DROP TABLE IF EXISTS `k9_ped_assignments`;
+        -- migration 0010 (db-schema foolproofing pass, 2026-08-25): these
+        -- three were previously absent from this list entirely, which is
+        -- why the FK-blocker gate above and the dependency report also had
+        -- to be fixed in the SAME change -- see the OWNED TABLE LIST comment
+        -- near this procedure's DECLARE for the full incident writeup. No FK
+        -- exists between any two of our own tables (see that comment), so
+        -- their position in this list carries no ordering requirement today.
+        DROP TABLE IF EXISTS `k9_certification_tiers`;
+        DROP TABLE IF EXISTS `k9_certification_tier_capabilities`;
+        DROP TABLE IF EXISTS `k9_certification_tier_audit`;
 
         -- RESIDUE REPORT: name any k9_* table this file did NOT drop. New
         -- migrations add tables, and if one is ever missed out of the list
