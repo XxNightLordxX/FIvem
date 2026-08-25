@@ -60,7 +60,29 @@
 -- this file's numeric filename order (0001, 0002, 0003, ...) after
 -- install.sql, as documented in install.sql's own header, always satisfies
 -- this.
+--
+-- RE-RUN-AFTER-PARTIAL-FAILURE SAFETY (db-schema execution-verification
+-- pass): a `DROP PROCEDURE IF EXISTS` is issued immediately BEFORE the
+-- `CREATE PROCEDURE` below, in addition to the one already present after
+-- the `CALL`. This column's own ALTER cannot legitimately fail (a plain
+-- `ADD COLUMN ... DEFAULT 0` has no duplicate-entry/constraint failure
+-- mode the way migration 0004's unique-key step does), so this is
+-- defense-in-depth rather than a fix for an observed failure on THIS file
+-- -- but the same CREATE-then-CALL-then-DROP shape is used again in
+-- migration 0004, where the CALL genuinely can throw (a pre-existing
+-- duplicate-active-row conflict). A tool that runs this script and aborts
+-- on the first statement error (the plain `mysql` CLI without `--force`,
+-- per this resource's own documented install method) would, without this
+-- extra DROP, leave the temporary procedure behind if a run were ever
+-- interrupted for any other reason (killed connection, disk full
+-- mid-script, etc.), and the next re-run would then fail at `CREATE
+-- PROCEDURE` (MySQL/MariaDB error 1304, "PROCEDURE ... already exists")
+-- instead of cleanly re-attempting the guarded ALTER. Dropping the
+-- procedure on the way IN, not just on the way out, makes re-running this
+-- file after ANY prior partial run safe, not just after a clean one.
 -- =====================================================================
+
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0003_add_tenure_column`;
 
 DELIMITER $$
 

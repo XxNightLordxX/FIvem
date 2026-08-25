@@ -96,6 +96,10 @@
 -- catalog view for index presence, as opposed to .COLUMNS for column
 -- presence).
 --
+-- See the "RE-RUN-AFTER-PARTIAL-FAILURE SAFETY" note above Step 1 below for
+-- why each of these four procedures is now also dropped immediately BEFORE
+-- it is created, not only after.
+--
 -- WHY BACKFILLING active_cert_key IS SAFE FOR EXISTING ROWS: it is a
 -- VIRTUAL generated column (`GENERATED ALWAYS AS (...) VIRTUAL`), computed
 -- from `active`/`citizenid`/`job` on every read -- MySQL/MariaDB derives
@@ -137,8 +141,36 @@
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
+-- RE-RUN-AFTER-PARTIAL-FAILURE SAFETY (db-schema execution-verification
+-- pass, 2026-08-25): every one of this file's four blocks now issues a
+-- `DROP PROCEDURE IF EXISTS` immediately BEFORE its own `CREATE PROCEDURE`,
+-- in addition to the one already present after each `CALL`. This closes a
+-- real gap the previous version of this file had: Step 4 below (the
+-- `ADD UNIQUE KEY`) is explicitly documented as the one step that can
+-- legitimately fail with a real duplicate-entry error, on exactly the
+-- dirty-data database this migration exists to catch (see the "OPERATOR
+-- NOTE" below). When run through the plain `mysql` CLI without `--force`
+-- -- this resource's own documented install method (see README.md) -- a
+-- statement error aborts the REST of the script, which means the `CALL`
+-- that throws would never reach its own trailing `DROP PROCEDURE IF
+-- EXISTS` line: the temporary procedure is left behind in the schema.
+-- The OPERATOR NOTE's own recovery instructions ("deactivate the
+-- duplicates, THEN re-run this migration file") would previously walk
+-- straight into a SECOND, unrelated failure on that re-run --
+-- `CREATE PROCEDURE qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`
+-- failing with MySQL/MariaDB error 1304 ("PROCEDURE ... already exists"),
+-- because the first, aborted run's procedure was still sitting in the
+-- schema -- even though the actual data problem had already been fixed.
+-- Dropping each procedure on the way IN, not just on the way out, makes
+-- re-running this file after ANY prior partial run (for this reason or any
+-- other) safe, matching what this file's header already claims.
+-- ---------------------------------------------------------------------
+
+-- ---------------------------------------------------------------------
 -- Step 1: add `active_cert_key` (generated column) if missing.
 -- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_active_cert_key_column`;
+
 DELIMITER $$
 
 CREATE PROCEDURE `qbx_k9unit_migration_0004_add_active_cert_key_column`()
@@ -178,6 +210,8 @@ DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_active_cert_key_column`;
 -- with pre-existing duplicate active rows (see the "ORDERING, REVISED"
 -- note in this file's header).
 -- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_idx_citizen_job_active`;
+
 DELIMITER $$
 
 CREATE PROCEDURE `qbx_k9unit_migration_0004_add_idx_citizen_job_active`()
@@ -206,6 +240,8 @@ DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_idx_citizen_job_active`;
 -- exact index -- see sql/install.sql's own comment on it). Same
 -- independence-from-the-unique-key reasoning as Step 2 above applies here.
 -- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_idx_job_active`;
+
 DELIMITER $$
 
 CREATE PROCEDURE `qbx_k9unit_migration_0004_add_idx_job_active`()
@@ -240,6 +276,8 @@ DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_idx_job_active`;
 -- header for why Steps 2 and 3 above (independent of this one) are applied
 -- first, so they still land even if this step fails.
 -- ---------------------------------------------------------------------
+DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`;
+
 DELIMITER $$
 
 CREATE PROCEDURE `qbx_k9unit_migration_0004_add_uq_one_active_cert_per_job`()
