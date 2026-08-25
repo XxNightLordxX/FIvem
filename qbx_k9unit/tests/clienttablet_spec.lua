@@ -325,6 +325,15 @@ local function newTabletFixture(opts)
                 handler(data, slot)
             end
         end,
+        --- Generic AddEventHandler-firing helper for events this file
+        --- doesn't already expose a named shortcut for (e.g.
+        --- qbx_k9unit:client:themeUpdated) -- mirrors fireResourceStop/
+        --- fireItemUse's own shape exactly, just not hardcoded to one name.
+        fireEvent = function(eventName, ...)
+            for _, handler in ipairs(eventHandlers[eventName] or {}) do
+                handler(...)
+            end
+        end,
         --- Awaits a NUI callback the same way FiveM's own dispatch would:
         --- calls the captured handler and returns whatever it passed to `cb`.
         --- @param name string
@@ -1022,6 +1031,199 @@ t.test('tablet:runCommand: every one of the nine allowlisted commands is reachab
         t.isTrue(result.ok, name .. ' should be allowlisted')
     end
     t.equals(#f.executeCommandCalls, #names)
+end)
+
+-- ----------------------------------------------------------------------
+-- OpenTablet() payload -- peds / themingEnabled additions.
+-- ----------------------------------------------------------------------
+
+t.test('OpenTablet(): payload carries peds (shared Config.Peds, no round trip) and themingEnabled', function()
+    local f = newTabletFixture({ features = { TabletTheming = true } })
+    f.env.OpenTablet()
+    local msg = f.sendNuiMessageCalls[1]
+    t.equals(msg.data.peds, f.Config.Peds)
+    t.isTrue(msg.data.themingEnabled)
+end)
+
+t.test('OpenTablet(): themingEnabled reflects Config.Features.TabletTheming = false', function()
+    local f = newTabletFixture({ features = { TabletTheming = false } })
+    f.env.OpenTablet()
+    t.isFalse(f.sendNuiMessageCalls[1].data.themingEnabled)
+end)
+
+-- ----------------------------------------------------------------------
+-- tablet:assignK9Role / tablet:revertK9Ped -- forwarded verbatim,
+-- server/tablet.lua's own tabletAssignK9Role/tabletRevertK9Ped already do
+-- every authorization/validation check. See this file's header NUI
+-- CONTRACT note.
+-- ----------------------------------------------------------------------
+
+t.test('tablet:assignK9Role: missing/empty targetCitizenId or modelName is invalid_args before any server round trip', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:assignK9Role', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:assignK9Role', { targetCitizenId = 'ABC' }).error, 'invalid_args')
+    t.equals(f.callNui('tablet:assignK9Role', { targetCitizenId = '', modelName = 'a_c_shepherd' }).error, 'invalid_args')
+    t.equals(f.callNui('tablet:assignK9Role', { targetCitizenId = 'ABC', modelName = '' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:assignK9Role: a valid payload forwards (citizenid, modelName) to tabletAssignK9Role and forwards the result verbatim', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAssignK9Role', { ok = true })
+    local result = f.callNui('tablet:assignK9Role', { targetCitizenId = 'ABC', modelName = 'a_c_husky' })
+    t.isTrue(result.ok)
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletAssignK9Role')
+    t.equals(f.callbackCallLog[1].args[1], 'ABC')
+    t.equals(f.callbackCallLog[1].args[2], 'a_c_husky')
+end)
+
+t.test('tablet:assignK9Role: a server denial (e.g. caller not high command) is forwarded verbatim, never swallowed', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAssignK9Role', { ok = false, error = 'denied' })
+    local result = f.callNui('tablet:assignK9Role', { targetCitizenId = 'ABC', modelName = 'a_c_husky' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'denied')
+end)
+
+t.test('tablet:assignK9Role: a THROWN server callback fails closed to error="timeout", never raises', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:assignK9Role', { targetCitizenId = 'ABC', modelName = 'a_c_husky' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'timeout')
+end)
+
+t.test('tablet:revertK9Ped: missing/empty targetCitizenId is invalid_args before any server round trip', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:revertK9Ped', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:revertK9Ped', { targetCitizenId = '' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:revertK9Ped: LOAD-BEARING no-unbounded-trap -- forwards (citizenid) and the result verbatim regardless of what the target holds; this file adds no additional target-side gate of its own', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletRevertK9Ped', { ok = true })
+    local result = f.callNui('tablet:revertK9Ped', { targetCitizenId = 'ALREADY-DECERTIFIED' })
+    t.isTrue(result.ok)
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletRevertK9Ped')
+    t.equals(f.callbackCallLog[1].args[1], 'ALREADY-DECERTIFIED')
+end)
+
+t.test('tablet:revertK9Ped: a server denial is forwarded verbatim', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletRevertK9Ped', { ok = false, error = 'denied' })
+    local result = f.callNui('tablet:revertK9Ped', { targetCitizenId = 'ABC' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'denied')
+end)
+
+-- ----------------------------------------------------------------------
+-- Tablet theming -- tablet:getTheme / tablet:setTheme / tablet:resetTheme.
+-- Translated through ThemeResultToJs (reason -> error, field forwarded).
+-- ----------------------------------------------------------------------
+
+t.test('tablet:getTheme: forwards the server theme verbatim on success', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletGetTheme', { ok = true, theme = { primaryColor = '#2563eb', density = 'comfortable', headerTitle = 'K9 Command Tablet' } })
+    local result = f.callNui('tablet:getTheme', {})
+    t.isTrue(result.ok)
+    t.equals(result.theme.primaryColor, '#2563eb')
+    t.equals(result.theme.headerTitle, 'K9 Command Tablet')
+end)
+
+t.test('tablet:getTheme: a thrown/unregistered callback fails closed to error="timeout"', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:getTheme', {})
+    t.isFalse(result.ok)
+    t.equals(result.error, 'timeout')
+end)
+
+t.test('tablet:setTheme: a non-table payload is invalid_args before any server round trip', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:setTheme', nil)
+    t.equals(result.error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:setTheme: forwards the WHOLE payload table verbatim to tabletSetTheme -- no client-side re-validation of individual fields', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletSetTheme', { ok = true, theme = { headerTitle = 'Bark Squad HQ' } })
+    local result = f.callNui('tablet:setTheme', { headerTitle = 'Bark Squad HQ', density = 'compact' })
+    t.isTrue(result.ok)
+    t.equals(result.theme.headerTitle, 'Bark Squad HQ')
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletSetTheme')
+    t.equals(f.callbackCallLog[1].args[1].headerTitle, 'Bark Squad HQ')
+    t.equals(f.callbackCallLog[1].args[1].density, 'compact')
+end)
+
+t.test('tablet:setTheme: reason="invalid_field" is translated to error="invalid_field" with `field` forwarded, so the tablet can highlight exactly which input failed', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletSetTheme', { ok = false, reason = 'invalid_field', field = 'primaryColor' })
+    local result = f.callNui('tablet:setTheme', { primaryColor = 'not-a-color' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_field')
+    t.equals(result.field, 'primaryColor')
+end)
+
+t.test('tablet:setTheme: reason="denied"/"feature_disabled"/"rate_limited" are all forwarded as the plain error code, unchanged', function()
+    local f = newTabletFixture()
+    for _, reason in ipairs({ 'denied', 'feature_disabled', 'rate_limited', 'db_error', 'invalid_payload' }) do
+        f.setServerCallback('qbx_k9unit:server:tabletSetTheme', { ok = false, reason = reason })
+        local result = f.callNui('tablet:setTheme', { density = 'compact' })
+        t.isFalse(result.ok)
+        t.equals(result.error, reason)
+    end
+end)
+
+t.test('tablet:setTheme: a THROWN server callback fails closed to error="timeout"', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:setTheme', { density = 'compact' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'timeout')
+end)
+
+t.test('tablet:resetTheme: forwards the reset theme verbatim on success', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletResetTheme', { ok = true, theme = { density = 'comfortable' } })
+    local result = f.callNui('tablet:resetTheme', {})
+    t.isTrue(result.ok)
+    t.equals(result.theme.density, 'comfortable')
+end)
+
+t.test('tablet:resetTheme: a denial is translated the same way as setTheme', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletResetTheme', { ok = false, reason = 'denied' })
+    local result = f.callNui('tablet:resetTheme', {})
+    t.isFalse(result.ok)
+    t.equals(result.error, 'denied')
+end)
+
+-- ----------------------------------------------------------------------
+-- qbx_k9unit:client:themeUpdated push -- relayed verbatim into
+-- SendNUIMessage, registered unconditionally (not only while tabletOpen).
+-- ----------------------------------------------------------------------
+
+t.test('themeUpdated push: relayed into SendNUIMessage as {action="tablet:themeUpdated", data=theme}, verbatim', function()
+    local f = newTabletFixture()
+    local theme = { primaryColor = '#ff0000', density = 'compact', headerTitle = 'Bark Squad HQ' }
+    f.fireEvent('qbx_k9unit:client:themeUpdated', theme)
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(f.sendNuiMessageCalls[1].action, 'tablet:themeUpdated')
+    t.equals(f.sendNuiMessageCalls[1].data, theme)
+end)
+
+t.test('themeUpdated push: fires even while the tablet is CLOSED -- this file never gates the listener on tabletOpen', function()
+    local f = newTabletFixture()
+    -- Tablet never opened this test at all.
+    f.fireEvent('qbx_k9unit:client:themeUpdated', { density = 'compact' })
+    t.equals(#f.sendNuiMessageCalls, 1, 'the push must reach SendNUIMessage regardless of local open/closed state')
+end)
+
+t.test('themeUpdated push: fires again while the tablet IS open, alongside the original tablet:open push', function()
+    local f = newTabletFixture()
+    f.env.OpenTablet()
+    f.fireEvent('qbx_k9unit:client:themeUpdated', { density = 'compact' })
+    t.equals(#f.sendNuiMessageCalls, 2)
+    t.equals(f.sendNuiMessageCalls[2].action, 'tablet:themeUpdated')
 end)
 
 os.exit(t.summary())

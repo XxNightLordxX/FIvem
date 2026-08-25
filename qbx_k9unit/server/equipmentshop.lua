@@ -412,3 +412,535 @@ AddEventHandler('onResourceStart', function(resourceName)
 
     print(('[qbx_k9unit] equipmentshop: K9 Supply shop registered (%d/%d configured items resolved).'):format(#inventoryItems, #shopConfig.items))
 end)
+
+-- ======================================================================
+-- RUNTIME SHOP LOCATIONS -- see this file's own header "RUNTIME SHOP
+-- LOCATIONS" section for the full design/scope/privilege writeup. Every
+-- helper and callback below is a SELF-CONTAINED addition: it shares no
+-- local with the RegisterShop section above (other than reading the same
+-- `Config.K9EquipmentShop` table) and can be read/reviewed independently
+-- of it.
+-- ======================================================================
+
+--- @param source number
+--- @return string? citizenid
+local function ResolveCitizenId(source)
+    local Player = exports.qbx_core:GetPlayer(source)
+    local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+    if type(citizenid) == 'string' and citizenid ~= '' then return citizenid end
+    return nil
+end
+
+--- Server-authoritative: may `source` add/move/remove a runtime shop
+--- location right now? Re-resolved fresh on every call, per this task's
+--- explicit "re-verifies IsHighCommand() SERVER-SIDE at the point of the
+--- action, never trusting a flag the NUI sent" instruction -- never
+--- cached, never trusts a client claim of authority. Mirrors
+--- server/runtimecontrol.lua's own CanManageRuntimeControl/
+--- CanManageTabletTheme SHAPE as an independent, self-contained copy (see
+--- this file's own header for why this is not a shared call into that
+--- file) -- kept under its OWN permission key
+--- ('k9.equipmentshoplocations', not 'k9.runtimecontrol'/'k9.tablettheme')
+--- so a server could one day grant "may edit shop locations" without also
+--- granting either of those, matching that file's own "kept SEPARATE"
+--- reasoning for its own two keys.
+--- @param source number
+--- @return boolean, string? citizenid -- citizenid is returned when known, for the caller to use as the audit `changed_by`
+local function CanManageShopLocations(source)
+    local citizenid = ResolveCitizenId(source)
+    if type(IsHighCommand) == 'function' and IsHighCommand(source) then
+        return true, citizenid
+    end
+    if citizenid and type(HasPermission) == 'function' and HasPermission(citizenid, 'k9.equipmentshoplocations') == true then
+        return true, citizenid
+    end
+    return false, citizenid
+end
+
+--- Console log line for every mutating call below -- matches
+--- server/runtimecontrol.lua's/server/admin.lua's own "%s ran %s(%s) ->
+--- %s" audit format exactly.
+--- @param source number
+--- @param action string
+--- @param detail string
+--- @param outcome string
+local function LogShopLocationAudit(source, action, detail, outcome)
+    local citizenid = ResolveCitizenId(source)
+    local whoLabel = citizenid and ('citizenid=' .. citizenid) or ('unresolved-source=' .. tostring(source))
+    print(('[qbx_k9unit] AUDIT: %s ran %s(%s) -> %s'):format(whoLabel, action, detail, outcome))
+end
+
+--- Fail-closed SELECT wrapper -- pcall around MySQL.query.await, matching
+--- server/runtimecontrol.lua's/server/admin.lua's own SafeQuery. A failed
+--- read returns an empty table, never a raw Lua error.
+--- @param sql string
+--- @param params table
+--- @return table rows
+local function SafeQuery(sql, params)
+    local ok, rowsOrErr = pcall(MySQL.query.await, sql, params)
+    if not ok then
+        print(('[qbx_k9unit] equipmentshop.lua query failed: %s'):format(tostring(rowsOrErr)))
+        return {}
+    end
+    return rowsOrErr or {}
+end
+
+--- pcall-wrapped write helper for INSERT/UPDATE/DELETE that don't need a
+--- generated id back -- returns true/false rather than throwing. Every
+--- write in this file is a plain statement with `?`-bound parameters only,
+--- never a caller-controlled fragment.
+--- @param sql string
+--- @param params table
+--- @return boolean ok
+local function SafeWrite(sql, params)
+    local ok, err = pcall(MySQL.query.await, sql, params)
+    if not ok then
+        print(('[qbx_k9unit] equipmentshop.lua write failed: %s'):format(tostring(err)))
+        return false
+    end
+    return true
+end
+
+--- pcall-wrapped INSERT helper for the one write in this file that needs
+--- the generated auto-increment id back (equipmentShopAddLocation, to
+--- build that new row's own `db:<id>` location key).
+--- @param sql string
+--- @param params table
+--- @return boolean ok, number? insertId
+local function SafeInsert(sql, params)
+    local ok, resultOrErr = pcall(MySQL.insert.await, sql, params)
+    if not ok or type(resultOrErr) ~= 'number' then
+        print(('[qbx_k9unit] equipmentshop.lua insert failed: %s'):format(tostring(resultOrErr)))
+        return false, nil
+    end
+    return true, resultOrErr
+end
+
+--- Rejects nil, non-number, NaN, and +/-infinity -- never a bare
+--- `type(x) == 'number'` alone. Same NaN test as
+--- server/runtimecontrol.lua's own SetTunable comment cites
+--- (`newValue == newValue`, Lua's standard NaN idiom).
+--- @param value any
+--- @return boolean
+local function IsFiniteNumber(value)
+    return type(value) == 'number' and value == value and value > -math.huge and value < math.huge
+end
+
+--- Strict, small character-level filter for a short player/officer-typed
+--- string (a shop ped's model/scenario/label) before it is ever persisted
+--- -- a self-contained duplicate of server/runtimecontrol.lua's own
+--- IsSafeHeaderTitle, same reasoning: defense in depth on top of whatever
+--- renders it later (the tablet's own textContent-only discipline), so a
+--- value that somehow reached a different, less careful renderer still
+--- could not carry markup or a control sequence. Rejects empty, anything
+--- over `maxLen`, and any of `< > & " ' \`` or a control/CR/LF/TAB byte.
+--- @param value any
+--- @param maxLen number
+--- @return boolean
+local function IsSafeShortString(value, maxLen)
+    if type(value) ~= 'string' then return false end
+    local len = #value
+    if len == 0 or len > maxLen then return false end
+    if value:find('[<>&"\'`\r\n\t]') then return false end
+    for i = 1, len do
+        local byte = value:byte(i)
+        if byte < 0x20 or byte == 0x7F then return false end
+    end
+    return true
+end
+
+--- In-memory mirror of every row currently in k9_equipment_shop_locations,
+--- keyed by that row's own `db:<id>` location key -- populated once at
+--- boot (below) and kept in sync by the three mutating callbacks below,
+--- rather than re-querying the database on every GetLocations call or
+--- every BuildEffectiveLocations build -- same "populated at boot, kept in
+--- sync by Set/Reset... rather than re-querying the DB on every tablet
+--- open" performance posture as server/runtimecontrol.lua's own
+--- ActiveOverrides.
+--- @type table<string, { x: number, y: number, z: number, heading: number, model: string?, scenario: string?, label: string? }>
+local RuntimeShopLocations = {}
+
+--- @class ShopLocation
+--- @field x number
+--- @field y number
+--- @field z number
+--- @field heading number
+--- @field model string -- already resolved against Config.K9EquipmentShop.pedModel -- never nil/empty
+--- @field scenario string -- already resolved against Config.K9EquipmentShop.pedScenario -- '' means "no scenario", never nil
+--- @field label string -- already resolved against Config.K9EquipmentShop.label -- never nil/empty
+
+--- Resolves ONE location's model/heading/scenario/label against this
+--- shop's own pedModel/pedHeading/pedScenario/label defaults. Shared by
+--- BOTH a Config.K9EquipmentShop.locations entry and a
+--- k9_equipment_shop_locations database row below -- both use the exact
+--- same optional-field-with-shop-wide-fallback shape, just sourced from a
+--- Lua table vs. a SQL row (where a SQL NULL already reads back as Lua
+--- `nil` via oxmysql, so no separate NULL-handling branch is needed here).
+--- `scenario` distinguishes three states, matching config.lua's own
+--- per-location `scenario = false` convention: `false` OR the literal
+--- empty string `''` (the database's own way of persisting that same
+--- "explicitly no scenario" choice, since SQL has no boolean-false-vs-
+--- string type to reuse instead) means "no scenario, even if the shop-wide
+--- default has one"; a non-empty string is a real override; `nil` (never
+--- set at all) falls through to the shop-wide default.
+--- @param x number @param y number @param z number
+--- @param heading number? @param model string? @param scenario string|false|nil @param label string?
+--- @param shopConfig table -- Config.K9EquipmentShop
+--- @return ShopLocation
+local function ResolveLocation(x, y, z, heading, model, scenario, label, shopConfig)
+    local resolvedHeading = type(heading) == 'number' and heading or shopConfig.pedHeading
+    if type(resolvedHeading) ~= 'number' then resolvedHeading = 0.0 end
+
+    local resolvedModel = (type(model) == 'string' and model ~= '') and model or shopConfig.pedModel
+    if type(resolvedModel) ~= 'string' or resolvedModel == '' then resolvedModel = 'a_c_shepherd' end
+
+    local resolvedScenario
+    if scenario == false or scenario == '' then
+        resolvedScenario = ''
+    elseif type(scenario) == 'string' then
+        resolvedScenario = scenario
+    elseif shopConfig.pedScenario == false then
+        resolvedScenario = ''
+    elseif type(shopConfig.pedScenario) == 'string' and shopConfig.pedScenario ~= '' then
+        resolvedScenario = shopConfig.pedScenario
+    else
+        resolvedScenario = ''
+    end
+
+    local resolvedLabel = (type(label) == 'string' and label ~= '') and label
+        or (type(shopConfig.label) == 'string' and shopConfig.label ~= '' and shopConfig.label)
+        or 'K9 Supply'
+
+    return { x = x, y = y, z = z, heading = resolvedHeading, model = resolvedModel, scenario = resolvedScenario, label = resolvedLabel }
+end
+
+--- The full, effective shop location list: every valid
+--- Config.K9EquipmentShop.locations entry (keyed `cfg:<index>`) UNIONED
+--- with every row currently in RuntimeShopLocations (keyed `db:<id>`) --
+--- see this file's header "SCOPE" note for why this is always a pure
+--- union, never a conflict to resolve. Safe to call with
+--- Config.K9EquipmentShop missing/malformed (returns whatever runtime
+--- locations exist, or an empty table) -- this function is read by
+--- GetLocations (any connected player) and after every mutation below, so
+--- it must never throw regardless of config shape.
+--- @return table<string, ShopLocation>
+local function BuildEffectiveLocations()
+    local out = {}
+    local shopConfig = Config.K9EquipmentShop
+
+    if type(shopConfig) == 'table' and type(shopConfig.locations) == 'table' then
+        for i, entry in ipairs(shopConfig.locations) do
+            if type(entry) == 'table' and IsFiniteNumber(entry.x) and IsFiniteNumber(entry.y) and IsFiniteNumber(entry.z) then
+                out['cfg:' .. i] = ResolveLocation(entry.x, entry.y, entry.z, entry.heading, entry.model, entry.scenario, entry.label, shopConfig)
+            end
+        end
+    end
+
+    for key, loc in pairs(RuntimeShopLocations) do
+        out[key] = ResolveLocation(loc.x, loc.y, loc.z, loc.heading, loc.model, loc.scenario, loc.label, type(shopConfig) == 'table' and shopConfig or {})
+    end
+
+    return out
+end
+
+-- Anti-fat-finger cooldown, one shared instance keyed by the calling
+-- officer's own source -- covers every mutating callback below. Mirrors
+-- server/runtimecontrol.lua's RuntimeControlActionCooldown shape exactly,
+-- as a SEPARATE instance (every caller here is already high command or an
+-- explicit permission holder, i.e. already trusted -- this guards against
+-- a held key or a double-submitted click, not abuse).
+local EQUIPMENT_SHOP_LOCATION_ACTION_COOLDOWN_MS = 1000
+local EquipmentShopLocationActionCooldown = NewCooldown(EQUIPMENT_SHOP_LOCATION_ACTION_COOLDOWN_MS)
+EquipmentShopLocationActionCooldown.RegisterPlayerDropped()
+
+-- ======================================================================
+-- BOOT -- load every persisted runtime shop location. Deferred to
+-- onResourceStart (not this file's own raw top-level), matching
+-- server/runtimecontrol.lua's own documented "every existing DB-dependent
+-- startup path in this resource defers its first real query into
+-- onResourceStart" convention. Independent of the RegisterShop
+-- onResourceStart handler above (AddEventHandler allows any number of
+-- handlers for the same event; both run, in registration order, when the
+-- event actually fires) -- deliberately NOT folded into that same handler,
+-- since loading runtime locations must not depend on shopType/items
+-- having validated successfully (a broken `items` list still leaves the
+-- shop ped worth spawning at its configured spot; ox_inventory simply has
+-- nothing to sell there until that's fixed, same as today).
+-- ======================================================================
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return end
+
+    local rows = SafeQuery('SELECT id, x, y, z, heading, model, scenario, label FROM k9_equipment_shop_locations', {})
+    for _, row in ipairs(rows) do
+        RuntimeShopLocations['db:' .. row.id] = {
+            x = row.x, y = row.y, z = row.z, heading = row.heading,
+            model = row.model, scenario = row.scenario, label = row.label,
+        }
+    end
+
+    print(('[qbx_k9unit] equipmentshop.lua: %d runtime shop location(s) loaded from the database.'):format(#rows))
+end)
+
+-- ======================================================================
+-- CALLBACKS -- see this file's header "RUNTIME SHOP LOCATIONS" section
+-- for the full contract. ALWAYS registered, unconditionally -- each
+-- re-checks Config.Features.K9EquipmentShop live, on every call, matching
+-- this resource's "live"-tier convention (server/runtimecontrol.lua's own
+-- header, "THE ENGINE CONSTRAINT").
+-- ======================================================================
+
+lib.callback.register('qbx_k9unit:server:equipmentShopGetLocations', function(source)
+    if type(source) ~= 'number' or source <= 0 then
+        return { ok = false, reason = 'invalid_source' }
+    end
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then
+        return { ok = false, reason = 'feature_disabled' }
+    end
+    return { ok = true, locations = BuildEffectiveLocations() }
+end)
+
+lib.callback.register('qbx_k9unit:server:equipmentShopAddLocation', function(source, location)
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then
+        return { ok = false, reason = 'feature_disabled' }
+    end
+
+    local authorized, citizenid = CanManageShopLocations(source)
+    if not authorized then
+        LogShopLocationAudit(source, 'equipmentShopAddLocation', 'n/a', 'denied')
+        return { ok = false, reason = 'denied' }
+    end
+
+    if not EquipmentShopLocationActionCooldown.Consume(source, EQUIPMENT_SHOP_LOCATION_ACTION_COOLDOWN_MS) then
+        return { ok = false, reason = 'rate_limited' }
+    end
+
+    if type(location) ~= 'table' or not IsFiniteNumber(location.x) or not IsFiniteNumber(location.y) or not IsFiniteNumber(location.z) then
+        LogShopLocationAudit(source, 'equipmentShopAddLocation', 'n/a', 'invalid_coords')
+        return { ok = false, reason = 'invalid_coords' }
+    end
+
+    local heading = 0.0
+    if location.heading ~= nil then
+        if not IsFiniteNumber(location.heading) then
+            LogShopLocationAudit(source, 'equipmentShopAddLocation', 'n/a', 'invalid_heading')
+            return { ok = false, reason = 'invalid_heading' }
+        end
+        heading = location.heading % 360
+    end
+
+    local model = nil
+    if location.model ~= nil then
+        if not IsSafeShortString(location.model, 64) then
+            LogShopLocationAudit(source, 'equipmentShopAddLocation', 'n/a', 'invalid_model')
+            return { ok = false, reason = 'invalid_model' }
+        end
+        model = location.model
+    end
+
+    local scenario = nil
+    if location.scenario == false then
+        scenario = ''
+    elseif location.scenario ~= nil then
+        if not IsSafeShortString(location.scenario, 64) then
+            LogShopLocationAudit(source, 'equipmentShopAddLocation', 'n/a', 'invalid_scenario')
+            return { ok = false, reason = 'invalid_scenario' }
+        end
+        scenario = location.scenario
+    end
+
+    local label = nil
+    if location.label ~= nil then
+        if not IsSafeShortString(location.label, 100) then
+            LogShopLocationAudit(source, 'equipmentShopAddLocation', 'n/a', 'invalid_label')
+            return { ok = false, reason = 'invalid_label' }
+        end
+        label = location.label
+    end
+
+    local insertOk, newId = SafeInsert(
+        'INSERT INTO k9_equipment_shop_locations (x, y, z, heading, model, scenario, label, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        { location.x, location.y, location.z, heading, model, scenario, label, citizenid or 'unknown' }
+    )
+    if not insertOk then
+        LogShopLocationAudit(source, 'equipmentShopAddLocation', 'n/a', 'db_error')
+        return { ok = false, reason = 'db_error' }
+    end
+
+    local locationKey = 'db:' .. newId
+    RuntimeShopLocations[locationKey] = { x = location.x, y = location.y, z = location.z, heading = heading, model = model, scenario = scenario, label = label }
+
+    SafeWrite(
+        'INSERT INTO k9_equipment_shop_locations_audit (location_id, action, x, y, z, heading, model, scenario, label, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        { newId, 'add', location.x, location.y, location.z, heading, model, scenario, label, citizenid or 'unknown' }
+    )
+
+    LogShopLocationAudit(source, 'equipmentShopAddLocation', ('key=%s x=%.2f y=%.2f z=%.2f'):format(locationKey, location.x, location.y, location.z), 'ok')
+
+    local effective = BuildEffectiveLocations()
+    TriggerClientEvent('qbx_k9unit:client:equipmentShopLocationsUpdated', -1, effective)
+
+    return { ok = true, locationKey = locationKey, locations = effective }
+end)
+
+lib.callback.register('qbx_k9unit:server:equipmentShopMoveLocation', function(source, locationKey, updates)
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then
+        return { ok = false, reason = 'feature_disabled' }
+    end
+
+    local authorized, citizenid = CanManageShopLocations(source)
+    if not authorized then
+        LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(tostring(locationKey)), 'denied')
+        return { ok = false, reason = 'denied' }
+    end
+
+    if not EquipmentShopLocationActionCooldown.Consume(source, EQUIPMENT_SHOP_LOCATION_ACTION_COOLDOWN_MS) then
+        return { ok = false, reason = 'rate_limited' }
+    end
+
+    -- Only ever valid on a `db:<id>` key -- see this file's header "SCOPE"
+    -- note. A `cfg:<n>` key (or any other malformed string) is refused
+    -- here, never silently accepted and dropped.
+    local dbId = type(locationKey) == 'string' and locationKey:match('^db:(%d+)$')
+    local current = dbId and RuntimeShopLocations[locationKey]
+    if not dbId or not current then
+        LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(tostring(locationKey)), 'invalid_key')
+        return { ok = false, reason = 'invalid_key' }
+    end
+
+    if type(updates) ~= 'table' then
+        LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(locationKey), 'invalid_payload')
+        return { ok = false, reason = 'invalid_payload' }
+    end
+
+    -- Merge onto the CURRENT row (never onto an empty table) -- an admin
+    -- moving only x/y/z must not accidentally blank model/scenario/label
+    -- back to nil, mirroring server/runtimecontrol.lua's own SetTheme
+    -- merge-then-validate discipline.
+    local merged = { x = current.x, y = current.y, z = current.z, heading = current.heading, model = current.model, scenario = current.scenario, label = current.label }
+
+    if updates.x ~= nil or updates.y ~= nil or updates.z ~= nil then
+        local x = updates.x ~= nil and updates.x or current.x
+        local y = updates.y ~= nil and updates.y or current.y
+        local z = updates.z ~= nil and updates.z or current.z
+        if not IsFiniteNumber(x) or not IsFiniteNumber(y) or not IsFiniteNumber(z) then
+            LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(locationKey), 'invalid_coords')
+            return { ok = false, reason = 'invalid_coords' }
+        end
+        merged.x, merged.y, merged.z = x, y, z
+    end
+
+    if updates.heading ~= nil then
+        if not IsFiniteNumber(updates.heading) then
+            LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(locationKey), 'invalid_heading')
+            return { ok = false, reason = 'invalid_heading' }
+        end
+        merged.heading = updates.heading % 360
+    end
+
+    -- For model/scenario/label: `false` explicitly resets that field back
+    -- to nil (i.e. "use the shop-wide default again"), a non-empty valid
+    -- string overrides it, anything else is refused outright.
+    if updates.model ~= nil then
+        if updates.model == false then
+            merged.model = nil
+        elseif IsSafeShortString(updates.model, 64) then
+            merged.model = updates.model
+        else
+            LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(locationKey), 'invalid_model')
+            return { ok = false, reason = 'invalid_model' }
+        end
+    end
+
+    if updates.scenario ~= nil then
+        if updates.scenario == false then
+            merged.scenario = ''
+        elseif IsSafeShortString(updates.scenario, 64) then
+            merged.scenario = updates.scenario
+        else
+            LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(locationKey), 'invalid_scenario')
+            return { ok = false, reason = 'invalid_scenario' }
+        end
+    end
+
+    if updates.label ~= nil then
+        if updates.label == false then
+            merged.label = nil
+        elseif IsSafeShortString(updates.label, 100) then
+            merged.label = updates.label
+        else
+            LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(locationKey), 'invalid_label')
+            return { ok = false, reason = 'invalid_label' }
+        end
+    end
+
+    local wrote = SafeWrite(
+        'UPDATE k9_equipment_shop_locations SET x = ?, y = ?, z = ?, heading = ?, model = ?, scenario = ?, label = ?, updated_by = ? WHERE id = ?',
+        { merged.x, merged.y, merged.z, merged.heading, merged.model, merged.scenario, merged.label, citizenid or 'unknown', tonumber(dbId) }
+    )
+    if not wrote then
+        LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(locationKey), 'db_error')
+        return { ok = false, reason = 'db_error' }
+    end
+
+    RuntimeShopLocations[locationKey] = merged
+
+    SafeWrite(
+        'INSERT INTO k9_equipment_shop_locations_audit (location_id, action, x, y, z, heading, model, scenario, label, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        { tonumber(dbId), 'move', merged.x, merged.y, merged.z, merged.heading, merged.model, merged.scenario, merged.label, citizenid or 'unknown' }
+    )
+
+    LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s x=%.2f y=%.2f z=%.2f'):format(locationKey, merged.x, merged.y, merged.z), 'ok')
+
+    local effective = BuildEffectiveLocations()
+    TriggerClientEvent('qbx_k9unit:client:equipmentShopLocationsUpdated', -1, effective)
+
+    return { ok = true, locations = effective }
+end)
+
+lib.callback.register('qbx_k9unit:server:equipmentShopRemoveLocation', function(source, locationKey)
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then
+        return { ok = false, reason = 'feature_disabled' }
+    end
+
+    local authorized, citizenid = CanManageShopLocations(source)
+    if not authorized then
+        LogShopLocationAudit(source, 'equipmentShopRemoveLocation', ('key=%s'):format(tostring(locationKey)), 'denied')
+        return { ok = false, reason = 'denied' }
+    end
+
+    if not EquipmentShopLocationActionCooldown.Consume(source, EQUIPMENT_SHOP_LOCATION_ACTION_COOLDOWN_MS) then
+        return { ok = false, reason = 'rate_limited' }
+    end
+
+    -- Only ever valid on a `db:<id>` key -- see this file's header "SCOPE"
+    -- note. Removing a `cfg:<n>` location is not supported from here at
+    -- all (never silently accepted and ignored) -- config.lua stays the
+    -- one source of truth for its own entries.
+    local dbId = type(locationKey) == 'string' and locationKey:match('^db:(%d+)$')
+    local existing = dbId and RuntimeShopLocations[locationKey]
+    if not dbId or not existing then
+        LogShopLocationAudit(source, 'equipmentShopRemoveLocation', ('key=%s'):format(tostring(locationKey)), 'invalid_key')
+        return { ok = false, reason = 'invalid_key' }
+    end
+
+    local wrote = SafeWrite('DELETE FROM k9_equipment_shop_locations WHERE id = ?', { tonumber(dbId) })
+    if not wrote then
+        LogShopLocationAudit(source, 'equipmentShopRemoveLocation', ('key=%s'):format(locationKey), 'db_error')
+        return { ok = false, reason = 'db_error' }
+    end
+
+    SafeWrite(
+        'INSERT INTO k9_equipment_shop_locations_audit (location_id, action, x, y, z, heading, model, scenario, label, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        { tonumber(dbId), 'remove', existing.x, existing.y, existing.z, existing.heading, existing.model, existing.scenario, existing.label, citizenid or 'unknown' }
+    )
+
+    RuntimeShopLocations[locationKey] = nil
+
+    LogShopLocationAudit(source, 'equipmentShopRemoveLocation', ('key=%s'):format(locationKey), 'ok')
+
+    local effective = BuildEffectiveLocations()
+    TriggerClientEvent('qbx_k9unit:client:equipmentShopLocationsUpdated', -1, effective)
+
+    return { ok = true, locations = effective }
+end)

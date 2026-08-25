@@ -198,6 +198,23 @@ local function newCombatFixture(opts)
     local hasAccessBySource = {}
     local function HasK9Access(src) return hasAccessBySource[src] == true end
 
+    -- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl) --
+    -- HasPermission is OMITTED FROM THE SANDBOX ENTIRELY BY DEFAULT, same
+    -- convention this file's own header already establishes for
+    -- IsHesitating/IsDistracted/AwardXP: this proves
+    -- IsCombatFeaturePermittedForCitizenId's real `type(HasPermission) ==
+    -- 'function'` guard degrades cleanly (default-allow, step 4) when
+    -- server/permissions.lua is absent, and means every one of THIS file's
+    -- other ~70 tests (none of which opt in via opts.withHasPermission)
+    -- exercises that exact absent-dependency path for free, never a grant
+    -- store that happens to be empty.
+    local permissionGrants = {} -- [citizenid][key] = true/false
+    local permissionCalls = {}
+    local function defaultHasPermission(citizenid, key)
+        permissionCalls[#permissionCalls + 1] = { citizenid = citizenid, key = key }
+        return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+    end
+
     local playersBySource = {} -- src -> { citizenid=, metadata={wanted=,iswanted=,isdead=,inlaststand=} }
     local function qbxGetPlayer(_self, src)
         local p = playersBySource[src]
@@ -263,6 +280,17 @@ local function newCombatFixture(opts)
         -- Default shape here is deliberately arbitrary -- override via
         -- opts.departmentsCfg for tests that care about the exact threshold.
         Departments = opts.departmentsCfg or { police = { nonComplianceAlertGrade = 2 } },
+        -- PER-PERSON FEATURE CONTROL -- absent (nil) by default, matching
+        -- this file's real config.lua-absent-in-tests posture exactly: with
+        -- no Config.FeatureControl table at all, IsCombatFeaturePermittedForCitizenId's
+        -- own `type(featureControl) == 'table'` guard makes `requiresGrant`
+        -- false for every feature, so every one of this file's ~70 OTHER
+        -- tests (none of which pass opts.featureControlRequireGrant) falls
+        -- straight through to step 4 (default allow) exactly as before this
+        -- check existed. opts.featureControlRequireGrant, when given, is a
+        -- plain `{ FeatureName = true, ... }` table assigned verbatim as
+        -- Config.FeatureControl.RequireGrant.
+        FeatureControl = opts.featureControlRequireGrant and { RequireGrant = opts.featureControlRequireGrant } or nil,
     }
 
     local envOverrides = {
@@ -292,6 +320,9 @@ local function newCombatFixture(opts)
     if opts.withWellbeing then
         envOverrides.IsHesitating = isHesitatingFn
         envOverrides.IsDistracted = isDistractedFn
+    end
+    if opts.withHasPermission then
+        envOverrides.HasPermission = opts.hasPermissionFn or defaultHasPermission
     end
 
     local env = Sandbox.newEnv(envOverrides)
@@ -348,6 +379,11 @@ local function newCombatFixture(opts)
         setNow = function(ms) fakeNow = ms end,
         now = function() return fakeNow end,
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
+        permissionCalls = permissionCalls,
+        grantPermission = function(citizenid, key, value)
+            permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+            permissionGrants[citizenid][key] = value
+        end,
         setPlayer = function(src, shape)
             playersBySource[src] = {
                 citizenid = shape.citizenid,
@@ -1509,6 +1545,177 @@ t.test('NonComplianceDetection notify_staff: the OLD ACE check is gone -- IsPlay
     f.advance(500)
     local ok = pcall(f.runOneTick)
     t.isTrue(ok, 'the notify_staff fan-out must never call the removed IsPlayerAceAllowed')
+end)
+
+-- ========================================================================
+-- PER-PERSON FEATURE CONTROL -- config.lua's Config.FeatureControl,
+-- steps 2-4 of its documented "first match wins" resolution (step 1, the
+-- Config.Features.<Name> flag, is already covered by the feature-disabled
+-- tests at the top of this file). This is the headline finding of this
+-- pass: server/permissions.lua's IsValidPermissionKey previously rejected
+-- EVERY 'feature.<Name>'/'block.<Name>' grant outright, so
+-- IsCombatFeaturePermittedForCitizenId below (wired into ValidateCombatRequest,
+-- this pass) had nothing real to ever read -- a block or RequireGrant
+-- listing had ZERO effect on whether BiteAndHold/NonLethalTakedown/
+-- PropDragging could be used, regardless of what the tablet displayed.
+-- These tests prove a block ACTUALLY blocks and a grant ACTUALLY grants at
+-- the real gate, not merely that the tablet renders the right label.
+-- Mirrors tests/pursuitsprint_spec.lua's own "Per-person feature control"
+-- section byte-for-byte in test SHAPE (that file is the reference
+-- implementation this file's own IsCombatFeaturePermittedForCitizenId
+-- mirrors) -- extended here to also cover NonLethalTakedown/PropDragging
+-- and the cross-feature independence a SHARED validator specifically
+-- risks getting wrong.
+-- ========================================================================
+
+t.test('requestBiteHold: RequireGrant.BiteAndHold = true + no grant held -- denied even though HasK9Access is true', function()
+    local f = newCombatFixture({ withHasPermission = true, featureControlRequireGrant = { BiteAndHold = true } })
+    wireK9(f, K9_SRC) -- citizenid defaults to 'K9-CID-10', deliberately NOT granted
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+    t.equals(f.notifyCalls[#f.notifyCalls].notifyType, 'error')
+end)
+
+t.test('requestBiteHold: RequireGrant.BiteAndHold = true + an active feature.BiteAndHold grant -- allowed', function()
+    local f = newCombatFixture({ withHasPermission = true, featureControlRequireGrant = { BiteAndHold = true } })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'feature.BiteAndHold', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+end)
+
+t.test('requestBiteHold: BLOCK ALWAYS WINS -- an explicit block.BiteAndHold denies even a citizenid who ALSO holds an active feature.BiteAndHold grant', function()
+    local f = newCombatFixture({ withHasPermission = true, featureControlRequireGrant = { BiteAndHold = true } })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'feature.BiteAndHold', true)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'block.BiteAndHold', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('requestBiteHold: RequireGrant.BiteAndHold not listed at all -- default ALLOW, no grant needed (step 4)', function()
+    local f = newCombatFixture({ withHasPermission = true, featureControlRequireGrant = {} })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    -- deliberately NOT granted -- must still succeed since it is not listed
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+end)
+
+t.test('requestBiteHold: BLOCK STILL APPLIES even when BiteAndHold is NOT listed in RequireGrant (step 2 fires independently of step 3)', function()
+    local f = newCombatFixture({ withHasPermission = true, featureControlRequireGrant = {} })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'block.BiteAndHold', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('requestBiteHold: server/permissions.lua entirely absent (HasPermission not even defined) + RequireGrant listed -- fails CLOSED, never open', function()
+    local f = newCombatFixture({ withHasPermission = false, featureControlRequireGrant = { BiteAndHold = true } })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.isTrue(ok, 'a missing HasPermission must never error the request handler')
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('requestBiteHold: a BLOCK on a DIFFERENT feature key (NonLethalTakedown) does not affect BiteAndHold -- feature keys are independent, not conflated by the shared validator', function()
+    local f = newCombatFixture({ withHasPermission = true })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'block.NonLethalTakedown', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'BiteAndHold must be unaffected by a block on a different feature key')
+end)
+
+t.test('requestBiteHold: a block granted AFTER an already-open hold does NOT terminate it, and the hold\'s own release path is never gated on the grant -- NO UNBOUNDED TRAP', function()
+    local f = newCombatFixture({ withHasPermission = true, featureControlRequireGrant = { BiteAndHold = true } })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'feature.BiteAndHold', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+
+    -- High command revokes the grant and blocks the K9 mid-hold.
+    f.grantPermission('K9-CID-' .. K9_SRC, 'feature.BiteAndHold', false)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'block.BiteAndHold', true)
+
+    -- The ALREADY-OPEN hold must still be releasable -- EndHold/releaseBiteHold
+    -- never consult HasPermission at all (ValidateCombatRequest is only
+    -- ever re-run at REQUEST time, never at teardown time).
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldEnded'), 1, 'a mid-hold block/revoke must never strand an already-open hold')
+
+    -- The block DOES correctly stop a brand-new request from the same K9.
+    wireNpcTarget(f, 501)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 501)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'still exactly 1 -- the new request against 501 must be denied')
+end)
+
+t.test('requestTakedown: RequireGrant.NonLethalTakedown = true + no grant held -- denied (checked at the PRE-yield ValidateCombatRequest call, before the speed-sample Wait())', function()
+    local f = newCombatFixture({ withHasPermission = true, featureControlRequireGrant = { NonLethalTakedown = true } })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.dispatchNetEvent('qbx_k9unit:server:requestTakedown', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('requestTakedown: a grant revoked DURING the speed-sample yield is caught by the POST-yield re-validation -- TOCTOU-safe', function()
+    local f = newCombatFixture({ withHasPermission = true, featureControlRequireGrant = { NonLethalTakedown = true } })
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.grantPermission('K9-CID-' .. K9_SRC, 'feature.NonLethalTakedown', true)
+
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        -- Parked mid-Wait(), post the PRE-yield check (which passed) --
+        -- high command revokes the grant right now, before the POST-yield
+        -- re-validation runs.
+        f.grantPermission('K9-CID-' .. K9_SRC, 'feature.NonLethalTakedown', false)
+        f.setCoords(ped, 100, 0, 0) -- would otherwise clearly pass the speed gate
+    end)
+
+    t.equals(#f.clientEvents, 0, 'the revoke made during the yield must be caught by ValidateCombatRequest\'s own second, post-yield call')
+end)
+
+t.test('requestTakedown: BLOCK ALWAYS WINS, same as BiteAndHold', function()
+    local f = newCombatFixture({ withHasPermission = true, featureControlRequireGrant = { NonLethalTakedown = true } })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'feature.NonLethalTakedown', true)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'block.NonLethalTakedown', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestTakedown', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('requestDrag: RequireGrant.PropDragging = true + no grant held -- denied', function()
+    local f = newCombatFixture({ propDragging = true, withHasPermission = true, featureControlRequireGrant = { PropDragging = true } })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 50 }) -- downed (<= PED_DEAD_HEALTH_THRESHOLD)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('requestDrag: RequireGrant.PropDragging = true + an active feature.PropDragging grant -- allowed', function()
+    local f = newCombatFixture({ propDragging = true, withHasPermission = true, featureControlRequireGrant = { PropDragging = true } })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 50 })
+    f.grantPermission('K9-CID-' .. K9_SRC, 'feature.PropDragging', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1)
+end)
+
+t.test('requestDrag: BLOCK ALWAYS WINS, same as BiteAndHold/NonLethalTakedown', function()
+    local f = newCombatFixture({ propDragging = true, withHasPermission = true, featureControlRequireGrant = { PropDragging = true } })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500, { health = 50 })
+    f.grantPermission('K9-CID-' .. K9_SRC, 'feature.PropDragging', true)
+    f.grantPermission('K9-CID-' .. K9_SRC, 'block.PropDragging', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
 end)
 
 os.exit(t.summary())

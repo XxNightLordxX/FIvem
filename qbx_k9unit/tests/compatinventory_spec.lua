@@ -23,20 +23,26 @@
          capability gating, correct export names/argument shapes on the
          real call, FAIL CLOSED behavior on a throwing export (never
          propagates, never leaves a UseItem caller's callback un-invoked),
-         and the 'itemEnteredInventory'/'itemDropped' RegisterHook
-         translation against ox_inventory's real confirmed 'swapItems'
-         payload shape (same-stash reorganize is never re-filtered, a
-         malformed payload never crashes or false-rejects, a genuine veto
-         really returns the literal `false`).
+         and RegisterHook as a PURE, GENERIC pass-through onto ox_inventory's
+         own real `registerHook(eventName, callback)` -- per
+         shared/compat/README.md's "match the reference resource's calling
+         convention" rule, no fixed event list, no payload translation, the
+         caller's own `false` return forwarded as ox_inventory's real veto
+         signal, and a throwing caller callback never propagates into
+         ox_inventory's own hook-dispatch call stack.
       3. qb-inventory (CONFIRMED for a real server-side subset; client
          realm is a confirmed, disclosed nil): the COMPOSED
          GetInventoryItems (via GetInventory().items), the CONFIRMED-ABSENT
          GetContainerFromSlot no-op, RegisterStash's CreateInventory mapping
          (owner/groups silently dropped, never forwarded as a fake ACL),
          RegisterShop's CreateShop mapping (disclosed stock-amount default),
-         and RegisterHook's split behavior: 'itemEnteredInventory' really
-         registers against the real AddHook('ItemAdded', ...) veto point,
-         'itemDropped' is a confirmed no-op that never even calls AddHook.
+         and RegisterHook: ONLY the literal eventName 'swapItems' (ox_inventory's
+         own vocabulary, per the README rule above) has a confirmed
+         translation on this backend, onto the real AddHook('ItemAdded', ...)
+         veto point, with the payload translated onto ox_inventory's OWN
+         real field names (toInventory/fromSlot/toType/fromInventory/source)
+         rather than this backend's own differently-shaped hookData fields
+         -- any other eventName returns false without ever calling AddHook.
       4. Every UNCONFIRMED candidate (qs-inventory, ps-inventory,
          origen_inventory, codem-inventory, core_inventory,
          tgiann-inventory) returns nil unconditionally -- including when the
@@ -429,120 +435,82 @@ t.test('ox_inventory SERVER RegisterShop: a malformed shopDetails (no items tabl
     t.isFalse(called)
 end)
 
--- ---- ox_inventory SERVER RegisterHook ----
+-- ---- ox_inventory SERVER RegisterHook -- PURE, GENERIC PASS-THROUGH ----
+-- (per shared/compat/README.md's "match the reference resource's calling
+-- convention" rule -- eventName and payload are exactly ox_inventory's own)
 
-t.test("ox_inventory SERVER RegisterHook: an unrecognized event name returns false immediately, without ever calling registerHook", function()
+t.test("ox_inventory SERVER RegisterHook: an invalid eventName (empty/non-string) or a non-function callback returns false immediately, without ever calling registerHook", function()
     local called = false
     local exportsTbl = oxFullExports({ registerHook = function() called = true return 'id' end })
     local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
     local server = f.getFactory('inventory', 'ox_inventory')('server')
-    t.isFalse(server.RegisterHook('somethingElse', function() end))
+    t.isFalse(server.RegisterHook('', function() end))
+    t.isFalse(server.RegisterHook(nil, function() end))
+    t.isFalse(server.RegisterHook('swapItems', 'not-a-function'))
     t.isFalse(called)
 end)
 
-t.test("ox_inventory SERVER RegisterHook: a non-function callback returns false immediately", function()
-    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = oxFullExports() } })
-    local server = f.getFactory('inventory', 'ox_inventory')('server')
-    t.isFalse(server.RegisterHook('itemEnteredInventory', 'not-a-function'))
-end)
-
-t.test("ox_inventory SERVER RegisterHook('itemEnteredInventory'): registers against the real 'swapItems' event name and returns true", function()
+t.test("ox_inventory SERVER RegisterHook: registers against the EXACT eventName given, unrestricted -- 'swapItems', 'buyItem', or anything else ox_inventory itself fires", function()
     local capturedEvent, capturedCallback
     local exportsTbl = oxFullExports({ registerHook = function(_self, event, callback) capturedEvent = event capturedCallback = callback return 'id' end })
     local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
     local server = f.getFactory('inventory', 'ox_inventory')('server')
-    local ok = server.RegisterHook('itemEnteredInventory', function() end)
+    local ok = server.RegisterHook('swapItems', function() end)
     t.isTrue(ok)
     t.equals(capturedEvent, 'swapItems')
     t.equals(type(capturedCallback), 'function')
+
+    local ok2 = server.RegisterHook('buyItem', function() end)
+    t.isTrue(ok2, 'this adapter must never restrict eventName to a fixed list -- it is a pure pass-through')
+    t.equals(capturedEvent, 'buyItem')
 end)
 
-t.test("ox_inventory SERVER RegisterHook('itemEnteredInventory') wrapper: a disallowed item entering a K9 stash is a real veto -- the literal false", function()
+t.test("ox_inventory SERVER RegisterHook wrapper: the payload handed to the caller's callback is EXACTLY ox_inventory's own real payload, unmodified", function()
     local capturedCallback
     local exportsTbl = oxFullExports({ registerHook = function(_self, event, callback) capturedCallback = callback return 'id' end })
     local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
     local server = f.getFactory('inventory', 'ox_inventory')('server')
     local seenPayload
-    server.RegisterHook('itemEnteredInventory', function(payload) seenPayload = payload return false end)
+    server.RegisterHook('swapItems', function(payload) seenPayload = payload end)
 
-    local result = capturedCallback({ fromInventory = 'player:1', toInventory = 'k9inv-REX', fromSlot = { name = 'weapon_pistol', count = 1 } })
-    t.equals(result, false, 'a genuine veto must be the literal boolean false, ox_inventory\'s own real reject signal')
-    t.equals(seenPayload.toInventoryId, 'k9inv-REX')
-    t.equals(seenPayload.itemName, 'weapon_pistol')
-    t.equals(seenPayload.itemCount, 1)
+    local realPayload = { fromInventory = 'player:1', toInventory = 'k9inv-REX', fromSlot = { name = 'weapon_pistol', count = 1 }, toType = 'stash', source = 5 }
+    capturedCallback(realPayload)
+    t.equals(seenPayload, realPayload, 'no translation/normalization must happen for the reference adapter -- the payload is passed through as-is')
 end)
 
-t.test("ox_inventory SERVER RegisterHook('itemEnteredInventory') wrapper: allowing an item (callback returns nil/true) never rejects", function()
+t.test("ox_inventory SERVER RegisterHook wrapper: the caller's callback returning the literal false is forwarded as the real ox_inventory veto signal", function()
     local capturedCallback
     local exportsTbl = oxFullExports({ registerHook = function(_self, event, callback) capturedCallback = callback return 'id' end })
     local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
     local server = f.getFactory('inventory', 'ox_inventory')('server')
-    server.RegisterHook('itemEnteredInventory', function() return true end)
-    local result = capturedCallback({ fromInventory = 'player:1', toInventory = 'k9inv-REX', fromSlot = { name = 'k9_treat', count = 1 } })
+    server.RegisterHook('swapItems', function() return false end)
+    local result = capturedCallback({ toInventory = 'k9inv-REX', fromSlot = { name = 'weapon_pistol', count = 1 } })
+    t.equals(result, false)
+end)
+
+t.test("ox_inventory SERVER RegisterHook wrapper: allowing (callback returns nil/true) never rejects, and the caller's callback itself throwing is caught, never propagated into ox_inventory's own call stack", function()
+    local capturedCallback
+    local exportsTbl = oxFullExports({ registerHook = function(_self, event, callback) capturedCallback = callback return 'id' end })
+    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
+    local server = f.getFactory('inventory', 'ox_inventory')('server')
+    server.RegisterHook('swapItems', function() return true end)
+    t.isNil(capturedCallback({ toInventory = 'k9inv-REX' }))
+
+    local throwingCapturedCallback
+    local throwingExports = oxFullExports({ registerHook = function(_self, event, callback) throwingCapturedCallback = callback return 'id' end })
+    local f2 = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = throwingExports } })
+    local server2 = f2.getFactory('inventory', 'ox_inventory')('server')
+    server2.RegisterHook('swapItems', function() error('caller bug inside its own callback') end)
+    local ok, result = pcall(throwingCapturedCallback, { toInventory = 'k9inv-REX' })
+    t.isTrue(ok, 'a throwing CALLER callback must never propagate into ox_inventory\'s own hook-dispatch call stack either')
     t.isNil(result)
-end)
-
-t.test("ox_inventory SERVER RegisterHook('itemEnteredInventory') wrapper: same-stash reorganize (fromInventory == toInventory) never reaches the caller's callback at all", function()
-    local capturedCallback
-    local exportsTbl = oxFullExports({ registerHook = function(_self, event, callback) capturedCallback = callback return 'id' end })
-    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
-    local server = f.getFactory('inventory', 'ox_inventory')('server')
-    local called = false
-    server.RegisterHook('itemEnteredInventory', function() called = true return false end)
-    local result = capturedCallback({ fromInventory = 'k9inv-REX', toInventory = 'k9inv-REX', fromSlot = { name = 'weapon_pistol', count = 1 } })
-    t.isNil(result)
-    t.isFalse(called, 'reorganizing within the same stash must never be treated as an incoming transfer')
-end)
-
-t.test("ox_inventory SERVER RegisterHook('itemEnteredInventory') wrapper: a malformed payload (no fromSlot table, no .name) fails OPEN, never a confident reject, never a crash", function()
-    local capturedCallback
-    local exportsTbl = oxFullExports({ registerHook = function(_self, event, callback) capturedCallback = callback return 'id' end })
-    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
-    local server = f.getFactory('inventory', 'ox_inventory')('server')
-    local called = false
-    server.RegisterHook('itemEnteredInventory', function() called = true return false end)
-
-    local r1 = capturedCallback({ fromInventory = 'player:1', toInventory = 'k9inv-REX', fromSlot = 'not-a-table' })
-    local r2 = capturedCallback({ fromInventory = 'player:1', toInventory = 'k9inv-REX', fromSlot = { count = 1 } })
-    local r3 = capturedCallback('not-even-a-table')
-    t.isNil(r1)
-    t.isNil(r2)
-    t.isNil(r3)
-    t.isFalse(called)
-end)
-
-t.test("ox_inventory SERVER RegisterHook('itemDropped'): fires the observer for a real drop payload, source/item/dropId all normalized, and NEVER vetoes regardless of the callback's return value", function()
-    local capturedCallback
-    local exportsTbl = oxFullExports({ registerHook = function(_self, event, callback) capturedCallback = callback return 'id' end })
-    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
-    local server = f.getFactory('inventory', 'ox_inventory')('server')
-    local seenPayload
-    server.RegisterHook('itemDropped', function(payload) seenPayload = payload return false end) -- return value must be IGNORED
-
-    local result = capturedCallback({ source = 7, toType = 'drop', fromSlot = { name = 'weed_baggy', count = 5 }, dropId = 'drop-123' })
-    t.isNil(result, 'itemDropped is observer-only -- the callback\'s return value must never veto a real drop')
-    t.equals(seenPayload.source, 7)
-    t.equals(seenPayload.itemName, 'weed_baggy')
-    t.equals(seenPayload.itemCount, 5)
-    t.equals(seenPayload.dropId, 'drop-123')
-end)
-
-t.test("ox_inventory SERVER RegisterHook('itemDropped'): a non-drop swapItems event (a stash move) never reaches the observer callback", function()
-    local capturedCallback
-    local exportsTbl = oxFullExports({ registerHook = function(_self, event, callback) capturedCallback = callback return 'id' end })
-    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
-    local server = f.getFactory('inventory', 'ox_inventory')('server')
-    local called = false
-    server.RegisterHook('itemDropped', function() called = true end)
-    capturedCallback({ source = 7, toType = 'stash', fromSlot = { name = 'weed_baggy', count = 5 } })
-    t.isFalse(called)
 end)
 
 t.test('ox_inventory SERVER RegisterHook: the underlying registerHook call throwing is caught, reported false, never propagated', function()
     local exportsTbl = oxFullExports({ registerHook = function() error('simulated ox_inventory internal error') end })
     local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
     local server = f.getFactory('inventory', 'ox_inventory')('server')
-    local ok, result = pcall(server.RegisterHook, 'itemEnteredInventory', function() end)
+    local ok, result = pcall(server.RegisterHook, 'swapItems', function() end)
     t.isTrue(ok)
     t.isFalse(result)
 end)
@@ -669,41 +637,48 @@ t.test('qb-inventory SERVER RegisterShop: a malformed shopDetails (no items tabl
     t.isFalse(called)
 end)
 
--- ---- qb-inventory SERVER RegisterHook ----
+-- ---- qb-inventory SERVER RegisterHook -- ONLY 'swapItems' has a confirmed
+-- translation on this backend (per shared/compat/README.md's "match the
+-- reference resource's calling convention" rule); the payload is translated
+-- onto ox_inventory's OWN real field names (fromInventory/fromSlot/
+-- toInventory/toType/source), never this backend's own hookData names. ----
 
-t.test("qb-inventory SERVER RegisterHook('itemEnteredInventory'): registers against the real AddHook('ItemAdded', ...) veto point", function()
+t.test("qb-inventory SERVER RegisterHook('swapItems'): registers against the real AddHook('ItemAdded', ...) veto point", function()
     local capturedHookType, capturedCallback
     local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedHookType = hookType capturedCallback = callback return 1 end })
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')
-    local ok = server.RegisterHook('itemEnteredInventory', function() end)
+    local ok = server.RegisterHook('swapItems', function() end)
     t.isTrue(ok)
     t.equals(capturedHookType, 'ItemAdded')
     t.equals(type(capturedCallback), 'function')
 end)
 
-t.test("qb-inventory SERVER RegisterHook('itemEnteredInventory') wrapper: a disallowed item is a real veto (the literal false), normalized payload matches buildItemAddedData's real shape", function()
+t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper: a disallowed item is a real veto (the literal false); the normalized payload uses ox_inventory's OWN field names, translated from qb-inventory's real hookData", function()
     local capturedCallback
     local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedCallback = callback return 1 end })
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')
     local seenPayload
-    server.RegisterHook('itemEnteredInventory', function(payload) seenPayload = payload return false end)
+    server.RegisterHook('swapItems', function(payload) seenPayload = payload return false end)
 
-    local result = capturedCallback('weapon', { toId = 'k9inv-REX', item = { name = 'weapon_pistol' }, amount = 1 })
+    local result = capturedCallback('weapon', { toId = 'k9inv-REX', toType = 'stash', item = { name = 'weapon_pistol' }, amount = 1 })
     t.equals(result, false)
-    t.equals(seenPayload.toInventoryId, 'k9inv-REX')
-    t.equals(seenPayload.itemName, 'weapon_pistol')
-    t.equals(seenPayload.itemCount, 1)
+    t.equals(seenPayload.toInventory, 'k9inv-REX', 'ox_inventory\'s own toInventory is an ID STRING -- qb-inventory\'s hookData.toId is the field that matches that semantic, never hookData.toInventory (a resolved data table)')
+    t.equals(seenPayload.fromSlot.name, 'weapon_pistol')
+    t.equals(seenPayload.fromSlot.count, 1, 'ox_inventory item slots use .count, not qb-inventory\'s own .amount field name -- translated, not copied verbatim')
+    t.equals(seenPayload.toType, 'stash')
+    t.isNil(seenPayload.fromInventory, 'confirmed absent from qb-inventory\'s ItemAdded payload -- never guessed')
+    t.isNil(seenPayload.source, 'confirmed absent from qb-inventory\'s ItemAdded payload -- never guessed')
 end)
 
-t.test("qb-inventory SERVER RegisterHook('itemEnteredInventory') wrapper: allowing an item never rejects, and a malformed hookData fails open", function()
+t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper: allowing an item never rejects, and a malformed hookData fails open", function()
     local capturedCallback
     local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedCallback = callback return 1 end })
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')
     local called = false
-    server.RegisterHook('itemEnteredInventory', function() called = true return true end)
+    server.RegisterHook('swapItems', function() called = true return true end)
 
     local allowed = capturedCallback('item', { toId = 'k9inv-REX', item = { name = 'k9_treat' }, amount = 1 })
     t.isNil(allowed)
@@ -717,29 +692,19 @@ t.test("qb-inventory SERVER RegisterHook('itemEnteredInventory') wrapper: allowi
     t.isFalse(called)
 end)
 
-t.test("qb-inventory SERVER RegisterHook('itemEnteredInventory'): AddHook returning nil (its own documented 'registration failed' signal) is reported as a failed registration, not a silent success", function()
+t.test("qb-inventory SERVER RegisterHook('swapItems'): AddHook returning nil (its own documented 'registration failed' signal) is reported as a failed registration, not a silent success", function()
     local exportsTbl = qbFullExports({ AddHook = function() return nil end })
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')
-    t.isFalse(server.RegisterHook('itemEnteredInventory', function() end))
+    t.isFalse(server.RegisterHook('swapItems', function() end))
 end)
 
-t.test("qb-inventory SERVER RegisterHook('itemDropped'): a CONFIRMED NO-OP -- never calls AddHook at all, returns false, and warns explaining why", function()
+t.test('qb-inventory SERVER RegisterHook: any event name OTHER than \'swapItems\' returns false without ever calling AddHook -- no confirmed translation exists, never guessed', function()
     local called = false
     local exportsTbl = qbFullExports({ AddHook = function() called = true return 1 end })
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')
-    local ok = server.RegisterHook('itemDropped', function() end)
-    t.isFalse(ok)
-    t.isFalse(called, 'itemDropped must never even attempt AddHook on qb-inventory -- registering against a confirmed-dead hook type would be a silent no-op indistinguishable from success')
-    t.isTrue(f.countPrintsContaining('confirmed no-op') > 0)
-end)
-
-t.test('qb-inventory SERVER RegisterHook: an unrecognized event name returns false without calling AddHook', function()
-    local called = false
-    local exportsTbl = qbFullExports({ AddHook = function() called = true return 1 end })
-    local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
-    local server = f.getFactory('inventory', 'qb-inventory')('server')
+    t.isFalse(server.RegisterHook('buyItem', function() end))
     t.isFalse(server.RegisterHook('somethingElse', function() end))
     t.isFalse(called)
 end)

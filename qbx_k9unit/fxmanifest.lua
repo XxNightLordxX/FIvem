@@ -186,6 +186,12 @@ client_scripts {
 
 server_scripts {
     '@oxmysql/lib/MySQL.lua',
+    -- Database accessor layer -- the switch behind Config.Database.enabled.
+    -- Every other server file reads and writes this resource's persistent
+    -- state through K9Store.* rather than calling MySQL.* or naming a k9_*
+    -- table itself. Loaded FIRST among this resource's own files: it has no
+    -- dependency of its own, and every file below it is a consumer.
+    'server/datastore.lua',
     -- REFACTOR_ROADMAP.md item 1: shared cooldown/mutex helper (NewCooldown/
     -- NewNestedCooldown/NewMutex), loaded FIRST among this resource's own
     -- files since main.lua/certifications.lua/tracking.lua/search.lua all

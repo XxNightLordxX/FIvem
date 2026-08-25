@@ -123,12 +123,62 @@
         (config.lua's own header: grants and blocks share the k9_permissions
         table and revoke semantics -- revoking a 'block.<Name>' row is how
         it's lifted. Nothing new needed server-side for these four.)
+      tablet:assignK9Role {targetCitizenId, modelName}            -> cb({ok,error?,message?})   [high command -- server/tablet.lua's tabletAssignK9Role]
+        Forwarded VERBATIM -- server/appearance.lua's ApplyK9PedRole (via
+        that callback) already re-checks IsHighCommand itself and already
+        accepts ANY Config.Peds entry; this file adds no authorization and
+        no second appearance-mutation path. `modelName` is display-chosen
+        from the `peds` list this file sends in the tablet:open payload
+        below, but the SERVER'S OWN IsValidPedModelName re-check against
+        its OWN Config.Peds is what actually matters -- a modified client
+        sending an arbitrary string gets 'invalid_model' back, nothing more.
+      tablet:revertK9Ped {targetCitizenId}                        -> cb({ok,error?,message?})   [high command -- server/tablet.lua's tabletRevertK9Ped]
+        THE NO-UNBOUNDED-TRAP ACTION -- forwarded verbatim, gated
+        server-side on the GRANTER's own authorization ONLY, never on
+        anything about the target (see server/tablet.lua's own header): a
+        target who already lost every certification/grant/feature check
+        must still be revertible, or revoking someone first would strand
+        them as an animal permanently. This file's OWN contribution to that
+        guarantee is UI-side, not authorization-side: html/tablet.js's
+        "open by citizen ID" control (its own header) exists specifically
+        so high command can reach a person screen for a citizenid who no
+        longer appears in tablet:requestRoster's own certified-only rows,
+        and therefore still has a path to press this button on them at all.
+      tablet:getTheme {}                                          -> cb({ok,theme?,error?})     [Config.Features.TabletTheming -- server/runtimecontrol.lua]
+      tablet:setTheme {primaryColor?,accentColor?,backgroundColor?,textColor?,density?,headerTitle?} -> cb({ok,theme?,error?,field?})  [high command]
+      tablet:resetTheme {}                                        -> cb({ok,theme?,error?})     [high command]
+        All three forwarded through ThemeResultToJs (below), which only
+        renames server/runtimecontrol.lua's `reason` field to this
+        contract's `error` (and forwards `field`, set only on
+        error='invalid_field', naming which of the six theme inputs failed)
+        -- COSMETIC ONLY, see that file's own PART 2 header: nothing a
+        theme value carries is ever consulted by an authorization check,
+        here or anywhere else in this resource. getTheme has no
+        authorization gate at all (applied for every viewer); setTheme/
+        resetTheme re-check high command server-side regardless of what
+        this page shows.
 
     Lua -> JS (SendNUIMessage):
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
           strings = TABLET_STRINGS (currently {} -- see TODO below),
-          maxXpPerGrant = Config.HighCommand.maxXpPerGrant } }
+          maxXpPerGrant = Config.HighCommand.maxXpPerGrant,
+          peds = Config.Peds,               -- shared config, no round trip -- display list only for tablet:assignK9Role's model picker; server/appearance.lua's IsValidPedModelName is the real gate
+          themingEnabled = Config.Features.TabletTheming == true, -- UX hint only -- hides the theme editor's Save/Reset controls when off rather than offering ones that would always come back 'feature_disabled'; the CURRENT theme is still fetched/applied for every viewer regardless (tablet:getTheme has no such gate)
+      } }
       { action = 'tablet:close', data = {} }
+      { action = 'tablet:themeUpdated', data = Theme }
+        Lua-INITIATED, NOT tied to this player's own tablet being open --
+        relayed verbatim from server/runtimecontrol.lua's
+        qbx_k9unit:client:themeUpdated broadcast (see that file's own PART 2
+        header: "an already-open tablet updates without the viewer having
+        to close and reopen it"), which fires for EVERY connected client on
+        every successful SetTheme/ResetTheme, not only the officer who
+        triggered it. This file registers that event UNCONDITIONALLY (not
+        only while tabletOpen) and does nothing more than relay it into the
+        SAME SendNUIMessage channel tablet:open/tablet:close already use --
+        html/tablet-bridge.js's existing `/^tablet:/` relay picks it up with
+        no further change on that file's side; html/tablet.js's own header
+        documents what it does with a push arriving while hidden.
 
     TODO, DISCLOSED NOT SILENT: `strings` ships empty. html/tablet.js's own
     DEFAULT_STRINGS is a complete, byte-ready English fallback for every UI
@@ -286,6 +336,8 @@ function OpenTablet()
             strings = {}, -- see this file's header TODO -- html/tablet.js's own DEFAULT_STRINGS covers every key until this is wired
             maxXpPerGrant = (type(Config.HighCommand) == 'table' and type(Config.HighCommand.maxXpPerGrant) == 'number')
                 and Config.HighCommand.maxXpPerGrant or nil,
+            peds = Config.Peds, -- shared config, no round trip -- see this file's header NUI CONTRACT note on tablet:assignK9Role
+            themingEnabled = Config.Features and Config.Features.TabletTheming == true, -- UX hint only, see NUI CONTRACT
         },
     })
     SetNuiFocus(true, true)
@@ -846,6 +898,104 @@ RegisterNUICallback('tablet:unblockFeature', function(data, cb)
         return
     end
     cb(ReasonToJsResult(AwaitServerCallback('qbx_k9unit:server:tabletRevokePermission', data.targetCitizenId, 'block.' .. data.feature)))
+end)
+
+-- ----------------------------------------------------------------------
+-- K9 ROLE ASSIGN / REVERT-TO-HUMAN -- owner's own words: "assign de
+-- assign give certs remove certs remove k9 ped and reverts them to a
+-- human". Both forwarded VERBATIM -- server/tablet.lua's own
+-- tabletAssignK9Role/tabletRevertK9Ped already return this exact
+-- {ok,error?,message?} shape and already re-verify IsHighCommand
+-- themselves (see that file's own header); this file adds no
+-- authorization and no second appearance-mutation path. THE TABLET IS A
+-- VIEW. IT DECIDES NOTHING -- same rule as every other mutation above.
+-- ----------------------------------------------------------------------
+RegisterNUICallback('tablet:assignK9Role', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == ''
+        or type(data.modelName) ~= 'string' or data.modelName == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletAssignK9Role', data.targetCitizenId, data.modelName))
+end)
+
+--- NO UNBOUNDED TRAP: server/tablet.lua's tabletRevertK9Ped gates purely on
+--- the CALLER's own IsHighCommand, never on anything about the target, so
+--- this must work for a target who has already lost every certification/
+--- grant/feature check -- see this file's own header NUI CONTRACT note.
+RegisterNUICallback('tablet:revertK9Ped', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletRevertK9Ped', data.targetCitizenId))
+end)
+
+-- ----------------------------------------------------------------------
+-- TABLET THEMING -- Config.Features.TabletTheming. COSMETIC ONLY (see
+-- server/runtimecontrol.lua's own PART 2 header): nothing a theme value
+-- carries is ever consulted by an authorization check, here or anywhere
+-- else in this resource. getTheme has no authorization gate server-side
+-- at all (applied for every viewer); setTheme/resetTheme re-check high
+-- command server-side regardless of what this page shows or hides.
+-- ----------------------------------------------------------------------
+
+--- Translates server/runtimecontrol.lua's theme callback shape
+--- (`{ok=true, theme=...}` | `{ok=false, reason=...,field=?}`) into
+--- html/tablet.js's `{ok, error?, theme?, field?}` contract -- the same
+--- `reason` -> `error` rename ReasonToJsResult performs above for
+--- grant/revoke, kept as its OWN separate helper (not reused) since
+--- theming has no locale-resolved special-cased reason to translate --
+--- every reason this surface can return ('denied'/'rate_limited'/
+--- 'invalid_payload'/'invalid_field'/'db_error'/'feature_disabled') is
+--- already a plain, self-explanatory machine code the tablet can render
+--- generically. `field` (set only alongside reason='invalid_field') is
+--- forwarded so the tablet can highlight exactly which of the six theme
+--- inputs failed server-side re-validation.
+--- @param serverResult table
+--- @return table
+local function ThemeResultToJs(serverResult)
+    if type(serverResult) ~= 'table' then return { ok = false, error = 'server_error' } end
+    if serverResult.ok ~= true then
+        return { ok = false, error = serverResult.error or serverResult.reason or 'server_error', field = serverResult.field }
+    end
+    return { ok = true, theme = serverResult.theme }
+end
+
+RegisterNUICallback('tablet:getTheme', function(_, cb)
+    cb(ThemeResultToJs(AwaitServerCallback('qbx_k9unit:server:tabletGetTheme')))
+end)
+
+RegisterNUICallback('tablet:setTheme', function(data, cb)
+    -- Deliberately NO field-by-field re-validation here beyond "is this
+    -- even a table" -- server/runtimecontrol.lua's ValidateFullTheme is
+    -- the real, strict gate (exact #RRGGBB match, a fixed density enum, a
+    -- <=40-char/no-markup header title) and this file must never re-derive
+    -- or loosen that; a modified client sending a bogus payload gets back
+    -- {ok=false, error='invalid_field', field=...} same as a legitimate one
+    -- that somehow raced a config change.
+    if type(data) ~= 'table' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(ThemeResultToJs(AwaitServerCallback('qbx_k9unit:server:tabletSetTheme', data)))
+end)
+
+RegisterNUICallback('tablet:resetTheme', function(_, cb)
+    cb(ThemeResultToJs(AwaitServerCallback('qbx_k9unit:server:tabletResetTheme')))
+end)
+
+-- Lua-INITIATED push, NOT tied to this player's own tablet being open --
+-- see this file's header NUI CONTRACT note on tablet:themeUpdated.
+-- Registered UNCONDITIONALLY (not only while tabletOpen) so an
+-- already-open tablet elsewhere on the server updates live the instant
+-- high command saves a change, matching server/runtimecontrol.lua's own
+-- "applied for everyone" broadcast intent. No listener/interval is started
+-- here that would ever need cleanup on close -- this is a single,
+-- session-lifetime AddEventHandler, registered once at file load, exactly
+-- like every other AddEventHandler in this file.
+AddEventHandler('qbx_k9unit:client:themeUpdated', function(theme)
+    SendNUIMessage({ action = 'tablet:themeUpdated', data = theme })
 end)
 
 -- ----------------------------------------------------------------------

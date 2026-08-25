@@ -374,6 +374,41 @@
         use_label: 'Use',
         not_available_short: 'Unavailable',
         opening_person: 'Loading record...',
+
+        // ---- Open-by-citizen-ID (console screen) -- see this file's
+        // header note on why the roster search box alone cannot reach a
+        // decertified/never-certified citizenid.
+        open_by_id_placeholder: 'Open by exact citizen ID...',
+        open_by_id_label: 'Open',
+        open_by_id_empty: 'Enter a citizen ID first.',
+
+        // ---- K9 role control (person screen, high command only) --
+        // owner's own words: "assign de assign give certs remove certs
+        // remove k9 ped and reverts them to a human".
+        role_heading: 'K9 Role',
+        role_model_label: 'Ped model',
+        role_assign_label: 'Assign K9 Role',
+        role_assign_hint: 'Turns this person into the selected model. Their current appearance is preserved for a later revert.',
+        role_revert_label: 'Revert to Human',
+        role_revert_hint: 'Forces this person back to human immediately -- works even if they hold no certification, no access, and no grant at all.',
+        role_no_peds_configured: 'No ped models are configured on this server.',
+
+        // ---- Tablet theming (its own tab, high command only to edit;
+        // the resulting colours/density/title apply for every viewer).
+        tab_theme: 'Tablet Theme',
+        theme_heading: 'Tablet Appearance',
+        theme_primary_label: 'Primary colour',
+        theme_accent_label: 'Accent colour',
+        theme_background_label: 'Background colour',
+        theme_text_label: 'Text colour',
+        theme_density_label: 'Density',
+        theme_density_comfortable: 'Comfortable',
+        theme_density_compact: 'Compact',
+        theme_header_title_label: 'Header title',
+        theme_save_label: 'Save Theme',
+        theme_reset_label: 'Reset to Default',
+        theme_disabled_note: 'Tablet theming is disabled server-wide. The current theme still applies; these controls will not save.',
+        theme_field_invalid: 'That value was rejected by the server.',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical

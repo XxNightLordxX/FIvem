@@ -345,7 +345,6 @@ t.test('tick loop: found -- awards XP exactly once, fires the sarCallCompleted o
     playersBySource[21] = { citizenid = 'CIT_FOUND', job = 'ambulance' }
     pedCoordsBySource[21] = { x = 0.0, y = 0.0, z = 0.0 }
     fakeNow = fakeNow + 20000
-    local startedAt = fakeNow
     queueRandom(0.0, 0.0) -- target (10.0, 0.0)
     requestSarCall(21)
 
@@ -591,10 +590,10 @@ local function newClientFixture(opts)
         return table.remove(callbackResponses, 1)
     end
 
-    local notifyCalls = {}
+    local clientNotifyCalls = {}
     local lib = {
         callback = { await = callbackAwait },
-        notify = function(payload) notifyCalls[#notifyCalls + 1] = payload end,
+        notify = function(payload) clientNotifyCalls[#clientNotifyCalls + 1] = payload end,
     }
 
     local myPed = 1
@@ -725,7 +724,7 @@ local function newClientFixture(opts)
     return {
         env = env,
         stepOne = runner.step,
-        notifyCalls = notifyCalls,
+        notifyCalls = clientNotifyCalls,
         triggerServerEventCalls = triggerServerEventCalls,
         playK9SoundCalls = playK9SoundCalls,
         createdPeds = createdPeds,

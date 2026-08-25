@@ -113,6 +113,20 @@ read_globals = {
     --   never creates a ped at all: the hidden target is a coordinate, not
     --   an entity, which is why nothing here can leak one.
     "CreatePed",
+    --   SetEntityInvincible / SetEntityAsMissionEntity --
+    --   client/equipmentshop.lua's shop ped (a dog standing at each supply
+    --   point). Both decl pages 404, which for a legacy R* native is never
+    --   proof of absence; both were re-verified INDEPENDENTLY here against
+    --   the natives.json hash database rather than taken on report:
+    --     SET_ENTITY_INVINCIBLE        ENTITY 0x3882114BDE571AD4
+    --     SET_ENTITY_AS_MISSION_ENTITY ENTITY 0xAD738C3085FE7E11
+    --   Neither carries an `apiset` key, which in that database means the
+    --   default, client-only -- matching their one call site. The mission-
+    --   entity flag is the load-bearing one: without it the game's own
+    --   population cleanup can despawn a shop ped out from under the file's
+    --   tracking table, after which every later deletion is aimed at a
+    --   handle that no longer belongs to us.
+    "SetEntityInvincible", "SetEntityAsMissionEntity",
     -- vector3 is NOT a native and has no decl page to check -- it is a Lua
     -- RUNTIME TYPE that CitizenFX's Lua build adds to the language itself,
     -- alongside vector2/vector4/quat, in both realms. Nothing declares it,
