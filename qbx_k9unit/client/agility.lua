@@ -133,6 +133,22 @@ if Config.Features.AgilityAdvanced then
     -- this is the first value to have native-api-assistant re-confirm.
     local SHAPE_TEST_FLAG_INTERSECT_MAP = 1
 
+    -- Bug fix (this pass): the polling loop below used to have no upper
+    -- bound at all -- if GET_SHAPE_TEST_RESULT ever kept returning 1
+    -- ("still processing") forever for a given handle (a stuck/leaked
+    -- handle, or any other engine-side edge case that never resolves),
+    -- TryVault() would hang in that coroutine permanently, once per
+    -- height band, since nothing else in this function can make progress
+    -- until the `repeat` loop below exits. A real capsule sweep against
+    -- static world geometry is expected to resolve within a frame or two
+    -- (see the loop's own comment), so a generous-but-bounded cap catches
+    -- only the genuinely-stuck case, not a normal-but-slightly-slow one.
+    -- Treated as "no hit" for that band on timeout, the same silent
+    -- fallback this function already uses for a band that legitimately
+    -- reports no hit -- consistent with this file's "cooldown/no-obstacle
+    -- branches are silent, not notification spam" posture elsewhere.
+    local SHAPE_TEST_MAX_POLLS = 60
+
     --- Multi-height capsule sweep: fires one shape test per configured
     --- height band, forward from the K9's current position, and returns
     --- the TALLEST band that still reports a hit as this obstacle's
@@ -191,14 +207,22 @@ if Config.Features.AgilityAdvanced then
             -- loop does not assume that -- it keeps polling (yielding a
             -- frame between attempts) until the handle itself reports done.
             local resultCode, hit
+            local pollCount = 0
             repeat
                 resultCode, hit = GetShapeTestResult(shapeTestHandle)
-                if resultCode == 1 then Wait(0) end
-            until resultCode ~= 1
+                if resultCode == 1 then
+                    pollCount = pollCount + 1
+                    Wait(0)
+                end
+            until resultCode ~= 1 or pollCount >= SHAPE_TEST_MAX_POLLS
 
             if resultCode == 2 and hit then
                 tallestHit = height
             end
+            -- resultCode == 1 here means SHAPE_TEST_MAX_POLLS was reached
+            -- without the handle ever resolving -- treated identically to
+            -- "no hit this band" (see SHAPE_TEST_MAX_POLLS's own comment
+            -- above), not an error.
         end
 
         return tallestHit

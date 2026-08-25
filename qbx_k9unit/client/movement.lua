@@ -565,6 +565,34 @@ CreateThread(function()
     end
 end)
 
+-- Bug fix (this pass): a resource restart (not a disconnect -- the
+-- player stays connected, this resource just stops and restarts on
+-- their client) while IsLeashed() is true used to leave a real orphaned
+-- pairing: the thread above (this resource's ONLY enforcement of the
+-- elastic pull-back / hard-cap safety valve) dies along with the rest of
+-- this resource on stop, but leashState lives on server-side
+-- (server/main.lua's LeashPairs) with nothing left client-side to ever
+-- correct drift or auto-detach on a runaway distance -- the constrained
+-- party could end up leashed-in-name-only, with zero of the restriction
+-- this feature exists to provide, until either party manually detaches.
+-- Same "don't leave sticky cross-resource state behind on stop" class of
+-- bug this file's isFirstPersonK9View/lastAppliedMoveRate onResourceStop
+-- handlers above already guard against, and the exact convention
+-- client/vehicle.lua's own onResourceStop (ReleasePedFromVehicleState)
+-- follows for its own stranding case. DetachLeash() is a no-op if not
+-- leashed, and reuses the SAME server round-trip DetachLeash() always
+-- uses -- no second detach path introduced. Only meaningful on the
+-- CONSTRAINED party's client (the anchor/officer side has no local
+-- enforcement to lose either way), but calling it unconditionally on
+-- both is harmless and keeps this one code path in charge of every
+-- detach, per this file's own header point 4.
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    if IsLeashed() then
+        DetachLeash()
+    end
+end)
+
 -- IsEntityModelK9(entity) used to be defined here as a small local copy
 -- (with its own private k9ModelHashesForTargeting hash set) of the same
 -- generic Config.Peds-driven display-only check, since client/main.lua only
