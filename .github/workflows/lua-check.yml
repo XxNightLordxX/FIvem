@@ -67,7 +67,7 @@ jobs:
   # --- Everything below this line catches defect classes that pass BOTH
   # luac5.4 -p and a clean luacheck run: syntactically valid, no unused/
   # undefined-global warnings, and still broken at runtime. Each of these
-  # four jobs automates a specific real defect this codebase has actually
+  # five jobs automates a specific real defect this codebase has actually
   # shipped (see each job's own comment for which one, and how). They are
   # deliberately kept as separate jobs, same as luac-syntax/luacheck above,
   # so a failure's job name alone tells you which defect class it is
@@ -471,6 +471,49 @@ jobs:
               main()
           PYEOF
 
+  locale-cross-check:
+    name: locale() call sites <-> locales/en.json keys (both directions)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Every locale() call site must match a real en.json key, and vice versa
+        # Real defect class this catches (has nearly shipped TWICE this
+        # session, both times caught only by a human manually diffing
+        # locales/en.json against call sites, never by a tool): a
+        # locale('some.key') call site whose key was never added to
+        # locales/en.json, or a rename on one side that wasn't mirrored on
+        # the other. This is dangerous specifically because it is SILENT --
+        # ox_lib's locale() does not error on a miss, it returns the raw
+        # key string, so a player just sees literal text like
+        # "admin.usage_auditdept" instead of a real message. No exception,
+        # no log line, nothing else in this workflow (luac5.4 -p, luacheck,
+        # or any job above) can see this: a locale() call with a typo'd or
+        # stale key is syntactically ordinary code calling an allowlisted
+        # global with an ordinary string argument.
+        #
+        # Script: .github/scripts/locale_cross_check.py (checked in, not
+        # inlined here, specifically so a red build is reproducible in one
+        # line -- `python3 .github/scripts/locale_cross_check.py` from the
+        # repo root -- without needing to open this workflow file first).
+        # It flattens locales/en.json's nested keys to dotted paths and
+        # extracts every locale('...') call site across client/, server/,
+        # and html/, in each case stripping comments FIRST with a small
+        # character-by-character scanner (not a regex, not a naive `--`
+        # split) that tracks real string literals and Lua long-bracket
+        # strings -- this codebase's own prose comments routinely quote
+        # realistic-looking locale('...') examples (e.g. client/movement.lua
+        # documents a REMOVED locale('movement.leash_request_sent') call in
+        # a run of `--` comment lines), and a naive scan mistakes those for
+        # real call sites, which would report a phantom "missing key" and
+        # teach people to ignore this job. Verified against the real
+        # current state of this repo (306 keys, 306 keys each with at least
+        # one real call site, 0 missing, 0 unused) and against constructed
+        # regressions in both directions before being added here.
+        run: |
+          python3 .github/scripts/locale_cross_check.py
+
   luacheckrc-globals-defined:
     name: .luacheckrc globals allowlist has real definitions
     runs-on: ubuntu-latest
@@ -580,3 +623,83 @@ jobs:
         # and, more usefully, what it deliberately does not: client/*.lua needs
         # game natives, and server/search.lua's ResolveAlertTier is `local`
         # with no testable entry point. run.sh exits non-zero on any failure.
+        #
+        # NOTE ON A FOOTGUN, NOT A BUG: run.sh glob-discovers every
+        # *_spec.lua file in tests/ (`for spec in *_spec.lua`). That means a
+        # spec file that is only half-written -- pushed mid-edit, or added
+        # to tests/ before its assertions are finished -- turns this WHOLE
+        # job red, including for every OTHER, unrelated spec file's
+        # failures reported alongside it. That is correct, intended
+        # behavior for CI on a pushed branch (an incomplete spec is exactly
+        # as red as a real regression, on purpose -- there is no quieter
+        # "pending/skipped" state here), but it is also the single most
+        # likely way to get confused by a red build from this job: check
+        # `==> whatever_spec.lua` in the log for a spec that was still being
+        # written, not just for a genuine regression, before assuming the
+        # underlying Lua code broke.
+
+  js-tests:
+    name: node.js unit tests (html/tests/)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run qbx_k9unit/html/tests suite
+        # html/tests/ is a Node harness for html/app.js (the K9 NUI, driven
+        # by postMessage payloads client/hud.lua and friends send it),
+        # mirroring qbx_k9unit/tests/testkit.lua's own "why not a real
+        # framework" reasoning on the JS side: html/tests/testkit.js is a
+        # zero-dependency assertion+runner (no jest/mocha/vitest, no
+        # package.json, no `npm install` step -- runs under any Node the
+        # box already has), one process per *_spec.js file, each of which
+        # calls t.run() and exits 0/1 itself, same shape as the Lua specs.
+        #
+        # There is no checked-in html/tests/run.sh (or run.js) as of this
+        # job being written -- this harness was still being built
+        # concurrently with this workflow change, one spec file
+        # (hud_vitals_spec.js) existing so far. Rather than add a runner
+        # script under html/tests/ myself (that directory isn't
+        # .github/workflows/'s to own), this step inlines the same
+        # glob-and-aggregate shape tests/run.sh uses on the Lua side,
+        # directly in this job, so it activates automatically as more
+        # *_spec.js files are added -- nothing here needs to change for
+        # that. If/when a real html/tests/run.sh appears, replace this
+        # inlined loop with `cd qbx_k9unit/html/tests && ./run.sh` for
+        # exact parity with the lua-tests job above.
+        #
+        # SAME FOOTGUN AS lua-tests, SAME REASON: this glob-discovers every
+        # *_spec.js file, so one half-written spec turns this whole job red
+        # (intended, not a bug -- see lua-tests' own comment above).
+        run: |
+          set -uo pipefail
+          cd qbx_k9unit/html/tests
+          shopt -s nullglob
+          specs=(*_spec.js)
+          if [ "${#specs[@]}" -eq 0 ]; then
+            echo "html/tests: no *_spec.js files found -- nothing ran."
+            exit 2
+          fi
+          status=0
+          failed=()
+          for spec in "${specs[@]}"; do
+            echo "==> $spec"
+            if ! node "$spec"; then
+              status=1
+              failed+=("$spec")
+            fi
+            echo ""
+          done
+          echo "============================================================"
+          if [ "$status" -eq 0 ]; then
+            echo "ALL JS SPEC FILES PASSED (${#specs[@]} file(s))."
+          else
+            echo "JS SPEC FILE(S) FAILED: ${failed[*]}"
+            echo "Reproduce locally, one line, from repo root: (cd qbx_k9unit/html/tests && for f in *_spec.js; do node \"\$f\" || exit 1; done)"
+          fi
+          exit "$status"
