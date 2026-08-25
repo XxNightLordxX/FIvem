@@ -1,7 +1,7 @@
 -- =====================================================================
 -- qbx_k9unit :: migration 0009 :: add k9_progression.idx_xp
 --
--- WHY THIS FILE EXISTS: FEATURE_IDEAS.md Part A Tier C §10 -- "Handler
+-- WHY THIS FILE EXISTS: DEVELOPER_REFERENCE.md Part A Tier C §10 -- "Handler
 -- leaderboard / /k9stats". server/leaderboard.lua's own `/k9stats` command
 -- runs `SELECT citizenid, xp FROM k9_progression ORDER BY xp DESC LIMIT ?`
 -- -- a real, bounded query, but one that `k9_progression`'s existing shape

@@ -1,14 +1,14 @@
 --[[
     qbx_k9unit/server/combat.lua
 
-    Phase 3 implementation (coder-security), PHASE3_SPEC.md §12.5.1
+    Phase 3 implementation (coder-security), DEVELOPER_REFERENCE.md §12.5.1
     (Bite-and-Hold) and §12.5.2 (Non-lethal takedown), built under §12.0
     item 8's ("the client-relay/non-cooperating-target-client architecture
     problem") own resolution and its five binding guardrails — this file
     IS that resolution's implementation, not a separate design pass.
 
     PHASE 3 ADDITION (this pass, coder-architect): also owns
-    `PropDragging` (PHASE3_SPEC.md §12.5.4, §12.0 item 6's downed-check
+    `PropDragging` (DEVELOPER_REFERENCE.md §12.5.4, §12.0 item 6's downed-check
     contract, §12.0 item 8's "mixed Category A/B" split for this
     specific mechanic). `HandlerDownDefense` remains OUT OF SCOPE for this
     file — still blocked on `server/partnership.lua` (§12.0 item 7) not
@@ -22,7 +22,7 @@
 
     ======================================================================
     HOW THIS FILE SATISFIES ITEM 8'S FIVE BINDING GUARDRAILS (read together
-    with PHASE3_SPEC.md §12.0 item 8's own text, not a substitute for it):
+    with DEVELOPER_REFERENCE.md §12.0 item 8's own text, not a substitute for it):
 
     1. "The detection layer ... exists in real, tested code in
        server/combat.lua — not merely the config placeholder table." See
@@ -63,7 +63,7 @@
     ======================================================================
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT (client<->server, PHASE3_SPEC.md §12.5.1/
+    EVENT/CALLBACK CONTRACT (client<->server, DEVELOPER_REFERENCE.md §12.5.1/
     §12.5.2/§12.0 item 8):
 
     Server events (RegisterNetEvent, client->server), THIS FILE:
@@ -130,14 +130,14 @@
       Sent ONLY to the requesting K9's own client — same relay, teardown
       side.
 
-    PROP DRAGGING (coder-architect, this pass, PHASE3_SPEC.md §12.5.4) —
+    PROP DRAGGING (coder-architect, this pass, DEVELOPER_REFERENCE.md §12.5.4) —
     NEW server events (client->server), THIS FILE:
     - 'qbx_k9unit:server:requestDrag' (targetNetId: number)
     - 'qbx_k9unit:server:releaseDrag' () — either the HOLDING K9 or, when
       the target is a player, the TARGET can send this; server resolves
       which side `source` is and ends the drag either way. Zero consent
       needed from the other side either direction — mirrors leash's own
-      "no consent needed to get free" rule, PHASE3_SPEC.md §12.0 item 4/
+      "no consent needed to get free" rule, DEVELOPER_REFERENCE.md §12.0 item 4/
       §12.5.4, and is stronger than BiteAndHold/NonLethalTakedown's own
       target (who has NO self-release action at all — apprehension, not a
       cooperative mechanic).
@@ -160,7 +160,7 @@
     - 'qbx_k9unit:client:applyDragSpeedLimit' (expiresAt: number)
       Sent ONLY to a PLAYER target's own client (never to an NPC — NPCs have
       no "own client," see dragStarted above) — the Category B half of
-      dragging, PHASE3_SPEC.md §12.0 item 8. Re-asserted by that client
+      dragging, DEVELOPER_REFERENCE.md §12.0 item 8. Re-asserted by that client
       every tick via SetPedMoveRateOverride, either directly or through
       client/movement.lua's shared move-rate composer depending on whether
       THAT client's own ped is currently a K9 model — see client/combat.lua's
@@ -284,7 +284,7 @@
     ======================================================================
 
     No anim-dictionary/TASK_PLAY_ANIM asset is used for BiteAndHold in this
-    pass — phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat's own §1 write-up flags
+    pass — phase2_notes/DEVELOPER_REFERENCE.md#phase-3-combat's own §1 write-up flags
     the one candidate clip (`creatures@rottweiler@melee@streamed_core@` /
     `takedown_from_back`) as MEDIUM confidence, one-shot (not a sustained
     hold loop), model-specific to the Rottweiler only, and explicitly
@@ -304,11 +304,11 @@
     - Calls HasK9Access(source) (server/certifications.lua),
       ResolveNetworkEntity(netId, expectedEntityType?) (server/entities.lua),
       and ResolveConnectedPlayerFromPed(entity) (server/entities.lua,
-      REFACTOR_ROADMAP.md item 2b — see the PLAYER-VS-NPC RESOLUTION
+      DEVELOPER_REFERENCE.md item 2b — see the PLAYER-VS-NPC RESOLUTION
       section below) — does not re-implement any of the three.
     - Calls NewCooldown()/NewMutex() (server/cooldowns.lua) — every
       cooldown/in-flight-guard below is one of these constructors, never a
-      hand-rolled table, per REFACTOR_ROADMAP.md item 1's own standing
+      hand-rolled table, per DEVELOPER_REFERENCE.md item 1's own standing
       convention for this resource. The four cooldowns constructed straight
       from a Config.Combat.*.cooldownMs/targetCooldownMs field are each
       first passed through ResolveConfiguredThresholdMs (also
@@ -362,18 +362,18 @@
       comment already documents for RestoreInjury.
     ======================================================================
 
-    PLAYER-VS-NPC RESOLUTION — DELIBERATE DEVIATION FROM PHASE3_SPEC.md'S
+    PLAYER-VS-NPC RESOLUTION — DELIBERATE DEVIATION FROM DEVELOPER_REFERENCE.md'S
     OWN INFORMAL PROSE, flagged explicitly rather than silently diverging:
     §12.5.1/§12.5.2/§12.0 item 8's prose names `IsPedAPlayer(targetPed)` as
     the resolution mechanism. This file instead reuses
     `ResolveConnectedPlayerFromPed(entity)` — the SAME pattern
     server/search.lua's own security-reviewed
-    `RESEARCH_ARCHIVE.md#contraband-search`-driven implementation already
+    `DEVELOPER_REFERENCE.md#contraband-search`-driven implementation already
     uses for the identical fact ("does this entity belong to a real,
     currently-connected player?"), for the SAME reason that file's own
     header gives: `IsPedAPlayer`/`NetworkGetPlayerIndexFromPed` combos were
     never independently confirmed reliable SERVER-side in this codebase's
-    own native-verification passes (phase2_notes/RESEARCH_ARCHIVE.md#phase-3-combat
+    own native-verification passes (phase2_notes/DEVELOPER_REFERENCE.md#phase-3-combat
     does not list `IS_PED_A_PLAYER` in its confirmed-natives table for
     either feature at all), whereas the `GetPlayers()`/`GetPlayerPed(id)`
     scan is already proven reliable server-side elsewhere in this exact
@@ -383,7 +383,7 @@
     one already-trusted mechanism instead of two natives of differing
     verified reliability.
 
-    EXTRACTION UPDATE (REFACTOR_ROADMAP.md item 2b): this file's own copy
+    EXTRACTION UPDATE (DEVELOPER_REFERENCE.md item 2b): this file's own copy
     was flagged above (when this comment was first written) as "worth
     flagging to coder-architect as an extraction candidate now that there
     are two" — that observation was already stale on arrival, since
@@ -395,7 +395,7 @@
     global instead, with no change to its own logic or call site.
     ======================================================================
 
-    NON-COMPLIANCE DETECTION (PHASE3_SPEC.md §12.0 item 8, point 2) — real,
+    NON-COMPLIANCE DETECTION (DEVELOPER_REFERENCE.md §12.0 item 8, point 2) — real,
     implemented sampling, not a sketch. TWO shared maintenance threads (never
     one thread per active effect, mirroring server/tracking.lua's
     PruneTrackableLogs single-pass-over-a-shared-table discipline), each
@@ -411,7 +411,7 @@
           runs on its own positionSampleWindowMs interval and samples the
           target's live, server-authoritative position (GetEntityCoords —
           NEVER a client-reported value), applying the PER-EFFECT heuristic
-          PHASE3_SPEC.md §12.0 item 8 specifies:
+          DEVELOPER_REFERENCE.md §12.0 item 8 specifies:
             - BiteAndHold: near-stationary check, flagged only after
               `biteHoldViolationSamples` CONSECUTIVE over-threshold
               samples (never a single noisy sample — server/tracking.lua's
@@ -438,7 +438,7 @@
     player holding the 'command' ACE permission via an ox_lib notify when
     action == 'notify_staff' (a generic, ecosystem-standard staff-permission
     convention — this resource assumes no particular admin resource exists,
-    per SPEC.md §2's "exports/events exposed so integration is possible, no
+    per DEVELOPER_REFERENCE.md §2's "exports/events exposed so integration is possible, no
     particular external resource assumed" posture, same as
     WantedStatusCheckOverride/IsPlayerDownedOverride elsewhere in this
     codebase). Config.Combat.NonComplianceDetection.OnViolationOverride, if
@@ -465,13 +465,13 @@
 --     isPlayerTarget = boolean,        -- resolved server-side via ResolveConnectedPlayerFromPed, NEVER client-claimed
 --     targetSrc    = number?,          -- present only when isPlayerTarget
 --     startedAt    = number,           -- GetGameTimer() at open
---     expiresAt    = number,           -- GetGameTimer() hard cap -- PHASE3_SPEC.md §12.0 item 4's "no unbounded trap" guarantee
+--     expiresAt    = number,           -- GetGameTimer() hard cap -- DEVELOPER_REFERENCE.md §12.0 item 4's "no unbounded trap" guarantee
 --     compliance   = { ... },          -- see NON-COMPLIANCE DETECTION above; shape differs slightly per effectType, see the two sampling branches below
 -- }
 local ActiveHolds = {}
 
 -- K9ActiveEffect[holderSrc] = targetNetId -- "one hold at a time per K9"
--- (PHASE3_SPEC.md §12.5.1: "One hold at a time per K9"), enforced across
+-- (DEVELOPER_REFERENCE.md §12.5.1: "One hold at a time per K9"), enforced across
 -- BOTH BiteAndHold and NonLethalTakedown (a single K9 engaging one target
 -- at a time, not one slot per effect type) -- also lets releaseBiteHold
 -- resolve its own target without a linear scan of ActiveHolds.
@@ -736,7 +736,7 @@ local TAKEDOWN_XP_MINT_COOLDOWN_MS = 60000
 -- see each call site's own comment.
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
 -- implementation -- see that file's own header for the extraction writeup.
 -- Every call site below is unchanged: this file never passed a custom
@@ -744,12 +744,12 @@ local TAKEDOWN_XP_MINT_COOLDOWN_MS = 60000
 
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a local
 -- function (duplicated from server/search.lua's own copy). Extracted to
--- server/entities.lua as a resource-global per REFACTOR_ROADMAP.md item
+-- server/entities.lua as a resource-global per DEVELOPER_REFERENCE.md item
 -- 2b — see this file's header "PLAYER-VS-NPC RESOLUTION" section's
 -- "EXTRACTION UPDATE" note for the full reasoning. ValidateCombatRequest
 -- below now calls that shared global instead.
 
---- PHASE3_SPEC.md §12.0 item 5. Never trusts a client-supplied "I am
+--- DEVELOPER_REFERENCE.md §12.0 item 5. Never trusts a client-supplied "I am
 --- wanted" (or "that target is wanted") claim — always reads server-side
 --- state for `targetSrc` itself. FAILS CLOSED (returns false) if
 --- Config.Combat.WantedStatusCheckOverride is supplied but errors — a
@@ -771,14 +771,14 @@ local function IsPlayerWantedEligible(targetSrc)
 
     -- Default best-effort check -- see config.lua's own comment on this
     -- field for the confidence caveat (LOWER confidence than
-    -- PropDragging's equivalent default, per PHASE3_SPEC.md §12.0 item 5).
+    -- PropDragging's equivalent default, per DEVELOPER_REFERENCE.md §12.0 item 5).
     local player = exports.qbx_core:GetPlayer(targetSrc)
     local metadata = player and player.PlayerData and player.PlayerData.metadata
     if type(metadata) ~= 'table' then return false end
     return metadata.wanted == true or metadata.iswanted == true
 end
 
---- PHASE3_SPEC.md §12.0 item 6 / §12.5.4 — PropDragging's "is this target
+--- DEVELOPER_REFERENCE.md §12.0 item 6 / §12.5.4 — PropDragging's "is this target
 --- actually downed" gate. NEVER reuses ValidateCombatRequest's own
 --- dead-target check (that check exists specifically to REJECT a dead
 --- target for BiteAndHold/NonLethalTakedown, the exact opposite of what
@@ -846,7 +846,7 @@ local function IsTargetDowned(targetPed, isPlayerTarget, targetSrc)
 
     -- Default best-effort check -- see config.lua's own comment on this
     -- field for the confidence note (HIGHER confidence than
-    -- WantedStatusCheckOverride's equivalent default, per PHASE3_SPEC.md
+    -- WantedStatusCheckOverride's equivalent default, per DEVELOPER_REFERENCE.md
     -- §12.0 item 6 vs. item 5).
     local player = exports.qbx_core:GetPlayer(targetSrc)
     local metadata = player and player.PlayerData and player.PlayerData.metadata
@@ -1015,7 +1015,7 @@ local function IsCombatFeaturePermittedForCitizenId(citizenid, featureKey)
 end
 
 --- Shared request-time validation for BiteAndHold, NonLethalTakedown, AND
---- (this pass) PropDragging — PHASE3_SPEC.md §12.5.1/§12.5.2/§12.5.4's own
+--- (this pass) PropDragging — DEVELOPER_REFERENCE.md §12.5.1/§12.5.2/§12.5.4's own
 --- contract blocks specify an identical validation prefix for all three
 --- (`requestBiteHold`/`requestTakedown`/`requestDrag`'s own doc text:
 --- "re-validates ... HasK9Access(source), live proximity ..., resolves
@@ -1219,7 +1219,7 @@ local function EndHold(targetNetId, reason)
     if hold.effectType == 'bite' then
         if hold.isPlayerTarget then
             -- Category B teardown relay -- best-effort, same posture as the
-            -- apply side (PHASE3_SPEC.md §12.0 item 8). If the target's
+            -- apply side (DEVELOPER_REFERENCE.md §12.0 item 8). If the target's
             -- client ignored the apply event in the first place, it will
             -- almost certainly ignore this one too — that is an accepted,
             -- disclosed limitation (item 8's own guardrail 3 is exactly why
@@ -1309,14 +1309,14 @@ local function EndHold(targetNetId, reason)
         end
 
         if reason ~= 'timeout' then
-            -- Takedown has no manual "release" action (PHASE3_SPEC.md
+            -- Takedown has no manual "release" action (DEVELOPER_REFERENCE.md
             -- §12.5.2 lists no release event) — only notify the K9 for a
             -- non-timeout reason (e.g. the target disconnecting mid-ragdoll);
             -- a plain timeout is the expected, silent end of a successful
             -- takedown.
             NotifyPlayer(hold.holderSrc, locale('combat.takedown_ended_early'), 'inform')
         end
-    else -- 'drag' (PHASE3_SPEC.md §12.5.4, this pass)
+    else -- 'drag' (DEVELOPER_REFERENCE.md §12.5.4, this pass)
         -- Category A (attach) teardown ALWAYS goes to the HOLDING K9's own
         -- client regardless of target kind — that client is the one
         -- actually calling AttachEntityToEntity/DetachEntity, §12.0 item 8's
@@ -1349,7 +1349,7 @@ end
 --- to unconditionally end whatever engagement (bite/takedown/drag) a K9 is
 --- CURRENTLY the HOLDER of, regardless of who is asking or that K9's own
 --- current certification/access state. server/recall.lua's Recall actor
---- (PHASE3_SPEC.md §12.5.1, §12.0 item 7's "Recall actor" consumer) is this
+--- (DEVELOPER_REFERENCE.md §12.5.1, §12.0 item 7's "Recall actor" consumer) is this
 --- function's one intended caller today -- resolved through the SAME
 --- `type(...) == 'function'` runtime-existence-guard convention this file
 --- already uses for IsHesitating/IsDistracted/AwardXP (see FILE-TO-FILE
@@ -1358,7 +1358,7 @@ end
 --- not, and should not need to be, load-bearing.
 ---
 --- DELIBERATELY NEVER CHECKS HasK9Access/Config.Features.* ITSELF -- this is
---- a TERMINATION path, and PHASE3_SPEC.md's own "no unbounded trap"
+--- a TERMINATION path, and DEVELOPER_REFERENCE.md's own "no unbounded trap"
 --- guarantee (§12.0 item 4, restated for Recall specifically at §12.5.1)
 --- requires that a K9 whose certification is revoked, or whose feature flag
 --- is toggled off, mid-engagement can still be called off; gating this
@@ -1420,7 +1420,7 @@ end
 ---      GetEntityHealth <= PED_DEAD_HEALTH_THRESHOLD check
 ---      reportBiteHoldTargetDied and ValidateCombatRequest already use —
 ---      never trusted alone.
---- THIS IS A TERMINATION PATH (PHASE3_SPEC.md §12.0 item 4's "no unbounded
+--- THIS IS A TERMINATION PATH (DEVELOPER_REFERENCE.md §12.0 item 4's "no unbounded
 --- trap" guarantee, restated for EndActiveEffectForHolder immediately
 --- above): it must never be gated on HasK9Access/Config.Features.*/a
 --- cooldown/mutex/any check that can fail closed, same discipline
@@ -1629,7 +1629,7 @@ local function SampleCompliance(targetNetId, hold, now)
             FlagNonCompliance(hold, targetNetId, 'takedown_displacement',
                 ('netDisplacement=%.2fm threshold=%.2fm'):format(netDisplacement, cfg.takedownNetDisplacementMeters))
         end
-    else -- 'drag' (PHASE3_SPEC.md §12.5.4/§12.0 item 8, this pass)
+    else -- 'drag' (DEVELOPER_REFERENCE.md §12.5.4/§12.0 item 8, this pass)
         -- Only meaningful for a PLAYER target -- an NPC target has no "own
         -- client" to ignore the speed-limit relay in the first place (the
         -- K9's own already-trusted client directly commands the NPC's move
@@ -1638,7 +1638,7 @@ local function SampleCompliance(targetNetId, hold, now)
         -- above which sample BOTH target kinds uniformly (a pre-existing
         -- choice this pass does not relitigate). Compares the target's live
         -- position against the K9's OWN live position (never an absolute
-        -- speed ceiling) -- PHASE3_SPEC.md §12.0 item 8's own framing:
+        -- speed ceiling) -- DEVELOPER_REFERENCE.md §12.0 item 8's own framing:
         -- "regardless of cause (self-detach, a bypassed move-rate override,
         -- or the K9's own client failing to re-assert the attach)" — this
         -- single geometric check catches all three failure modes at once
@@ -1660,7 +1660,7 @@ local function SampleCompliance(targetNetId, hold, now)
     compliance.lastTime = now
 end
 
---- PHASE3_SPEC.md §12.0 item 4's "no unbounded trap" guarantee for
+--- DEVELOPER_REFERENCE.md §12.0 item 4's "no unbounded trap" guarantee for
 --- PropDragging specifically — item 4's own text names `maxDragDistance`
 --- (not a duration) as this mechanic's analog of BiteAndHold/
 --- NonLethalTakedown's hard `maxDurationMs`/ragdoll-window caps. ALWAYS
@@ -1789,7 +1789,7 @@ if Config.Features.BiteAndHold or Config.Features.NonLethalTakedown or Config.Fe
                     -- the ALWAYS-ON backstop half of the holder-death fix,
                     -- never gated behind NonComplianceDetection.enabled or
                     -- any other feature flag/access/cooldown check — this is
-                    -- a TERMINATION path (PHASE3_SPEC.md §12.0 item 4's own
+                    -- a TERMINATION path (DEVELOPER_REFERENCE.md §12.0 item 4's own
                     -- "no unbounded trap" guarantee, same discipline
                     -- EndActiveEffectForHolder's own doc comment above
                     -- already establishes for Recall) and must never be
@@ -1960,13 +1960,13 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
     K9ActiveEffect[src] = targetNetId
 
     if isPlayerTarget then
-        -- Category B relay -- PHASE3_SPEC.md §12.0 item 8. Sent ONLY to
+        -- Category B relay -- DEVELOPER_REFERENCE.md §12.0 item 8. Sent ONLY to
         -- the target's own client, never a broadcast.
         TriggerClientEvent('qbx_k9unit:client:applyBiteHold', targetSrc, k9NetId, expiresAt)
     else
         -- NPC target — RESTRUCTURED, native-api-assistant verification
         -- pass (this session): see this file's header "NPC-TARGET NATIVE
-        -- EXECUTION CONTEXT" note. PHASE3_SPEC.md §12.5.1's own prose calls
+        -- EXECUTION CONTEXT" note. DEVELOPER_REFERENCE.md §12.5.1's own prose calls
         -- this "no relay problem" on the theory the server can just call
         -- these natives directly — that theory did not survive
         -- verification (SetBlockingOfNonTemporaryEvents/SetPedFleeAttributes'
@@ -2124,7 +2124,7 @@ local function HandleTakedownRequest(src, targetNetId)
         return
     end
 
-    -- SERVER-COMPUTED SPEED GATE — PHASE3_SPEC.md §12.5.2 / §12.0 item 8's
+    -- SERVER-COMPUTED SPEED GATE — DEVELOPER_REFERENCE.md §12.5.2 / §12.0 item 8's
     -- "rolling speed history per targetable entity" open item, resolved
     -- NARROWLY this pass: a short, bounded, two-sample measurement window
     -- taken at request time, rather than a continuously-running per-ped
@@ -2203,7 +2203,7 @@ local function HandleTakedownRequest(src, targetNetId)
     K9ActiveEffect[src] = targetNetId
 
     if isPlayerTarget2 then
-        -- Category B relay -- PHASE3_SPEC.md §12.0 item 8.
+        -- Category B relay -- DEVELOPER_REFERENCE.md §12.0 item 8.
         TriggerClientEvent('qbx_k9unit:client:forceRagdoll', targetSrc2, expiresAt)
     else
         -- NPC target — RESTRUCTURED, native-api-assistant verification
@@ -2345,15 +2345,15 @@ end)
 
 --[[ ================= PROP DRAGGING ================= ]]
 --[[
-    PHASE3_SPEC.md §12.5.4 / §12.0 items 1, 4, 5, 6, 8 (coder-architect,
+    DEVELOPER_REFERENCE.md §12.5.4 / §12.0 items 1, 4, 5, 6, 8 (coder-architect,
     this pass). Reuses ActiveHolds/K9ActiveEffect/EndHold/FlagNonCompliance/
     the shared maintenance thread above wholesale (effectType = 'drag') —
     see this file's own header for why (avoids exactly the kind of
-    unforced duplicate-table/duplicate-lifecycle problem PHASE3_SPEC.md
+    unforced duplicate-table/duplicate-lifecycle problem DEVELOPER_REFERENCE.md
     §12.0 item 8 itself warns against for this class of state).
 
     CATEGORY A/B SPLIT FOR THIS MECHANIC, restated concretely against the
-    code below (PHASE3_SPEC.md §12.0 item 8's own framing): the attach
+    code below (DEVELOPER_REFERENCE.md §12.0 item 8's own framing): the attach
     (AttachEntityToEntity, entirely client/combat.lua's responsibility —
     THIS file only ever grants/denies the request and tracks state, it
     never calls that native itself) is Category A and comparatively robust
@@ -2376,13 +2376,13 @@ end)
 
     "IS THIS TARGET DOWNED" — see IsTargetDowned (above, near
     IsPlayerWantedEligible) for the full two-branch contract (native-only
-    for an NPC, override-or-metadata-guess for a player, PHASE3_SPEC.md
+    for an NPC, override-or-metadata-guess for a player, DEVELOPER_REFERENCE.md
     §12.0 item 6). Called as an explicit SEPARATE step after
     ValidateCombatRequest({requireAlive = false}) succeeds — see that
     function's own updated header for why this could not simply reuse its
     built-in dead-target check (GetEntityHealth-based -- see PED_DEAD_HEALTH_THRESHOLD above).
 
-    NO XP AWARD for PropDragging in this pass — PHASE3_SPEC.md §12.2's own
+    NO XP AWARD for PropDragging in this pass — DEVELOPER_REFERENCE.md §12.2's own
     config sketch names no `Config.XP.awards.*` key for dragging (unlike
     biteHoldSuccess/takedownSuccess), so none is invented here; this is a
     disclosed omission, not an oversight, and a config-validator/product
@@ -2420,7 +2420,7 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
 
     local now = GetGameTimer()
     -- maxDragDurationMs: a defensive hard-duration backstop ADDED beyond
-    -- PHASE3_SPEC.md §12.2's literal sketch (which names only
+    -- DEVELOPER_REFERENCE.md §12.2's literal sketch (which names only
     -- maxDragDistance as this mechanic's "no unbounded trap" cap, §12.0
     -- item 4) — see config.lua's own comment on this field (once added —
     -- this value is REQUESTED, not yet landed, see this pass's own report)
@@ -2457,7 +2457,7 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
     TriggerClientEvent('qbx_k9unit:client:dragStarted', src, targetNetId, isPlayerTarget, expiresAt)
 
     if isPlayerTarget then
-        -- Category B relay -- PHASE3_SPEC.md §12.0 item 8.
+        -- Category B relay -- DEVELOPER_REFERENCE.md §12.0 item 8.
         TriggerClientEvent('qbx_k9unit:client:applyDragSpeedLimit', targetSrc, expiresAt)
     end
     -- NPC target: no separate relay event needed -- dragStarted above
@@ -2474,7 +2474,7 @@ RegisterNetEvent('qbx_k9unit:server:releaseDrag', function()
     local src = source
 
     -- Either the HOLDING K9 or, when the target is a player, the TARGET
-    -- itself may release at will -- PHASE3_SPEC.md §12.5.4 / §12.0 item 4:
+    -- itself may release at will -- DEVELOPER_REFERENCE.md §12.5.4 / §12.0 item 4:
     -- mirrors leash's own "no consent needed to get free" rule, and is
     -- STRONGER than bite/takedown's own target (who has no self-release
     -- action at all -- apprehension by design, not a cooperative

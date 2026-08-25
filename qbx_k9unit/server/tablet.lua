@@ -365,6 +365,26 @@ end
 --- otherwise hang the NUI's fetch() promise -- see client/tablet.lua's own
 --- AwaitServerCallback doc comment for why an uninvoked callback is never
 --- acceptable here).
+---
+--- K9STORE MIGRATION NOTE (this pass): this file's other two direct-SQL
+--- reads (QueryHasAnyActiveCertification, QueryActivePermissionSet) have now
+--- moved onto K9Store.Cert_GetActiveIdAnyJob / K9Store.Perm_GetActiveForCitizen
+--- below (see SafeStoreCall), so Config.Database.enabled = false now actually
+--- takes effect for those two. SafeQuery itself STAYS, calling MySQL.*
+--- directly, for the two remaining call sites below (BuildCertificationsArray,
+--- tabletRequestRoster's per-department fetch) -- neither has a clean 1:1
+--- K9Store accessor today: BuildCertificationsArray needs "every active cert
+--- row for one citizenid across ALL departments, columns job+granted_by,
+--- unordered" and no K9Store function returns that shape (the closest,
+--- Cert_GetActiveIdAnyJob, is a scalar id-existence check only); the roster
+--- fetch needs the SAME per-job columns WITHOUT an ORDER BY (see this file's
+--- header "ROSTER QUERY -- PERFORMANCE" for why that omission is deliberate),
+--- while K9Store.Cert_GetActiveRosterByJob adds `ORDER BY granted_at DESC`
+--- (admin.lua's own shape) -- swapping onto it would reintroduce the exact
+--- filesort this file's header documents avoiding. Reported to main/
+--- coder-architect rather than reshaped here or fixed by adding a new
+--- K9Store function unilaterally (server/datastore.lua is shared by all five
+--- of this pass's coders).
 --- @param sql string
 --- @param params table
 --- @return table rows
@@ -377,23 +397,40 @@ local function SafeQuery(sql, params)
     return rowsOrErr or {}
 end
 
+--- Fail-closed K9Store-accessor wrapper -- pcall around a K9Store.* function,
+--- mirroring SafeQuery's own contract exactly (a failed read returns zero
+--- rows/false, never a raw Lua error out of a lib.callback handler).
+--- server/datastore.lua's own K9Store.* functions mirror oxmysql's RAW,
+--- un-pcalled MySQL.query.await/MySQL.scalar.await contract in their DB-mode
+--- branch by design (see that file's header "CONTRACT DISCIPLINE") -- this
+--- file still needs "never throws" for its own callback handlers regardless
+--- of which backend K9Store is running against, so the pcall stays here, at
+--- this file's own call sites, exactly the same shape as SafeQuery above.
+--- @param fn function -- a K9Store.* accessor
+--- @return any result -- rowsOrErr on success, or the caller's own documented
+--- fallback (nil/false/{}) on failure -- see each call site.
+local function SafeStoreCall(fn, ...)
+    local ok, resultOrErr = pcall(fn, ...)
+    if not ok then
+        print(('[qbx_k9unit] tablet.lua K9Store call failed: %s'):format(tostring(resultOrErr)))
+        return nil
+    end
+    return resultOrErr
+end
+
 --- DB-authoritative: does `citizenid` hold an active row in ANY configured
 --- department? Used ONLY as the offline fallback inside
 --- ResolveTargetHasK9Access below (an online target's access is read from
 --- the real, live HasK9Access(source) instead -- this is strictly a
---- substitute for when no live source exists). Uses idx_citizen_job_active
---- as a citizenid-prefix scan (EXPLAIN-verified this pass against MySQL
---- 5.7/8.0), same index server/permissions.lua's own header already
---- documents for the identical query shape.
+--- substitute for when no live source exists). Migrated onto
+--- K9Store.Cert_GetActiveIdAnyJob this pass (identical SQL/index, now behind
+--- the DatabaseEnabled() switch -- Config.Database.enabled = false answers
+--- this from K9Store's own in-memory certification rows instead of a live
+--- MySQL connection).
 --- @param citizenid string
 --- @return boolean
 local function QueryHasAnyActiveCertification(citizenid)
-    local ok, idOrErr = pcall(MySQL.scalar.await, 'SELECT id FROM k9_certifications WHERE citizenid = ? AND active = 1 LIMIT 1', { citizenid })
-    if not ok then
-        print(('[qbx_k9unit] tablet.lua QueryHasAnyActiveCertification failed for %s: %s'):format(citizenid, tostring(idOrErr)))
-        return false
-    end
-    return idOrErr ~= nil
+    return SafeStoreCall(K9Store.Cert_GetActiveIdAnyJob, citizenid) ~= nil
 end
 
 --- Every ACTIVE k9_permissions row for `citizenid`, as a set (presence of a
@@ -406,11 +443,14 @@ end
 --- target too (tabletRequestPersonSummary/tabletRequestPersonFeatures), so a
 --- direct, DB-authoritative read is correct here regardless of
 --- IsValidPermissionKey's own now-fixed namespace acceptance (see this
---- file's header "RESOLVED, PREVIOUSLY A REAL GAP").
+--- file's header "RESOLVED, PREVIOUSLY A REAL GAP"). Migrated onto
+--- K9Store.Perm_GetActiveForCitizen this pass (identical SQL, same row
+--- shape `{ permission = ... }`) -- now works correctly under
+--- Config.Database.enabled = false too.
 --- @param citizenid string
 --- @return table<string, boolean>
 local function QueryActivePermissionSet(citizenid)
-    local rows = SafeQuery('SELECT permission FROM k9_permissions WHERE citizenid = ? AND active = 1', { citizenid })
+    local rows = SafeStoreCall(K9Store.Perm_GetActiveForCitizen, citizenid) or {}
     local set = {}
     for _, row in ipairs(rows) do
         set[row.permission] = true
@@ -425,6 +465,12 @@ end
 --- as a citizenid-prefix scan (no LIMIT needed: bounded by the number of
 --- configured departments, a small fixed set -- at most one active row per
 --- department per this schema's own uq_one_active_cert_per_job invariant).
+--- NOT YET MIGRATED onto K9Store -- see SafeQuery's own doc comment above
+--- ("K9STORE MIGRATION NOTE") for why: no existing K9Store accessor returns
+--- this exact shape (every active cert for one citizenid across ALL
+--- departments, columns job+granted_by). Still calls MySQL.* directly via
+--- SafeQuery, so Config.Database.enabled = false does not yet help this one
+--- read -- flagged to main/coder-architect rather than papered over here.
 --- @param citizenid string
 --- @return table -- array of { departmentKey, departmentLabel, active, grantedBy }
 local function BuildCertificationsArray(citizenid)
@@ -814,7 +860,13 @@ lib.callback.register('qbx_k9unit:server:tabletRequestRoster', function(source, 
     -- is not an injection vector, and oxmysql's LIMIT-placeholder
     -- compatibility was never independently confirmed in this codebase).
     -- NO ORDER BY -- see this file's header for the filesort this
-    -- deliberately avoids repeating.
+    -- deliberately avoids repeating. NOT YET MIGRATED onto K9Store for the
+    -- same reason: K9Store.Cert_GetActiveRosterByJob (server/datastore.lua)
+    -- mirrors server/admin.lua's ORDERED shape, not this one -- swapping
+    -- onto it would silently reintroduce the filesort this loop exists to
+    -- avoid. See SafeQuery's own doc comment above for the full note; this
+    -- is the second of the two direct-MySQL call sites flagged to main/
+    -- coder-architect rather than papered over here.
     local candidates = {}
     local hitFetchCap = false
     if type(Config.Departments) == 'table' then

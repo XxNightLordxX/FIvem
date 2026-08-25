@@ -3,12 +3,12 @@
 
     Phase 4 implementation. Client-side half of Config.Features.FatigueSystem
     / MoodSystem / FearStressSystem / DistractionSystem / InjuryLimping
-    (PHASE4_SPEC.md §13.0 Decision 1, §13.3, §13.4.3). Receives the server's
+    (DEVELOPER_REFERENCE.md §13.0 Decision 1, §13.3, §13.4.3). Receives the server's
     pushed wellbeing snapshots, sets the shared `K9MoveRateModifiers` entries
-    for Fatigue/Injury/Mood (PHASE4_SPEC.md §13.0 Decision 2) and calls
+    for Fatigue/Injury/Mood (DEVELOPER_REFERENCE.md §13.0 Decision 2) and calls
     `RecomputeK9MoveRate()` (client/movement.lua), enforces the client-local
     sprint/jump input blocks for low Injury (a disclosed, bounded, self-
-    applied limitation — see server/wellbeing.lua's header and PHASE4_SPEC.md
+    applied limitation — see server/wellbeing.lua's header and DEVELOPER_REFERENCE.md
     §13.0 Decision 3, not a security boundary), and owns the "Pet K9"/
     "Feed K9" ox_target interactions plus the meat-bait/whistle/calm-down
     self-actions.
@@ -23,9 +23,9 @@
     (pet/feed/calm-down/distraction-item-use) is re-validated server-side in
     server/wellbeing.lua regardless of what this file's own UI/gating
     thinks — the standard "client hides the option, server is the real
-    gate" split this codebase applies everywhere (SPEC.md §4.1).
+    gate" split this codebase applies everywhere (DEVELOPER_REFERENCE.md §4.1).
 
-    DELIBERATELY NOT WIRED INTO client/radial.lua THIS PASS: PHASE4_SPEC.md
+    DELIBERATELY NOT WIRED INTO client/radial.lua THIS PASS: DEVELOPER_REFERENCE.md
     §13.4.3.3 frames "Calm Down" as a radial command, but client/radial.lua
     is being actively worked on by a concurrent agent (AdvancedBarkRadial,
     Phase 5) this session — touching it here risks a collision with that
@@ -49,7 +49,7 @@
     - '/k9calmdown' — self-only, gated on CanShowK9UI() + Config.Features.FearStressSystem.
       Triggers 'qbx_k9unit:server:calmDownK9'.
     - '/k9meatbait' / '/k9whistle' — deliberately NOT gated on CanShowK9UI():
-      PHASE4_SPEC.md §13.4.3.4 open question 2 reads this as intentionally
+      DEVELOPER_REFERENCE.md §13.4.3.4 open question 2 reads this as intentionally
       open to any player (a fleeing suspect using a whistle/meat-bait
       against a pursuing K9 is explicitly in-scope per that document's own
       framing), gated only on Config.Features.DistractionSystem and, for
@@ -57,17 +57,17 @@
 
     FILE-TO-FILE CONTRACT:
     - Reads/writes `K9MoveRateModifiers` and calls `RecomputeK9MoveRate()`,
-      both resource-globals from client/movement.lua (PHASE4_SPEC.md §13.0
+      both resource-globals from client/movement.lua (DEVELOPER_REFERENCE.md §13.0
       Decision 2) — never calls `SetPedMoveRateOverride` directly.
     - Calls `IsOwnModelK9()`/`CanShowK9UI()`/`DenyK9UIAccess()`/
       `IsEntityModelK9(entity)`/`ResolvePlayerServerIdFromPed(entity)`,
       resource-globals from client/main.lua — reused, never re-derived.
-      `IsEntityModelK9` (REFACTOR_ROADMAP.md item 3) replaces this file's
+      `IsEntityModelK9` (DEVELOPER_REFERENCE.md item 3) replaces this file's
       own former local `K9ModelHashes` set (used to mirror
       client/medkit.lua's own precomputation exactly — a client-side
       display filter only, server/wellbeing.lua re-derives every target's
       real model server-side regardless). `ResolvePlayerServerIdFromPed`
-      (REFACTOR_ROADMAP.md item 2b) replaces this file's own former local
+      (DEVELOPER_REFERENCE.md item 2b) replaces this file's own former local
       copy of the same function (used to mirror client/medkit.lua's own
       copy exactly).
 ]]
@@ -161,13 +161,13 @@ local function ApplyWellbeingSnapshot(stats)
     end
 end
 
---- PHASE4_SPEC.md §13.4.3.1. Pure tick-driven consumer — server/wellbeing.lua's
+--- DEVELOPER_REFERENCE.md §13.4.3.1. Pure tick-driven consumer — server/wellbeing.lua's
 --- header EVENT/CALLBACK CONTRACT item 8.
 --- @param stats table
 RegisterNetEvent('qbx_k9unit:client:wellbeingUpdate', function(stats)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup;
+    -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
     -- not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:wellbeingUpdate', { fatigue = 999,
     -- ... })` would feed straight into ApplyWellbeingSnapshot() ->
@@ -216,7 +216,7 @@ if Config.Features.FatigueSystem or Config.Features.MoodSystem
 end
 
 -- ======================================================================
--- INJURY — client-local sprint/jump input blocks. PHASE4_SPEC.md
+-- INJURY — client-local sprint/jump input blocks. DEVELOPER_REFERENCE.md
 -- §13.4.3.5's own disclosed limitation: self-applied, not a security
 -- boundary, same category as the speed-penalty modifier above (§13.0
 -- Decision 3). Only started at all if InjuryLimping is enabled (no thread,
@@ -275,7 +275,7 @@ if Config.Features.InjuryLimping then
             -- after a respawn) — negligible against Config.Wellbeing
             -- .tickIntervalMs's own 5000ms default cadence for Injury to
             -- change at all, and this was never a security boundary to
-            -- begin with (this section's own header, and PHASE4_SPEC.md
+            -- begin with (this section's own header, and DEVELOPER_REFERENCE.md
             -- §13.0 Decision 3).
             --
             -- OWNER'S CALL, NOT GUESSED (K9 role/model decoupling pass):
@@ -329,7 +329,7 @@ if Config.Features.MoodSystem then
     -- ResolvePlayerServerIdFromPed(entity) used to be defined here as a
     -- local copy of client/medkit.lua's own function (deliberate per-file
     -- duplication at the time). Extracted to client/main.lua as a
-    -- resource-global per REFACTOR_ROADMAP.md item 2b once both copies
+    -- resource-global per DEVELOPER_REFERENCE.md item 2b once both copies
     -- were confirmed byte-identical — see that file's own doc comment.
     -- The "Pet K9"/"Feed K9" onSelect handlers below now call the shared
     -- global instead.

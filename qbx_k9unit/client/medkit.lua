@@ -2,13 +2,13 @@
     qbx_k9unit/client/medkit.lua
 
     Phase 4 implementation. Owns Config.Features.K9Medkit's client-side
-    "Treat K9" ox_target world interaction (PHASE4_SPEC.md §13.4.4) — the
+    "Treat K9" ox_target world interaction (DEVELOPER_REFERENCE.md §13.4.4) — the
     UX-only half of this feature's trust boundary. ALL real validation
     (using-player eligibility, live proximity, target-model re-verification,
     item possession/consumption, per-target cooldown) happens server-side in
     server/medkit.lua's `qbx_k9unit:server:useK9Medkit` callback — nothing
     below is a security boundary, per this codebase's established "client
-    hides the option, server is the real gate" split (SPEC.md §4.1's
+    hides the option, server is the real gate" split (DEVELOPER_REFERENCE.md §4.1's
     security note, already applied identically to every other gated action
     in this resource).
 
@@ -289,14 +289,14 @@ end
 
 --- Server-pushed heal application — see server/medkit.lua's header for why
 --- this is client-self-applied rather than a direct server-side
---- SetEntityHealth call (PHASE4_SPEC.md §13.4.4 open question 1).
+--- SetEntityHealth call (DEVELOPER_REFERENCE.md §13.4.4 open question 1).
 --- `newHealth` is an already-clamped ABSOLUTE health value computed
 --- server-side — this handler never adds/interprets a delta of its own.
 --- @param newHealth number
 RegisterNetEvent('qbx_k9unit:client:applyMedkitHeal', function(newHealth)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup;
+    -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
     -- not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:applyMedkitHeal', <anything>)`
     -- would reach the exact same SetEntityHealth call a genuine server

@@ -303,7 +303,7 @@ t.test('ToggleThermalVision: a K9 model, currently ON, turns OFF -- SetSeethroug
 end)
 
 -- ----------------------------------------------------------------------
--- Mutual exclusivity -- SPEC.md §11.5's own confirmed judgment call:
+-- Mutual exclusivity -- DEVELOPER_REFERENCE.md §11.5's own confirmed judgment call:
 -- turning one on forces the other off first.
 -- ----------------------------------------------------------------------
 

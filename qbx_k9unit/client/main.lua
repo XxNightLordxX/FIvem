@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/main.lua
 
-    Phase 1 scaffold only (coder-architect). REWRITTEN after SPEC.md's
+    Phase 1 scaffold only (coder-architect). REWRITTEN after DEVELOPER_REFERENCE.md's
     post-draft correction. Owns the two building-block checks every other
     client file gates on — "is my own character a K9 model" (display-only,
     client-side) and "does the server say I have K9 access" (the real
@@ -41,16 +41,16 @@
     'qbx_k9unit:server:registerK9'/'unregisterK9' events,
     'qbx_k9unit:client:despawnK9' event. There is no ped to select, spawn,
     register, or despawn — the K9 player plays their own persistent
-    character at all times (SPEC.md §1, §2).
+    character at all times (DEVELOPER_REFERENCE.md §1, §2).
     ======================================================================
 
     FILE-TO-FILE CONTRACT (client side):
     - THIS FILE exposes three resource-global (no `local`) functions,
       used by client/movement.lua, client/radial.lua, and client/vehicle.lua,
       PLUS ResolveNetworkEntity() (see its own doc comment near
-      PlaySoundOnNetworkEntity below — REFACTOR_ROADMAP.md near-term item 2),
+      PlaySoundOnNetworkEntity below — DEVELOPER_REFERENCE.md near-term item 2),
       PLUS ResolvePlayerServerIdFromPed() and IsEntityModelK9() (see their
-      own doc comments below — REFACTOR_ROADMAP.md item 2b and item 3
+      own doc comments below — DEVELOPER_REFERENCE.md item 2b and item 3
       respectively):
         IsOwnModelK9() -> boolean
             Pure local check (GetEntityModel(PlayerPedId()) against
@@ -58,7 +58,7 @@
             security boundary.
         HasK9Access() -> boolean
             Awaits the 'qbx_k9unit:server:hasK9Access' callback for the
-            LOCAL player. This is a real network round-trip; per SPEC.md
+            LOCAL player. This is a real network round-trip; per DEVELOPER_REFERENCE.md
             §4.1 ("checked... on every access point... not just once") it
             must be re-awaited at each point of use, not cached forever —
             but DO cache it briefly (a TODO below) so a hot call site like
@@ -89,7 +89,7 @@
       API), not a shared symbol.
 
     OPEN QUESTION flagged for coder-frontend (not decided here): does the
-    first/third-person eye-height camera toggle (SPEC.md §6.1 bullet 2)
+    first/third-person eye-height camera toggle (DEVELOPER_REFERENCE.md §6.1 bullet 2)
     and native run/jump/crouch (bullet 3) need to be gated by CanShowK9UI()
     at all, or are they baseline behavior available to anyone playing a
     K9-model character regardless of job/cert (the game already gives any
@@ -105,7 +105,7 @@
 
 --- Precomputed set of Config.Peds model hashes, built once at file load.
 --- Mirrors server/certifications.lua's K9ModelHashes approach so both
---- sides stay generic over the config (SPEC.md §3 acceptance bullet 3) —
+--- sides stay generic over the config (DEVELOPER_REFERENCE.md §3 acceptance bullet 3) —
 --- no hardcoded model name anywhere, including custom streamed entries.
 local K9ModelHashes = {}
 for _, pedEntry in ipairs(Config.Peds) do
@@ -117,7 +117,7 @@ end
 --- boundary; every server-side handler that cares about a target's real
 --- model re-derives it itself (IsConfiguredK9Model, server/certifications.lua).
 ---
---- REFACTOR_ROADMAP.md item 3. Promoted from client/movement.lua's local
+--- DEVELOPER_REFERENCE.md item 3. Promoted from client/movement.lua's local
 --- `IsEntityModelK9`/`k9ModelHashesForTargeting` pair (which already had
 --- this exact signature) to a resource-global here, reusing THIS file's
 --- own `K9ModelHashes` table above rather than building a second,
@@ -148,7 +148,7 @@ end
 
 --- Client-side, display-only check: does the LOCAL player currently count
 --- as a K9 for gating purposes? Still never used for security — see
---- SPEC.md §4.5 ("Convenience (client)" bullet) and this doc comment's own
+--- DEVELOPER_REFERENCE.md §4.5 ("Convenience (client)" bullet) and this doc comment's own
 --- audit note below.
 ---
 --- ROLE/MODEL DECOUPLING (coder-architect, this pass, owner directive
@@ -220,7 +220,7 @@ end
 -- leash option in particular) can run several times a second while
 -- hovering — without this, each of those would re-await the server
 -- callback on every frame. ~1000ms keeps "checked... not just once"
--- (SPEC.md §4.1) true in spirit: this is a debounce, not a permanent
+-- (DEVELOPER_REFERENCE.md §4.1) true in spirit: this is a debounce, not a permanent
 -- cache, and every gated server-side action independently re-verifies
 -- access regardless of what this cache currently believes.
 local HAS_K9_ACCESS_CACHE_TTL_MS = 1000
@@ -306,7 +306,7 @@ function DenyK9UIAccess()
     lib.notify({ title = locale('common.notify_title'), description = locale('common.no_k9_access'), type = 'error' })
 end
 
--- Placeholder sound reference. SPEC.md §7 flags that "bark sounds" need
+-- Placeholder sound reference. DEVELOPER_REFERENCE.md §7 flags that "bark sounds" need
 -- bundled audio asset files (bark .ogg/.wav) that do not exist anywhere in
 -- this resource yet, and that there's no native "make this canine ped
 -- emit a bark voice line" the way human ped speech works — this is not a
@@ -327,10 +327,10 @@ local K9_SOUND_SET = 'qbx_k9unit_sounds'
 
 --- Phase 5 (Config.Features.AdvancedBarkRadial, client/radial.lua): maps a
 --- specific `barkType` string (config.lua's Config.AdvancedBarkRadial —
---- SPEC.md §6.7's "aggressive/alert/calm") to its own placeholder sound
+--- DEVELOPER_REFERENCE.md §6.7's "aggressive/alert/calm") to its own placeholder sound
 --- name, built once at file load. Still all placeholder audio, same
 --- K9_SOUND_SET convention as BARK_SOUND_NAME above — phase2_notes/
---- RESEARCH_ARCHIVE.md#phase-5-research confirms a real per-variant soundset
+--- DEVELOPER_REFERENCE.md#phase-5-research confirms a real per-variant soundset
 --- needs authored `.awc`/REL audio-bank assets, not just a different string
 --- here; this table only carries the plumbing. Built defensively against
 --- Config.AdvancedBarkRadial not existing (older configs, or the feature
@@ -341,7 +341,7 @@ for _, variant in ipairs(Config.AdvancedBarkRadial or {}) do
     BarkTypeSoundNames[variant.barkType] = variant.sound
 end
 
---- REFACTOR_ROADMAP.md near-term item 2 ("resolve network entity
+--- DEVELOPER_REFERENCE.md near-term item 2 ("resolve network entity
 --- defensively" helper — 6 independent hand-written copies, 4 client-side
 --- + 2 server-side). Resolves netId to a live, currently-streamed-in
 --- entity handle on THIS client, or nil if it doesn't currently resolve to
@@ -381,7 +381,7 @@ end
 --- flags this SAME native combo as unverified SERVER-side only; that
 --- caveat does not apply to this client-side use.
 ---
---- REFACTOR_ROADMAP.md item 2b. Extracted from two independent,
+--- DEVELOPER_REFERENCE.md item 2b. Extracted from two independent,
 --- byte-identical hand-written copies of this exact function:
 --- client/medkit.lua's "Treat K9" onSelect handler and
 --- client/wellbeing.lua's "Pet K9"/"Feed K9" onSelect handlers. Both now
@@ -404,7 +404,7 @@ end
 --- DoesEntityExist -> PlaySoundFromEntity" sequence was previously
 --- duplicated between this file's playBark handler and
 --- client/search.lua's contraband-alert handler; the resolve half is now
---- ResolveNetworkEntity() above (REFACTOR_ROADMAP.md near-term item 2).
+--- ResolveNetworkEntity() above (DEVELOPER_REFERENCE.md near-term item 2).
 ---
 --- Two playback paths run back-to-back, not either/or: the original
 --- PlaySoundFromEntity native call stays exactly as it was (a harmless
@@ -452,7 +452,7 @@ end
 RegisterNetEvent('qbx_k9unit:client:playBark', function(netId, barkType)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary for the full writeup;
+    -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
     -- not re-derived here). Confidence: MEDIUM-HIGH, the official
     -- documented pattern for distinguishing a genuine server-sent event
     -- from a local self-trigger, not independently verified in-engine

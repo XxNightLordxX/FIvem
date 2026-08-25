@@ -5,10 +5,10 @@
 -- EXISTING k9_certifications table that predates them.
 --
 -- WHY THIS FILE EXISTS (db-schema re-reconciliation pass, 2026-08-25):
--- SPEC.md section 9 item 1 records this table's DB-level uniqueness
+-- DEVELOPER_REFERENCE.md section 9 item 1 records this table's DB-level uniqueness
 -- backstop as something db-schema's Phase 1 review "resolved" and
 -- "added" to an already-drafted certification table design ("dedicated
--- table confirmed, with an added DB-level uniqueness backstop" -- SPEC.md
+-- table confirmed, with an added DB-level uniqueness backstop" -- DEVELOPER_REFERENCE.md
 -- section 9 item 1; see also section 4.3's own "Reviewed and refined by
 -- db-schema" framing). That wording means the generated column, its
 -- unique index, and very likely the two plain lookup indexes below were
@@ -265,7 +265,7 @@ CALL `qbx_k9unit_migration_0004_add_idx_citizen_job_active`();
 DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0004_add_idx_citizen_job_active`;
 
 -- ---------------------------------------------------------------------
--- Step 3: add `idx_job_active` if missing (SPEC.md 4.3's admin-path
+-- Step 3: add `idx_job_active` if missing (DEVELOPER_REFERENCE.md 4.3's admin-path
 -- "list all certified handlers in department X" query relies on this
 -- exact index -- see sql/install.sql's own comment on it). Same
 -- independence-from-the-unique-key reasoning as Step 2 above applies here.

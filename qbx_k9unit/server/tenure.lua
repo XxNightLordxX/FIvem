@@ -5,7 +5,7 @@
     file's own header: "a FOUNDATION only... zero gameplay consequence
     wired to it yet") a real, modest gameplay payoff: a handler+K9 pair who
     STAY partnered accrue tenure, and crossing a tenure threshold grants a
-    one-time, flat XP bonus to the K9-role party -- FEATURE_IDEAS.md Part B
+    one-time, flat XP bonus to the K9-role party -- DEVELOPER_REFERENCE.md Part B
     §7 ("Partnership-tenure bonuses") -- formerly COMPLEMENTARY_FEATURES.md,
     merged 2026-08-25, the #3 item in that pass's "Top 3"
     specifically because the registry already carries everything this file
@@ -45,7 +45,7 @@
     written under a hard constraint -- every OTHER existing `.lua` file in
     this resource (server/partnership.lua, server/progression.lua,
     server/wellbeing.lua, client/movement.lua included) is OFF LIMITS, not
-    just "prefer not to touch." FEATURE_IDEAS.md Part B §7's own "Needs"
+    just "prefer not to touch." DEVELOPER_REFERENCE.md Part B §7's own "Needs"
     paragraph assumed a coder who COULD edit server/wellbeing.lua to add one
     more key to the existing Mood-regen/K9MoveRateModifiers composer -- that
     path is genuinely closed here, since `WellbeingStats` is `local` to that
@@ -86,7 +86,7 @@
     2. FEED THE EXISTING PROGRESSION, OR GRANT SOMETHING CATEGORICALLY
        DIFFERENT? -- Feeds the existing progression, deliberately, and NOT
        by choice alone: `Config.XPTiers`' speedMultiplier/scentRangeMultiplier are the
-       "categorically different" alternative FEATURE_IDEAS.md Part B §7
+       "categorically different" alternative DEVELOPER_REFERENCE.md Part B §7
        itself names (a Mood-regen bonus, a raised Fatigue cap) -- both of
        which require write access to server/wellbeing.lua's `local`
        WellbeingStats / client/movement.lua's K9MoveRateModifiers, both off
@@ -148,7 +148,7 @@
              file's tick takes to notice, and logs back off has cleared it.
              That is an accepted, disclosed limitation, not an oversight --
              a stronger bar (e.g. "credit only after a joint search," per
-             FEATURE_IDEAS.md Part B §10's separate, NOT-built-here idea)
+             DEVELOPER_REFERENCE.md Part B §10's separate, NOT-built-here idea)
              would require hooking server/search.lua's own success path,
              which is off limits this pass for the same SCOPE BOUNDARY
              reason as wellbeing.lua/movement.lua above. Given the reward's
@@ -374,8 +374,8 @@
 -- profile, same accepted shape as server/certifications.lua's own
 -- `Certifications` cache and server/progression.lua's own `K9XP` cache.
 --
--- ITEM 4 CLOSURE (REFACTOR_ROADMAP.md Part B item 4 -- formerly
--- REFACTOR_ROADMAP_2.md, merged 2026-08-25 / tests/README.md "What's NOT
+-- ITEM 4 CLOSURE (DEVELOPER_REFERENCE.md Part B item 4 -- formerly
+-- REFACTOR_ROADMAP_2.md, merged 2026-08-25 / DEVELOPER_REFERENCE.md §20 "What's NOT
 -- covered" / tests/tenure_spec.lua's own DISCREPANCY case -- this is the
 -- fourth pass over this exact question; this section exists specifically so
 -- there is no fifth. Dated: 2026-08-25.):
@@ -512,7 +512,7 @@
 local TenureFullyCollected = {}
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
 -- audit) -- the narrowest of the 12, with no `notifyType` parameter at all
 -- (always `'inform'`). It is now server/notify.lua's single shared
 -- resource-global implementation -- see that file's own header for the
@@ -649,7 +649,7 @@ end
 --- One pass over currently-connected players per tick, mirroring
 --- server/wellbeing.lua's/server/progression.lua's own resource-start
 --- backfill loops' `GetPlayers()`/`tonumber` idiom exactly. Re-checks all
---- three prerequisite flags at the point of use (SPEC.md §3), even though
+--- three prerequisite flags at the point of use (DEVELOPER_REFERENCE.md §3), even though
 --- the CreateThread guard below already gates on the same three at
 --- file-load time -- matches this resource's own repeated-check convention
 --- (e.g. AwardXP re-checking Config.Features.XPProgression despite every

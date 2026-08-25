@@ -3,12 +3,12 @@
 
     Phase 4 (coder-ui/coder-backend handoff). Config.Features.HealthStaminaHUD
     gate (currently `false` in config.lua — this file registers NOTHING at
-    all while that stays false, see the gating note below). SPEC.md §6.6
+    all while that stays false, see the gating note below). DEVELOPER_REFERENCE.md §6.6
     first bullet: "NUI HUD displays health, stamina, hunger, and thirst for
     the active K9... only if Config.Features.HealthStaminaHUD is true."
 
     Authoritative contract for everything in this file:
-    phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge (read that in full before
+    phase2_notes/DEVELOPER_REFERENCE.md#hud-bridge (read that in full before
     touching the callback/message names, payload shape, focus policy, or
     push-cadence constants below — this file is a direct implementation of
     that note's §2/§3/§4/§5/§6, not an independent design pass). The NUI
@@ -156,7 +156,7 @@
     already gate on — deliberately NOT `IsOwnModelK9()` alone (that would
     be client/vision.lua's thermal/night-vision precedent, which does not
     apply here: this HUD is a department-issued monitoring instrument per
-    SPEC.md §6.1's own acceptance criterion grouping it with the radial
+    DEVELOPER_REFERENCE.md §6.1's own acceptance criterion grouping it with the radial
     menu, not the K9's innate perception). Do not regress this to
     IsOwnModelK9() alone — see design note §6 for the full "innate
     perception vs. granted privilege" reasoning on both sides of this call.

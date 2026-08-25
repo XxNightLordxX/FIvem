@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/server/fetch.lua
 
-    Config.Features.FetchMechanic (SPEC.md §6.7: "dog can pick up, carry
+    Config.Features.FetchMechanic (DEVELOPER_REFERENCE.md §6.7: "dog can pick up, carry
     (attached to mouth bone), and drop a physics prop ... on a handler
     command"). Ships `false`.
 
@@ -19,7 +19,7 @@
     build a second sweep tool. Per that coordination and per
     client/propattachment.lua's own shipped, simpler convention (a single
     flat `boneIndex` + offsets, not a per-`Config.Peds`-model table — a
-    deliberate departure from an earlier PHASE5_SPEC.md draft's more
+    deliberate departure from an earlier DEVELOPER_REFERENCE.md draft's more
     elaborate `Config.K9BoneIndices[model]` sketch, superseded by what
     actually shipped), this feature's own mouth-carry config mirrors that
     same flat shape: `Config.FetchMechanic.mouthBoneIndex` (defaults to `0`,
@@ -35,12 +35,12 @@
 
     ======================================================================
     WHY THE THROWER, NOT AN AUTONOMOUS DOG, DOES THE "RETURN TO HANDLER" LEG:
-    this resource's entire architecture (SPEC.md §1/§2, config.lua's own
+    this resource's entire architecture (DEVELOPER_REFERENCE.md §1/§2, config.lua's own
     history note on the removed spawn/despawn/registry concept) is that the
     K9 IS a player's own persistent, player-CONTROLLED character — there is
     no NPC dog for a script to path-find around, and no precedent anywhere
     in this codebase for a script driving a connected player's own ped
-    movement without their input (PHASE5_SPEC.md's own "Pursue: zero
+    movement without their input (DEVELOPER_REFERENCE.md's own "Pursue: zero
     scripting" finding, already reached independently for the throw→pickup
     leg, applies identically here). A literal, scripted "K9 walks itself
     back to the handler" would mean hijacking a live player's controls —
@@ -345,9 +345,9 @@ local function EndFetchCycle(citizenid, ball)
 end
 
 --- Step 1: handler asks to throw a fetch ball. A HUMAN HANDLER action per
---- SPEC.md's own "on a handler command" wording — deliberately gated on
+--- DEVELOPER_REFERENCE.md's own "on a handler command" wording — deliberately gated on
 --- `HasK9Access(src)` ALONE, not also `IsConfiguredK9Model`, since the
---- thrower need not currently be riding a K9 model (PHASE5_SPEC.md
+--- thrower need not currently be riding a K9 model (DEVELOPER_REFERENCE.md
 --- §14.4.3's own resolved design; this file calls HasK9Access directly
 --- rather than adding a same-shape `CanActAsK9Handler()` combinator to
 --- client/main.lua, since `HasK9Access` alone is exactly what that would
@@ -429,7 +429,7 @@ end)
 --- KENNEL_CONFIRM_DISTANCE_TOLERANCE) — a thrown, physics-simulated ball's
 --- resting position legitimately moves before this confirm fires, and
 --- nothing server-authoritative depends on exactly where it lands
---- (PHASE5_SPEC.md §14.4.3's own disclosed divergence, adopted verbatim).
+--- (DEVELOPER_REFERENCE.md §14.4.3's own disclosed divergence, adopted verbatim).
 ---
 --- ORPHANED-OBJECT FIX (coder-backend, this pass): every failure branch
 --- below now tells `src` — and ONLY `src`, never a broadcast — to reclaim

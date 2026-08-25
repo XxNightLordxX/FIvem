@@ -1,16 +1,16 @@
 --[[
     qbx_k9unit/server/main.lua
 
-    Phase 1 scaffold only (coder-architect). REWRITTEN after SPEC.md's
+    Phase 1 scaffold only (coder-architect). REWRITTEN after DEVELOPER_REFERENCE.md's
     post-draft correction — the K9 is a player's own persistent character,
     so there is no spawn/despawn/registry concept for this file to own
     anymore (see server/certifications.lua's header for the full removed
     list). Later REVISED again once the requester confirmed the leash
     mechanic explicitly (consent-based attach, elastic movement restriction
     while attached, zero-consent detach, safety-valve auto-detach —
-    SPEC.md §6.1, §9 item 3b resolved). This file's role:
+    DEVELOPER_REFERENCE.md §6.1, §9 item 3b resolved). This file's role:
       1. Resource-start cache backfill (see TODO below) — a structural gap
-         SPEC.md doesn't call out explicitly, flagged here.
+         DEVELOPER_REFERENCE.md doesn't call out explicitly, flagged here.
       2. A home for small, access-gated K9 actions that need SOME server
          authority but aren't part of the certification/permission system
          itself: bark relay, and now the leash consent handshake + the
@@ -42,7 +42,7 @@
       once-a-second call into a large -1-broadcast (bandwidth
       amplification), independent of any future barkType enum.
     - 'qbx_k9unit:server:requestLeashAttach' (targetServerId: number)
-      Initiator (either the K9 or the officer, per SPEC.md §6.1) asks to
+      Initiator (either the K9 or the officer, per DEVELOPER_REFERENCE.md §6.1) asks to
       attach to `targetServerId`. Server validates eligibility/proximity/
       role and, if valid, relays a consent prompt to the TARGET — does
       NOT attach anything yet. See "LEASH SUBSYSTEM" section below.
@@ -55,12 +55,12 @@
       the requester's confirmation — no mechanic may trap someone leashed
       with no self-service exit).
     - 'qbx_k9unit:server:relayDoorScratch' (doorNetId: number)
-      Phase 2 (SPEC.md §11.4 item 5, phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2).
+      Phase 2 (DEVELOPER_REFERENCE.md §11.4 item 5, phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2).
       Structurally mirrors relayBark above, EXCEPT `doorNetId` names a
       DIFFERENT entity than the sender's own ped, so (unlike relayBark) this
       handler also resolves it (NetworkGetEntityFromNetworkId), confirms it
       still exists (DoesEntityExist), and confirms it's actually near the
-      caller before broadcasting — closing the gap flagged in SPEC.md §9
+      caller before broadcasting — closing the gap flagged in DEVELOPER_REFERENCE.md §9
       item 16. Own independent cooldown table (lastDoorScratchAt), not
       shared with relayBark's.
 
@@ -101,7 +101,7 @@
       resource-global functions exposed by server/certifications.lua — do
       not re-implement either check here.
     - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)`,
-      exposed by server/entities.lua (REFACTOR_ROADMAP.md near-term item 2),
+      exposed by server/entities.lua (DEVELOPER_REFERENCE.md near-term item 2),
       inside relayDoorScratch below — do not re-implement the
       resolve/existence-guard sequence here.
     - THIS FILE calls `RefreshCertificationCache(citizenid, jobName)`,
@@ -112,7 +112,7 @@
       K9-role party's certification transitions from active to revoked
       (manual RevokeCertification, offline RevokeCertificationOffline, or
       the QBCore:Server:OnJobUpdate auto-revoke) while that citizenid
-      currently resolves to a connected server id — SPEC.md §1/§4.4
+      currently resolves to a connected server id — DEVELOPER_REFERENCE.md §1/§4.4
       "immediately" ending K9 access must also tear down an already-formed
       leash pairing, not just block future attach attempts. No-op (returns
       false) if that source isn't currently leashed to anyone, OR if it is
@@ -130,7 +130,7 @@
       DetachLeash/IsLeashed), never these events directly.
     ======================================================================
     LEASH SUBSYSTEM DESIGN (per requester's confirmation, resolving
-    SPEC.md §9 item 3b — supersedes the earlier "client-only state, no
+    DEVELOPER_REFERENCE.md §9 item 3b — supersedes the earlier "client-only state, no
     server event" scaffold draft):
 
     1. Attach requires consent. The target must explicitly accept via an
@@ -155,7 +155,7 @@
     (IsConfiguredK9Model + GetEntityModel(GetPlayerPed(...))), never a
     client-reported role. The K9-role party's access is checked via
     HasK9Access. The other ("handler"/officer) party does NOT need an
-    active K9 certification of their own, but per SPEC.md §6.1/§9 item 9
+    active K9 certification of their own, but per DEVELOPER_REFERENCE.md §6.1/§9 item 9
     (Resolved) they DO need `job.name ∈ Config.Departments` — "handler" is
     defined throughout the spec (§1) as a partnered officer, so an
     arbitrary non-department player cannot hold the other end of a working
@@ -235,7 +235,7 @@ local LEASH_REQUEST_TTL_MS = 30000
 -- still applies before this ever fires), just a UI-harassment vector.
 -- Mirrors the bark cooldown's exact pattern.
 --
--- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastLeashRequestAt`
+-- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled `lastLeashRequestAt`
 -- table, now a NewCooldown() instance (server/cooldowns.lua) — same
 -- threshold, same per-source key, same playerDropped-based cleanup (see
 -- LeashRequestCooldown.RegisterPlayerDropped() below), behavior unchanged.
@@ -244,7 +244,7 @@ local LeashRequestCooldown = NewCooldown(LEASH_REQUEST_COOLDOWN_MS)
 LeashRequestCooldown.RegisterPlayerDropped()
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by REFACTOR_ROADMAP.md's dedup
+-- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
 -- audit). It is now server/notify.lua's single shared resource-global
 -- implementation, called at RUN time from this file's handlers exactly as
 -- before -- see server/notify.lua's own header for the extraction writeup.
@@ -252,7 +252,7 @@ LeashRequestCooldown.RegisterPlayerDropped()
 -- title, which is server/notify.lua's own default.
 
 -- STRUCTURAL GAP backfill (flagged by coder-architect, not explicit in
--- SPEC.md itself): server/certifications.lua's cache populates per-player
+-- DEVELOPER_REFERENCE.md itself): server/certifications.lua's cache populates per-player
 -- on a player-loaded event, which only fires for players who connect/load
 -- AFTER that handler is registered. On a `/restart qbx_k9unit` (or a
 -- crash-restart) while players are already online, nobody re-fires that
@@ -350,12 +350,12 @@ end)
 -- fast as the network allows turns into a server-wide broadcast flood
 -- (network chatter to every player, plus a PlaySoundFromEntity call fired
 -- on every one of their clients), i.e. an abuse-resistance gap per
--- SPEC.md's general "spammable actions" concern even though a bark itself
+-- DEVELOPER_REFERENCE.md's general "spammable actions" concern even though a bark itself
 -- has no other gameplay effect. A small per-player cooldown closes this
 -- without needing a config addition — bark has no legitimate reason to be
 -- triggered faster than this.
 --
--- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastBarkAt` table,
+-- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled `lastBarkAt` table,
 -- now a NewCooldown() instance (server/cooldowns.lua) — same threshold,
 -- same per-source key, same playerDropped-based cleanup (see
 -- BarkCooldown.RegisterPlayerDropped() below), behavior unchanged.
@@ -385,7 +385,7 @@ local BARK_TYPE_MAX_LENGTH = 16
 --- Gated by Config.Features.BasicBarkSounds AND HasK9Access(source) —
 --- both re-checked HERE, server-side, regardless of whether the client UI
 --- that triggered this (client/radial.lua's Bark item) already checked
---- them, per SPEC.md §3's "disabled feature must be a no-op server-side,
+--- them, per DEVELOPER_REFERENCE.md §3's "disabled feature must be a no-op server-side,
 --- not just hidden client-side" requirement.
 --- @param barkType string
 RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
@@ -407,7 +407,7 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     local ped = GetPlayerPed(src)
     local netId = NetworkGetNetworkIdFromEntity(ped)
 
-    -- NOTE on `barkType`: no enum is defined anywhere yet in SPEC.md or
+    -- NOTE on `barkType`: no enum is defined anywhere yet in DEVELOPER_REFERENCE.md or
     -- config.lua — Phase 1 only needs a single generic bark per §6.1.
     -- Treat barkType as an opaque passthrough string, don't invent a
     -- validation enum unless client/radial.lua's comment says otherwise
@@ -418,14 +418,14 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     TriggerClientEvent('qbx_k9unit:client:playBark', -1, netId, barkType)
 end)
 
--- SPEC.md §9 item 16 (Phase 2 event-contract hardening pass finding, closed
+-- DEVELOPER_REFERENCE.md §9 item 16 (Phase 2 event-contract hardening pass finding, closed
 -- here as part of writing this handler for the first time, per that item's
 -- own closing note that it "should be closed out as part of writing it, not
 -- discovered afterward as a regression"): unlike relayBark above (which only
 -- ever resolves and broadcasts the SENDER's own already-access-checked ped),
 -- relayDoorScratch's `doorNetId` names a DIFFERENT entity the caller merely
 -- claims to be near — neither the original §11.4 item 5 contract nor
--- phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2's handler sketch called for
+-- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2's handler sketch called for
 -- resolving/existence-checking/proximity-checking that id before
 -- broadcasting. Left unchecked, a modified client could pass any entity's
 -- netId (any vehicle, any other player's ped, even 0) and have the server
@@ -439,11 +439,11 @@ local DOOR_SCRATCH_DISTANCE_TOLERANCE = 1.0 -- meters of slack over Config.DoorI
 
 -- Sibling, INDEPENDENT per-source cooldown table — deliberately not shared
 -- with lastBarkAt above. Bark and door-scratch are two independently
--- cooldowned actions per §11.4/phase2_notes/RESEARCH_ARCHIVE.md#door-interaction §4.2; a
+-- cooldowned actions per §11.4/phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2; a
 -- player who just barked should not have that consumed against their
 -- separate door-scratch allowance, or vice versa.
 --
--- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastDoorScratchAt`
+-- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled `lastDoorScratchAt`
 -- table, now a NewCooldown() instance (server/cooldowns.lua) — no default
 -- threshold baked in at construction since the check below reads
 -- Config.DoorInteraction.scratchCooldownMs fresh on every call (matching
@@ -483,7 +483,7 @@ DoorScratchCooldown.RegisterPlayerDropped()
 -- prune-on-access, since a dedicated thread keeps the eviction logic in one
 -- place and doesn't add work to the hot broadcast path above.
 --
--- REFACTOR_ROADMAP.md item 1: was its own hand-rolled `lastDoorScratchAtByDoor`
+-- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled `lastDoorScratchAtByDoor`
 -- table + `PruneDoorScratchCooldowns` sweep thread, now a NewCooldown()
 -- instance with :StartSweep (server/cooldowns.lua) — same doorNetId key,
 -- same staleness rule, same interval, behavior unchanged.
@@ -510,7 +510,7 @@ end)
 --- Relays a door-scratch sound to every client so anyone with the door
 --- entity streamed in hears it. Gated by Config.Features.DoorInteraction AND
 --- HasK9Access(source) — both re-checked HERE, server-side, same standard as
---- relayBark above (SPEC.md §3's "disabled feature must be a no-op
+--- relayBark above (DEVELOPER_REFERENCE.md §3's "disabled feature must be a no-op
 --- server-side" requirement).
 --- @param doorNetId number
 RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
@@ -520,11 +520,11 @@ RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
     if type(doorNetId) ~= 'number' then return end -- defensive: never trust client payload shape
     if not HasK9Access(src) then return end -- reuse the global from server/certifications.lua, do not re-derive the job/cert check here
 
-    -- Gap closed per SPEC.md §9 item 16 (see comment above this handler):
+    -- Gap closed per DEVELOPER_REFERENCE.md §9 item 16 (see comment above this handler):
     -- resolve the claimed netId to a live entity and confirm it actually
     -- exists AND is an object (GetEntityType == 3 — door props are
     -- objects; 1 = ped, 2 = vehicle) before doing anything else with it.
-    -- REFACTOR_ROADMAP.md near-term item 2: was this handler's own inline
+    -- DEVELOPER_REFERENCE.md near-term item 2: was this handler's own inline
     -- "NetworkGetEntityFromNetworkId -> 0/DoesEntityExist guard" followed,
     -- a few lines further down, by a SEPARATE `GetEntityType ~= 3` check —
     -- both are now server/entities.lua's shared ResolveNetworkEntity(),
@@ -577,7 +577,7 @@ RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
     -- DELIBERATE broadcast to EVERYONE (-1), not distance-filtered to nearby
     -- clients server-side, and NOT the pattern to copy if you're touching
     -- server/search.lua's contraband-alert broadcast instead: a door's
-    -- location carries no person/vehicle identity to leak (SPEC.md §11.4
+    -- location carries no person/vehicle identity to leak (DEVELOPER_REFERENCE.md §11.4
     -- item 5: "No inventory/lock-state reveal of any kind — purely a sound
     -- cue"), unlike a search alert which does need scope-limiting to avoid
     -- broadcasting a specific player/vehicle's search outcome resource-wide.
@@ -883,7 +883,7 @@ end)
 --- Resource-global (no `local`) — exposed for server/certifications.lua to
 --- call when a K9-role party's certification is revoked (manually or via
 --- the QBCore:Server:OnJobUpdate auto-revoke) while they're actively
---- leashed. SPEC.md §1/§4.4: losing department employment or certification
+--- leashed. DEVELOPER_REFERENCE.md §1/§4.4: losing department employment or certification
 --- must end K9 access "immediately" — without this, an already-formed
 --- leash pairing would keep running untouched until someone manually
 --- detaches or the distance safety-valve trips, even though the K9-role
@@ -918,7 +918,7 @@ end
 --- Resource-global (no `local`) — exposed for server/certifications.lua's
 --- QBCore:Server:OnJobUpdate handler to call as a SECOND, INDEPENDENT check
 --- from ForceDetachLeashForSource above. An officer/handler-role leash
---- party never holds a K9 certification of their own (SPEC.md §9 item 9 —
+--- party never holds a K9 certification of their own (DEVELOPER_REFERENCE.md §9 item 9 —
 --- their eligibility is pure Config.Departments membership, not a cert),
 --- so no certification-revocation path can ever observe them losing
 --- eligibility; only a job/department change can. Mirrors
@@ -949,7 +949,7 @@ AddEventHandler('playerDropped', function(reason)
 
     PendingLeashRequests[src] = nil -- target-side: a request aimed AT the disconnecting player
 
-    -- REFACTOR_ROADMAP.md item 1: BarkCooldown/LeashRequestCooldown/
+    -- DEVELOPER_REFERENCE.md item 1: BarkCooldown/LeashRequestCooldown/
     -- DoorScratchCooldown each already registered their OWN independent
     -- `playerDropped` handler via :RegisterPlayerDropped() above (see each
     -- one's own declaration), so this handler no longer clears them

@@ -210,7 +210,7 @@
     attacker does not control — this is the same "the client only offers
     a convenience, the server is the only authority" posture this
     resource enforces everywhere else (see server/certifications.lua's
-    own SPEC.md §4.3 quote).
+    own DEVELOPER_REFERENCE.md §4.3 quote).
 
     DEFENSE AGAINST THE FIRST ADVERSARY (the actual privilege-escalation
     surface, structurally, not merely procedurally): CAPABILITY_CATALOG

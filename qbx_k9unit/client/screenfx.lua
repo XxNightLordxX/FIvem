@@ -2,13 +2,13 @@
     qbx_k9unit/client/screenfx.lua
 
     Phase 4 (coder-ui). Implements Config.Features.ContrabandScreenFX --
-    PHASE4_SPEC.md §13.4.5 / §13.2 / §13.3's file-plan row for this feature --
+    DEVELOPER_REFERENCE.md §13.4.5 / §13.2 / §13.3's file-plan row for this feature --
     the last Phase 4 feature that had a written spec and zero implementation
     anywhere in this resource as of this pass.
 
     ======================================================================
     FILENAME/FILE-PLAN DEVIATION -- READ BEFORE ASSUMING THIS MATCHES
-    PHASE4_SPEC.md §13.3'S TABLE VERBATIM:
+    DEVELOPER_REFERENCE.md §13.3'S TABLE VERBATIM:
 
     §13.3's file-plan row for this feature puts the CLIENT-side handling
     inside `client/search.lua` as an "Extends" entry ("Handles
@@ -23,7 +23,7 @@
     different design: `RegisterNetEvent` lets any number of client files
     each independently register their own handler for the same event name
     (FiveM fires every registered handler for a given event -- the same
-    "an additional CONSUMER, not a replacement" framing PHASE4_SPEC.md
+    "an additional CONSUMER, not a replacement" framing DEVELOPER_REFERENCE.md
     §13.0/fxmanifest.lua already uses for server/wellbeing.lua and
     server/tracking.lua both consuming relayDamageEvent/relayWeaponFire).
     client/search.lua therefore needs ZERO changes for this feature to
@@ -39,7 +39,7 @@
     ======================================================================
 
     Supplementary implementation detail cited below (non-authoritative --
-    PHASE4_SPEC.md §13.4.5 is the source of truth if anything here drifts
+    DEVELOPER_REFERENCE.md §13.4.5 is the source of truth if anything here drifts
     from it): client/vision.lua (this resource's only other file that owns
     a full-screen post-effect native, and per this pass's own task framing
     the closest structural precedent -- its "gate at registration," "force
@@ -50,7 +50,7 @@
     `if not Config.Features.X then return end` file-scope gating shape).
 
     ======================================================================
-    EVENT/CALLBACK CONTRACT -- Phase 4, per PHASE4_SPEC.md §13.4.5:
+    EVENT/CALLBACK CONTRACT -- Phase 4, per DEVELOPER_REFERENCE.md §13.4.5:
 
     1. 'qbx_k9unit:client:applyContrabandScreenFx' (durationMs: number)
        [server->client, REQUESTER ONLY, never a broadcast -- see REQUIRED
@@ -63,10 +63,10 @@
        event -- it never triggers it, and has no client-triggerable path of
        its own to request this effect on demand (there is no legitimate
        reason a client would ever need to ask for this cosmetic effect
-       outside a real, already-validated search result. PHASE4_SPEC.md
+       outside a real, already-validated search result. DEVELOPER_REFERENCE.md
        §13.4.5's own event contract text is explicit on this point).
 
-    TRUST BOUNDARY -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary (written
+    TRUST BOUNDARY -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary (written
     this session, read in full before writing this file): a client-side
     RegisterNetEvent handler cannot otherwise distinguish a genuine
     server-sent TriggerClientEvent from a local, zero-server-contact
@@ -112,13 +112,13 @@
         end
 
     Sent to `source` (the requesting player) ONLY -- never
-    TriggerClientEvent(-1, ...) -- matching PHASE4_SPEC.md §13.4.5's own
+    TriggerClientEvent(-1, ...) -- matching DEVELOPER_REFERENCE.md §13.4.5's own
     "requester-only, never target-identifying" framing, the same broadcast
     discipline server/search.lua's own playContrabandAlert broadcast
     already follows for a DIFFERENT (bystander-audible) event. This is a
     read of an already-server-computed, already-trustworthy value
     (alertTier) -- it adds no new trust surface of its own; see
-    PHASE4_SPEC.md §13.4.5's own "Server-authority points" section.
+    DEVELOPER_REFERENCE.md §13.4.5's own "Server-authority points" section.
 
     ======================================================================
     CONFIDENCE NOTE -- SetTimecycleModifier/ClearTimecycleModifier (the
@@ -131,12 +131,12 @@
       this session (no research pass was run for this file), but these are
       long-standing, extremely widely-used FiveM/GTA natives across the
       ecosystem for exactly this "apply a named post-process look, clear it
-      later" shape -- PHASE4_SPEC.md §13.4.5's own reality-check section
-      independently reaches the same "confirmed native-only per SPEC.md §7"
+      later" shape -- DEVELOPER_REFERENCE.md §13.4.5's own reality-check section
+      independently reaches the same "confirmed native-only per DEVELOPER_REFERENCE.md §7"
       conclusion for the mechanism. Treated as reasonably high confidence
       for the native call shape itself, distinct from the string below.
     - The specific modifier name is a GENUINE, UNRESOLVED UNCERTAINTY,
-      exactly as PHASE4_SPEC.md §13.4.5 already flags it ("a candidate
+      exactly as DEVELOPER_REFERENCE.md §13.4.5 already flags it ("a candidate
       only... no equivalent verification pass has been done for this
       specific modifier name"). This file does NOT hardcode that string --
       it reads Config.ContrabandScreenFX.modifierName (owned by
@@ -153,7 +153,7 @@
     ======================================================================
     INTENSITY / DURATION CONCERN -- flagged per this pass's own task
     instruction to say so rather than ship an unreviewed default silently:
-    PHASE4_SPEC.md §13.2's sketch defaults `durationMs` to 8000 (8 seconds).
+    DEVELOPER_REFERENCE.md §13.2's sketch defaults `durationMs` to 8000 (8 seconds).
     A "wobbly shroom"-family timecycle modifier is, by its own name and by
     every public description of that GTA effect family this session is
     aware of, a strong, saturating, warping full-screen look -- not a subtle
@@ -200,7 +200,7 @@ if not Config.Features.ContrabandScreenFX then return end
 -- Hard ceiling on the EFFECTIVE applied duration, independent of whatever
 -- Config.ContrabandScreenFX.durationMs or the event's own durationMs
 -- argument requests -- see this file's header "INTENSITY / DURATION
--- CONCERN" section. Deliberately well under PHASE4_SPEC.md §13.2's own
+-- CONCERN" section. Deliberately well under DEVELOPER_REFERENCE.md §13.2's own
 -- 8000ms sketch: a strong full-screen post-process effect held for that
 -- long reads as disorienting/gameplay-obscuring, in tension with this
 -- feature's own "subtle... feedback for the handler, not a
@@ -212,7 +212,7 @@ local SCREENFX_MAX_DURATION_MS = 4000
 -- Floor on the effective duration -- guards against a durationMs of 0,
 -- a negative number, or some other degenerate value making the effect
 -- flash on and immediately clear before it could ever register as
--- feedback at all (the entire point of this feature, per PHASE4_SPEC.md
+-- feedback at all (the entire point of this feature, per DEVELOPER_REFERENCE.md
 -- §13.4.5's own "representing the K9 getting a... reaction" framing).
 local SCREENFX_MIN_DURATION_MS = 500
 
@@ -227,7 +227,7 @@ local SCREENFX_MIN_DURATION_MS = 500
 local SCREENFX_POLL_MS = 250
 
 -- Fallback ONLY if Config.ContrabandScreenFX.modifierName is missing or
--- not a string -- the exact same candidate PHASE4_SPEC.md §13.2/§13.4.5
+-- not a string -- the exact same candidate DEVELOPER_REFERENCE.md §13.2/§13.4.5
 -- names, not a value this file invents independently. See this file's
 -- header CONFIDENCE NOTE: this string itself is NOT independently verified
 -- this session.
@@ -296,7 +296,7 @@ local function EnsureScreenFxThreadRunning()
 
             if IsEntityDead(PlayerPedId()) then
                 -- Exit path: death. Mirrors client/vision.lua's own
-                -- maintenance thread's death handling exactly (PHASE4_SPEC.md
+                -- maintenance thread's death handling exactly (DEVELOPER_REFERENCE.md
                 -- §13.4.5 / that file's §11.6-derived discipline: "force off
                 -- on every exit path," not just after the timer) -- a dead
                 -- player's screen should not stay visually altered for
@@ -312,7 +312,7 @@ end
 
 -- Listening for this event is the ONLY way this file's logic can run at all
 -- (no ox_target option, no command, no keybind -- purely a server-pushed
--- reaction to an already-validated search result, per PHASE4_SPEC.md
+-- reaction to an already-validated search result, per DEVELOPER_REFERENCE.md
 -- §13.4.5's own contract). Registered unconditionally at THIS point in the
 -- file only because the file-scope `if not Config.Features.ContrabandScreenFX
 -- then return end` guard above already prevented this line from ever
@@ -320,7 +320,7 @@ end
 -- registration" this file's header commits to, not a redundant inner check
 -- duplicated here.
 RegisterNetEvent('qbx_k9unit:client:applyContrabandScreenFx', function(durationMs)
-    -- phase2_notes/RESEARCH_ARCHIVE.md#trust-boundary's origin check -- see
+    -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary's origin check -- see
     -- this file's header TRUST BOUNDARY section for the full citation and
     -- confidence grading. First statement in the handler body, per that
     -- note's own recommended shape.

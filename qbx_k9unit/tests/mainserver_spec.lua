@@ -25,7 +25,7 @@
     second copy of those.
 
     locale() is NEVER stubbed (per this suite's own convention -- see
-    tests/README.md). LEASH_REJECT_MESSAGES is built ONCE, at server/main.lua's
+    DEVELOPER_REFERENCE.md §20). LEASH_REJECT_MESSAGES is built ONCE, at server/main.lua's
     own file-load time, from 8 locale() calls -- every single test in this
     file that successfully loads the sandbox (i.e. every test) already
     proves all 8 of those keys resolve against the real locales/en.json, since
@@ -88,7 +88,7 @@
         contract, which is that file's own spec's job, not this one's.
         Registration is pinned (Section 1) as an inventory fact; the bodies
         are never fired.
-      - barkType's content/enum semantics -- SPEC.md and this file's own
+      - barkType's content/enum semantics -- DEVELOPER_REFERENCE.md and this file's own
         header both say Phase 1 treats it as an opaque passthrough string;
         Section 2 only pins length/type/cooldown/access gating, never a
         specific barkType value's meaning.
@@ -1315,7 +1315,7 @@ end)
 
 print('')
 print('mainserver_spec.lua coverage summary (71 cases -- run this file, do not')
-print('grep it, per tests/README.md\'s own "count you must run" note): relayBark')
+print('grep it, per DEVELOPER_REFERENCE.md §20\'s own "count you must run" note): relayBark')
 print('(8), relayDoorScratch (11), CheckLeashEligibility\'s 8 reject reasons + happy')
 print('path + 3 K9 role/model decoupling widening cases (15), symmetric role')
 print('assignment incl. the both-K9 tie-break (3),')

@@ -11,7 +11,7 @@
     flags, one shared file pair, one shared prune loop) rather than five
     near-duplicate files.
 
-    "READ AT THE POINT OF ACTIVATION" DISCIPLINE (SPEC.md §3): every branch
+    "READ AT THE POINT OF ACTIVATION" DISCIPLINE (DEVELOPER_REFERENCE.md §3): every branch
     below is gated on its OWN Config.Features flag, not just declared —
     disabling e.g. FatigueSystem while MoodSystem stays on means fatigue is
     never ticked, never read, and never pushed to a meaningful value; it
@@ -81,7 +81,7 @@
        nothing in this codebase, and no confirmed third-party flashbang/stun
        resource's event name/payload shape, exists for this file to listen
        for and suppress — inventing one here would be exactly the kind of
-       guess SPEC.md §11.6 already refused for the door-lock nudge-open
+       guess DEVELOPER_REFERENCE.md §11.6 already refused for the door-lock nudge-open
        dependency. A companion flashbang/stun resource (or a future addition
        to THIS resource, once one exists) that wants to honor immunity calls
        `IsFlashbangImmune(citizenid)` before applying its own stun effect,
@@ -196,7 +196,7 @@
     8. 'qbx_k9unit:client:wellbeingUpdate' (stats: table) [server->client,
        requester only, client/wellbeing.lua] — one combined push per tick
        carrying all five wellbeing values together (mirrors
-       phase2_notes/RESEARCH_ARCHIVE.md#hud-bridge's own "one combined message
+       phase2_notes/DEVELOPER_REFERENCE.md#hud-bridge's own "one combined message
        beats a split one" reasoning, DEVELOPER_REFERENCE.md §13.4.3.1).
 
     Resource-globals (no `local` — other files call these directly):

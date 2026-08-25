@@ -91,7 +91,7 @@
     THE FULL AUDIT, tier by tier (every entry below was confirmed by
     directly reading the file that registers it, not inferred from its
     name or from this resource's own general "read the flag at the point of
-    use" convention alone -- that convention is real and is SPEC.md §3's own
+    use" convention alone -- that convention is real and is DEVELOPER_REFERENCE.md §3's own
     acceptance criterion, restated at config.lua's Config.Features header,
     but is not universally followed to the letter every file claims; several
     files say so themselves, e.g. server/fetch.lua's own "GATE AT
@@ -131,7 +131,7 @@
                     PartnershipTenureBonus (server/tenure.lua's
                     TickPartnershipTenure re-checks all three of
                     HandlerPartnership/XPProgression/PartnershipTenureBonus
-                    on every tick, per that file's own "SPEC.md §3... point
+                    on every tick, per that file's own "DEVELOPER_REFERENCE.md §3... point
                     of use" comment -- but the TICK THREAD ITSELF only
                     starts if all three were already true when tenure.lua
                     loaded, so turning this on when it was off at boot has
@@ -216,7 +216,7 @@
          constructor default, by direct code read (server/tracking.lua's
          Config.Tracking.*.searchCooldownMs/relayCooldownMs/maxRange/
          maxAgeSeconds are all read inside a live callback/handler body per
-         request, matching that Config block's own header quoting SPEC.md
+         request, matching that Config block's own header quoting DEVELOPER_REFERENCE.md
          §3 verbatim; server/admin.lua's Config.AdminAudit.CommandCooldownMs
          and Config.AdminAudit.MaxResults.* are both read fresh inside each
          command's own handler on every invocation, never captured as a

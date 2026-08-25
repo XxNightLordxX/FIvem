@@ -470,51 +470,17 @@ local function LogShopLocationAudit(source, action, detail, outcome)
     print(('[qbx_k9unit] AUDIT: %s ran %s(%s) -> %s'):format(whoLabel, action, detail, outcome))
 end
 
---- Fail-closed SELECT wrapper -- pcall around MySQL.query.await, matching
---- server/runtimecontrol.lua's/server/admin.lua's own SafeQuery. A failed
---- read returns an empty table, never a raw Lua error.
---- @param sql string
---- @param params table
---- @return table rows
-local function SafeQuery(sql, params)
-    local ok, rowsOrErr = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] equipmentshop.lua query failed: %s'):format(tostring(rowsOrErr)))
-        return {}
-    end
-    return rowsOrErr or {}
-end
-
---- pcall-wrapped write helper for INSERT/UPDATE/DELETE that don't need a
---- generated id back -- returns true/false rather than throwing. Every
---- write in this file is a plain statement with `?`-bound parameters only,
---- never a caller-controlled fragment.
---- @param sql string
---- @param params table
---- @return boolean ok
-local function SafeWrite(sql, params)
-    local ok, err = pcall(MySQL.query.await, sql, params)
-    if not ok then
-        print(('[qbx_k9unit] equipmentshop.lua write failed: %s'):format(tostring(err)))
-        return false
-    end
-    return true
-end
-
---- pcall-wrapped INSERT helper for the one write in this file that needs
---- the generated auto-increment id back (equipmentShopAddLocation, to
---- build that new row's own `db:<id>` location key).
---- @param sql string
---- @param params table
---- @return boolean ok, number? insertId
-local function SafeInsert(sql, params)
-    local ok, resultOrErr = pcall(MySQL.insert.await, sql, params)
-    if not ok or type(resultOrErr) ~= 'number' then
-        print(('[qbx_k9unit] equipmentshop.lua insert failed: %s'):format(tostring(resultOrErr)))
-        return false, nil
-    end
-    return true, resultOrErr
-end
+-- K9Store MIGRATION NOTE: this file used to hand-roll its own SafeQuery/
+-- SafeWrite/SafeInsert pcall-wrapped MySQL.* helpers here (the ONLY 3 direct
+-- MySQL.* call sites this file ever had, backing
+-- k9_equipment_shop_locations/k9_equipment_shop_locations_audit -- migration
+-- 0011, the newest table in this schema). Now replaced by
+-- K9Store.ShopLocation_GetAll/Insert/Update/Delete and
+-- K9Store.ShopLocationAudit_Insert (server/datastore.lua), which mirror
+-- these exact same bespoke boolean/empty-table-never-throws contracts --
+-- see that file's own section for those five functions -- so every call
+-- site below needed NO change to its own surrounding logic beyond the
+-- function name and argument list itself.
 
 --- Rejects nil, non-number, NaN, and +/-infinity -- never a bare
 --- `type(x) == 'number'` alone. Same NaN test as
@@ -671,7 +637,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
     if not (Config.Features and Config.Features.K9EquipmentShop == true) then return end
 
-    local rows = SafeQuery('SELECT id, x, y, z, heading, model, scenario, label FROM k9_equipment_shop_locations', {})
+    local rows = K9Store.ShopLocation_GetAll()
     for _, row in ipairs(rows) do
         RuntimeShopLocations['db:' .. row.id] = {
             x = row.x, y = row.y, z = row.z, heading = row.heading,
@@ -758,10 +724,7 @@ lib.callback.register('qbx_k9unit:server:equipmentShopAddLocation', function(sou
         label = location.label
     end
 
-    local insertOk, newId = SafeInsert(
-        'INSERT INTO k9_equipment_shop_locations (x, y, z, heading, model, scenario, label, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        { location.x, location.y, location.z, heading, model, scenario, label, citizenid or 'unknown' }
-    )
+    local insertOk, newId = K9Store.ShopLocation_Insert(location.x, location.y, location.z, heading, model, scenario, label, citizenid or 'unknown')
     if not insertOk then
         LogShopLocationAudit(source, 'equipmentShopAddLocation', 'n/a', 'db_error')
         return { ok = false, reason = 'db_error' }
@@ -770,10 +733,7 @@ lib.callback.register('qbx_k9unit:server:equipmentShopAddLocation', function(sou
     local locationKey = 'db:' .. newId
     RuntimeShopLocations[locationKey] = { x = location.x, y = location.y, z = location.z, heading = heading, model = model, scenario = scenario, label = label }
 
-    SafeWrite(
-        'INSERT INTO k9_equipment_shop_locations_audit (location_id, action, x, y, z, heading, model, scenario, label, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        { newId, 'add', location.x, location.y, location.z, heading, model, scenario, label, citizenid or 'unknown' }
-    )
+    K9Store.ShopLocationAudit_Insert(newId, 'add', location.x, location.y, location.z, heading, model, scenario, label, citizenid or 'unknown')
 
     LogShopLocationAudit(source, 'equipmentShopAddLocation', ('key=%s x=%.2f y=%.2f z=%.2f'):format(locationKey, location.x, location.y, location.z), 'ok')
 
@@ -874,10 +834,7 @@ lib.callback.register('qbx_k9unit:server:equipmentShopMoveLocation', function(so
         end
     end
 
-    local wrote = SafeWrite(
-        'UPDATE k9_equipment_shop_locations SET x = ?, y = ?, z = ?, heading = ?, model = ?, scenario = ?, label = ?, updated_by = ? WHERE id = ?',
-        { merged.x, merged.y, merged.z, merged.heading, merged.model, merged.scenario, merged.label, citizenid or 'unknown', tonumber(dbId) }
-    )
+    local wrote = K9Store.ShopLocation_Update(merged.x, merged.y, merged.z, merged.heading, merged.model, merged.scenario, merged.label, citizenid or 'unknown', tonumber(dbId))
     if not wrote then
         LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s'):format(locationKey), 'db_error')
         return { ok = false, reason = 'db_error' }
@@ -885,10 +842,7 @@ lib.callback.register('qbx_k9unit:server:equipmentShopMoveLocation', function(so
 
     RuntimeShopLocations[locationKey] = merged
 
-    SafeWrite(
-        'INSERT INTO k9_equipment_shop_locations_audit (location_id, action, x, y, z, heading, model, scenario, label, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        { tonumber(dbId), 'move', merged.x, merged.y, merged.z, merged.heading, merged.model, merged.scenario, merged.label, citizenid or 'unknown' }
-    )
+    K9Store.ShopLocationAudit_Insert(tonumber(dbId), 'move', merged.x, merged.y, merged.z, merged.heading, merged.model, merged.scenario, merged.label, citizenid or 'unknown')
 
     LogShopLocationAudit(source, 'equipmentShopMoveLocation', ('key=%s x=%.2f y=%.2f z=%.2f'):format(locationKey, merged.x, merged.y, merged.z), 'ok')
 
@@ -924,16 +878,13 @@ lib.callback.register('qbx_k9unit:server:equipmentShopRemoveLocation', function(
         return { ok = false, reason = 'invalid_key' }
     end
 
-    local wrote = SafeWrite('DELETE FROM k9_equipment_shop_locations WHERE id = ?', { tonumber(dbId) })
+    local wrote = K9Store.ShopLocation_Delete(tonumber(dbId))
     if not wrote then
         LogShopLocationAudit(source, 'equipmentShopRemoveLocation', ('key=%s'):format(locationKey), 'db_error')
         return { ok = false, reason = 'db_error' }
     end
 
-    SafeWrite(
-        'INSERT INTO k9_equipment_shop_locations_audit (location_id, action, x, y, z, heading, model, scenario, label, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        { tonumber(dbId), 'remove', existing.x, existing.y, existing.z, existing.heading, existing.model, existing.scenario, existing.label, citizenid or 'unknown' }
-    )
+    K9Store.ShopLocationAudit_Insert(tonumber(dbId), 'remove', existing.x, existing.y, existing.z, existing.heading, existing.model, existing.scenario, existing.label, citizenid or 'unknown')
 
     RuntimeShopLocations[locationKey] = nil
 

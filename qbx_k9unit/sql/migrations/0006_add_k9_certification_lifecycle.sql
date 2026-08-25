@@ -3,7 +3,7 @@
 -- expiry columns on k9_certifications, plus the new
 -- k9_certification_specializations sibling table.
 --
--- WHY THIS FILE EXISTS: FEATURE_IDEAS.md Part A §2 (revoke reason code),
+-- WHY THIS FILE EXISTS: DEVELOPER_REFERENCE.md Part A §2 (revoke reason code),
 -- §5 (tiered certification: trainee -> certified -> senior, instead of a
 -- single active/inactive boolean), §9 (certification expiry / periodic
 -- recertification), and Part B §11 (certification specializations) all
@@ -199,7 +199,7 @@ CALL `qbx_k9unit_migration_0006_add_tier_column`();
 DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0006_add_tier_column`;
 
 -- ---------------------------------------------------------------------
--- Step 2: add `revoke_reason` if missing (FEATURE_IDEAS.md Part A §2).
+-- Step 2: add `revoke_reason` if missing (DEVELOPER_REFERENCE.md Part A §2).
 -- Nullable, free of any backfill -- see the COMPATIBILITY section above.
 -- Fixed application-level vocabulary (retired / reassigned / disciplinary
 -- / performance / other), enforced by server/certifications.lua, not by a
@@ -233,7 +233,7 @@ CALL `qbx_k9unit_migration_0006_add_revoke_reason_column`();
 DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0006_add_revoke_reason_column`;
 
 -- ---------------------------------------------------------------------
--- Step 3: add `expires_at` if missing (FEATURE_IDEAS.md Part A §9).
+-- Step 3: add `expires_at` if missing (DEVELOPER_REFERENCE.md Part A §9).
 -- Nullable, defaults to NULL ("does not expire") -- see the
 -- COMPATIBILITY section above for why this is never backfilled to
 -- anything else for a pre-existing row.
@@ -300,7 +300,7 @@ DROP PROCEDURE IF EXISTS `qbx_k9unit_migration_0006_add_idx_expires_at`;
 
 -- ---------------------------------------------------------------------
 -- Step 5: create `k9_certification_specializations` if missing
--- (FEATURE_IDEAS.md Part B §11).
+-- (DEVELOPER_REFERENCE.md Part B §11).
 --
 -- SHAPE, deliberately mirroring `k9_certifications`/`k9_permissions`'s own
 -- append-mostly-audit-log design byte-for-byte: granting a specialization

@@ -7,7 +7,7 @@
     keybind-only, by design — see below).
 
     Owns the two independent thermal/night vision toggle keybinds —
-    SPEC.md §11.1 sub-phase 2a, §11.3's `client/vision.lua` row (new file,
+    DEVELOPER_REFERENCE.md §11.1 sub-phase 2a, §11.3's `client/vision.lua` row (new file,
     not folded into client/movement.lua, "vision is a big enough sibling
     concern... to warrant its own file rather than a fourth unrelated
     concern bolted onto that one"). Both toggles mirror
@@ -18,18 +18,18 @@
     (config-gated registration).
 
     Supplementary implementation detail cited in the TODOs below
-    (non-authoritative — SPEC.md §11 is the source of truth if anything
-    here drifts from it): phase2_notes/RESEARCH_ARCHIVE.md#vision (the
+    (non-authoritative — DEVELOPER_REFERENCE.md §11 is the source of truth if anything
+    here drifts from it): phase2_notes/DEVELOPER_REFERENCE.md#vision (the
     revised, §11-reconciled pass — read its own header before trusting
-    anything in it that contradicts SPEC.md §11.5/§11.6 directly) and
-    phase2_notes/RESEARCH_ARCHIVE.md#vision /
-    phase2_notes/RESEARCH_ARCHIVE.md#tracking §3 (two independent native
+    anything in it that contradicts DEVELOPER_REFERENCE.md §11.5/§11.6 directly) and
+    phase2_notes/DEVELOPER_REFERENCE.md#vision /
+    phase2_notes/DEVELOPER_REFERENCE.md#tracking §3 (two independent native
     confirmation passes, both agreeing on the same hashes).
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 2: NONE. This file registers or
     triggers no network event or callback of any kind — thermal/night
-    vision are purely client-local render toggles (SPEC.md §11.6: "both
+    vision are purely client-local render toggles (DEVELOPER_REFERENCE.md §11.6: "both
     natives are global local-render toggles," no server-side fact to
     check, no other player's state affected). This mirrors
     client/vehicle.lua's own "no dedicated server event" precedent for
@@ -40,8 +40,8 @@
 
     FILE-TO-FILE CONTRACT (client side):
     - THIS FILE will expose four resource-global (no `local`) functions.
-      These names are already settled — SPEC.md §11 left this an open
-      naming slot, phase2_notes/RESEARCH_ARCHIVE.md#vision §7 filled it, and
+      These names are already settled — DEVELOPER_REFERENCE.md §11 left this an open
+      naming slot, phase2_notes/DEVELOPER_REFERENCE.md#vision §7 filled it, and
       README.md's "Public API (exports)" section's "Batch 2" validation pass
       confirmed no other design note proposed a competing name for the
       same slot:
@@ -50,7 +50,7 @@
         IsThermalVisionActive()
         IsNightVisionActive()
       No other Phase 2 file currently needs to call into these (§1 of
-      phase2_notes/RESEARCH_ARCHIVE.md#vision: "no radial item; no other
+      phase2_notes/DEVELOPER_REFERENCE.md#vision: "no radial item; no other
       Phase 2 file's design references vision toggling") — exposed as
       resource-globals anyway, per this codebase's established convention
       that every toggle/action function is a resource-global (see
@@ -62,22 +62,22 @@
 
     ======================================================================
     RESOLVED ACCESS-GATING DECISION (do not re-litigate — settled by
-    SPEC.md §11.5, quoted here so it can't be silently drifted from again):
+    DEVELOPER_REFERENCE.md §11.5, quoted here so it can't be silently drifted from again):
     thermal/night vision gate on IsOwnModelK9() ONLY, the SAME cheap,
     local, free check client/movement.lua's ToggleK9Camera() already uses
     — NOT CanShowK9UI() (the full server-backed combinator Bark/Sit/
     Leash/Vehicle use). §11.5's own stated reasoning: "thermal/night
-    vision is presented in SPEC.md as the K9's own innate perception, not
+    vision is presented in DEVELOPER_REFERENCE.md as the K9's own innate perception, not
     a granted departmental privilege." Apply IDENTICALLY to both Thermal
     and Night vision — §11.5 is explicit that whichever answer is chosen
     must apply to both for consistency with each other.
 
     HISTORY WORTH KNOWING (not a live disagreement — recorded so nobody
     re-opens this by reading stale material out of order): the FIRST
-    draft of phase2_notes/RESEARCH_ARCHIVE.md#vision picked the OPPOSITE
+    draft of phase2_notes/DEVELOPER_REFERENCE.md#vision picked the OPPOSITE
     answer (CanShowK9UI()), reasoning by analogy to ScentTracking/
     BloodTracking being certified-K9 capabilities. That note's OWN
-    revised pass (§3) explicitly corrects itself once SPEC.md §11.5
+    revised pass (§3) explicitly corrects itself once DEVELOPER_REFERENCE.md §11.5
     landed and settled the question the other way — the correction is
     already made in that note; this file's implementation should reflect
     §11.5's settled answer directly, not the earlier draft's guess.
@@ -91,12 +91,12 @@
 
 --- Thin wrapper over the native's OWN getter — the native is the source
 --- of truth for "is thermal vision currently on," not a separately
---- tracked local boolean that could desync from it (per SPEC.md §11.6 /
---- phase2_notes/RESEARCH_ARCHIVE.md#vision §7: "the native's own getter is
+--- tracked local boolean that could desync from it (per DEVELOPER_REFERENCE.md §11.6 /
+--- phase2_notes/DEVELOPER_REFERENCE.md#vision §7: "the native's own getter is
 --- the source of truth, not a separately-tracked local boolean"). Real
 --- IsSeethroughActive() native, confirmed to exist alongside its setter
---- by native-api-assistant (SPEC.md §11.6) and independently by
---- phase2_notes/RESEARCH_ARCHIVE.md#tracking §3.
+--- by native-api-assistant (DEVELOPER_REFERENCE.md §11.6) and independently by
+--- phase2_notes/DEVELOPER_REFERENCE.md#tracking §3.
 --- @return boolean
 function IsThermalVisionActive()
     return IsSeethroughActive() == true
@@ -109,13 +109,13 @@ function IsNightVisionActive()
 end
 
 --- Shared internal helper for the mutual-exclusivity judgment call
---- confirmed (not mandated by the engine) in SPEC.md §11.5: "Thermal and
+--- confirmed (not mandated by the engine) in DEVELOPER_REFERENCE.md §11.5: "Thermal and
 --- night vision are mutually exclusive at any given moment (toggling one
 --- off the other if both were somehow active)... a reasonable default
 --- given both are full-screen post-effects that would otherwise visually
 --- conflict." One small shared helper here rather than duplicating the
 --- check-and-turn-off logic once per toggle function below, per
---- phase2_notes/RESEARCH_ARCHIVE.md#vision §4's explicit implementation-shape
+--- phase2_notes/DEVELOPER_REFERENCE.md#vision §4's explicit implementation-shape
 --- recommendation.
 --- @param keepingActive 'thermal'|'night'  -- the effect about to be turned ON; turn OFF whichever of the two this is NOT
 local function EnsureOnlyOneVisionEffectActive(keepingActive)
@@ -169,7 +169,7 @@ local function EnsureVisionMaintenanceThreadRunning()
                 SetNightvision(false)
             elseif not IsOwnModelK9() then
                 -- The player's live model has stopped being a configured
-                -- K9 model (the same rare appearance-swap edge case SPEC.md
+                -- K9 model (the same rare appearance-swap edge case DEVELOPER_REFERENCE.md
                 -- §9 item 8 flags for certification) — a direct corollary
                 -- of the exact gate Toggle*Vision() already uses: if the
                 -- gate that allows turning it on no longer holds, the same
@@ -204,7 +204,7 @@ local function EnsureVisionMaintenanceThreadRunning()
     end)
 end
 
---- Toggles GTA's built-in heat-vision effect. SPEC.md §11.5/§11.6:
+--- Toggles GTA's built-in heat-vision effect. DEVELOPER_REFERENCE.md §11.5/§11.6:
 --- SetSeethrough(BOOL) — confirmed real, toggle-and-forget (no per-frame
 --- re-assertion needed to HOLD the effect, only the maintenance/cleanup
 --- thread further below is needed, and only while at least one vision
@@ -219,7 +219,7 @@ function ToggleThermalVision()
 
     local turningOn = not IsThermalVisionActive()
     -- Mutual exclusion happens BEFORE flipping this effect on, per
-    -- phase2_notes/RESEARCH_ARCHIVE.md#vision §4's ordering.
+    -- phase2_notes/DEVELOPER_REFERENCE.md#vision §4's ordering.
     if turningOn then
         EnsureOnlyOneVisionEffectActive('thermal')
     end
@@ -236,7 +236,7 @@ function ToggleThermalVision()
     end
 end
 
---- Toggles GTA's built-in night-vision-goggle effect. SPEC.md §11.5/§11.6:
+--- Toggles GTA's built-in night-vision-goggle effect. DEVELOPER_REFERENCE.md §11.5/§11.6:
 --- SetNightvision(BOOL) — confirmed real, same toggle-and-forget shape as
 --- thermal above. Identical shape to ToggleThermalVision() above,
 --- substituting SetNightvision/IsNightVisionActive and
@@ -264,9 +264,9 @@ function ToggleNightVision()
     end
 end
 
--- Config-gated command + keybind registration for BOTH toggles — SPEC.md
+-- Config-gated command + keybind registration for BOTH toggles — DEVELOPER_REFERENCE.md
 -- §11.2's Config.Vision schema,
--- phase2_notes/RESEARCH_ARCHIVE.md#vision §1's "Config-gated registration,
+-- phase2_notes/DEVELOPER_REFERENCE.md#vision §1's "Config-gated registration,
 -- not just config-gated behavior" requirement. THIS IS THE ONE PLACE
 -- this file DELIBERATELY diverges from ToggleK9Camera()'s exact
 -- precedent, not just mirrors it: client/movement.lua's
@@ -274,7 +274,7 @@ end
 -- UNCONDITIONAL (camera has no Config.Features entry to gate on at all).
 -- Thermal/night vision DO have Config.Features.ThermalVision /
 -- .NightVision entries (already present in config.lua today), so per
--- SPEC.md §3's hard requirement ("read at the point where that feature
+-- DEVELOPER_REFERENCE.md §3's hard requirement ("read at the point where that feature
 -- would activate... command registration... not read once at resource
 -- start and then ignored"), each registration below must be wrapped in
 -- its OWN independent `if Config.Features.X then ... end` at file-load
@@ -298,7 +298,7 @@ end
 -- consistent with the camera toggle's existing precedent."
 
 -- Resource-stop safety net — mirrors client/vehicle.lua's ALREADY-SHIPPED
--- onResourceStop pattern for the identical underlying reason: per SPEC.md
+-- onResourceStop pattern for the identical underlying reason: per DEVELOPER_REFERENCE.md
 -- §11.5's own thermal-vision acceptance bullet, "the native effect itself
 -- persists across a resource restart independent of script state, exactly
 -- the same class of bug client/vehicle.lua's header already documents and
@@ -309,7 +309,7 @@ end
 -- regardless of which (if either) was actually on this session: both
 -- natives are idempotent boolean toggles, not stacking counters, so
 -- calling SetSeethrough(false)/SetNightvision(false) when an effect was
--- never on this session is a harmless no-op (phase2_notes/RESEARCH_ARCHIVE.md#vision
+-- never on this session is a harmless no-op (phase2_notes/DEVELOPER_REFERENCE.md#vision
 -- §6 item 2). Also covers disconnect per that note's §6 item 3 (FiveM
 -- stops every currently-loaded resource, firing this same handler, as
 -- part of a player disconnecting) — high confidence per that note's own

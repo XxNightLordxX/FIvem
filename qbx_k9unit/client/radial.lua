@@ -52,7 +52,7 @@
       call site in this codebase.
     ======================================================================
 
-    SPEC.md §6.1 / §8 step 7 Phase 1 radial item list: Bark, Sit,
+    DEVELOPER_REFERENCE.md §6.1 / §8 step 7 Phase 1 radial item list: Bark, Sit,
     Attach/Detach Leash, Enter/Exit Vehicle — "each item only appears if
     its owning Config.Features flag is true AND the access check above
     passes."
@@ -61,7 +61,7 @@
     here): ox_lib's `lib.addRadialItem` registers items once; there's no
     built-in live "should this item be visible right now" predicate the
     way ox_target's `canInteract` works. Two ways to satisfy "each item
-    only appears if... access check passes" (SPEC.md §3/§6.1):
+    only appears if... access check passes" (DEVELOPER_REFERENCE.md §3/§6.1):
       (a) A lightweight polling thread (e.g. every 2-3s while the local
           player is near/playing) that calls CanShowK9UI() and
           lib.addRadialItem/lib.removeRadialItem the whole "K9 Unit"
@@ -71,7 +71,7 @@
           Config.Features flag), notifying+denying on failure — the menu
           entry always "appears" but does nothing for a non-qualifying
           player.
-    SPEC.md's "only appears if" phrasing leans toward (a), but a live
+    DEVELOPER_REFERENCE.md's "only appears if" phrasing leans toward (a), but a live
     network round-trip (CanShowK9UI awaits a server callback) firing every
     couple of seconds for every player near a PD may be more chatter than
     wanted — your call, but document whichever is chosen so
@@ -174,7 +174,7 @@
 -- OPEN STRUCTURAL QUESTION resolution: option (b) was chosen — the "K9
 -- Unit" submenu and its sub-items are registered ONCE, unconditionally
 -- (subject to each item's own Config.Features flag at registration time,
--- satisfying SPEC.md §3's "read at the point... menu item visibility"),
+-- satisfying DEVELOPER_REFERENCE.md §3's "read at the point... menu item visibility"),
 -- and every onSelect below independently re-checks CanShowK9UI() before
 -- doing anything, notifying+denying on failure. Rationale for (b) over
 -- (a) here: every one of coder-architect's own onSelect TODO snippets
@@ -359,7 +359,7 @@ local function RegisterK9RadialMenu()
     -- actions with their own onSelect, so `menu` must stay unset on all of
     -- them.
     local k9SubmenuItems = {
-        --- Sit — SPEC.md §6.1. No dedicated Config.Features flag (bundled
+        --- Sit — DEVELOPER_REFERENCE.md §6.1. No dedicated Config.Features flag (bundled
         --- under the general RadialMenu flag + access check, same as every
         --- other Phase 1 item here).
         {
@@ -390,14 +390,14 @@ local function RegisterK9RadialMenu()
         },
     }
 
-    --- Bark — SPEC.md §6.1, §8 step 9. Config.Features.BasicBarkSounds gate.
+    --- Bark — DEVELOPER_REFERENCE.md §6.1, §8 step 9. Config.Features.BasicBarkSounds gate.
     ---
     --- Phase 5's AdvancedBarkRadial (Config.Features.AdvancedBarkRadial, layered
     --- ON TOP of BasicBarkSounds — still requires it, matching how this resource
     --- layers every Phase 5 feature over its Phase 1 prerequisite elsewhere,
     --- e.g. ScentTracking/BloodTracking/GunpowderSniffing each standing alone
     --- under RadialMenu) swaps the single generic "Bark" action for a nested
-    --- submenu of variants (Config.AdvancedBarkRadial, config.lua — SPEC.md
+    --- submenu of variants (Config.AdvancedBarkRadial, config.lua — DEVELOPER_REFERENCE.md
     --- §6.7: "aggressive/alert/calm"). Every variant still funnels through the
     --- SAME 'qbx_k9unit:server:relayBark' event with its own `barkType` string —
     --- server/main.lua's handler is UNCHANGED for this feature; it already
@@ -484,7 +484,7 @@ local function RegisterK9RadialMenu()
         end
     end
 
-    --- Attach/Detach Leash — SPEC.md §6.1, §8 step 6-7. A single
+    --- Attach/Detach Leash — DEVELOPER_REFERENCE.md §6.1, §8 step 6-7. A single
     --- context-sensitive item: behaves as "Attach" when not currently
     --- leashed, "Detach" when leashed. Config.Features.LeashMechanics gate.
     --- See client/movement.lua's header for the full consent-based leash
@@ -499,7 +499,7 @@ local function RegisterK9RadialMenu()
             icon = 'link',
             onSelect = function()
                 -- Detach never requires consent/access — always available
-                -- while leashed, per SPEC.md §9 item 3b's hard requirement.
+                -- while leashed, per DEVELOPER_REFERENCE.md §9 item 3b's hard requirement.
                 -- type(...) == 'function' guards added below per this
                 -- file's own header policy -- see k9_sit's identical note
                 -- above for the full HEADER/CODE DRIFT FIX writeup. A
@@ -535,7 +535,7 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Enter/Exit Vehicle — SPEC.md §6.1, §8 step 8. A single
+    --- Enter/Exit Vehicle — DEVELOPER_REFERENCE.md §6.1, §8 step 8. A single
     --- context-sensitive item mirroring the ox_target vehicle option
     --- client/vehicle.lua registers directly. Config.Features.VehicleEntryExit
     --- gate.
@@ -567,7 +567,7 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Track Scent/Blood/Gunpowder — SPEC.md §11.3/§11.5, Phase 2. Each is a
+    --- Track Scent/Blood/Gunpowder — DEVELOPER_REFERENCE.md §11.3/§11.5, Phase 2. Each is a
     --- single context-sensitive item: while a trail of THAT SPECIFIC type is
     --- active it becomes a "Stop Tracking" cancel (calling the shared
     --- StopTracking()); while tracking a DIFFERENT type is active, it defers to
@@ -709,7 +709,7 @@ local function RegisterK9RadialMenu()
             icon = 'paw',
             onSelect = function()
                 -- Release is NOT gated on CanShowK9UI(), matching the Detach
-                -- Leash branch above and SPEC.md §9 item 3b's "no unbounded
+                -- Leash branch above and DEVELOPER_REFERENCE.md §9 item 3b's "no unbounded
                 -- trap" requirement. ReleaseBiteHold()'s own doc comment claims
                 -- exactly this exemption ("always available while engaged, same
                 -- no consent/access gate on the way out"), and server/combat.lua's
@@ -803,7 +803,7 @@ local function RegisterK9RadialMenu()
     ---
     --- RELEASE ORDERING — do not gate this on CanShowK9UI(): same "no
     --- unbounded trap" requirement as Detach Leash and Bite & Hold's own
-    --- Release branch above (SPEC.md §9 item 3b — see Bite & Hold's comment
+    --- Release branch above (DEVELOPER_REFERENCE.md §9 item 3b — see Bite & Hold's comment
     --- block above for the full reasoning, which applies here verbatim).
     --- client/combat.lua's ReleaseDrag() itself never re-checks
     --- HasK9Access/feature-flag on the way out either (only that this src is a
@@ -859,7 +859,7 @@ local function RegisterK9RadialMenu()
     --- This item is that entry point.
     ---
     --- NOT GATED ON CanShowK9UI() -- same "no unbounded trap" requirement as
-    --- Detach Leash / Release Bite & Hold / Release Drag above (SPEC.md §9 item
+    --- Detach Leash / Release Bite & Hold / Release Drag above (DEVELOPER_REFERENCE.md §9 item
     --- 3b), now applied to a persistent, DB-backed relationship instead of a
     --- session-scoped one. client/partnership.lua's own BreakPartnership() is
     --- documented as deliberately ungated for exactly this reason (its header:
@@ -1020,7 +1020,7 @@ local function RegisterK9RadialMenu()
     ---
     --- NOT GATED ON CanShowK9UI() -- same "no unbounded trap" requirement as
     --- Detach Leash / Release Bite & Hold / Release Drag / Break Partnership
-    --- above (SPEC.md §9 item 3b). client/recall.lua's own header states this
+    --- above (DEVELOPER_REFERENCE.md §9 item 3b). client/recall.lua's own header states this
     --- by name: "TERMINATION MUST NEVER BE GATED -- RequestRecall() below
     --- calls NEITHER CanShowK9UI() NOR DenyK9UIAccess()... Recall is a
     --- TERMINATION action, not an initiation." Gating the call HERE would

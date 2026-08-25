@@ -80,13 +80,13 @@
 -- qbx_k9unit :: k9_certifications
 --
 -- Source of truth for K9 handler certification grants/revocations.
--- See SPEC.md section 4.3 for full rationale. This table is an
+-- See DEVELOPER_REFERENCE.md section 4.3 for full rationale. This table is an
 -- append-mostly audit log: granting INSERTs a new row, revoking UPDATEs
 -- the existing active row to active = 0 (never deletes), so the full
 -- grant/revoke history per citizenid+job is always reconstructable —
 -- including revocations issued while the target is offline.
 --
--- db-schema review notes (per SPEC.md 4.3 / 9.1):
+-- db-schema review notes (per DEVELOPER_REFERENCE.md 4.3 / 9.1):
 --   * citizenid/job/granted_by/revoked_by use the standard qbx_core /
 --     QBCore VARCHAR(50) citizenid convention, matched consistently
 --     across every citizenid-shaped column in this table.
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
   `granted_by`       VARCHAR(50)  NOT NULL,                          -- citizenid of the certifying officer
   `granted_at`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `revoked_by`       VARCHAR(50)  DEFAULT NULL,                      -- citizenid of the revoking officer; NULL until revoked.
-                                                                      -- Per SPEC.md 4.4, may also hold the non-citizenid
+                                                                      -- Per DEVELOPER_REFERENCE.md 4.4, may also hold the non-citizenid
                                                                       -- sentinel 'system:job_change' when auto-revoked by
                                                                       -- a department firing rather than a manual revoke.
                                                                       -- No FK/format constraint on this column, so no
@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
                                                                       -- expect it as a valid non-citizenid value.
   `revoked_at`       DATETIME     DEFAULT NULL,
 
-  -- CERTIFICATION DEPTH (FEATURE_IDEAS.md Part A §2 -- coder-backend pass,
+  -- CERTIFICATION DEPTH (DEVELOPER_REFERENCE.md Part A §2 -- coder-backend pass,
   -- landed via sql/migrations/0006_add_k9_certification_lifecycle.sql for
   -- an existing database; included here directly so a FRESH install lands
   -- in the same final shape in one pass, matching this file's own
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
   -- one (this argument is optional everywhere it is threaded through).
   `revoke_reason`    VARCHAR(20)  DEFAULT NULL,
 
-  -- CERTIFICATION DEPTH (FEATURE_IDEAS.md Part A §9). NULL means "does not
+  -- CERTIFICATION DEPTH (DEVELOPER_REFERENCE.md Part A §9). NULL means "does not
   -- expire" -- the default for EVERY row unless a certifier grants (or
   -- later renews) this citizenid's certification on a server that has
   -- explicitly opted in via `Config.Features.CertificationExpiry = true`.
@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
 
   `active`           TINYINT(1)   NOT NULL DEFAULT 1,                -- 1 = currently grants access, 0 = historical/revoked row
 
-  -- CERTIFICATION DEPTH (FEATURE_IDEAS.md Part A §5). Fixed, ordinal
+  -- CERTIFICATION DEPTH (DEVELOPER_REFERENCE.md Part A §5). Fixed, ordinal
   -- 3-step vocabulary (trainee / certified / senior), enforced at the
   -- application layer (server/certifications.lua's TIER_RANK) rather than
   -- a DB-level ENUM/CHECK, same reasoning as `revoke_reason` above.
@@ -216,7 +216,7 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
 
   -- Hot-path index: "does citizenid X hold an active cert for job Y".
   -- Checked on player load, job change, grant, and revoke (per
-  -- SPEC.md 4.3 the result is cached in memory after that, so this
+  -- DEVELOPER_REFERENCE.md 4.3 the result is cached in memory after that, so this
   -- index is NOT hit on every menu-open/spawn request — only on the
   -- less-frequent events that (re)populate the cache).
   --   SELECT id FROM k9_certifications
@@ -226,14 +226,14 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
   KEY `idx_citizen_job_active` (`citizenid`, `job`, `active`),
 
   -- Admin-path index: "list all certified handlers in department X"
-  -- (SPEC.md 4.3 rationale). idx_citizen_job_active above cannot serve
+  -- (DEVELOPER_REFERENCE.md 4.3 rationale). idx_citizen_job_active above cannot serve
   -- this efficiently because job is not its leading column; this index
   -- makes it an index seek instead of a full table scan:
   --   SELECT citizenid, granted_by, granted_at FROM k9_certifications
   --   WHERE job = ? AND active = 1;
   KEY `idx_job_active` (`job`, `active`),
 
-  -- CERTIFICATION DEPTH (FEATURE_IDEAS.md Part A §9). Not on this
+  -- CERTIFICATION DEPTH (DEVELOPER_REFERENCE.md Part A §9). Not on this
   -- resource's own hot path (the expiry sweep walks currently-connected
   -- players via the in-memory cache -- see server/certifications.lua's
   -- header -- never a live SQL scan over this column); added for the
@@ -257,7 +257,7 @@ CREATE TABLE IF NOT EXISTS `k9_certifications` (
 -- =====================================================================
 -- qbx_k9unit :: k9_certification_specializations
 --
--- FEATURE_IDEAS.md Part B §11 -- named K9 training specializations
+-- DEVELOPER_REFERENCE.md Part B §11 -- named K9 training specializations
 -- (narcotics / explosives / patrol / ..., catalog in
 -- `Config.K9Specializations`) layered on top of an existing ACTIVE
 -- `k9_certifications` row. Landed via
@@ -335,8 +335,8 @@ CREATE TABLE IF NOT EXISTS `k9_certification_specializations` (
 -- qbx_k9unit :: k9_search_log
 --
 -- Persistent audit log for the Phase 2 contraband-search action
--- (`qbx_k9unit:server:searchTarget`, phase2_notes/RESEARCH_ARCHIVE.md#contraband-search
--- §6 last bullet, SPEC.md §11.4 item 2's "STILL-OPEN" list). Added per
+-- (`qbx_k9unit:server:searchTarget`, phase2_notes/DEVELOPER_REFERENCE.md#contraband-search
+-- §6 last bullet, DEVELOPER_REFERENCE.md §11.4 item 2's "STILL-OPEN" list). Added per
 -- db-schema's Phase 2 review of the open question both of those raised:
 -- does a search action warrant the same kind of durable accountability
 -- trail `k9_certifications` already provides for grants/revokes?
@@ -431,7 +431,7 @@ CREATE TABLE IF NOT EXISTS `k9_search_log` (
                                                                     -- 'found'/'clean' = a real inventory read completed (contrabandFound true/false);
                                                                     -- 'search_failed' = the inventory read itself errored/returned nil (searchTarget's
                                                                     -- reason = 'search_failed' path) -- kept as its own distinct value, never
-                                                                    -- collapsed into 'clean', carrying phase2_notes/RESEARCH_ARCHIVE.md#contraband-search's
+                                                                    -- collapsed into 'clean', carrying phase2_notes/DEVELOPER_REFERENCE.md#contraband-search's
                                                                     -- explicit "never collapse search_failed into contrabandFound=false" requirement
                                                                     -- all the way down into the audit record itself.
   `total_weight`       INT UNSIGNED DEFAULT NULL,                  -- the real computed totalWeight for 'found'/'clean' (0 for 'clean'); NULL for
@@ -695,13 +695,13 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
 -- table closes that gap. THE SPEC/DESIGN ARTIFACT GOVERNING ITS SHAPE
 -- PREDATES THIS EDIT: this `CREATE TABLE` is intentionally the same shape
 -- already reviewed and sketched (not applied) in
--- phase2_notes/RESEARCH_ARCHIVE.md#xp-schema section 4, derived here directly
+-- phase2_notes/DEVELOPER_REFERENCE.md#xp-schema section 4, derived here directly
 -- from server/progression.lua's real, currently-shipping queries rather
 -- than re-derived from scratch -- the two agree because the sketch is
 -- what that file was written against.
 --
 -- Governing spec: DEVELOPER_REFERENCE.md section 13.4.1 (`Config.Features.
--- XPProgression`), and phase2_notes/RESEARCH_ARCHIVE.md#xp-schema's own
+-- XPProgression`), and phase2_notes/DEVELOPER_REFERENCE.md#xp-schema's own
 -- persistence-decision note (sections 2-4) for the full "why a table, not
 -- qbx_core metadata" rationale -- restated briefly here: (1) atomic
 -- accumulation via a single `INSERT ... ON DUPLICATE KEY UPDATE
@@ -711,7 +711,7 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
 -- inspection must work without loading another player's full metadata
 -- blob out of band; (3) admin/ops queryability ("list every K9 at Elite
 -- tier," "average XP in department X") without scanning every player's
--- JSON. Same three reasons SPEC.md section 4.3 already accepted once for
+-- JSON. Same three reasons DEVELOPER_REFERENCE.md section 4.3 already accepted once for
 -- `k9_certifications` over metadata.
 --
 -- Owner file: `server/progression.lua`. That file's own header documents
@@ -751,7 +751,7 @@ CREATE TABLE IF NOT EXISTS `k9_partnerships` (
 -- not an audit trail of individual award events. Whether a separate
 -- append-only `k9_xp_log`-style table is also worth adding for
 -- anti-cheat/dispute auditing is a distinct, still-open question
--- (phase2_notes/RESEARCH_ARCHIVE.md#xp-schema section 6 item 2) -- not
+-- (phase2_notes/DEVELOPER_REFERENCE.md#xp-schema section 6 item 2) -- not
 -- decided or added here.
 --
 -- `xp`'s tier is intentionally NOT computed in SQL (no generated column
@@ -786,7 +786,7 @@ CREATE TABLE IF NOT EXISTS `k9_progression` (
                                                           -- (server/progression.lua's ResolveTier). UNSIGNED guards against a
                                                           -- negative value at the type level, but is not a substitute for
                                                           -- app-layer clamping if a future "reduce/reset XP" admin path is
-                                                          -- ever added (see phase2_notes/RESEARCH_ARCHIVE.md#xp-schema section 6
+                                                          -- ever added (see phase2_notes/DEVELOPER_REFERENCE.md#xp-schema section 6
                                                           -- item 3) -- no such path exists in this codebase today.
   `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -809,7 +809,7 @@ CREATE TABLE IF NOT EXISTS `k9_progression` (
   -- citizenid -- see the integration note above.
 
   -- ADDED via sql/migrations/0009_add_k9_progression_idx_xp.sql
-  -- (FEATURE_IDEAS.md Part A Tier C §10, server/leaderboard.lua's
+  -- (DEVELOPER_REFERENCE.md Part A Tier C §10, server/leaderboard.lua's
   -- `/k9stats`). PREVIOUSLY documented here as "optional, not added" --
   -- that was correct until this query actually got built. VERIFIED BY
   -- REAL EXPLAIN, not assumed (see migration 0009's own header for the

@@ -3,7 +3,7 @@
 
     Phase 1 scaffold (coder-architect). Owns K9 vehicle entry/exit only —
     self-administered (the K9 player interacts with the vehicle
-    themselves, nobody does it to them, per SPEC.md §6.1). Never touches
+    themselves, nobody does it to them, per DEVELOPER_REFERENCE.md §6.1). Never touches
     leash/ox_target-on-peds (that's client/movement.lua's job) — keep that
     split.
 
@@ -31,7 +31,7 @@
     - THIS FILE calls client/main.lua's global CanShowK9UI() before acting
       on any of the above, and client/main.lua's global
       ResolveNetworkEntity(netId) inside ResolveVehicleFromState() below
-      (REFACTOR_ROADMAP.md near-term item 2 — was this file's own
+      (DEVELOPER_REFERENCE.md near-term item 2 — was this file's own
       independent copy of the same defensive-resolve sequence).
 ]]
 
@@ -52,7 +52,7 @@ end
 
 -- Precomputed set of Config.K9Vehicles model hashes, built once at file
 -- load — no hardcoded model name anywhere, generic over the config
--- (SPEC.md §3 acceptance bullet 3 spirit, applied here to vehicles too).
+-- (DEVELOPER_REFERENCE.md §3 acceptance bullet 3 spirit, applied here to vehicles too).
 local K9VehicleHashes = {}
 for _, model in ipairs(Config.K9Vehicles) do
     K9VehicleHashes[GetHashKey(model)] = true
@@ -86,7 +86,7 @@ end
 --- pull-back thread, which re-resolves its partner ped from a server id
 --- every tick for the identical reason ("a cached ped handle can go
 --- stale"). The actual resolve-and-guard sequence is now
---- client/main.lua's shared ResolveNetworkEntity() (REFACTOR_ROADMAP.md
+--- client/main.lua's shared ResolveNetworkEntity() (DEVELOPER_REFERENCE.md
 --- near-term item 2) — this function's only remaining job is the
 --- vehicleState-nil short-circuit, which is specific to this file's own
 --- local state and doesn't belong in the generic resolver.
@@ -126,7 +126,7 @@ end
 
 --- Finds the nearest vehicle within Config.VehicleInteractMeters whose
 --- model is in Config.K9Vehicles and enters it (hides/freezes the K9's
---- own ped, per SPEC.md §6.1 vehicle bullet).
+--- own ped, per DEVELOPER_REFERENCE.md §6.1 vehicle bullet).
 function EnterNearestK9Vehicle()
     if not Config.Features.VehicleEntryExit then return end
 
@@ -200,7 +200,7 @@ function EnterNearestK9Vehicle()
     end
 
     -- "Tucked away" treatment: frozen, invisible, no collision, AND
-    -- attached to the vehicle. SPEC.md §6.1 only says "hidden/frozen," but
+    -- attached to the vehicle. DEVELOPER_REFERENCE.md §6.1 only says "hidden/frozen," but
     -- freezing in place without attaching would leave the K9 stranded,
     -- motionless, in world space the instant the vehicle actually drives
     -- anywhere — defeating the entire real-world point of "loading" a K9
@@ -223,10 +223,10 @@ end
 --- No-op if not currently in a vehicle. Deliberately NOT gated behind
 --- CanShowK9UI() — a K9 whose certification lapses mid-ride must always
 --- be able to un-freeze/un-hide themselves; this mirrors the same
---- "never leave a player stuck" principle SPEC.md §9 item 3b establishes
+--- "never leave a player stuck" principle DEVELOPER_REFERENCE.md §9 item 3b establishes
 --- as a hard requirement for leash detach, applied here by extension
 --- since unfreezing your own visible ped isn't itself a security-relevant
---- capability grant. Not spelled out verbatim in SPEC.md — a deliberate
+--- capability grant. Not spelled out verbatim in DEVELOPER_REFERENCE.md — a deliberate
 --- client-logic judgment call, flagged here rather than made silently.
 function ExitK9Vehicle()
     if not IsInK9Vehicle() then return end
@@ -406,7 +406,7 @@ end)
 -- header names as the reason HasK9Access() has a short TTL cache, since
 -- canInteract can run several times a second while hovering.
 -- Gate visibility with Config.Features.VehicleEntryExit AND the access
--- check above — this is a DISPLAY optimization per SPEC.md §3/§4.5, not
+-- check above — this is a DISPLAY optimization per DEVELOPER_REFERENCE.md §3/§4.5, not
 -- the security boundary (there's no server round-trip to independently
 -- re-verify here since this action has no server event at all, per this
 -- file's header note — if that turns out to be the wrong call per
