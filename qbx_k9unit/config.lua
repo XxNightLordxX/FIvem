@@ -982,14 +982,13 @@ Config.K9Inventory = {
     accessScope   = 'department',
 
     -- nil = no item whitelist enforced (ox_inventory's own slot/weight
-    -- limits are the only restriction). NOTE: as of this pass, setting this
-    -- to a non-nil list has NO EFFECT — see server/inventory.lua's header
-    -- CONFIDENCE NOTE for why item-whitelist enforcement (a
-    -- registerHook-style mechanism, PHASE4_SPEC.md §13.4.2's own genuinely
+    -- limits are the only restriction).
+    --
     -- NOW ENFORCED. The note that stood here said this was deliberately not
     -- built, and warned an owner not to assume setting it did anything. That
-    -- warning was correct and is now obsolete: server/inventory.lua enforces
-    -- it through ox_inventory's own `swapItems` hook.
+    -- warning was correct when written and is now obsolete:
+    -- server/inventory.lua enforces the list through ox_inventory's own
+    -- `swapItems` hook.
     --
     -- Expects a plain array of item-name strings (same convention as
     -- Config.SearchContrabandItems). `nil` means no filtering, which stays the

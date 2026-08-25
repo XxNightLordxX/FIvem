@@ -59,6 +59,22 @@
     ox_inventory pattern" — MEDIUM confidence, not independently
     re-verified against the real ox_inventory source or a live install this
     session (same status server/inventory.lua's header gives RegisterStash).
+
+    RUNTIME EXISTENCE GUARD (this pass): OpenK9InventoryForNetId's call to
+    `exports.ox_inventory:openInventory` used to be a naked, unguarded
+    export call — the ONLY third-party-resource export call in this file
+    with no `type(x) == 'function'`-style existence check at all, unlike
+    this file's server-side counterpart (server/inventory.lua's
+    `IsOxInventoryHookCapable` around `registerHook`). Fixed: see
+    `IsOxInventoryOpenCapable()` immediately above OpenK9InventoryForNetId —
+    same `GetResourceState('ox_inventory') == 'started'` + pcall'd
+    export-access shape, so an ox_inventory restart/version mismatch after
+    THIS resource has already started degrades to a logged warning + a
+    player-facing `inventory.unable_to_open_generic` notify, never an
+    uncaught error out of an ox_target onSelect/RequestOpenOwnK9Inventory
+    call. The call itself is additionally pcall'd (existence is not proof
+    the call can't still throw for some other reason) with the same
+    fail-safe notify.
 ]]
 
 --- Human-readable rejection messages for the openK9Inventory callback's
@@ -87,6 +103,29 @@ local K9_INVENTORY_REASON_MESSAGES = {
     not_authorized    = locale('inventory.reason_not_authorized'),
     stash_failed      = locale('inventory.reason_stash_failed'),
 }
+
+--- RUNTIME EXISTENCE GUARD for the ox_inventory `openInventory` export this
+--- file calls below to actually present the stash UI once the server has
+--- granted access. ox_inventory is a hard `fxmanifest.lua` `dependencies`
+--- entry, which only guarantees it was RUNNING at the moment THIS resource
+--- itself started — it does NOT guarantee the export still exists for the
+--- rest of this resource's lifetime (an operator can `restart ox_inventory`
+--- independently of this one, or run a fork/older build missing this
+--- export), so this is a runtime check, never a load-order assumption —
+--- same `GetResourceState` + pcall'd export-access shape as
+--- server/inventory.lua's own `IsOxInventoryHookCapable` (the server-side
+--- `registerHook` export); this is the client-side equivalent for
+--- `openInventory`, per this project's "check `type(x) == 'function'`
+--- before calling into another resource's global/export" rule.
+--- @return boolean
+local function IsOxInventoryOpenCapable()
+    if GetResourceState('ox_inventory') ~= 'started' then
+        return false
+    end
+
+    local ok, openExport = pcall(function() return exports.ox_inventory.openInventory end)
+    return ok and type(openExport) == 'function'
+end
 
 --- Shared "ask the server to open this stash, then open it client-side"
 --- implementation — called by both the ox_target `onSelect` below (netId
@@ -120,7 +159,43 @@ local function OpenK9InventoryForNetId(netId)
         return
     end
 
-    exports.ox_inventory:openInventory('stash', result.stashId)
+    -- The server has already granted access (EnsureK9Stash succeeded
+    -- server-side) by the time we get here — a failure past this point is
+    -- purely "could not present the UI client-side," never a
+    -- re-litigation of access, so it always gets the same generic
+    -- unable-to-open copy rather than any of K9_INVENTORY_REASON_MESSAGES
+    -- (those are all server-decision reasons, not applicable here).
+    if not IsOxInventoryOpenCapable() then
+        print(('[qbx_k9unit] WARNING: server granted K9 stash %s but ox_inventory\'s ' ..
+            'openInventory export is unavailable client-side (ox_inventory is missing, not ' ..
+            'started, or this build does not support it) -- the stash UI could not be opened.')
+            :format(tostring(result.stashId)))
+        lib.notify({
+            title = locale('common.notify_title'),
+            description = locale('inventory.unable_to_open_generic'),
+            type = 'error',
+        })
+        return
+    end
+
+    -- pcall'd defensively (not just existence-guarded above): the export
+    -- existing is not proof the call itself cannot throw for some other
+    -- reason (a malformed stashId, an internal ox_inventory error, etc) —
+    -- never let that propagate as an uncaught error out of an ox_target
+    -- onSelect/RequestOpenOwnK9Inventory call, same "never a naked
+    -- third-party export call with no fail path" discipline this file's
+    -- server-side counterpart applies to RegisterStash (EnsureK9Stash).
+    local openOk = pcall(function()
+        exports.ox_inventory:openInventory('stash', result.stashId)
+    end)
+
+    if not openOk then
+        lib.notify({
+            title = locale('common.notify_title'),
+            description = locale('inventory.unable_to_open_generic'),
+            type = 'error',
+        })
+    end
 end
 
 --- Register the "Open K9 Gear" ox_target option on nearby player peds whose
