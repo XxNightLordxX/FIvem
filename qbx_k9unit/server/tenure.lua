@@ -335,18 +335,43 @@
     prior work).
 ]]
 
--- TenureFullyCollected[partnershipRowId] = true -- purely a per-process,
--- in-memory SKIP-CACHE to avoid re-running the SELECT below every tick for
--- a partnership that has already collected every configured milestone (a
--- steady-state, extremely common case once a real partnership ages past the
--- last threshold). Never used to decide WHETHER a grant is safe to make --
--- only the persisted `tenure_bonus_tier_granted` column (proposed, see this
--- file's own header) is authoritative for that; losing this cache entirely
--- on a restart is harmless and self-healing (the next tick's SELECT simply
--- reconfirms "already fully collected" from the DB and repopulates this
--- entry once). Bounded, cheap, unbounded-but-fine growth profile, same
--- accepted shape as server/certifications.lua's own `Certifications` cache
--- and server/progression.lua's own `K9XP` cache.
+-- TenureFullyCollected[partnershipRowId] = true -- a per-process, in-memory
+-- marker for a partnership that has already collected every configured
+-- milestone (a steady-state, extremely common case once a real partnership
+-- ages past the last threshold).
+--
+-- CORRECTNESS-PASS CORRECTION (this pass -- tests/tenure_spec.lua's own
+-- "DISCREPANCY" case locks this in): this does NOT skip the SELECT below on
+-- a fully-collected partnership, despite an earlier revision of this comment
+-- claiming it did. It CANNOT skip that SELECT: the only key this cache has
+-- is `partnershipRowId`, and that id is itself a COLUMN OF THE ROW THE
+-- SELECT RETURNS -- there is no way to know which row id to check this
+-- cache against without already having run the query that names it. What
+-- this cache actually short-circuits is the CHEAPER work strictly AFTER the
+-- SELECT (the tier walk / optimistic UPDATE attempt below), which is a real,
+-- if modest, saving once a partnership has nothing left to grant. A true
+-- pre-query skip would need a SEPARATE cache keyed by `k9Citizenid` instead
+-- (the value TickPartnershipTenure's loop actually has in hand before
+-- calling this function) -- and that shape was deliberately NOT built here,
+-- because it is only SAFE if it is invalidated the instant this citizenid's
+-- active partnership row changes (a break, or a break-then-reform with a
+-- fresh `established_at` and a fresh id resets tenure to zero, per this
+-- file's own header design question 4). This file has no hook into
+-- server/partnership.lua's teardown/establish paths to drive that
+-- invalidation, and guessing wrong in that direction (serving a stale
+-- "fully collected" verdict for a citizenid's BRAND NEW partnership) would
+-- silently withhold every future milestone for that new partnership forever
+-- -- a strictly worse bug than one extra cheap, already-indexed SELECT per
+-- tick for an already-tenured K9 (config.lua's own comment on
+-- `Config.Partnership.TenureBonus.checkIntervalMs` already prices this
+-- query as "effectively free" at a 5-minute cadence). Never used to decide
+-- WHETHER a grant is safe to make either way -- only the persisted
+-- `tenure_bonus_tier_granted` column is authoritative for that; losing this
+-- cache entirely on a restart is harmless and self-healing (the next tick's
+-- SELECT simply reconfirms "already fully collected" from the DB and
+-- repopulates this entry once). Bounded, cheap, unbounded-but-fine growth
+-- profile, same accepted shape as server/certifications.lua's own
+-- `Certifications` cache and server/progression.lua's own `K9XP` cache.
 local TenureFullyCollected = {}
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12

@@ -85,6 +85,26 @@ into one template" reasoning already used for `movement.camera_first_person`/
 `camera_third_person` and `partnership.now_partnered_as_handler`/
 `now_partnered_as_k9`.
 
+**Update (sixth migration pass, coder-frontend, `client/combat.lua`):**
+`client/combat.lua` — previously named explicitly in "What's left" below as
+UNCHECKED — is now migrated. It had exactly one hardcoded player-facing
+string, `lib.notify({ title = 'K9 Unit', description = 'No eligible target
+in range.', type = 'error' })`, repeated verbatim at three call sites
+(`RequestBiteHold`/`RequestTakedown`/`RequestDrag`'s own "no candidate found
+in range" rejection). The title is now `locale('common.notify_title')`
+(reusing the existing shared key, not a fourth "K9 Unit" copy, same
+convention every other file's own notify title already follows); the
+description is a single new key, `combat.no_target_in_range`, shared across
+all three call sites since the text is genuinely identical for all three
+(same "one key, multiple call sites" precedent as `common.no_k9_access`).
+`client/combat.lua`'s OTHER player-facing text — every `lib.notify` call
+inside its `RegisterNetEvent` handlers — does not exist: those handlers
+apply native side effects only (`DisableControlAction`/
+`SetEntityCanBeDamaged`/etc.), never a notification, so there was nothing
+further to migrate in this file. `client/defense.lua` was already fully
+migrated as of the fourth pass (`defense.*`, above) and needed no further
+work this pass.
+
 ## Format (verified against ox_lib source, not assumed)
 
 Checked directly against `overextended/ox_lib`
@@ -572,23 +592,25 @@ specific language.
 
 ## What's left (honest count)
 
-As of this (fifth) pass, **18 of roughly 48 Lua files** in this
+As of the sixth pass, **19 of roughly 48 Lua files** in this
 resource's `client/` + `server/` trees have actually needed a `locale()`
 migration — `client/vision.lua`, `client/vehicle.lua`, `client/kennel.lua`,
 `client/main.lua`, `client/movement.lua`, `client/agility.lua`,
 `client/inventory.lua`, `client/partnership.lua`, `client/defense.lua`,
-`client/fetch.lua`, `client/propattachment.lua`, and now `client/radial.lua`,
+`client/fetch.lua`, `client/propattachment.lua`, `client/radial.lua`,
 `client/search.lua`, `client/tracking.lua`, `client/wellbeing.lua`,
-`client/progression.lua`, `client/medkit.lua`, and `client/bonetool.lua`.
+`client/progression.lua`, `client/medkit.lua`, `client/bonetool.lua`, and
+now `client/combat.lua` (new `combat.*` group, one key, three call sites —
+see "Update (sixth migration pass...)" above).
 Five files (`client/screenfx.lua`, `client/audio.lua`,
 `client/proximityaudio.lua`, `client/recall.lua`, and `client/hud.lua`)
 have been checked and confirmed to have **no player-facing strings at
 all**, so they need no `locale()` calls — don't re-check them again from
 scratch, but do re-check if you add new player-facing UI to any of them
-later. That's 23 of ~48 files actually checked one way or the other.
+later. That's 24 of ~48 files actually checked one way or the other.
 
-Every other file — `client/combat.lua`, `client/exports.lua`, and every
-file under `server/` — is UNCHECKED by this pass and should be assumed to
+Every other file — `client/exports.lua` and every file under `server/` —
+is UNCHECKED by this pass and should be assumed to
 still have 100% hardcoded English for any player-facing string it contains
 (server-side strings sent to players via `lib.notify`/
 `exports.qbx_core:Notify`/similar are just as in scope as client-side ones;

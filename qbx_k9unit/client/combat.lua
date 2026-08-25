@@ -474,7 +474,7 @@ function RequestBiteHold()
 
     local target = FindNearestCombatTarget(Config.Combat.BiteAndHold.range)
     if not target then
-        lib.notify({ title = 'K9 Unit', description = 'No eligible target in range.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.no_target_in_range'), type = 'error' })
         return
     end
 
@@ -508,7 +508,7 @@ function RequestTakedown()
 
     local target = FindNearestCombatTarget(Config.Combat.NonLethalTakedown.range)
     if not target then
-        lib.notify({ title = 'K9 Unit', description = 'No eligible target in range.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.no_target_in_range'), type = 'error' })
         return
     end
 
@@ -561,7 +561,7 @@ function RequestDrag()
 
     local target = FindNearestDraggableCandidate(Config.Combat.PropDragging.range)
     if not target then
-        lib.notify({ title = 'K9 Unit', description = 'No eligible target in range.', type = 'error' })
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.no_target_in_range'), type = 'error' })
         return
     end
 
@@ -669,40 +669,29 @@ end
 -- ======================================================================
 
 -- ======================================================================
--- SHARED PER-TICK ASSERTION HELPERS (QA FIX — prompt suppression on grant,
--- this pass). The shared maintenance thread below (see "SHARED MAINTENANCE
--- THREAD") picks its own Wait() duration once per iteration, from whichever
--- states were active AT THE TOP of that iteration. A target going from
--- fully idle (thread asleep in its own Wait(500), the common case) to
--- freshly bitten/dragged got, before this fix, NO enforcement native call
--- at all until that sleep happened to elapse on its own — up to ~500ms
--- during which the mechanic that just landed enforced nothing, long enough
--- for an extra sprint/attack/escape input the mechanic exists to prevent.
+-- SHARED PER-TICK ASSERTION HELPERS (QA FIX — prompt suppression on grant;
+-- CANCELLABLE-WAIT FOLLOW-UP, this pass — see "CANCELLABLE MAINTENANCE
+-- WAIT" immediately below for the second half of this fix). The shared
+-- maintenance thread below (see "SHARED MAINTENANCE THREAD") picks its own
+-- wait duration once per iteration, from whichever states were active AT
+-- THE TOP of that iteration. A target going from fully idle (thread asleep
+-- in its own coarse wait, the common case) to freshly bitten/dragged got,
+-- before the QA fix below, NO enforcement native call at all until that
+-- sleep happened to elapse on its own — up to ~500ms during which the
+-- mechanic that just landed enforced nothing, long enough for an extra
+-- sprint/attack/escape input the mechanic exists to prevent.
 --
 -- Each function below is the EXACT same native-call sequence the thread's
 -- own per-tick branch for that effect already performs — extracted once,
--- not duplicated — and is now ALSO invoked immediately, a single time,
--- from the RegisterNetEvent handler that turns the corresponding state on
+-- not duplicated — and is invoked immediately, a single time, from the
+-- RegisterNetEvent handler that turns the corresponding state on
 -- (applyBiteHold / dragStarted / applyDragSpeedLimit below), in addition to
 -- the thread's own per-tick call once it next wakes. A RegisterNetEvent
--- handler runs on receipt, on its own coroutine, independently of whatever
--- the shared thread happens to be doing — this is not a second CreateThread
--- and does not touch the thread's own Wait() selection at all, it just
--- means the first assertion no longer waits on that selection.
---
--- WHAT THIS DOES NOT CLOSE: this closes the ONSET delay only (enforcement
--- now begins on the very tick the grant arrives, not whenever the thread
--- next wakes). It does not make the thread itself wake up early — a true
--- interrupt would need a cancellable-wait primitive (promise.new() +
--- SetTimeout(), the standard Citizen-scripting idiom for exactly this),
--- deliberately NOT adopted here: neither `promise` nor `SetTimeout` is
--- currently in .luacheckrc's read_globals, and this file's own ownership
--- boundary this pass does not extend to that config file — flagged as a
--- worthwhile follow-up for whoever owns it, not applied here. Practical
--- residual with just this fix: a gap can still reopen on any frame between
--- this bridge call and the thread's own next wake (same up-to-~500ms upper
--- bound as before) — a real, disclosed narrowing of the window, not a claim
--- that the window is now fully gapless.
+-- handler runs on receipt, independently of whatever the shared thread
+-- happens to be doing — this bridge call alone only closes the ONSET delay
+-- (enforcement begins the very tick the grant arrives); it does not, by
+-- itself, make the thread itself wake up early for the frames after that.
+-- That second half is CANCELLABLE MAINTENANCE WAIT below.
 -- ======================================================================
 local function AssertBiteHoldControlsOnTarget()
     DisableControlAction(0, INPUT_SPRINT, true)
@@ -757,6 +746,157 @@ local function AssertDragSpeedLimitOnTarget()
     end
 end
 
+-- ======================================================================
+-- CANCELLABLE MAINTENANCE WAIT (this pass) — closes the residual gap the
+-- previous pass's own header comment flagged: the shared maintenance
+-- thread's coarse idle wait (100ms/500ms, "SHARED MAINTENANCE THREAD"
+-- below) previously could not be aborted early, so a grant landing while
+-- the thread was asleep in that wait got exactly ONE enforcement tick (the
+-- bridge call above) and then nothing further until that sleep elapsed on
+-- its own — up to ~500ms of unenforced window on top of the bridge call.
+--
+-- DESIGN NOTE, disclosed rather than silently substituted: the brief for
+-- this fix named `promise.new()` + `SetTimeout()` + `Citizen.Await()` as
+-- the standard Citizen-scripting cancellable-wait idiom. `promise` and
+-- `SetTimeout` are now genuinely in .luacheckrc's read_globals (verified:
+-- `grep -n promise .luacheckrc` shows both, with the primary-source
+-- citation). `Citizen` (the table `Citizen.Await` hangs off) is NOT —
+-- confirmed by actually running `luacheck` against a
+-- `Citizen.Await(promise.new())` snippet, which reports "accessing
+-- undefined variable Citizen" (Citizen is a genuine engine-provided global,
+-- distinct from `promise`/`SetTimeout`, which are the two names
+-- scheduler.lua/deferred.lua actually bind into `_G` — `Citizen` itself is
+-- never re-bound as a bare global, only referenced via the table CFX's
+-- runtime pre-seeds). Editing .luacheckrc to add "Citizen" is outside this
+-- file's ownership boundary this pass (see HARD RULES), so this
+-- implementation deliberately reaches the identical cancellable-wait
+-- GUARANTEE (early-wake OR timeout, whichever first, whole-numbered
+-- resolve-once semantics, no permanent park) without `Citizen.Await`:
+-- instead of blocking the thread's own coroutine on the promise
+-- (`Citizen.Await`'s job), `WaitCancellable` below registers its
+-- CONTINUATION via the promise's own `:next()` callback (deferred.lua's
+-- public, allowlist-clean API — no `Citizen` reference needed at all), and
+-- the shared maintenance thread's `while true do` loop (below) is
+-- restructured into a self-continuing local function so that callback can
+-- actually drive the next tick. Functionally equivalent for this file's
+-- purpose; flagged here as a deliberate substitution, not a silent
+-- reinterpretation of the brief. If a later pass prefers a literal
+-- `Citizen.Await`-blocking form, that only requires the owner of
+-- .luacheckrc to add "Citizen" to read_globals — the design above does not
+-- need to change to accommodate that, since `Citizen.Await(promise)` and
+-- `promise:next(fn)` observe the exact same resolve() call identically.
+--
+-- SINGLE-RESOLUTION GUARANTEE (belt-and-suspenders, both independently
+-- sufficient): (1) `WaitCancellable`/`WakeMaintenanceThread` both gate on
+-- an identity check against `PendingMaintenanceWaitPromise`, clearing that
+-- slot to nil in the SAME step as the check — since this resource's Lua
+-- runs cooperatively (never two callbacks mid-execution at once), whichever
+-- of "the SetTimeout fired" or "something called WakeMaintenanceThread"
+-- runs first claims the promise; the other, running later, always finds
+-- the slot already nil and does nothing. (2) Independently, deferred.lua's
+-- own `resolve(deferred, state, value)` (this file's own read of the
+-- primary source, not asserted from memory) only mutates `deferred.state`
+-- `if deferred.state == 0` (PENDING) — a promise this file has already
+-- resolved once is already past state 0, so even a hypothetical duplicate
+-- `:resolve()` call would be a verified no-op at the library level, not
+-- merely by this file's own convention.
+--
+-- NO PERMANENT PARK: `WaitCancellable` ALWAYS schedules the `SetTimeout`
+-- side unconditionally, regardless of whether `WakeMaintenanceThread` is
+-- ever called — so an "abandoned" wait (nothing ever wakes it) still
+-- resolves, and therefore still continues the maintenance chain, at
+-- exactly `ms` milliseconds, identical to a plain `Wait(ms)` would have. A
+-- STALE `SetTimeout` from an already-superseded call (superseded by an
+-- earlier `WakeMaintenanceThread()` call, or by a later `WaitCancellable`
+-- call for the NEXT tick) is inert by the same identity check — it targets
+-- a promise object `PendingMaintenanceWaitPromise` no longer references, so
+-- it can never resolve, or otherwise affect, the wrong wait.
+-- ======================================================================
+
+--- Exactly one `WaitCancellable` call is ever outstanding at a time (the
+--- shared maintenance thread is the only caller, and it never starts a new
+--- one until the previous one's continuation has already fired) — a single
+--- file-local slot, not a queue/set, is therefore sufficient. `nil` means
+--- the thread is not currently parked in a cancellable wait at all (e.g.
+--- it is mid-Wait(0) tick, or has not started yet).
+local PendingMaintenanceWaitPromise = nil
+
+--- Runs `onResume` once, either when `ms` milliseconds have elapsed (the
+--- ordinary case — behaves exactly like `Wait(ms)` followed by continuing)
+--- OR as soon as `WakeMaintenanceThread()` is called, WHICHEVER HAPPENS
+--- FIRST. See header "CANCELLABLE MAINTENANCE WAIT" for the
+--- single-resolution/no-permanent-park guarantees this relies on.
+---
+--- ERROR-VISIBILITY FIX, verified against the primary source before relying
+--- on it (this file's own read of `deferred.lua`, and an empirical repro —
+--- `p:next(function() error('boom') end); p:resolve()` prints nothing at
+--- all and does not propagate): `:next()`'s own continuation runs inside
+--- `deferred.lua`'s internal `pcall(deferred.success, ...)`, which SWALLOWS
+--- an error raised in `onResume` completely — no console print, no
+--- traceback, nothing — unlike the previous `while true do ... end` loop,
+--- where an uncaught error inside the loop body propagated to FiveM's own
+--- per-coroutine error boundary and printed a traceback (the thread still
+--- died either way, but LOUDLY, not silently). `onResume` is therefore run
+--- through an explicit `pcall` here with an explicit `print` on failure —
+--- restoring that same "dies loudly, not silently" property this thread
+--- already had before this pass, not a new guarantee invented for it. This
+--- does not make the tick loop self-healing (an error still ends the
+--- chain, exactly as an uncaught error in the old `while true do` loop
+--- would have killed that thread too) — only VISIBLE again.
+--- @param ms number
+--- @param onResume fun()
+local function WaitCancellable(ms, onResume)
+    local waitPromise = promise.new()
+    PendingMaintenanceWaitPromise = waitPromise
+
+    waitPromise:next(function()
+        local ok, err = pcall(onResume)
+        if not ok then
+            print(('[qbx_k9unit] combat.lua shared maintenance thread errored and has stopped: %s'):format(tostring(err)))
+        end
+    end)
+
+    SetTimeout(ms, function()
+        if PendingMaintenanceWaitPromise == waitPromise then
+            PendingMaintenanceWaitPromise = nil
+            waitPromise:resolve()
+        end
+    end)
+end
+
+--- Called from the RegisterNetEvent handlers that turn on a Wait(0)-class
+--- state (applyBiteHold / dragStarted / applyDragSpeedLimit below) to cut
+--- the shared maintenance thread's current coarse wait short, if it is
+--- currently parked in one. A safe no-op when the thread is not currently
+--- waiting on a cancellable promise at all (e.g. already mid-Wait(0)
+--- because some OTHER Wait(0)-class state is already active — the thread
+--- is already reasserting every frame in that case, nothing to wake).
+---
+--- Deliberately resolves via a fresh `SetTimeout(0, ...)` rather than
+--- resolving `waitPromise` synchronously right here: this function is
+--- called from INSIDE a RegisterNetEvent handler's own coroutine, and
+--- resolving synchronously would run MaintenanceTick's entire continuation
+--- (including its own subsequent Wait(0)/WaitCancellable calls) nested
+--- inside that handler's call stack/coroutine instead of a fresh
+--- SetTimeout-owned one — not incorrect (FiveM's scheduler tracks any
+--- yielding coroutine generically), but an unnecessary coupling this
+--- avoids for no behavioral cost: `SetTimeout(0, ...)` still resumes on
+--- essentially the very next tick, the same order of magnitude as a
+--- synchronous resolve. The identity re-check inside the deferred callback
+--- (not just here) is what actually keeps this single-resolution-safe even
+--- across that one-tick indirection.
+local function WakeMaintenanceThread()
+    if not PendingMaintenanceWaitPromise then return end -- nothing parked right now, nothing to wake
+
+    SetTimeout(0, function()
+        local waitPromise = PendingMaintenanceWaitPromise
+        if waitPromise then
+            PendingMaintenanceWaitPromise = nil
+            waitPromise:resolve()
+        end
+    end)
+end
+
 if Config.Features.BiteAndHold then
     -- HOLDER-SIDE receivers — server/combat.lua's own header: "Sent ONLY to
     -- the HOLDING K9's own client — starts/ends its own local cosmetic
@@ -799,9 +939,13 @@ if Config.Features.BiteAndHold then
         }
         -- QA FIX (prompt suppression on grant) — see header "SHARED PER-TICK
         -- ASSERTION HELPERS": bridge the onset gap immediately rather than
-        -- wait for the shared thread's own next wake (up to ~500ms away if
-        -- this client was fully idle beforehand).
+        -- wait for the shared thread's own next wake.
         AssertBiteHoldControlsOnTarget()
+        -- CANCELLABLE-WAIT FIX — see header "CANCELLABLE MAINTENANCE WAIT":
+        -- cut the thread's own coarse wait short (if it is currently
+        -- parked in one) so continuous per-frame reassertion resumes within
+        -- about one tick, instead of up to ~500ms later.
+        WakeMaintenanceThread()
     end)
 
     --- @param reason string
@@ -997,6 +1141,8 @@ if Config.Features.PropDragging then
         -- PER-TICK ASSERTION HELPERS": bridge the onset gap immediately
         -- rather than wait for the shared thread's own next wake.
         AssertDragAsHolderTick(ActiveDragAsHolder)
+        -- CANCELLABLE-WAIT FIX — see header "CANCELLABLE MAINTENANCE WAIT".
+        WakeMaintenanceThread()
     end)
 
     --- HOLDER-SIDE receiver — stops the re-assertion loop, calls
@@ -1040,6 +1186,8 @@ if Config.Features.PropDragging then
         -- PER-TICK ASSERTION HELPERS": bridge the onset gap immediately
         -- rather than wait for the shared thread's own next wake.
         AssertDragSpeedLimitOnTarget()
+        -- CANCELLABLE-WAIT FIX — see header "CANCELLABLE MAINTENANCE WAIT".
+        WakeMaintenanceThread()
     end)
 
     --- @param reason string
@@ -1153,9 +1301,34 @@ end
 -- status would just be a second copy of the same disclosed gap, not a step
 -- toward closing it — left for whoever lands the server-side condition to
 -- decide whether one shared event or two is the right shape.
+--
+-- CANCELLABLE-WAIT FOLLOW-UP (this pass) — the structure below is no longer
+-- a literal `while true do ... end`; every "loop iteration" reference above
+-- now means one call of the local `MaintenanceTick` function defined below,
+-- self-continuing (via a tail call for the Wait(0) branch, or via
+-- `WaitCancellable`'s own `:next()` continuation for the coarse-wait
+-- branch) rather than looping. The decoupled-backstop/Wait(0)-class
+-- reasoning above is otherwise unchanged by this restructure — only HOW the
+-- thread reaches its next tick changed, not which native calls or backstop
+-- checks run on it. See "CANCELLABLE MAINTENANCE WAIT" (above, near
+-- WaitCancellable's own definition) for the actual fix this pass makes:
+-- the coarse-wait branch can now be cut short the instant a Wait(0)-class
+-- state turns on, instead of always running out its full 100/500ms.
 -- ======================================================================
 CreateThread(function()
-    while true do
+    -- Recursive self-continuing tick (not a `while true do` loop) — see
+    -- header "CANCELLABLE MAINTENANCE WAIT" for why: a plain `while true do
+    -- ... Wait(ms) ... end` cannot be interrupted early without a
+    -- coroutine-yield primitive (`Citizen.Await`, not currently
+    -- allowlisted); a promise `:next()` callback, by contrast, can only
+    -- drive a NEW function call, not resume an already-suspended loop body.
+    -- Each call below is one "tick," equivalent to one previous loop
+    -- iteration: the Wait(0)-class branch below tail-calls itself directly
+    -- (`return MaintenanceTick()`, a genuine Lua 5.4 tail call — no stack
+    -- growth even under a long run of continuous per-frame ticks), and the
+    -- coarse-wait branch re-enters via WaitCancellable's own `:next()`
+    -- continuation instead of a blocking `Wait(ms)`.
+    local function MaintenanceTick()
         local now = GetGameTimer()
 
         if ActiveBiteHold then
@@ -1238,23 +1411,52 @@ CreateThread(function()
         end
 
         if ActiveDragSpeedLimit then
-            -- See header "SHARED PER-TICK ASSERTION HELPERS" — same
-            -- IsOwnModelK9()-branched assertion applyDragSpeedLimit's own
-            -- handler above already runs once, immediately, on grant; this
-            -- is the CONTINUOUS every-tick reassertion of the same thing.
-            AssertDragSpeedLimitOnTarget()
+            local myPed = PlayerPedId()
 
-            if now >= ActiveDragSpeedLimit.localDeadline then
-                -- Backstop only — see header "DEFENSE IN DEPTH".
+            -- CORRECTNESS FIX (this pass) — same shape and rationale as
+            -- ActiveBiteHold's/ActiveForcedRagdoll's own IsEntityDead
+            -- branches above (mirrored deliberately, not reinvented):
+            -- SetPedMoveRateOverride is a PERSISTENT flag on this ped
+            -- handle, exactly like DisableControlAction's per-frame
+            -- reassertion and SetEntityCanBeDamaged's own persistent flag
+            -- are for the other two states — FiveM respawn reuses this
+            -- same handle, so without this branch a target killed by
+            -- unrelated means mid-drag would come back RESURRECTED still
+            -- speed-limited (and, worse, this file's own
+            -- AttachEntityToEntity-adjacent DetachEntity backstop never ran
+            -- either) until ActiveDragSpeedLimit.localDeadline elapsed.
+            -- Bounded already by maxDragDurationMs (not an unbounded trap),
+            -- but the exact same disclosed inconsistency class this
+            -- resource already fixed once for the other two Category B
+            -- target-side states — closed here too, for full consistency,
+            -- rather than left as the one state that missed the fix.
+            if IsEntityDead(myPed) then
                 ActiveDragSpeedLimit = nil
-                local ped = PlayerPedId()
                 if IsOwnModelK9() and K9MoveRateModifiers then
                     K9MoveRateModifiers.dragging = 1.0
                     RecomputeK9MoveRate()
                 else
-                    SetPedMoveRateOverride(ped, 1.0)
+                    SetPedMoveRateOverride(myPed, 1.0)
                 end
-                DetachEntity(ped, true, false) -- defense in depth, same reasoning as endDragSpeedLimit's own restore
+                DetachEntity(myPed, true, false) -- defense in depth, same reasoning as endDragSpeedLimit's own restore
+            else
+                -- See header "SHARED PER-TICK ASSERTION HELPERS" — same
+                -- IsOwnModelK9()-branched assertion applyDragSpeedLimit's own
+                -- handler above already runs once, immediately, on grant; this
+                -- is the CONTINUOUS every-tick reassertion of the same thing.
+                AssertDragSpeedLimitOnTarget()
+
+                if now >= ActiveDragSpeedLimit.localDeadline then
+                    -- Backstop only — see header "DEFENSE IN DEPTH".
+                    ActiveDragSpeedLimit = nil
+                    if IsOwnModelK9() and K9MoveRateModifiers then
+                        K9MoveRateModifiers.dragging = 1.0
+                        RecomputeK9MoveRate()
+                    else
+                        SetPedMoveRateOverride(myPed, 1.0)
+                    end
+                    DetachEntity(myPed, true, false) -- defense in depth, same reasoning as endDragSpeedLimit's own restore
+                end
             end
         end
 
@@ -1330,10 +1532,17 @@ CreateThread(function()
         -- kind of decision as "should a backstop run at all").
         if ActiveBiteHold or ActiveDragAsHolder or ActiveDragSpeedLimit then
             Wait(0)
+            return MaintenanceTick() -- tail call, see this function's own opening comment — no stack growth
         else
-            Wait(ActiveForcedRagdoll and 100 or 500)
+            -- CANCELLABLE — see header "CANCELLABLE MAINTENANCE WAIT". Behaves
+            -- exactly like Wait(ms) followed by continuing, unless
+            -- WakeMaintenanceThread() (called from applyBiteHold/dragStarted/
+            -- applyDragSpeedLimit on grant) cuts it short.
+            WaitCancellable(ActiveForcedRagdoll and 100 or 500, MaintenanceTick)
         end
     end
+
+    MaintenanceTick()
 end)
 
 -- ======================================================================

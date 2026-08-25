@@ -40,6 +40,9 @@
     "usage_decertify": "Usage: /k9decertify [server id]",
     "usage_decertify_offline": "Usage: /k9decertifyoffline [citizenid] [job]"
   },
+  "combat": {
+    "no_target_in_range": "No eligible target in range."
+  },
   "common": {
     "handler_not_in_department": "The handler must be employed by an eligible department.",
     "k9_not_certified": "The K9 is not certified for K9 duty.",
