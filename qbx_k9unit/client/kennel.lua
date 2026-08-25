@@ -105,6 +105,22 @@ local function LoadModelWithTimeout(modelName)
     end
 
     if not HasModelLoaded(modelHash) then
+        -- LEAK FIX, THIS PASS: RequestModel above increments this model's
+        -- streaming reference count; failing to load in time is a real
+        -- exit path (not just the "invalid hash" early-return above, which
+        -- never called RequestModel at all) and previously left that
+        -- reference held forever -- nothing else in this file's only
+        -- caller ever released a model that DIDN'T end up used to
+        -- CreateObject (the caller only calls SetModelAsNoLongerNeeded on
+        -- the modelHash it actually built the kennel with, e.g. the
+        -- fallback's hash when the primary timed out -- the primary's own
+        -- still-pending request was never released). Every RequestModel in
+        -- this resource must have a matching SetModelAsNoLongerNeeded on
+        -- every exit path, including this failure one; release it here,
+        -- at the one place that knows this exact request is being
+        -- abandoned, rather than relying on a caller that has no reason to
+        -- know this particular RequestModel ever happened.
+        SetModelAsNoLongerNeeded(modelHash)
         return nil
     end
     return modelHash

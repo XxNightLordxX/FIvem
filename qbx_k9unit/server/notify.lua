@@ -121,11 +121,38 @@
 --- across this resource's server files -- see this file's header for the
 --- full extraction writeup, including the two files that keep a thin local
 --- wrapper to preserve their own deliberately different title.
+---
+--- TARGET GUARD (new, not present in any of the 12 original copies -- see
+--- accompanying report): none of the 12 originals validated `target` before
+--- handing it straight to TriggerClientEvent. A caller bug that lets a nil
+--- or non-player `target` (nil from an unguarded ResolveConnectedPlayerFromPed
+--- result, the `0` "console" source sentinel some call sites already
+--- special-case before calling this, a stale/disconnected server id) reach
+--- TriggerClientEvent this way is a genuine risk either way: FXServer's own
+--- 'ox_lib:notify' delivery for an invalid target is not guaranteed to be a
+--- clean no-op (see this file's own header framing of that risk), and even
+--- when it IS a clean no-op, that failure was previously completely
+--- invisible -- no log, no error, just a player who silently never sees a
+--- notification they were supposed to get. This guard converts either
+--- failure mode into one deterministic, observable outcome: reject before
+--- calling TriggerClientEvent at all, and print a console line naming the
+--- bad target and the description that would have been sent, so a caller
+--- bug surfaces in the server console instead of vanishing. Every existing
+--- call site in this resource already passes a real, positive numeric
+--- server id (confirmed by direct grep of every `NotifyPlayer(...)` call
+--- site before adding this), so this is not expected to change observed
+--- behavior for any current caller -- it only changes what happens on a
+--- future caller bug.
 --- @param target number
 --- @param description string
 --- @param notifyType string? -- defaults to 'inform', matching every original copy's own default
 --- @param title string? -- defaults to 'K9 Unit', matching 9 of the 12 original copies' hard-coded title
 function NotifyPlayer(target, description, notifyType, title)
+    if type(target) ~= 'number' or target <= 0 then
+        print(('[qbx_k9unit] NotifyPlayer: refusing to send to invalid target (%s) -- description was: %s'):format(tostring(target), tostring(description)))
+        return
+    end
+
     TriggerClientEvent('ox_lib:notify', target, {
         title = title or 'K9 Unit',
         description = description,
