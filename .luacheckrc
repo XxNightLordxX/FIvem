@@ -47,6 +47,12 @@ read_globals = {
     -- resource that is not started can throw rather than return nil.
     -- VERIFIED: ext/native-decls/GetResourceState.md declares apiset `shared`.
     "GetResourceState",
+    -- Server-side entity pool enumeration, used by server/wellbeing.lua's rest-
+    -- source proximity check. VERIFIED against primary source: each has an
+    -- ext/native-decls entry declaring `apiset: server`. Same test the native
+    -- audit established, and the same one that falsified the earlier
+    -- "no apiset in frontmatter means client-only" method.
+    "GetAllObjects", "GetAllVehicles",
     -- Timecycle modifiers, client/screenfx.lua. VERIFIED client-only against
     -- primary source: both are declared in citizenfx/natives GRAPHICS with no
     -- ext/native-decls server override, and FXServer has no renderer at all.

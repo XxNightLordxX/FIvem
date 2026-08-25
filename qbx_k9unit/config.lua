@@ -956,10 +956,27 @@ Config.K9Inventory = {
     -- to a non-nil list has NO EFFECT — see server/inventory.lua's header
     -- CONFIDENCE NOTE for why item-whitelist enforcement (a
     -- registerHook-style mechanism, PHASE4_SPEC.md §13.4.2's own genuinely
-    -- unresolved implementation question) was deliberately not built this
-    -- pass rather than half-implemented. Left nil, not a placeholder list,
-    -- so a server owner who sets this doesn't mistakenly believe it's
-    -- already enforced.
+    -- NOW ENFORCED. The note that stood here said this was deliberately not
+    -- built, and warned an owner not to assume setting it did anything. That
+    -- warning was correct and is now obsolete: server/inventory.lua enforces
+    -- it through ox_inventory's own `swapItems` hook.
+    --
+    -- Expects a plain array of item-name strings (same convention as
+    -- Config.SearchContrabandItems). `nil` means no filtering, which stays the
+    -- default -- an empty table would mean "allow nothing", a very different
+    -- and much worse default to ship by accident.
+    --
+    -- Filters only what goes IN. Nothing is ever filtered on the way OUT, so a
+    -- tightened list can never strand an item already in a stash -- that would
+    -- be the unbounded trap this resource forbids.
+    --
+    -- The enforcement point was verified against ox_inventory's real source
+    -- rather than assumed, because this resource has already shipped one
+    -- illusory access control (an `accessScope` setting documented as
+    -- restricting access that provided none). A hook returning false genuinely
+    -- aborts before any mutation. If `registerHook` is unavailable on a given
+    -- install, the stash still works unfiltered and logs one warning rather
+    -- than silently pretending to filter.
     allowedItems  = nil,
 }
 

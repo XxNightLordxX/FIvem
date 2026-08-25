@@ -144,16 +144,109 @@
       call, client/inventory.lua) — VERIFIED this session: this exact call
       shape (`'stash', stash.name`) appears in ox_inventory's own
       modules/inventory/client.lua. HIGH confidence.
-    - `Config.K9Inventory.allowedItems` item-whitelist enforcement is
-      DELIBERATELY NOT IMPLEMENTED in this pass — PHASE4_SPEC.md §13.4.2
-      itself flags this as "a real, currently unresolved implementation
-      question, not assumed away": whether a `registerHook('swapItems', ...)`
-      -style hook is the right/only mechanism needs its own ox_inventory-hook
-      verification pass this session did not perform. Setting
-      `Config.K9Inventory.allowedItems` to a non-nil list currently has NO
-      effect — left as an honestly-inert config field (see config.lua's own
-      comment on it) rather than fake/partial enforcement that would silently
-      under-deliver what a server owner configured.
+
+    ======================================================================
+    `Config.K9Inventory.allowedItems` ENFORCEMENT — IMPLEMENTED this pass
+    (previously "DELIBERATELY NOT IMPLEMENTED... has NO effect", per both
+    this file's own prior header text and config.lua's own comment on the
+    field — that comment is now stale and needs a follow-up edit by
+    config.lua's owner; this file cannot edit it, see this task's own
+    constraints).
+
+    MECHANISM, and the source actually read to confirm it this session
+    (raw.githubusercontent.com/overextended/ox_inventory, `main` branch,
+    fetched fresh this session — no SHA pin available, GitHub's API was not
+    reachable this session to resolve one, only the raw file endpoint was):
+
+    - `exports.ox_inventory:registerHook(event, callback)` — confirmed real,
+      `modules/hooks/server.lua`'s `TriggerEventHooks(event, payload)`: for
+      EVERY registered hook on `event`, it `pcall`s the hook with `payload`
+      and checks the return value. Returning the literal boolean `false`
+      makes `TriggerEventHooks` return immediately WITHOUT setting
+      `result.success = true` — any other return value (including `nil`,
+      i.e. no explicit `return`) leaves `result.success` on track to become
+      `true`. This is a REAL pre-mutation veto, not an advisory/observer-only
+      callback (the distinction that mattered most to verify, since
+      server/tracking.lua's own existing `'swapItems'` hook only ever
+      LOGS and never rejects — this file's usage is the first place in this
+      resource that relies on the reject path, so it could not simply be
+      assumed to work the same way just because the registration call looks
+      identical).
+    - `modules/inventory/server.lua`'s `ox_inventory:swapItems` callback
+      (the single server-side entry point that handles EVERY client-driven
+      "move an item from inventory A to inventory B" action — drag-drop
+      swap/stack/move onto an existing or empty slot, and drop-to-ground) —
+      traced end to end this session, all four `TriggerEventHooks('swapItems',
+      hookPayload)` call sites inside it (`action` = 'swap'/'stack'/'move',
+      plus `dropItem`'s separate 'drop' case) — confirms `if not
+      hooks.success then return end` runs BEFORE any of that action's actual
+      mutation (`Inventory.SwapSlots`, `fromInventory.items[...] = ...`,
+      `toInventory.items[...] = ...`). Rejecting from the hook genuinely
+      prevents the item from ever being written into the destination
+      inventory — not a race, not an after-the-fact undo.
+    - `hookPayload.toInventory` is always the DESTINATION inventory's own id
+      string (for a stash, exactly the id this file passes as
+      `RegisterStash`'s first argument, i.e. `'k9inv-<citizenid>'` here) and
+      `hookPayload.fromSlot` is always the FULL item table (`{name=...,
+      count=...,  ...}`) being moved OUT of `fromInventory` INTO
+      `toInventory` for every one of those branches — confirmed by reading
+      each `hookPayload`/`TriggerEventHooks('swapItems', {...})` construction
+      site directly, not inferred. This is what makes a per-stash,
+      per-incoming-item filter possible from inside a single hook callback
+      body without any `itemFilter`/`inventoryFilter`/`typeFilter`
+      `registerHook` option (those exist in `modules/hooks/server.lua` too,
+      but were deliberately NOT used here — `typeFilter` in particular
+      would match `toType == 'stash'` for EVERY registered ox_inventory
+      stash on the whole server, not just this resource's K9 gear stashes;
+      doing the `'k9inv-'` id-prefix check inside the callback body instead,
+      exactly like this file's own `EnsureK9Stash` already assumes that
+      prefix is this resource's own naming convention, keeps the filter
+      correctly scoped to only the stashes this resource itself registers).
+    - `ox_inventory:giveItem` (player-to-player) and the shop `'buyItem'`
+      hook were also traced this session and confirmed to NEVER target a
+      stash `toInventory` at all (`giveItem` returns immediately unless
+      `toInventory.player` is truthy; the shop's `TriggerEventHooks('buyItem',
+      ...)` call always sets `toInventory = playerInv.id`, the buying
+      player's own inventory) — so `swapItems` is confirmed the ONLY
+      client-reachable path by which an item can end up owned by a stash,
+      not merely the most obvious one.
+
+    WHAT IS DELIBERATELY NEVER FILTERED (the task's own "no unbounded trap"
+    constraint, and this file's own "filter what goes IN, never what comes
+    OUT" framing): the hook body below only inspects `payload.fromSlot` (the
+    item entering `toInventory`) and only ever acts when `payload.toInventory`
+    resolves to a K9 stash AND differs from `payload.fromInventory` — an
+    item already inside a K9 stash moving to a DIFFERENT slot in that SAME
+    stash (`fromInventory == toInventory`, e.g. reorganizing/restacking) is
+    never re-filtered, and taking an item OUT of a K9 stash into any other
+    inventory is structurally invisible to this filter (`toInventory` is the
+    destination the OTHER inventory in that case, never the K9 stash) —
+    ox_inventory's own slot/weight limits are the only restriction on
+    withdrawals, exactly as before this pass. This also means an item that
+    was already sitting in a K9 stash before `allowedItems` was configured
+    (or before it was tightened) is never retroactively stuck — it can
+    always be taken back out, only never re-deposited once removed if it is
+    no longer on the list.
+
+    RUNTIME CAPABILITY GUARD: same posture server/tracking.lua's
+    `IsOxInventoryHookCapable`/ScentTracking `onResourceStart` block already
+    established for this exact same `registerHook` export (that file's own
+    header has the full "why a runtime check, not a `dependencies` version
+    pin" writeup — not re-derived here). A small LOCAL copy of that
+    capability check lives in this file (`IsOxInventoryHookCapable` below) —
+    NOT extracted to a shared resource-global, because this task's own scope
+    is limited to this file pair only; flagged as a REFACTOR_ROADMAP
+    candidate (a second independent copy now exists) for whoever next
+    touches both files with broader scope. If the capability check fails
+    while `Config.Features.K9Inventory` AND a non-nil `Config.K9Inventory.
+    allowedItems` are both configured, this file prints ONE warning and
+    leaves the whitelist genuinely unenforced (the stash itself keeps
+    working, unfiltered) — never a fake/silent pass, matching this task's
+    explicit instruction for the "cannot verify" case. This was NOT the path
+    taken here: the mechanism above WAS independently verified against real,
+    current ox_inventory source this session, so the hook is registered for
+    real whenever the capability check passes (expected to be the normal
+    case on any current ox_inventory install).
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 4.
@@ -184,6 +277,20 @@
     request/response shaped, same posture server/search.lua's header
     documents for the identical reason — no legitimate reason for a
     fire-and-forget "I opened it" event to exist.
+
+    ox_inventory hooks (exports.ox_inventory:registerHook, ox_inventory ->
+    this file, NOT a client-reachable event at all):
+    2. 'swapItems' — registered conditionally at THIS resource's own
+       onResourceStart (see the `K9InventoryItemFilterHook`-registering
+       block below), gated on Config.Features.K9Inventory AND a non-nil
+       Config.K9Inventory.allowedItems AND IsOxInventoryHookCapable()
+       (mirrors server/tracking.lua's identical ScentTracking gating
+       shape/reasoning for the same export — see this file's header
+       "RUNTIME CAPABILITY GUARD" section). Enforces
+       Config.K9Inventory.allowedItems for THIS resource's own K9 gear
+       stashes only (`'k9inv-'`-prefixed ids) — see this file's header for
+       the full mechanism/verification writeup and the "filter what goes
+       IN, never what comes OUT" scope of what it does and does not touch.
 
     Client events (RegisterNetEvent, server->client): none.
 
@@ -221,6 +328,19 @@
       written, server/search.lua exposed no resource-global functions to
       reuse. Both are now the shared server/entities.lua globals instead —
       see HandleOpenK9Inventory's own comment for the exact migration.
+    - THIS FILE also CONSUMES a second export from ox_inventory (a
+      dependency in the "this file's runtime behavior is contingent on
+      external code" sense, not a call THIS FILE initiates) —
+      `exports.ox_inventory:registerHook('swapItems', ...)`, the same
+      export/event name server/tracking.lua's ScentTracking branch already
+      consumes for an unrelated purpose (log-only, never rejects). The two
+      registrations are entirely independent (ox_inventory supports
+      multiple hooks per event, confirmed against `modules/hooks/server.lua`'s
+      `eventHooks[event]` being an ARRAY, not a single slot) — this file
+      does not call, depend on, or need to know about server/tracking.lua's
+      registration, and does not touch that file to add one either; a
+      small local duplicate of `IsOxInventoryHookCapable` lives in THIS file
+      instead (see header RUNTIME CAPABILITY GUARD section for why).
     ======================================================================
 ]]
 
@@ -303,6 +423,129 @@ AddEventHandler('onResourceStart', function(resourceName)
         'check this resource makes (proximity, HasK9Access, IsAuthorizedForK9Inventory, the ' ..
         'cooldown/mutex) and Config.Features.K9Inventory itself.'
     )
+end)
+
+-- ======================================================================
+-- Config.K9Inventory.allowedItems ENFORCEMENT — see this file's header for
+-- the full mechanism/verification writeup. Everything below this point
+-- (through the onResourceStart block that calls registerHook) is new this
+-- pass; nothing above this comment changed.
+-- ======================================================================
+
+-- Precomputed `table<itemName, true>` lookup, built once at file load from
+-- Config.K9Inventory.allowedItems — same "precompute a set from a config
+-- array, once, at file load" convention server/search.lua's own
+-- ContrabandItemSet already establishes for Config.SearchContrabandItems
+-- (both are plain arrays of item-name strings; O(1) membership test instead
+-- of re-scanning the config array on every filtered transfer). Stays `nil`
+-- (never an empty table) when Config.K9Inventory.allowedItems is `nil`,
+-- matching that field's own documented "nil = no item whitelist enforced"
+-- meaning exactly — this is also what the onResourceStart block below
+-- checks to decide whether to register the hook at all.
+local K9InventoryAllowedItemSet = nil
+if Config.K9Inventory.allowedItems then
+    K9InventoryAllowedItemSet = {}
+    for _, itemName in ipairs(Config.K9Inventory.allowedItems) do
+        K9InventoryAllowedItemSet[itemName] = true
+    end
+end
+
+--- RUNTIME CAPABILITY CHECK for the ox_inventory `registerHook` export the
+--- item-filter hook below depends on. A small LOCAL duplicate of
+--- server/tracking.lua's `IsOxInventoryHookCapable` of the exact same name/
+--- shape/reasoning (see that file's own doc comment on it for the full
+--- "why a runtime check, not a `dependencies` version pin, and why
+--- GetResourceState must be checked before any export access is attempted"
+--- writeup — not re-derived here) — NOT extracted to a shared
+--- resource-global because this task's scope is this file pair only; see
+--- this file's header FILE-TO-FILE CONTRACT for the explicit
+--- non-consolidation note.
+--- @return boolean
+local function IsOxInventoryHookCapable()
+    if GetResourceState('ox_inventory') ~= 'started' then
+        return false
+    end
+
+    local ok, hookExport = pcall(function() return exports.ox_inventory.registerHook end)
+    return ok and type(hookExport) == 'function'
+end
+
+--- Config.K9Inventory.allowedItems ENFORCEMENT (this pass). GATED AT
+--- REGISTRATION, same "config-gated registration, not just config-gated
+--- behavior" convention server/tracking.lua's ScentTracking block already
+--- establishes for this identical export: if Config.Features.K9Inventory is
+--- false, OR Config.K9Inventory.allowedItems is nil (no whitelist
+--- configured — nothing to enforce), the hook is never registered at all.
+--- If a whitelist IS configured but IsOxInventoryHookCapable() fails, this
+--- prints ONE warning and leaves the whitelist genuinely unenforced (the K9
+--- stash itself keeps working, unfiltered) rather than pretending — same
+--- honest-soft-disable posture this task requires and server/tracking.lua's
+--- ScentTracking block already established for this exact export.
+---
+--- Wrapped in `onResourceStart` (THIS resource's own start, per the
+--- `GetCurrentResourceName() ~= resourceName` guard) for the same reasons
+--- server/tracking.lua's identical block documents: ox_inventory is a hard
+--- `fxmanifest.lua` dependency, so by the time THIS resource's own
+--- onResourceStart fires, ox_inventory is already running (or knowably
+--- not) — no player-facing stash interaction can occur before this
+--- resource itself has finished starting anyway.
+---
+--- See this file's header for the full verified mechanism (why returning
+--- `false` from this hook is a real pre-mutation veto, why only
+--- `payload.fromSlot` against a `'k9inv-'`-prefixed, differing
+--- `payload.toInventory` is ever inspected, and why that scope can never
+--- trap an item already inside a K9 stash).
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+
+    if not Config.Features.K9Inventory then return end -- nothing to gate for; do not probe/warn about a disabled-by-default feature
+    if not K9InventoryAllowedItemSet then return end -- no whitelist configured -- Config.K9Inventory.allowedItems' own documented `nil` meaning; inert by config choice, not by missing capability, so no warning either
+
+    if not IsOxInventoryHookCapable() then
+        print('[qbx_k9unit] WARNING: Config.K9Inventory.allowedItems is configured but ' ..
+            'ox_inventory\'s registerHook export is unavailable (ox_inventory is missing, not ' ..
+            'started, or this build does not support hook registration) -- the K9 gear stash ' ..
+            'item whitelist is NOT enforced. The stash itself still functions normally (any ' ..
+            'item can be deposited); only the allowedItems restriction is disabled.')
+        return
+    end
+
+    exports.ox_inventory:registerHook('swapItems', function(payload)
+        -- An item already inside a K9 stash moving to a DIFFERENT SLOT in
+        -- that SAME stash (reorganizing/restacking) is not an incoming
+        -- transfer from outside -- never re-filtered (header "WHAT IS
+        -- DELIBERATELY NEVER FILTERED").
+        if payload.fromInventory == payload.toInventory then return end
+
+        -- Only ever restrict THIS resource's own K9 gear stashes
+        -- (`'k9inv-<citizenid>'`, this file's own EnsureK9Stash naming
+        -- convention) -- never any other ox_inventory stash on the server
+        -- (player houses, gang stashes, evidence lockers, etc). Deliberately
+        -- an id-prefix check inside the callback body rather than a
+        -- `typeFilter` registerHook option, which would match `toType ==
+        -- 'stash'` for EVERY stash on the server (see header).
+        if type(payload.toInventory) ~= 'string' or not payload.toInventory:find('^k9inv%-') then
+            return
+        end
+
+        -- The item ENTERING toInventory -- confirmed against source to
+        -- always be the full item table for every swapItems branch that can
+        -- reach a stash toInventory (see header). Defensive type checks
+        -- only: a shape mismatch here means some other resource/ox_inventory
+        -- version is driving this hook differently than confirmed this
+        -- session -- fail OPEN (never filter) rather than reject on a shape
+        -- this file cannot actually interpret, matching this file's own
+        -- "never a fake/silent pass, but also never a confidently-wrong
+        -- reject" posture.
+        local incomingItem = payload.fromSlot
+        if type(incomingItem) ~= 'table' or type(incomingItem.name) ~= 'string' then
+            return
+        end
+
+        if not K9InventoryAllowedItemSet[incomingItem.name] then
+            return false -- REJECT: not on Config.K9Inventory.allowedItems -- verified pre-mutation veto (see header)
+        end
+    end)
 end)
 
 -- ResolveConnectedPlayerFromPed(entity) used to be defined here as a small
