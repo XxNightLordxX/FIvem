@@ -285,42 +285,73 @@ if Config.Features.MoodSystem then
         lib.notify({ title = locale('common.notify_title'), description = reasonLabel, type = 'error' })
     end
 
-    exports.ox_target:addGlobalPlayer({
-        {
-            name = 'qbx_k9unit:petK9',
-            icon = 'fas fa-hand-holding-heart',
-            label = locale('wellbeing.pet_target_label'),
-            distance = 3.0,
-            canInteract = function(entity)
-                if not Config.Features.MoodSystem then return false end
-                return IsEntityModelK9(entity)
-            end,
-            onSelect = function(data)
-                local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
-                if not targetServerId then return end
+    -- LIFECYCLE FIX (this pass): extracted into a named function, sole
+    -- call site the AddEventHandler('onResourceStart', ...) below, so both
+    -- options come back after a bare `restart ox_target`, not just after
+    -- this resource's own restart -- ox_target keeps addGlobalPlayer's
+    -- registry in a plain file-local Lua table inside its own client
+    -- chunk (confirmed by reading ox_target's client/api.lua directly),
+    -- reloaded empty on ox_target's own restart with nothing else
+    -- prompting a re-add. Mirrors server/tracking.lua's
+    -- RegisterScentInventoryHook / server/inventory.lua's
+    -- RegisterK9InventoryItemFilterHook fixes for the identical bug class
+    -- against ox_inventory. DUPLICATE-VS-REPLACE: both options below
+    -- always set `name`, and ox_target's own `addTarget` unconditionally
+    -- removes any existing option with the same name+resource before
+    -- appending, so re-running this never duplicates either entry.
+    local function RegisterMoodOxTargetOptions()
+        exports.ox_target:addGlobalPlayer({
+            {
+                name = 'qbx_k9unit:petK9',
+                icon = 'fas fa-hand-holding-heart',
+                label = locale('wellbeing.pet_target_label'),
+                distance = 3.0,
+                canInteract = function(entity)
+                    if not Config.Features.MoodSystem then return false end
+                    return IsEntityModelK9(entity)
+                end,
+                onSelect = function(data)
+                    local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
+                    if not targetServerId then return end
 
-                local result = lib.callback.await('qbx_k9unit:server:petK9', false, targetServerId)
-                NotifyResult(result, locale('wellbeing.pet_success'))
-            end,
-        },
-        {
-            name = 'qbx_k9unit:feedK9',
-            icon = 'fas fa-bone',
-            label = locale('wellbeing.feed_target_label'),
-            distance = 3.0,
-            canInteract = function(entity)
-                if not Config.Features.MoodSystem then return false end
-                return IsEntityModelK9(entity)
-            end,
-            onSelect = function(data)
-                local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
-                if not targetServerId then return end
+                    local result = lib.callback.await('qbx_k9unit:server:petK9', false, targetServerId)
+                    NotifyResult(result, locale('wellbeing.pet_success'))
+                end,
+            },
+            {
+                name = 'qbx_k9unit:feedK9',
+                icon = 'fas fa-bone',
+                label = locale('wellbeing.feed_target_label'),
+                distance = 3.0,
+                canInteract = function(entity)
+                    if not Config.Features.MoodSystem then return false end
+                    return IsEntityModelK9(entity)
+                end,
+                onSelect = function(data)
+                    local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
+                    if not targetServerId then return end
 
-                local result = lib.callback.await('qbx_k9unit:server:feedK9', false, targetServerId)
-                NotifyResult(result, locale('wellbeing.feed_success'))
-            end,
-        },
-    })
+                    local result = lib.callback.await('qbx_k9unit:server:feedK9', false, targetServerId)
+                    NotifyResult(result, locale('wellbeing.feed_success'))
+                end,
+            },
+        })
+    end
+
+    -- Sole call site for RegisterMoodOxTargetOptions() above: this
+    -- resource's own start, or ox_target's own start -- mirrors
+    -- server/tracking.lua's RegisterScentInventoryHook /
+    -- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for
+    -- the identical class of gap against ox_inventory. Kept inside this
+    -- `if Config.Features.MoodSystem then` gate (not just inside
+    -- canInteract) so a disabled MoodSystem never even defines this
+    -- handler, matching this block's original config-gated-at-registration
+    -- shape exactly.
+    AddEventHandler('onResourceStart', function(resourceName)
+        if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+            RegisterMoodOxTargetOptions()
+        end
+    end)
 end
 
 -- ======================================================================

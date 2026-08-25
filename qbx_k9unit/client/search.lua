@@ -259,58 +259,82 @@ local function PerformSearch(targetType, targetEntity)
     searchInProgress = false
 end
 
--- "Search Vehicle" ox_target option (exports.ox_target:addGlobalVehicle,
--- mirroring client/vehicle.lua's existing addGlobalVehicle registration
--- shape exactly) — name 'qbx_k9unit:searchVehicle'. canInteract is a
--- DISPLAY optimization only per SPEC.md §3/§4.5, same "not the security
--- boundary" framing client/vehicle.lua's own header already documents for
--- its enterVehicle option, since server/search.lua independently
--- re-verifies everything (§11.4 item 2).
-exports.ox_target:addGlobalVehicle({
-    {
-        name = 'qbx_k9unit:searchVehicle',
-        icon = 'fas fa-magnifying-glass',
-        label = locale('search.vehicle_target_label'),
-        distance = Config.SearchZones.vehicleSearchDistance,
-        canInteract = function(entity, distance, coords, name)
-            if not Config.Features.SearchZones then return false end
-            return CanShowK9UI()
-        end,
-        onSelect = function(data)
-            PerformSearch('vehicle', data.entity)
-        end,
-    },
-})
+-- "Search Vehicle" / "Search Person" ox_target options — LIFECYCLE FIX
+-- (this pass): pulled into a named function so both can be re-run any time
+-- ox_target itself (re)starts, not just once at this file's own load time.
+-- ox_target keeps its addGlobalVehicle/addGlobalPlayer registries in plain
+-- file-local Lua tables inside its OWN client chunk (confirmed by reading
+-- ox_target's client/api.lua directly), cleared only by ox_target's own
+-- `onClientResourceStop` handler when the CALLING resource (this one)
+-- stops — a bare `restart ox_target` while this resource keeps running
+-- reloads that chunk with empty tables and nothing else asks anyone to
+-- re-register. See the `AddEventHandler` immediately below for the two
+-- triggers this now dispatches on, mirroring server/tracking.lua's
+-- RegisterScentInventoryHook fix for the identical bug class against
+-- ox_inventory. DUPLICATE-VS-REPLACE: both options below always set
+-- `name`, and ox_target's own `addTarget` unconditionally removes any
+-- existing option with the same name+resource before appending, so
+-- re-running this never duplicates either entry.
+local function RegisterSearchOxTargetOptions()
+    -- "Search Vehicle" ox_target option (exports.ox_target:addGlobalVehicle,
+    -- mirroring client/vehicle.lua's existing addGlobalVehicle registration
+    -- shape exactly) — name 'qbx_k9unit:searchVehicle'. canInteract is a
+    -- DISPLAY optimization only per SPEC.md §3/§4.5, same "not the security
+    -- boundary" framing client/vehicle.lua's own header already documents for
+    -- its enterVehicle option, since server/search.lua independently
+    -- re-verifies everything (§11.4 item 2).
+    exports.ox_target:addGlobalVehicle({
+        {
+            name = 'qbx_k9unit:searchVehicle',
+            icon = 'fas fa-magnifying-glass',
+            label = locale('search.vehicle_target_label'),
+            distance = Config.SearchZones.vehicleSearchDistance,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.SearchZones then return false end
+                return CanShowK9UI()
+            end,
+            onSelect = function(data)
+                PerformSearch('vehicle', data.entity)
+            end,
+        },
+    })
 
--- "Search Person" ox_target option (exports.ox_target:addGlobalPlayer,
--- mirroring client/movement.lua's existing addGlobalPlayer registrations,
--- e.g. its "Attach Leash" option's shape) — name 'qbx_k9unit:searchPerson'.
--- Self-exclusion (NetworkGetPlayerIndexFromPed(entity) ~= PlayerId()) is a
--- low-stakes UX judgment call, not addressed one way or the other by
--- SPEC.md §11 — mirrors the self-exclusion already established for the
--- leash and certify/revoke ox_target options in client/movement.lua;
--- server/search.lua's own proximity + entity-type checks make a
--- self-search harmless even if attempted.
--- Ped/NPC variant (non-player peds) is an explicit STRETCH item per §11.3
--- — no addGlobalPed/addModel registration added here, since
--- server/search.lua's contract only validates a real connected player's
--- ped for targetType == 'person'.
-exports.ox_target:addGlobalPlayer({
-    {
-        name = 'qbx_k9unit:searchPerson',
-        icon = 'fas fa-magnifying-glass',
-        label = locale('search.person_target_label'),
-        distance = Config.SearchZones.personSearchDistance,
-        canInteract = function(entity, distance, coords, name)
-            if not Config.Features.SearchZones then return false end
-            if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't search self
-            return CanShowK9UI()
-        end,
-        onSelect = function(data)
-            PerformSearch('person', data.entity)
-        end,
-    },
-})
+    -- "Search Person" ox_target option (exports.ox_target:addGlobalPlayer,
+    -- mirroring client/movement.lua's existing addGlobalPlayer registrations,
+    -- e.g. its "Attach Leash" option's shape) — name 'qbx_k9unit:searchPerson'.
+    -- Self-exclusion (NetworkGetPlayerIndexFromPed(entity) ~= PlayerId()) is a
+    -- low-stakes UX judgment call, not addressed one way or the other by
+    -- SPEC.md §11 — mirrors the self-exclusion already established for the
+    -- leash and certify/revoke ox_target options in client/movement.lua;
+    -- server/search.lua's own proximity + entity-type checks make a
+    -- self-search harmless even if attempted.
+    -- Ped/NPC variant (non-player peds) is an explicit STRETCH item per §11.3
+    -- — no addGlobalPed/addModel registration added here, since
+    -- server/search.lua's contract only validates a real connected player's
+    -- ped for targetType == 'person'.
+    exports.ox_target:addGlobalPlayer({
+        {
+            name = 'qbx_k9unit:searchPerson',
+            icon = 'fas fa-magnifying-glass',
+            label = locale('search.person_target_label'),
+            distance = Config.SearchZones.personSearchDistance,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.SearchZones then return false end
+                if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't search self
+                return CanShowK9UI()
+            end,
+            onSelect = function(data)
+                PerformSearch('person', data.entity)
+            end,
+        },
+    })
+end
+
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+        RegisterSearchOxTargetOptions()
+    end
+end)
 
 -- Bystander-audible contraband alert broadcast receiver. Mirrors
 -- client/main.lua's existing playBark handler exactly (resolve the network

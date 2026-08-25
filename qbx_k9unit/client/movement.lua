@@ -692,30 +692,47 @@ local LEASH_TARGET_DISTANCE_FACTOR = 0.5
 -- optimization only — the server independently re-validates everything
 -- for real in CheckLeashEligibility (server/main.lua), so this predicate
 -- doesn't need to be perfect.
-exports.ox_target:addGlobalPlayer({
-    {
-        name = 'qbx_k9unit:attachLeash',
-        icon = 'fas fa-link',
-        label = locale('movement.attach_leash_target_label'),
-        distance = LEASH_TARGET_DISTANCE_FACTOR * Config.LeashMaxDistance,
-        canInteract = function(entity, distance, coords, name)
-            if not Config.Features.LeashMechanics then return false end
-            if IsLeashed() then return false end
-            if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't target self
+--
+-- LIFECYCLE FIX (this pass): extracted into a named function — see the
+-- combined `AddEventHandler('onResourceStart', ...)` near the end of this
+-- file (after all three ox_target registration functions it dispatches
+-- are defined) for why: ox_target keeps addGlobalPlayer/addGlobalObject's
+-- registries in plain file-local Lua tables inside its own client chunk
+-- (confirmed by reading ox_target's client/api.lua directly), reloaded
+-- empty on ox_target's own restart with nothing else prompting a re-add.
+-- Mirrors server/tracking.lua's RegisterScentInventoryHook /
+-- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
+-- identical bug class against ox_inventory. DUPLICATE-VS-REPLACE: every
+-- option this file registers always sets `name`, and ox_target's own
+-- `addTarget` unconditionally removes any existing option with the same
+-- name+resource before appending, so re-running any of these three
+-- functions never duplicates an entry.
+local function RegisterLeashOxTargetOption()
+    exports.ox_target:addGlobalPlayer({
+        {
+            name = 'qbx_k9unit:attachLeash',
+            icon = 'fas fa-link',
+            label = locale('movement.attach_leash_target_label'),
+            distance = LEASH_TARGET_DISTANCE_FACTOR * Config.LeashMaxDistance,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.LeashMechanics then return false end
+                if IsLeashed() then return false end
+                if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't target self
 
-            -- At least one side should plausibly be a K9 (either us, or
-            -- the target's live model) — cheap client-side plausibility
-            -- only, per this file's header note not to over-invest here.
-            return IsOwnModelK9() or IsEntityModelK9(entity)
-        end,
-        onSelect = function(data)
-            local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
-            if not targetPlayer or targetPlayer == -1 then return end
+                -- At least one side should plausibly be a K9 (either us, or
+                -- the target's live model) — cheap client-side plausibility
+                -- only, per this file's header note not to over-invest here.
+                return IsOwnModelK9() or IsEntityModelK9(entity)
+            end,
+            onSelect = function(data)
+                local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
+                if not targetPlayer or targetPlayer == -1 then return end
 
-            RequestLeashAttach(GetPlayerServerId(targetPlayer))
-        end,
-    },
-})
+                RequestLeashAttach(GetPlayerServerId(targetPlayer))
+            end,
+        },
+    })
+end
 
 -- Register the "Certify K9 Handler" / "Revoke K9 Certification" ox_target
 -- options on nearby player peds (SPEC.md §4.3's flow table, §8 step 3 —
@@ -777,59 +794,65 @@ exports.ox_target:addGlobalPlayer({
 -- instead of staying frozen.
 local CERTIFY_TARGET_DISTANCE_FACTOR = 0.5
 
-exports.ox_target:addGlobalPlayer({
-    {
-        name = 'qbx_k9unit:certifyHandler',
-        icon = 'fas fa-id-badge',
-        label = locale('movement.certify_handler_target_label'),
-        distance = CERTIFY_TARGET_DISTANCE_FACTOR * Config.CertifyProximityMeters,
-        canInteract = function(entity, distance, coords, name)
-            if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-cert stays command-only (/k9certify [own id]), matches the leash option's self-exclusion above
+-- LIFECYCLE FIX (this pass): extracted into a named function — see this
+-- file's "Attach Leash" option above for the full writeup this shares
+-- (same ox_target lifecycle bug, same fix shape, same combined
+-- `AddEventHandler` near the end of this file).
+local function RegisterCertifyOxTargetOptions()
+    exports.ox_target:addGlobalPlayer({
+        {
+            name = 'qbx_k9unit:certifyHandler',
+            icon = 'fas fa-id-badge',
+            label = locale('movement.certify_handler_target_label'),
+            distance = CERTIFY_TARGET_DISTANCE_FACTOR * Config.CertifyProximityMeters,
+            canInteract = function(entity, distance, coords, name)
+                if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-cert stays command-only (/k9certify [own id]), matches the leash option's self-exclusion above
 
-            -- SPEC.md §4.2 condition 5: grant requires the TARGET's live
-            -- ped model to be a configured K9 model. Cheap client-side
-            -- plausibility check only — the server independently
-            -- re-verifies via GetEntityModel(GetPlayerPed(targetServerId))
-            -- regardless, see GrantCertification.
-            return IsEntityModelK9(entity)
-        end,
-        onSelect = function(data)
-            local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
-            if not targetPlayer or targetPlayer == -1 then return end
+                -- SPEC.md §4.2 condition 5: grant requires the TARGET's live
+                -- ped model to be a configured K9 model. Cheap client-side
+                -- plausibility check only — the server independently
+                -- re-verifies via GetEntityModel(GetPlayerPed(targetServerId))
+                -- regardless, see GrantCertification.
+                return IsEntityModelK9(entity)
+            end,
+            onSelect = function(data)
+                local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
+                if not targetPlayer or targetPlayer == -1 then return end
 
-            TriggerServerEvent('qbx_k9unit:server:certifyHandler', GetPlayerServerId(targetPlayer))
-        end,
-    },
-    {
-        name = 'qbx_k9unit:revokeHandler',
-        icon = 'fas fa-id-badge',
-        label = locale('movement.revoke_certification_target_label'),
-        distance = CERTIFY_TARGET_DISTANCE_FACTOR * Config.CertifyProximityMeters,
-        canInteract = function(entity, distance, coords, name)
-            if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-decert stays command-only, matches certify above
+                TriggerServerEvent('qbx_k9unit:server:certifyHandler', GetPlayerServerId(targetPlayer))
+            end,
+        },
+        {
+            name = 'qbx_k9unit:revokeHandler',
+            icon = 'fas fa-id-badge',
+            label = locale('movement.revoke_certification_target_label'),
+            distance = CERTIFY_TARGET_DISTANCE_FACTOR * Config.CertifyProximityMeters,
+            canInteract = function(entity, distance, coords, name)
+                if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- self-decert stays command-only, matches certify above
 
-            -- SPEC.md §4.2.5: the model check applies to GRANT only, not
-            -- revoke (revoking must remain possible even if the target has
-            -- already left K9 form) — but this predicate still reuses
-            -- IsEntityModelK9 as the display-only plausibility gate rather
-            -- than showing this option on every nearby player regardless
-            -- of appearance, per this block's header note above (no new
-            -- eligibility-check callback added this pass). A handler who
-            -- has already left K9 form and needs their cert pulled remains
-            -- reachable via /k9decertify [id] (or /k9decertifyoffline if
-            -- they've since disconnected), neither of which has any model
-            -- restriction at all — this ox_target option is a convenience
-            -- entry point, not the only way to revoke.
-            return IsEntityModelK9(entity)
-        end,
-        onSelect = function(data)
-            local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
-            if not targetPlayer or targetPlayer == -1 then return end
+                -- SPEC.md §4.2.5: the model check applies to GRANT only, not
+                -- revoke (revoking must remain possible even if the target has
+                -- already left K9 form) — but this predicate still reuses
+                -- IsEntityModelK9 as the display-only plausibility gate rather
+                -- than showing this option on every nearby player regardless
+                -- of appearance, per this block's header note above (no new
+                -- eligibility-check callback added this pass). A handler who
+                -- has already left K9 form and needs their cert pulled remains
+                -- reachable via /k9decertify [id] (or /k9decertifyoffline if
+                -- they've since disconnected), neither of which has any model
+                -- restriction at all — this ox_target option is a convenience
+                -- entry point, not the only way to revoke.
+                return IsEntityModelK9(entity)
+            end,
+            onSelect = function(data)
+                local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
+                if not targetPlayer or targetPlayer == -1 then return end
 
-            TriggerServerEvent('qbx_k9unit:server:revokeHandler', GetPlayerServerId(targetPlayer))
-        end,
-    },
-})
+                TriggerServerEvent('qbx_k9unit:server:revokeHandler', GetPlayerServerId(targetPlayer))
+            end,
+        },
+    })
+end
 
 -- ======================================================================
 -- MOVE-RATE COMPOSER (PHASE4_SPEC.md §13.0 Decision 2) -- REAL BUG FIX,
@@ -1447,79 +1470,106 @@ end
 -- Config.Features.LeashMechanics only inside canInteract). Both patterns
 -- already coexist in this codebase; this option follows the stricter one on
 -- purpose, per this task's explicit direction for this specific feature.
-if Config.Features.DoorInteraction then
-    -- Config.DoorInteraction.nudgeRequiresUnlocked "applied as a config
-    -- gate" (Finding 3, phase2_notes/door_interaction_security_review.md):
-    -- per this file's "NUDGE-OPEN — DESIGN PATH TAKEN" header comment
-    -- above, NudgeDoor() has no real lock-state read anywhere to build a
-    -- runtime branch off this flag with — doing so would require exactly
-    -- the kind of believed-lock-state check this design must never perform.
-    -- Instead of leaving the flag as a silent, unenforced no-op (Finding
-    -- 3's core complaint — a field whose own comment claims "hard
-    -- requirement, not a toggle" but that no code anywhere reads), this
-    -- ships the review's recommended Option A: fail resource start LOUDLY
-    -- if it's ever set to anything other than `true`, converting it from
-    -- "looks load-bearing but isn't" into an active guardrail against a
-    -- FUTURE implementer wiring a real (dangerous) lock-state branch off it
-    -- without deliberately, reviewedly removing this assertion first.
-    assert(Config.DoorInteraction.nudgeRequiresUnlocked == true,
-        'Config.DoorInteraction.nudgeRequiresUnlocked must remain true -- ' ..
-        'nudge-open (client/movement.lua NudgeDoor) has no lock-state check ' ..
-        'of any kind, by design (it never consults GTA\'s door-lock/CDoor ' ..
-        'system, see this file\'s "NUDGE-OPEN" header comment) -- this ' ..
-        'assertion exists solely to fail loudly if this field is ever ' ..
-        'repurposed as a real gate without a reviewed code change. See ' ..
-        'phase2_notes/door_interaction_security_review.md Finding 3.')
+--
+-- LIFECYCLE FIX (this pass): extracted into a named function — see this
+-- file's "Attach Leash" option above for the full ox_target-lifecycle
+-- writeup this shares (same bug, same fix shape, same combined
+-- `AddEventHandler` immediately below). The Config.Features.DoorInteraction
+-- gate stays AT REGISTRATION (inside this function, wrapping both the
+-- assert and the addGlobalObject call), exactly as before, so a
+-- re-registration on ox_target's restart never adds these options when the
+-- original load-time code would have skipped them entirely.
+local function RegisterDoorInteractionOxTargetOptions()
+    if Config.Features.DoorInteraction then
+        -- Config.DoorInteraction.nudgeRequiresUnlocked "applied as a config
+        -- gate" (Finding 3, phase2_notes/door_interaction_security_review.md):
+        -- per this file's "NUDGE-OPEN — DESIGN PATH TAKEN" header comment
+        -- above, NudgeDoor() has no real lock-state read anywhere to build a
+        -- runtime branch off this flag with — doing so would require exactly
+        -- the kind of believed-lock-state check this design must never perform.
+        -- Instead of leaving the flag as a silent, unenforced no-op (Finding
+        -- 3's core complaint — a field whose own comment claims "hard
+        -- requirement, not a toggle" but that no code anywhere reads), this
+        -- ships the review's recommended Option A: fail resource start LOUDLY
+        -- if it's ever set to anything other than `true`, converting it from
+        -- "looks load-bearing but isn't" into an active guardrail against a
+        -- FUTURE implementer wiring a real (dangerous) lock-state branch off it
+        -- without deliberately, reviewedly removing this assertion first.
+        assert(Config.DoorInteraction.nudgeRequiresUnlocked == true,
+            'Config.DoorInteraction.nudgeRequiresUnlocked must remain true -- ' ..
+            'nudge-open (client/movement.lua NudgeDoor) has no lock-state check ' ..
+            'of any kind, by design (it never consults GTA\'s door-lock/CDoor ' ..
+            'system, see this file\'s "NUDGE-OPEN" header comment) -- this ' ..
+            'assertion exists solely to fail loudly if this field is ever ' ..
+            'repurposed as a real gate without a reviewed code change. See ' ..
+            'phase2_notes/door_interaction_security_review.md Finding 3.')
 
-    exports.ox_target:addGlobalObject({
-        {
-            name = 'qbx_k9unit:scratchDoor',
-            icon = 'fas fa-paw',
-            label = locale('movement.scratch_door_target_label'),
-            distance = Config.DoorInteraction.interactDistance,
-            canInteract = function(entity, distance, coords, name)
-                if not CanShowK9UI() then return false end
-                -- qa-tester finding: a vehicle-tucked K9 (frozen/invisible/
-                -- attached, client/vehicle.lua's EnterNearestK9Vehicle) is
-                -- nowhere near this door in any way that should let it play
-                -- a scratch scenario and broadcast an alert — mirrors the
-                -- leash pull-back thread's own `IsInK9Vehicle and
-                -- IsInK9Vehicle()` exclusion for the identical state
-                -- (client/vehicle.lua loads after this file, hence the
-                -- existence guard, same reason that thread uses it).
-                if IsInK9Vehicle and IsInK9Vehicle() then return false end
-                return IsLikelyDoorEntity(entity)
-            end,
-            onSelect = function(data)
-                ScratchAtDoor(data.entity)
-            end,
-        },
-        {
-            -- SEPARATE ox_target option from "Scratch to Alert" above (per
-            -- this task's explicit direction), registered on the SAME
-            -- door-like objects, gated behind the same
-            -- Config.Features.DoorInteraction check at registration (this
-            -- whole block). See NudgeDoor()'s own header comment for the
-            -- full safety design this option's canInteract/onSelect below
-            -- are deliberately minimal because of.
-            name = 'qbx_k9unit:nudgeDoor',
-            icon = 'fas fa-hand-paper',
-            label = locale('movement.nudge_door_target_label'),
-            distance = Config.DoorInteraction.interactDistance,
-            canInteract = function(entity, distance, coords, name)
-                if not CanShowK9UI() then return false end
-                -- Same vehicle-tucked-K9 exclusion as "Scratch to Alert"
-                -- above, same reasoning — a tucked K9 is nowhere near this
-                -- door in any way that should let it play a push impulse.
-                if IsInK9Vehicle and IsInK9Vehicle() then return false end
-                return IsLikelyDoorEntity(entity)
-            end,
-            onSelect = function(data)
-                NudgeDoor(data.entity)
-            end,
-        },
-    })
+        exports.ox_target:addGlobalObject({
+            {
+                name = 'qbx_k9unit:scratchDoor',
+                icon = 'fas fa-paw',
+                label = locale('movement.scratch_door_target_label'),
+                distance = Config.DoorInteraction.interactDistance,
+                canInteract = function(entity, distance, coords, name)
+                    if not CanShowK9UI() then return false end
+                    -- qa-tester finding: a vehicle-tucked K9 (frozen/invisible/
+                    -- attached, client/vehicle.lua's EnterNearestK9Vehicle) is
+                    -- nowhere near this door in any way that should let it play
+                    -- a scratch scenario and broadcast an alert — mirrors the
+                    -- leash pull-back thread's own `IsInK9Vehicle and
+                    -- IsInK9Vehicle()` exclusion for the identical state
+                    -- (client/vehicle.lua loads after this file, hence the
+                    -- existence guard, same reason that thread uses it).
+                    if IsInK9Vehicle and IsInK9Vehicle() then return false end
+                    return IsLikelyDoorEntity(entity)
+                end,
+                onSelect = function(data)
+                    ScratchAtDoor(data.entity)
+                end,
+            },
+            {
+                -- SEPARATE ox_target option from "Scratch to Alert" above (per
+                -- this task's explicit direction), registered on the SAME
+                -- door-like objects, gated behind the same
+                -- Config.Features.DoorInteraction check at registration (this
+                -- whole block). See NudgeDoor()'s own header comment for the
+                -- full safety design this option's canInteract/onSelect below
+                -- are deliberately minimal because of.
+                name = 'qbx_k9unit:nudgeDoor',
+                icon = 'fas fa-hand-paper',
+                label = locale('movement.nudge_door_target_label'),
+                distance = Config.DoorInteraction.interactDistance,
+                canInteract = function(entity, distance, coords, name)
+                    if not CanShowK9UI() then return false end
+                    -- Same vehicle-tucked-K9 exclusion as "Scratch to Alert"
+                    -- above, same reasoning — a tucked K9 is nowhere near this
+                    -- door in any way that should let it play a push impulse.
+                    if IsInK9Vehicle and IsInK9Vehicle() then return false end
+                    return IsLikelyDoorEntity(entity)
+                end,
+                onSelect = function(data)
+                    NudgeDoor(data.entity)
+                end,
+            },
+        })
+    end
 end
+
+-- Sole call site for RegisterLeashOxTargetOption() / RegisterCertifyOxTargetOptions()
+-- / RegisterDoorInteractionOxTargetOptions() above: this resource's own
+-- start, or ox_target's own start — mirrors server/tracking.lua's
+-- RegisterScentInventoryHook / server/inventory.lua's
+-- RegisterK9InventoryItemFilterHook fixes for the identical class of gap
+-- against ox_inventory. Combined into one handler (rather than one per
+-- function) since all three share the identical two-branch condition and
+-- this file already defines all three by this point.
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+        RegisterLeashOxTargetOption()
+        RegisterCertifyOxTargetOptions()
+        RegisterDoorInteractionOxTargetOptions()
+    end
+end)
 
 --- Broadcast receiver for the shared "door was scratched" alert cue —
 --- mirrors client/main.lua's existing playBark handler EXACTLY per SPEC.md

@@ -329,25 +329,54 @@ end)
 -- independently re-verifies real ownership against its Kennels registry
 -- and rejects (with a notification, not silently) anyone who isn't the
 -- actual owner.
-if Config.Features.DeployableKennel then
-    exports.ox_target:addModel({
-        GetHashKey(Config.DeployableKennel.propModel),
-        GetHashKey(Config.DeployableKennel.fallbackPropModel),
-    }, {
-        {
-            name = 'qbx_k9unit:pickupKennel',
-            icon = 'fas fa-dog',
-            label = locale('kennel.pickup_target_label'),
-            distance = Config.DeployableKennel.interactDistanceMeters,
-            canInteract = function(entity, distance, coords, name)
-                if not Config.Features.DeployableKennel then return false end
-                return CanShowK9UI()
-            end,
-            onSelect = function(data)
-                if not data or not data.entity or not DoesEntityExist(data.entity) then return end
-                local netId = NetworkGetNetworkIdFromEntity(data.entity)
-                TriggerServerEvent('qbx_k9unit:server:requestPickupKennel', netId)
-            end,
-        },
-    })
+-- LIFECYCLE FIX (this pass): extracted into a named function so this option
+-- can be re-registered any time ox_target itself (re)starts, not just once
+-- at this file's own load time — ox_target keeps addModel's registry in a
+-- plain file-local Lua table inside its own client chunk (confirmed by
+-- reading ox_target's client/api.lua directly), reloaded empty on
+-- ox_target's own restart with nothing else prompting a re-add. Mirrors
+-- server/tracking.lua's RegisterScentInventoryHook /
+-- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
+-- identical bug class against ox_inventory. The Config.Features.
+-- DeployableKennel gate stays AT REGISTRATION (inside this function, not
+-- just inside canInteract) exactly as before, so a re-registration on
+-- ox_target's restart never adds an option this file's original load-time
+-- code would have skipped. DUPLICATE-VS-REPLACE: the option below always
+-- sets `name`, and ox_target's own `addTarget` unconditionally removes any
+-- existing option with the same name+resource before appending, so
+-- re-running this never duplicates the entry.
+local function RegisterKennelOxTargetOption()
+    if Config.Features.DeployableKennel then
+        exports.ox_target:addModel({
+            GetHashKey(Config.DeployableKennel.propModel),
+            GetHashKey(Config.DeployableKennel.fallbackPropModel),
+        }, {
+            {
+                name = 'qbx_k9unit:pickupKennel',
+                icon = 'fas fa-dog',
+                label = locale('kennel.pickup_target_label'),
+                distance = Config.DeployableKennel.interactDistanceMeters,
+                canInteract = function(entity, distance, coords, name)
+                    if not Config.Features.DeployableKennel then return false end
+                    return CanShowK9UI()
+                end,
+                onSelect = function(data)
+                    if not data or not data.entity or not DoesEntityExist(data.entity) then return end
+                    local netId = NetworkGetNetworkIdFromEntity(data.entity)
+                    TriggerServerEvent('qbx_k9unit:server:requestPickupKennel', netId)
+                end,
+            },
+        })
+    end
 end
+
+-- Sole call site for RegisterKennelOxTargetOption(): this resource's own
+-- start, or ox_target's own start — mirrors server/tracking.lua's
+-- RegisterScentInventoryHook / server/inventory.lua's
+-- RegisterK9InventoryItemFilterHook fixes for the identical class of gap
+-- against ox_inventory.
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+        RegisterKennelOxTargetOption()
+    end
+end)

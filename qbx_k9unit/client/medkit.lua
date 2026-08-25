@@ -117,24 +117,45 @@ local function RequestTreatK9(targetServerId)
     end
 end
 
-exports.ox_target:addGlobalPlayer({
-    {
-        name = 'qbx_k9unit:treatK9',
-        icon = 'fas fa-kit-medical',
-        label = locale('medkit.treat_target_label'),
-        distance = Config.K9Medkit.range,
-        canInteract = function(entity, distance, coords, name)
-            if not Config.Features.K9Medkit then return false end
-            return IsEntityModelK9(entity)
-        end,
-        onSelect = function(data)
-            local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
-            if not targetServerId then return end
+-- LIFECYCLE FIX (this pass): extracted into a named function, sole call
+-- site the AddEventHandler('onResourceStart', ...) below, so this option
+-- comes back after a bare `restart ox_target`, not just after this
+-- resource's own restart — ox_target keeps addGlobalPlayer's registry in a
+-- plain file-local Lua table inside its own client chunk (confirmed by
+-- reading ox_target's client/api.lua directly), reloaded empty on
+-- ox_target's own restart with nothing else prompting a re-add. Mirrors
+-- server/tracking.lua's RegisterScentInventoryHook /
+-- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
+-- identical bug class against ox_inventory. DUPLICATE-VS-REPLACE: the
+-- option below always sets `name`, and ox_target's own `addTarget`
+-- unconditionally removes any existing option with the same name+resource
+-- before appending, so re-running this never duplicates the entry.
+local function RegisterMedkitOxTargetOption()
+    exports.ox_target:addGlobalPlayer({
+        {
+            name = 'qbx_k9unit:treatK9',
+            icon = 'fas fa-kit-medical',
+            label = locale('medkit.treat_target_label'),
+            distance = Config.K9Medkit.range,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.K9Medkit then return false end
+                return IsEntityModelK9(entity)
+            end,
+            onSelect = function(data)
+                local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
+                if not targetServerId then return end
 
-            RequestTreatK9(targetServerId)
-        end,
-    },
-})
+                RequestTreatK9(targetServerId)
+            end,
+        },
+    })
+end
+
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+        RegisterMedkitOxTargetOption()
+    end
+end)
 
 --- Same nearest-candidate scan shape as client/radial.lua's own
 --- FindNearestLeashCandidate()/FindNearestPartnerCandidate() — duplicated

@@ -453,54 +453,95 @@ RegisterCommand('k9recallfetchball', function()
     RequestRecallFetchBall()
 end, false)
 
--- "Pick Up Ball" ox_target option — targets the configured ball prop model
--- directly by hash, mirroring client/kennel.lua's own addModel pattern.
-exports.ox_target:addModel({
-    GetHashKey(Config.FetchMechanic.ballPropModel),
-}, {
-    {
-        name = 'qbx_k9unit:pickupFetchBall',
-        icon = 'fas fa-baseball',
-        label = locale('fetch.pickup_target_label'),
-        distance = Config.FetchMechanic.pickupInteractDistanceMeters,
-        canInteract = function(entity, distance, coords, name)
-            if ActiveFetchCarry then return false end
-            return CanShowK9UI()
-        end,
-        onSelect = function(data)
-            if not data or not data.entity or not DoesEntityExist(data.entity) then return end
-            local netId = NetworkGetNetworkIdFromEntity(data.entity)
-            TriggerServerEvent('qbx_k9unit:server:requestPickupFetchBall', netId)
-        end,
-    },
-})
-
--- "Deliver to Handler" ox_target option on nearby player peds — the
--- player-driven "return to handler" leg (server/fetch.lua's own header
--- explains why this is a proximity interaction rather than scripted
--- movement). DISPLAY optimization only: server/fetch.lua's
--- requestDeliverFetchBall independently re-verifies ownership, the target's
--- identity as the real thrower, and live proximity — this predicate doesn't
--- need to be perfect (same posture client/partnership.lua's "Partner Up"
--- canInteract predicate already documents in full).
+-- "Pick Up Ball" / "Deliver to Handler" ox_target options — LIFECYCLE FIX
+-- (this pass): pulled into a named function so it can be re-run any time
+-- ox_target itself (re)starts, not just once at this file's own load time.
+-- ox_target keeps its addModel/addGlobalPlayer registries in plain
+-- file-local Lua tables inside its OWN client chunk (confirmed by reading
+-- ox_target's client/api.lua directly this pass), cleared only by
+-- ox_target's own `onClientResourceStop` handler when the CALLING resource
+-- (this one) stops — a bare `restart ox_target` while this resource keeps
+-- running reloads that chunk with empty tables and nothing else asks
+-- anyone to re-register, silently and permanently losing both options for
+-- the rest of this resource's uptime. See the `AddEventHandler`
+-- immediately below for the two triggers this now dispatches on, mirroring
+-- server/tracking.lua's RegisterScentInventoryHook fix for the identical
+-- bug class against ox_inventory.
+--
+-- DUPLICATE-VS-REPLACE (verified against ox_target's client/api.lua
+-- `addTarget`, this pass): every option below always has `name` set, and
+-- `addTarget` unconditionally calls `removeTarget(target, checkNames,
+-- resource, true)` BEFORE appending — i.e. re-running this against a
+-- registry that already holds an option with the same name AND resource
+-- (`GetInvokingResource()`, always this resource here) REPLACES it, it
+-- never duplicates. No extra remove-before-add call is needed here; the
+-- exports themselves are already idempotent.
 local DELIVER_TARGET_DISTANCE_FACTOR = 0.5
-exports.ox_target:addGlobalPlayer({
-    {
-        name = 'qbx_k9unit:deliverFetchBall',
-        icon = 'fas fa-hand-holding',
-        label = locale('fetch.deliver_target_label'),
-        distance = DELIVER_TARGET_DISTANCE_FACTOR * Config.FetchMechanic.deliverProximityMeters,
-        canInteract = function(entity, distance, coords, name)
-            if not ActiveFetchCarry then return false end
-            return NetworkGetPlayerIndexFromPed(entity) ~= PlayerId()
-        end,
-        onSelect = function(data)
-            local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
-            if not targetServerId then return end
-            TriggerServerEvent('qbx_k9unit:server:requestDeliverFetchBall', targetServerId)
-        end,
-    },
-})
+
+local function RegisterFetchOxTargetOptions()
+    -- "Pick Up Ball" ox_target option — targets the configured ball prop
+    -- model directly by hash, mirroring client/kennel.lua's own addModel
+    -- pattern.
+    exports.ox_target:addModel({
+        GetHashKey(Config.FetchMechanic.ballPropModel),
+    }, {
+        {
+            name = 'qbx_k9unit:pickupFetchBall',
+            icon = 'fas fa-baseball',
+            label = locale('fetch.pickup_target_label'),
+            distance = Config.FetchMechanic.pickupInteractDistanceMeters,
+            canInteract = function(entity, distance, coords, name)
+                if ActiveFetchCarry then return false end
+                return CanShowK9UI()
+            end,
+            onSelect = function(data)
+                if not data or not data.entity or not DoesEntityExist(data.entity) then return end
+                local netId = NetworkGetNetworkIdFromEntity(data.entity)
+                TriggerServerEvent('qbx_k9unit:server:requestPickupFetchBall', netId)
+            end,
+        },
+    })
+
+    -- "Deliver to Handler" ox_target option on nearby player peds — the
+    -- player-driven "return to handler" leg (server/fetch.lua's own header
+    -- explains why this is a proximity interaction rather than scripted
+    -- movement). DISPLAY optimization only: server/fetch.lua's
+    -- requestDeliverFetchBall independently re-verifies ownership, the target's
+    -- identity as the real thrower, and live proximity — this predicate doesn't
+    -- need to be perfect (same posture client/partnership.lua's "Partner Up"
+    -- canInteract predicate already documents in full).
+    exports.ox_target:addGlobalPlayer({
+        {
+            name = 'qbx_k9unit:deliverFetchBall',
+            icon = 'fas fa-hand-holding',
+            label = locale('fetch.deliver_target_label'),
+            distance = DELIVER_TARGET_DISTANCE_FACTOR * Config.FetchMechanic.deliverProximityMeters,
+            canInteract = function(entity, distance, coords, name)
+                if not ActiveFetchCarry then return false end
+                return NetworkGetPlayerIndexFromPed(entity) ~= PlayerId()
+            end,
+            onSelect = function(data)
+                local targetServerId = ResolvePlayerServerIdFromPed(data.entity)
+                if not targetServerId then return end
+                TriggerServerEvent('qbx_k9unit:server:requestDeliverFetchBall', targetServerId)
+            end,
+        },
+    })
+end
+
+-- Sole call site for RegisterFetchOxTargetOptions(): this resource's OWN
+-- start (the original, only trigger before this pass — `onResourceStart`
+-- fires once for a resource's own boot, same idiom this file's other
+-- `GetCurrentResourceName()` checks already use, just via the start event
+-- instead of the stop event) OR, new this pass, ox_target's OWN start —
+-- same two-branch shape as server/tracking.lua's RegisterScentInventoryHook
+-- / server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
+-- identical class of gap against ox_inventory.
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+        RegisterFetchOxTargetOptions()
+    end
+end)
 
 -- OWN-DEATH AUTO-DETACH/DROP (task requirement: "if ... the K9 dies ... the
 -- cycle must end cleanly"). Lightweight poll, only running at all while this

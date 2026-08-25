@@ -310,33 +310,54 @@ end)
 -- here the same way leash ended up needing one, not silently trusting
 -- the client further than intended; nothing below forecloses adding one
 -- later).
-exports.ox_target:addGlobalVehicle({
-    {
-        name = 'qbx_k9unit:enterVehicle',
-        icon = 'fas fa-dog',
-        label = locale('vehicle.target_enter_label'),
-        distance = Config.VehicleInteractMeters,
-        canInteract = function(entity, distance, coords, name)
-            if not Config.Features.VehicleEntryExit then return false end
-            if IsInK9Vehicle() then return false end
-            if not K9VehicleHashes[GetEntityModel(entity)] then return false end
-            return CanShowK9UI()
-        end,
-        onSelect = function()
-            EnterNearestK9Vehicle()
-        end,
-    },
-    {
-        name = 'qbx_k9unit:exitVehicle',
-        icon = 'fas fa-dog',
-        label = locale('vehicle.target_exit_label'),
-        distance = Config.VehicleInteractMeters,
-        canInteract = function(entity, distance, coords, name)
-            if not Config.Features.VehicleEntryExit then return false end
-            return IsInK9Vehicle() and ResolveVehicleFromState() == entity
-        end,
-        onSelect = function()
-            ExitK9Vehicle()
-        end,
-    },
-})
+-- LIFECYCLE FIX (this pass): extracted into a named function, sole call
+-- site the AddEventHandler('onResourceStart', ...) below, so both options
+-- come back after a bare `restart ox_target`, not just after this
+-- resource's own restart -- ox_target keeps addGlobalVehicle's registry in
+-- a plain file-local Lua table inside its own client chunk (confirmed by
+-- reading ox_target's client/api.lua directly), reloaded empty on
+-- ox_target's own restart with nothing else prompting a re-add. Mirrors
+-- server/tracking.lua's RegisterScentInventoryHook /
+-- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
+-- identical bug class against ox_inventory. DUPLICATE-VS-REPLACE: both
+-- options below always set `name`, and ox_target's own `addTarget`
+-- unconditionally removes any existing option with the same name+resource
+-- before appending, so re-running this never duplicates either entry.
+local function RegisterVehicleOxTargetOptions()
+    exports.ox_target:addGlobalVehicle({
+        {
+            name = 'qbx_k9unit:enterVehicle',
+            icon = 'fas fa-dog',
+            label = locale('vehicle.target_enter_label'),
+            distance = Config.VehicleInteractMeters,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.VehicleEntryExit then return false end
+                if IsInK9Vehicle() then return false end
+                if not K9VehicleHashes[GetEntityModel(entity)] then return false end
+                return CanShowK9UI()
+            end,
+            onSelect = function()
+                EnterNearestK9Vehicle()
+            end,
+        },
+        {
+            name = 'qbx_k9unit:exitVehicle',
+            icon = 'fas fa-dog',
+            label = locale('vehicle.target_exit_label'),
+            distance = Config.VehicleInteractMeters,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.VehicleEntryExit then return false end
+                return IsInK9Vehicle() and ResolveVehicleFromState() == entity
+            end,
+            onSelect = function()
+                ExitK9Vehicle()
+            end,
+        },
+    })
+end
+
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+        RegisterVehicleOxTargetOptions()
+    end
+end)

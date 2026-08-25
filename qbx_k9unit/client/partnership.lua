@@ -524,26 +524,48 @@ local PARTNER_TARGET_DISTANCE_FACTOR = 0.5
 -- (server/partnership.lua), so this predicate doesn't need to be perfect
 -- (see this file's header "KNOWN CACHE-STALENESS GAP" for the one honest
 -- limitation of the IsPartnered() check below).
-exports.ox_target:addGlobalPlayer({
-    {
-        name = 'qbx_k9unit:partnerUp',
-        icon = 'fas fa-handshake',
-        label = locale('partnership.partner_up_target_label'),
-        distance = PARTNER_TARGET_DISTANCE_FACTOR * Config.Partnership.ProximityMeters,
-        canInteract = function(entity, distance, coords, name)
-            if IsPartnered() then return false end
-            if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't target self
+--
+-- LIFECYCLE FIX (this pass): extracted into a named function, sole call
+-- site the AddEventHandler('onResourceStart', ...) below, so this option
+-- comes back after a bare `restart ox_target`, not just after this
+-- resource's own restart -- ox_target keeps addGlobalPlayer's registry in
+-- a plain file-local Lua table inside its own client chunk (confirmed by
+-- reading ox_target's client/api.lua directly), reloaded empty on
+-- ox_target's own restart with nothing else prompting a re-add. Mirrors
+-- server/tracking.lua's RegisterScentInventoryHook /
+-- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
+-- identical bug class against ox_inventory. DUPLICATE-VS-REPLACE: the
+-- option below always sets `name`, and ox_target's own `addTarget`
+-- unconditionally removes any existing option with the same name+resource
+-- before appending, so re-running this never duplicates the entry.
+local function RegisterPartnerUpOxTargetOption()
+    exports.ox_target:addGlobalPlayer({
+        {
+            name = 'qbx_k9unit:partnerUp',
+            icon = 'fas fa-handshake',
+            label = locale('partnership.partner_up_target_label'),
+            distance = PARTNER_TARGET_DISTANCE_FACTOR * Config.Partnership.ProximityMeters,
+            canInteract = function(entity, distance, coords, name)
+                if IsPartnered() then return false end
+                if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then return false end -- can't target self
 
-            -- At least one side should plausibly be a K9 (either us, or
-            -- the target's live model) -- cheap client-side plausibility
-            -- only, mirrors client/movement.lua's "Attach Leash" predicate.
-            return IsOwnModelK9() or IsEntityModelK9(entity)
-        end,
-        onSelect = function(data)
-            local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
-            if not targetPlayer or targetPlayer == -1 then return end
+                -- At least one side should plausibly be a K9 (either us, or
+                -- the target's live model) -- cheap client-side plausibility
+                -- only, mirrors client/movement.lua's "Attach Leash" predicate.
+                return IsOwnModelK9() or IsEntityModelK9(entity)
+            end,
+            onSelect = function(data)
+                local targetPlayer = NetworkGetPlayerIndexFromPed(data.entity)
+                if not targetPlayer or targetPlayer == -1 then return end
 
-            RequestPartnerUp(GetPlayerServerId(targetPlayer))
-        end,
-    },
-})
+                RequestPartnerUp(GetPlayerServerId(targetPlayer))
+            end,
+        },
+    })
+end
+
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+        RegisterPartnerUpOxTargetOption()
+    end
+end)

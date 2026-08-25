@@ -205,49 +205,76 @@ end
 --- proximity, and interactor authorization for real; this predicate does
 --- not need to be perfect (same posture client/movement.lua's own
 --- attachLeash option documents for its analogous canInteract).
-exports.ox_target:addGlobalPlayer({
-    {
-        name = 'qbx_k9unit:openK9Inventory',
-        icon = 'fas fa-briefcase',
-        label = locale('inventory.open_gear_target_label'),
-        distance = Config.K9Inventory.interactRange,
-        canInteract = function(entity, distance, coords, name)
-            if not Config.Features.K9Inventory then return false end
-            if not IsEntityModelK9(entity) then return false end
+---
+--- LIFECYCLE FIX (this pass): extracted into a named function, sole call
+--- site the `AddEventHandler('onResourceStart', ...)` below, so this
+--- option comes back after a bare `restart ox_target` and not just after
+--- this resource's own restart — see that handler's own doc comment
+--- (mirrors server/tracking.lua's RegisterScentInventoryHook /
+--- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
+--- identical bug class: ox_target keeps addGlobalPlayer's registry in a
+--- plain file-local Lua table inside its own client chunk, confirmed by
+--- reading ox_target's client/api.lua, which reloads empty on ox_target's
+--- own restart with nothing else prompting a re-add). DUPLICATE-VS-REPLACE:
+--- the option below always sets `name`, and ox_target's own `addTarget`
+--- unconditionally removes any existing option with the same name+resource
+--- before appending, so re-running this never duplicates the entry.
+local function RegisterK9InventoryOxTargetOption()
+    exports.ox_target:addGlobalPlayer({
+        {
+            name = 'qbx_k9unit:openK9Inventory',
+            icon = 'fas fa-briefcase',
+            label = locale('inventory.open_gear_target_label'),
+            distance = Config.K9Inventory.interactRange,
+            canInteract = function(entity, distance, coords, name)
+                if not Config.Features.K9Inventory then return false end
+                if not IsEntityModelK9(entity) then return false end
 
-            -- The K9 player accessing their OWN stash is always authorized
-            -- server-side (see server/inventory.lua's
-            -- IsAuthorizedForK9Inventory `isSelf` branch) — always show the
-            -- option for self, independent of accessScope or job.
-            if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then
-                return true
-            end
+                -- The K9 player accessing their OWN stash is always authorized
+                -- server-side (see server/inventory.lua's
+                -- IsAuthorizedForK9Inventory `isSelf` branch) — always show the
+                -- option for self, independent of accessScope or job.
+                if NetworkGetPlayerIndexFromPed(entity) == PlayerId() then
+                    return true
+                end
 
-            -- Otherwise, DISPLAY-ONLY approximation of accessScope: only
-            -- show the option to a player whose own job is a configured
-            -- department. `accessScope ~= 'department'` is UNREACHABLE
-            -- today — server/inventory.lua's onResourceStart assert
-            -- hard-enforces accessScope == 'department' (coder-security
-            -- finding: any other value, including 'ownerOnly', provided no
-            -- real ox_inventory access control at all) — kept as
-            -- defense-in-depth so this UI never shows a stale/misleading
-            -- option if that invariant is ever loosened. QBX.PlayerData is
-            -- the live-updated client-side job cache this resource's
-            -- fxmanifest.lua already documents as the standard source for
-            -- this, per '@qbx_core/modules/playerdata.lua'.
-            if Config.K9Inventory.accessScope ~= 'department' then
-                return false
-            end
+                -- Otherwise, DISPLAY-ONLY approximation of accessScope: only
+                -- show the option to a player whose own job is a configured
+                -- department. `accessScope ~= 'department'` is UNREACHABLE
+                -- today — server/inventory.lua's onResourceStart assert
+                -- hard-enforces accessScope == 'department' (coder-security
+                -- finding: any other value, including 'ownerOnly', provided no
+                -- real ox_inventory access control at all) — kept as
+                -- defense-in-depth so this UI never shows a stale/misleading
+                -- option if that invariant is ever loosened. QBX.PlayerData is
+                -- the live-updated client-side job cache this resource's
+                -- fxmanifest.lua already documents as the standard source for
+                -- this, per '@qbx_core/modules/playerdata.lua'.
+                if Config.K9Inventory.accessScope ~= 'department' then
+                    return false
+                end
 
-            local job = QBX.PlayerData and QBX.PlayerData.job
-            return job ~= nil and Config.Departments[job.name] ~= nil
-        end,
-        onSelect = function(data)
-            local netId = NetworkGetNetworkIdFromEntity(data.entity)
-            OpenK9InventoryForNetId(netId)
-        end,
-    },
-})
+                local job = QBX.PlayerData and QBX.PlayerData.job
+                return job ~= nil and Config.Departments[job.name] ~= nil
+            end,
+            onSelect = function(data)
+                local netId = NetworkGetNetworkIdFromEntity(data.entity)
+                OpenK9InventoryForNetId(netId)
+            end,
+        },
+    })
+end
+
+-- Sole call site for RegisterK9InventoryOxTargetOption(): this resource's
+-- own start, or ox_target's own start — mirrors server/tracking.lua's
+-- RegisterScentInventoryHook / server/inventory.lua's
+-- RegisterK9InventoryItemFilterHook fixes for the identical class of gap
+-- against ox_inventory.
+AddEventHandler('onResourceStart', function(resourceName)
+    if resourceName == GetCurrentResourceName() or resourceName == 'ox_target' then
+        RegisterK9InventoryOxTargetOption()
+    end
+end)
 
 --- Resource-global — radial self-service entry point (see FILE-TO-FILE
 --- CONTRACT above and this file's own now-RESOLVED header note). Mirrors
