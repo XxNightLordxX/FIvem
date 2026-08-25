@@ -625,6 +625,18 @@ Config.Combat = {
         range         = 2.5,    -- meters, self-initiated trigger range
         maxDurationMs = 15000,  -- hard timeout if never manually released — THIS IS the "no unbounded trap" guarantee for a non-consensual mechanic, PHASE3_SPEC.md §12.0 item 4. Never remove without an equally-hard replacement cap.
         cooldownMs    = 20000,  -- per-K9 cooldown between attempts
+        -- Per-target cooldown, mirroring NonLethalTakedown.targetCooldownMs
+        -- below. Without it the per-K9 cooldown is the only bound, and the
+        -- `already_held` check does not help -- that only blocks a second
+        -- CONCURRENT hold by a DIFFERENT K9, not the same K9 re-taking the
+        -- same target once its own cooldown clears. A compliant or AFK
+        -- target could therefore be bite-held every 20s indefinitely, each
+        -- hold over MIN_BITE_HOLD_XP_DURATION_MS paying biteHoldSuccess --
+        -- roughly 60 XP/min against one stationary target with no travel
+        -- and no variety. Set slightly above NonLethalTakedown's 30000 on
+        -- purpose: a bite hold can pay out every 3s of a 15s window,
+        -- whereas a takedown is a single discrete event.
+        targetCooldownMs = 35000,
     },
     NonLethalTakedown = {
         range               = 3.0,
