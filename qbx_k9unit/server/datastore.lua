@@ -352,6 +352,16 @@ end
 --- -- one omitted server/certtiers.lua entirely, one wrongly implied
 --- server/equipmentshop.lua already called this when it did not yet).
 --- Currently, in fxmanifest.lua server_scripts load order:
+---   server/runtimecontrol.lua     -- 1 call site: the onResourceStart
+---     handler that re-applies persisted overrides/theme on top of
+---     config.lua's shipped defaults reads K9Store.Override_GetAll()
+---     (k9_runtime_feature_overrides) and K9Store.Theme_GetRows()
+---     (k9_tablet_theme) -- ADDED to this list (issue-closer sweep,
+---     2026-08-26): this call site existed since this file's own boot
+---     section was written, but was missing from this list the whole time
+---     (the exact class of drift this paragraph's own header warns about) --
+---     confirmed by direct read that it now calls this function first, same
+---     fail-closed skip-with-a-log shape as every other entry here.
 ---   server/permissions.lua        -- 2 call sites: the FeatureControl
 ---     startup warning does NOT call this (no k9_* table read there), but
 ---     the onResourceStart backfill loop (RefreshPermissionCache per

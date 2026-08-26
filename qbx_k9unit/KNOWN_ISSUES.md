@@ -162,12 +162,77 @@ designed but have an edge worth knowing about before you rely on them.
   networking model works, not something this resource can close. There's
   a hard maximum drag distance and duration as the real backstop.
 
-- **Client-relayed combat effects are detected, never enforced.** A K9 can
-  suppress or ragdoll a player target, but the target's own client has to
-  cooperate for the effect to actually apply — there is no way to force
-  it. Non-compliance is logged (and can trigger a staff notification), but
-  by design nothing server-authoritative (an arrest, evidence, XP) is ever
-  conditioned on the effect having visibly landed.
+- **Client-relayed combat effects: re-checked after a real second look —
+  only the visible restraint on a PLAYER target is unenforceable, not the
+  decision to grant it, and the practical exposure is narrower than "trust
+  boundary gap" suggests.** Precise scope, traced against the actual code:
+  *whether* a Bite & Hold, Non-Lethal Takedown, or drag is granted at all —
+  K9 access, per-person feature grants/blocks, certification-tier
+  capability, an anti-teleport speed check against independently-sampled
+  server-side position history, live server-measured proximity, target
+  liveness, a vehicle-seated exclusion (checked at grant time AND
+  re-checked continuously for the life of the hold), the target's wanted
+  status, and every cooldown (per-K9, per-target, and a separate flat
+  XP-mint cooldown) — is decided and re-verified by the server alone;
+  none of it is ever taken on a client's word. The one piece that genuinely
+  is client-relayed is the *mechanical* effect on a PLAYER target's own
+  screen (`DisableControlAction` during a bite hold, `SetPedToRagdollWithFall`/
+  `SetEntityCanBeDamaged` during a takedown, `SetPedMoveRateOverride` while
+  dragged) — that code runs on the target's own client, and a modified
+  client can simply not run it. There is no way to force another player's
+  client to do anything; that is a property of FiveM's own peer-ownership
+  networking model, the identical limit already documented above for Prop
+  Dragging's self-detach, not a gap in this file's own checks. An NPC
+  target is not exposed by this at all — an NPC has no "own client" to lie
+  to; the requesting K9's own already-trusted client drives an NPC's
+  suppression directly.
+
+  What a cheater running the modified client actually gains: the ability
+  to make a restraint on **themselves** cosmetic and keep moving, fighting,
+  or fleeing despite an active hold — nothing more. It does not let them
+  affect anyone else, and this resource has no arrest/evidence workflow of
+  its own wired to "did the effect visibly land" — XP is the only reward
+  this file grants, and it is timed and gated independently of compliance
+  (a minimum held-duration floor, a per-target cooldown, a per-holder
+  cooldown, and a separate flat per-holder XP-mint cooldown, all already
+  hardened against exactly this class of farming). A non-compliant or even
+  actively-colluding target does not raise that ceiling above what an
+  honestly-compliant one already allows, so this is not a new exploit on
+  top of the one already priced into this resource's own XP-economy audit
+  — it is the same ceiling, reached a different way. Non-compliance
+  detection (`Config.Combat.NonComplianceDetection`, **off by default**)
+  samples the target's own server-read position and only ever logs or
+  notifies staff — deliberately never auto-punishes, since a false
+  positive here is lag or desync, not proof.
+
+  Ranked plainly: the real cost is an evading suspect, not a compromised
+  server-authoritative outcome — closer in kind to "a dragged player can
+  always let go by force" two entries above than to an actual trust-boundary
+  hole. There is nothing left to harden on the request-granting side (it is
+  already this thorough); the only way to truly force a player's own ped
+  state would be a real redesign this resource does not have today — a
+  third client, already positioned near both peds, corroborating the effect
+  from outside, the same shape already ruled out below for the
+  line-of-sight gap, for the same reason (no single participant's own claim
+  can be trusted). Accepted as-is; not a decision this note is asking for.
+
+- **Bite & Hold, Non-Lethal Takedown, and Prop Dragging have no
+  line-of-sight check at all.** A K9 within range on the far side of a thin
+  wall or door can start any of the three exactly as if standing in the
+  open — confirmed, not assumed: FXServer loads no collision/physics world
+  server-side, so there is nothing to query even in principle (checked
+  directly against the game server's own native-registration source, not
+  inferred from a missing doc page). A client-reported "I have line of
+  sight" flag was deliberately not added as a stand-in: the one client with
+  an incentive to lie about it (the K9's own) could simply always claim
+  true, which would look fixed on the next read while adding zero real
+  protection. The only shape that could genuinely close this is a third
+  client, already positioned near both peds, corroborating the check from
+  outside — a materially larger design, not a narrow fix, and out of scope
+  here. Every other check (distance, access, cooldowns, wanted status,
+  vehicle exclusion) is unaffected and still applies in full; this is
+  specifically the missing line-of-sight leg, previously disclosed only in
+  `server/combat.lua`'s own header, not here.
 
 - **Five of the eight inventory scripts this resource recognizes are paid
   scripts with no readable source.** They're listed in the compatibility

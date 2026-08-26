@@ -183,9 +183,24 @@ local function newServerFixture(opts)
         triggerClientEventCalls[#triggerClientEventCalls + 1] = { name = name, target = target, args = { ... } }
     end
 
+    -- PursuitSprintCooldown now calls :StartSweep (server/cooldowns.lua)
+    -- instead of :RegisterPlayerDropped() (see server/pursuitsprint.lua's
+    -- own "RECONNECT GAP" comment on PursuitSprintCooldown for why) --
+    -- :StartSweep calls CreateThread at this file's own load time, so this
+    -- fixture needs a CreateThread/Wait stub the same way tests/combat_spec.lua's
+    -- own fixture already does for TakedownTargetCooldown/BiteHoldTargetCooldown's
+    -- identical :StartSweep calls. Sandbox.newThreadRunner() captures the
+    -- sweep thread as a coroutine that is never resumed unless a test calls
+    -- threadRunner.step() -- no test below needs the sweep to actually run
+    -- (it only bounds memory for citizenids that stop requesting bursts
+    -- entirely), so it is wired in purely so the file loads without error.
+    local threadRunner = Sandbox.newThreadRunner()
+
     local overrides = {
         Config = Config,
         GetGameTimer = GetGameTimer,
+        CreateThread = threadRunner.CreateThread,
+        Wait = threadRunner.Wait,
         NotifyPlayer = NotifyPlayer,
         print = printStub,
         exports = exportsTable,
@@ -221,6 +236,7 @@ local function newServerFixture(opts)
         printLog = printLog,
         eventHandlers = eventHandlers,
         triggerClientEventCalls = triggerClientEventCalls,
+        threadRunner = threadRunner,
         hasK9AccessCalls = hasK9AccessCalls,
         permissionCalls = permissionCalls,
         advance = function(ms) state.now = state.now + ms end,
@@ -802,19 +818,98 @@ t.test('AN INVALID REQUEST NEVER BURNS THE COOLDOWN: a too_far rejection does no
     t.equals(#f.triggerClientEventCalls, 1)
 end)
 
-t.test('playerDropped clears the disconnecting K9\'s own cooldown entry (RegisterPlayerDropped wiring)', function()
+-- REGRESSION (this pass -- KNOWN_ISSUES.md, "Pursuit sprint's cooldown used
+-- to reset on disconnect/reconnect"): this test used to assert the OPPOSITE
+-- of what's below -- that a `playerDropped` firing for the K9's old source
+-- CLEARED the cooldown, so a "brand new occupant of the same recycled
+-- source id" (in practice: the SAME player, reconnected, reissued a new
+-- source by FXServer) was NOT blocked by their own immediately-preceding
+-- request. That was the bug being pinned as a passing test. PursuitSprintCooldown
+-- is now keyed by citizenid (never `src`) and cleaned up via :StartSweep,
+-- never :RegisterPlayerDropped() -- see server/pursuitsprint.lua's own
+-- "RECONNECT GAP" comment on PursuitSprintCooldown for the full reasoning
+-- (including why this is a narrower fix than "reconnecting always helps
+-- you," which it never did for the mechanic's headline fleeing-chase case).
+t.test('RECONNECT: the SAME K9 citizenid reconnected under a brand-new server id is still denied inside cooldownMs', function()
+    local f = newServerFixture()
+    grantOnce(f, 1, 'K9-CID', 2, 'TARGET-CID', 9001)
+
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 1)
+
+    -- Simulate a disconnect + reconnect: FXServer fires playerDropped for
+    -- the old source, then later reissues a DIFFERENT numeric source (99,
+    -- never 1) to the same citizenid reconnecting. Firing playerDropped
+    -- must have no effect on this citizenid-keyed cooldown at all (that
+    -- was the whole bug).
+    f.firePlayerDropped(1)
+    f.registerPlayer(99, 'K9-CID', 99 * 100, nil)
+    f.setPedCoords(99 * 100, 0, 0, 0)
+
+    f.advance(REAL_COOLDOWN_MS - 1)
+    f.dispatch(99, 9001)
+    t.equals(#f.triggerClientEventCalls, 1, 'reconnecting under a new source id must not reset this citizenid\'s cooldown')
+    t.equals(lastNotifyFor(f, 99).message, locale('pursuitsprint.denied_on_cooldown'))
+end)
+
+t.test('RECONNECT: the cooldown still expires at the ORIGINAL grant time for the reconnected citizenid, not restarted', function()
+    local f = newServerFixture()
+    grantOnce(f, 1, 'K9-CID', 2, 'TARGET-CID', 9001)
+
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 1)
+
+    f.firePlayerDropped(1)
+    f.registerPlayer(99, 'K9-CID', 99 * 100, nil)
+    f.setPedCoords(99 * 100, 0, 0, 0)
+
+    f.advance(REAL_COOLDOWN_MS)
+    f.dispatch(99, 9001)
+    t.equals(#f.triggerClientEventCalls, 2, 'the cooldown must still expire normally, on schedule, for the reconnected citizenid')
+end)
+
+-- MEMORY BOUND: citizenid-keyed (unlike the old src-keyed version) has no
+-- per-connection cleanup hook at all -- :StartSweep is the ONLY thing
+-- bounding this table now (see this cooldown's own declaration comment in
+-- server/pursuitsprint.lua). The underlying sweep MECHANISM is already
+-- proven correct at the primitive level (tests/cooldowns_spec.lua's own
+-- "StartSweep evicts only entries isStaleFn reports as stale"); this test
+-- exercises the REAL production wiring end to end -- the actual interval/
+-- isStaleFn PursuitSprintCooldown.StartSweep was called with -- to prove it
+-- runs without error against this file's real Config shape and that the
+-- tracker keeps working correctly across a real sweep pass, not merely that
+-- the primitive works in isolation.
+t.test('MEMORY BOUND: a real sweep pass mid-cooldown must not wrongly evict a still-active entry (proves the real PursuitSprintCooldown.StartSweep wiring runs without erroring against this file\'s actual Config shape)', function()
     local f = newServerFixture()
     grantOnce(f, 1, 'K9-CID', 2, 'TARGET-CID', 9001)
     f.dispatch(1, 9001)
     t.equals(#f.triggerClientEventCalls, 1)
 
-    f.firePlayerDropped(1)
+    f.threadRunner.step() -- primes past the sweep thread's initial Wait() -- no pass yet
+    f.advance(REAL_COOLDOWN_MS - 1) -- still genuinely on cooldown, nowhere near this cooldown's own "stale after 2x cooldownMs" sweep margin
+    f.threadRunner.step() -- runs exactly one real sweep pass over the real production isStaleFn
 
-    -- A brand new occupant of the SAME recycled source id, still well
-    -- within what would have been the old cooldown window, must not be
-    -- blocked by the prior occupant's recent request.
+    -- Still correctly denies -- a sweep pass run while an entry is genuinely
+    -- still active must never itself evict (and thereby silently grant) it.
     f.dispatch(1, 9001)
-    t.equals(#f.triggerClientEventCalls, 2)
+    t.equals(#f.triggerClientEventCalls, 1, 'a sweep pass must never itself grant a request still genuinely on cooldown')
+end)
+
+t.test('RECONNECT: a DIFFERENT citizenid recycling the disconnected K9\'s old numeric source id is unaffected by that stranger\'s cooldown', function()
+    local f = newServerFixture()
+    grantOnce(f, 1, 'K9-CID', 2, 'TARGET-CID', 9001)
+
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 1)
+
+    f.firePlayerDropped(1)
+    -- FXServer recycles numeric source 1 for a genuinely different person.
+    f.registerPlayer(1, 'OTHER-CID', 1 * 100, nil)
+    f.grantPermission('OTHER-CID', 'feature.PursuitSprint', true)
+    f.setPedCoords(1 * 100, 0, 0, 0)
+
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 2, 'a citizenid-keyed cooldown must not leak across two different citizenids sharing a recycled source id')
 end)
 
 -- ------------------------------------------------------------------

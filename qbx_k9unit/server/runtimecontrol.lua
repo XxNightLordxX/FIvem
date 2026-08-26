@@ -2092,6 +2092,32 @@ end
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
+    -- BOOT-ORDER RACE FIX (issue-closer sweep, 2026-08-26): this handler
+    -- reads TWO schema-checked tables below (K9Store.Override_GetAll --
+    -- k9_runtime_feature_overrides -- and K9Store.Theme_GetRows --
+    -- k9_tablet_theme) and, until now, did so with no call to
+    -- K9Store.WaitForSchemaCheckToSettle() first -- the exact race that
+    -- function's own doc comment (server/datastore.lua) exists to close,
+    -- and this file was missing from that comment's own "AUTHORITATIVE
+    -- CALLER LIST" despite genuinely needing to be on it. This handler
+    -- registers AFTER server/datastore.lua's own onResourceStart (fxmanifest.lua
+    -- loads server/datastore.lua first), so the probe's handler has already
+    -- been registered and its first yielding query is already in flight by
+    -- the time this one runs -- but "registered first" does not mean
+    -- "finished first" (see WaitForSchemaCheckToSettle's own doc comment,
+    -- "THE RACE, PRECISELY"), so this call is genuinely load-bearing, not
+    -- decorative. On a `false` return (the probe had not settled within its
+    -- wait budget), this skips override/theme re-application for this boot
+    -- entirely -- config.lua's own shipped defaults and the built-in theme
+    -- stand for this session, exactly like Config.Database.enabled = false
+    -- -- rather than trust a database state that is not yet confirmed safe.
+    -- The next SetFeature/SetTunable/SetTheme call (or a restart once the
+    -- check has had time to finish) re-syncs the persisted state as normal.
+    if not K9Store.WaitForSchemaCheckToSettle() then
+        print('[qbx_k9unit] runtimecontrol.lua: the schema-collision check had not finished within its wait budget -- skipping this restart\'s override/theme re-application (no database read attempted, exactly like Config.Database.enabled = false) rather than trust a database state that is not yet confirmed safe. config.lua\'s own shipped defaults and the built-in theme stand for this session; the next admin edit (or a restart once the check has had time to finish) re-syncs it as normal.')
+        return
+    end
+
     local overrideRows = K9Store.Override_GetAll()
     local appliedCount, skippedCount = 0, 0
 

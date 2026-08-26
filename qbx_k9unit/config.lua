@@ -2311,14 +2311,26 @@ Config.Combat = {
     -- "NON-COMPLIANCE DETECTION" section for the full design writeup this
     -- table's fields map onto.
     NonComplianceDetection = {
-        -- DEFAULT CHANGED true -> false. This flag is independent of
-        -- BiteAndHold/NonLethalTakedown/PropDragging/HandlerDownDefense, which
-        -- all default false -- so at `true` it span up a 500ms sampling thread
-        -- on every default install, forever, sweeping a table that stays empty
-        -- until a combat feature is actually enabled. The cost was negligible
-        -- and the principle is not: nobody should pay a thread for a feature
-        -- they have not switched on. Turn this on together with whichever
-        -- combat mechanic you enable.
+        -- DEFAULT CHANGED true -> false, and the reason recorded here used
+        -- to be wrong in a way worth correcting rather than deleting.
+        --
+        -- It used to say this flag is independent of BiteAndHold/
+        -- NonLethalTakedown/PropDragging/HandlerDownDefense "which all
+        -- default false", so leaving it on would spin a 500ms thread
+        -- sweeping a table that stays empty on a default install. Those four
+        -- actually default TRUE (see Config.Features above), so on a default
+        -- install that table is NOT empty and the thread would have had real
+        -- work to do. The stated reasoning was backwards.
+        --
+        -- The setting itself is still correctly false, for a different and
+        -- better reason: this is DETECTION ONLY and never enforcement (see
+        -- guardrail 3 above), its thresholds below are openly marked
+        -- UNTUNED, and its output is a log line nobody has asked for. An
+        -- untuned detector running on every install produces noise a server
+        -- owner then has to learn to ignore, which is worse than no detector
+        -- at all. Turn it on when you actually intend to read what it
+        -- reports, and expect to tune the numbers below against your own
+        -- server before trusting them.
         enabled                = false,
         positionSampleWindowMs = 500,   -- how often the shared sampling thread re-reads every active hold/ragdoll's target position
         biteHoldIdleCeiling    = 0.3,   -- m/s -- a compliant BiteAndHold target is near-stationary (may turn in place); observed speed above (idleCeiling + biteHoldSpeedTolerance) is a candidate violation. UNTUNED placeholder, per item 8's own numbers.

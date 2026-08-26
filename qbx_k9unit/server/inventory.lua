@@ -180,9 +180,13 @@
     ======================================================================
     `Config.K9Inventory.allowedItems` ENFORCEMENT (previously "DELIBERATELY
     NOT IMPLEMENTED... has NO effect", per both this file's own prior
-    header text and config.lua's own comment on the field — that comment is
-    now stale; config.lua's own comment on Config.K9Inventory.allowedItems
-    should be updated to match).
+    header text and config.lua's own comment on the field). DONE (verified,
+    issue-closer sweep, 2026-08-26): config.lua's own comment on
+    Config.K9Inventory.allowedItems has since been updated to match --
+    it now reads "That warning was correct when written and is now
+    obsolete: server/inventory.lua enforces the list through ox_inventory's
+    own `swapItems` hook." No further action needed on that side; both
+    files agree.
 
     MECHANISM, and the source actually read to confirm it
     (raw.githubusercontent.com/overextended/ox_inventory, `main` branch,

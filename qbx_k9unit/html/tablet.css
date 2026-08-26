@@ -742,6 +742,62 @@ body {
     font-style: italic;
 }
 
+/*
+    DOMAIN GROUPING (owner: "more color based on all scent stuff vehicle
+    related is more text based") -- html/tablet.js's buildMyFeaturesList()/
+    buildVehicleFeatureRow()/personFeatureNameCellClass(). SCENT leans on
+    the tablet's own theme accent colour (--k9tablet-accent) MORE HEAVILY
+    than the generic feature list -- deliberately NOT
+    Config.Tracking.ScentVision.palette's five in-world per-person trail
+    colours, which are reserved for identifying a SPECIFIC TRACKED PERSON
+    (a concept this static ability list has no row for) -- see
+    server/tablet.lua's FEATURE_DOMAINS comment for the full reasoning.
+    VEHICLE gets no colour treatment here at all -- .k9tablet-feature-row--vehicle
+    and .k9tablet-feature-vehicle-sentence are plain text, on purpose.
+*/
+.k9tablet-feature-group-heading {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #9aa0ab;
+    margin: 10px 0 2px;
+}
+
+.k9tablet-feature-group-heading--scent {
+    color: var(--k9tablet-accent, #f59e0b);
+}
+
+.k9tablet-feature-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.k9tablet-feature-row--scent {
+    border-left: 3px solid var(--k9tablet-accent, #f59e0b);
+}
+
+.k9tablet-person-feature-name--scent {
+    border-left: 3px solid var(--k9tablet-accent, #f59e0b);
+    padding-left: 6px;
+}
+
+.k9tablet-feature-row--vehicle {
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.k9tablet-feature-vehicle-sentence {
+    margin: 0;
+    font-size: 13px;
+    color: #d5d8de;
+}
+
+.k9tablet-person-feature-name--vehicle {
+    padding-left: 6px;
+}
+
 .k9tablet-givexp {
     display: flex;
     align-items: center;

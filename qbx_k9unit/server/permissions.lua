@@ -412,23 +412,35 @@
     reason strings on the SERVER side either, since neither ever reaches
     locale() -- they are internal outcome tags, not player-facing text.
 
-    NOT IMPLEMENTED HERE, AND DELIBERATELY SO: `qbx_k9unit:server:tabletListRoster`.
-    client/tablet.lua's own header describes this as returning "a roster of
-    handlers/K9s with their certifications, XP and granted permissions" --
-    that is a THREE-WAY aggregation across server/certifications.lua's
-    k9_certifications, server/progression.lua's k9_progression, and this
-    file's own k9_permissions, none of which this file has any business
-    reaching across into on its own initiative (certifications.lua is
-    UNOWNED and editable surgically for this task, but progression.lua is
-    LIVE-OWNED by the XP agent this session -- see COORDINATION.md). This is
-    a genuine cross-file architecture question (does a fourth file own the
-    merge, does the client make three separate round trips instead, does
-    ListActivePermissionsForCitizenId get reused per-row by whichever file
-    does own it), not a permissions-layer implementation detail -- reported
-    to coder-frontend/coder-ui/coder-architect rather than decided
-    unilaterally here. This file's own two roster-shaped exports
-    (ListActivePermissionsForCitizenId, ListPermissionRoster) are ready to
-    be called by whichever file ends up owning that aggregation.
+    RESOLVED, DIFFERENTLY THAN EITHER OPTION THIS PARAGRAPH ORIGINALLY
+    FLOATED (issue-closer sweep, 2026-08-26): this used to say
+    `qbx_k9unit:server:tabletListRoster` was "NOT IMPLEMENTED HERE, AND
+    DELIBERATELY SO" and left the three-way aggregation (certifications/
+    XP/permissions) as an open cross-file architecture question for
+    coder-frontend/coder-ui/coder-architect to decide. Verified directly:
+    that literal callback name was never built, and no file anywhere calls
+    this file's own ListActivePermissionsForCitizenId/ListPermissionRoster
+    for that purpose -- but the underlying need WAS answered, by
+    server/tablet.lua, with a two-callback split rather than one
+    aggregating call:
+      - `qbx_k9unit:server:tabletRequestRoster` -- lists MANY people
+        (bounded per department) with certification + XP/tier fields only,
+        no permissions column per row.
+      - `qbx_k9unit:server:tabletRequestPersonSummary` -- the drill-down for
+        ONE citizenid, which DOES merge all three: certifications, XP/tier,
+        AND permissions (via that file's own QueryActivePermissionSet, a
+        direct k9_permissions read it maintains itself, structurally
+        parallel to but independent of this file's
+        ListActivePermissionsForCitizenId rather than calling it).
+    So "browse the roster, drill into a person for the full picture"
+    is the shape that shipped, not "every roster row already shows
+    permissions" -- a real, load-bearing distinction for anyone consuming
+    this comment, not merely a naming difference from the original ask.
+    This file's own two roster-shaped exports
+    (ListActivePermissionsForCitizenId, ListPermissionRoster) remain
+    unused by server/tablet.lua's aggregation and are still available for
+    any future consumer that wants this file's own row shape instead of
+    tablet.lua's independent read.
     ======================================================================
 
     FEATURE-BLOCK PUSH (this pass) -- closes a drift-guard finding: client/

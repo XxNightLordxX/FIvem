@@ -837,6 +837,12 @@ local TABLET_STRING_KEYS = {
     'self_grant_disabled_title', 'truncated_notice', 'action_working',
     'action_failed', 'action_succeeded', 'no_certifications',
     'my_certifications_heading', 'my_xp_heading', 'my_abilities_heading',
+    -- DOMAIN GROUPING (owner: "more color based on all scent stuff
+    -- vehicle related is more text based") -- see html/tablet.js's
+    -- buildMyFeaturesList()/server/tablet.lua's FEATURE_DOMAINS for the
+    -- full mechanism these five keys support.
+    'feature_group_scent_heading', 'feature_group_scent_hint', 'feature_group_vehicle_heading',
+    'feature_group_other_heading', 'feature_vehicle_sentence_template',
     'no_abilities', 'search_features_placeholder', 'state_global_off',
     'state_blocked', 'state_not_certified', 'state_requires_grant_missing',
     'state_available', 'feature_column', 'status_column',

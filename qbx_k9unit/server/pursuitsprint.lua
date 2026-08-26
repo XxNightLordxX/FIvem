@@ -355,19 +355,75 @@ Config.PursuitSprint.durationMs = ResolveConfiguredThresholdMs(
 -- reasoning on why clamp-and-warn is preferred to error-and-abort here too,
 -- not just at the call sites that risk stranding a termination path.
 
--- Per-K9 (keyed by src) cooldown -- hard file-load-time dependency on
--- server/cooldowns.lua (NewCooldown), same requirement every other
--- consumer in this resource's fxmanifest.lua already states. See this
--- file's report to main: server/pursuitsprint.lua must load AFTER
--- server/cooldowns.lua; no other load-order requirement (every other
--- cross-file call below is reached only from inside a deferred
--- RegisterNetEvent handler body, resolved at call time, after every
--- server_scripts file has already loaded -- same convention
--- server/combat.lua's own fxmanifest.lua comment documents for its own
--- soft dependencies).
-local PursuitSprintCooldown = NewCooldown(ResolveConfiguredThresholdMs(
-    Config.PursuitSprint.cooldownMs, 45000, 'Config.PursuitSprint.cooldownMs'))
-PursuitSprintCooldown.RegisterPlayerDropped()
+-- Per-K9 cooldown -- hard file-load-time dependency on server/cooldowns.lua
+-- (NewCooldown), same requirement every other consumer in this resource's
+-- fxmanifest.lua already states. See this file's report to main:
+-- server/pursuitsprint.lua must load AFTER server/cooldowns.lua; no other
+-- load-order requirement (every other cross-file call below is reached only
+-- from inside a deferred RegisterNetEvent handler body, resolved at call
+-- time, after every server_scripts file has already loaded -- same
+-- convention server/combat.lua's own fxmanifest.lua comment documents for
+-- its own soft dependencies).
+--
+-- RECONNECT GAP, SCOPED HONESTLY (KNOWN_ISSUES.md §3, "Pursuit sprint's
+-- cooldown used to reset on disconnect/reconnect" -- previously filed under
+-- §2 as an open issue; re-investigated and fixed this pass, see that
+-- entry's own history for why the first two framings of this were each
+-- wrong in opposite directions before landing here). This used to be keyed
+-- by `src` (the player's numeric server id) and cleaned up via
+-- :RegisterPlayerDropped(), which actively clears the disconnecting
+-- source's own entry -- `src` is reissued by FXServer on every reconnect
+-- and is never the same value twice for the same person, so reconnecting
+-- always produced a brand-new key with no cooldown history at all.
+--
+-- WHAT THIS DID NOT ACTUALLY BUY, RE-CHECKED BEFORE ACTING (do not repeat
+-- the original overclaim that this "defeats the entire point of the
+-- cooldown"): for the mechanic's OWN stated purpose -- ending a foot chase
+-- already going the K9's way -- reconnecting mid-chase is close to
+-- worthless regardless of this gap. The request handler below re-checks
+-- live proximity (<= Config.PursuitSprint.requestRangeMeters) and re-
+-- resolves the target ped fresh on EVERY request, cooldown state aside; a
+-- suspect who is genuinely fleeing will be out of range, out of line of
+-- sight, or simply gone by the time anyone reconnects, so the reset
+-- cooldown has nothing left to spend itself on in that case.
+--
+-- THE ACTUAL GAP: a STATIONARY or engaged target -- cornered, mid-shootout,
+-- downed-but-not-arrested, anyone who stays within requestRangeMeters and
+-- `wanted` for well over cooldownMs (a standoff, not a foot chase). Nothing
+-- else in this file limits re-bursting against that same target faster than
+-- this one cooldown -- unlike this resource's other per-K9-source combat
+-- cooldowns, which are each independently backstopped by something already
+-- immune to this exact gap (server/combat.lua's BiteHoldCooldown/
+-- TakedownCooldown are backstopped by BiteHoldTargetCooldown/
+-- TakedownTargetCooldown, both keyed by targetNetId and swept, not
+-- src-keyed at all; the four per-mechanic XP-mint cooldowns are backstopped
+-- by server/progression.lua's shared XPMintBudget, citizenid-keyed and
+-- explicitly never cleared on playerDropped for this identical reason --
+-- see that file's own comment on XPMintBudget). PursuitSprintCooldown has
+-- no such second gate, which is what makes it worth fixing even though the
+-- headline "ends a chase" scenario is already fine on its own.
+--
+-- A citizenid never changes across a reconnect, so this cooldown is now
+-- keyed by the K9's own citizenid (`k9Citizenid`, already resolved fresh
+-- from server-held state at the top of the request handler below -- never a
+-- client-supplied value) instead of `src`. That key choice means
+-- :RegisterPlayerDropped() (which clears by the raw numeric `source`, per
+-- its own doc comment in server/cooldowns.lua) is the WRONG cleanup mode
+-- here -- a citizenid has no per-connection hook to clear on, exactly like
+-- server/search.lua's TargetSearchCooldown/server/combat.lua's
+-- TakedownTargetCooldown (both keyed by something other than a player
+-- source, both cleaned up the same way below). Bounded instead by
+-- :StartSweep, evicting any entry once it is provably stale (more than
+-- twice this cooldown's own configured length old -- same "threshold * 2"
+-- margin those two call sites already use) rather than growing this table
+-- forever for every citizenid that has ever requested a burst.
+local PURSUIT_SPRINT_COOLDOWN_PRUNE_INTERVAL_MS = 60000
+local pursuitSprintCooldownMs = ResolveConfiguredThresholdMs(
+    Config.PursuitSprint.cooldownMs, 45000, 'Config.PursuitSprint.cooldownMs')
+local PursuitSprintCooldown = NewCooldown(pursuitSprintCooldownMs)
+PursuitSprintCooldown.StartSweep(PURSUIT_SPRINT_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
+    return (now - loggedAt) > (pursuitSprintCooldownMs * 2)
+end)
 
 -- ======================================================================
 -- REJECT MESSAGES -- mirrors server/combat.lua's own COMBAT_REJECT_MESSAGES
@@ -583,7 +639,12 @@ RegisterNetEvent('qbx_k9unit:server:requestPursuitSprint', function(targetNetId)
     -- not wanted) must never burn the K9's own cooldown, matching
     -- server/combat.lua's own "cheapest/no-side-effect checks first,
     -- mutation last" discipline.
-    if not PursuitSprintCooldown.Consume(src) then
+    --
+    -- Keyed by k9Citizenid, NOT src -- see this cooldown's own declaration
+    -- comment above ("RECONNECT EXPLOIT FIX") for why. k9Citizenid was
+    -- already resolved fresh from exports.qbx_core:GetPlayer(src) earlier in
+    -- this same handler, never a client-supplied value.
+    if not PursuitSprintCooldown.Consume(k9Citizenid) then
         NotifyPlayer(src, PursuitSprintRejectMessage('on_cooldown'), 'error')
         return
     end

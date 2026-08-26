@@ -781,6 +781,15 @@
         my_abilities_heading: 'Abilities',
         no_abilities: 'Nothing to show yet.',
         search_features_placeholder: 'Search abilities...',
+        // DOMAIN GROUPING (owner: "more color based on all scent stuff
+        // vehicle related is more text based") -- see buildMyFeaturesList()'s
+        // own header comment for the full mechanism these five strings
+        // support.
+        feature_group_scent_heading: 'Scent & Tracking',
+        feature_group_scent_hint: 'These abilities help your K9 follow a scent trail, and pick up on blood or gunpowder.',
+        feature_group_vehicle_heading: 'Vehicles',
+        feature_group_other_heading: 'Other Abilities',
+        feature_vehicle_sentence_template: '{feature} is currently: {state}.',
         state_global_off: 'Disabled server-wide',
         state_blocked: 'Blocked',
         state_not_certified: 'Not certified',
@@ -5187,6 +5196,29 @@
         return row;
     }
 
+    /**
+     * DOMAIN GROUPING (owner: "more color based on all scent stuff vehicle
+     * related is more text based") -- `feature.category` is a small, hand-
+     * maintained tag ('scent' | 'vehicle' | null/absent) sent from
+     * server/tablet.lua's own FEATURE_DOMAINS table (mirroring that file's
+     * established NOT_ENFORCEABLE_FEATURES/CLIENT_ENFORCED_FEATURES
+     * pattern), never guessed here from a feature's name string. Splits a
+     * flat features[] into three buckets, ORDER-PRESERVING within each
+     * bucket, so this is purely a display grouping, never a re-sort of
+     * anything the server itself ordered.
+     * @param {Array<object>} features @returns {{scent:Array<object>, vehicle:Array<object>, other:Array<object>}}
+     */
+    function groupFeaturesByDomain(features) {
+        var scent = [], vehicle = [], other = [];
+        for (var i = 0; i < features.length; i++) {
+            var f = features[i];
+            if (f && f.category === 'scent') scent.push(f);
+            else if (f && f.category === 'vehicle') vehicle.push(f);
+            else other.push(f);
+        }
+        return { scent: scent, vehicle: vehicle, other: other };
+    }
+
     function buildMyFeaturesList() {
         var wrap = mk('div', { class: 'k9tablet-feature-list' });
         var features = (state.myRecord && state.myRecord.myFeatures) || [];
@@ -5194,9 +5226,58 @@
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('no_abilities') }));
             return wrap;
         }
-        for (var i = 0; i < features.length; i++) {
-            wrap.appendChild(buildMyFeatureRow(features[i]));
+
+        var grouped = groupFeaturesByDomain(features);
+        var hasDomainSections = grouped.scent.length > 0 || grouped.vehicle.length > 0;
+
+        // SCENT -- colour-forward. Config.Tracking.ScentVision.palette (the
+        // real, in-world per-person trail colour scheme) is deliberately
+        // NOT reused here: that palette identifies a SPECIFIC TRACKED
+        // PERSON, and no row in this ability list represents one -- reusing
+        // it for something else would teach a second, disagreeing meaning
+        // for the same five colours. Instead this section leans on the
+        // tablet's own theme accent colour (--k9tablet-accent, the same
+        // custom property the Block Effect column's 'client_enforced'
+        // badge already reuses for an identical reason) more heavily than
+        // the generic list does -- see html/tablet.css's own comment on
+        // .k9tablet-feature-group--scent.
+        if (grouped.scent.length > 0) {
+            wrap.appendChild(mk('h3', { class: 'k9tablet-feature-group-heading k9tablet-feature-group-heading--scent', text: S('feature_group_scent_heading') }));
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('feature_group_scent_hint') }));
+            var scentGroup = mk('div', { class: 'k9tablet-feature-group k9tablet-feature-group--scent' });
+            for (var i = 0; i < grouped.scent.length; i++) {
+                var scentRow = buildMyFeatureRow(grouped.scent[i]);
+                scentRow.className += ' k9tablet-feature-row--scent';
+                scentGroup.appendChild(scentRow);
+            }
+            wrap.appendChild(scentGroup);
         }
+
+        // VEHICLE -- text-forward. No colour badge at all: a full,
+        // locale-authored sentence carries both what the ability is and
+        // its current state, since vehicle content is about what happens
+        // rather than about telling several things apart at a glance (the
+        // owner's own distinction). Effectively one feature today
+        // (VehicleEntryExit) -- see server/tablet.lua's FEATURE_DOMAINS
+        // comment for why vehicle *search* is not tagged here.
+        if (grouped.vehicle.length > 0) {
+            wrap.appendChild(mk('h3', { class: 'k9tablet-feature-group-heading k9tablet-feature-group-heading--vehicle', text: S('feature_group_vehicle_heading') }));
+            var vehicleGroup = mk('div', { class: 'k9tablet-feature-group k9tablet-feature-group--vehicle' });
+            for (var j = 0; j < grouped.vehicle.length; j++) {
+                vehicleGroup.appendChild(buildVehicleFeatureRow(grouped.vehicle[j]));
+            }
+            wrap.appendChild(vehicleGroup);
+        }
+
+        if (grouped.other.length > 0) {
+            if (hasDomainSections) {
+                wrap.appendChild(mk('h3', { class: 'k9tablet-feature-group-heading', text: S('feature_group_other_heading') }));
+            }
+            for (var k = 0; k < grouped.other.length; k++) {
+                wrap.appendChild(buildMyFeatureRow(grouped.other[k]));
+            }
+        }
+
         return wrap;
     }
 
@@ -5204,6 +5285,29 @@
         var row = mk('div', { class: 'k9tablet-feature-row' });
         row.appendChild(mk('span', { class: 'k9tablet-feature-label', text: featureLabel(feature) }));
         row.appendChild(mk('span', { class: 'k9tablet-feature-state k9tablet-feature-state--' + feature.state, text: featureStateLabel(feature.state) }));
+        if (feature.actionable && feature.state === 'available') {
+            row.appendChild(mkButton(S('use_label'), 'k9tablet-btn', function () {
+                triggerFeature(feature.key);
+            }, { disabled: state.pendingAction }));
+        }
+        return row;
+    }
+
+    /** @param {{key:string,label?:string,state:string}} feature @returns {string} a full, plain-language sentence (never a colour badge) describing this vehicle-domain ability and its current state -- see buildMyFeaturesList()'s own "VEHICLE" comment. */
+    function vehicleFeatureSentence(feature) {
+        return formatTemplate(S('feature_vehicle_sentence_template'), {
+            feature: featureLabel(feature),
+            state: featureStateLabel(feature.state),
+        });
+    }
+
+    /** Vehicle-domain equivalent of buildMyFeatureRow() -- same actionable/
+     * trigger-button behaviour, but the label+badge pair is replaced with
+     * one full sentence (never a colour badge) per the "more text-based"
+     * ask. @param {object} feature */
+    function buildVehicleFeatureRow(feature) {
+        var row = mk('div', { class: 'k9tablet-feature-row k9tablet-feature-row--vehicle' });
+        row.appendChild(mk('p', { class: 'k9tablet-feature-vehicle-sentence', text: vehicleFeatureSentence(feature) }));
         if (feature.actionable && feature.state === 'available') {
             row.appendChild(mkButton(S('use_label'), 'k9tablet-btn', function () {
                 triggerFeature(feature.key);
@@ -6122,10 +6226,30 @@
      * three-state contract this reads and why it is never derived from
      * `feature.key` here.
      */
+    /** @param {{category?:string}} feature @returns {string} name-cell class for this row's domain (scent/vehicle get a light visual accent here too; every other row keeps no class at all, byte-identical to before this pass). */
+    function personFeatureNameCellClass(feature) {
+        if (feature && feature.category === 'scent') return 'k9tablet-person-feature-name--scent';
+        if (feature && feature.category === 'vehicle') return 'k9tablet-person-feature-name--vehicle';
+        return null;
+    }
+
     function buildPersonFeatureRow(feature) {
         var tr = mk('tr');
-        tr.appendChild(mk('td', { text: featureLabel(feature) }));
-        tr.appendChild(mk('td', { class: 'k9tablet-feature-state--' + feature.state, text: featureStateLabel(feature.state) }));
+        var nameCls = personFeatureNameCellClass(feature);
+        tr.appendChild(nameCls ? mk('td', { class: nameCls, text: featureLabel(feature) }) : mk('td', { text: featureLabel(feature) }));
+        // VEHICLE -- text-forward, same reasoning as buildVehicleFeatureRow()
+        // above: a full sentence replaces the terse state badge entirely,
+        // never a colour badge, for admins looking at this same feature on
+        // a specific person's record too. Every other row (including
+        // scent) keeps the ORIGINAL badge cell, byte-identical to before
+        // this pass.
+        if (feature.category === 'vehicle') {
+            var vehicleStateTd = mk('td', { class: 'k9tablet-feature-state--' + feature.state });
+            vehicleStateTd.appendChild(mk('p', { class: 'k9tablet-feature-vehicle-sentence', text: vehicleFeatureSentence(feature) }));
+            tr.appendChild(vehicleStateTd);
+        } else {
+            tr.appendChild(mk('td', { class: 'k9tablet-feature-state--' + feature.state, text: featureStateLabel(feature.state) }));
+        }
 
         var citizenid = state.person.citizenid;
         var key = feature.key;
