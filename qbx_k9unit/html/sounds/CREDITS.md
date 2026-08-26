@@ -2,6 +2,46 @@
 
 Author: technology-scout pass, 2026-08-24, jlwood17190665@gmail.com.
 
+## Current status (read this first)
+
+**All five required files exist in `html/sounds/`, are genuine Ogg Vorbis
+audio (not placeholders), and are listed in `fxmanifest.lua`'s `files{}`
+block, so they actually reach clients today.** The sections below are kept
+in the order they were written and include two early passes that correctly
+concluded nothing could be shipped yet — that history is real and is left
+in place, but it describes a state this resource is no longer in. Skip to
+"AUDIO SHIP PASS — 2026-08-25" and "AUDIO SHIP PASS 2 — 2026-08-25" further
+down for the full sourcing/verification record behind each file; the table
+below is only a summary of that record, not a replacement for it.
+
+| File | License | Attribution required |
+|---|---|---|
+| `bark.ogg` | OGA-BY 3.0 (OpenGameArt) | "Dog barking mono" by Brandon Morris (HaelDB), https://opengameart.org/content/dog-barking-mono, licensed under OGA-BY 3.0. |
+| `bark_alert.ogg` | OGA-BY 3.0 (OpenGameArt) | Same as `bark.ogg` — same source submission. |
+| `bark_aggressive.ogg` | OGA-BY 3.0 (OpenGameArt) | Same as `bark.ogg` — same source submission. |
+| `bark_calm.ogg` | OGA-BY 3.0 (OpenGameArt) | Same as `bark.ogg` — same source submission. |
+| `growl_ambient.ogg` | CC-BY 3.0 (OpenGameArt) + CC-BY 4.0 (Freesound, upstream original) | "Dog growls" by congusbongus, https://opengameart.org/content/dog-growls, licensed under CC-BY 3.0; derived from "Dogs growling.wav" by juskiddink, https://freesound.org/people/juskiddink/sounds/121565/, licensed under CC-BY 4.0. |
+
+All four bark files are different trims of the same single OpenGameArt
+submission (`dog-barking-mono`), each individually verified as genuine Ogg
+Vorbis and measured for clipping/DC offset/loop-seam quality — see "Source 1"
+and each file's own dated entry below for the exact commands and numbers.
+None of this attribution or licensing text was invented for this summary —
+every line above is copied from the fully-sourced entries later in this
+file.
+
+**Two loose ends from the sourcing record itself, not something this pass
+resolved:** (1) the OpenGameArt "Dog barking mono" submission is offered
+under both OGA-BY 3.0 and CC0 — this file deliberately credits it under the
+stricter OGA-BY 3.0 rather than assuming the lighter CC0 option applies;
+see "AUDIO SHIP PASS 2"'s "Correction... independently reproduced" section
+if that choice is ever revisited. (2) whether CC BY-SA-style share-alike
+terms could ever reach into this resource's own code was reasoned about,
+not confirmed against primary licence text, in "On CC BY-SA's share-alike
+scope" below — moot for what's actually shipped (none of the five shipped
+files carry a share-alike term), but worth reading before ever adding a
+Wikimedia Commons file to this folder.
+
 **Merge note, docs-consolidation pass, 2026-08-25:** the separate
 `AUDIO_SOURCING.md` (root of the resource) has been folded into this file.
 That document was a second, corroborating pass over the same licensing
@@ -24,8 +64,11 @@ original brief below). This file is a sourcing brief, not a credits log —
 there was nothing to credit yet at that point. That was a deliberate,
 honest outcome, not an oversight: see "Why no files shipped" below before
 assuming this was unfinished work someone forgot to do. **This has since
-changed — see "AUDIO SHIP PASS — 2026-08-25" further down: `bark.ogg` is
-now sourced, shipped, and credited.**
+changed — see "AUDIO SHIP PASS — 2026-08-25" and "AUDIO SHIP PASS 2 —
+2026-08-25" further down: all five files (`bark.ogg`, `bark_alert.ogg`,
+`bark_aggressive.ogg`, `bark_calm.ogg`, `growl_ambient.ogg`) are now
+sourced, shipped, and credited — see "Current status" at the top of this
+file for the summary.**
 
 **Confidence convention** (same standard `DEVELOPER_REFERENCE.md#dependencies-and-audio`
 already uses in this resource): a claim below is marked CONFIRMED only when
@@ -219,8 +262,12 @@ From what could be reached:
 
 ## Files actually added this pass
 
-`bark.ogg` was added in the 2026-08-25 "AUDIO SHIP PASS" below. Use this
-template for any future file added to `html/sounds/`:
+`bark.ogg` was added in the 2026-08-25 "AUDIO SHIP PASS" below. **Update:**
+the remaining four files (`bark_alert.ogg`, `bark_aggressive.ogg`,
+`bark_calm.ogg`, `growl_ambient.ogg`) were subsequently added in "AUDIO SHIP
+PASS 2 — 2026-08-25" further down this file — all five now exist in
+`html/sounds/`. Use this template for any future file added to
+`html/sounds/`:
 
 ```
 ### <filename>
@@ -715,40 +762,39 @@ CC-BY 4.0.
 
 ---
 
-## Required follow-up in `fxmanifest.lua` (owned by someone else — NOT done by this pass)
+## Required follow-up in `fxmanifest.lua` — RESOLVED
 
-The four new files **will 404 exactly as before** until these four lines
-join `'html/sounds/bark.ogg'` in that file's `files{}` block:
+**Update:** this has since been done. `fxmanifest.lua`'s `files{}` block now
+lists all five files (`html/sounds/bark.ogg`, `bark_alert.ogg`,
+`bark_aggressive.ogg`, `bark_calm.ogg`, `growl_ambient.ogg`) as explicit
+entries, matching this manifest's existing convention rather than a glob —
+the reasoning for that is in the "glob support finding" section above and
+is unchanged. Nothing outstanding here; the paragraph below is left for
+context on why the fix mattered.
 
-```lua
-    'html/sounds/bark_alert.ogg',
-    'html/sounds/bark_aggressive.ogg',
-    'html/sounds/bark_calm.ogg',
-    'html/sounds/growl_ambient.ogg',
-```
+The four new files **would have 404'd exactly as before** until those four
+lines joined `'html/sounds/bark.ogg'` in that file's `files{}` block — which
+they now have.
 
-Explicit entries, matching this manifest's existing convention rather than
-a glob — the reasoning for that is in the "glob support finding" section
-above and is unchanged.
+## Heads-up: `html/tests/` no longer encodes "these four files do not exist" as a fixture — RESOLVED
 
-## Heads-up: `html/tests/` encodes "these four files do not exist" as a fixture
+**Update:** `html/tests/sandbox.js`'s `realSoundsFetch()` now reads whatever
+is genuinely present in `html/sounds/` (all five real files, today), and the
+suite's 404-path tests use a dedicated `MISSING_SOUND_KEY =
+'nonexistent_test_sound'` — a key guaranteed never to be a shipped asset —
+instead of piggy-backing on a real filename that used to be absent. That is
+exactly the robust fix this section used to ask whoever owns `html/tests/`
+to make; it has been made. The paragraph below is left for context on the
+problem it fixed.
 
-`html/tests/sandbox.js`'s `realSoundsFetch()` deliberately reads the **real**
-`html/sounds/` directory, and its own comment says so: "(bark.ogg exists;
-bark_alert/bark_aggressive/bark_calm/growl_ambient do not, as of this
-task's own setup)". Shipping the four files therefore flips those tests'
-404 path to a 200 path, and `audio_play_spec.js` (3 cases) and
-`audio_setgain_stop_spec.js` (1 case) now fail for that reason alone —
-including the regression test for the recently-fixed `stoppedBeforeStart`
-leak, which needs a genuinely-absent file to exercise the leak path at all.
-
-This pass did **not** edit those specs — they belong to whoever owns
-`html/tests/`, and the fix is a test-design decision. The robust fix is to
-stop piggy-backing on "not sourced yet" and point the 404-path cases at a
-key that is guaranteed never to be a shipped asset (any key matching
-`app.js`'s `[a-z0-9_-]` sanitiser with no file behind it, e.g.
-`nonexistent_test_sound`), so the tests stay meaningful no matter which
-real sounds ship later.
+Before that fix, `html/tests/sandbox.js`'s `realSoundsFetch()` deliberately
+read the **real** `html/sounds/` directory, and its own comment said so:
+"(bark.ogg exists; bark_alert/bark_aggressive/bark_calm/growl_ambient do
+not, as of this task's own setup)". Shipping the four files would have
+flipped those tests' 404 path to a 200 path, breaking `audio_play_spec.js`
+and `audio_setgain_stop_spec.js` for that reason alone — including the
+regression test for the `stoppedBeforeStart` leak, which needs a
+genuinely-absent file to exercise the leak path at all.
 
 Worth noting what those failures actually prove, though: the sandbox
 reported decoding buffers of **6721** and **28386** bytes for `bark_alert`
