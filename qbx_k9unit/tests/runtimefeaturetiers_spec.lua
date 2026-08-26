@@ -249,7 +249,26 @@ t.test('a still-genuinely-unaudited feature (this spec\'s own fixture, never ser
     t.equals(result.reason, 'unaudited_feature')
 end)
 
-t.test('DISCLOSED PARTIAL LIVENESS: BiteAndHold/NonLethalTakedown/PropDragging stay tier = \'live\' (the request-time gate genuinely is), but each carries a note disclosing that server/combat.lua\'s own auto-release maintenance thread does not', function()
+-- INVERTED ON PURPOSE (2026-08-26). This test used to REQUIRE a disclosure
+-- note on BiteAndHold/NonLethalTakedown/PropDragging, because server/combat.lua's
+-- auto-release maintenance thread and its K9-position-history sampling thread
+-- each only STARTED if one of those flags (or HandlerDownDefense) was already
+-- true when that file loaded -- so flipping one on live, from all-four-off at
+-- boot, created holds that nothing would ever time out. That gap is fixed:
+-- both threads now start unconditionally and re-check their governing flag(s)
+-- fresh every tick. The honest disclosure has therefore become a LIE, and a
+-- note that describes a gap which no longer exists is worse than no note --
+-- it tells an operator not to trust a safety net that now works.
+--
+-- So this test now asserts the OPPOSITE of what it once did. If you are here
+-- because you spotted three bare `tier = 'live'` entries and thought the
+-- disclosure had been dropped by accident: it was not. Read
+-- tests/combat_spec.lua's two "LIVE-FLIP FIX" tests -- they are the real
+-- regression coverage proving a hold created after a live flip still
+-- auto-releases, and that position-history sampling starts within one
+-- interval of that flip. Re-adding a note here would need those two tests to
+-- be failing first.
+t.test('RESOLVED PARTIAL LIVENESS: BiteAndHold/NonLethalTakedown/PropDragging are tier = \'live\' with NO caveat note -- both the request-time gate and the auto-release maintenance thread are genuinely live now', function()
     local f = boot()
     local result = f.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
     t.isTrue(result.ok)
@@ -263,8 +282,7 @@ t.test('DISCLOSED PARTIAL LIVENESS: BiteAndHold/NonLethalTakedown/PropDragging s
         local row = rowByName[name]
         t.isNotNil(row, name .. ' must be present in config.lua\'s Config.Features')
         t.equals(row.tier, 'live', name .. ' -- the request-time gate (ValidateCombatRequest) really is checked fresh every call')
-        t.isTrue(type(row.note) == 'string' and #row.note > 0, name .. ' must carry a note disclosing the maintenance-thread gap -- a bare tier = \'live\' with no note would silently over-promise a working timeout/holder-death/vehicle-entry auto-release that a boot-time-off-then-live-on flip does not actually get until a restart')
-        t.isTrue(row.note:find('maintenance thread', 1, true) ~= nil, name .. ' note must name the actual mechanism (the maintenance thread) this gap is about, not just a vague caveat')
+        t.isTrue(row.note == nil, name .. ' must carry NO note: the maintenance-thread gap it used to disclose is fixed (server/combat.lua starts both threads unconditionally), and a stale caveat would tell an operator not to trust an auto-release that now works')
     end
 end)
 

@@ -474,50 +474,23 @@ local FEATURE_TIERS = {
     -- tier = 'live' -- see header "THE FULL AUDIT" for the exact evidence per entry.
     XPProgression          = { tier = 'live' },
     HandlerPartnership     = { tier = 'live' },
-    -- DISCLOSED PARTIAL LIVENESS (found this pass, same class as
-    -- ScentTracking/CertificationExpiry/PartnershipTenureBonus below --
-    -- "the request-time gate is live; a background thread that only starts
-    -- if the flag was already true at boot is not"). server/combat.lua's
-    -- own maintenance loop ("if Config.Features.BiteAndHold or
-    -- Config.Features.NonLethalTakedown or Config.Features.PropDragging or
-    -- Config.Features.HandlerDownDefense then CreateThread(...) end", the
-    -- comment directly above it: "With all four false, ActiveHolds is
-    -- provably always empty, so not running this thread is behaviorally
-    -- identical to running it forever against an empty table") is THE ONLY
-    -- place any active hold/takedown/drag is ever auto-ended by timeout,
-    -- holder-death, target-unresolvable, target-entered-vehicle, or
-    -- drag-max-distance-exceeded -- confirmed by direct read (every one of
-    -- those five EndHold(...) call sites lives inside this one thread body).
-    -- That "provably always empty" reasoning is true only for as long as
-    -- ALL FOUR flags stay exactly what they were at boot -- which this very
-    -- registry's own SetFeature promise (tier = 'live', restartRequired =
-    -- false) now lets an operator break: booting with all four off, then
-    -- flipping ONE of these three on live, lets requestBiteHold/
-    -- requestTakedown/requestDrag (unconditionally registered, each
-    -- re-checking its own flag fresh via ValidateCombatRequest) start
-    -- populating ActiveHolds for real -- with the ONE thread that would ever
-    -- auto-release any of them never having started. A resulting hold
-    -- cannot time out, cannot auto-release on the holder dying, on the
-    -- target's ped becoming unresolvable, on the target entering a vehicle,
-    -- or (for a drag) on exceeding its own max distance, for the rest of
-    -- that server's uptime -- reopening exactly the "unbounded trap" class
-    -- this resource is otherwise careful never to reintroduce. A manual
-    -- release action and Recall remain unaffected (neither routes through
-    -- this thread), so this is not a total dead end for the held party --
-    -- but every AUTOMATIC safety net this file's own SetFeature response
-    -- implies is already working ("appliedLive = true, restartRequired =
-    -- false") silently is not, until the next restart. Reported to
-    -- server/combat.lua's own owner as the real fix (start that thread
-    -- unconditionally, mirroring server/main.lua's own
-    -- DoorScratchByDoorCooldown.StartSweep precedent of walking a
-    -- provably-empty table for free rather than gating the thread's START
-    -- on a boot-time flag snapshot) -- not fixed here, since this file does
-    -- not own server/combat.lua; disclosing the gap accurately in this
-    -- entry's own `note` is the correct, safe action on THIS file's side
-    -- regardless of when/whether that fix lands.
-    BiteAndHold            = { tier = 'live', note = 'The request-time gate (ValidateCombatRequest) is genuinely live. server/combat.lua\'s own auto-release maintenance thread (timeout, holder-death, target-unresolvable, target-entered-vehicle) only starts if BiteAndHold, NonLethalTakedown, PropDragging, or HandlerDownDefense was ALREADY true when that file loaded -- turning this on live, from all-four-off at boot, lets a hold be created with none of those automatic safety releases running until this resource restarts. A manual release action and Recall are unaffected.' },
-    NonLethalTakedown      = { tier = 'live', note = 'The request-time gate (ValidateCombatRequest) is genuinely live. server/combat.lua\'s own auto-release maintenance thread (timeout, holder-death, target-unresolvable, target-entered-vehicle) only starts if BiteAndHold, NonLethalTakedown, PropDragging, or HandlerDownDefense was ALREADY true when that file loaded -- turning this on live, from all-four-off at boot, lets a takedown hold be created with none of those automatic safety releases running until this resource restarts. A manual release action and Recall are unaffected.' },
-    PropDragging           = { tier = 'live', note = 'The request-time gate (ValidateCombatRequest) is genuinely live. server/combat.lua\'s own auto-release maintenance thread (timeout, holder-death, target-unresolvable, target-entered-vehicle, drag-max-distance-exceeded) only starts if BiteAndHold, NonLethalTakedown, PropDragging, or HandlerDownDefense was ALREADY true when that file loaded -- turning this on live, from all-four-off at boot, lets a drag be created with none of those automatic safety releases (including its own max-distance cutoff) running until this resource restarts. A manual release action and Recall are unaffected.' },
+    -- RESOLVED (coder-backend, this pass): this entry used to disclose a
+    -- partial-liveness gap -- server/combat.lua's own expiry maintenance
+    -- thread and its K9-position-history sampling thread each used to only
+    -- start if one of BiteAndHold/NonLethalTakedown/PropDragging/
+    -- HandlerDownDefense was ALREADY true when that file loaded, so
+    -- flipping one on live (all four off at boot) produced holds/takedowns/
+    -- drags with no automatic release path until a restart. Both threads
+    -- now start unconditionally and re-check their governing flag(s) fresh
+    -- every tick (the expiry thread needed no inner check at all -- an
+    -- empty ActiveHolds is genuinely free to walk; the position-history
+    -- thread's flag check moved inside its loop, since GetPlayers() is not
+    -- free to walk unconditionally). See server/combat.lua's own comments
+    -- at both thread definitions, and tests/combat_spec.lua's two
+    -- "LIVE-FLIP FIX" tests, for the full writeup and regression coverage.
+    BiteAndHold            = { tier = 'live' },
+    NonLethalTakedown      = { tier = 'live' },
+    PropDragging           = { tier = 'live' },
     DeployableKennel       = { tier = 'live' },
     ScentTracking          = { tier = 'live', note = 'Query side (findTrackableSource) is fully live. The ox_inventory drop hook that logs NEW scent sources is only (re-)registered at server start -- turning this on mid-session re-enables searching existing/already-logged sources immediately, but new drops will not be logged as scent sources until this resource restarts.' },
     BloodTracking          = { tier = 'live' },

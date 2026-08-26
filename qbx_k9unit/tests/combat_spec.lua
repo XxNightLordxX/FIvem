@@ -835,14 +835,72 @@ t.test('REGRESSION: Config.Combat.NonLethalTakedown.cooldownMs = 0 -- NonLethalT
     t.equals(#f.clientEvents, afterFirst, 'still on the FALLBACK 25000ms per-K9 cooldown -- a second takedown by the SAME K9 is correctly denied, not silently unlimited')
 end)
 
-t.test('with every combat feature flag off, the maintenance thread is never created, and requests are silently feature-gated', function()
+t.test('with every combat feature flag off, requests are still silently feature-gated, and the (now-unconditional) maintenance thread idles cleanly over an empty ActiveHolds with no error', function()
     local f = newCombatFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = false })
     wireK9(f, K9_SRC)
     wireNpcTarget(f, 500)
     f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
     t.equals(#f.clientEvents, 0)
-    local ok = pcall(f.runOneTick) -- must not error even though nothing was ever created
+    -- CORRECTED (this pass, coder-backend): this test used to be titled "the
+    -- maintenance thread is never created" and treated that as the CORRECT
+    -- behavior -- it was actually the confirmed bug (see the dedicated
+    -- LIVE-FLIP FIX test immediately below for the real regression coverage).
+    -- The thread IS created now, unconditionally, every time this file
+    -- loads; what this test actually pins is narrower and still true post-fix:
+    -- with ActiveHolds genuinely empty, one full pass costs nothing and
+    -- never errors.
+    local ok = pcall(f.runOneTick)
     t.isTrue(ok)
+end)
+
+-- ========================================================================
+-- CONFIRMED BUG, FIXED (this pass, coder-backend): the shared expiry
+-- maintenance thread -- the ONLY place any hold/takedown/drag is ever
+-- auto-ended by timeout, holder-death, target-unresolvable,
+-- target-entered-vehicle, or drag-max-distance-exceeded -- used to only
+-- ever start if one of BiteAndHold/NonLethalTakedown/PropDragging/
+-- HandlerDownDefense was ALREADY true at this file's own load time.
+-- server/runtimecontrol.lua's FEATURE_TIERS registers BiteAndHold/
+-- NonLethalTakedown/PropDragging as `tier = 'live'` (ApplyFeatureOverride
+-- mutates Config.Features.* immediately, no restart), so an operator could
+-- boot with all four off, flip ONE on live from the tablet, and get a fully
+-- live requestBiteHold/HandleTakedownRequest/requestDrag (each re-checks
+-- its own flag fresh) writing real ActiveHolds entries with the one thread
+-- that would ever release any of them never having started -- an
+-- unreleasable hold for the rest of that server's uptime, escapable only by
+-- a manual release or a disconnect. This is the exact property this
+-- section proves now holds: a hold that CAN be created can ALWAYS be
+-- released, regardless of what the flags were when this file loaded.
+-- ========================================================================
+
+t.test('LIVE-FLIP FIX: a hold created after flipping BiteAndHold on LIVE (booted with every combat flag off) still times out and auto-releases on its own -- no restart of this resource required', function()
+    local f = newCombatFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = false })
+    wireK9(f, K9_SRC)
+    wireNpcTarget(f, 500)
+
+    -- Boot-time state: request-time gating still denies -- this fix never
+    -- widens that check.
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0, 'still denied while the flag is off at boot')
+
+    -- High command flips BiteAndHold on LIVE, mid-session -- exactly the
+    -- scenario server/runtimecontrol.lua's own FEATURE_TIERS entry for this
+    -- flag documents (`tier = 'live'`, `restartRequired = false`).
+    f.config.Features.BiteAndHold = true
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'the request-time gate is genuinely live -- a real hold is created')
+
+    -- THE ACTUAL BUG, pre-fix: the maintenance thread never started (it was
+    -- never true that any of the four flags were on when this file loaded
+    -- in this fixture), so nothing would ever have timed this hold out.
+    -- Prove the opposite now holds -- the SAME thread that has been idling
+    -- over an empty ActiveHolds since load time picks this hold up and
+    -- ends it on schedule, with no restart in between.
+    f.advance(15000) -- Config.Combat.BiteAndHold.maxDurationMs (baselineBiteAndHoldConfig)
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:endNpcBiteHold'), 1,
+        'a hold created after a LIVE flag flip must still be auto-released on timeout -- a hold that can be created must always be releasable')
 end)
 
 t.test('onResourceStart: prints the spoofable-default warning for PropDragging when enabled with no IsPlayerDownedOverride', function()
@@ -1092,6 +1150,44 @@ t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- an ACTIVE hold remains r
     f.advance(baselineBiteAndHoldConfig().targetCooldownMs + 1)
     f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
     t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'a genuinely fresh request from the same still-teleported, stale-history K9 must still be refused')
+end)
+
+-- ========================================================================
+-- CONFIRMED SIBLING BUG, FIXED (this pass, coder-backend): the K9
+-- POSITION-HISTORY sampling thread that backs RED-TEAM FINDING 1's own
+-- teleport-plausibility check above had the EXACT SAME boot-time-snapshot
+-- gate as the expiry maintenance thread ("if Config.Features.BiteAndHold or
+-- Config.Features.NonLethalTakedown or Config.Features.PropDragging then
+-- CreateThread(...) end") -- all three flags are `tier = 'live'` in
+-- server/runtimecontrol.lua. Booting with all three off then flipping one
+-- on live left K9PositionHistory permanently empty for the rest of that
+-- server's uptime, which does not strand anyone (this is a REQUEST-time
+-- check, not a release path) but silently turns the ALREADY-disclosed,
+-- BOUNDED "at most once per fresh connection" fail-open gap (see
+-- K9PositionHistory's own declaration comment) into an UNBOUNDED one: every
+-- single request, forever, not just the first one after connecting.
+-- ========================================================================
+
+t.test('LIVE-FLIP FIX: K9 position-history sampling stays off while every combat flag is off, then starts within one interval of flipping BiteAndHold on live -- the teleport-plausibility check is no longer permanently fail-open', function()
+    local f = newCombatFixture({ biteAndHold = false, nonLethalTakedown = false, propDragging = false })
+    local k9Ped = wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    f.addOnline(K9_SRC)
+    f.runOneTick() -- all three flags off: the live inner check must skip the GetPlayers() scan entirely -- no sample taken
+
+    f.config.Features.BiteAndHold = true -- live flip, e.g. from the tablet, mid-session
+    f.runOneTick() -- the SAME already-running thread reads the flag fresh next tick and samples K9PositionHistory[K9_SRC] = { pos = (0,0,0), time = <now> } -- no restart needed
+
+    -- Teleport 1000m instantly. Pre-fix, K9PositionHistory[K9_SRC] would
+    -- still be nil here (permanently, since a boot-time-gated thread never
+    -- starts once the flags were off at load) and this obviously-implausible
+    -- request would fail OPEN. Post-fix, the baseline sample above makes
+    -- this the same detectable jump RED-TEAM FINDING 1's own tests already
+    -- cover.
+    f.setCoords(k9Ped, 1000, 0, 0)
+    wireNpcTarget(f, 500, { x = 1000, y = 0, z = 0 })
+    f.advance(1000)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0, 'once the flag has been on for at least one sampling interval, the teleport-plausibility check must be live, not permanently fail-open from a stale boot-time gate')
 end)
 
 -- ========================================================================
