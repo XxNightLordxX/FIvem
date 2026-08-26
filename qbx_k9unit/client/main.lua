@@ -357,17 +357,52 @@ end
 --- goes through PlaySoundOnNetworkEntity (and therefore, transitively,
 --- through this function) rather than resolving netId itself — it never
 --- needed its own separate migration.
+--- OPTIONAL BOUNDED RETRY. `attempts` defaults to 1, which is the plain
+--- single synchronous check every existing caller has always relied on and
+--- which never yields -- important, because several callers run this inside
+--- per-frame maintenance loops where a Wait() would be wrong.
+---
+--- Pass a higher number ONLY from a net-event handler that has just been
+--- told about an entity by the server. In that specific case a single check
+--- can legitimately answer false: the event can arrive a fraction before the
+--- entity finishes streaming in to this client, and the caller then treats a
+--- perfectly real kennel/vehicle/prop as absent and silently does nothing.
+---
+--- WHY THIS PARAMETER EXISTS AT ALL: three call sites in client/kennel.lua
+--- (the pickup, put-down and enter-kennel confirmations, all three fired
+--- immediately after a server round trip) have been passing `3` as a second
+--- argument since they were written. This function took ONE parameter, so
+--- Lua silently discarded it -- no error, no warning, and no retry. They
+--- were asking for exactly this and getting a single check. Rather than
+--- delete the argument and leave the real race unhandled, the behaviour they
+--- were asking for is now implemented.
 --- @param netId number
+--- @param attempts number? -- how many checks to make, default 1 (no waiting)
 --- @return number? entity
-function ResolveNetworkEntity(netId)
-    if not NetworkDoesEntityExistWithNetworkId(netId) then
-        return nil -- this client doesn't have the entity streamed in at all
+function ResolveNetworkEntity(netId, attempts)
+    -- Deliberately NOT `attempts or 1`: in Lua that falls through for a
+    -- legitimate 0 the same way it does for nil, and this codebase has been
+    -- bitten by that pattern before. A non-number, or anything below 1, means
+    -- "just check once".
+    local tries = 1
+    if type(attempts) == 'number' and attempts > 1 then
+        tries = math.floor(attempts)
     end
 
-    local entity = NetworkGetEntityFromNetworkId(netId)
-    if not DoesEntityExist(entity) then return nil end
+    for attempt = 1, tries do
+        if NetworkDoesEntityExistWithNetworkId(netId) then
+            local entity = NetworkGetEntityFromNetworkId(netId)
+            if DoesEntityExist(entity) then return entity end
+        end
 
-    return entity
+        -- Only wait BETWEEN attempts, never after the last one -- a caller
+        -- asking for one attempt must be exactly as synchronous as it always
+        -- was, and a caller asking for three must not pay for a fourth wait
+        -- it will never use.
+        if attempt < tries then Wait(0) end
+    end
+
+    return nil -- not streamed in, deleted/recycled, or a bogus id
 end
 
 --- Resolves a targeted ped entity to the server id of the player it

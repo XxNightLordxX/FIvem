@@ -198,7 +198,29 @@ local function newMainFixture()
     }
 
     local networkEntities = {} -- netId -> entity handle, present only once "registered" (models NetworkDoesEntityExistWithNetworkId's real true/false contract, not just a 0-vs-nonzero return)
-    local function NetworkDoesEntityExistWithNetworkId(netId) return networkEntities[netId] ~= nil end
+    -- netId -> how many more checks must happen before it "streams in".
+    -- Models the real race ResolveNetworkEntity's retry parameter exists for:
+    -- a net event arriving a fraction before the entity finishes streaming.
+    local streamsInAfter = {}
+    local existenceChecks = 0
+    local function NetworkDoesEntityExistWithNetworkId(netId)
+        existenceChecks = existenceChecks + 1
+        local pending = streamsInAfter[netId]
+        if pending then
+            if pending > 1 then
+                streamsInAfter[netId] = pending - 1
+                return false
+            end
+            streamsInAfter[netId] = nil -- streamed in on this check
+        end
+        return networkEntities[netId] ~= nil
+    end
+
+    -- ResolveNetworkEntity waits BETWEEN attempts. Nothing else in this file
+    -- yields, so a bare counter is enough to prove both that it waits when
+    -- retrying and that it never waits after its final attempt.
+    local waitCalls = {}
+    local function Wait(ms) waitCalls[#waitCalls + 1] = ms end
     local function NetworkGetEntityFromNetworkId(netId) return networkEntities[netId] or 0 end
     local existingEntities = {} -- entity handle -> true
     local function DoesEntityExist(entity) return existingEntities[entity] == true end
@@ -248,6 +270,7 @@ local function newMainFixture()
         GetGameTimer = GetGameTimer,
         lib = lib,
         NetworkDoesEntityExistWithNetworkId = NetworkDoesEntityExistWithNetworkId,
+        Wait = Wait,
         NetworkGetEntityFromNetworkId = NetworkGetEntityFromNetworkId,
         DoesEntityExist = DoesEntityExist,
         NetworkGetPlayerIndexFromPed = NetworkGetPlayerIndexFromPed,
@@ -286,6 +309,15 @@ local function newMainFixture()
             networkEntities[netId] = handle
             existingEntities[handle] = exists ~= false
         end,
+        --- Registers an entity that only reports as streamed-in from the
+        --- Nth existence check onward, so a retry can be observed working.
+        registerEntityAfterChecks = function(netId, handle, checks)
+            networkEntities[netId] = handle
+            existingEntities[handle] = true
+            streamsInAfter[netId] = checks
+        end,
+        waitCallCount = function() return #waitCalls end,
+        existenceCheckCount = function() return existenceChecks end,
         setPlayerIndexForPed = function(entity, playerIndex) playerIndexByPed[entity] = playerIndex end,
         setServerIdForPlayerIndex = function(playerIndex, serverId) serverIdByPlayerIndex[playerIndex] = serverId end,
         getPlayerServerIdCallCount = function() return #getPlayerServerIdCallLog end,
@@ -745,6 +777,66 @@ t.test('playBark: source left unset (nil) -- modeling a bare local TriggerEvent(
     f.registerEntity(203, 6003, true)
     f.triggerPlayBark(nil, 203, 'bark')
     t.equals(#f.playSoundFromEntityCalls, 0, 'nil ~= 65535 in Lua, so this must reject exactly like any other non-sentinel value -- same open-engine-question caveat as above')
+end)
+
+-- THE RETRY PARAMETER. Three call sites in client/kennel.lua -- the pickup,
+-- put-down and enter-kennel confirmations -- have passed `3` as a second
+-- argument to ResolveNetworkEntity since they were written, while the
+-- function took ONE parameter. Lua silently discarded it: no error, no
+-- warning, no retry. All three fire immediately after a server round trip,
+-- which is exactly when a single check can legitimately answer false because
+-- the entity has not finished streaming in yet -- so the real kennel was
+-- treated as absent and the action silently did nothing.
+--
+-- These tests pin the behaviour those call sites were always asking for, and
+-- equally pin that a one-attempt caller stayed exactly as synchronous as it
+-- has always been. Several callers run this inside per-frame maintenance
+-- loops where an unexpected yield would be its own bug.
+t.test('ResolveNetworkEntity: the default is ONE check and ZERO waits -- every existing caller is unchanged and never yields', function()
+    local f = newMainFixture()
+    f.registerEntity(200, 6000)
+
+    t.equals(f.env.ResolveNetworkEntity(200), 6000)
+    t.equals(f.existenceCheckCount(), 1, 'exactly one existence check for a plain call')
+    t.equals(f.waitCallCount(), 0, 'a single-attempt resolve must never yield -- per-frame callers depend on this')
+end)
+
+t.test('ResolveNetworkEntity: an entity that streams in a moment late is found on a retry, instead of being wrongly reported absent', function()
+    local f = newMainFixture()
+    -- Absent for the first two checks, present from the third -- the exact
+    -- race the kennel confirmations hit.
+    f.registerEntityAfterChecks(201, 6001, 3)
+
+    t.equals(f.env.ResolveNetworkEntity(201, 3), 6001, 'three attempts must find an entity that arrives by the third check')
+    t.equals(f.waitCallCount(), 2, 'waits BETWEEN attempts only -- two waits for three attempts, never a wasted one after the last')
+end)
+
+t.test('ResolveNetworkEntity: the same late entity is MISSED with the default single attempt -- proving the retry is what makes the difference, not the fixture', function()
+    local f = newMainFixture()
+    f.registerEntityAfterChecks(202, 6002, 3)
+
+    t.isNil(f.env.ResolveNetworkEntity(202), 'one attempt cannot see an entity that has not streamed in yet -- this is the silent no-op the three kennel call sites were suffering')
+end)
+
+t.test('ResolveNetworkEntity: retries are BOUNDED -- an entity that never streams in gives up rather than looping forever', function()
+    local f = newMainFixture()
+    -- Never arrives: more pending checks than attempts allowed.
+    f.registerEntityAfterChecks(203, 6003, 99)
+
+    t.isNil(f.env.ResolveNetworkEntity(203, 3))
+    t.equals(f.existenceCheckCount(), 3, 'exactly the requested number of attempts, no more')
+    t.equals(f.waitCallCount(), 2, 'and no wait after the final failed attempt')
+end)
+
+t.test('ResolveNetworkEntity: a nonsense attempts argument falls back to a single check rather than misbehaving', function()
+    local f = newMainFixture()
+    f.registerEntity(204, 6004)
+
+    -- 0 is the case a bare `attempts or 1` would get wrong, since 0 is truthy
+    -- in Lua. A string is the case arithmetic would throw on.
+    t.equals(f.env.ResolveNetworkEntity(204, 0), 6004)
+    t.equals(f.env.ResolveNetworkEntity(204, 'three'), 6004)
+    t.equals(f.waitCallCount(), 0, 'neither may yield')
 end)
 
 os.exit(t.summary())
