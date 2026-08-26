@@ -423,9 +423,15 @@ t.test('poll result inactive, no expired flag (e.g. stopped some other way serve
     local f = newScentTrailFixture()
     f.queueCallbackResponse({ started = true, huntId = 1 })
     f.startCommand({})
+
+    -- Baseline past the start confirmation and assert on the DELTA -- see
+    -- the poll-failure test below for why. What this test is about is the
+    -- SILENT-STOP path staying silent, not the total notify count.
+    local notifiesBeforeStop = #f.notifyCalls
+
     f.queueCallbackResponse({ active = false })
     f.stepOne(1)
-    t.equals(#f.notifyCalls, 0)
+    t.equals(#f.notifyCalls - notifiesBeforeStop, 0, 'a silent server-side stop must notify nothing')
 end)
 
 -- ----------------------------------------------------------------------
@@ -444,9 +450,21 @@ t.test('FAIL-CLOSED: pollScentHunt throwing mid-hunt is caught, ends the hunt lo
     local f = newScentTrailFixture()
     f.queueCallbackResponse({ started = true, huntId = 1 })
     f.startCommand({})
+
+    -- A successful start now emits one confirmation notify of its own (see
+    -- client/scenttrail.lua's START CONFIRMATION block -- the audio pulse
+    -- this mechanic relies on for guidance is silent on a stock install, so
+    -- without it the command looked like it did nothing). That notify is
+    -- not what this test is about. Baseline it here and assert on the
+    -- DELTA, so this keeps measuring the one thing it actually cares about:
+    -- that the POLL FAILURE path stays silent. Counting the total would
+    -- have made this test fail for a correct, unrelated change -- which is
+    -- exactly what it just did.
+    local notifiesBeforeFailure = #f.notifyCalls
+
     f.setThrowNext()
     f.stepOne(1) -- must not raise out of the coroutine
-    t.equals(#f.notifyCalls, 0)
+    t.equals(#f.notifyCalls - notifiesBeforeFailure, 0, 'the poll-failure path itself must notify nothing')
 end)
 
 t.test('death mid-poll: IsEntityDead true stops the hunt BEFORE ever calling the server again, via the unconditional stop path', function()

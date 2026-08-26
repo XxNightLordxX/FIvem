@@ -394,26 +394,41 @@ if Config.Features.AgilityAdvanced then
         --      to scale down (or verticalSpeed's multiplier scale down)
         --      for the taller end of the configured height range, not stay
         --      flat across the whole band.
-        --   2. NEW FINDING: SetEntityVelocity SETS the ped's velocity
-        --      outright (it does not add to whatever velocity the ped
-        --      already had -- this is the established, widely-relied-upon
-        --      behavior of this native across the FiveM ecosystem, not
-        --      something this file invents). A K9 already sprinting faster
-        --      than forwardSpeed (3.5 units/s) the instant it vaults will
-        --      have its actual forward momentum REPLACED by this flat
-        --      constant, which can read as a visible snap/deceleration
-        --      exactly at takeoff rather than a smooth leap that carries
-        --      the sprint through. NOT fixed here: the natural fix
-        --      (incorporate the ped's own current speed, e.g. via
-        --      GetEntitySpeed(ped), so the impulse never goes SLOWER than
-        --      the K9 was already moving) needs a new native added to the
-        --      repo-root .luacheckrc's read_globals before it can land
-        --      cleanly, and confirming it's worth doing at all needs a live
-        --      sprint-then-vault check first -- flagged for whoever runs
-        --      the in-engine pass, not applied speculatively here.
+        --   2. FIXED THIS PASS (fluidity pass, coder-frontend): SetEntityVelocity
+        --      SETS the ped's velocity outright (it does not add to whatever
+        --      velocity the ped already had -- this is the established,
+        --      widely-relied-upon behavior of this native across the FiveM
+        --      ecosystem, not something this file invents). A K9 already
+        --      sprinting faster than the flat 3.5 units/s constant this used
+        --      to hardcode would have its actual forward momentum REPLACED by
+        --      that constant the instant it vaulted -- a visible snap/
+        --      deceleration exactly at takeoff, the single most common way a
+        --      player would ever brush against this feature (sprint at a
+        --      fence, vault it), rather than a smooth leap that carries the
+        --      sprint through. GetEntitySpeed(ped) (GET_ENTITY_SPEED,
+        --      0xB2D8994DBB3E68C1 -- PED/ENTITY-namespace native returning the
+        --      entity's current speed magnitude in m/s; requested for
+        --      allowlisting in the repo-root .luacheckrc read_globals, not
+        --      editable by this pass) is read once, right here, and floored
+        --      into the forward-impulse magnitude below so a vault can only
+        --      ever match-or-exceed the K9's own current speed, never go
+        --      slower than it was already moving. Reads the ped's TOTAL 3D
+        --      speed (would include a vertical component if the K9 were
+        --      already airborne/falling) rather than a horizontal-only
+        --      projection -- an acceptable approximation for this call site
+        --      specifically, since TryVault() above already refuses to reach
+        --      this point while seated/tucked in a vehicle, and a grounded
+        --      sprinting K9's vertical velocity component is negligible. The
+        --      vertical arc height (verticalSpeed below) is UNCHANGED by this
+        --      fix -- still scaled only from the detected obstacle's height,
+        --      per finding 1 above, which this does not touch. Still
+        --      UNTUNED/first-pass on the absolute numbers (both findings share
+        --      that same open, in-engine-pass caveat) -- this only fixes the
+        --      "goes SLOWER than the K9 already was" direction of the
+        --      problem, not the overall arc feel.
         local forward = GetEntityForwardVector(ped)
         local verticalSpeed = 4.0 + obstacleHeight * 2.0 -- taller obstacle -> slightly higher arc
-        local forwardSpeed = 3.5
+        local forwardSpeed = math.max(3.5, GetEntitySpeed(ped))
         SetEntityVelocity(ped, forward.x * forwardSpeed, forward.y * forwardSpeed, verticalSpeed)
 
         vaultInProgress = false

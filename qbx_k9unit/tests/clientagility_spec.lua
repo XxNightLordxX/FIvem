@@ -43,13 +43,25 @@
     STUBBING EFFORT, reported honestly per this task's own instruction: every
     native this file touches is either a simple capturing/controllable stub
     (CanShowK9UI, DenyK9UIAccess, PlayerPedId, IsPedInAnyVehicle, IsInK9Vehicle,
-    GetEntityCoords, GetEntityForwardVector, SetEntityVelocity, GetGameTimer,
-    RegisterCommand, RegisterKeyMapping) or a small, deliberately-designed
-    per-handle sequencer (StartShapeTestCapsule/GetShapeTestResult -- the one
-    pair genuinely worth custom-building, since DetectVaultableObstacleHeight's
-    own poll-until-resolved contract needs a controllable "still processing N
-    times, then resolved" sequence per shape-test call, not just a single
-    canned return). Nothing here needed disproportionate stubbing.
+    GetEntityCoords, GetEntityForwardVector, GetEntitySpeed, SetEntityVelocity,
+    GetGameTimer, RegisterCommand, RegisterKeyMapping) or a small,
+    deliberately-designed per-handle sequencer (StartShapeTestCapsule/
+    GetShapeTestResult -- the one pair genuinely worth custom-building, since
+    DetectVaultableObstacleHeight's own poll-until-resolved contract needs a
+    controllable "still processing N times, then resolved" sequence per
+    shape-test call, not just a single canned return). Nothing here needed
+    disproportionate stubbing.
+
+    GetEntitySpeed (fluidity pass, coder-frontend): added alongside the
+    momentum-carry-through fix in client/agility.lua itself (see that file's
+    TryVault() "FIXED THIS PASS" comment) -- defaults to 0 (a stationary test
+    ped), which keeps every pre-existing SetEntityVelocity assertion in this
+    file byte-for-byte unchanged (math.max(3.5, 0) == 3.5, the same flat
+    constant every existing test already expects) without silently softening
+    what any of them check. `setEntitySpeed(v)` below lets a test opt into a
+    faster-than-3.5 reading to actually exercise the new "never slower than
+    the K9 was already moving" behavior -- see the dedicated test for it
+    further down.
 ]]
 
 local t = dofile('testkit.lua')
@@ -125,6 +137,12 @@ local function newAgilityFixture(opts)
     local forwardVector = vec3(1, 0, 0)
     local function GetEntityForwardVector(_entity) return forwardVector end
 
+    -- GetEntitySpeed (fluidity pass) -- see this file's header note on why
+    -- this defaults to 0 (never overrides the flat 3.5 forwardSpeed floor
+    -- unless a test explicitly opts in via setEntitySpeed below).
+    local entitySpeed = 0
+    local function GetEntitySpeed(_entity) return entitySpeed end
+
     -- StartShapeTestCapsule/GetShapeTestResult -- see this file's header.
     -- Every StartShapeTestCapsule call (across the WHOLE fixture's lifetime,
     -- not just one TryVault() call) gets the NEXT sequential handle number,
@@ -188,6 +206,7 @@ local function newAgilityFixture(opts)
         IsPedInAnyVehicle = IsPedInAnyVehicle,
         GetEntityCoords = GetEntityCoords,
         GetEntityForwardVector = GetEntityForwardVector,
+        GetEntitySpeed = GetEntitySpeed,
         StartShapeTestCapsule = StartShapeTestCapsule,
         GetShapeTestResult = GetShapeTestResult,
         Wait = Wait,
@@ -247,6 +266,7 @@ local function newAgilityFixture(opts)
         setIsInK9Vehicle = function(v) isInK9Vehicle = v end,
         setPedCoords = function(entity, x, y, z) pedCoords[entity] = vec3(x, y, z) end,
         setForwardVector = function(x, y, z) forwardVector = vec3(x, y, z) end,
+        setEntitySpeed = function(v) entitySpeed = v end,
         setShapeTestResolver = function(fn) shapeTestResolver = fn end,
         setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
         denyK9FeatureBlockedCallCount = function() return denyK9FeatureBlockedCallCount end,
@@ -535,6 +555,31 @@ t.test('a successful vault applies SetEntityVelocity to the player\'s OWN ped, s
     t.equals(call.x, 0.0) -- forward.x (0) * forwardSpeed
     t.equals(call.y, 3.5) -- forward.y (1) * forwardSpeed (3.5)
     t.equals(call.z, 4.0 + 1.2 * 2.0) -- verticalSpeed formula, obstacleHeight = 1.2
+end)
+
+-- FLUIDITY FIX (this pass, coder-frontend): SetEntityVelocity previously
+-- REPLACED the K9's own momentum with a flat 3.5 forwardSpeed constant no
+-- matter how fast it was already moving -- a K9 sprinting into a vault would
+-- visibly snap/decelerate exactly at takeoff. See client/agility.lua's
+-- TryVault() "FIXED THIS PASS" comment for the full writeup this test
+-- proves both directions of.
+t.test('a K9 already moving FASTER than the flat 3.5 constant carries that speed through the vault instead of being slowed down to it', function()
+    local f = newAgilityFixture({ maxVaultHeight = 1.2 })
+    f.setShapeTestResolver(function(_h, _p) return 2, true end)
+    f.setForwardVector(1, 0, 0)
+    f.setEntitySpeed(6.0) -- sprinting faster than the old flat constant
+    f.runVault()
+    t.equals(#f.setEntityVelocityCalls, 1)
+    t.equals(f.setEntityVelocityCalls[1].x, 6.0, 'the vault must never go SLOWER than the K9 was already moving')
+end)
+
+t.test('a K9 slower than (or at) the flat 3.5 constant -- standing start, walking, or exactly 3.5 -- still gets the existing floor, not throttled down further', function()
+    local f = newAgilityFixture({ maxVaultHeight = 1.2 })
+    f.setShapeTestResolver(function(_h, _p) return 2, true end)
+    f.setForwardVector(1, 0, 0)
+    f.setEntitySpeed(1.5) -- walking -- slower than the 3.5 floor
+    f.runVault()
+    t.equals(f.setEntityVelocityCalls[1].x, 3.5, 'a slow-moving K9 still gets the same minimum launch speed it always did, unchanged by this fix')
 end)
 
 -- ----------------------------------------------------------------------

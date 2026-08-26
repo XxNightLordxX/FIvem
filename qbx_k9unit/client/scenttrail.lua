@@ -559,6 +559,20 @@ local function StartScentHunt()
     huntCompleted = false
     currentHuntId = result.huntId -- see this file's header "STALE-SESSION RACE"
     EnsureHuntPollThreadRunning()
+
+    -- START CONFIRMATION. This mechanic deliberately never reveals the
+    -- distance or direction to the target -- guidance is meant to come from
+    -- the audio pulse, so the player has to work for it. But this resource
+    -- ships with several sound files absent (see client/audio.lua's own
+    -- disclosure), and on a stock install those degrade to silence. That
+    -- left the common case giving NO feedback at all: type the command,
+    -- nothing happens, and the hunt is silently live.
+    --
+    -- This says only that the hunt started. It reveals nothing about where
+    -- anything is, so it does not weaken the design -- it just stops a
+    -- working feature from looking broken on an install with no custom
+    -- audio.
+    lib.notify({ description = locale('scenttrail.hunt_started'), type = 'success' })
 end
 
 -- '/k9nosehunt' starts a hunt; '/k9nosehunt stop' abandons one. Mirrors
