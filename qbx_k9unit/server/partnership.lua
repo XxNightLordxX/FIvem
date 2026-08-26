@@ -468,8 +468,11 @@ function RefreshPartnershipCache(citizenid)
 end
 
 --- Read-only accessor over the `local` `Partnerships` cache -- see
---- "FUTURE CONSUMERS" in this file's header for the intended caller
---- (HandlerDownDefense's trigger, not yet implemented).
+--- "FUTURE CONSUMERS" in this file's header for the originally-intended
+--- caller. LANDED: both server/defense.lua's HandlerDownDefense trigger
+--- and server/recall.lua's Recall actor now call this directly (confirmed
+--- by direct read of both files), each behind their own
+--- `type(GetActivePartnerCitizenId) == 'function'` runtime guard.
 --- @param citizenid string
 --- @return string? partnerCitizenid
 --- @return boolean? isK9
@@ -482,7 +485,15 @@ end
 --- Read-only accessor over the `local` `Partnerships` cache, expressing
 --- exactly the boolean check DEVELOPER_REFERENCE.md §12.0 item 7 specifies for
 --- BiteAndHold's Recall actor -- see "FUTURE CONSUMERS" in this file's
---- header for the intended caller (not yet implemented).
+--- header for the originally-intended caller. STILL not called that way:
+--- server/recall.lua (confirmed by direct read) never takes an
+--- "alleged partner" from anywhere to validate against this function --
+--- it derives the K9 to recall directly from `GetActivePartnerCitizenId(callerCitizenid)`
+--- instead, which is strictly narrower (a caller can only ever recall their
+--- own registered partner, never anyone else's) and needs no separate
+--- alleged-partner comparison. This function has no internal caller today;
+--- it remains reachable only via server/exports.lua's `IsActivePartnerOf`
+--- export for other resources.
 --- @param citizenid string
 --- @param allegedPartnerCitizenid string
 --- @return boolean

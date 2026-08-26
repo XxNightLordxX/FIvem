@@ -986,6 +986,20 @@ local function RegisterScentInventoryHook()
     local registered = K9Compat.Get('inventory').RegisterHook('swapItems', function(payload)
         if payload.toType ~= 'drop' then return end -- only a ground-drop counts as a scent source; trunk/stash/give moves are not
 
+        -- payload.source must be a real number before it is used as a cooldown
+        -- KEY. Not defensive padding: the qb-inventory adapter's ItemAdded
+        -- translation hardcodes `source = nil` (that event genuinely does not
+        -- carry one), and its toType vocabulary is documented as unconfirmed --
+        -- so if that backend ever reports toType == 'drop' via ItemAdded, this
+        -- reached Consume(nil, ...) -> Touch(nil) -> `store[nil] = now`, which
+        -- is a hard "table index is nil" error. It was swallowed by the
+        -- adapter's own pcall, so it failed safe and vetoed nothing, but it
+        -- silently dropped the scent observation AND hid a real Lua error from
+        -- the operator -- the worst combination for diagnosing why tracking is
+        -- missing drops on that backend. Found by a red-team pass over the
+        -- ItemDropped hook, 2026-08-26.
+        if type(payload.source) ~= 'number' then return end
+
         -- Defense-in-depth rate limit, stamped BEFORE any log-append work, same
         -- ordering discipline as every other ingest surface in this file — see
         -- ScentDropRelayCooldown's own declaration comment for why this is NOT
