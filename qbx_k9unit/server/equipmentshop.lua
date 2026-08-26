@@ -1495,11 +1495,29 @@ end
 --- request handler with a natural "top of file" of its own, so keeping
 --- the flag check self-contained here is safer than trusting every future
 --- call site to remember it independently.
+--- WORKFLOW CLARITY FIX (this pass -- "buying, cannot afford, no space,
+--- using each item" walkthrough): this function used to return a bare
+--- boolean, and BOTH call sites below reported every refusal through the
+--- SAME `equipmentshop.blocked_from_shop` text -- "High Command has
+--- blocked you from using the K9 equipment shop." -- even for the OTHER
+--- two reasons this function can refuse for, neither of which is a
+--- personal High Command decision at all: the shop being turned off
+--- server-wide (step 1), and this server requiring an explicit
+--- feature.K9EquipmentShop grant that this citizenid simply never
+--- received (step 3, the RequireGrant branch). Telling someone "High
+--- Command has blocked you" for either of those is not just imprecise,
+--- it is WRONG -- it blames a person for a decision nobody made about
+--- them individually. Every sibling feature with this same three-way
+--- shape (server/pursuitsprint.lua, server/scenttrail.lua, server/sar.lua,
+--- server/scentlineup.lua, server/findalert.lua) already reports these as
+--- three distinct, accurately-worded messages; this function now returns
+--- a `reason` string so its two call sites can do the same.
 --- @param citizenid string
 --- @return boolean allowed
+--- @return string? reason -- 'feature_disabled' | 'blocked' | 'not_granted', present only when allowed is false
 local function IsEquipmentShopPermittedForCitizenId(citizenid)
     -- step 1: global off beats everything.
-    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return false end
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return false, 'feature_disabled' end
 
     -- Soft dependency, this resource's established convention -- see
     -- server/pursuitsprint.lua's own identical comment on its own copy of
@@ -1507,7 +1525,7 @@ local function IsEquipmentShopPermittedForCitizenId(citizenid)
     local hasPermissionAvailable = type(HasPermission) == 'function'
 
     if hasPermissionAvailable and HasPermission(citizenid, 'block.K9EquipmentShop') == true then
-        return false -- step 2: an explicit block always wins, even over an active grant
+        return false, 'blocked' -- step 2: an explicit block always wins, even over an active grant
     end
 
     local featureControl = Config.FeatureControl
@@ -1517,10 +1535,28 @@ local function IsEquipmentShopPermittedForCitizenId(citizenid)
 
     if requiresGrant then
         -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
-        return hasPermissionAvailable and HasPermission(citizenid, 'feature.K9EquipmentShop') == true
+        if hasPermissionAvailable and HasPermission(citizenid, 'feature.K9EquipmentShop') == true then
+            return true
+        end
+        return false, 'not_granted'
     end
 
     return true -- step 4: not listed in RequireGrant at all -- default allow
+end
+
+--- Shared by both ox_inventory hooks below -- maps
+--- IsEquipmentShopPermittedForCitizenId's own `reason` string to the
+--- locale key that actually names what happened, instead of every call
+--- site repeating its own if/elseif over the same three strings.
+--- @param reason string?
+--- @return string localeText
+local function EquipmentShopDenialText(reason)
+    if reason == 'feature_disabled' then
+        return locale('equipmentshop.feature_disabled')
+    elseif reason == 'not_granted' then
+        return locale('equipmentshop.not_granted')
+    end
+    return locale('equipmentshop.blocked_from_shop') -- 'blocked', or an unrecognized future reason -- never silent
 end
 
 -- Defensive cap on total live (non-tombstoned) item count -- same
@@ -1655,6 +1691,52 @@ local function RefreshEquipmentShopItemCatalog()
     ItemByKey = merged
     ItemOrder = order
     return hasOverlay
+end
+
+--- How many shop items currently require certification tier `tierKey`
+--- before anyone may buy them.
+---
+--- WHY THIS EXISTS, AND WHY IT LIVES HERE. server/certtiers.lua refuses to
+--- delete a tier that anything still points at, and already counts the
+--- k9_certifications rows referencing it. Shop items were the OTHER
+--- referrer nobody had counted: delete a tier that an item requires and
+--- that item becomes unbuyable by every single player on the server, with
+--- the refusal naming a tier that no longer exists and can never be
+--- granted to anybody. Nothing warned the officer doing the deleting, and
+--- nothing in the shop said why it had stopped selling something.
+---
+--- It has to live in THIS file rather than in certtiers.lua or K9Store,
+--- because only the MERGED catalog knows the answer: `required_tier_key`
+--- lives on the database overlay rows, and an overlay row can tombstone an
+--- item entirely (RefreshEquipmentShopItemCatalog above). Counting raw
+--- database rows would count items that have since been deleted; reading
+--- config.lua alone would find nothing at all, since config item entries
+--- never carry a tier requirement in the first place.
+---
+--- A resource-global rather than an export, and called through a
+--- `type(fn) == 'function'` guard at its one call site, because
+--- fxmanifest.lua loads server/certtiers.lua BEFORE this file -- the same
+--- convention this resource already uses for every other cross-file
+--- global. By the time any tablet callback can run, both files exist.
+---
+--- @param tierKey string
+--- @return number count
+--- @return string[] itemKeys -- the item keys themselves, so the refusal can name them
+function CountEquipmentShopItemsRequiringTier(tierKey)
+    local matched = {}
+    if type(tierKey) ~= 'string' or tierKey == '' then return 0, matched end
+    if type(ItemByKey) ~= 'table' then return 0, matched end
+
+    -- Walks ItemOrder rather than pairs(ItemByKey) so the names come back
+    -- in the same order the tablet lists them, and the refusal a person
+    -- reads matches the screen they are looking at.
+    for _, key in ipairs(ItemOrder or {}) do
+        local entry = ItemByKey[key]
+        if type(entry) == 'table' and entry.requiredTierKey == tierKey then
+            matched[#matched + 1] = key
+        end
+    end
+    return #matched, matched
 end
 
 --- Display label for the tablet's own item list -- an explicit DB
@@ -2140,9 +2222,10 @@ local function RegisterEquipmentShopOpenShopBlockHook(shopType)
             return false -- cannot identify the requester at all -- fail closed, never open the shop for an unresolvable identity
         end
 
-        if not IsEquipmentShopPermittedForCitizenId(citizenid) then
+        local allowed, reason = IsEquipmentShopPermittedForCitizenId(citizenid)
+        if not allowed then
             if type(NotifyPlayer) == 'function' and type(source) == 'number' then
-                NotifyPlayer(source, locale('equipmentshop.blocked_from_shop'), 'error')
+                NotifyPlayer(source, EquipmentShopDenialText(reason), 'error')
             end
             return false -- VETO: the shop UI never opens for this one attempt
         end
@@ -2206,9 +2289,10 @@ local function RegisterEquipmentShopBuyItemRequirementHook(shopType)
             return false -- unresolvable identity -- fail closed (see header)
         end
 
-        if not IsEquipmentShopPermittedForCitizenId(citizenid) then
+        local allowed, reason = IsEquipmentShopPermittedForCitizenId(citizenid)
+        if not allowed then
             if type(NotifyPlayer) == 'function' and type(source) == 'number' then
-                NotifyPlayer(source, locale('equipmentshop.blocked_from_shop'), 'error')
+                NotifyPlayer(source, EquipmentShopDenialText(reason), 'error')
             end
             return false
         end

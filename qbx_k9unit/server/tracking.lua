@@ -662,6 +662,44 @@ local TRACK_TYPE_CONFIG = {
 -- from the front, never the back.
 -- ======================================================================
 
+--- ======================================================================
+--- UPPER CEILING (performance audit at 128 players, this pass -- follow-up
+--- to the ENTRY-COUNT CEILING above). maxLoggedEntries closed the unbounded
+--- growth problem, but ResolveTrackableLogMaxEntries below used to enforce
+--- ONLY a `>= 1` floor -- no ceiling at all. Every field this whole ceiling
+--- exists to bound is hand-edit-only (§ header above: "deliberately NOT
+--- tablet-editable"), so an owner who opens config.lua and sets
+--- maxLoggedEntries back up to, say, 250000 "to be safe" would put the
+--- EXACT 243,000-entry / 35-50MB problem this ceiling was built to close
+--- straight back -- with the ceiling mechanism itself now actively
+--- laundering that mistake through, since ResolveTrackableLogMaxEntries
+--- would accept it as "a valid number >= 1" without comment.
+---
+--- ARITHMETIC (not a round number picked by feel): this file's own
+--- combined-total comment a few lines above already establishes this
+--- codebase's own working estimate for one TrackableLog entry --
+--- 20,000 combined entries costing roughly 3-4MB, i.e. ~150-200
+--- bytes/entry (`{ coords = vector3, loggedAt = number, ticketIssued =
+--- boolean }`, a small STRING-keyed table, not a cheap array-style one).
+--- Using 200 bytes/entry (the upper, more conservative end of that same
+--- established range) as the basis here rather than inventing a fresh
+--- estimate:
+---   MAX_LOGGED_ENTRIES_CEILING (50,000 per type) x 200 bytes
+---     = ~10MB for ONE type at its ceiling.
+---   All three types (Scent + Blood + Gunpowder) simultaneously cranked to
+--- this ceiling at once (the actual worst case this clamp has to bound,
+--- since nothing stops an operator raising all three): 150,000 entries x
+--- 200 bytes = ~30MB total -- comfortably below the 35-50MB figure this
+--- resource's own audit measured for the ORIGINAL uncapped bug at 128
+--- players (a real reduction, not just "still bad but now a round number"),
+--- while still leaving every shipped default (6,000 / 8,000 / 6,000 --
+--- 12-16% of this ceiling) enormous headroom to be raised for a genuinely
+--- bigger or busier deployment than the 128-player baseline this pass's own
+--- numbers are computed from, without ever tripping this warning on a
+--- reasonable config.
+--- ======================================================================
+local MAX_LOGGED_ENTRIES_CEILING = 50000
+
 --- CLAMP-AND-WARN for a Config.Tracking.<Type>.maxLoggedEntries value --
 --- same posture this resource applies to every operator-editable Config
 --- field: never throw, print one clear line naming the exact key and what
@@ -675,22 +713,40 @@ local TRACK_TYPE_CONFIG = {
 --- here" reason server/certifications.lua's own
 --- ResolveConfiguredPositiveNumber doc comment already gives for not
 --- calling a differently-worded sibling function directly.
+---
+--- UPPER CEILING added this pass -- see MAX_LOGGED_ENTRIES_CEILING's own
+--- declaration comment immediately above for the full worked arithmetic
+--- behind the 50,000 figure and why this field needed one at all (it is
+--- the one Config value that can single-handedly reintroduce the exact
+--- unbounded-growth incident this whole ceiling mechanism exists to close).
 --- @param configuredValue any
 --- @param fallback number -- a positive, hardcoded call-site literal (this file's own shipped default for the field), never itself read from Config
 --- @param configKeyName string
 --- @return number
 local function ResolveTrackableLogMaxEntries(configuredValue, fallback, configKeyName)
-    if type(configuredValue) == 'number' and configuredValue == configuredValue and configuredValue >= 1 then
-        return configuredValue
+    if type(configuredValue) ~= 'number' or configuredValue ~= configuredValue or configuredValue < 1 then
+        print(
+            ('[qbx_k9unit] tracking.lua: %s must be a number >= 1 (found: %s). This log would otherwise have no ' ..
+             'absolute ceiling at all -- Config.Tracking.<Type>.maxAgeSeconds is an AGE limit, not a COUNT limit, ' ..
+             'and cannot substitute for one. Using the built-in fallback of %s instead so this log stays bounded ' ..
+             'while the config is fixed -- find %s in config.lua and set it to a positive number.')
+                :format(configKeyName, tostring(configuredValue), tostring(fallback), configKeyName)
+        )
+        return fallback
     end
-    print(
-        ('[qbx_k9unit] tracking.lua: %s must be a number >= 1 (found: %s). This log would otherwise have no ' ..
-         'absolute ceiling at all -- Config.Tracking.<Type>.maxAgeSeconds is an AGE limit, not a COUNT limit, ' ..
-         'and cannot substitute for one. Using the built-in fallback of %s instead so this log stays bounded ' ..
-         'while the config is fixed -- find %s in config.lua and set it to a positive number.')
-            :format(configKeyName, tostring(configuredValue), tostring(fallback), configKeyName)
-    )
-    return fallback
+    if configuredValue > MAX_LOGGED_ENTRIES_CEILING then
+        print(
+            ('[qbx_k9unit] tracking.lua: %s (%s) exceeds this resource\'s own %d-entry ceiling -- see ' ..
+             'MAX_LOGGED_ENTRIES_CEILING\'s own declaration comment in this file for the worked memory arithmetic ' ..
+             '(a value this high risks reintroducing the exact unbounded-growth memory problem this field was ' ..
+             'added to close: ~243,000 entries / 35-50MB at 128 players sustaining full combat). Clamping to %d ' ..
+             'instead so this log stays bounded -- find %s in config.lua and lower it if this warning should not ' ..
+             'be appearing.')
+                :format(configKeyName, tostring(configuredValue), MAX_LOGGED_ENTRIES_CEILING, MAX_LOGGED_ENTRIES_CEILING, configKeyName)
+        )
+        return MAX_LOGGED_ENTRIES_CEILING
+    end
+    return configuredValue
 end
 
 -- Resolved ONCE, at file-load time -- see the ENTRY-COUNT CEILING header
@@ -1822,18 +1878,41 @@ local SCENT_VISION_CAPTURE_IDLE_MS = 5000
 --- Config field (a bare assert here would kill every registration below it
 --- for this file's whole uptime over one bad number in a 2,000+ line
 --- config.lua).
+---
+--- UPPER CEILING (`maxAllowed`, performance audit at 128 players, this
+--- pass): optional, and nil by default -- MOST fields this function
+--- resolves (e.g. minSampleMovementMeters) only get SAFER as they get
+--- larger (a bigger required-movement distance means FEWER capture writes,
+--- never more memory), so they pass no `maxAllowed` and this branch never
+--- runs for them. maxPointsPerPerson is the one caller below that DOES pass
+--- one, because it is the opposite shape -- a direct per-person storage
+--- multiplier -- see that call site's own comment for the exact figure and
+--- why it was chosen to match server/runtimecontrol.lua's own tablet-side
+--- ceiling for the identical field, rather than inventing a second, looser
+--- number for the hand-edit path the tablet does not police.
 --- @param configuredValue any
 --- @param fallback number
 --- @param minAllowed number
 --- @param configKeyName string
+--- @param maxAllowed number? -- see UPPER CEILING note above; nil (the default at every pre-existing call site) means "no ceiling checked here"
 --- @return number
-local function ResolveScentVisionNumber(configuredValue, fallback, minAllowed, configKeyName)
-    if type(configuredValue) == 'number' and configuredValue == configuredValue and configuredValue >= minAllowed then
-        return configuredValue
+local function ResolveScentVisionNumber(configuredValue, fallback, minAllowed, configKeyName, maxAllowed)
+    if type(configuredValue) ~= 'number' or configuredValue ~= configuredValue or configuredValue < minAllowed then
+        print(('[qbx_k9unit] ScentVision: %s must be a number >= %s (found: %s) -- falling back to %s.')
+            :format(configKeyName, tostring(minAllowed), tostring(configuredValue), tostring(fallback)))
+        return fallback
     end
-    print(('[qbx_k9unit] ScentVision: %s must be a number >= %s (found: %s) -- falling back to %s.')
-        :format(configKeyName, tostring(minAllowed), tostring(configuredValue), tostring(fallback)))
-    return fallback
+    if maxAllowed and configuredValue > maxAllowed then
+        print(
+            ('[qbx_k9unit] ScentVision: %s (%s) exceeds the %s ceiling this resource enforces for this field -- ' ..
+             'clamping to %s instead. See this field\'s own config.lua/call-site comment for the memory arithmetic ' ..
+             'behind that ceiling -- a hand-edit this high bypasses the tablet\'s own %s cap on the identical field ' ..
+             'with nothing else in the way.')
+                :format(configKeyName, tostring(configuredValue), tostring(maxAllowed), tostring(maxAllowed), tostring(maxAllowed))
+        )
+        return maxAllowed
+    end
+    return configuredValue
 end
 
 --- Clamp-and-warn for Config.Tracking.ScentVision.mode -- a THREE-WAY
@@ -1920,6 +1999,31 @@ local function RecordScentVisionPoint(src, coords, now, minMovement, maxPoints, 
     end
 end
 
+-- ======================================================================
+-- UPPER CEILING for maxPointsPerPerson (performance audit at 128 players,
+-- this pass). Matches server/runtimecontrol.lua's own tablet-editable bound
+-- for this EXACT field (`['Tracking.ScentVision.maxPointsPerPerson'] =
+-- { ..., min = 1, max = 50, ... }`) -- deliberately the SAME number, not a
+-- separately-chosen one, so a config.lua hand-edit cannot reach a value the
+-- tablet's own UI already refuses to let an admin set. Without this, the
+-- worked example from this section's own header comment above ("STORAGE
+-- ceiling") stops holding: a hand-edited maxPointsPerPerson of 100,000
+-- would multiply directly into PositionTrail's per-player storage (this
+-- section's own header already establishes ~150 bytes/point as this
+-- resource's working estimate for one point) --
+--   100,000 points x 150 bytes = ~14.3MB PER CONNECTED PLAYER, i.e. up to
+--   ~1.8GB at 128 players, or ~14.6GB at FiveM's documented 1024-slot hard
+--   ceiling (already cited in this section's own header) -- entirely
+--   bypassing the "trivial, ~440KB-2.2MB" conclusion that header's own
+--   arithmetic reached for the shipped default.
+-- At the ceiling enforced here instead (50, matching the tablet):
+--   128 players x 50 points x 150 bytes = ~960KB; even at the 1024-slot
+--   hard ceiling, 1024 x 50 x 150 bytes = ~7.3MB -- both comfortably inside
+--   "trivial against a real server's memory budget", the same conclusion
+--   this section's header already draws for the shipped default of 15.
+-- ======================================================================
+local SCENT_VISION_MAX_POINTS_PER_PERSON_CEILING = 50
+
 -- CAPTURE THREAD -- population-wide, unconditional while the feature flag
 -- is on (mirrors this file's own established "capture is population-wide by
 -- design" posture already documented above for blood/gunpowder/scent --
@@ -1935,7 +2039,7 @@ CreateThread(function()
             Wait(interval)
 
             local minMovement = ResolveScentVisionNumber(svConfig.minSampleMovementMeters, 2.0, 0.0, 'Config.Tracking.ScentVision.minSampleMovementMeters')
-            local maxPoints = ResolveScentVisionNumber(svConfig.maxPointsPerPerson, 15, 1, 'Config.Tracking.ScentVision.maxPointsPerPerson')
+            local maxPoints = ResolveScentVisionNumber(svConfig.maxPointsPerPerson, 15, 1, 'Config.Tracking.ScentVision.maxPointsPerPerson', SCENT_VISION_MAX_POINTS_PER_PERSON_CEILING)
             local lifetimeMs = ResolveConfiguredThresholdMs(svConfig.dotLifetimeMs, 45000, 'Config.Tracking.ScentVision.dotLifetimeMs')
             local now = GetGameTimer()
 

@@ -467,7 +467,43 @@ local function SpawnShopPed(key, loc)
             icon = 'fas fa-user-tie',
             groups = ShopGroups,
             onSelect = function()
-                K9Compat.Get('inventory').OpenShop(ShopType)
+                -- THE RETURN VALUE IS THE WHOLE POINT. It used to be
+                -- thrown away, and on one entirely plausible configuration
+                -- that made this the worst kind of bug: a real, visible dog
+                -- ped standing at a real, configured supply point, with a
+                -- working prompt, that does absolutely nothing when
+                -- clicked. No message on screen. Nothing in console.
+                --
+                -- shared/compat/inventory.lua's qb-inventory adapter (and
+                -- ps-inventory's, same architecture) returns nil for the
+                -- CLIENT realm unconditionally -- correctly, and honestly
+                -- disclosed in its own header: those backends genuinely
+                -- have no client-callable "open this shop" primitive, their
+                -- OpenShop is a server-side-only export. And an explicit
+                -- `Config.Compat.Systems.inventory.override` does NOT fall
+                -- through to the other candidates (shared/compat/core.lua).
+                -- So an owner who overrides to qb-inventory -- a very
+                -- ordinary thing to do, it is a common inventory -- ends up
+                -- with the server half of their inventory working fine
+                -- (the K9 medkit, contraband searches) and this one player-
+                -- facing door silently welded shut.
+                --
+                -- OpenShop never throws (it is pcall-wrapped inside the
+                -- compat layer) and returns false rather than erroring, so
+                -- reading the result is all that is needed here.
+                -- Deliberately NOT a "try again" message: on that
+                -- configuration it will never work, and telling a player to
+                -- retry something structurally impossible is worse than
+                -- telling them nothing. It names the real cause and points
+                -- at the person who can actually fix it.
+                local openOk = K9Compat.Get('inventory').OpenShop(ShopType)
+                if not openOk then
+                    lib.notify({
+                        title = locale('common.notify_title'),
+                        description = locale('equipmentshop.cannot_open_on_this_inventory'),
+                        type = 'error',
+                    })
+                end
             end,
         },
     })

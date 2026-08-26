@@ -667,6 +667,33 @@ local function IsBlockedByVehicleTuck()
     return type(IsInK9Vehicle) == 'function' and IsInK9Vehicle()
 end
 
+--- MUTUAL GUARD vs. client/search.lua's contraband search -- this file's
+--- half of it. That file refuses to START a search while a bite, drag or
+--- vehicle already owns the ped; this refuses to start a bite, takedown or
+--- drag while a search is already running.
+---
+--- Both halves are needed. A guard that only exists in one direction does
+--- not prevent the conflict, it just decides which of the two mechanics
+--- has to be started second — and this codebase has already had to come
+--- back and fix that exact half-a-guard shape once, between vehicle entry
+--- and dragging (see IsBlockedByVehicleTuck's own history above).
+---
+--- Note what this is NOT: client/search.lua's progress bar passes
+--- `disable = { combat = true }`, which disables game CONTROLS while the
+--- bar runs. That does nothing here — every one of the three requests
+--- below is reached from a RegisterCommand keybind or a menu item, neither
+--- of which is a game control, so all three were reachable mid-sniff and
+--- would tear the dog out of its own search animation.
+---
+--- Guarded call, like every other cross-file global in this file: a server
+--- with Config.Features.SearchZones off never loads that file's globals at
+--- all, and an absent optional global is a skipped check, never an error.
+---
+--- @return boolean
+local function IsBlockedBySearchInProgress()
+    return type(IsSearchInProgress) == 'function' and IsSearchInProgress()
+end
+
 --- Self-initiated BiteAndHold trigger — DEVELOPER_REFERENCE.md §12.5.1. Called from
 --- client/radial.lua's "Bite & Hold / Release" item when not currently
 --- engaged (see IsBiteHoldEngaged() below for the toggle).
@@ -690,6 +717,16 @@ function RequestBiteHold()
 
     if IsBlockedByVehicleTuck() then
         lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_by_vehicle'), type = 'error' })
+        return
+    end
+
+    -- MUTUAL GUARD vs. client/search.lua -- see IsBlockedBySearchInProgress
+    -- above. Placed alongside the vehicle guard rather than folded into it
+    -- so each refusal keeps its own accurate message: "your dog is in a
+    -- car" and "your dog is mid-search" are different problems with
+    -- different fixes.
+    if IsBlockedBySearchInProgress() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_while_searching'), type = 'error' })
         return
     end
 
@@ -743,6 +780,16 @@ function RequestTakedown()
     -- IsBlockedByVehicleTuck()'s own doc comment above for the full writeup.
     if IsBlockedByVehicleTuck() then
         lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_by_vehicle'), type = 'error' })
+        return
+    end
+
+    -- MUTUAL GUARD vs. client/search.lua -- see IsBlockedBySearchInProgress
+    -- above. Placed alongside the vehicle guard rather than folded into it
+    -- so each refusal keeps its own accurate message: "your dog is in a
+    -- car" and "your dog is mid-search" are different problems with
+    -- different fixes.
+    if IsBlockedBySearchInProgress() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_while_searching'), type = 'error' })
         return
     end
 
@@ -849,6 +896,16 @@ function RequestDrag()
     -- vehicle first, then request a drag).
     if IsBlockedByVehicleTuck() then
         lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_by_vehicle'), type = 'error' })
+        return
+    end
+
+    -- MUTUAL GUARD vs. client/search.lua -- see IsBlockedBySearchInProgress
+    -- above. Placed alongside the vehicle guard rather than folded into it
+    -- so each refusal keeps its own accurate message: "your dog is in a
+    -- car" and "your dog is mid-search" are different problems with
+    -- different fixes.
+    if IsBlockedBySearchInProgress() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_while_searching'), type = 'error' })
         return
     end
 

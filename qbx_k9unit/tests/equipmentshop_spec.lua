@@ -106,7 +106,7 @@ local function makeInsertAwait(world)
     end
 end
 
---- @param opts table? -- { featureEnabled: boolean?, shopConfig: table?, departments: table?, registeredItems: table<string, boolean>?, throwOnRegisterShop: boolean?, world: table?, isHighCommand: fun(source):boolean?, hasPermission: fun(citizenid, key):boolean?, playersBySource: table? }
+--- @param opts table? -- { featureEnabled: boolean?, shopConfig: table?, departments: table?, registeredItems: table<string, boolean>?, throwOnRegisterShop: boolean?, world: table?, isHighCommand: fun(source):boolean?, hasPermission: fun(citizenid, key):boolean?, playersBySource: table?, featureControl: table? }
 --- @return table fixture
 local function newFixture(opts)
     opts = opts or {}
@@ -149,6 +149,15 @@ local function newFixture(opts)
     local registeredItems = opts.registeredItems or {}
     local throwOnRegisterShop = opts.throwOnRegisterShop or false
     local registerShopCalls = {}
+    -- WORKFLOW CLARITY FIX (this pass -- "buying, cannot afford, no space,
+    -- using each item"): captured by eventName so a test can drive
+    -- RegisterEquipmentShopOpenShopBlockHook's/
+    -- RegisterEquipmentShopBuyItemRequirementHook's own registered
+    -- callback directly, exactly as ox_inventory's real registerHook would
+    -- invoke it -- these two hooks had no test coverage at all before this
+    -- pass, for either the pre-existing behavior or this pass's own
+    -- feature_disabled/blocked/not_granted split.
+    local registeredHooks = {}
 
     -- COMPAT-LAYER MIGRATION (coder-backend, this pass): server/equipmentshop.lua
     -- now calls `K9Compat.Get('inventory').RegisterShop(...)` instead of
@@ -183,7 +192,10 @@ local function newFixture(opts)
             GetItemCount = function() return 0 end,
             RemoveItem = function() return false end,
             RegisterStash = function() return true end,
-            registerHook = function() return 1 end,
+            registerHook = function(_self, eventName, callback)
+                registeredHooks[eventName] = callback
+                return 1
+            end,
         },
         qbx_core = {
             GetPlayer = function(_self, source)
@@ -197,6 +209,7 @@ local function newFixture(opts)
         Features = { K9EquipmentShop = opts.featureEnabled },
         K9EquipmentShop = opts.shopConfig,
         Departments = opts.departments,
+        FeatureControl = opts.featureControl,
         -- COMPAT-LAYER MIGRATION (this pass): pins the 'inventory' system
         -- straight to 'ox_inventory' via `override` -- shared/compat/
         -- core.lua's TIER 1, which skips the whole candidate-scanning walk
@@ -229,6 +242,19 @@ local function newFixture(opts)
 
     local isHighCommand = opts.isHighCommand or function() return false end
     local hasPermission = opts.hasPermission -- nil unless a test wants the permission-grant escape hatch
+
+    -- WORKFLOW CLARITY FIX (this pass): server/equipmentshop.lua's two
+    -- ox_inventory hooks (openShop block / buyItem requirement) call the
+    -- real, resource-global NotifyPlayer -- absent from this fixture's env
+    -- until now, so `type(NotifyPlayer) == 'function'` always failed and
+    -- every denial silently sent nothing at all in this sandbox. Captured
+    -- here rather than loading the real server/notify.lua, matching this
+    -- fixture's existing "small local stub, not the real file" posture for
+    -- everything else it does not need the real implementation of.
+    local notifyCalls = {}
+    local function NotifyPlayerStub(target, message, notifyType)
+        notifyCalls[#notifyCalls + 1] = { target = target, message = message, type = notifyType }
+    end
 
     -- server/cooldowns.lua's Consume falls back to GetGameTimer() whenever
     -- a caller (every mutating callback below) omits the optional `now`
@@ -317,6 +343,14 @@ local function newFixture(opts)
         GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
         CreateThread = CreateThreadStub,
         Wait = WaitStub,
+        NotifyPlayer = NotifyPlayerStub,
+        -- `locale` is deliberately left un-overridden -- Sandbox.newEnv
+        -- already wires the real locale() reader over the real
+        -- locales/en.json (see tests/certifications_spec.lua's own header
+        -- for the precedent), so every notify assertion below doubles as a
+        -- check that the locale key it names actually resolves to real
+        -- text, not a fixture-invented string that could silently drift
+        -- from locales/en.json.
     })
 
     -- server/equipmentshop.lua's new runtime-locations section calls
@@ -434,6 +468,8 @@ local function newFixture(opts)
     return {
         printedLines = printedLines,
         registerShopCalls = registerShopCalls,
+        registeredHooks = registeredHooks,
+        notifyCalls = notifyCalls,
         config = Config,
         world = world,
         callbacks = callbacks,
@@ -960,6 +996,135 @@ t.test('equipmentShopRemoveLocation happy path: deletes the row, audits it, the 
     local getResponse = f.callbacks['qbx_k9unit:server:equipmentShopGetLocations'](NON_HC_SOURCE)
     t.isNil(getResponse.locations[added.locationKey], 'a removed location must never resurface via GetLocations')
     t.isNotNil(getResponse.locations['cfg:1'], 'the config-defined location must be unaffected by removing a db: one')
+end)
+
+-- ============================================================================
+-- WORKFLOW CLARITY FIX (this pass -- "buying, cannot afford, no space,
+-- using each item" walkthrough): IsEquipmentShopPermittedForCitizenId used
+-- to be a bare boolean, and BOTH ox_inventory hooks below reported every
+-- refusal reason through the SAME 'equipmentshop.blocked_from_shop' text
+-- ("High Command has blocked you...") even when nobody blocked this
+-- citizenid individually at all -- the shop being off server-wide, or a
+-- RequireGrant listed feature this citizenid simply never received, both
+-- collapsed into that one, factually wrong sentence. Neither ox_inventory
+-- hook had ANY test coverage before this pass. These tests drive the real,
+-- registered hook callback directly (exactly as ox_inventory's own
+-- registerHook would invoke it), covering all three distinct refusal
+-- reasons plus the allowed case, for both the openShop and buyItem hooks.
+-- ============================================================================
+
+local SHOP_TYPE = 'k9supply'
+local PLAYER_SOURCE = 300
+local PLAYER_CITIZENID = 'PLAYER01'
+
+--- @param overrides table?
+--- @return table fixture
+local function newHookFixture(overrides)
+    overrides = overrides or {}
+    local playersBySource = {}
+    registerPlayer(playersBySource, PLAYER_SOURCE, PLAYER_CITIZENID)
+
+    local f = newFixture({
+        featureEnabled = true,
+        shopConfig = { shopType = SHOP_TYPE, items = {} },
+        playersBySource = playersBySource,
+        hasPermission = overrides.hasPermission,
+        featureControl = overrides.featureControl,
+    })
+    f.fireResourceStart()
+    return f
+end
+
+t.test('openShop hook: feature disabled server-wide -- feature_disabled text, never the "High Command blocked you" text', function()
+    local f = newFixture({
+        featureEnabled = false,
+        shopConfig = { shopType = SHOP_TYPE, items = {} },
+    })
+    f.fireResourceStart()
+    -- The hooks are only ever registered while the feature is on (this
+    -- file's own top-of-function `if not (Config.Features... ) then
+    -- return end` guard) -- confirm the setup itself proves the point:
+    -- with the feature off, ox_inventory's openShop hook is never even
+    -- registered, so there is nothing here for a real buyer to hit at all.
+    t.isNil(f.registeredHooks.openShop, 'no hook is registered while the feature is off -- ox_inventory sees no gate at all, not a refusal')
+end)
+
+t.test('openShop hook: an explicit block.K9EquipmentShop -- blocked text, names High Command', function()
+    local f = newHookFixture({
+        hasPermission = function(citizenid, key) return citizenid == PLAYER_CITIZENID and key == 'block.K9EquipmentShop' end,
+    })
+    local veto = f.registeredHooks.openShop({ shopType = SHOP_TYPE, source = PLAYER_SOURCE })
+    t.equals(veto, false)
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].message, Sandbox.locale('equipmentshop.blocked_from_shop'))
+end)
+
+t.test('openShop hook: RequireGrant.K9EquipmentShop=true and no grant held -- not_granted text, never blames High Command', function()
+    local f = newHookFixture({
+        featureControl = { RequireGrant = { K9EquipmentShop = true } },
+        hasPermission = function() return false end,
+    })
+    local veto = f.registeredHooks.openShop({ shopType = SHOP_TYPE, source = PLAYER_SOURCE })
+    t.equals(veto, false)
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].message, Sandbox.locale('equipmentshop.not_granted'))
+    t.isTrue(f.notifyCalls[1].message ~= Sandbox.locale('equipmentshop.blocked_from_shop'),
+        'a never-granted citizenid must not be told High Command blocked them personally -- nobody made that decision about them')
+end)
+
+t.test('openShop hook: RequireGrant.K9EquipmentShop=true WITH an active feature.K9EquipmentShop grant -- allowed, no veto, no notify', function()
+    local f = newHookFixture({
+        featureControl = { RequireGrant = { K9EquipmentShop = true } },
+        hasPermission = function(citizenid, key) return citizenid == PLAYER_CITIZENID and key == 'feature.K9EquipmentShop' end,
+    })
+    local veto = f.registeredHooks.openShop({ shopType = SHOP_TYPE, source = PLAYER_SOURCE })
+    t.isNil(veto)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('openShop hook: not listed in RequireGrant at all -- default allow, no veto, no notify', function()
+    local f = newHookFixture({})
+    local veto = f.registeredHooks.openShop({ shopType = SHOP_TYPE, source = PLAYER_SOURCE })
+    t.isNil(veto)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('openShop hook: an explicit block always wins even with an active grant held -- blocked text, not allowed', function()
+    local f = newHookFixture({
+        featureControl = { RequireGrant = { K9EquipmentShop = true } },
+        hasPermission = function(citizenid, key)
+            if key == 'feature.K9EquipmentShop' then return true end
+            if key == 'block.K9EquipmentShop' then return true end
+            return false
+        end,
+    })
+    local veto = f.registeredHooks.openShop({ shopType = SHOP_TYPE, source = PLAYER_SOURCE })
+    t.equals(veto, false)
+    t.equals(f.notifyCalls[1].message, Sandbox.locale('equipmentshop.blocked_from_shop'))
+end)
+
+t.test('openShop hook: a different shopType payload is never our shop -- no veto, no notify', function()
+    local f = newHookFixture({ hasPermission = function() return false end, featureControl = { RequireGrant = { K9EquipmentShop = true } } })
+    local veto = f.registeredHooks.openShop({ shopType = 'someone_elses_shop', source = PLAYER_SOURCE })
+    t.isNil(veto)
+    t.equals(#f.notifyCalls, 0)
+end)
+
+t.test('buyItem hook: the SAME three-way split (feature_disabled is proven by no-registration above; blocked and not_granted here)', function()
+    local blockedFixture = newHookFixture({
+        hasPermission = function(citizenid, key) return citizenid == PLAYER_CITIZENID and key == 'block.K9EquipmentShop' end,
+    })
+    local blockedVeto = blockedFixture.registeredHooks.buyItem({ shopType = SHOP_TYPE, source = PLAYER_SOURCE, itemName = 'k9_medkit' })
+    t.equals(blockedVeto, false)
+    t.equals(blockedFixture.notifyCalls[1].message, Sandbox.locale('equipmentshop.blocked_from_shop'))
+
+    local notGrantedFixture = newHookFixture({
+        featureControl = { RequireGrant = { K9EquipmentShop = true } },
+        hasPermission = function() return false end,
+    })
+    local notGrantedVeto = notGrantedFixture.registeredHooks.buyItem({ shopType = SHOP_TYPE, source = PLAYER_SOURCE, itemName = 'k9_medkit' })
+    t.equals(notGrantedVeto, false)
+    t.equals(notGrantedFixture.notifyCalls[1].message, Sandbox.locale('equipmentshop.not_granted'))
 end)
 
 os.exit(t.summary())

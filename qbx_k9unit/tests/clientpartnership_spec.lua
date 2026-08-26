@@ -414,11 +414,50 @@ t.test('partnershipEnded: reason="broken" (self-initiated) shows the generic end
     t.equals(f.lastNotify().description, locale('partnership.ended_generic'))
 end)
 
-t.test('partnershipEnded: a real reason string (server-triggered teardown, e.g. certification revoke) shows the reason-specific message', function()
+t.test('partnershipEnded: a known server-triggered reason shows its OWN dedicated sentence, never the raw internal tag', function()
     local f = newPartnershipFixture()
     f.dispatchNetEvent('qbx_k9unit:client:partnershipEstablished', 65535, 55, true)
     f.dispatchNetEvent('qbx_k9unit:client:partnershipEnded', 65535, 'certification_revoked')
-    t.equals(f.lastNotify().description, locale('partnership.ended_with_reason', 'certification_revoked'))
+    t.equals(f.lastNotify().description, locale('partnership.ended_certification_revoked'))
+    -- WORKFLOW CLARITY FIX regression guard: this used to be
+    -- locale('partnership.ended_with_reason', 'certification_revoked'),
+    -- i.e. the literal string "Partnership ended (certification_revoked)."
+    -- shown to a real player. Confirm that raw tag never appears in the
+    -- rendered text, whichever wording the dedicated sentence above uses.
+    t.isNil(f.lastNotify().description:find('certification_revoked', 1, true),
+        'the raw internal reason tag must never leak into player-facing text')
+end)
+
+t.test('partnershipEnded: department_changed shows its own sentence', function()
+    local f = newPartnershipFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEstablished', 65535, 55, true)
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEnded', 65535, 'department_changed')
+    t.equals(f.lastNotify().description, locale('partnership.ended_department_changed'))
+end)
+
+t.test('partnershipEnded: k9_access_lost and k9_access_revoked share the same dedicated sentence', function()
+    local f = newPartnershipFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEstablished', 65535, 55, true)
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEnded', 65535, 'k9_access_lost')
+    t.equals(f.lastNotify().description, locale('partnership.ended_k9_access_lost'))
+
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEstablished', 65535, 55, true)
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEnded', 65535, 'k9_access_revoked')
+    t.equals(f.lastNotify().description, locale('partnership.ended_k9_access_lost'))
+end)
+
+t.test('partnershipEnded: admin_forced_from_tablet (server/tablet.lua CALLBACK 9) shows its own sentence', function()
+    local f = newPartnershipFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEstablished', 65535, 55, true)
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEnded', 65535, 'admin_forced_from_tablet')
+    t.equals(f.lastNotify().description, locale('partnership.ended_admin_action'))
+end)
+
+t.test('partnershipEnded: an unrecognized future reason degrades to the plain generic message, never the raw tag', function()
+    local f = newPartnershipFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEstablished', 65535, 55, true)
+    f.dispatchNetEvent('qbx_k9unit:client:partnershipEnded', 65535, 'some_future_reason_this_file_does_not_know_yet')
+    t.equals(f.lastNotify().description, locale('partnership.ended_generic'))
 end)
 
 -- ========================================================================

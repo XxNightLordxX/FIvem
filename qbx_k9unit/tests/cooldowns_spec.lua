@@ -281,6 +281,79 @@ t.test('NewCooldown: StartSweep evicts only entries isStaleFn reports as stale',
 end)
 
 -- ----------------------------------------------------------------------
+-- StartSweep: THROWING isStaleFn (performance audit at 128 players, this
+-- pass). Every tracker built via :StartSweep is keyed by something with NO
+-- playerDropped hook -- this sweep is the ONLY thing bounding that table's
+-- size, so a predicate that throws must never be allowed to silently kill
+-- the sweep thread (the table would then grow unbounded forever) or
+-- silently keep every entry alive forever (same outcome, reached a
+-- different way -- see :StartSweep's own doc comment in server/cooldowns.lua
+-- for the full "evict, don't keep" reasoning this locks in).
+-- ----------------------------------------------------------------------
+
+t.test('StartSweep: an isStaleFn that throws for one entry evicts ONLY that entry, leaving an entry it evaluates successfully untouched', function()
+    capturedPrints = {}
+    fakeNow = 0
+    local c = NewCooldown()
+    c.Touch('throws-key', 0)     -- loggedAt = 0 -- the predicate below throws only for this loggedAt
+    c.Touch('fresh-key', 500)    -- loggedAt = 500 -- evaluated normally, never stale at t=600
+
+    c.StartSweep(1000, function(now, loggedAt)
+        if loggedAt == 0 then
+            error('config field went missing')
+        end
+        return (now - loggedAt) > 5000
+    end)
+
+    threadRunner.step() -- prime
+    fakeNow = 600
+    threadRunner.step() -- one real sweep pass
+
+    -- Distinguish "evicted" from "present but merely not-yet-expired" by
+    -- using a threshold large enough that a STILL-PRESENT entry would read
+    -- as on-cooldown regardless of the tiny elapsed time since its touch.
+    t.isFalse(c.IsOnCooldown('throws-key', 1000000, fakeNow),
+        'the entry whose isStaleFn call threw must be evicted (treated as stale), not left stuck forever')
+    t.isTrue(c.IsOnCooldown('fresh-key', 1000000, fakeNow),
+        'a throw evaluating ONE entry must never evict a DIFFERENT entry the predicate never threw for')
+
+    t.equals(#capturedPrints, 1, 'exactly one warning for the one throwing predicate call')
+    t.contains(capturedPrints[1], 'throws-key')
+    t.contains(capturedPrints[1], 'config field went missing')
+end)
+
+t.test('StartSweep: a predicate that throws for every entry warns exactly ONCE per tracker instance, not once per key or once per pass, and still evicts every entry it threw on', function()
+    capturedPrints = {}
+    fakeNow = 0
+    local c = NewCooldown()
+    c.Touch('a', fakeNow)
+    c.Touch('b', fakeNow)
+    c.Touch('c', fakeNow)
+
+    c.StartSweep(1000, function()
+        error('Config.Whatever.multiplier is not a number')
+    end)
+
+    threadRunner.step() -- prime
+    fakeNow = 100
+    threadRunner.step() -- pass #1 -- every one of a/b/c throws
+
+    t.isFalse(c.IsOnCooldown('a', 1000000, fakeNow), 'a throwing predicate must evict, never permanently retain, the entry it failed to evaluate')
+    t.isFalse(c.IsOnCooldown('b', 1000000, fakeNow))
+    t.isFalse(c.IsOnCooldown('c', 1000000, fakeNow))
+    t.equals(#capturedPrints, 1, 'three throws in the same pass must still only print one warning for this tracker')
+
+    -- A second pass, against a freshly-touched key, must still not print
+    -- again -- the "once per tracker instance" rule, not "once per pass".
+    c.Touch('d', fakeNow)
+    fakeNow = 1200
+    threadRunner.step() -- pass #2
+
+    t.isFalse(c.IsOnCooldown('d', 1000000, fakeNow), 'the sweep must keep bounding memory even after the tracker has already warned once')
+    t.equals(#capturedPrints, 1, 'no repeat warning on a later pass for the same tracker instance')
+end)
+
+-- ----------------------------------------------------------------------
 -- NewNestedCooldown
 -- ----------------------------------------------------------------------
 

@@ -1445,6 +1445,43 @@ lib.callback.register('qbx_k9unit:server:certTiersDelete', function(source, key)
         return { ok = false, reason = 'tier_in_use', referenceCount = refCount }
     end
 
+    -- THE SECOND REFERRER, which nothing counted until this pass.
+    --
+    -- Certifications are not the only thing that points at a tier. A supply
+    -- shop item can require one before anybody may buy it. Deleting a tier
+    -- an item requires does not fail loudly -- it makes that item unbuyable
+    -- for every player on the server, forever, and the refusal they get
+    -- names a tier that no longer exists and can never be granted to
+    -- anyone. Nothing told the officer doing the deleting, and nothing in
+    -- the shop explained why it had quietly stopped selling something.
+    --
+    -- Deliberately a SEPARATE refusal reason from 'tier_in_use' rather than
+    -- folding the two counts together: "3 certification records still use
+    -- this" and "2 shop items still require this" need completely different
+    -- actions from the person reading it, and one number covering both
+    -- would send them to the wrong screen.
+    --
+    -- Guarded call: server/equipmentshop.lua loads AFTER this file
+    -- (fxmanifest.lua), so this global does not exist while this file is
+    -- being read -- only by the time a tablet callback can actually run.
+    -- If it is genuinely absent (that file removed, or failed to load),
+    -- this check is skipped rather than erroring: the same posture every
+    -- other cross-file global call site in this resource takes.
+    if type(CountEquipmentShopItemsRequiringTier) == 'function' then
+        local shopOk, shopCount, shopItemKeys = pcall(CountEquipmentShopItemsRequiringTier, key)
+        if shopOk and type(shopCount) == 'number' and shopCount > 0 then
+            TierEditMutex.Release(key)
+            print(('[qbx_k9unit] certtiers: REFUSED to delete tier %s -- %d supply shop item(s) still require it: %s. Change or clear those items\' tier requirement from the tablet first, then delete the tier.')
+                :format(key, shopCount, table.concat(type(shopItemKeys) == 'table' and shopItemKeys or {}, ', ')))
+            return {
+                ok = false,
+                reason = 'tier_in_use_by_shop_items',
+                referenceCount = shopCount,
+                shopItemKeys = type(shopItemKeys) == 'table' and shopItemKeys or {},
+            }
+        end
+    end
+
     local entry = TierByKey[key]
     local wrote = K9Store.Tier_Tombstone(key, entry.label, entry.ordinal, citizenid or 'unknown')
     TierEditMutex.Release(key)
@@ -1454,7 +1491,7 @@ lib.callback.register('qbx_k9unit:server:certTiersDelete', function(source, key)
     end
 
     WriteTierAudit('tier_delete', key,
-        ('tier %s deleted (tombstoned) -- confirmed zero k9_certifications rows referenced it at the moment of deletion'):format(key),
+        ('tier %s deleted (tombstoned) -- confirmed zero k9_certifications rows AND zero supply shop items referenced it at the moment of deletion'):format(key),
         citizenid or 'unknown')
 
     RefreshCertificationTierCatalog()

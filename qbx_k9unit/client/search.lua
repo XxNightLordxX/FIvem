@@ -136,6 +136,66 @@
 --- @type boolean
 local searchInProgress = false
 
+--- Is this K9 currently part-way through a search?
+---
+--- Exposed as a resource-global (not merely a file local) so the MUTUAL
+--- GUARD below can be closed from BOTH sides: this file refuses to start a
+--- search while a restraint or a vehicle already owns the ped, and
+--- client/combat.lua refuses to start a bite / takedown / drag while a
+--- search is running. A guard that only exists in one direction is not a
+--- guard -- it just decides which of two conflicting mechanics has to be
+--- started second, and this codebase has already had to fix that exact
+--- half-a-guard shape once, between vehicle entry and dragging.
+---
+--- @return boolean
+function IsSearchInProgress()
+    return searchInProgress
+end
+
+--- Is something else already using this K9's body in a way a search would
+--- fight with?
+---
+--- Deliberately the same question client/appearance.lua's own
+--- IsCurrentlyEngaged() asks before a model swap, and answered by calling
+--- the same resource-globals, because it is the same question: "is this
+--- ped currently owned by another mechanic". Kept as a separate local
+--- rather than reaching for that file's version because it is a `local
+--- function` there, private to it -- duplicating four guarded calls is
+--- better than making one file's internals another file's dependency.
+---
+--- Each call is `type(fn) == 'function'`-guarded: every one of these lives
+--- in a file that may legitimately not be loaded (a server running with
+--- that feature's Config.Features flag off never defines them), and this
+--- resource's rule is that an absent optional global is a skipped check,
+--- never an error.
+---
+--- A vehicle-seated K9 is included on purpose, and is the case that
+--- actually shipped broken: a dog sitting in the back of a cruiser could
+--- search a person standing outside it, through the door, because
+--- ox_target's own reach does not care that the K9 is strapped in. Nothing
+--- refused it -- not this file, not the server.
+---
+--- @return boolean engaged
+--- @return string|nil reasonLocaleKey -- which message to show, when engaged
+local function IsBusyWithSomethingElse()
+    if type(IsInK9Vehicle) == 'function' and IsInK9Vehicle() then
+        return true, 'combat.blocked_by_vehicle'
+    end
+    if type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then
+        return true, 'search.blocked_while_engaged'
+    end
+    if type(IsDragEngaged) == 'function' and IsDragEngaged() then
+        return true, 'search.blocked_while_engaged'
+    end
+    if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then
+        return true, 'search.blocked_while_engaged'
+    end
+    if type(IsFetchCarryEngaged) == 'function' and IsFetchCarryEngaged() then
+        return true, 'search.blocked_while_engaged'
+    end
+    return false, nil
+end
+
 --- Shared implementation behind the two ox_target options below. Plays the
 --- sniff animation/progress bar, awaits the server's authoritative result,
 --- and renders feedback — never computes or guesses a result itself. Kept
@@ -159,6 +219,24 @@ local function PerformSearch(targetType, targetEntity)
     -- §4's own "Rejection UX note" recommendation for
     -- on_cooldown/search_in_progress being low-key, not error-styled).
     if searchInProgress then return end
+
+    -- MUTUAL GUARD, this file's half. UNLIKE the double-click case above
+    -- this DOES get a message: being refused because your dog is currently
+    -- biting someone, or is strapped into a car, is not routine traffic --
+    -- it is a real reason the player can act on, and silence would read as
+    -- the button being broken.
+    --
+    -- The progress bar's own `disable = { combat = true }` below is NOT
+    -- this check and never was: that disables game CONTROLS for the
+    -- bar's duration, which does nothing about this resource's own
+    -- keybind-driven RequestBiteHold/RequestDrag (a registered command, not
+    -- a game control) and nothing at all about a search STARTED while a
+    -- bite is already running -- the direction this branch covers.
+    local busy, reasonKey = IsBusyWithSomethingElse()
+    if busy then
+        lib.notify({ title = locale('common.notify_title'), description = locale(reasonKey), type = 'error' })
+        return
+    end
 
     if not DoesEntityExist(targetEntity) then
         lib.notify({ title = locale('common.notify_title'), description = locale('search.nothing_to_search'), type = 'error' })
@@ -349,6 +427,10 @@ local function RegisterSearchOxTargetOptions()
                 -- PerformSearch's own defensive re-check and the server's
                 -- independent mutex are what actually enforce this.
                 if searchInProgress then return false end
+                -- Same "never show an option that will just refuse"
+                -- reasoning, for the MUTUAL GUARD above. Display-only:
+                -- PerformSearch re-checks it defensively regardless.
+                if (IsBusyWithSomethingElse()) then return false end
                 return CanShowK9UI()
             end,
             onSelect = function(data)
@@ -391,6 +473,10 @@ local function RegisterSearchOxTargetOptions()
                 -- silent no-op (searchInProgress inside PerformSearch), so
                 -- hide it for that window instead of leaving it clickable.
                 if searchInProgress then return false end
+                -- Same "never show an option that will just refuse"
+                -- reasoning, for the MUTUAL GUARD above. Display-only:
+                -- PerformSearch re-checks it defensively regardless.
+                if (IsBusyWithSomethingElse()) then return false end
                 return CanShowK9UI()
             end,
             onSelect = function(data)

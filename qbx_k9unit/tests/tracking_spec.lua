@@ -990,6 +990,85 @@ t.test('ScentVision: maxPointsPerPerson is a hard cap regardless of how many cap
     t.isTrue(#result.points <= 3, ('expected at most 3 points (hard cap), got %d'):format(#result.points))
 end)
 
+-- ========================================================================
+-- UPPER CEILING on maxPointsPerPerson (performance audit at 128 players,
+-- this pass). See server/tracking.lua's own
+-- SCENT_VISION_MAX_POINTS_PER_PERSON_CEILING declaration comment for the
+-- full worked arithmetic. This field is the one caller of
+-- ResolveScentVisionNumber that passes an upper `maxAllowed` -- matching
+-- server/runtimecontrol.lua's own tablet-side bound (min=1, max=50) for the
+-- identical field, so a config.lua hand-edit cannot reach a value the
+-- tablet's own UI already refuses.
+-- ========================================================================
+
+t.test('ScentVision: an excessively large maxPointsPerPerson is clamped to this resource\'s own ceiling (50) and warns, rather than reintroducing unbounded per-player trail memory', function()
+    -- queryMaxPointsPerTrail/queryRangeMeters overridden generously large so
+    -- the QUERY side never masks what this test actually cares about: the
+    -- STORAGE-side cap enforced by RecordScentVisionPoint's own `maxPoints`
+    -- (resolved from maxPointsPerPerson). Clock is never advanced between
+    -- capture passes (matching the sibling hard-cap test just above), so
+    -- dotLifetimeMs expiry cannot be the reason any point is missing either.
+    local f = newScentVisionFixture({ trackingOverrides = {
+        maxPointsPerPerson     = 100000, -- far above the 50 ceiling this resource enforces
+        minSampleMovementMeters = 0.5,
+        queryMaxPointsPerTrail  = 100000,
+        queryRangeMeters        = 100000,
+    } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 0, 0, 0)
+
+    f.step() -- prime
+
+    for i = 1, 55 do
+        f.setPedCoords(2, i * 1, 0, 0) -- always moves well past minSampleMovementMeters (0.5)
+        f.step()
+    end
+
+    local result = f.getScentVisionPoints(1)
+    t.isTrue(#result.points <= 50,
+        ('expected at most 50 points (this resource\'s own built-in ceiling, matching the tablet\'s own bound), got %d -- an unclamped maxPointsPerPerson would have let this reach 55'):format(#result.points))
+
+    local warningLine
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Tracking.ScentVision.maxPointsPerPerson', 1, true) and line:find('exceeds', 1, true) then
+            warningLine = line
+        end
+    end
+    t.isNotNil(warningLine, 'an excessively large maxPointsPerPerson must print a warning naming the exact key')
+    t.contains(warningLine, '100000', 'the warning must name the value that was actually found')
+    t.contains(warningLine, '50', 'the warning must name the ceiling value substituted')
+end)
+
+t.test('ScentVision: the shipped default (15) and the tablet\'s own max (50) both sit at-or-under the ceiling -- neither ever warns', function()
+    local f1 = newScentVisionFixture() -- fixture default maxPointsPerPerson = 4, well under
+    f1.registerPlayer(1, 'K9-CID', 100)
+    f1.registerPlayer(2, 'SUSPECT-CID', 200)
+    f1.setPedCoords(1, 0, 0, 0)
+    f1.setPedCoords(2, 0, 0, 0)
+    f1.step()
+    f1.setPedCoords(2, 5, 0, 0)
+    f1.step()
+    for _, line in ipairs(f1.printLog) do
+        t.isFalse(line:find('maxPointsPerPerson', 1, true) ~= nil and line:find('exceeds', 1, true) ~= nil,
+            'a small, legitimate maxPointsPerPerson must never trip the upper-ceiling warning: ' .. line)
+    end
+
+    local f2 = newScentVisionFixture({ trackingOverrides = { maxPointsPerPerson = 50 } }) -- exactly the tablet's own max
+    f2.registerPlayer(1, 'K9-CID', 100)
+    f2.registerPlayer(2, 'SUSPECT-CID', 200)
+    f2.setPedCoords(1, 0, 0, 0)
+    f2.setPedCoords(2, 0, 0, 0)
+    f2.step()
+    f2.setPedCoords(2, 5, 0, 0)
+    f2.step()
+    for _, line in ipairs(f2.printLog) do
+        t.isFalse(line:find('maxPointsPerPerson', 1, true) ~= nil and line:find('exceeds', 1, true) ~= nil,
+            'exactly the tablet\'s own max (50) must never itself trigger the "exceeds" warning: ' .. line)
+    end
+end)
+
 t.test('ScentVision: only maxVisibleTrails distinct trails are revealed at once -- the FURTHEST is dropped under load', function()
     local f = newScentVisionFixture() -- maxVisibleTrails = 2 in this fixture's own defaults
     f.registerPlayer(1, 'K9-CID', 100)
@@ -1349,6 +1428,60 @@ t.test('ENTRY-COUNT CEILING: an invalid Config.Tracking.<Type>.maxLoggedEntries 
 
     local result = f.findTrackableSource(1, 'blood')
     t.isTrue(result.found, 'the feature must keep working off the built-in fallback -- an invalid cap must never collapse to something that evicts every entry on arrival')
+end)
+
+-- ========================================================================
+-- UPPER CEILING on maxLoggedEntries (performance audit at 128 players, this
+-- pass -- follow-up finding). See server/tracking.lua's own
+-- MAX_LOGGED_ENTRIES_CEILING declaration comment for the full worked
+-- arithmetic behind the 50000 figure. This field is hand-edit-only (not
+-- tablet-reachable), so it was the one place a floor-only clamp still let
+-- an operator reintroduce the exact unbounded-growth incident this whole
+-- mechanism exists to close.
+-- ========================================================================
+
+t.test('UPPER CEILING: a maxLoggedEntries value above the built-in ceiling is clamped down and warns, naming the exact key and the ceiling substituted', function()
+    local f = newTrackingFixture({ maxLoggedEntries = { blood = 999999 } })
+
+    local warningLine
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Tracking.Blood.maxLoggedEntries', 1, true) and line:find('exceeds', 1, true) then
+            warningLine = line
+        end
+    end
+    t.isNotNil(warningLine, 'a maxLoggedEntries value above the ceiling must print a warning naming the exact key')
+    t.contains(warningLine, '999999', 'the warning must name the value that was actually found')
+    t.contains(warningLine, '50000', 'the warning must name the ceiling value substituted')
+end)
+
+t.test('UPPER CEILING: exactly AT the ceiling (50000) is accepted unchanged, with no warning', function()
+    local f = newTrackingFixture({ maxLoggedEntries = { gunpowder = 50000 } })
+
+    for _, line in ipairs(f.printLog) do
+        t.isNil(line:find('Config.Tracking.Gunpowder.maxLoggedEntries', 1, true) and line:find('exceeds', 1, true),
+            'a value exactly at the ceiling must never trigger the "exceeds ceiling" warning')
+    end
+end)
+
+t.test('UPPER CEILING: one ms over the ceiling (50001) still warns -- boundary is inclusive, not off-by-one', function()
+    local f = newTrackingFixture({ maxLoggedEntries = { scent = 50001 } })
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.Tracking.Scent.maxLoggedEntries', 1, true) and line:find('exceeds', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, '50001 (one over the ceiling) must still be clamped and warned about')
+end)
+
+t.test('UPPER CEILING: every real shipped config.lua default (6000/8000/6000) sits comfortably under the ceiling -- no warning ever fires for an untouched config', function()
+    local f = newTrackingFixture() -- uses this fixture's own defaults, which mirror config.lua's shipped values
+
+    for _, line in ipairs(f.printLog) do
+        t.isFalse(line:find('maxLoggedEntries', 1, true) ~= nil and line:find('exceeds', 1, true) ~= nil,
+            'the shipped defaults must never trip the new upper-ceiling warning: ' .. line)
+    end
 end)
 
 os.exit(t.summary())

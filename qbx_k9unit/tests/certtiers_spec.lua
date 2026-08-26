@@ -195,6 +195,16 @@ local function boot(opts)
     if opts.getCertificationTier then
         envOverrides.GetCertificationTier = opts.getCertificationTier
     end
+    -- server/equipmentshop.lua's CountEquipmentShopItemsRequiringTier --
+    -- the SECOND thing that can point at a tier. OMITTED from envOverrides
+    -- entirely (not merely nil) unless a test supplies one, for exactly the
+    -- same reason as GetCertificationTier immediately above: the production
+    -- file's own `type(fn) == 'function'` guard must genuinely see it as
+    -- absent, the way a real server would while server/certtiers.lua is
+    -- still loading (fxmanifest.lua loads equipmentshop.lua after it).
+    if opts.countShopItemsRequiringTier then
+        envOverrides.CountEquipmentShopItemsRequiringTier = opts.countShopItemsRequiringTier
+    end
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
@@ -428,6 +438,92 @@ t.test('HAZARD 2: deleting a tier with at least one referencing k9_certification
     t.equals(result.reason, 'tier_in_use')
     t.equals(result.referenceCount, 1)
     t.isTrue(f.env.IsKnownCertificationTierKey('trainee'), 'a refused delete must leave the tier fully intact')
+end)
+
+-- ----------------------------------------------------------------------
+-- HAZARD 2, SECOND REFERRER. Certifications were the only thing counted.
+-- A supply shop item can also require a tier, and deleting a tier an item
+-- requires does not fail loudly -- it makes that item unbuyable for every
+-- player on the server, forever, with the refusal naming a tier that no
+-- longer exists and can never be granted to anybody. Nothing told the
+-- officer doing the deleting, and nothing in the shop said why it had
+-- stopped selling something.
+-- ----------------------------------------------------------------------
+
+t.test('HAZARD 2 (SHOP): deleting a tier that a supply shop item still requires is REFUSED, with its own distinct reason and the item named', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        countShopItemsRequiringTier = function(tierKey)
+            if tierKey == 'trainee' then return 2, { 'k9_vest', 'k9_medkit' } end
+            return 0, {}
+        end,
+    })
+    local result = f.callbacks['qbx_k9unit:server:certTiersDelete'](HC_SOURCE, 'trainee')
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'tier_in_use_by_shop_items',
+        'a separate reason from tier_in_use on purpose -- the two send the person to completely different screens')
+    t.equals(result.referenceCount, 2)
+    t.equals(result.shopItemKeys[1], 'k9_vest')
+    t.equals(result.shopItemKeys[2], 'k9_medkit')
+    t.isTrue(f.env.IsKnownCertificationTierKey('trainee'), 'a refused delete must leave the tier fully intact')
+end)
+
+t.test('HAZARD 2 (SHOP): the refusal names the blocking items in the console too, so an operator can act on it without the tablet open', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        countShopItemsRequiringTier = function() return 1, { 'k9_vest' } end,
+    })
+    f.callbacks['qbx_k9unit:server:certTiersDelete'](HC_SOURCE, 'trainee')
+
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('REFUSED to delete tier trainee', 1, true) and line:find('k9_vest', 1, true) then found = true end
+    end
+    t.isTrue(found, 'naming the tier but not the items would leave them hunting through the whole shop')
+end)
+
+t.test('HAZARD 2 (SHOP): a tier NO shop item requires still deletes normally -- the new check must not block ordinary deletes', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        countShopItemsRequiringTier = function() return 0, {} end,
+    })
+    local result = f.callbacks['qbx_k9unit:server:certTiersDelete'](HC_SOURCE, 'trainee')
+    t.isTrue(result.ok)
+    t.isFalse(f.env.IsKnownCertificationTierKey('trainee'))
+end)
+
+t.test('HAZARD 2 (SHOP): certifications are checked FIRST -- a tier blocked by both reports the certification refusal, which is the one that must be cleared first', function()
+    local world = newWorld()
+    world.certifications = { { tier = 'trainee' } }
+    local f = boot({
+        world = world,
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        countShopItemsRequiringTier = function() return 3, { 'a', 'b', 'c' } end,
+    })
+    local result = f.callbacks['qbx_k9unit:server:certTiersDelete'](HC_SOURCE, 'trainee')
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'tier_in_use')
+    t.equals(result.referenceCount, 1, 'the two counts must never be added together -- one number covering both would be meaningless')
+end)
+
+t.test('HAZARD 2 (SHOP): server/equipmentshop.lua not loaded at all is a skipped check, never an error -- the delete behaves exactly as it did before this existed', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end }) -- countShopItemsRequiringTier deliberately absent from the env
+    t.isNil(f.env.CountEquipmentShopItemsRequiringTier)
+    local result = f.callbacks['qbx_k9unit:server:certTiersDelete'](HC_SOURCE, 'trainee')
+    t.isTrue(result.ok)
+end)
+
+t.test('HAZARD 2 (SHOP): a THROWING counter is a skipped check, never a delete that errors out halfway with the tier mutex still held', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        countShopItemsRequiringTier = function() error('simulated equipmentshop failure', 0) end,
+    })
+    local result = f.callbacks['qbx_k9unit:server:certTiersDelete'](HC_SOURCE, 'trainee')
+    t.isTrue(result.ok, 'a broken referrer check must never strand the tier editor')
+
+    -- The mutex really was released: a second, unrelated edit still works.
+    local second = f.callbacks['qbx_k9unit:server:certTiersDelete'](HC_SOURCE, 'senior')
+    t.isTrue(second.ok or second.reason == 'rate_limited', 'whatever the outcome, it must not be "busy" -- that would mean a leaked lock')
 end)
 
 t.test('HAZARD 2: \'certified\' can NEVER be deleted, even with zero referencing rows -- unconditional protection independent of reference count', function()

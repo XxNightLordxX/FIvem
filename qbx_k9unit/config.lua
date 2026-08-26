@@ -3406,6 +3406,10 @@ Config.ProximityAudioFX = {
 --   * `override`   -- a resource name, as a string. Skips detection entirely
 --                     and uses THIS one. Use it when you run two of
 --                     something and want to be certain which one is used.
+--                     Setting the INVENTORY system's override (or letting
+--                     auto-detect pick it) to 'qb-inventory' specifically
+--                     has two real gaps that print no warning -- read the
+--                     INVENTORY section below before you choose it.
 --   * `candidates` -- the search order. ADD YOUR OWN NAME TO THIS LIST if
 --                     you run something not listed. It is a plain list of
 --                     strings; there is nothing magic about the ones that
@@ -3462,6 +3466,29 @@ Config.Compat = {
         -- ==============================================================
         -- INVENTORY -- items, stashes, the contraband search, the K9 supply
         -- shop, and the tablet item. The most-used system in this list.
+        --
+        -- IF YOU PICK (OR AUTO-DETECT) qb-inventory, READ THIS FIRST. Two
+        -- specific things behave differently on qb-inventory than on
+        -- ox_inventory (the one this resource is built and tested against),
+        -- and neither one prints a warning or an error when it happens:
+        --   * The K9 supply shop does not open for players. A handler who
+        --     clicks "Buy K9 Gear" gets nothing at all -- no menu, no
+        --     message, nothing in the server console. qb-inventory has no
+        --     way for this resource to open a shop screen from the
+        --     PLAYER's side, only from the server's side, so this one
+        --     action is a permanent dead end on qb-inventory -- not
+        --     something a restart or a different setting fixes.
+        --   * A search cannot see contraband hidden inside a bag or
+        --     backpack item. It still correctly finds anything sitting
+        --     loose in someone's own inventory ("pockets"); only the
+        --     INSIDE of a separate bag item is invisible to it on this
+        --     backend. A "clean" result can mean "actually clean" or
+        --     "hidden in a bag" on qb-inventory -- there is no way to tell
+        --     which.
+        -- Everything else -- including the K9 medkit and finding
+        -- contraband sitting loose (not in a bag) -- works normally on
+        -- qb-inventory. If you need the supply shop to work for players,
+        -- or need bag-searching to be reliable, use ox_inventory instead.
         -- ==============================================================
         inventory = {
             override = nil,
@@ -3535,13 +3562,25 @@ Config.Compat = {
         },
 
         -- ==============================================================
-        -- DISPATCH -- OUTBOUND ONLY. This resource ANNOUNCES things ("a K9
-        -- went down", "a search found contraband"); it never asks dispatch
-        -- a question. Even with nothing detected here, every announcement
-        -- still fires as a plain `qbx_k9unit:events:*` event that your own
-        -- dispatch can listen for with one line of code -- so a fully
-        -- custom dispatch needs NOTHING in this block. Detection here is
-        -- purely a convenience so the common ones work with no setup.
+        -- DISPATCH -- OUTBOUND ONLY. This resource ANNOUNCES things (for
+        -- example, "a K9 went down"); it never asks dispatch a question.
+        -- Even with nothing detected here, every announcement still fires
+        -- as a plain `qbx_k9unit:events:*` event that your own dispatch can
+        -- listen for with one line of code -- so a fully custom dispatch
+        -- needs NOTHING in this block.
+        --
+        -- READ THIS BEFORE YOU ASSUME EVERYTHING SHOWS UP ON YOUR DISPATCH
+        -- BOARD. Detection here only lights up a real, no-setup-needed
+        -- board alert for ONE thing today: a K9 going down. A
+        -- search-and-rescue call being completed, and a contraband search
+        -- finishing, both still fire their own plain event (so something
+        -- IS available to listen for), but neither one automatically posts
+        -- to a detected dispatch board the way a K9 going down does. This
+        -- is a deliberate, narrower scope, not a bug that got missed. If
+        -- you want search-and-rescue calls or search results to show up on
+        -- your dispatch board too, someone needs to write a small bridge
+        -- that listens for that event and posts it to your dispatch
+        -- script -- this resource does not do that step for you today.
         -- ==============================================================
         dispatch = {
             override = nil,

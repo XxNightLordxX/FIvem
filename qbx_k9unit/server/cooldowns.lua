@@ -606,15 +606,87 @@ function NewCooldown(defaultThresholdMs)
     --- periodic sweep thread evicting any entry `isStaleFn(now, loggedAt)`
     --- reports as stale. Exactly mirrors the shape every existing sweep
     --- thread in this resource already used before this extraction.
+    ---
+    --- THROWING PREDICATE (performance audit at 128 players, this pass): a
+    --- tracker built via :StartSweep is, by definition, keyed by something
+    --- with NO playerDropped hook (a door's netId, a resolved plate/
+    --- citizenid identity, a target's own netId) — this sweep is the ONLY
+    --- thing that ever bounds that table's size. Every isStaleFn call site
+    --- in this resource today is simple arithmetic against a handful of
+    --- static Config numbers (see server/combat.lua's
+    --- TakedownTargetCooldown/BiteHoldTargetCooldown/DragTargetCooldown for
+    --- the three real examples), but if a Config field one of them
+    --- multiplies against ever goes missing or changes type, an UNGUARDED
+    --- isStaleFn throwing here would kill this CreateThread outright —
+    --- silently, permanently, for the rest of this resource's uptime, with
+    --- nothing but one script-error line at the moment it happens (easy to
+    --- miss, impossible to notice later). The table this sweep exists to
+    --- bound would then grow without limit for the rest of the server's
+    --- life. That failure mode — "the memory bound quietly stops existing
+    --- and nothing says so" — is exactly the class of bug this file's other
+    --- backstops (IsValidThreshold's NaN check, ResolveConfiguredThresholdMs,
+    --- AssertValidDefaultThreshold) all exist to make loud instead of
+    --- silent, so this sweep gets the same treatment.
+    ---
+    --- FIX: pcall around every isStaleFn call. A throw is treated as STALE
+    --- (the entry is evicted), deliberately NOT as "not stale" (the entry is
+    --- kept) — a choice between two imperfect options, picked on purpose:
+    ---   - "not stale" (keep) looks safer for any ONE key's correctness, but
+    ---     a throwing predicate is a Config-shaped bug that applies
+    ---     IDENTICALLY to every key this sweep ever evaluates (same closure,
+    ---     same broken Config field, every single pass) — so "keep" here
+    ---     would mean NOTHING is ever evicted again once the bug is
+    ---     triggered, silently disabling the exact memory ceiling this
+    ---     mechanism exists to enforce for as long as the resource keeps
+    ---     running. That is the one outcome this whole file cannot allow.
+    ---   - "stale" (evict) bounds memory unconditionally. Worst case, a
+    ---     still-legitimately-active entry is evicted early, handing
+    ---     whoever it was gating one extra, earlier-than-intended action —
+    ---     a bounded, self-healing, one-time-per-key correctness nuisance
+    ---     (the entry is simply re-created next time it's touched), never
+    ---     an unbounded resource leak. That is the strictly less dangerous
+    ---     of the two failure directions for a MAINTENANCE sweep — contrast
+    ---     with :IsOnCooldown's own fail-CLOSED choice elsewhere in this
+    ---     file, which is right for a GATE deciding whether to allow an
+    ---     action, but is the wrong model here: this is a sweep deciding
+    ---     whether to keep old bookkeeping around, not a gate gone wrong.
+    --- Never silent either way: the first throw on a given tracker prints
+    --- one line naming the offending key and the exact error the predicate
+    --- raised, so a broken isStaleFn becomes a loud, findable bug report
+    --- instead of a table that just quietly stops shrinking. Printed once
+    --- per TRACKER INSTANCE (not once per key, not once per pass) — same
+    --- "loud once, not a flood" convention as :IsOnCooldown's own bad-
+    --- call-time-threshold warning above — since a real Config bug here
+    --- throws for EVERY key on EVERY pass, and a print-per-occurrence would
+    --- flood the console instead of informing it.
     --- @param intervalMs number
     --- @param isStaleFn fun(now: number, loggedAt: number): boolean
     function tracker.StartSweep(intervalMs, isStaleFn)
+        local warnedPredicateThrew = false
         CreateThread(function()
             while true do
                 Wait(intervalMs)
                 local now = GetGameTimer()
                 for key, loggedAt in pairs(store) do
-                    if isStaleFn(now, loggedAt) then
+                    local ok, staleOrErr = pcall(isStaleFn, now, loggedAt)
+                    if not ok then
+                        -- Threw: evict (treat as stale) — see this function's
+                        -- own doc comment above for why eviction, not
+                        -- retention, is the safe direction here.
+                        if not warnedPredicateThrew then
+                            warnedPredicateThrew = true
+                            print(
+                                ('[qbx_k9unit] cooldowns.lua: StartSweep isStaleFn threw (%s) while checking key=%s -- ' ..
+                                 'evicting this entry rather than leaving this tracker\'s memory ceiling silently ' ..
+                                 'disabled (see :StartSweep\'s own doc comment for the full reasoning). This predicate ' ..
+                                 'is now broken for EVERY entry it is ever asked about again -- the same closure/Config ' ..
+                                 'bug applies to all of them, not just this one -- find and fix whatever Config field ' ..
+                                 'this sweep\'s staleness check reads.')
+                                    :format(tostring(staleOrErr), tostring(key))
+                            )
+                        end
+                        store[key] = nil
+                    elseif staleOrErr then
                         store[key] = nil
                     end
                 end

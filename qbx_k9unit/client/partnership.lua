@@ -467,6 +467,21 @@ end)
 --- connected, unlike leash's leashDetached.
 --- @param reason string -- e.g. 'broken' (self-initiated) or a plain reason like 'certification_revoked'/'department_changed' (server-triggered); never the raw 'system:<reason>' DB sentinel, which stays server-internal
 RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
+    -- WORKFLOW CLARITY FIX (this pass -- same shape as this file's own
+    -- leash.lua sibling's `leashDetached` handler): every reason the
+    -- server can actually send needs its OWN sentence here. Before this
+    -- fix, any reason other than 'broken' was interpolated raw into
+    -- 'Partnership ended (%s).', so a real player saw literal internal
+    -- text like "Partnership ended (certification_revoked)." or
+    -- "Partnership ended (admin_forced_from_tablet)." -- the exact
+    -- machine-readable tag server/certifications.lua/server/permissions.lua/
+    -- server/tablet.lua pass to ForceBreakPartnershipForCitizenId, never
+    -- translated. This is sent to BOTH parties with the SAME string (see
+    -- server/partnership.lua's TellCitizenIdPartnershipEnded), so each
+    -- sentence below is worded neutrally enough to be true for either side
+    -- (never "your certification", since the officer/handler-role party
+    -- holds no certification of their own -- see this file's header on
+    -- that asymmetry).
     -- SOURCE-ORIGIN GUARD (see client/combat.lua's "SOURCE-ORIGIN GUARD"
     -- header block and DEVELOPER_REFERENCE.md#trust-boundary for the full
     -- writeup; not re-derived here). Without this, a forged local
@@ -484,14 +499,21 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
     PartnershipState = nil
 
     local description = locale('partnership.ended_generic')
-    if type(reason) == 'string' and reason ~= '' and reason ~= 'broken' then
-        -- Generic fallback rather than a hardcoded exact-string table:
-        -- this file doesn't own server/certifications.lua's eventual exact
-        -- reason strings, and a future caller of
-        -- ForceBreakPartnershipForCitizenId should not need to also edit
-        -- this file just to get a readable notification.
-        description = locale('partnership.ended_with_reason', reason)
+    if reason == 'certification_revoked' then
+        description = locale('partnership.ended_certification_revoked')
+    elseif reason == 'department_changed' then
+        description = locale('partnership.ended_department_changed')
+    elseif reason == 'k9_access_lost' or reason == 'k9_access_revoked' then
+        description = locale('partnership.ended_k9_access_lost')
+    elseif reason == 'admin_forced_from_tablet' then
+        description = locale('partnership.ended_admin_action')
     end
+    -- Anything else (including 'broken', the self-initiated case, and any
+    -- reason this list does not yet know about) stays the plain generic
+    -- message above -- never the raw tag itself. A future new reason
+    -- degrades to "Partnership ended." rather than leaking its own
+    -- internal name; add it to the list above rather than reaching for a
+    -- %s template again.
     lib.notify({ title = locale('common.notify_title'), description = description, type = 'info' })
 end)
 

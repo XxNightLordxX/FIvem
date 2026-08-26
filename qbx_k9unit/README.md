@@ -147,6 +147,42 @@ and `ox_inventory` still have to be installed and started regardless
 (they're hard dependencies above), but this resource can route around
 them for a specific system if you run something else.
 
+**One inventory choice has two real gaps worth knowing before you pick
+it: `qb-inventory`.** If you set `Config.Compat.Systems.inventory.override`
+to `'qb-inventory'` yourself, or just leave auto-detection to find it,
+two specific player-facing things quietly stop working — no error, no
+notification, nothing in the console:
+
+- **The K9 supply shop never opens for players.** A handler walks up,
+  clicks "Buy K9 Gear", and nothing happens at all. qb-inventory has no
+  way for this resource to open a shop screen from the *player's* side
+  (only from the server), so this is a permanent dead end on
+  qb-inventory, not something a restart or a different setting fixes.
+- **A search cannot see contraband hidden inside a bag or backpack
+  item.** It still correctly finds anything sitting loose in someone's
+  own inventory ("pockets") — only the *inside* of a separate bag item
+  is invisible to it on this backend. A "clean" result can mean
+  genuinely clean, or "hidden in a bag," and there's no way to tell
+  which on qb-inventory.
+
+Everything else — including the K9 medkit and finding contraband
+sitting loose — works normally on qb-inventory. If you need the supply
+shop to work for players, or need bag-searching to be trustworthy, use
+`ox_inventory` (the one this resource is built and tested against)
+instead.
+
+**Dispatch integration covers one alert, not every K9 event.** If a
+supported dispatch is detected, this resource automatically posts to
+its board with zero setup for exactly one thing: a K9 going down. A
+search-and-rescue call being completed and a contraband search
+finishing both still announce themselves as an event your own scripts
+can listen for (see "Public API for developers" below), but neither one
+lights up a detected dispatch board on its own the way a K9 going down
+does. That's a deliberate, narrower scope, not a missed connection —
+if you want those to show up on your dispatch board too, someone needs
+to write a small bridge that listens for the event and posts it there;
+this resource doesn't do that step for you today.
+
 **Framework detection does not mean framework support, and this is the
 one place this document is deliberately blunt rather than reassuring:**
 `/k9compat` will correctly tell you if you're running QBCore or ESX, but
@@ -226,6 +262,12 @@ Work through all of these first:
 - **`Config.Peds`** — which ped models count as a K9. Any model works,
   including a non-dog custom streamed one, as long as it's actually
   streamed on your server.
+- **If you run (or are auto-detected onto) `qb-inventory`** — check
+  `Config.Compat.Systems.inventory` in `config.lua` and read "About
+  works with any inventory/dispatch/framework" above before you commit
+  to it. Short version: the K9 supply shop won't open for players, and
+  a search can't see contraband hidden inside a bag, on that specific
+  backend only.
 - **`Config.K9Vehicles`** — which vehicles a K9 can ride in. A K9 sits
   in a real seat (rear preferred, never the driver's) — visible to
   everyone else, not hidden or attached to the outside of the car.

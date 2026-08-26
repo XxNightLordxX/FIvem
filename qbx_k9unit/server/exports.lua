@@ -230,6 +230,87 @@
        carries a location (`coords`), deliberately: unlike the other six
        events, a dispatch alert's entire purpose is a map pin.
 
+    CORRECTED (integration-verification pass, 2026-08-26): the "Current full
+    list" table above already named all fourteen events — it was measured by
+    grepping every real call site, not guessed — but only #1–#7 above had a
+    documented payload shape. The remaining seven were real, already-firing
+    events with no contract entry here at all, which is exactly the kind of
+    gap a resource built against this file from the table alone would not
+    have caught until it tried to read a field that was never documented.
+    Filled in below, each verified directly against its own
+    `FireOutboundEvent` call site(s), never guessed from the name:
+
+    8. 'qbx_k9unit:events:certificationTierChanged'
+       (citizenid: string, jobName: string, oldTier: string, newTier: string,
+        granterCitizenid: string)
+       oldTier/newTier are plain tier-KEY strings ('trainee'|'certified'|
+       'senior', or any live operator-added key from server/certtiers.lua) —
+       NOT table copies, unlike xpTierReached's newTier/oldTier (#6) above.
+       Fire from TWO existing success points in server/certifications.lua:
+       SetCertificationTier (online target) and SetCertificationTierOffline
+       (offline target), each right after its own post-write
+       RefreshCertificationCache confirms the tier that actually landed.
+       SetCertificationTierForTablet wraps both and has no separate fire site
+       of its own.
+
+    9. 'qbx_k9unit:events:certificationRenewed'
+       (citizenid: string, jobName: string, expiresAtUnix: number|nil,
+        granterCitizenid: string)
+       `expiresAtUnix` is read back from the post-write cache, never the
+       requested value — `nil` only if that read-back itself could not be
+       confirmed fresh (see the call site's own "freshlyVerified" gate).
+       Fire from TWO existing success points in server/certifications.lua:
+       RenewCertification (online target) and RenewCertificationOffline
+       (offline target). RenewCertificationForTablet wraps both and has no
+       separate fire site of its own.
+
+    10. 'qbx_k9unit:events:specializationGranted'
+        (citizenid: string, jobName: string, specializationKey: string,
+         granterCitizenid: string)
+        Fire from: server/certifications.lua's GrantSpecialization, right
+        after RefreshSpecializationCache following a confirmed INSERT.
+        GrantSpecializationForTablet wraps it and has no separate fire site.
+
+    11. 'qbx_k9unit:events:specializationRevoked'
+        (citizenid: string, jobName: string, specializationKey: string,
+         reason: 'manual'|'manual_offline'|'certification_revoked'|
+         'department_changed'|'job_changed')
+        Fire from THREE existing success points in server/certifications.lua:
+        RevokeSpecialization (reason='manual'), RevokeSpecializationOffline
+        (reason='manual_offline'), and RevokeAllSpecializationsForCitizenJob
+        (reason passed through from its own caller — the cascade this
+        function runs from a base-certification revoke or a job/department
+        change, so it fires once per specialization key still active at that
+        moment, not once per call). RevokeSpecializationForTablet wraps the
+        first of these and has no separate fire site of its own.
+
+    12. 'qbx_k9unit:events:sarCallStarted'
+        (source: number, citizenid: string, jobName: string,
+         callType: 'person'|'property')
+        Fire from: server/sarcalls.lua's own /k9startsarcall callback, right
+        after a new ActiveSarCalls[source] session is recorded — `source` is
+        the live, currently-connected server id at the moment of firing, the
+        same "hint, not a guarantee" caveat #7's `source` field documents.
+
+    13. 'qbx_k9unit:events:sarCallCompleted'
+        (source: number, citizenid: string, jobName: string,
+         callType: 'person'|'property', durationMs: number)
+        Fire from: server/sarcalls.lua's EndSarCall, ONLY on
+        reason == 'found' (a timeout or an abandoned call fires neither this
+        event nor any other — see that file's own header EVENT/CALLBACK
+        CONTRACT note). `durationMs` is `GetGameTimer() - call.startedAt`,
+        measured at the moment this fires, not a stored value.
+
+    14. 'qbx_k9unit:events:scentLineupResolved'
+        (src: number, correct: boolean)
+        Fire from: server/scentlineup.lua's pick-resolution handler, right
+        before that session's own CleanupSession call. `src` is the
+        conductor's own connection id, not a citizenid — deliberately, per
+        that call site's own comment, matching every other still-online-only
+        outbound payload in this contract. No XP is ever tied to this event;
+        the outcome is random by design (see README.md's "Scent Lineup"
+        entry).
+
     Every payload above uses ONLY values the owning file already computes
     for its own internal purposes (a DB column just written, an existing
     TriggerClientEvent's own arguments, or — for #7 — a live, server-resolved
@@ -237,7 +318,10 @@
     logic beyond firing at an existing success point, matching
     DEVELOPER_REFERENCE.md Part B's own "Effort: small" assessment for that
     item; #7 is genuinely new detection logic, scoped to its own file rather
-    than any existing one — see server/integrations.lua's own header.
+    than any existing one — see server/integrations.lua's own header. #8
+    through #14 are, like #1–#6, all wired at a pre-existing success point in
+    a file that already computed every field in their payload for its own
+    purposes — none of them required new detection logic either.
     ======================================================================
 
     ======================================================================

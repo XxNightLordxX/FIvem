@@ -56,6 +56,10 @@
 
 local t = dofile('testkit.lua')
 local Sandbox = dofile('fixtures/sandbox.lua')
+-- Never stubbed, per this suite's convention: every locale() below is
+-- resolved against the REAL locales/en.json, so a message this file
+-- asserts on cannot drift away from the one the player actually sees.
+local locale = Sandbox.locale
 
 -- ----------------------------------------------------------------------
 -- Vector3-alike stub -- same shape as tests/clienttracking_spec.lua's own
@@ -167,14 +171,24 @@ local function newFixture(opts)
             end
             if system == 'inventory' then
                 return {
+                    -- Returns TRUE by default, matching shared/compat/
+                    -- inventory.lua's real ox_inventory adapter (its
+                    -- `attempted` contract). opts.openShopFails = true
+                    -- models the qb-inventory / ps-inventory case, where
+                    -- the CLIENT half of the adapter is nil by design and
+                    -- K9Compat's own safe stub answers false -- see the
+                    -- SILENT-DOOR tests at the end of this file.
                     OpenShop = function(shopType)
                         openInventoryCalls[#openInventoryCalls + 1] = { 'shop', { type = shopType } }
+                        return not opts.openShopFails
                     end,
                 }
             end
             return {}
         end,
     }
+
+    local notifyCalls = {}
 
     local function lib_callback_await(name, ...)
         if name == 'qbx_k9unit:server:equipmentShopGetLocations' then
@@ -192,7 +206,10 @@ local function newFixture(opts)
         GetCurrentResourceName = function() return 'qbx_k9unit' end,
         print = printStub,
         K9Compat = fakeK9Compat,
-        lib = { callback = { await = lib_callback_await } },
+        lib = {
+            callback = { await = lib_callback_await },
+            notify = function(payload) notifyCalls[#notifyCalls + 1] = payload end,
+        },
         Config = opts.config,
         GetEntityCoords = GetEntityCoords,
         PlayerPedId = PlayerPedId,
@@ -222,6 +239,7 @@ local function newFixture(opts)
         targetedEntities = targetedEntities,
         removedEntities = removedEntities,
         openInventoryCalls = openInventoryCalls,
+        notifyCalls = notifyCalls,
         scenarioCalls = scenarioCalls,
         invincibleCalls = invincibleCalls,
         missionEntityCalls = missionEntityCalls,
@@ -327,6 +345,76 @@ t.test('happy path: a player standing at the shop location gets a real ped spawn
     f.targetedEntities[ped.handle][1].onSelect()
     t.equals(#f.openInventoryCalls, 1)
     t.equals(f.openInventoryCalls[1][2].type, 'k9supply')
+    t.equals(#f.notifyCalls, 0, 'a shop that opened must say nothing -- the UI opening IS the feedback')
+end)
+
+-- ----------------------------------------------------------------------
+-- SILENT-DOOR FIX. This file's onSelect used to throw away OpenShop's
+-- return value, which made one entirely ordinary configuration produce the
+-- worst possible bug: a real, visible dog ped at a real, configured supply
+-- point, with a working prompt, that does nothing at all when clicked --
+-- nothing on screen, nothing in console.
+--
+-- The configuration is not exotic. shared/compat/inventory.lua's
+-- qb-inventory adapter (and ps-inventory's, same architecture) returns nil
+-- for the CLIENT realm unconditionally and says so in its own header --
+-- correctly, because those backends genuinely have no client-callable
+-- "open this shop" primitive. An explicit
+-- Config.Compat.Systems.inventory.override does not fall through to the
+-- other candidates. So an owner who overrides to qb-inventory keeps a
+-- perfectly working SERVER half (the K9 medkit, contraband searches) and
+-- gets this one player-facing door silently welded shut.
+-- ----------------------------------------------------------------------
+
+t.test('SILENT-DOOR FIX: an inventory backend whose client half cannot open a shop tells the player so, instead of doing nothing at all', function()
+    local f = newFixture({
+        config = BASE_CONFIG,
+        playerCoords = vec3(0.0, 0.0, 0.0),
+        callbackResult = SERVER_RESOLVED_LOCATIONS,
+        openShopFails = true,
+    })
+    f.runner.step()
+    local ped = f.createdPeds[1]
+
+    f.targetedEntities[ped.handle][1].onSelect()
+
+    t.equals(#f.notifyCalls, 1, 'clicking a real ped and getting no response whatsoever is the bug -- there must be a message')
+    t.equals(f.notifyCalls[1].description, locale('equipmentshop.cannot_open_on_this_inventory'))
+    t.equals(f.notifyCalls[1].type, 'error')
+end)
+
+t.test('SILENT-DOOR FIX: the message names the real cause and never tells the player to try again -- on this backend it can never work', function()
+    local f = newFixture({
+        config = BASE_CONFIG,
+        playerCoords = vec3(0.0, 0.0, 0.0),
+        callbackResult = SERVER_RESOLVED_LOCATIONS,
+        openShopFails = true,
+    })
+    f.runner.step()
+    local ped = f.createdPeds[1]
+    f.targetedEntities[ped.handle][1].onSelect()
+
+    local text = f.notifyCalls[1].description
+    t.isTrue(text:lower():find('server', 1, true) ~= nil,
+        'it has to point at the person who can actually fix it -- the player cannot')
+    t.isTrue(text:lower():find('try again', 1, true) == nil,
+        'telling someone to retry something structurally impossible is worse than telling them nothing')
+end)
+
+t.test('SILENT-DOOR FIX: a repeated click keeps answering -- the failure is not swallowed after the first time', function()
+    local f = newFixture({
+        config = BASE_CONFIG,
+        playerCoords = vec3(0.0, 0.0, 0.0),
+        callbackResult = SERVER_RESOLVED_LOCATIONS,
+        openShopFails = true,
+    })
+    f.runner.step()
+    local ped = f.createdPeds[1]
+
+    for _ = 1, 3 do
+        f.targetedEntities[ped.handle][1].onSelect()
+    end
+    t.equals(#f.notifyCalls, 3, 'a player who clicks again deserves an answer again, not silence after the first')
 end)
 
 -- ----------------------------------------------------------------------
