@@ -751,26 +751,50 @@ end
 -- "connects them instead of adding a new subsystem"), NOT a new
 -- authorization layer of its own.
 --
--- THREE UNLOCKS SHIPPED, ONE PER NON-BASE TIER:
---   Trained (1,250 XP) -- eligibility for the cooperative search bonus
---     (server/search.lua, Part B §10): BOTH the searcher and their currently
---     active partner must be Trained+ (`GetXPTier(citizenid).xp > 0` on both
---     citizenids -- never by label/index, so this stays correct even if the
---     tier table is retuned later). Lives entirely in server/search.lua's
---     TryAwardCoopSearchBonus; nothing else needed here beyond the
---     already-existing GetXPTier this reuses completely unchanged.
---   Veteran (4,000 XP) -- a reduced server/medkit.lua K9Medkit cooldown, via
---     GetXPTierMedkitCooldownMs below. See that function's own doc comment
---     for the exact contract, and this pass's own report for why the
---     one-line medkit.lua call site is REPORTED, not wired here -- that file
---     has a live owner this session.
---   Elite (9,000 XP) -- a cosmetic HUD tier badge. NO CODE CHANGE in this
---     file: PushTierSnapshot/CopyTier already forward EVERY field present on
---     a Config.XPTiers[n] row to the client verbatim (CopyTier's own
---     `for key, value in pairs(tier) do copy[key] = value end`), so a
---     reported `badge` field added to config.lua's Elite row is sufficient
---     on its own -- client/hud.lua/html/app.js (coder-ui) render it once
---     added. See this pass's own report for the exact field/asset needs.
+-- THREE UNLOCKS DEFINED, ONE PER NON-BASE TIER. WIRED STATUS BELOW IS THE
+-- CURRENT GROUND TRUTH, RE-VERIFIED AGAINST THE REAL FILES BEFORE WRITING
+-- THIS -- not a status this comment is allowed to go stale on. If you wire
+-- one of the two UNWIRED items below, flip its own line to WIRED and say
+-- where, in the same edit; do not leave a dangling "not wired yet" note
+-- once it is no longer true.
+--   Trained (1,250 XP) -- WIRED. Eligibility for the cooperative search
+--     bonus (server/search.lua, Part B §10): BOTH the searcher and their
+--     currently active partner must be Trained+ (`GetXPTier(citizenid).xp >
+--     0` on both citizenids -- never by label/index, so this stays correct
+--     even if the tier table is retuned later). Confirmed live in
+--     server/search.lua's TryAwardCoopSearchBonus (`GetXPTier(searcherCitizenid
+--     ).xp <= 0 or GetXPTier(partnerCitizenid).xp <= 0` gate) -- nothing
+--     needed here beyond the already-existing GetXPTier this reuses
+--     unchanged.
+--   Veteran (4,000 XP) -- ACCESSOR WIRED, CALL SITE NOT YET APPLIED.
+--     GetXPTierMedkitCooldownMs below is complete, defensively bounded (see
+--     its own doc comment) and covered end to end by
+--     tests/xptierunlocks_spec.lua -- config.lua's Elite/Veteran rows
+--     already carry `medkitCooldownMultiplier = 0.75`. The only missing
+--     piece is a ONE-LINE call at server/medkit.lua's own
+--     `MedkitCooldown.IsOnCooldown(targetCitizenid, Config.K9Medkit.cooldownMs,
+--     requestedAt)` site (that file's own RunUseK9MedkitMutation, currently
+--     reading Config.K9Medkit.cooldownMs raw, never this accessor) -- an
+--     exact, ready-to-apply patch for that site was sent to main/that
+--     file's current owner rather than applied here, since this pass does
+--     not have write access to server/medkit.lua. Until that patch lands,
+--     every K9 medkit cooldown is the flat configured value regardless of
+--     tier, and config.lua's own Veteran-row comment overpromises.
+--   Elite (9,000 XP) -- SERVER HALF WIRED, DISPLAY NOT WIRED. NO CODE
+--     CHANGE NEEDED IN THIS FILE: PushTierSnapshot/CopyTier already forward
+--     EVERY field present on a Config.XPTiers[n] row to the client verbatim
+--     (CopyTier's own `for key, value in pairs(tier) do copy[key] = value
+--     end`), config.lua's Elite row already carries `badge = 'elite'`, and
+--     client/progression.lua's `currentXPTier` (confirmed by reading that
+--     file) caches the FULL received tier table, badge field included --
+--     so `GetCurrentXPTier().badge` already resolves to `'elite'` for an
+--     Elite-tier client today, with zero further server/progression.lua or
+--     client/progression.lua work. What is verified NOT present, by
+--     grepping both files directly, is any *consumer* of that field:
+--     client/hud.lua's PushVitals only ever sends `xpTier.label` to the
+--     NUI, and html/app.js has no `badge` handling at all -- so the value
+--     is computed, forwarded, and cached, but never rendered. Handed to
+--     coder-ui (owns both files) as a wiring request, not applied here.
 --
 -- COMPOSITION WITH THE PERMISSION/FEATURE-CONTROL LAYER (server/
 -- permissions.lua's HasPermission, config.lua's Config.FeatureControl
@@ -850,19 +874,36 @@ end
 -- ==========================================================================
 
 --- Resource-global — Part B §8 XP TIER UNLOCKS (see the section header
---- immediately above for the full "why this is safe" writeup). Returns the
---- EFFECTIVE K9Medkit cooldown for `citizenid`'s own tier given the
---- feature's own configured `baseCooldownMs` — never a boolean, never an
---- access decision. A pass-through-with-clamping over an OPTIONAL
+--- immediately above for the full "why this is safe" writeup, and for this
+--- reward's current WIRED/UNWIRED status — this comment documents the
+--- function's own contract, not a standing status note that can go stale).
+--- Returns the EFFECTIVE K9Medkit cooldown for `citizenid`'s own tier given
+--- the feature's own configured `baseCooldownMs` — never a boolean, never
+--- an access decision. A pass-through-with-clamping over an OPTIONAL
 --- `medkitCooldownMultiplier` field on the citizenid's current
---- Config.XPTiers row (reported to config.lua's owner; not present on any
---- shipped row today, so this defensively returns `baseCooldownMs`
---- UNCHANGED until that field is added — a clean no-op, never an error, on
---- an unmodified config).
+--- Config.XPTiers row (config.lua's Veteran row carries `0.75` today; still
+--- OPTIONAL and defensively checked below, not assumed present, so an
+--- operator-edited config missing it on some future row still gets a
+--- clean `baseCooldownMs` no-op, never an error).
 ---
---- CALLER CONTRACT (server/medkit.lua — reported, not wired, this pass; see
---- this pass's own report for the exact one-line call-site snippet):
---- consult this ONLY AFTER every one of that file's own existing gates
+--- CALLER CONTRACT (server/medkit.lua — this accessor is complete and
+--- tested; the call site that should consume it is a separate, currently
+--- UNAPPLIED change to a file this pass does not own — see this pass's own
+--- report for the ready-to-apply patch). The intended one-line integration,
+--- replacing the raw `Config.K9Medkit.cooldownMs` currently passed straight
+--- into `MedkitCooldown.IsOnCooldown` at that file's own
+--- RunUseK9MedkitMutation:
+---   local effectiveCooldownMs = Config.K9Medkit.cooldownMs
+---   if type(GetXPTierMedkitCooldownMs) == 'function' then
+---       effectiveCooldownMs = GetXPTierMedkitCooldownMs(targetCitizenid, Config.K9Medkit.cooldownMs)
+---   end
+---   if MedkitCooldown.IsOnCooldown(targetCitizenid, effectiveCooldownMs, requestedAt) then
+--- `targetCitizenid` (not the using player's own citizenid) is deliberate:
+--- `MedkitCooldown` is already keyed on the TARGET K9's citizenid (that
+--- file's own header — the cooldown limits how often a given K9 can be
+--- re-healed), so the tier that should shorten it is the K9 BEING healed's
+--- own earned tier, not whoever happens to be holding the medkit.
+--- Consult this ONLY AFTER every one of that file's own existing gates
 --- (Config.Features.K9Medkit, the proximity/item/department checks) has
 --- already allowed the action. This function performs NONE of those checks
 --- itself and must never be treated as one — it is a pure numeric modifier

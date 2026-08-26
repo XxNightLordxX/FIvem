@@ -203,6 +203,24 @@ t.test('GetXPTierMedkitCooldownMs: a non-positive multiplier (Elite tier, 0) is 
         'a multiplier of 0 must NEVER be applied -- server/cooldowns.lua\'s own IsOnCooldown treats a non-positive threshold as PERMANENTLY ON, the opposite of a reward')
 end)
 
+t.test('GetXPTierMedkitCooldownMs: a NEGATIVE multiplier is rejected exactly like zero -- the lower bound is a range check (<= 0), not a special-case for 0 alone', function()
+    local original = Config.XPTiers[3].medkitCooldownMultiplier
+    Config.XPTiers[3].medkitCooldownMultiplier = -0.5
+    t.equals(GetXPTierMedkitCooldownMs('cid-veteran', 60000), 60000,
+        'a negative multiplier must never be applied -- it would otherwise LENGTHEN the effective value going into math.floor/math.max below in a way this function\'s own contract forbids, and must never reach server/cooldowns.lua\'s IsOnCooldown as a non-positive threshold either')
+    Config.XPTiers[3].medkitCooldownMultiplier = original
+end)
+
+t.test('GetXPTierMedkitCooldownMs: a tiny baseCooldownMs with a valid multiplier can never floor to 0 or below -- the math.max(1, ...) floor holds at the extreme', function()
+    -- 1ms * 0.75 = 0.75, which math.floor alone would truncate to 0 -- a
+    -- 0ms cooldown would hand server/cooldowns.lua's IsOnCooldown a
+    -- non-positive threshold, which that file's own header documents as
+    -- PERMANENTLY ON (the opposite of an unlock). math.max(1, ...) is what
+    -- prevents that at this extreme, not just the multiplier's own <= 0/> 1
+    -- rejection above.
+    t.equals(GetXPTierMedkitCooldownMs('cid-veteran', 1), 1, 'must clamp to a minimum of 1ms, never 0')
+end)
+
 t.test('GetXPTierMedkitCooldownMs: a malformed baseCooldownMs (non-number, NaN, <= 0) is returned unchanged, never erroring', function()
     t.equals(GetXPTierMedkitCooldownMs('cid-veteran', nil), nil)
     t.equals(GetXPTierMedkitCooldownMs('cid-veteran', 'not-a-number'), 'not-a-number')
