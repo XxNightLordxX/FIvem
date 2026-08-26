@@ -1317,45 +1317,6 @@ end)
 t.test('SETTLEMENT: PART-INSTALLED database, CASCADE CASE -- a missing k9_certifications forces the intact k9_certification_specializations into memory mode too, even though its own columns matched (the one identified cross-table coupling -- see MISSING_TABLE_CASCADES in server/datastore.lua for the full "why")', function()
     local eventHandlers = {}
     local printedLines = {}
-    -- Mirrors sql/preflight_check.sql's own CHECK 1 column list (same
-    -- hand-maintained-list convention this whole mechanism already uses) --
-    -- kept local to this test, not exported by datastore.lua itself, purely
-    -- so the mock query below can return a realistic full column set for
-    -- every table without hand-typing all 25 tables' worth of columns
-    -- inline. Declared BEFORE Sandbox.newEnv (not assigned onto `env`
-    -- afterward) so the MySQL.query.await closure below captures it as a
-    -- normal upvalue -- referencing a same-named `local env` field from
-    -- INSIDE the table literal building that very `local env` would only
-    -- ever see the pre-existing (nil/global) `env`, never the new local,
-    -- since the right-hand side of `local env = ...` is fully evaluated
-    -- before the new local binding takes effect.
-    local expectedColumnsForTest = {
-        k9_certifications = { 'citizenid', 'job', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
-        k9_search_log = { 'searcher_citizenid', 'searcher_job', 'target_type', 'target_plate', 'target_citizenid', 'result', 'total_weight', 'alert_tier', 'searched_at' },
-        k9_partnerships = { 'k9_citizenid', 'handler_citizenid', 'established_by', 'established_at', 'ended_by', 'ended_at', 'active' },
-        k9_partnership_pair_progress = { 'k9_citizenid', 'handler_citizenid', 'highest_tenure_tier_granted' },
-        k9_progression = { 'citizenid', 'xp', 'created_at', 'updated_at' },
-        k9_permissions = { 'citizenid', 'permission', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
-        k9_certification_specializations = { 'citizenid', 'job', 'specialization', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
-        k9_runtime_feature_overrides = { 'override_key', 'kind', 'value', 'updated_by', 'updated_at' },
-        k9_runtime_override_audit = { 'override_key', 'kind', 'old_value', 'new_value', 'changed_by', 'changed_at' },
-        k9_tablet_theme = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'updated_by', 'updated_at' },
-        k9_tablet_theme_audit = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'changed_by', 'changed_at' },
-        k9_ped_assignments = { 'citizenid', 'model', 'original_model_hash', 'active', 'applied_by', 'applied_at', 'revoked_at' },
-        k9_certification_tiers = { 'tier_key', 'label', 'ordinal', 'deleted', 'created_at', 'updated_by', 'updated_at' },
-        k9_certification_tier_capabilities = { 'tier_key', 'capability_key', 'granted_by', 'granted_at' },
-        k9_certification_tier_audit = { 'id', 'action', 'tier_key', 'detail', 'changed_by', 'changed_at' },
-        k9_equipment_shop_locations = { 'x', 'y', 'z', 'created_by' },
-        k9_equipment_shop_locations_audit = { 'location_id', 'action', 'changed_by', 'changed_at' },
-        k9_xp_tiers = { 'ordinal', 'xp_threshold', 'label', 'speed_multiplier', 'scent_range_multiplier', 'updated_by', 'updated_at' },
-        k9_xp_tier_audit = { 'id', 'action', 'ordinal', 'detail', 'changed_by', 'changed_at' },
-        k9_individual_overrides = { 'citizenid', 'speed_multiplier', 'scent_range_multiplier', 'medkit_cooldown_multiplier', 'note', 'deleted', 'updated_by' },
-        k9_individual_override_audit = { 'id', 'action', 'citizenid', 'detail', 'changed_by', 'changed_at' },
-        k9_equipment_shop_items = { 'item_key', 'price', 'sort_order', 'required_tier_key', 'required_specialization', 'deleted', 'updated_by' },
-        k9_equipment_shop_item_audit = { 'id', 'action', 'item_key', 'detail', 'changed_by', 'changed_at' },
-        k9_permission_keys = { 'permission_key', 'label', 'description', 'deleted', 'created_at', 'updated_by', 'updated_at' },
-        k9_permission_key_audit = { 'id', 'action', 'permission_key', 'detail', 'changed_by', 'changed_at' },
-    }
     local env = Sandbox.newEnv({
         Config = { Database = { enabled = true } },
         MySQL = { query = { await = function()
@@ -1363,12 +1324,16 @@ t.test('SETTLEMENT: PART-INSTALLED database, CASCADE CASE -- a missing k9_certif
             -- itself, which is entirely absent -- modelling an operator who
             -- dropped/never migrated that one table while everything built
             -- on top of it (specializations) survived untouched.
+            -- Sandbox.installedSchemaRows() (fixtures/sandbox.lua) derives
+            -- the full, always-current expected table/column set directly
+            -- from server/datastore.lua's own EXPECTED_TABLE_COLUMNS
+            -- source, rather than a sixth hand-typed copy of that same
+            -- list going stale here too (five already had, before this
+            -- helper existed).
             local rows = {}
-            for tableName, columns in pairs(expectedColumnsForTest) do
-                if tableName ~= 'k9_certifications' then
-                    for _, col in ipairs(columns) do
-                        rows[#rows + 1] = { tbl = tableName, col = col }
-                    end
+            for _, row in ipairs(Sandbox.installedSchemaRows()) do
+                if row.tbl ~= 'k9_certifications' then
+                    rows[#rows + 1] = row
                 end
             end
             return rows

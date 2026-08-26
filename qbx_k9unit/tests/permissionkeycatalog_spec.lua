@@ -1211,28 +1211,31 @@ t.test('BOOT-ORDER RACE bounded timeout: if the schema probe never settles, this
     -- ceiling exists purely so a regression that makes the production wait
     -- loop genuinely infinite fails this test instead of hanging the whole
     -- suite.
-    -- FIND the catalog's own handler rather than indexing it by position.
-    -- This used to be `f.coros[3]`, on the assumption that the third
-    -- registered onResourceStart handler is this catalog's. That is not a
-    -- property this spec controls: every file loaded into the fixture
-    -- registers its own handlers, so an unrelated file adding one shifts
-    -- the index and this test silently starts driving the WRONG coroutine
-    -- -- which is exactly what happened when server/permissions.lua went
-    -- from one start handler to three for an unrelated feature. The test
-    -- then failed while the boot-order safety property it exists to
-    -- protect was completely intact.
+    -- FIND the catalog's own handler rather than indexing it by a GUESSED
+    -- position. This used to be `f.coros[3]`, on the assumption that the
+    -- third registered onResourceStart handler is this catalog's -- broke
+    -- once server/permissions.lua went from one start handler to three for
+    -- an unrelated feature, shifting every index after it. Rewritten, at
+    -- that point, to instead find "the one still suspended after the probe
+    -- is deliberately left hung, since it is the only one polling for a
+    -- settle that never comes" -- but THAT assumption broke too, silently,
+    -- the moment server/permissions.lua's OWN restart-backfill
+    -- onResourceStart handler independently started calling
+    -- K9Store.WaitForSchemaCheckToSettle() as well (an unrelated pass):
+    -- with the probe hung, BOTH that handler and this catalog's own end up
+    -- "still suspended, polling for a settle that never comes" at once, so
+    -- picking the first one found (registration order) silently started
+    -- driving server/permissions.lua's handler instead again.
     --
-    -- The catalog's handler is the one still suspended after the probe is
-    -- deliberately left hung: it is the only one polling for a settle that
-    -- never comes. Identifying it by that behaviour cannot drift.
-    local catalogCo
-    for i, co in ipairs(f.coros) do
-        if i > 1 and coroutine.status(co) == 'suspended' then
-            catalogCo = co
-            break
-        end
-    end
-    t.isTrue(catalogCo ~= nil, 'the catalog must have a suspended start handler polling for the schema check to settle')
+    -- FIXED, this time, by position anchored to something this spec DOES
+    -- control: server/permissionkeycatalog.lua is always the LAST of these
+    -- four files loaded (see this fixture's own `Sandbox.loadInto` call
+    -- order above) and registers exactly one onResourceStart handler, so
+    -- its coroutine is always `coros[#coros]` regardless of how many OTHER
+    -- handlers any earlier-loaded file registers, or how many of them
+    -- happen to share this exact "still suspended, polling forever" shape.
+    local catalogCo = f.coros[#f.coros]
+    t.isTrue(catalogCo ~= nil and coroutine.status(catalogCo) == 'suspended', 'the catalog must have a suspended start handler polling for the schema check to settle')
 
     local resumes = 0
     while coroutine.status(catalogCo) == 'suspended' and resumes < 200 do

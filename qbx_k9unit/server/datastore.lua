@@ -271,14 +271,17 @@ K9Store.IsDatabaseEnabled = DatabaseEnabled
 -- BOOT-ORDER SETTLEMENT -- closes the race between the schema-collision
 -- probe below (VerifyTableShapesAgainstKnownSchema, a real, YIELDING
 -- MySQL.query.await call) and every OTHER file's own `onResourceStart`
--- boot-time cache read (permissionkeycatalog.lua, xptiers.lua,
--- equipmentshop.lua, k9profiles.lua). See this file's own "SCHEMA COLLISION SAFETY NET"
--- section near the bottom for the full "why this exists" writeup; this is
--- just the mechanism.
+-- boot-time read of a table this probe checks -- see
+-- K9Store.WaitForSchemaCheckToSettle's own doc comment (below) for the
+-- current, complete list of which files that is; not repeated here since
+-- keeping several hand-typed copies of that same list in sync is exactly
+-- what let it go stale before this pass. See this file's own "SCHEMA
+-- COLLISION SAFETY NET" section near the bottom for the full "why this
+-- exists" writeup; this is just the mechanism.
 --
 -- THE RACE, PRECISELY: fxmanifest.lua loads this file before any of those
--- four, so THIS file's own `AddEventHandler('onResourceStart', ...)` call
--- (bottom of this file) registers first. But registering first only
+-- others, so THIS file's own `AddEventHandler('onResourceStart', ...)`
+-- call (bottom of this file) registers first. But registering first only
 -- guarantees running first up to that handler's own FIRST yield --
 -- `MySQL.query.await` always yields (it awaits a real oxmysql promise), and
 -- when a handler yields, FXServer's event dispatch does not wait for it to
@@ -289,9 +292,9 @@ K9Store.IsDatabaseEnabled = DatabaseEnabled
 -- since it starts false and is set at most once), and any OTHER file's own
 -- onResourceStart handler that fires in that window sees a stale answer.
 --
--- WHY THIS MATTERS MORE THAN "STALE FOR A MOMENT": each of those four
--- catalogs' own boot-time reads is a NARROWER `SELECT` than the columns
--- this file's own EXPECTED_TABLE_COLUMNS checks (e.g. PermKey_GetAllRows
+-- WHY THIS MATTERS MORE THAN "STALE FOR A MOMENT": each of those other
+-- files' own boot-time reads is a NARROWER `SELECT` than the columns this
+-- file's own EXPECTED_TABLE_COLUMNS checks (e.g. PermKey_GetAllRows
 -- selects 4 of the 7 columns k9_permission_keys is checked against). A
 -- foreign table the full probe would correctly reject as a collision can
 -- still satisfy one of these narrower SELECTs during that window,
@@ -299,10 +302,10 @@ K9Store.IsDatabaseEnabled = DatabaseEnabled
 -- outcome the safety net exists to prevent, just via a side door instead
 -- of the front one.
 --
--- THE FIX: every one of those four files' own onResourceStart handlers
--- must call K9Store.WaitForSchemaCheckToSettle() FIRST, before its own
--- first K9Store.* read, and treat a `false` result (see below) the exact
--- same way it already treats `Config.Database.enabled == false` -- boot to
+-- THE FIX: every one of those files' own onResourceStart handlers must
+-- call K9Store.WaitForSchemaCheckToSettle() FIRST, before its own first
+-- K9Store.* read, and treat a `false` result (see below) the exact same
+-- way it already treats `Config.Database.enabled == false` -- boot to
 -- config-only defaults for this session, no DB read attempted. This keeps
 -- the fix entirely coordination-based (a shared "has this been decided
 -- yet" flag), not a structural merge of every catalog's own query into
@@ -3293,18 +3296,21 @@ end
 -- writing into a table it does not own.
 --
 -- THE BOOT-ORDER RACE THIS USED TO HAVE, AND HOW IT IS CLOSED (interaction
--- review + fix, this pass): the paragraph above is true ONLY from the
--- moment this probe's own query returns -- and that query, like every real
--- `MySQL.*.await` call, YIELDS. `permissionkeycatalog.lua`, `xptiers.lua`,
--- `equipmentshop.lua`, and `k9profiles.lua` each register their OWN `onResourceStart`
+-- review + fix, this pass -- WIDENED, later pass, to cover every file
+-- listed in K9Store.WaitForSchemaCheckToSettle's own doc comment, not only
+-- the original four this paragraph used to name -- see that doc comment
+-- for the current, complete, authoritative list rather than a second copy
+-- here): the paragraph above is true ONLY from the moment this probe's own
+-- query returns -- and that query, like every real `MySQL.*.await` call,
+-- YIELDS. Several other files each register their OWN `onResourceStart`
 -- handler to populate their own boot-time cache from a `k9_*` table this
 -- same EXPECTED_TABLE_COLUMNS list also checks. fxmanifest.lua loads this
 -- file first, so this probe's handler registers first too -- but
 -- registering first only guarantees running first up to its own first
 -- yield; when it yields, FXServer's event dispatch moves straight on to
 -- the NEXT already-registered handler rather than waiting for this one to
--- resume. Those four files' own boot-time reads are each a NARROWER
--- `SELECT` than the column list this probe checks (e.g.
+-- resume. Every one of those other files' own boot-time reads is a
+-- NARROWER `SELECT` than the column list this probe checks (e.g.
 -- `K9Store.PermKey_GetAllRows` selects 4 of the 7 columns
 -- `k9_permission_keys` is checked against below) -- so for the length of
 -- that one window, a foreign table this probe WOULD correctly reject as a
@@ -3313,7 +3319,7 @@ end
 -- whole safety net exists to prevent, just through a side door instead of
 -- the front one. THE FIX: `K9Store.WaitForSchemaCheckToSettle()` (declared
 -- next to `SCHEMA_CHECK_SETTLED`, near the top of this file) gives every
--- one of those four files' own onResourceStart handlers a shared,
+-- one of those files' own onResourceStart handlers a shared,
 -- resource-global "has this been decided yet" signal to wait on, with a
 -- bounded timeout (`SCHEMA_CHECK_WAIT_TIMEOUT_MS`), BEFORE their own first
 -- read -- see that function's own header for the full contract, including
