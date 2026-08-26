@@ -959,6 +959,105 @@ t.test('tabletRequestPersonFeatures: globallyEnabled/requiresGrant/granted/block
 end)
 
 -- ============================================================================
+-- RATE LIMITING (this pass) -- the four read/aggregation callbacks above had
+-- NO cooldown at all, unlike every other client-triggered, DB-touching read
+-- this resource exposes (server/admin.lua's own AuditCooldown covers its
+-- read-only audit callbacks the same way). Shared TabletReadCooldown, keyed
+-- by source, 500ms floor -- see server/tablet.lua's own header comment on
+-- TABLET_READ_COOLDOWN_MS for the full reasoning.
+-- ============================================================================
+
+t.test('RATE LIMIT: a second rapid tabletRequestMyRecord from the SAME source is rejected as rate_limited', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    local first = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isTrue(first.ok)
+    local second = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isFalse(second.ok)
+    t.equals(second.error, 'rate_limited')
+end)
+
+t.test('RATE LIMIT: tabletRequestMyRecord recovers once the cooldown window elapses', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    t.isTrue(cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src).ok)
+    f.fakeNow.value = f.fakeNow.value + 501
+    local third = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isTrue(third.ok, 'must succeed again once the 500ms floor has elapsed')
+end)
+
+t.test('RATE LIMIT: is PER SOURCE -- a different source is unaffected by another source\'s cooldown entry', function()
+    local f = newFixture()
+    local src1 = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    local src2 = f.registerPlayer(2, 'CIT2', { name = 'police', grade = { level = 1 } })
+    t.isTrue(cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src1).ok)
+    local other = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src2)
+    t.isTrue(other.ok, 'a fresh source must never be blocked by a DIFFERENT source\'s own cooldown entry')
+end)
+
+t.test('RATE LIMIT: an UNAUTHORIZED caller never spends the shared cooldown budget -- denial always returns before Consume', function()
+    local f = newFixture({ config = { Features = { CommandTablet = true }, FeatureControl = { everyoneCanViewOwnRecord = false } } })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    local denied = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.equals(denied.error, 'not_authorized')
+    -- The SAME source, now authorized, must not find itself already
+    -- rate_limited from the denied attempt above.
+    local f2 = newFixture()
+    local authorizedSrc = f2.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    t.isTrue(cb(f2, 'qbx_k9unit:server:tabletRequestMyRecord')(authorizedSrc).ok)
+end)
+
+t.test('RATE LIMIT: applies to tabletRequestRoster too -- a second rapid call from the same console-access source is rejected', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    t.isTrue(cb(f, 'qbx_k9unit:server:tabletRequestRoster')(src, '').ok)
+    local second = cb(f, 'qbx_k9unit:server:tabletRequestRoster')(src, '')
+    t.isFalse(second.ok)
+    t.equals(second.error, 'rate_limited')
+end)
+
+t.test('RATE LIMIT: SHARED across all four read callbacks -- one budget per source, not one independent allowance per callback', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    t.isTrue(cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src).ok, 'first call, own budget, must succeed')
+    local rosterAttempt = cb(f, 'qbx_k9unit:server:tabletRequestRoster')(src, '')
+    t.isFalse(rosterAttempt.ok, 'a DIFFERENT callback from the SAME source, immediately after, must still be rejected -- one shared budget, not a per-callback allowance')
+    t.equals(rosterAttempt.error, 'rate_limited')
+    f.fakeNow.value = f.fakeNow.value + 501
+    t.isTrue(cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1').ok, 'a third, different callback recovers once the shared window elapses')
+end)
+
+t.test('RATE LIMIT: applies to tabletRequestPersonSummary -- second rapid call from the same console-access source is rejected', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    t.isTrue(cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1').ok)
+    local second = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1')
+    t.isFalse(second.ok)
+    t.equals(second.error, 'rate_limited')
+end)
+
+t.test('RATE LIMIT: applies to tabletRequestPersonFeatures -- second rapid call from the same high-command source is rejected', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    t.isTrue(cb(f, 'qbx_k9unit:server:tabletRequestPersonFeatures')(src, 'TARGET1').ok)
+    local second = cb(f, 'qbx_k9unit:server:tabletRequestPersonFeatures')(src, 'TARGET1')
+    t.isFalse(second.ok)
+    t.equals(second.error, 'rate_limited')
+end)
+
+t.test('RATE LIMIT: invalid_args on tabletRequestPersonSummary/PersonFeatures never consumes the shared budget -- three malformed-target calls in a row all report invalid_args, never rate_limited', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    t.equals(cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, '').error, 'invalid_args')
+    t.equals(cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, nil).error, 'invalid_args')
+    t.equals(cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 123).error, 'invalid_args')
+    -- A real request from the SAME source must still succeed afterward --
+    -- none of the three invalid_args calls above may have silently spent
+    -- the cooldown budget this real request now needs.
+    t.isTrue(cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TARGET1').ok)
+end)
+
+-- ============================================================================
 -- tabletAssignK9Role -- thin wrapper over server/appearance.lua's
 -- ApplyK9PedRole. Authorization is ApplyK9PedRole's OWN job (already
 -- covered by that file's own test suite) -- these tests only prove the

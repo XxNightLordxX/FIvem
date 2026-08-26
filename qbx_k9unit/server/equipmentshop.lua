@@ -1850,9 +1850,32 @@ end)
 --- header "WHERE THIS IS GATED" for the full "why this is the real
 --- opening decision point" writeup. NEVER gates closing/leaving the shop
 --- UI (there is no such hook here at all).
+---
+--- FAIL-CLOSED ON ERROR (this pass, coder-security review finding).
+--- CONFIRMED against real source, not assumed: ox_inventory's own
+--- `TriggerEventHooks` (modules/hooks/server.lua) invokes every registered
+--- hook as `local _, response = pcall(hook, payload)` -- an ERROR thrown by
+--- this hook is swallowed there, `response` becomes the error STRING (never
+--- the literal `false`), so `response == false` is false and the loop
+--- treats a THROWN hook identically to an ALLOWING hook. shared/compat/
+--- inventory.lua's own RegisterHook wrapper (`local vetoOk, veto =
+--- pcall(callback, payload); if vetoOk and veto == false then return false
+--- end`) has the exact same gap one layer up: when `callback` (this
+--- function's own body) throws, `vetoOk` is false and the wrapper falls
+--- through to an implicit `return nil` -- also read as "no veto" by
+--- ox_inventory. Two independent layers, same fail-open direction on an
+--- unanticipated error -- exactly the "hook that fails open on error is a
+--- free-items bug" case this pass was asked to rule out. This file cannot
+--- fix the shared compat layer (reported to main/coder-backend instead,
+--- shared/compat/inventory.lua:534-549) but CAN and DOES ensure that any
+--- error raised by ITS OWN evaluation logic below never reaches either
+--- swallowing layer as a thrown error in the first place -- pcall'd here,
+--- one level in, with an EXPLICIT `false` (veto/deny) on failure, so an
+--- unanticipated bug in this function denies the shop-open attempt instead
+--- of silently granting it.
 --- @param shopType string -- Config.K9EquipmentShop.shopType, captured once at registration time
 local function RegisterEquipmentShopOpenShopBlockHook(shopType)
-    local registered = K9Compat.Get('inventory').RegisterHook('openShop', function(payload)
+    local function EvaluateOpenShopHook(payload)
         if type(payload) ~= 'table' or payload.shopType ~= shopType then return end -- not our shop -- never touch anyone else's
 
         local source = payload.source
@@ -1869,6 +1892,15 @@ local function RegisterEquipmentShopOpenShopBlockHook(shopType)
             return false -- VETO: the shop UI never opens for this one attempt
         end
         -- allowed -- return nil, no veto
+    end
+
+    local registered = K9Compat.Get('inventory').RegisterHook('openShop', function(payload)
+        local evalOk, veto = pcall(EvaluateOpenShopHook, payload)
+        if not evalOk then
+            print(('[qbx_k9unit] equipmentshop: ERROR: openShop block hook threw while evaluating a shop-open attempt -- FAILING CLOSED (denying this one attempt) rather than risk a silent allow: %s'):format(tostring(veto)))
+            return false -- FAIL CLOSED: an error evaluating this hook must never be read as "no veto"
+        end
+        return veto
     end)
 
     if not registered then
@@ -1882,9 +1914,20 @@ end
 --- (defense-in-depth -- see this section's own header). NEVER gates a
 --- termination/cleanup path -- there is no "give the item back" concept
 --- here at all; a purchase either completes or it does not.
+---
+--- FAIL-CLOSED ON ERROR -- see RegisterEquipmentShopOpenShopBlockHook's own
+--- doc comment immediately above for the full two-layer (ox_inventory's
+--- own TriggerEventHooks + shared/compat/inventory.lua's RegisterHook)
+--- swallow-to-allow finding this applies to as well. This hook is the
+--- higher-stakes of the two to get this right for -- an uncaught error
+--- inside `MeetsTierRequirement`/`HasSpecialization` (both calls into
+--- OTHER files' code this function does not control) would otherwise sell
+--- a tier/specialization-gated item to ANY buyer the instant either
+--- function had a bug, with no purchase-time signal that the gate was ever
+--- bypassed.
 --- @param shopType string
 local function RegisterEquipmentShopBuyItemRequirementHook(shopType)
-    local registered = K9Compat.Get('inventory').RegisterHook('buyItem', function(payload)
+    local function EvaluateBuyItemHook(payload)
         if type(payload) ~= 'table' or payload.shopType ~= shopType then return end -- not our shop
 
         local source = payload.source
@@ -1932,6 +1975,15 @@ local function RegisterEquipmentShopBuyItemRequirementHook(shopType)
             end
         end
         -- every configured requirement met -- allow (return nil, no veto)
+    end
+
+    local registered = K9Compat.Get('inventory').RegisterHook('buyItem', function(payload)
+        local evalOk, veto = pcall(EvaluateBuyItemHook, payload)
+        if not evalOk then
+            print(('[qbx_k9unit] equipmentshop: ERROR: buyItem requirement hook threw while evaluating a purchase attempt -- FAILING CLOSED (denying this one purchase) rather than risk a silent allow of a gated item: %s'):format(tostring(veto)))
+            return false -- FAIL CLOSED: an error evaluating this hook must never be read as "no veto"
+        end
+        return veto
     end)
 
     if not registered then

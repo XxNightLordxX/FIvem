@@ -421,29 +421,32 @@
     reason — so a future consumer following that same existing discipline
     gets this one for free by construction, not by remembering to.
 
-    THE TWO REAL CANDIDATE CONSUMERS IDENTIFIED, NOT YET WIRED (both files
-    are off-limits to this pass — see this pass's own report to main for
-    the exact proposed diff text, ready to apply as-is):
-      - server/certifications.lua's GrantSpecialization — currently checks
-        only IsEligibleCertifier(granter) and the TARGET's active base
-        certification; it never asks whether the target's OWN tier is
-        even eligible to hold a specialization at all. Proposed: one
-        added check, right after the existing "specialization_requires_
-        active_cert" check, calling
-        TierCapabilityPermits(targetCitizenid, jobName,
+    THE TWO REAL CANDIDATE CONSUMERS: WIRED, as of a later pass than the one
+    that wrote this paragraph. This originally described both as NOT YET
+    WIRED, both files off-limits to that pass, with only a proposed diff on
+    file; that is no longer true. Both are live now — see
+    server/certifications.lua's GrantSpecialization (~line 3002) and
+    server/combat.lua's ValidateCombatRequest (~line 1408) for the actual
+    call sites, and the CAPABILITY_CATALOG labels above, which already say
+    ENFORCED for both. The original per-consumer writeup is kept below,
+    updated from proposed to landed, for the design reasoning:
+      - server/certifications.lua's GrantSpecialization — previously
+        checked only IsEligibleCertifier(granter) and the TARGET's active
+        base certification, never whether the target's OWN tier is even
+        eligible to hold a specialization at all. Landed: one added check,
+        right after the existing "specialization_requires_active_cert"
+        check, calling TierCapabilityPermits(targetCitizenid, jobName,
         'specializations_eligible').
-      - server/combat.lua's ValidateCombatRequest — currently checks
+      - server/combat.lua's ValidateCombatRequest — previously checked
         HasK9Access and the existing per-person Config.FeatureControl
-        resolution (IsCombatFeaturePermittedForCitizenId), but never the
+        resolution (IsCombatFeaturePermittedForCitizenId), never the
         acting K9 HANDLER's own tier, for BiteAndHold/NonLethalTakedown
         specifically (NOT PropDragging, which shares this same validator
         for an unrelated mechanic the capability catalog does not name).
-        Proposed: one added check, immediately after the existing
-        IsCombatFeaturePermittedForCitizenId block, calling
-        TierCapabilityPermits(k9Citizenid, k9JobName,
-        'bite_hold_and_takedown') — at REQUEST time only, never touching
-        EndHold/the maintenance-thread expiry sweep, per "NO UNBOUNDED
-        TRAP" above.
+        Landed: one added check, calling TierCapabilityPermits(k9Citizenid,
+        k9JobName, 'bite_hold_and_takedown') — at REQUEST time only, never
+        touching EndHold/the maintenance-thread expiry sweep, per "NO
+        UNBOUNDED TRAP" above.
     A third candidate, server/equipmentshop.lua's shop registration
     (specialized_equipment_access), was investigated and found to need
     MORE than a diff: this resource routes the entire K9 supply shop
@@ -480,11 +483,18 @@
     COMPOSITION" above) — it is additionally now an EXPLICIT rule stated
     in that section, binding on this file and on every future consumer:
     gate the request that opens an effect, never the release that closes
-    one. Today, in this shipped pass, the older, simpler justification
-    still independently holds too: tier capability enforcement remains
-    globally DORMANT (no tier anywhere has ever had a capability granted
-    outside a test), and zero consumer call sites exist outside this
-    file's own tests, so there is doubly no trap to build here yet.
+    one. That older, simpler justification — tier capability enforcement
+    was globally DORMANT (no tier anywhere had ever had a capability
+    granted outside a test), with zero consumer call sites outside this
+    file's own tests, so there was doubly no trap to build — held at the
+    time this paragraph was written. It no longer does:
+    server/certifications.lua (~line 3002) and server/combat.lua (~line
+    1408) both now call TierCapabilityPermits for real, gating
+    specializations_eligible and bite_hold_and_takedown respectively. The
+    invariant this section states still holds regardless, because it no
+    longer rests on that absence — it rests on the EXPLICIT rule above,
+    which both of those call sites already follow (request-time only,
+    never a termination/cleanup path).
     SetCertificationTier's pre-existing behavior (confirmed unchanged by
     this pass, re-read before writing this file) never force-detaches
     anything even on an ordinary tier CHANGE, let alone a tier DELETION —
@@ -538,19 +548,22 @@ local LEGACY_TIER_DEFAULTS = {
 -- "HAZARD 4" for the full threat-model writeup this table's own existence
 -- depends on. NOT a Config.* value, deliberately — adding a new entry
 -- here is a real code change, reviewed like any other, never an in-game
--- or config.lua action. Every entry is currently INERT (no gate anywhere
--- in this codebase reads TierHasCapability yet) — see header for why
--- that is deliberate, not an oversight.
+-- or config.lua action. This paragraph originally said every entry was
+-- INERT with no gate anywhere reading TierHasCapability; that is no
+-- longer true for two of the five. See each entry's own label below for
+-- its current, individual status, and HAZARD 5 above for the live call
+-- sites of the two that are now ENFORCED.
 -- ======================================================================
--- LABELS, UPDATED THIS PASS to stay honest about the exact current state
--- (see header "CAPABILITY COMPOSITION" for the full writeup) -- every one
--- of the five still changes NOTHING observable in a running server today
--- (zero consumer call sites exist outside this file and its own tests),
--- so none of these claim otherwise. What changed from the previous
--- wording is precision about WHY each one is still inert: two have a
--- real, reviewed, ready-to-apply diff waiting on a file this pass may not
--- edit; one needs a real design this pass did not attempt; two have no
--- mechanic anywhere in this codebase to gate at all yet.
+-- LABELS. specializations_eligible and bite_hold_and_takedown are wired
+-- to a real consumer each (server/certifications.lua's GrantSpecialization
+-- and server/combat.lua's ValidateCombatRequest respectively -- see
+-- HAZARD 5 above) and their own labels below say ENFORCED. The other
+-- three remain inert, for the reasons the previous version of this
+-- paragraph already gave and which still hold: advanced_tracking and
+-- mentor_trainees have no mechanic anywhere in this codebase to gate at
+-- all yet; specialized_equipment_access has a candidate mechanic but
+-- needs new purchase-gating machinery this resource does not have today,
+-- not a small change.
 local CAPABILITY_CATALOG = {
     specializations_eligible = {
         label = 'Eligible to hold K9 specializations (narcotics/explosives/patrol) -- ENFORCED. Grant this to a tier and only that tier can be given specializations. Someone who already holds one keeps it.',

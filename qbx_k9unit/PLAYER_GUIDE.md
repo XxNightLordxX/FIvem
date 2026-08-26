@@ -446,11 +446,19 @@ item, same as any other in-game shop.
 Open it with `/k9tablet` (unless your server made it item-only — check
 for a "K9 Tablet" item instead), or from the radial menu. Everyone gets a
 read-only view of their own certification, XP, and any personal grants.
-High command additionally gets a full roster and controls to certify,
-assign/revert the K9 role and appearance, grant permissions, and adjust
-what individual people can access. The tablet never grants anything by
-itself — every button it offers is re-checked exactly like the matching
-chat command would be.
+High command additionally gets a full roster and a much bigger toolbox:
+certify people and set their certification tier, assign/revert the K9
+role and appearance, grant XP and permissions, adjust what individual
+people can access, add or relabel certification tiers and permission
+keys, change the XP required for each rank, add/move/remove K9 Supply
+Shop locations, flip most feature switches and tune numbers live without
+a restart, and restyle the tablet itself. A separate, read-only audit
+trail (certification, partnership, search, XP, and department-roster
+history) is also open to anyone who separately qualifies for the staff
+audit commands, not only high command — see "Staff-only and
+developer-only" above. The tablet never grants anything by itself —
+every button it offers is re-checked exactly like the matching chat
+command would be.
 
 ## XP and tiers (needs "XP Progression")
 

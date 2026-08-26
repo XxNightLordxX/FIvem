@@ -281,6 +281,88 @@ nothing.
     narcotics/explosives/patrol — anyone who already holds one keeps it).
     The other three are reserved for mechanics that don't exist yet in
     this resource and currently do nothing if granted.
+- **Permission Keys catalog editor** — high command can create new
+  permission keys, relabel existing ones, and retire (delete) one, all
+  from the tablet, on top of the four keys `Config.Permissions` ships with
+  (`k9.access`, `k9.certify`, `k9.audit`, `k9.givexp`). A few things worth
+  knowing:
+  - **"Delete" here is a tombstone, not a real delete.** Nobody's existing
+    grant of that key is removed from the database — it simply stops
+    working, permanently, the moment the key is retired, the same way an
+    already-revoked grant sits inertly forever. Re-creating a key with the
+    exact same name later makes an *already-active* grant of it valid
+    again, but it never revives a grant that was separately revoked in the
+    meantime. The tablet tells you how many currently-active grants exist
+    at the moment you retire a key, purely so you know the blast radius —
+    it never refuses to retire a key because grants of it still exist.
+  - **You can retire one of the four built-in keys**, including
+    `k9.access` itself. Doing so only turns off *this one route* to
+    granting/holding that capability going forward — certification, the
+    department `autoAccessGrade` rank, and the high-command bypass are all
+    completely independent of this catalog and keep working exactly as
+    before either way.
+  - This screen can never create, rename, or retire a `feature.<Name>` or
+    `block.<Name>` entry — that is a separate, unrelated namespace (the
+    per-person feature grant/block system described above), and the
+    tablet refuses outright if you try to type one of those in here.
+  - Capped at 60 live (non-retired) keys at once — comfortably above any
+    real server's needs.
+- **XP Rank editor** — high command can change the experience required for
+  each of the four existing XP ranks (Recruit/Trained/Veteran/Elite by
+  default), plus each rank's speed bonus, scent-range bonus, optional
+  medkit-cooldown bonus, and label, from the tablet. Two things that will
+  surprise you if you don't read this first:
+  - **This is edit-only.** There is no way to add a fifth rank, remove one
+    of the four, or reorder them, from the tablet or otherwise. The
+    bottom rank's threshold is also locked at exactly 0 XP and cannot be
+    changed — the tablet shows it but will not let you edit it. Every
+    other rank's new threshold has to stay strictly between its neighbors,
+    checked against the *live* ladder, not the last value you happened to
+    load — a change that would leave the ladder out of order is refused
+    outright.
+  - **Raising a threshold demotes currently-online K9s immediately, with
+    no warning to them beforehand.** A K9's rank has never been a stored
+    value in this resource — it is always recalculated live from that
+    citizenid's real accumulated XP against whatever the four thresholds
+    currently are. The instant you save a higher threshold, every
+    connected K9 whose XP now falls short of it drops to whatever rank it
+    does qualify for, in that same moment — their real XP total is
+    unchanged, only which rank it currently earns. The tablet's own save
+    confirmation tells you plainly how many currently-connected K9s were
+    just demoted by the change you made, and this is **not automatically
+    reversible** — if that wasn't what you meant to do, you have to edit
+    the threshold back yourself.
+- **K9 Supply Shop locations manager** — high command can add, move, and
+  remove shop-ped locations from the tablet, on top of whatever
+  `Config.K9EquipmentShop.locations` already lists. Worth knowing:
+  - **A location you typed into `config.lua` can only be viewed here, not
+    edited or removed.** Only a location *added from the tablet* can be
+    moved or removed from the tablet; change a config-defined one the
+    normal way, by editing `config.lua` and restarting.
+  - **"Add Location Here" and "Move Here" use high command's own current
+    in-game position** — walk to the spot you want first, then press the
+    button. There is no field to type coordinates into.
+  - Every add, move, or removal updates every other connected player's
+    open tablet immediately, so two high-command officers editing shop
+    locations at the same time both see the current list, not a stale one.
+- **K9 Audit Trail viewer** — a read-only screen with five lookups:
+  certification history for one citizen, partnership history for one
+  citizen, the search log (searchable by officer, plate, person, or just
+  the most recent entries), one citizen's current XP, and the active
+  roster for one department. It changes nothing — there is no delete or
+  edit control anywhere on this screen. Every query is rate-limited and
+  logged, exactly like running the equivalent `/k9audit*` chat command,
+  because that is literally what it calls behind the scenes.
+  - **Unlike every other screen in this section, this one is not
+    high-command-only.** Anyone who separately qualifies for the
+    `k9.audit` capability can see this tab — department boss, meeting the
+    department's own `auditGrade` rank, an explicit `k9.audit` grant, or
+    high command. But on the shipped default config, qualifying by rank
+    alone is still not enough to actually *run* a query here: see "Per-person
+    feature control" above — `AdminAuditCommands` needs its own individual
+    grant too, for every person, high command included. Someone who can
+    see the tab but lacks that grant just gets a plain "not authorized" on
+    every query, not a blank or broken-looking screen.
 - **Tablet theming** (`Config.Features.TabletTheming`) is purely cosmetic
   — it can never change what anyone is authorized to do or see.
 

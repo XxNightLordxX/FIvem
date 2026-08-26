@@ -261,7 +261,38 @@ local PULSE_MIN_INTERVAL_MS = 500
 -- Slowest pulse cadence, at/beyond the edge of the hunt area -- config-
 -- tunable (an operator's "how often should a far-away pulse check in"
 -- preference), unlike the fixed close-in floor above.
-local PULSE_MAX_INTERVAL_MS = ScentHuntConfig.pollIntervalMs or 2000
+--
+-- CLAMP AND WARN (bug found + fixed this pass): this used to be a bare
+-- `ScentHuntConfig.pollIntervalMs or 2000` -- Lua's `or` only falls through
+-- on nil/false, so a configured `pollIntervalMs = 0` (or any other
+-- non-positive/invalid value) passed straight through, same bug class as
+-- client/proximityaudio.lua's own PROXIMITY_SCAN_INTERVAL_MS fix (see that
+-- file's comment for the fuller writeup) and this resource's own on-record
+-- "a non-positive cooldown must never silently remove a throttle"
+-- precedent. Here the effect is worse than a flat Wait(0): IntervalForDistance()
+-- below LINEARLY INTERPOLATES between PULSE_MIN_INTERVAL_MS (500, at 0m) and
+-- this value (at/beyond PULSE_MAX_DISTANCE_METERS) and its result is fed
+-- directly into `Wait(...)` at this file's own poll loop below with no
+-- further clamp there either -- a PULSE_MAX_INTERVAL_MS below
+-- PULSE_MIN_INTERVAL_MS does not just remove the throttle, it INVERTS the
+-- curve (far away becomes FASTER than close-in), and a sufficiently
+-- negative configured value drives the interpolated result negative or to
+-- zero even for a NEARBY player, i.e. a Wait(0)-or-worse full-per-frame
+-- pulse loop. Clamped to a positive number no smaller than
+-- PULSE_MIN_INTERVAL_MS (so the curve can never invert), never asserted at
+-- file scope -- a malformed config value must degrade, not take this
+-- whole file's load down with it (client/agility.lua's own
+-- vaultCooldownMs clamp-and-warn precedent).
+local PULSE_MAX_INTERVAL_MS_DEFAULT = 2000
+local PULSE_MAX_INTERVAL_MS = PULSE_MAX_INTERVAL_MS_DEFAULT
+if ScentHuntConfig.pollIntervalMs ~= nil then
+    local configured = ScentHuntConfig.pollIntervalMs
+    if type(configured) == 'number' and configured == configured and configured >= PULSE_MIN_INTERVAL_MS then
+        PULSE_MAX_INTERVAL_MS = configured
+    else
+        print(('[qbx_k9unit] ScentTrailHunt: Config.ScentTrailHunt.pollIntervalMs must be a number >= %dms (this file\'s own PULSE_MIN_INTERVAL_MS floor, got %s) -- falling back to the shipped default of %dms. A value below that floor would invert the distance/cadence curve (far away pulsing FASTER than close-in) and, past a certain point, drive the interval to zero or negative -- a Wait(0)-or-worse full-per-frame pulse loop.'):format(PULSE_MIN_INTERVAL_MS, tostring(configured), PULSE_MAX_INTERVAL_MS_DEFAULT))
+    end
+end
 
 -- Distance (meters) at/beyond which the pulse sits at its slowest. Mirrors
 -- server/scenttrail.lua's own default so the felt curve matches the actual

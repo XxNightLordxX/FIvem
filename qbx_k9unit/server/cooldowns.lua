@@ -646,7 +646,12 @@ end
 --- primitive in this file: a mutex "expiring" would defeat the point of a
 --- mutex. That makes "is a mutex ever left held with no way to release it"
 --- entirely a caller-discipline question, not something this constructor
---- can enforce — audited across all 5 current call sites (server/search.lua
+--- can enforce — RE-AUDITED THIS PASS (quality-agent-14; the count below had
+--- drifted, see CORRECTION note at the end of this comment before trusting
+--- it again without re-measuring). Grouped by release discipline, not by
+--- age, since the two groups genuinely differ:
+---
+--- GROUP A — the original 5, released via pcall (server/search.lua
 --- SearchMutex, server/combat.lua TakedownMutex, server/inventory.lua
 --- K9InventoryOpenMutex, server/medkit.lua MedkitMutex,
 --- server/partnership.lua PartnershipEstablishMutex): every one wraps its
@@ -664,6 +669,37 @@ end
 --- RegisterPlayerDropped, correctly, since neither key is a player source —
 --- their sole release path is the pcall-guaranteed one, which does not
 --- depend on any player staying connected.
+---
+--- GROUP B — 4 more that landed after this comment was first written
+--- (server/certtiers.lua TierEditMutex, server/equipmentshop.lua
+--- ShopItemEditMutex, server/permissionkeycatalog.lua
+--- PermissionKeyEditMutex, server/xptiers.lua XPTierEditMutex): NONE of
+--- these wrap their critical section in `pcall` at all — instead, every one
+--- releases explicitly, in-line, immediately before EVERY early `return`
+--- inside the critical section (confirmed by direct read of all four, not
+--- assumed from the pattern above), and every DB write inside that section
+--- is a `K9Store.*` call under this resource's own SafeWrite contract (a
+--- thrown DB error degrades to a returned `false`, never an uncaught
+--- error — see server/datastore.lua) rather than an unguarded MySQL call
+--- that could itself throw. That combination (nothing in the critical
+--- section can throw + every explicit return path releases first) reaches
+--- the same guarantee GROUP A's pcall gets structurally, by a different
+--- route — not a weaker one, but genuinely a different one, so it is
+--- recorded here rather than silently folded into GROUP A's description.
+--- All four are keyed by something other than a player source (a tier_key,
+--- an item key, a permission key, and XPTierEditMutex's own fixed
+--- ladder-wide lock constant, respectively) and correctly do NOT call
+--- RegisterPlayerDropped, same reasoning as MedkitMutex/
+--- PartnershipEstablishMutex above.
+---
+--- CORRECTION: this comment used to say "audited across all 5 current call
+--- sites" as if that count were still current — it had quietly become
+--- wrong the moment GROUP B's first member landed, and stayed wrong through
+--- three more additions before anyone re-measured it here. The count is 9
+--- today (`grep -c 'NewMutex()' server/*.lua`, excluding this constructor's
+--- own definition and every prose mention in a comment) — re-derive it
+--- yourself before trusting a number in this note again; do not let this
+--- correction itself calcify into the next stale claim.
 --- @return table mutex
 function NewMutex()
     local held = {}

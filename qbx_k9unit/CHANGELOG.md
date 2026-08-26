@@ -15,6 +15,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Documentation catch-up: four working tablet screens had no operator-facing
+documentation anywhere — 2026-08-26 (later than the entry below).** No code
+changed in this pass. Each screen was traced end to end (the tab in
+`html/tablet.js`, its NUI bridge in `client/tablet.lua`, and the real
+server-side callback behind it) before being written up, rather than
+documented from its name alone. `OPERATOR_RUNBOOK.md` §5 and
+`PLAYER_GUIDE.md`'s tablet section now cover all four:
+
+- **The Permission Keys catalog editor** (`server/permissionkeycatalog.lua`,
+  tablet callbacks `permKeysList`/`permKeysUpsert`/`permKeysDelete`).
+  High-command-only. "Delete" is a tombstone, not a row delete — an existing
+  grant of a retired key simply stops resolving `true`, forever, rather than
+  disappearing or erroring; the tablet reports the current active-grant
+  count purely for the deleting officer's own awareness and never refuses
+  on it. Cannot touch the separate `feature.<Name>`/`block.<Name>`
+  namespace by construction. Capped at 60 live keys.
+- **The XP Rank editor** (`server/xptiers.lua`, tablet callbacks
+  `xpTiersList`/`xpTiersUpsert`). High-command-only, and deliberately
+  edit-only — the four ranks can be relabeled/retuned but never added,
+  removed, or reordered, and rank 1's 0 XP floor is fixed. Because a K9's
+  rank has never been a stored value (it is always recomputed live from raw
+  XP against the current thresholds), raising a threshold re-ranks every
+  currently-connected K9 against it immediately, with no grandfathering;
+  the save response carries an explicit warning naming how many
+  currently-connected K9s were just demoted, and this is not automatically
+  reversible.
+- **The K9 Supply Shop locations manager** (`server/equipmentshop.lua`,
+  tablet callbacks `equipmentShopGetLocations`/`AddLocation`/
+  `MoveLocation`/`RemoveLocation`). High-command-only. A `config.lua`-defined
+  location is visible but read-only from this screen; only a
+  tablet-added one can be edited, moved, or removed. Coordinates are always
+  the operator's own live in-game position at the moment of the click, on
+  both "Add Here" and "Move Here" — there is no coordinate input field,
+  because a CEF tablet page has no access to the operator's own position
+  and never sends one. **Not yet documented, because it is not reachable
+  from the tablet UI today**: `server/equipmentshop.lua` and
+  `client/tablet.lua` also carry a second, parallel surface for editing the
+  shop's actual item catalog (`equipmentShopItemsList`/`Upsert`/`Reorder`/
+  `Delete` — prices, currency, tier/specialization requirements), fully
+  wired server-side and bridged client-side, but `html/tablet.js` has no
+  tab or screen that ever calls it. Flagged for whoever owns that file, not
+  fixed here.
+- **The K9 Audit Trail viewer** (`server/admin.lua`'s five `tabletAudit*`
+  callbacks — cert/partner/search/xp/dept). Read-only, rate-limited and
+  logged exactly like the matching `/k9audit*` chat command, because it
+  calls the identical function. The one tablet screen that is *not*
+  high-command-only — anyone who separately qualifies for the `k9.audit`
+  capability can see it — but on the shipped default config, qualifying by
+  rank alone still is not enough to run a query: `AdminAuditCommands` sits
+  in `Config.FeatureControl.RequireGrant`, so an individual grant is needed
+  too, for every person, high command included.
+
 **Certification tiers made real, per-person blocking greatly widened, live
 tunables expanded 20 → 94, and the partner camera feed shipped — 2026-08-26
 (later than the compat-layer entry below).** The largest batch of

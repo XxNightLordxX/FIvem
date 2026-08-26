@@ -180,6 +180,7 @@ local function newProximityAudioFixture(opts)
     return {
         env = env,
         Config = env.Config,
+        printLog = printLog,
         playK9SoundCalls = playK9SoundCalls,
         stopK9SoundCalls = stopK9SoundCalls,
         threadCreateCount = function() return threadCreateCount end,
@@ -238,6 +239,60 @@ t.test('the discovery thread waits on the real, configured scanIntervalMs (2500m
         t.equals(ms, 2500)
     end
     t.isTrue(#f.waitCalls >= 2)
+end)
+
+-- ----------------------------------------------------------------------
+-- CLAMP AND WARN: Config.ProximityAudioFX.scanIntervalMs -- BUG (found +
+-- fixed this pass): `scanIntervalMs or 2500` let a configured 0 (or any
+-- other non-positive/invalid value) pass straight through as the real
+-- Wait() argument -- Lua's `or` only falls through on nil/false, and 0 is
+-- a genuine, truthy number. See client/proximityaudio.lua's own comment on
+-- PROXIMITY_SCAN_INTERVAL_MS_DEFAULT for the full writeup.
+-- ----------------------------------------------------------------------
+
+t.test('CLAMP AND WARN: scanIntervalMs = 0 no longer removes the throttle -- falls back to the shipped 2500ms default and warns loudly, naming the exact key', function()
+    local f = newProximityAudioFixture({ scanIntervalMs = 0 })
+    f.step() -- prime
+    f.step() -- one pass
+    for _, ms in ipairs(f.waitCalls) do
+        t.equals(ms, 2500, 'FIXED: a configured 0 must never reach Wait() directly -- that would be a full per-frame scan, not a faster one')
+    end
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.ProximityAudioFX.scanIntervalMs', 1, true) and line:find('got 0', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must warn loudly, naming both the config path and the bad value -- silent clamping trains operators to never notice their config typo')
+end)
+
+t.test('CLAMP AND WARN: a negative scanIntervalMs also falls back to the default and warns', function()
+    local f = newProximityAudioFixture({ scanIntervalMs = -500 })
+    f.step()
+    f.step()
+    for _, ms in ipairs(f.waitCalls) do
+        t.equals(ms, 2500)
+    end
+end)
+
+t.test('CLAMP AND WARN: a non-number scanIntervalMs (a numeric-looking string, matching a plain form-field/JSON-config footgun) also falls back to the default and warns', function()
+    local f = newProximityAudioFixture({ scanIntervalMs = '2500' })
+    f.step()
+    f.step()
+    for _, ms in ipairs(f.waitCalls) do
+        t.equals(ms, 2500)
+    end
+end)
+
+t.test('CLAMP AND WARN: a VALID, non-default scanIntervalMs is still used as-is, not silently replaced by the fallback', function()
+    local f = newProximityAudioFixture({ scanIntervalMs = 9000 })
+    f.step()
+    f.step()
+    for _, ms in ipairs(f.waitCalls) do
+        t.equals(ms, 9000)
+    end
+    for _, line in ipairs(f.printLog) do
+        t.isNil(line:find('scanIntervalMs', 1, true), 'a valid configured value must pass through silently -- warning on a good value trains operators to ignore the warning')
+    end
 end)
 
 -- ----------------------------------------------------------------------

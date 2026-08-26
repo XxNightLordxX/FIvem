@@ -233,4 +233,79 @@ t.test('composer ABSENT (K9MoveRateModifiers/RecomputeK9MoveRate do not exist at
     t.equals(#f.notifyCalls, 1)
 end)
 
+-- ----------------------------------------------------------------------
+-- PRIORITY 1 FIX -- LIVE FEATURE FLAG (`.live`) -- the confirmed unbounded
+-- trap this file's own header documents in full: a runtime tablet toggle of
+-- Config.Features.XPProgression never reaches an already-connected client's
+-- own static copy, and server/progression.lua's ONLY push (PushTierSnapshot)
+-- stops sending anything at all the instant the flag goes off server-side --
+-- so, without this fix, a previously-applied K9MoveRateModifiers.xpTier
+-- value would be stuck forever. These tests exercise the CLIENT half of the
+-- fix directly (the optional `.live` field ingest and the forced reset to
+-- neutral), independent of whether the server-side patch this depends on to
+-- ever be INVOKED while the feature is off has landed yet.
+-- ----------------------------------------------------------------------
+
+t.test('LIVE FLAG: a payload with no `.live` field at all behaves exactly as before this fix (backward compatible with an unpatched server)', function()
+    local f = newProgressionFixture()
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1 })
+    t.equals(f.k9MoveRateModifiers.xpTier, 1.1)
+    t.equals(f.env.GetCurrentXPTier().label, 'Veteran')
+end)
+
+t.test('LIVE FLAG: `.live = true` behaves identically to an absent field -- the real speedMultiplier is applied', function()
+    local f = newProgressionFixture()
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1, live = true })
+    t.equals(f.k9MoveRateModifiers.xpTier, 1.1)
+end)
+
+t.test('THE FIX: `.live = false` force-resets K9MoveRateModifiers.xpTier to neutral (1.0), regardless of the payload\'s own speedMultiplier', function()
+    local f = newProgressionFixture()
+    -- Establish a real, non-neutral tier first, exactly like a K9 who
+    -- legitimately earned it while the feature was on.
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1 })
+    t.equals(f.k9MoveRateModifiers.xpTier, 1.1)
+
+    -- High command disables XPProgression at runtime; the (patched) server
+    -- pushes a live-off signal on the SAME channel.
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1, live = false })
+    t.equals(f.k9MoveRateModifiers.xpTier, 1.0, 'a live-off push must reset the modifier to neutral even though speedMultiplier itself still reads 1.1')
+end)
+
+t.test('THE FIX: the reset is NOT gated on the feature being on -- it fires from the same always-registered handler, and a later live=true push re-applies the real value', function()
+    local f = newProgressionFixture()
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1 })
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1, live = false })
+    t.equals(f.k9MoveRateModifiers.xpTier, 1.0)
+
+    -- Re-enabled later -- the real value comes back without a relog.
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1, live = true })
+    t.equals(f.k9MoveRateModifiers.xpTier, 1.1)
+end)
+
+t.test('THE FIX: once `.live = false` is received, a SUBSEQUENT payload with no `.live` field at all keeps the reset in effect (sticky, not a one-shot)', function()
+    local f = newProgressionFixture()
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1, live = false })
+    t.equals(f.k9MoveRateModifiers.xpTier, 1.0)
+
+    -- A hypothetical future push that omits `.live` must not be treated as
+    -- "back on" by default -- LiveXPProgressionEnabled must stay at its last
+    -- known value, never reset to a bare true on a missing field.
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1 })
+    t.equals(f.k9MoveRateModifiers.xpTier, 1.0, 'a payload silent on `.live` must not be interpreted as re-enabling the feature')
+end)
+
+t.test('THE FIX: a live-off push never fires a "tier up" notification, even across a genuine label change', function()
+    local f = newProgressionFixture()
+    f.fireTierChanged(65535, { xp = 0, label = 'Trainee', speedMultiplier = 1.0 }) -- initial snapshot, never notifies
+    f.fireTierChanged(65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1, live = false })
+    t.equals(#f.notifyCalls, 0, 'a live-off push exists to reset the modifier, never to announce a level-up the player did not actually just earn')
+end)
+
+t.test('THE FIX: composer ABSENT -- a live=false payload is still accepted with no error (defensive soft-dependency preserved)', function()
+    local f = newProgressionFixture({ withComposer = false })
+    local ok = pcall(f.fireTierChanged, 65535, { xp = 500, label = 'Veteran', speedMultiplier = 1.1, live = false })
+    t.isTrue(ok)
+end)
+
 os.exit(t.summary())

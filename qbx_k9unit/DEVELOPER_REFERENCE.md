@@ -94,7 +94,17 @@ controls themselves directly, like any other player character, at all times.
   mechanic, deployable kennel, K9 camera feed R&D spike (Phase 5).
 
 ### Explicit non-goals
-- **ESX support.** Qbox/QBCore data model only.
+- **ESX support, and QBCore support — CORRECTED, 2026-08-26: this bullet
+  used to read "Qbox/QBCore data model only," implying QBCore was a
+  second supported framework alongside Qbox. It never was, and line one
+  of this same list ("Qbox-only... No ESX") already said so; this bullet
+  just failed to say the same thing about QBCore.** `Config.Compat`'s
+  framework detection correctly identifies `qb-core` if you run it, but
+  detection was never adaptation — roughly 169 call sites across this
+  resource talk to Qbox directly, and `qbx_core` is a hard `fxmanifest.lua`
+  dependency regardless of what's detected. See README.md's own "No QBCore
+  or ESX support" section and `config.lua`'s
+  `Config.Compat.Systems.framework` comment for the current, full story.
 - **True live-video PiP camera feed** of the dog's point of view. Concluded
   infeasible without new native support — see §7/§15 (`#phase-5-research`).
   Do not re-propose without a real engine-level capability landing in FiveM

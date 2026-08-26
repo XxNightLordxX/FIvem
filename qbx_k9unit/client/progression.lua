@@ -107,6 +107,139 @@
     same posture client/partnership.lua's IsPartnered()/GetPartnerServerId()
     already establish for a single-concern file.
     ======================================================================
+
+    ======================================================================
+    PRIORITY 1 FIX (quality-agent-15 pass) -- A CONFIRMED UNBOUNDED TRAP,
+    IDENTICAL IN SHAPE TO THE ONE client/wellbeing.lua's "LIVE FEATURE
+    FLAGS" section already closed for its own five flags (read that
+    section in full -- this fix reuses its exact reasoning and shape,
+    applied to this file's one flag).
+
+    THE TRAP, CONFIRMED BEFORE FIXING (not assumed from the report alone):
+    the top-of-file gate above reads Config.Features.XPProgression exactly
+    ONCE, at THIS CLIENT's own resource start -- this client's own static
+    copy of config.lua, never updated afterward. server/runtimecontrol.lua
+    classifies XPProgression as `tier = 'live'` specifically because
+    server/progression.lua's AwardXP and PushTierSnapshot both re-check
+    Config.Features.XPProgression fresh on every call -- a genuinely LIVE,
+    immediate, no-restart toggle, server-side. But server/runtimecontrol.lua's
+    own header states plainly it "does not push a live Config update to
+    already-connected CLIENTS" for anything other than its unrelated tablet-
+    theme broadcast -- so an already-connected client's OWN
+    Config.Features.XPProgression NEVER changes when high command flips the
+    flag off via the tablet, mid-session, without a restart. Concretely: a
+    K9 earns a real tier (say speedMultiplier = 1.10), this file writes
+    K9MoveRateModifiers.xpTier = 1.10 via ApplyXPTierMoveRateEffect(). High
+    command then disables XPProgression at runtime. PushTierSnapshot
+    (server/progression.lua) ALSO gates on the same flag and simply stops
+    sending 'qbx_k9unit:client:xpTierChanged' at all from that instant on
+    (its own early return, no exception) -- there is no OTHER push/poll
+    left anywhere in this resource that would ever tell this file to
+    reconsider. K9MoveRateModifiers.xpTier=1.10 -- and the composed
+    SetPedMoveRateOverride effect derived from it -- is stuck at that value
+    until this client relogs or the resource restarts, exactly the
+    unbounded trap this task's own rules forbid, and the SAME root cause
+    (a server-side toggle with literally nothing telling an already-
+    connected client) client/wellbeing.lua's own header already documents
+    finding and fixing for FatigueSystem/MoodSystem/FearStressSystem/
+    DistractionSystem/InjuryLimping.
+
+    UNLIKE wellbeing, THIS FILE CANNOT FULLY CLOSE THE LOOP ON ITS OWN:
+    wellbeing could piggyback a `featureFlags` table onto its own ALREADY-
+    UNCONDITIONAL periodic wellbeingUpdate push (that push keeps firing for
+    a connected K9 regardless of any ONE of its five flags, because at
+    least one of the other four might still be live) -- this file's ONLY
+    push, PushTierSnapshot, is gated on the very same single flag this fix
+    needs to detect going false, so it stops sending ANYTHING the instant
+    the flag flips, with no recurring channel left to reuse. Closing this
+    completely needs a small, server-side change this pass is not permitted
+    to make (server/*.lua is out of scope for this pass) -- reported in
+    full to coder-backend, not applied here. What THIS file does, right
+    now, unconditionally:
+      1. Tracks `LiveXPProgressionEnabled`, mirroring
+         client/wellbeing.lua's `LiveFeatureFlags` shape exactly (seeded
+         true -- by construction, reaching this line already required this
+         client's own static Config.Features.XPProgression to be true, per
+         the top-of-file gate above).
+      2. Reads an OPTIONAL `.live` boolean field off every
+         'qbx_k9unit:client:xpTierChanged' payload (absent on an
+         unpatched server -- left untouched, never invented, exactly
+         mirroring client/wellbeing.lua's ApplyWellbeingSnapshot ingest
+         guard for its own `featureFlags` sub-table).
+      3. THE FIX ITSELF, THE RULE THAT OUTRANKS EVERYTHING: whenever
+         `LiveXPProgressionEnabled` reads false, CachedXPTierSpeedMultiplier
+         is force-reset to the neutral 1.0 baseline regardless of whatever
+         speedMultiplier the payload carries, which ApplyXPTierMoveRateEffect()
+         then writes into K9MoveRateModifiers.xpTier as always -- this reset
+         path is NOT itself gated on the feature being on (that is
+         precisely the trap): it runs from inside the SAME always-
+         registered handler as every other branch, so once a `.live=false`
+         signal ever does arrive, the reset is unconditional.
+
+    THE EXACT SERVER-SIDE CHANGE THIS DEPENDS ON TO EVER BE INVOKED WHILE
+    THE FEATURE IS OFF (reported to coder-backend, NOT applied by this
+    pass -- server/*.lua is out of scope here). Two small, additive edits,
+    reusing the EXISTING 'qbx_k9unit:client:xpTierChanged' channel end to
+    end -- no new event name, no new lib.callback, no new poll thread:
+      a) server/progression.lua's `PushTierSnapshot` (currently: `if not
+         Config.Features.XPProgression then return end` before ever
+         calling TriggerClientEvent -- a hard no-op that sends nothing at
+         all while the flag is off) must stop early-returning and instead
+         ALWAYS send, with the live flag riding along on the payload:
+             local function PushTierSnapshot(targetSrc, tier)
+                 local snapshot = CopyTier(tier)  -- MUST copy -- tier is
+                     -- often a live reference into Config.XPTiers[n]
+                     -- (ResolveTier's own documented by-reference return);
+                     -- writing snapshot.live directly onto that shared
+                     -- reference would corrupt it for every other
+                     -- citizenid in the same bracket.
+                 snapshot.live = Config.Features.XPProgression == true
+                 TriggerClientEvent('qbx_k9unit:client:xpTierChanged', targetSrc, snapshot)
+             end
+         This alone changes nothing observable while the flag stays on
+         (every existing call site keeps behaving identically -- `.live`
+         is simply `true`); it only stops the payload from being withheld
+         entirely once the flag goes off.
+      b) That alone is not suffient -- PushTierSnapshot is only ever
+         CALLED from PlayerLoaded, the resource-start backfill loop, and a
+         tier CROSSING inside AwardXP/AwardXPDirect, none of which fire at
+         the moment an operator flips the flag mid-session. A new
+         resource-global, e.g. `RefreshXPProgressionLiveStateForAllOnline()`
+         in server/progression.lua, should iterate GetPlayers() (same shape
+         as the existing onResourceStart backfill loop) and call
+         `PushTierSnapshot(src, GetXPTier(citizenid))` for each currently
+         connected, resolvable citizenid -- deliberately WITHOUT that
+         backfill loop's own `if not Config.Features.XPProgression then
+         return end` early exit, since this function's entire purpose is
+         to run precisely when that flag may have just gone false. Then,
+         server/runtimecontrol.lua's `ApplyFeatureOverride(name, value)`
+         (server/runtimecontrol.lua:1174, the SINGLE mutation point for
+         every path that changes Config.Features[name] at runtime -- both
+         runtimeSetFeature and runtimeResetFeature already funnel through
+         it) should call this new function, behind the same soft-
+         dependency `type(...) == 'function'` guard this codebase already
+         uses pervasively (server/medkit.lua's `type(RestoreInjury) ==
+         'function'`, this file's own `type(RecomputeK9MoveRate) ==
+         'function'`):
+             local function ApplyFeatureOverride(name, value)
+                 if type(Config.Features) == 'table' and Config.Features[name] ~= nil then
+                     Config.Features[name] = value
+                     if name == 'XPProgression' and type(RefreshXPProgressionLiveStateForAllOnline) == 'function' then
+                         RefreshXPProgressionLiveStateForAllOnline()
+                     end
+                 end
+                 -- ... existing body continues unchanged
+             end
+         This is a single, precise hook at the ONE real transition point
+         (immediate, zero staleness -- unlike wellbeing's up-to-one-tick-
+         interval bound, since this flag has no recurring tick to piggyback
+         on) -- not a new poll thread, and not a second channel.
+      Until both (a) and (b) land, `newTier.live` is always absent on every
+      real server, `LiveXPProgressionEnabled` never moves off its seeded
+      `true`, and this file's own fix above is inert but harmless (it costs
+      nothing, changes no current behavior, and is the ready-to-activate
+      client half the moment the two-file server patch ships).
+    ======================================================================
 ]]
 
 if not Config.Features.XPProgression then return end
@@ -128,6 +261,19 @@ local hasReceivedInitialTier = false
 --- why this exists independently of whether the shared move-rate composer
 --- has shipped yet.
 local CachedXPTierSpeedMultiplier = 1.0
+
+--- Mirrors client/wellbeing.lua's own `LiveFeatureFlags` pattern exactly --
+--- see this file's header "PRIORITY 1 FIX" section for the full "why" and
+--- the confirmed unbounded trap this closes. The SERVER's CURRENT
+--- Config.Features.XPProgression value, kept fresh by an OPTIONAL `.live`
+--- field on every 'qbx_k9unit:client:xpTierChanged' payload -- NOT this
+--- client's own static Config.Features.XPProgression copy (fixed at this
+--- client's own resource start, never updated by a runtime tablet toggle --
+--- server/runtimecontrol.lua's own disclosed limitation). Seeded true: this
+--- whole file already returned at this file's own top-of-file gate above if
+--- this client's own static copy were false, so by construction it is true
+--- the instant this line runs.
+local LiveXPProgressionEnabled = true
 
 --- Resource-global — see FILE-TO-FILE CONTRACT above.
 --- @return table|nil
@@ -187,20 +333,45 @@ RegisterNetEvent('qbx_k9unit:client:xpTierChanged', function(newTier)
         return
     end
 
+    -- LIVE FEATURE FLAG INGEST — see this file's header "PRIORITY 1 FIX"
+    -- section. Done BEFORE CachedXPTierSpeedMultiplier is touched below, so
+    -- the reset branch always acts on the freshest known flag state for
+    -- THIS same payload. `.live` is OPTIONAL (absent on an unpatched
+    -- server) — a missing/non-boolean field leaves LiveXPProgressionEnabled
+    -- at its current value, never invents one, mirroring
+    -- client/wellbeing.lua's own ApplyWellbeingSnapshot ingest guard for its
+    -- `featureFlags` sub-table exactly.
+    if type(newTier.live) == 'boolean' then
+        LiveXPProgressionEnabled = newTier.live
+    end
+
     local previousTier = currentXPTier
     currentXPTier = newTier
-    CachedXPTierSpeedMultiplier = newTier.speedMultiplier
+    -- THE FIX, PRIORITY 1 — THE RULE THAT OUTRANKS EVERYTHING: while the
+    -- server's live flag reads OFF, this modifier is force-reset to the
+    -- neutral 1.0 baseline regardless of whatever speedMultiplier the
+    -- payload carries — never merely left at its previous, possibly
+    -- non-neutral, value. This branch is NOT gated on the feature being on
+    -- (it runs unconditionally, from inside this same always-registered
+    -- handler) — that is precisely what makes it a real reset rather than
+    -- another instance of the trap it exists to close. Mirrors
+    -- client/wellbeing.lua's own ApplyMoveRateModifiers "a flag switched
+    -- off mid-effect must REMOVE that effect, not merely stop re-applying
+    -- it" fix, applied here to this file's one modifier slot.
+    CachedXPTierSpeedMultiplier = LiveXPProgressionEnabled and newTier.speedMultiplier or 1.0
 
     ApplyXPTierMoveRateEffect()
 
     -- Only notify on a REAL tier change after this session's initial
     -- snapshot has already been received once — never on that first
     -- snapshot itself (there is no prior client-side tier to have "leveled
-    -- up" from at that point), and never for a no-op repeat of the same
-    -- tier (defensive — server/progression.lua only pushes on an actual
-    -- crossing today, but this file doesn't assume that invariant holds
-    -- forever).
-    if hasReceivedInitialTier and previousTier ~= newTier and previousTier and previousTier.label ~= newTier.label then
+    -- up" from at that point), never for a no-op repeat of the same tier
+    -- (defensive — server/progression.lua only pushes on an actual crossing
+    -- today, but this file doesn't assume that invariant holds forever),
+    -- and never while the live flag reads off — a live-off push exists
+    -- purely to reset this file's own modifier, never to announce a
+    -- "level up" the player did not actually just earn.
+    if LiveXPProgressionEnabled and hasReceivedInitialTier and previousTier ~= newTier and previousTier and previousTier.label ~= newTier.label then
         lib.notify({
             title = locale('common.notify_title'),
             description = locale('progression.tier_up', tostring(newTier.label)),

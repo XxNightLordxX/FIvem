@@ -924,8 +924,19 @@ local function newClientFixture(opts)
     local env = Sandbox.newEnv(overrides)
     env.Config = {
         Features = { ScentTrailHunt = true, BasicBarkSounds = opts.basicBarkSounds ~= false },
-        ScentTrailHunt = { pollIntervalMs = 2000, maxRadius = 30.0 },
+        ScentTrailHunt = { pollIntervalMs = opts.pollIntervalMs or 2000, maxRadius = 30.0 },
     }
+
+    -- CLAMP-AND-WARN CAPTURE -- proves a bad pollIntervalMs actually warns
+    -- (not just "doesn't crash"), same convention as
+    -- tests/sarcalls_spec.lua's/tests/clientkennel_spec.lua's own printLog
+    -- captures for this exact class of guard.
+    local printLog = {}
+    env.print = function(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
 
     Sandbox.loadInto('../client/scenttrail.lua', env)
 
@@ -933,6 +944,7 @@ local function newClientFixture(opts)
         env = env,
         threads = threads,
         waitLog = waitLog,
+        printLog = printLog,
         stepOne = runner.stepOne,
         notifyCalls = notifyCalls,
         triggerServerEventCalls = triggerServerEventCalls,
@@ -1022,6 +1034,66 @@ t.test('pulse pacing: PlayPulse fires once per poll iteration while not yet foun
     f.stepOne(1)
     t.equals(#f.playK9SoundCalls, 2)
     t.equals(f.waitLog[1], 2000, 'at/beyond maxRadius the pulse must sit at PULSE_MAX_INTERVAL_MS (Config.ScentTrailHunt.pollIntervalMs, 2000ms)')
+end)
+
+-- ----------------------------------------------------------------------
+-- CLAMP AND WARN: Config.ScentTrailHunt.pollIntervalMs -- BUG (found + fixed
+-- this pass): `pollIntervalMs or 2000` let a configured 0 (or a value below
+-- PULSE_MIN_INTERVAL_MS, or negative) pass straight through into
+-- PULSE_MAX_INTERVAL_MS, which IntervalForDistance() then linearly
+-- interpolates INTO -- inverting the distance/cadence curve, and past a
+-- certain point driving the interval fed to Wait() to zero or negative even
+-- for a nearby player. See client/scenttrail.lua's own comment on
+-- PULSE_MAX_INTERVAL_MS_DEFAULT for the full writeup.
+-- ----------------------------------------------------------------------
+
+t.test('CLAMP AND WARN: pollIntervalMs = 0 no longer inverts the distance/cadence curve -- falls back to the shipped 2000ms default and warns loudly, naming the exact key', function()
+    local f = newClientFixture({ pollIntervalMs = 0 })
+    f.queueCallbackResponse({ started = true })
+    f.startCommand({})
+
+    f.queueCallbackResponse({ active = true, distance = 30.0, found = false }) -- at/beyond maxRadius -> would-be PULSE_MAX_INTERVAL_MS
+    f.stepOne(1)
+    t.equals(f.waitLog[1], 2000, 'FIXED: a configured 0 must never reach the interpolated Wait() argument -- that would be a full per-frame pulse loop, not a faster one')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('Config.ScentTrailHunt.pollIntervalMs', 1, true) and line:find('got 0', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must warn loudly, naming both the config path and the bad value')
+end)
+
+t.test('CLAMP AND WARN: a pollIntervalMs below PULSE_MIN_INTERVAL_MS (500) also falls back -- it would invert the curve, not just remove a throttle', function()
+    local f = newClientFixture({ pollIntervalMs = 100 })
+    f.queueCallbackResponse({ started = true })
+    f.startCommand({})
+
+    f.queueCallbackResponse({ active = true, distance = 30.0, found = false })
+    f.stepOne(1)
+    t.equals(f.waitLog[1], 2000)
+end)
+
+t.test('CLAMP AND WARN: a negative pollIntervalMs also falls back to the default and warns', function()
+    local f = newClientFixture({ pollIntervalMs = -500 })
+    f.queueCallbackResponse({ started = true })
+    f.startCommand({})
+
+    f.queueCallbackResponse({ active = true, distance = 30.0, found = false })
+    f.stepOne(1)
+    t.equals(f.waitLog[1], 2000)
+end)
+
+t.test('CLAMP AND WARN: a VALID, non-default pollIntervalMs is still used as-is, not silently replaced by the fallback', function()
+    local f = newClientFixture({ pollIntervalMs = 3000 })
+    f.queueCallbackResponse({ started = true })
+    f.startCommand({})
+
+    f.queueCallbackResponse({ active = true, distance = 30.0, found = false })
+    f.stepOne(1)
+    t.equals(f.waitLog[1], 3000)
+    for _, line in ipairs(f.printLog) do
+        t.isNil(line:find('pollIntervalMs', 1, true), 'a valid configured value must pass through silently')
+    end
 end)
 
 t.test('pulse pacing: silently no-ops (never errors) when PlayK9Sound does not exist -- BasicBarkSounds off, same as production', function()

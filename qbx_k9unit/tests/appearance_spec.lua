@@ -964,4 +964,251 @@ t.test('PlayerLoaded: a citizenid who STILL holds the role gets the normal re-ap
     t.equals(#f.clientEvents, 1, 'still certified -- the K9 model is re-pushed on reconnect, exactly as before this backstop existed')
 end)
 
+-- ----------------------------------------------------------------------
+-- 9. DISCARDED-WRITE FIX (quality pass): every K9Store write in this file
+--    follows the SafeWrite contract (a DB error degrades to `false`/`nil`
+--    rather than throwing) -- these writes' own boolean results used to be
+--    discarded outright at every call site below, so a DB failure was
+--    silently reported as a clean success both to the player (a "success"
+--    toast) and in the audit trail (outcome 'ok'). Each write site gets its
+--    own DB-failure case here, injected via `f.mysql.query.await` (mirrors
+--    tests/certifications_spec.lua's/tests/partnership_spec.lua's own
+--    `f.mysql.scalar.await = function() error(...) end` pattern).
+-- ----------------------------------------------------------------------
+
+t.test('confirmK9PedSwap (apply): a DB write failure logs db_error, never a false "ok", and never tells the target the swap was saved', function()
+    local f = newFixture()
+    setupGranterAndTarget(f)
+    f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'a_c_husky')
+    local requestId = f.clientEvents[1][1]
+
+    local originalQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('INSERT INTO k9_ped_assignments', 1, true) then
+            error('simulated: DB unreachable for the appearance-apply write')
+        end
+        return originalQueryAwait(sql, params)
+    end
+
+    f.env.source = TARGET_SRC
+    f.events['qbx_k9unit:server:confirmK9PedSwap'](requestId, true, nil)
+
+    t.isNil(f.fakeAssignments['CITIZEN_TARGET'], 'the write genuinely failed -- nothing was persisted')
+    local toldTargetItSucceeded = false
+    for _, entry in ipairs(f.notifyLog) do
+        if entry.message == 'appearance.apply_success_target' then toldTargetItSucceeded = true end
+    end
+    t.isFalse(toldTargetItSucceeded, 'the target must never be told the swap was saved when it was not')
+    t.contains(table.concat(f.printLog, '\n'), 'k9AppearanceApply(citizenid=CITIZEN_TARGET) -> db_error',
+        'the audit trail records the real outcome, not a false "ok"')
+end)
+
+t.test('confirmK9PedSwap (revert): a DB write failure logs db_error, never a false "ok", and never tells the target the appearance was restored', function()
+    local f = newFixture({ fallbackHumanModel = 'mp_m_freemode_01' })
+    setupGranterAndTarget(f)
+    f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'a_c_husky')
+    f.env.source = TARGET_SRC
+    f.events['qbx_k9unit:server:confirmK9PedSwap'](f.clientEvents[1][1], true, nil)
+    f.clearClientEvents()
+    f.advanceTime(2000) -- past AppearanceActionCooldown
+
+    f.env.ForceRevertK9Appearance(HIGH_COMMAND_SRC, 'CITIZEN_TARGET')
+    local revertRequestId = f.clientEvents[1][1]
+
+    local originalQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('UPDATE k9_ped_assignments SET active = 0', 1, true) then
+            error('simulated: DB unreachable for the appearance-revert write')
+        end
+        return originalQueryAwait(sql, params)
+    end
+
+    f.env.source = TARGET_SRC
+    f.events['qbx_k9unit:server:confirmK9PedSwap'](revertRequestId, true, nil)
+
+    t.isTrue(f.fakeAssignments['CITIZEN_TARGET'].active, 'the write genuinely failed -- the row was NOT cleared')
+    local toldTargetItSucceeded = false
+    for _, entry in ipairs(f.notifyLog) do
+        if entry.message == 'appearance.revert_success_target' then toldTargetItSucceeded = true end
+    end
+    t.isFalse(toldTargetItSucceeded, 'the target must never be told the appearance was restored when it was not')
+    t.contains(table.concat(f.printLog, '\n'), 'k9AppearanceRevert(citizenid=CITIZEN_TARGET) -> db_error')
+end)
+
+t.test('ApplyK9PedRole: re-applying a DIFFERENT model to an already-granted, now-OFFLINE target whose persist-write fails reports db_error honestly, not persisted_offline', function()
+    local f = newFixture()
+    setupGranterAndTarget(f)
+    f.grantPermissionDirect('CITIZEN_TARGET', 'k9.access') -- already holds the role
+    f.clearClientEvents()
+    f.disconnectPlayer(TARGET_SRC)
+
+    local originalQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('INSERT INTO k9_ped_assignments', 1, true) then
+            error('simulated: DB unreachable for the offline re-apply write')
+        end
+        return originalQueryAwait(sql, params)
+    end
+
+    local ok, outcome = f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'a_c_husky')
+    t.isFalse(ok)
+    t.equals(outcome, 'db_error')
+    t.isNil(f.fakeAssignments['CITIZEN_TARGET'], 'nothing was actually persisted')
+end)
+
+t.test('ApplyK9AppearanceOnGrant: an OFFLINE target whose automatic persist-write fails is logged as db_error, not persisted_offline', function()
+    local f = newFixture()
+    setupGranterAndTarget(f)
+    f.disconnectPlayer(TARGET_SRC)
+
+    local originalQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('INSERT INTO k9_ped_assignments', 1, true) then
+            error('simulated: DB unreachable')
+        end
+        return originalQueryAwait(sql, params)
+    end
+
+    -- This function is a void automatic side effect (GrantCertification/
+    -- GrantPermission never check a return value from it, by design) -- the
+    -- audit trail is the only place this failure is ever visible.
+    f.env.ApplyK9AppearanceOnGrant('CITIZEN_TARGET', 'CITIZEN_HC', 'a_c_husky')
+
+    t.isNil(f.fakeAssignments['CITIZEN_TARGET'], 'nothing was actually persisted')
+    t.contains(table.concat(f.printLog, '\n'), 'applyK9AppearanceOnGrant(model=a_c_husky target=CITIZEN_TARGET) -> db_error')
+end)
+
+t.test('ForceRevertK9Appearance: an OFFLINE target with NO captured original hash (fallback-model branch) whose revert-write fails reports db_error, not a false "ok"', function()
+    local f = newFixture({ fallbackHumanModel = 'mp_m_freemode_01' })
+    setupGranterAndTarget(f)
+    f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'a_c_husky')
+    f.env.source = TARGET_SRC
+    f.events['qbx_k9unit:server:confirmK9PedSwap'](f.clientEvents[1][1], true, nil)
+    -- original_model_hash is nil here (never captured) -- the fallback-model branch of PerformRevert.
+    f.clearClientEvents()
+    f.advanceTime(2000)
+    f.disconnectPlayer(TARGET_SRC) -- offline: SendSwapRequest fails, PerformRevert must persist the revert directly
+
+    local originalQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('UPDATE k9_ped_assignments SET active = 0', 1, true) then
+            error('simulated: DB unreachable for the offline fallback-branch revert write')
+        end
+        return originalQueryAwait(sql, params)
+    end
+
+    local ok, outcome = f.env.ForceRevertK9Appearance(HIGH_COMMAND_SRC, 'CITIZEN_TARGET')
+    t.isFalse(ok)
+    t.equals(outcome, 'db_error')
+    t.isTrue(f.fakeAssignments['CITIZEN_TARGET'].active, 'the row was NOT actually cleared -- must not be reported as reverted')
+end)
+
+t.test('ForceRevertK9Appearance: an OFFLINE target WITH a captured original hash whose revert-write fails reports db_error, not a false "ok"', function()
+    local f = newFixture()
+    setupGranterAndTarget(f)
+    f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'a_c_husky')
+    f.env.source = TARGET_SRC
+    f.events['qbx_k9unit:server:confirmK9PedSwap'](f.clientEvents[1][1], true, nil)
+    f.fakeAssignments['CITIZEN_TARGET'].original_model_hash = -999888777 -- simulate a captured original
+    f.clearClientEvents()
+    f.advanceTime(2000)
+    f.disconnectPlayer(TARGET_SRC)
+
+    local originalQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('UPDATE k9_ped_assignments SET active = 0', 1, true) then
+            error('simulated: DB unreachable for the offline captured-hash revert write')
+        end
+        return originalQueryAwait(sql, params)
+    end
+
+    local ok, outcome = f.env.ForceRevertK9Appearance(HIGH_COMMAND_SRC, 'CITIZEN_TARGET')
+    t.isFalse(ok)
+    t.equals(outcome, 'db_error')
+    t.isTrue(f.fakeAssignments['CITIZEN_TARGET'].active)
+end)
+
+t.test('SWEEP: a forced-timeout revert whose DB write fails logs forced_timeout_db_error (never forced_timeout), and does not tell the target it was reverted', function()
+    local f = newFixture({ fallbackHumanModel = 'mp_m_freemode_01' })
+    setupGranterAndTarget(f)
+    f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'a_c_husky')
+    f.env.source = TARGET_SRC
+    f.events['qbx_k9unit:server:confirmK9PedSwap'](f.clientEvents[1][1], true, nil)
+    f.clearClientEvents()
+    f.advanceTime(2000)
+
+    f.env.ForceRevertK9Appearance(HIGH_COMMAND_SRC, 'CITIZEN_TARGET') -- the target simply never replies from here on
+
+    local originalQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('UPDATE k9_ped_assignments SET active = 0', 1, true) then
+            error('simulated: DB unreachable during the forced-timeout sweep')
+        end
+        return originalQueryAwait(sql, params)
+    end
+
+    f.stepSweepThread() -- primes the coroutine
+    f.advanceTime(14000) -- past ApplyRequestTtlMs
+    f.stepSweepThread() -- runs one real sweep pass
+
+    t.isTrue(f.fakeAssignments['CITIZEN_TARGET'].active, 'the write genuinely failed -- the row must not read as cleared')
+    local toldTargetItSucceeded = false
+    for _, entry in ipairs(f.notifyLog) do
+        if entry.message == 'appearance.revert_success_target' then toldTargetItSucceeded = true end
+    end
+    t.isFalse(toldTargetItSucceeded)
+    t.contains(table.concat(f.printLog, '\n'), 'k9AppearanceRevert(citizenid=CITIZEN_TARGET) -> forced_timeout_db_error')
+end)
+
+t.test('SECURITY: disconnecting mid-revert whose DB write ALSO fails logs committed_on_disconnect_db_error, never a false committed_on_disconnect', function()
+    local f = newFixture({ fallbackHumanModel = 'mp_m_freemode_01' })
+    setupGranterAndTarget(f)
+    f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'a_c_husky')
+    f.env.source = TARGET_SRC
+    f.events['qbx_k9unit:server:confirmK9PedSwap'](f.clientEvents[1][1], true, nil)
+    f.clearClientEvents()
+    f.advanceTime(2000)
+
+    f.env.ForceRevertK9Appearance(HIGH_COMMAND_SRC, 'CITIZEN_TARGET') -- sends the revert; never confirmed below
+
+    local originalQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('UPDATE k9_ped_assignments SET active = 0', 1, true) then
+            error('simulated: DB unreachable at disconnect time')
+        end
+        return originalQueryAwait(sql, params)
+    end
+
+    f.env.source = TARGET_SRC
+    for _, handler in ipairs(f.eventHandlers['playerDropped'] or {}) do handler('testing') end
+    f.disconnectPlayer(TARGET_SRC)
+
+    t.isTrue(f.fakeAssignments['CITIZEN_TARGET'].active, 'the write genuinely failed')
+    t.contains(table.concat(f.printLog, '\n'), 'k9AppearanceRevert(citizenid=CITIZEN_TARGET) -> committed_on_disconnect_db_error')
+end)
+
+t.test('SECURITY BACKSTOP: a stale-row clear whose DB write fails still refuses to re-apply the model (fail-safe unaffected), and logs stale_row_clear_db_error', function()
+    local f = newFixture()
+    setupGranterAndTarget(f)
+    f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'a_c_husky')
+    f.env.source = TARGET_SRC
+    f.events['qbx_k9unit:server:confirmK9PedSwap'](f.clientEvents[1][1], true, nil)
+    f.revokePermissionDirect('CITIZEN_TARGET', 'k9.access') -- no longer holds the role via any path
+    f.clearClientEvents()
+
+    local originalQueryAwait = f.mysql.query.await
+    f.mysql.query.await = function(sql, params)
+        if sql:find('UPDATE k9_ped_assignments SET active = 0', 1, true) then
+            error('simulated: DB unreachable at reconnect')
+        end
+        return originalQueryAwait(sql, params)
+    end
+
+    f.firePlayerLoadedAppearanceHandler({ PlayerData = { citizenid = 'CITIZEN_TARGET', source = TARGET_SRC } })
+
+    t.equals(#f.clientEvents, 0, 'the K9 model must never be re-applied to a citizenid who no longer holds the role, DB write outcome notwithstanding')
+    t.isTrue(f.fakeAssignments['CITIZEN_TARGET'].active, 'the clear-write genuinely failed -- the row is left exactly as it was, for a future attempt')
+    t.contains(table.concat(f.printLog, '\n'), 'k9AppearancePlayerLoaded(citizenid=CITIZEN_TARGET) -> stale_row_clear_db_error')
+end)
+
 os.exit(t.summary())

@@ -448,10 +448,16 @@ RegisterNetEvent('qbx_k9unit:server:requestDeployKennel', function()
     -- "occasionally wrong orientation" but a total no-op on
     -- placementForwardOffsetMeters, meaning every kennel would have spawned
     -- exactly on top of the placing handler's own feet, not in front of them.
-    -- (server/fetch.lua's HandleThrowFetchItem has the identical
-    -- GetEntityForwardVector(ped) call at its own line 345, with the same
+    -- (server/fetch.lua's 'qbx_k9unit:server:requestThrowFetchBall' handler
+    -- had the identical GetEntityForwardVector(ped) call, with the same
     -- consequence for both its spawn offset AND its throw force — flagged to
-    -- the file's owner separately since it's outside this file's ownership.)
+    -- the file's owner separately since it's outside this file's ownership.
+    -- That has SINCE been fixed: fetch.lua now uses GetEntityHeading the
+    -- same way this file does, and its own comment at that handler says so
+    -- — see that file's writeup there rather than this note, which is kept
+    -- only for the shared root-cause history. Its former line 345 is
+    -- unrelated code today (FindOtherBallByNetId), not this call site — a
+    -- line number is not a stable enough reference to keep citing here.)
     --
     -- Substitute: GetEntityHeading(ped) + the standard heading->direction
     -- trig conversion. GetEntityHeading IS in that same server-registered
