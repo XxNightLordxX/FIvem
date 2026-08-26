@@ -232,32 +232,66 @@
     guarantee, and is disclosed as such rather than presented as a fixed
     problem.
 
-    MOVE-RATE COMPOSER SCOPE — client/movement.lua's RecomputeK9MoveRate()
-    (DEVELOPER_REFERENCE.md §13.0 Decision 2) is HARD-GATED on IsOwnModelK9(): it
-    resets to neutral and returns early for any ped that is not currently a
-    recognized K9 model (see that function's own `if not IsOwnModelK9() then
-    ... return end` branch). PropDragging's applyDragSpeedLimit handler
-    below runs on the TARGET's own client, and the overwhelmingly common
-    real case is a human suspect, NOT another K9 — unconditionally routing
-    through the composer, as DEVELOPER_REFERENCE.md §13.0 Decision 2's own text
-    would suggest at first read ("nothing should ever call
-    SetPedMoveRateOverride directly except RecomputeK9MoveRate()"), would
-    therefore silently no-op for the actual primary use case, since the
-    composer would just reset-and-return every time it's called on a
-    non-K9 ped. RESOLUTION (checked against every existing
-    K9MoveRateModifiers writer before choosing this, and flagged to
-    coder-frontend, who owns that composer, for awareness/veto): route
-    through the composer ONLY when IsOwnModelK9() is true for the client
-    currently applying the effect (the rarer case where the drag target
-    genuinely is a K9 character, so the effect genuinely needs to compose
-    with Fatigue/Injury/Mood/XPTier) — otherwise call SetPedMoveRateOverride
-    directly. The direct call cannot "fight" the composer's other
-    contributors in that branch, because every one of them
-    (client/wellbeing.lua, client/progression.lua) is ITSELF scoped to a K9
-    model only — nothing else in this codebase ever touches a non-K9 ped's
-    move rate at all, so there is no last-caller-wins conflict to avoid for
-    that ped. The reserved `K9MoveRateModifiers.dragging` slot is used
-    exactly as documented, for the K9-target branch.
+    MOVE-RATE COMPOSER SCOPE — ORIGINAL DESIGN: client/movement.lua's
+    RecomputeK9MoveRate() (DEVELOPER_REFERENCE.md §13.0 Decision 2) used to be
+    HARD-GATED on IsOwnModelK9() alone: it reset to neutral and returned
+    early for any ped that was not currently a recognized K9 model.
+    PropDragging's applyDragSpeedLimit handler below runs on the TARGET's
+    own client, and the overwhelmingly common real case is a human suspect,
+    NOT another K9 — unconditionally routing through the composer, as
+    DEVELOPER_REFERENCE.md §13.0 Decision 2's own text would suggest at
+    first read ("nothing should ever call SetPedMoveRateOverride directly
+    except RecomputeK9MoveRate()"), would therefore silently no-op for the
+    actual primary use case, since the composer would just reset-and-return
+    every time it's called on a non-K9 ped. ORIGINAL RESOLUTION (checked
+    against every existing K9MoveRateModifiers writer before choosing this,
+    and flagged to coder-frontend, who owns that composer, for
+    awareness/veto): route through the composer ONLY when IsOwnModelK9()
+    was true for the client currently applying the effect, otherwise call
+    SetPedMoveRateOverride directly.
+
+    UPDATED (ANY-PED SWEEP FIX, this pass, coder-frontend — coordinator
+    finding: "PropDragging routes through that same composer only when
+    IsOwnModelK9() is true for the applying client," flagged as one of
+    three independently-found "checks whether a player is SHAPED like a
+    dog where it should check whether they HOLD the role" holes):
+    client/movement.lua's RecomputeK9MoveRate() gate is ITSELF no longer a
+    bare IsOwnModelK9() check — it was independently widened, in the same
+    sweep, to `not (IsOwnModelK9() or HasK9Access())` (see that function's
+    own "SCOPE, CORRECTED" doc comment), specifically so a K9-role holder
+    on a non-K9 body whose access comes via HasK9Access() (including the
+    High Command/autoAccessGrade bypasses IsK9Role() deliberately excludes,
+    per server/appearance.lua's own header) still gets fatigue/injury/mood/
+    xpTier/pursuitSprint composed correctly instead of silently reset to
+    neutral. This file's own ABOVE resolution predates that widening and
+    was flagged there as a related, out-of-scope observation at the time —
+    now fixed to match: every `IsOwnModelK9() and K9MoveRateModifiers`
+    branch below (AssertDragSpeedLimitOnTarget, endDragSpeedLimit, the
+    shared maintenance thread's own death/backstop branches for
+    ActiveDragSpeedLimit, and the onResourceStop cleanup) now reads
+    `(IsOwnModelK9() or HasK9Access()) and K9MoveRateModifiers` — the exact
+    same eligibility predicate RecomputeK9MoveRate() itself now uses to
+    decide whether to compose at all, rather than a narrower one this file
+    picks independently. Getting this WRONG in either direction is a real
+    bug, not just cosmetic: routing an INELIGIBLE ped (fails both halves)
+    through the composer would have RecomputeK9MoveRate() silently
+    reset-and-return, dropping the drag's own speed effect entirely (the
+    original no-op this section exists to avoid); routing an ELIGIBLE
+    role-holder around the composer via the DIRECT branch instead would
+    clobber their own already-composed fatigue/mood/injury move rate with a
+    raw override while dragged, then reset it to a flat 1.0 (not back to
+    their own composed baseline) the moment the drag ends — a real,
+    concrete instance of the "any ped" feature gap for a K9-role handler in
+    human form who ends up on either end of a drag. The direct-call branch
+    (still reachable for a genuinely-neither ped — a pure human suspect
+    with no K9 access at all, the overwhelmingly common drag-target case)
+    still cannot "fight" the composer's other contributors, because every
+    one of them (client/wellbeing.lua, client/progression.lua) is itself
+    scoped to the identical `IsOwnModelK9() or HasK9Access()` eligibility —
+    nothing else in this codebase ever touches an ineligible ped's move
+    rate at all, so there is still no last-caller-wins conflict to avoid
+    for that ped. The reserved `K9MoveRateModifiers.dragging` slot is used
+    exactly as documented, for the now-correctly-widened composer branch.
     ======================================================================
 
     ======================================================================
@@ -411,10 +445,11 @@ local ActiveDragAsHolder = nil
 
 -- PROP DRAGGING — TARGET-SIDE state (Category B relay, player target only):
 -- this client's own view of being dragged BY someone else. Never trusts
--- IsOwnModelK9() decided once at apply-time — re-checked fresh every tick
--- in the maintenance thread instead (see this file's header "MOVE-RATE
--- COMPOSER SCOPE" note), since the correct branch depends on THIS client's
--- CURRENT model, which this state does not need to remember.
+-- IsOwnModelK9()/HasK9Access() decided once at apply-time — re-checked
+-- fresh every tick in the maintenance thread instead (see this file's
+-- header "MOVE-RATE COMPOSER SCOPE" note), since the correct branch
+-- depends on THIS client's CURRENT model/access, which this state does not
+-- need to remember.
 -- ActiveDragSpeedLimit = { localDeadline = number } | nil
 local ActiveDragSpeedLimit = nil
 
@@ -927,13 +962,14 @@ local function AssertDragAsHolderTick(dragState)
 end
 
 --- Mirrors the shared thread's own ActiveDragSpeedLimit per-tick block —
---- see header "MOVE-RATE COMPOSER SCOPE" for the IsOwnModelK9() branch
---- reasoning, unchanged here; re-checked FRESH on every call (not decided
---- once at apply-time), since the correct branch depends on THIS client's
---- CURRENT model.
+--- see header "MOVE-RATE COMPOSER SCOPE" for the `IsOwnModelK9() or
+--- HasK9Access()` branch reasoning (ANY-PED SWEEP FIX, this pass — was
+--- IsOwnModelK9() alone); re-checked FRESH on every call (not decided once
+--- at apply-time), since the correct branch depends on THIS client's
+--- CURRENT model/access.
 local function AssertDragSpeedLimitOnTarget()
     local ped = PlayerPedId()
-    if IsOwnModelK9() and K9MoveRateModifiers then
+    if (IsOwnModelK9() or HasK9Access()) and K9MoveRateModifiers then
         K9MoveRateModifiers.dragging = Config.Combat.PropDragging.dragSpeedMultiplier
         RecomputeK9MoveRate()
     else
@@ -1497,9 +1533,9 @@ if Config.Features.PropDragging then
 
         local ped = PlayerPedId()
         -- See header "MOVE-RATE COMPOSER SCOPE" for why this branches on
-        -- IsOwnModelK9() rather than unconditionally going through the
-        -- composer.
-        if IsOwnModelK9() and K9MoveRateModifiers then
+        -- `IsOwnModelK9() or HasK9Access()` (ANY-PED SWEEP FIX, this pass)
+        -- rather than unconditionally going through the composer.
+        if (IsOwnModelK9() or HasK9Access()) and K9MoveRateModifiers then
             K9MoveRateModifiers.dragging = 1.0
             RecomputeK9MoveRate()
         else
@@ -1782,7 +1818,7 @@ CreateThread(function()
             -- rather than left as the one state that missed the fix.
             if IsEntityDead(myPed) then
                 ActiveDragSpeedLimit = nil
-                if IsOwnModelK9() and K9MoveRateModifiers then
+                if (IsOwnModelK9() or HasK9Access()) and K9MoveRateModifiers then
                     K9MoveRateModifiers.dragging = 1.0
                     RecomputeK9MoveRate()
                 else
@@ -1791,15 +1827,16 @@ CreateThread(function()
                 DetachEntity(myPed, true, false) -- defense in depth, same reasoning as endDragSpeedLimit's own restore
             else
                 -- See header "SHARED PER-TICK ASSERTION HELPERS" — same
-                -- IsOwnModelK9()-branched assertion applyDragSpeedLimit's own
-                -- handler above already runs once, immediately, on grant; this
-                -- is the CONTINUOUS every-tick reassertion of the same thing.
+                -- `IsOwnModelK9() or HasK9Access()`-branched assertion
+                -- applyDragSpeedLimit's own handler above already runs once,
+                -- immediately, on grant; this is the CONTINUOUS every-tick
+                -- reassertion of the same thing.
                 AssertDragSpeedLimitOnTarget()
 
                 if now >= ActiveDragSpeedLimit.localDeadline then
                     -- Backstop only — see header "DEFENSE IN DEPTH".
                     ActiveDragSpeedLimit = nil
-                    if IsOwnModelK9() and K9MoveRateModifiers then
+                    if (IsOwnModelK9() or HasK9Access()) and K9MoveRateModifiers then
                         K9MoveRateModifiers.dragging = 1.0
                         RecomputeK9MoveRate()
                     else
@@ -1988,7 +2025,7 @@ AddEventHandler('onResourceStop', function(resourceName)
 
     if ActiveDragSpeedLimit then
         local ped = PlayerPedId()
-        if IsOwnModelK9() and K9MoveRateModifiers then
+        if (IsOwnModelK9() or HasK9Access()) and K9MoveRateModifiers then
             K9MoveRateModifiers.dragging = 1.0
             RecomputeK9MoveRate()
         else

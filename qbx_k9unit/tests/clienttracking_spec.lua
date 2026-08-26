@@ -148,11 +148,32 @@ end
 -- Sandbox setup
 -- ----------------------------------------------------------------------
 
---- @param opts { canShowK9UI: boolean?, waterTrackingDecay: boolean?, xpProgression: boolean?, gunpowderSniffing: boolean?, bloodTracking: boolean? }?
+--- @param opts { hasK9Access: boolean?, canShowK9UI: boolean?, omitLegacyUIGlobals: boolean?, waterTrackingDecay: boolean?, xpProgression: boolean?, gunpowderSniffing: boolean?, bloodTracking: boolean? }?
 local function newTrackingFixture(opts)
     opts = opts or {}
     local runner, threads, waitLog = newTrackedRunner()
 
+    -- HasK9Access() (ANY-PED SWEEP FIX, this pass) -- the REAL gate
+    -- StartTrack() now calls, stubbed independently as its own raw boolean
+    -- rather than derived from CanShowK9UI() below, since StartTrack() no
+    -- longer calls (or transitively depends on) CanShowK9UI()/IsK9Role()/
+    -- IsOwnModelK9() at all -- see "must not call the composed UI gate"
+    -- regression test below, which deliberately leaves ALL THREE of those
+    -- undefined to prove it.
+    local hasK9Access = opts.hasK9Access
+    if hasK9Access == nil then hasK9Access = true end
+    local function HasK9Access() return hasK9Access end
+
+    -- CanShowK9UI() -- kept as a SEPARATE, independently-controllable stub
+    -- purely for the gunpowder-capture-thread tests further below (section
+    -- G), which pin it to prove that thread is population-wide and does
+    -- NOT gate on it. StartTrack() itself no longer calls this at all (see
+    -- HasK9Access() above) -- do not reuse this value as a stand-in for the
+    -- StartTrack() gate again; that exact substitution (a single stubbed
+    -- CanShowK9UI() boolean standing in for what the real client/main.lua
+    -- computes as `IsK9Role() and HasK9Access()` / `IsOwnModelK9() and
+    -- HasK9Access()`) is what hid the original "server allows it, client's
+    -- own gate refuses it" bug this fixture now exists to catch.
     local canShowK9UI = opts.canShowK9UI
     if canShowK9UI == nil then canShowK9UI = true end
     local denyCalls = 0
@@ -213,7 +234,7 @@ local function newTrackingFixture(opts)
     local function IsPedShooting(entity) return isPedShooting end
 
     local overrides = {
-        CanShowK9UI = CanShowK9UI,
+        HasK9Access = HasK9Access,
         DenyK9UIAccess = DenyK9UIAccess,
         lib = lib,
         PlayerPedId = PlayerPedId,
@@ -227,6 +248,17 @@ local function newTrackingFixture(opts)
         CreateThread = runner.CreateThread,
         Wait = runner.Wait,
     }
+
+    -- `omitLegacyUIGlobals` (default false): when true, CanShowK9UI is
+    -- deliberately left OUT of the sandbox entirely (env.CanShowK9UI stays
+    -- nil, same as the never-injected IsK9Role/IsOwnModelK9) -- used by the
+    -- one regression test below that proves StartTrack() genuinely never
+    -- calls any of the three: if a future edit reintroduces such a call,
+    -- that test fails LOUDLY (an "attempt to call a nil value" error), not
+    -- silently via a stubbed boolean that happens to agree.
+    if not opts.omitLegacyUIGlobals then
+        overrides.CanShowK9UI = CanShowK9UI
+    end
 
     local env = Sandbox.newEnv(overrides)
     Sandbox.loadInto('../config.lua', env)
@@ -253,6 +285,7 @@ local function newTrackingFixture(opts)
         triggerServerEventCalls = triggerServerEventCalls,
 
         setCanShowK9UI = function(v) canShowK9UI = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
         denyCallCount = function() return denyCalls end,
         queueCallbackResponse = function(v) callbackResponses[#callbackResponses + 1] = v end,
         setReentrant = function(fn) reentrantFn = fn end,
@@ -289,16 +322,54 @@ t.test('client/tracking.lua exposes all five documented resource-globals', funct
 end)
 
 -- ----------------------------------------------------------------------
--- SECTION A -- StartTrack()'s own guards: CanShowK9UI, already-tracking,
+-- SECTION A -- StartTrack()'s own guards: HasK9Access, already-tracking,
 -- not-found. These gate everything else below, so proven first.
+--
+-- ANY-PED SWEEP FIX (coder-frontend, this pass): StartTrack() used to gate
+-- on CanShowK9UI() -- strictly narrower than server/tracking.lua's own
+-- findTrackableSource, which checks HasK9Access(source) alone -- so a
+-- role-holder the server would allow (e.g. K9 access via High Command/
+-- autoAccessGrade, on a non-K9 body) could be refused by their own client.
+-- Fixed to gate on HasK9Access() alone; see StartTrack()'s own doc comment
+-- in client/tracking.lua for the full writeup.
 -- ----------------------------------------------------------------------
 
-t.test('StartScentTrack: CanShowK9UI() false denies access and never even calls the server callback', function()
-    local f = newTrackingFixture({ canShowK9UI = false })
+t.test('StartScentTrack: HasK9Access() false denies access and never even calls the server callback', function()
+    local f = newTrackingFixture({ hasK9Access = false })
     f.env.StartScentTrack()
     t.equals(f.denyCallCount(), 1)
     t.equals(f.callbackCallCount(), 0)
     t.isFalse(f.env.IsTracking())
+end)
+
+-- REGRESSION -- pins the exact bug this pass fixed: a role-holder whose
+-- K9 access comes via server/certifications.lua's HasK9Access() High
+-- Command/autoAccessGrade bypass is NOT a member of IsK9Role()'s
+-- deliberately-narrower set (server/appearance.lua's own header), and is
+-- not necessarily on a recognized K9 model either -- so the OLD
+-- CanShowK9UI() gate (`IsK9Role() and HasK9Access()` at the
+-- requireK9ModelForRole default, or `IsOwnModelK9() and HasK9Access()`
+-- otherwise) would have answered false for this exact caller even though
+-- HasK9Access() itself, and therefore server/tracking.lua's own
+-- findTrackableSource, both answer true. `omitLegacyUIGlobals = true`
+-- deliberately leaves CanShowK9UI/IsK9Role/IsOwnModelK9 completely
+-- undefined in this sandbox (not merely stubbed false) -- exercising the
+-- REAL path, not a fixture standing in for it: if StartTrack() ever again
+-- called any of those three, this test would fail with "attempt to call a
+-- nil value", not silently pass on a coincidentally-agreeing stub.
+t.test('StartScentTrack: a HasK9Access()-true caller succeeds even with CanShowK9UI()/IsK9Role()/IsOwnModelK9() entirely undefined (never called)', function()
+    local f = newTrackingFixture({ hasK9Access = true, omitLegacyUIGlobals = true })
+    t.isNil(f.env.CanShowK9UI, 'sanity: CanShowK9UI must be genuinely absent from this sandbox, not merely false')
+    t.isNil(f.env.IsK9Role)
+    t.isNil(f.env.IsOwnModelK9)
+
+    f.queueCallbackResponse({ found = true, coords = vec3(10, 0, 0), breaksAtWater = false })
+    f.env.StartScentTrack()
+
+    t.equals(f.denyCallCount(), 0)
+    t.equals(f.callbackCallCount(), 1, 'the request must have reached the real findTrackableSource callback')
+    t.isTrue(f.env.IsTracking())
+    t.equals(f.env.GetActiveTrackType(), 'scent')
 end)
 
 t.test('StartScentTrack: a successful resolve sets IsTracking()/GetActiveTrackType() and sends the real trackType to the real callback name', function()

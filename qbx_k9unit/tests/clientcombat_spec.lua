@@ -276,6 +276,23 @@ local function newCombatFixture(opts)
     local function DenyK9UIAccess() denyCallCount = denyCallCount + 1 end
     local function IsOwnModelK9() return isOwnModelK9 end
 
+    -- HasK9Access() -- ANY-PED SWEEP FIX (this pass): the PropDragging
+    -- move-rate-composer routing decision (AssertDragSpeedLimitOnTarget/
+    -- endDragSpeedLimit/the shared maintenance thread's ActiveDragSpeedLimit
+    -- branches/onResourceStop) now reads `(IsOwnModelK9() or HasK9Access())
+    -- and K9MoveRateModifiers`, matching client/movement.lua's own
+    -- RecomputeK9MoveRate() eligibility gate exactly (see this file's
+    -- header "MOVE-RATE COMPOSER SCOPE" note for the full writeup). Default
+    -- false, matching the PRE-FIX implicit assumption every existing test
+    -- below that leaves this unset already relies on (isOwnModelK9 = false
+    -- with no access concept at all used to mean "take the direct
+    -- SetPedMoveRateOverride branch") -- so `(false or false) = false`
+    -- preserves every pre-existing test's expected behavior unchanged;
+    -- only a test that explicitly opts in via `hasK9Access = true` (or
+    -- `f.setHasK9Access(true)`) exercises the new OR-widened branch.
+    local hasK9Access = opts.hasK9Access or false
+    local function HasK9Access() return hasK9Access end
+
     -- IsInK9Vehicle -- absent by default (models client/vehicle.lua not
     -- loaded at all, e.g. a unit-test harness -- this file's own comment on
     -- IsBlockedByVehicleTuck names this exact scenario), settable via
@@ -385,6 +402,7 @@ local function newCombatFixture(opts)
         CanShowK9UI = CanShowK9UI,
         DenyK9UIAccess = DenyK9UIAccess,
         IsOwnModelK9 = IsOwnModelK9,
+        HasK9Access = HasK9Access,
         ResolveNetworkEntity = ResolveNetworkEntity,
         NetworkRequestControlOfEntity = NetworkRequestControlOfEntity,
         DisableControlAction = DisableControlAction,
@@ -425,6 +443,7 @@ local function newCombatFixture(opts)
         denyCallCount = function() return denyCallCount end,
         setCanShowK9UI = function(v) canShowK9UI = v end,
         setIsOwnModelK9 = function(v) isOwnModelK9 = v end,
+        setHasK9Access = function(v) hasK9Access = v end,
         setIsInK9Vehicle = function(v) isInK9Vehicle = v end,
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         gameTimerCallCount = function() return gameTimerCallCount end,
@@ -767,6 +786,36 @@ t.test('applyDragSpeedLimit: a K9-model target (rare, per this file\'s own "MOVE
     t.equals(#f.moveRateCalls, 0, 'must not call SetPedMoveRateOverride directly when routing through the composer')
     t.equals(f.recomputeCallCount(), 1)
     t.equals(f.K9MoveRateModifiers.dragging, f.config.Combat.PropDragging.dragSpeedMultiplier)
+end)
+
+-- REGRESSION (ANY-PED SWEEP FIX, this pass) -- pins the exact bug
+-- client/movement.lua's own "MOVE-RATE COMPOSER SCOPE" note flagged as a
+-- related, out-of-scope observation when RecomputeK9MoveRate() itself was
+-- widened to `not (IsOwnModelK9() or HasK9Access())`: a K9-role handler on
+-- a non-K9 body (IsOwnModelK9() false) whose access comes from
+-- HasK9Access() (job/certification, or the High Command/autoAccessGrade
+-- bypass server/pursuitsprint.lua's own grant relies on -- deliberately
+-- NOT IsK9Role(), which excludes those bypasses) is dragged. BEFORE this
+-- fix, this exact caller took the direct SetPedMoveRateOverride branch
+-- (IsOwnModelK9() alone was false), silently clobbering any of THEIR OWN
+-- already-composed fatigue/injury/mood move-rate modifiers for the
+-- duration of the drag, and resetting them to a flat 1.0 -- not back to
+-- their own composed baseline -- the instant the drag ended. Fixed: this
+-- caller must now route through the SAME composer the K9-model case above
+-- does, identically, even off-model.
+t.test('applyDragSpeedLimit: a HasK9Access()-true target on a non-K9 body (role/access, not model) ALSO routes through the composer, not a raw override', function()
+    local f = newCombatFixture({ propDragging = true, withMoveRateComposer = true })
+    f.setIsOwnModelK9(false)
+    f.setHasK9Access(true)
+    f.dispatchNetEvent('qbx_k9unit:client:applyDragSpeedLimit', 65535, 999)
+    t.equals(#f.moveRateCalls, 0, 'must not call SetPedMoveRateOverride directly -- HasK9Access() alone must be enough to route through the composer')
+    t.equals(f.recomputeCallCount(), 1)
+    t.equals(f.K9MoveRateModifiers.dragging, f.config.Combat.PropDragging.dragSpeedMultiplier)
+
+    f.dispatchNetEvent('qbx_k9unit:client:endDragSpeedLimit', 65535, 'released_by_holder')
+    t.equals(#f.moveRateCalls, 0, 'the restore-to-neutral side must ALSO route through the composer for this same caller, not reset to a flat 1.0 directly')
+    t.equals(f.recomputeCallCount(), 2)
+    t.equals(f.K9MoveRateModifiers.dragging, 1.0)
 end)
 
 -- ========================================================================

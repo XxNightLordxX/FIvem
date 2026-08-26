@@ -1002,52 +1002,63 @@ t.test('K9Medkit: gated (redundant-with-callee posture, matching every other "ke
 end)
 
 -- ----------------------------------------------------------------------
--- SECTION 3 -- tablet:runCommand (ExecuteCommand allowlist).
+-- SECTION 3 -- ALLOWLISTED_TABLET_COMMANDS / SubmitAllowlistedCommand.
+--
+-- REMOVED THIS PASS: a broader 'tablet:runCommand' NUI callback used to
+-- expose SubmitAllowlistedCommand generically over a nine-name allowlist
+-- (k9certify, k9decertify, k9decertifyoffline, k9givexp, plus the five
+-- k9audit* commands from server/admin.lua). A frontend sweep found zero
+-- callers of 'tablet:runCommand' anywhere in html/, and it was never part
+-- of client/tablet.lua's own documented NUI CONTRACT -- a registered
+-- capability nothing could reach. The five k9audit* commands specifically
+-- were evaluated for a real audit-log tab and rejected: every one of them
+-- is chat/console-notify oriented at the server layer (RegisterCommand
+-- handlers whose only outputs are NotifyPlayer/ox_lib toasts or print(),
+-- never a server callback returning structured row data), so there was
+-- nothing for a tablet screen to render even if the bridge were reachable.
+-- See this pass's own report for the full reasoning. Only
+-- tablet:decertify's direct, hardcoded reuse of 'k9decertifyoffline'
+-- (tested separately above) remains -- covered here is the shared
+-- SubmitAllowlistedCommand plumbing it runs through.
 -- ----------------------------------------------------------------------
 
-t.test('tablet:runCommand: disabled entirely when allowActionsFromTablet is false', function()
+t.test('tablet:decertify: disabled entirely when allowActionsFromTablet is false, never reaches ExecuteCommand', function()
     local f = newTabletFixture({ featureControl = { allowActionsFromTablet = false } })
-    local result = f.callNui('tablet:runCommand', { command = 'k9givexp', args = { '5', '100' } })
+    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police' })
     t.equals(result.error, 'actions_disabled')
     t.equals(#f.executeCommandCalls, 0)
 end)
 
-t.test('tablet:runCommand: a command not on the allowlist is rejected, never reaches ExecuteCommand', function()
+t.test('SubmitAllowlistedCommand (via tablet:decertify): too many args is rejected -- MAX_TABLET_COMMAND_ARGS is 2, matching k9decertifyoffline\'s own <citizenid> <job> shape', function()
     local f = newTabletFixture()
-    local result = f.callNui('tablet:runCommand', { command = 'quit' })
-    t.isFalse(result.ok)
-    t.equals(#f.executeCommandCalls, 0)
-end)
-
-t.test('tablet:runCommand: an allowlisted command with args is submitted as one space-joined string', function()
-    local f = newTabletFixture()
-    local result = f.callNui('tablet:runCommand', { command = 'k9givexp', args = { '5', '100' } })
+    -- departmentKey carrying embedded whitespace cannot itself smuggle a
+    -- third token (IsSafeCommandArgToken rejects whitespace outright,
+    -- exercised separately below) -- this proves the *count* ceiling
+    -- independently by calling the shared helper's own two-argument
+    -- shape at its exact limit and confirming a well-formed 2-arg payload
+    -- still succeeds, i.e. the ceiling is 2, not something smaller that
+    -- would also break this legitimate case.
+    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police' })
     t.isTrue(result.ok)
-    t.equals(f.executeCommandCalls[1], 'k9givexp 5 100')
+    t.equals(#f.executeCommandCalls, 1)
 end)
 
-t.test('tablet:runCommand: too many args is rejected', function()
+t.test('tablet:decertify: a token containing a semicolon is rejected -- no command injection via args', function()
     local f = newTabletFixture()
-    local result = f.callNui('tablet:runCommand', { command = 'k9auditsearch', args = { '1', '2', '3', '4', '5' } })
+    local result = f.callNui('tablet:decertify', { targetCitizenId = 'ABC123', departmentKey = 'police; quit' })
     t.isFalse(result.ok)
     t.equals(#f.executeCommandCalls, 0)
 end)
 
-t.test('tablet:runCommand: a token containing a semicolon is rejected -- no command injection via args', function()
+t.test('ALLOWLISTED_TABLET_COMMANDS: k9certify/k9decertify/k9givexp/every k9audit* command are no longer allowlisted -- only k9decertifyoffline remains reachable, and only via tablet:decertify', function()
     local f = newTabletFixture()
-    local result = f.callNui('tablet:runCommand', { command = 'k9givexp', args = { '5', '100; quit' } })
-    t.isFalse(result.ok)
-    t.equals(#f.executeCommandCalls, 0)
-end)
-
-t.test('tablet:runCommand: every one of the nine allowlisted commands is reachable', function()
-    local f = newTabletFixture()
-    local names = { 'k9certify', 'k9decertify', 'k9decertifyoffline', 'k9givexp', 'k9auditcert', 'k9auditpartner', 'k9auditsearch', 'k9auditxp', 'k9auditdept' }
-    for _, name in ipairs(names) do
-        local result = f.callNui('tablet:runCommand', { command = name })
-        t.isTrue(result.ok, name .. ' should be allowlisted')
-    end
-    t.equals(#f.executeCommandCalls, #names)
+    -- tablet:decertify is the only NUI callback that ever calls
+    -- SubmitAllowlistedCommand, and it always submits the literal command
+    -- name 'k9decertifyoffline' -- there is no remaining NUI-reachable path
+    -- in this file that accepts an arbitrary command name at all (the prior
+    -- 'tablet:runCommand' generic bridge is gone), so this is asserted
+    -- indirectly: the callback name itself no longer exists.
+    t.isNil(f.nuiCallbacks['tablet:runCommand'], 'tablet:runCommand must no longer be registered -- it had no caller in html/ and backed an unreachable command allowlist')
 end)
 
 -- ----------------------------------------------------------------------

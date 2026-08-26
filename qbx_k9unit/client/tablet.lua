@@ -43,13 +43,23 @@
         Guarded with `type(fn) == 'function'` regardless (radial.lua
         returns early with neither defined when its own flag is off --
         this is not optional).
-      - SECTION 3 (the admin command bridge) calls `ExecuteCommand`, the
-        SAME mechanism the chat box itself uses to submit a typed command
-        -- a tablet-triggered `/k9certify 5` is, from the server's
+      - SECTION 3 (tablet:decertify's own command bridge) calls
+        `ExecuteCommand`, the SAME mechanism the chat box itself uses to
+        submit a typed command -- a tablet-triggered
+        `/k9decertifyoffline <citizenid> <job>` is, from the server's
         perspective, LITERALLY THE SAME EVENT as an officer typing it.
         Allowlisted by exact command name (never a raw string), since a
         generic passthrough is exactly what server/highcommand.lua's own
-        header already rejected for the identical reason.
+        header already rejected for the identical reason. (A prior,
+        broader 'tablet:runCommand' generic bridge -- allowlisting
+        k9certify/k9decertify/k9givexp plus five k9audit* commands -- was
+        REMOVED this pass: it had no caller anywhere in html/, was never
+        part of this file's own documented NUI CONTRACT below, and the
+        five audit commands it existed to reach are chat/console-notify
+        oriented at the server layer with no callback that returns
+        structured data -- see this pass's own report for the full
+        reasoning and the exact server-side change that would be needed
+        before a real audit tab could be built.)
     ======================================================================
 
     ======================================================================
@@ -829,32 +839,53 @@ RegisterNUICallback('tablet:triggerFeature', function(data, cb)
 end)
 
 -- ----------------------------------------------------------------------
--- SECTION 3 -- ADMIN COMMAND BRIDGE. Submits the EXACT SAME command
--- string the chat box would, via `ExecuteCommand` (verified this pass:
--- ext/native-decls/ExecuteCommand.md returns HTTP 200, `apiset: shared`).
--- The command's own RegisterCommand handler is the one and only place
--- that authorizes anything here (IsAuthorizedAdmin/IsEligibleCertifier/
--- IsHighCommand) -- this bridge adds no authority, exactly the "one code
--- path" RIGHT-VS-WRONG note above demands.
+-- SECTION 3 -- tablet:decertify's own command bridge. Submits the EXACT
+-- SAME command string the chat box would, via `ExecuteCommand` (verified
+-- this pass: ext/native-decls/ExecuteCommand.md returns HTTP 200,
+-- `apiset: shared`). The command's own RegisterCommand handler is the one
+-- and only place that authorizes anything here (IsEligibleCertifier) --
+-- this bridge adds no authority, exactly the "one code path"
+-- RIGHT-VS-WRONG note above demands.
 --
 -- ALLOWLISTED BY NAME, never "run anything" -- server/highcommand.lua's
 -- own header already rejected a generic passthrough for the identical
 -- reason. Every arg token is checked for whitespace/control characters
 -- before being concatenated into a command string, so a malformed NUI
 -- payload can't inject a second command or shift argument positions.
+--
+-- REMOVED THIS PASS: a broader 'tablet:runCommand' NUI callback used to
+-- expose this same SubmitAllowlistedCommand plumbing generically, keyed
+-- by an allowlist of NINE command names (k9certify, k9decertify,
+-- k9decertifyoffline, k9givexp, plus five k9audit* commands from
+-- server/admin.lua). A frontend sweep (html/, exhaustive) found zero
+-- references to 'tablet:runCommand' anywhere, and it was never even part
+-- of this file's own documented NUI CONTRACT above -- unlike every other
+-- callback in this file, no html/tablet.js UI element ever fired it.
+-- Eight of those nine allowlisted names had NO OTHER caller either (only
+-- k9decertifyoffline is reachable at all, via tablet:decertify's direct,
+-- hardcoded call to SubmitAllowlistedCommand just below) -- a registered
+-- capability nothing could reach, exactly the "dead code that looks live"
+-- failure mode this resource has already shipped once before (five files
+-- once written, tested, and never registered in the manifest).
+--
+-- The five k9audit* names specifically were evaluated for a real audit-log
+-- tab and rejected -- see this pass's own report for the full reasoning.
+-- Short version: every one of them (server/admin.lua) is chat/console-
+-- notify oriented at the server layer (RegisterCommand handlers that only
+-- ever call NotifyPlayer/ox_lib toast or print() -- see that file's own
+-- PresentRows/PrintRowsToConsole, its only two output paths) with no
+-- server callback that returns structured row data to a caller. Building
+-- an actual audit tab would need a NEW, PROPOSED server callback that runs
+-- the SAME query functions already in that file (QueryCertificationHistory
+-- etc.) and returns raw rows instead of formatted notify strings -- real
+-- server-side work outside this file's ownership, reported to main/
+-- coder-backend/coder-security rather than half-built here as another
+-- unreachable stub.
 -- ----------------------------------------------------------------------
 local ALLOWLISTED_TABLET_COMMANDS = {
-    k9certify          = true, -- server/certifications.lua
-    k9decertify        = true,
-    k9decertifyoffline = true, -- tablet:decertify's own implementation below
-    k9givexp           = true, -- server/highcommand.lua
-    k9auditcert        = true, -- server/admin.lua -- not yet reachable from html/tablet.js's own UI; ready for a future audit-log tab
-    k9auditpartner     = true,
-    k9auditsearch      = true,
-    k9auditxp          = true,
-    k9auditdept        = true,
+    k9decertifyoffline = true, -- tablet:decertify's own implementation below -- the only allowlisted name with a real caller
 }
-local MAX_TABLET_COMMAND_ARGS = 4 -- k9auditsearch's widest shape ('officer'|'person'|'plate'|'recent', value, limit) plus headroom
+local MAX_TABLET_COMMAND_ARGS = 2 -- k9decertifyoffline's exact shape: <citizenid> <job>, its only allowlisted command today
 
 --- @param token any
 --- @return boolean
@@ -863,9 +894,12 @@ local function IsSafeCommandArgToken(token)
     return token ~= '' and #token <= 64 and not token:find('[%s;]')
 end
 
---- Shared submit path for both the public 'tablet:runCommand' callback and
---- tablet:decertify's internal reuse below -- exactly one place validates
---- and builds the command string.
+--- Shared submit path -- currently only reached from tablet:decertify's
+--- internal reuse below, but kept as a small, named-allowlist helper
+--- (rather than inlining a single string check into that one call site)
+--- so a FUTURE tablet mutation that wants to reuse an existing chat
+--- command has one already-vetted place to add its name to, instead of
+--- reinventing this validation shape from scratch.
 --- @param command string
 --- @param args table?
 --- @return boolean ok
@@ -889,20 +923,6 @@ local function SubmitAllowlistedCommand(command, args)
     ExecuteCommand(table.concat(parts, ' '))
     return true
 end
-
-RegisterNUICallback('tablet:runCommand', function(data, cb)
-    if not (Config.FeatureControl and Config.FeatureControl.allowActionsFromTablet == true) then
-        cb({ ok = false, error = 'actions_disabled' })
-        return
-    end
-    if type(data) ~= 'table' or type(data.command) ~= 'string' then
-        cb({ ok = false, error = 'invalid_args' })
-        return
-    end
-
-    local ok, errorCode = SubmitAllowlistedCommand(data.command, data.args)
-    cb({ ok = ok, error = (not ok) and errorCode or nil })
-end)
 
 -- ----------------------------------------------------------------------
 -- PART 1 -- VIEW + mutation callbacks matching html/tablet.js's own
@@ -970,6 +990,21 @@ RegisterNUICallback('tablet:decertify', function(data, cb)
     -- command (server/certifications.lua) -- citizenid-keyed and already
     -- offline-capable, so this needs no new server code at all. Routed
     -- through SECTION 3's SAME allowlisted-command path, not a duplicate.
+    --
+    -- BUGFIX (this pass): this callback did not check
+    -- Config.FeatureControl.allowActionsFromTablet before submitting the
+    -- command, even though this file's own header documents that flag as
+    -- "checked before SECTION 2/3 dispatch" -- tablet:triggerFeature
+    -- (SECTION 2) already did; this SECTION 3 consumer never did, the only
+    -- gap of its kind now that the unreachable generic 'tablet:runCommand'
+    -- bridge (which DID check it) has been removed. Pure UX toggle, not an
+    -- authorization boundary -- see SECURITY NOTE -- but an operator who
+    -- turns it off expects EVERY tablet action button inert, not just the
+    -- ability-trigger ones.
+    if not (Config.FeatureControl and Config.FeatureControl.allowActionsFromTablet == true) then
+        cb({ ok = false, error = 'actions_disabled' })
+        return
+    end
     if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == ''
         or type(data.departmentKey) ~= 'string' or data.departmentKey == '' then
         cb({ ok = false, error = 'invalid_args' })

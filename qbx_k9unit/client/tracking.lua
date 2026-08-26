@@ -87,10 +87,14 @@
             Attach/Detach Leash's single context-sensitive radial item.
         IsTracking() -> boolean
         GetActiveTrackType() -> 'scent'|'blood'|'gunpowder'|nil
-    - THIS FILE calls client/main.lua's CanShowK9UI() at the top of every
+    - THIS FILE calls client/main.lua's HasK9Access() at the top of every
       Start*Track() call — "don't trust the caller already checked," the
       same posture client/movement.lua's RequestLeashAttach() documents for
-      itself.
+      itself. UPDATED (ANY-PED SWEEP FIX, this pass): this used to be
+      CanShowK9UI(), which is strictly narrower than what
+      server/tracking.lua's own findTrackableSource actually enforces
+      (HasK9Access(source) alone, by that file's own explicit design —
+      see StartTrack()'s own doc comment below for the full writeup).
     - THIS FILE reads Config.Tracking.Scent / .Blood / .Gunpowder and
       Config.WaterTrackingDecay (DEVELOPER_REFERENCE.md §11.2's config.lua additions,
       confirmed landed in config.lua as of this pass, including the
@@ -178,7 +182,43 @@ end
 --- duplicated.
 --- @param trackType 'scent'|'blood'|'gunpowder'
 local function StartTrack(trackType)
-    if not CanShowK9UI() then
+    -- ANY-PED SWEEP FIX (coder-frontend, this pass — coordinator finding:
+    -- "StartTrack() gates on CanShowK9UI(), which is stricter than what the
+    -- server itself checks (HasK9Access(source) alone in
+    -- findTrackableSource) — a role-holder the server would allow can be
+    -- refused by their own client"). CanShowK9UI() (client/main.lua) is
+    -- `IsK9Role() and HasK9Access()` at the Config.K9Appearance.
+    -- requireK9ModelForRole == false default (or `IsOwnModelK9() and
+    -- HasK9Access()` otherwise) — either way it ANDs in an extra role/model
+    -- check on top of HasK9Access(). server/tracking.lua's own
+    -- findTrackableSource has NO such extra check: that file's header FILE-
+    -- TO-FILE CONTRACT states outright "tracking access is gated purely on
+    -- HasK9Access (job + certification), never on the caller's CURRENT ped
+    -- model" and deliberately does not call IsConfiguredK9Model, flagging
+    -- that a future edit must not "helpfully" add one. A K9-role holder
+    -- whose access comes from server/certifications.lua's HasK9Access()
+    -- High Command/autoAccessGrade bypass — which IsK9Role() deliberately
+    -- EXCLUDES per server/appearance.lua's own header — therefore failed
+    -- BOTH halves of the old CanShowK9UI() gate on a non-K9 body
+    -- (IsOwnModelK9() false, IsK9Role() false) even though the server would
+    -- have answered `found = true` for the identical request: this client
+    -- silently refused an action its own server-side authority would have
+    -- granted, exactly the "checks whether a player is SHAPED like a dog
+    -- where it should check whether they HOLD the role" pattern this sweep
+    -- exists to close. Fixed by gating on HasK9Access() alone instead,
+    -- matching the server's own real boundary exactly, and reusing this
+    -- resource's own established precedent for a role-not-model gate:
+    -- client/fetch.lua's RequestThrowFetchBall() and client/radial.lua's
+    -- "Throw" item are both documented as deliberately "HasK9Access() alone,
+    -- NOT CanShowK9UI()/IsOwnModelK9()" for the identical reason (a
+    -- human-handler action must not depend on being modeled as a K9), and
+    -- client/movement.lua's RecomputeK9MoveRate() was independently widened
+    -- the same way in this same sweep. See
+    -- tests/clienttracking_spec.lua for the regression pinning this: a
+    -- HasK9Access()-true, IsK9Role()-false, non-K9-model caller must still
+    -- reach the real findTrackableSource callback path, not a stubbed
+    -- replacement of the function under test.
+    if not HasK9Access() then
         -- Migrated to the shared client/main.lua helper (DEVELOPER_REFERENCE.md
         -- Part B item 1 -- formerly DEVELOPER_REFERENCE.md, merged 2026-08-25)
         -- — this was the last raw inline copy of the
@@ -714,10 +754,12 @@ local GUNPOWDER_IDLE_POLL_MS = 1000
 --      builds it assuming ANY connected player, not a K9 handler, is a
 --      legitimate (if occasionally adversarial) caller of this relay.
 --   3. findTrackableSource — the SEARCH side, what "Track Gunpowder"
---      actually invokes (gated by StartTrack()'s CanShowK9UI() call above
---      in this file, and by HasK9Access(source) server-side) — is the
---      ONLY point in this mechanic where K9-handler status is meant to
---      matter. Capture (this thread, blood's relayDamageEvent, and
+--      actually invokes (gated by StartTrack()'s HasK9Access() call above
+--      in this file — UPDATED, ANY-PED SWEEP FIX, this pass, was
+--      CanShowK9UI(); see StartTrack()'s own doc comment — and by
+--      HasK9Access(source) server-side, the same real check on both ends
+--      now) — is the ONLY point in this mechanic where K9-handler status is
+--      meant to matter. Capture (this thread, blood's relayDamageEvent, and
 --      scent's ox_inventory swapItems hook) is deliberately population-
 --      wide: any player's fired shot / taken damage / dropped item
 --      becomes a source a K9 handler can LATER search for. That is the
