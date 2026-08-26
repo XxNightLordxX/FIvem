@@ -650,4 +650,35 @@ t.test('Delete refusal "tier_in_use" renders "cannot, and here is why" WITH the 
     t.isTrue(matches.length >= 1, 'the specific reference count is interpolated into the refusal text, rendered inline on the row');
 });
 
+// coordinator hand-off, 2026-08-26 (server/certtiers.lua commit a32a554):
+// a tier a supply shop item still requires is the OTHER referrer
+// DeleteTier now checks -- a SEPARATE refusal reason from 'tier_in_use'
+// (certification records) on purpose, since "N certification records" and
+// "N shop items" send the reader to two different screens to actually fix
+// it.
+t.test('Delete refusal "tier_in_use_by_shop_items" renders its own "cannot, and here is why" text WITH the count and the actual item keys, distinct from the certification-record refusal', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:certTiersList': () => ({
+                ok: true,
+                tiers: [{ key: 'senior', label: 'Senior', ordinal: 1, capabilities: {} }],
+                capabilityCatalog: {},
+            }),
+            'tablet:certTiersDelete': () => ({ ok: false, error: 'tier_in_use_by_shop_items', referenceCount: 2, shopItemKeys: ['k9_vest', 'k9_muzzle'] }),
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Certification Tiers')[0].click();
+    await settle();
+
+    const deleteBtn = findByText(h.getRoot(), 'Delete')[0];
+    deleteBtn.click();
+    deleteBtn.click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const matches = findAll(h.getRoot(), (n) => typeof n._textContent === 'string' && n._textContent.indexOf('2 supply shop item(s) still require it: k9_vest, k9_muzzle') !== -1);
+    t.isTrue(matches.length >= 1, 'the count AND the real, comma-joined item keys are interpolated into the refusal text, rendered inline on the row');
+    t.equals(findAll(h.getRoot(), (n) => typeof n._textContent === 'string' && n._textContent.indexOf('certification record(s)') !== -1).length, 0, 'never confused with the certification-record refusal text -- these are two different reasons with two different fixes');
+});
+
 t.run();

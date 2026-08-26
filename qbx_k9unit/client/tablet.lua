@@ -214,7 +214,14 @@
       tablet:certTiersList {}                                     -> cb({ok,tiers?,capabilityCatalog?,error?})   [high command -- server/certtiers.lua]
       tablet:certTiersUpsert {key,label,capabilities:string[]}    -> cb({ok,tiers?,capabilityCatalog?,error?})   [high command]
       tablet:certTiersReorder {orderedKeys:string[]}              -> cb({ok,tiers?,warning?,error?})             [high command]
-      tablet:certTiersDelete {key}                                -> cb({ok,tiers?,error?,referenceCount?})      [high command]
+      tablet:certTiersDelete {key}                                -> cb({ok,tiers?,error?,referenceCount?,shopItemKeys?}) [high command]
+        `referenceCount`/`shopItemKeys` are BOTH only ever populated
+        together, and only for error='tier_in_use_by_shop_items' (the
+        supply-shop-item referrer, server/certtiers.lua's DeleteTier,
+        commit a32a554) -- error='tier_in_use' (the certification-record
+        referrer, checked FIRST) populates `referenceCount` alone, with no
+        `shopItemKeys` at all. See html/tablet.js's certTierErrorText()
+        for how each is rendered.
         All four forwarded through the SAME TranslateReasonResult --
         server/certtiers.lua's own header states its response shape
         "mirrors server/runtimecontrol.lua's own `{ ok, reason, ... }`
@@ -853,6 +860,12 @@ local TABLET_STRING_KEYS = {
     'use_label', 'not_available_short', 'opening_person',
     'person_no_record_found',
     'open_by_id_placeholder', 'open_by_id_label', 'open_by_id_empty',
+    -- Workflow audit finding #1/#2, 2026-08-26 (html/tablet.js's
+    -- canOpenPersonRecord()/buildConsoleScreen() narrowed rendering, and
+    -- the "open by exact citizen ID" box's own new explanatory hint --
+    -- see each string's own doc comment in DEFAULT_STRINGS for the full
+    -- writeup).
+    'open_by_id_hint', 'console_person_only_notice',
     'role_heading', 'role_model_label', 'role_assign_label',
     'role_assign_hint', 'role_revert_label', 'role_revert_hint',
     'role_no_peds_configured',
@@ -881,7 +894,14 @@ local TABLET_STRING_KEYS = {
     'cert_tier_error_invalid_label', 'cert_tier_error_invalid_capabilities',
     'cert_tier_error_busy', 'cert_tier_error_too_many_tiers',
     'cert_tier_error_unknown_tier', 'cert_tier_error_protected_tier',
-    'cert_tier_error_tier_in_use', 'cert_tier_error_must_include_every_tier',
+    'cert_tier_error_tier_in_use',
+    -- The OTHER referrer a tier delete can be blocked by -- a supply shop
+    -- item requiring the tier (server/certtiers.lua's DeleteTier, commit
+    -- a32a554). Deliberately a separate key from cert_tier_error_tier_in_use
+    -- immediately above -- see that server-side doc comment for why one
+    -- combined count would send the reader to the wrong screen.
+    'cert_tier_error_tier_in_use_by_shop_items',
+    'cert_tier_error_must_include_every_tier',
     'cert_tier_error_invalid_key_set', 'cert_tier_error_db_error',
     'cert_tier_error_invalid_payload',
     -- Permission-key catalog editing (high command only, sits alongside the
@@ -1128,6 +1148,15 @@ local TABLET_STRING_KEYS = {
     'home_quick_actions_heading', 'home_view_my_record_label', 'home_view_my_record_hint',
     'home_open_console_label', 'home_open_console_hint', 'home_high_command_heading',
     'home_high_command_hint', 'home_high_command_tabs_pointer',
+    -- Workflow audit finding #3, 2026-08-26 -- see
+    -- buildHomeHighCommandSignpost()'s own doc comment (html/tablet.js)
+    -- for why a non-high-command delegate now gets a description of ONLY
+    -- what they actually hold, instead of the full high-command list
+    -- above.
+    'home_high_command_scope_theme', 'home_high_command_scope_shop_locations',
+    'home_high_command_scope_shop_items', 'home_high_command_scope_runtime_control',
+    'home_high_command_delegate_hint_template', 'home_high_command_delegate_tabs_pointer',
+    'list_join_and',
     'home_no_certification_title', 'home_no_certification_body', 'home_no_certification_next_steps',
     'home_ready_abilities_heading', 'home_no_ready_abilities', 'home_view_all_abilities_label',
     'home_blocked_count_template',

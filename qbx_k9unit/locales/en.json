@@ -567,6 +567,7 @@
         "cert_tier_error_unknown_tier": "That tier no longer exists.",
         "cert_tier_error_protected_tier": "\"Certified\" is a protected tier and can never be deleted.",
         "cert_tier_error_tier_in_use": "This tier cannot be deleted -- {count} certification record(s) still reference it. Move them to a different tier first, then delete.",
+        "cert_tier_error_tier_in_use_by_shop_items": "This tier cannot be deleted -- {count} supply shop item(s) still require it: {items}. Change or clear those items' tier requirement on the Shop Items screen first, then delete the tier.",
         "cert_tier_error_must_include_every_tier": "The new order must include every existing tier, with none missing or duplicated.",
         "cert_tier_error_invalid_key_set": "The new order must include every existing tier, with none missing or duplicated.",
         "cert_tier_error_db_error": "A database error occurred. Try again.",

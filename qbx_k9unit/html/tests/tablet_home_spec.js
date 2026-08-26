@@ -169,6 +169,55 @@ t.test('DELEGATED NON-HIGH-COMMAND (holds only k9.runtimecontrol): High Command 
     t.isTrue(findByText(h.getRoot(), 'Runtime Feature Control').length >= 1, 'the tab opens the real screen, not a dead end');
 });
 
+// ============================================================================
+// WORKFLOW AUDIT FINDING #3, 2026-08-26 -- buildHomeHighCommandSignpost()'s
+// BODY (not its heading, which stays "High Command Tools" for everyone who
+// sees the section at all -- see the sibling tests above/below still
+// asserting that exact heading text) now describes ONLY what a
+// non-high-command delegate actually holds, never the full six-item list a
+// true high-command viewer sees.
+// ============================================================================
+
+t.test('WORKFLOW AUDIT #3: a delegate holding ONLY k9.runtimecontrol sees a signpost body naming ONLY that capability, never the full high-command list', async () => {
+    const h = await openTablet({
+        ok: true,
+        viewer: { citizenid: 'DELEGATE2', name: 'Ops Delegate', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.runtimecontrol'], allowSelfGrant: false },
+        certifications: [], xp: null, tierLabel: null, myFeatures: [],
+    }, {
+        'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+        'tablet:runtimeListTunables': () => ({ ok: true, tunables: [] }),
+    });
+
+    t.equals(findByText(h.getRoot(), 'High Command Tools').length, 1, 'the heading is unchanged for every viewer who sees this section at all');
+    t.equals(findByText(h.getRoot(), "You've been granted access to: which features are turned on.").length, 1, 'the body names ONLY the one capability this viewer actually holds');
+    t.equals(findByText(h.getRoot(), 'Settings that affect the whole server: how the tablet looks, certification ranks, permission keys, the supply shop, which features are turned on, XP ranks, and the audit trail.').length, 0, 'the full high-command-only promise text is absent for this delegate');
+    t.equals(findByText(h.getRoot(), "You'll find all of these in the tabs at the top of the screen -- they're grouped together there, set apart from your own tabs, so they're easy to spot.").length, 0, 'the high-command-only tabs pointer sentence is absent too');
+    t.equals(findByText(h.getRoot(), "You'll find these in the tabs at the top of the screen -- grouped together there, set apart from your own tabs, so they're easy to spot.").length, 1, 'a delegate-specific tabs pointer is shown instead');
+});
+
+t.test('WORKFLOW AUDIT #3: a delegate holding TWO of the four capabilities gets both named in the signpost body, joined in plain English', async () => {
+    const h = await openTablet({
+        ok: true,
+        viewer: { citizenid: 'DELEGATE3', name: 'Multi Delegate', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.tablettheme', 'k9.equipmentshoplocations'], allowSelfGrant: false },
+        certifications: [], xp: null, tierLabel: null, myFeatures: [],
+    }, {
+        'tablet:getTheme': () => ({ ok: true, theme: { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: 'K9 Command Tablet' } }),
+    });
+
+    t.equals(findByText(h.getRoot(), "You've been granted access to: how the tablet looks and which supply shop locations are active.").length, 1, 'both held capabilities are named, joined with "and" -- neither the other two unheld ones nor the full high-command list appear');
+});
+
+t.test('WORKFLOW AUDIT #3 control: a TRUE high-command viewer keeps the original, unabridged signpost body -- this pass never touches the accurate case', async () => {
+    const h = await openTablet({
+        ok: true,
+        viewer: { citizenid: 'HC3', name: 'Chief', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false },
+        certifications: [], xp: null, tierLabel: null, myFeatures: [],
+    });
+
+    t.equals(findByText(h.getRoot(), 'Settings that affect the whole server: how the tablet looks, certification ranks, permission keys, the supply shop, which features are turned on, XP ranks, and the audit trail.').length, 1, 'high command still sees the full, accurate promise -- they really do have all of it');
+    t.equals(findByText(h.getRoot(), "You've been granted access to: which features are turned on.").length, 0, 'the delegate-scoped phrasing never leaks into the high-command path');
+});
+
 t.test('CERTIFIED HANDLER (not high command, not a K9 model, k9.access only): role badge reads "Certified Handler", NO console quick action, NO High Command Tools section', async () => {
     const h = await openTablet({
         ok: true,

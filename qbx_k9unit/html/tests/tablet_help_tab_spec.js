@@ -254,6 +254,63 @@ t.test('Every Tab, Explained only lists tabs this viewer can actually see -- Hig
     t.isTrue(findByText(hcHarness.getRoot(), 'Audit Trail').length >= 1, 'High Command IS taught about the Audit Trail tab');
 });
 
+// ============================================================================
+// WORKFLOW AUDIT FINDING #1, 2026-08-26 -- a viewer holding ONLY
+// 'k9.certify' (no 'k9.audit', not high command) now has a real (narrowed)
+// path into the Console tab (see tablet_console_spec.js's own coverage of
+// the screen itself) -- "Every Tab, Explained" must describe that tab to
+// them too, and the "Certify Someone" walkthrough must never point them at
+// Guided Flows, a tab they cannot see or use.
+// ============================================================================
+
+t.test('WORKFLOW AUDIT #1: "Every Tab, Explained" now explains the Console tab to a bare k9.certify holder too, not only to k9.audit/high command', async () => {
+    const DELEGATED_CERTIFIER = { citizenid: 'D3', name: 'Sergeant Certifier', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.certify'] };
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': myRecordHandler(DELEGATED_CERTIFIER, { certifications: [{ active: true }] }),
+        }),
+    });
+    await openHelpScreen(h);
+
+    t.isTrue(findByText(h.getRoot(), 'Command Console').length >= 1, 'the tab itself is explained (rendered) for this viewer -- it is visible to them now (workflow audit finding #1)');
+    t.isTrue(findByTextContaining(h.getRoot(), 'Open a specific handler or K9\'s record by their exact citizen ID').length >= 1, 'the description leads with the narrowed capability every k9.certify/k9.givexp holder actually gets');
+});
+
+t.test('WORKFLOW AUDIT #1: a plain handler with NEITHER k9.certify/k9.givexp NOR k9.audit still is not taught about the Console tab at all', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({ 'tablet:requestMyRecord': myRecordHandler(HANDLER_VIEWER, { certifications: [{ active: true }] }) }),
+    });
+    await openHelpScreen(h);
+    t.equals(findByText(h.getRoot(), 'Command Console').length, 0, 'HANDLER_VIEWER holds only k9.access -- no path into the Console at all, so nothing explains a tab they cannot see');
+});
+
+t.test('WORKFLOW AUDIT #1: the "Certify Someone" walkthrough never points a non-high-command k9.certify holder at Guided Flows, a tab they cannot see', async () => {
+    const DELEGATED_CERTIFIER = { citizenid: 'D4', name: 'Sergeant Certifier', isHighCommand: false, effectivePermissions: ['k9.access', 'k9.certify'] };
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': myRecordHandler(DELEGATED_CERTIFIER, { certifications: [{ active: true }] }),
+        }),
+    });
+    await openHelpScreen(h);
+
+    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 1, 'still gets the Certify Someone walkthrough');
+    t.equals(findByText(h.getRoot(), 'Guided Flows').length, 0, 'this viewer cannot see the Guided Flows tab at all, so the walkthrough must never mention it');
+    t.equals(findByTextContaining(h.getRoot(), 'Open the Guided Flows tab').length, 0, 'the Guided-Flows pointer step is entirely absent for this viewer');
+    t.equals(findByTextContaining(h.getRoot(), 'Select Person → Certify').length, 0, 'the derived flow-step-sequence line is Guided-Flows-specific too, and is absent alongside it');
+    t.isTrue(findByTextContaining(h.getRoot(), 'if this is a brand-new person, use "Open by exact citizen ID" instead').length >= 1, 'step 1 now also warns that the roster search alone will never find someone who has never been certified');
+});
+
+t.test('WORKFLOW AUDIT #1 control: a TRUE high-command viewer still gets the full Certify Someone walkthrough, including the Guided Flows pointer and the live step sequence', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({ 'tablet:requestMyRecord': myRecordHandler(HIGH_COMMAND_VIEWER, {}) }),
+    });
+    await openHelpScreen(h);
+
+    t.equals(findByText(h.getRoot(), 'Certify Someone').length, 1);
+    t.isTrue(findByTextContaining(h.getRoot(), 'Open the Guided Flows tab').length >= 1, 'high command CAN see and use Guided Flows, so the pointer stays');
+    t.isTrue(findByTextContaining(h.getRoot(), 'Select Person → Certify → K9 Role → Tier & Specializations → Feature Access → Summary').length >= 1, 'the real onboarding step sequence is still quoted live for high command');
+});
+
 t.test('a hostile string arriving via data.strings for a Help-screen key reaches the DOM only via textContent, never innerHTML', async () => {
     const malicious = '<img src=x onerror="window.__xss_pwned=true">';
     const h = createHarness({

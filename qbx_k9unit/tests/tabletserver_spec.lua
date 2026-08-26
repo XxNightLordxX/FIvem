@@ -1101,6 +1101,63 @@ t.test('tabletRequestPersonSummary: SECURITY -- console access is denied for a n
     t.equals(result.error, 'not_authorized')
 end)
 
+-- ============================================================================
+-- WORKFLOW AUDIT FINDING #1, 2026-08-26 -- CallerHasPersonAccess():
+-- tabletRequestPersonSummary specifically (NOT tabletRequestRoster, which
+-- keeps CallerHasConsoleAccess exactly as it was) now also admits a caller
+-- holding an explicit 'k9.certify' or 'k9.givexp' grant alone -- neither is
+-- high command, neither holds 'k9.audit', and grade level 1 is below this
+-- fixture's own certifierGrade/auditGrade thresholds (4) for 'police', so
+-- neither qualifies via rank either. Before this pass, a delegated
+-- certifier/XP-granter had a real, server-granted capability and no
+-- reachable screen to use it from at all (html/tablet.js's own
+-- buildPersonScreen() already gated Certify/Give XP on exactly these two
+-- capabilities -- the screen itself was simply unreachable).
+-- ============================================================================
+
+t.test('tabletRequestPersonSummary: WIDENED -- a caller holding ONLY an explicit k9.certify grant (no rank, no k9.audit, not high command) is now admitted', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'CERTIFIER', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('CERTIFIER', 'k9.certify', 'HC', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'SOMEONE-ELSE')
+    t.isTrue(result.ok, 'a bare k9.certify grant is enough to open a specific person\'s record')
+end)
+
+t.test('tabletRequestPersonSummary: WIDENED -- a caller holding ONLY an explicit k9.givexp grant (no rank, no k9.audit, not high command) is now admitted', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'GRANTER', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('GRANTER', 'k9.givexp', 'HC', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'SOMEONE-ELSE')
+    t.isTrue(result.ok, 'a bare k9.givexp grant is enough to open a specific person\'s record')
+end)
+
+t.test('tabletRequestPersonSummary: a bare k9.access grant alone still does NOT qualify -- the widening is specifically k9.certify/k9.givexp, not "any permission"', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'HANDLER', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('HANDLER', 'k9.access', 'HC', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'SOMEONE-ELSE')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+end)
+
+t.test('tabletRequestRoster: SECURITY -- UNTOUCHED by the widening above -- a caller holding ONLY k9.certify (no k9.audit, not high command) is still denied the full roster', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'CERTIFIER2', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('CERTIFIER2', 'k9.certify', 'HC', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestRoster')(src, '')
+    t.isFalse(result.ok, 'browsing/searching the full roster still needs k9.audit or high command -- see CallerHasConsoleAccess\'s own OWNER\'S DECISION comment, deliberately untouched')
+    t.equals(result.error, 'not_authorized')
+end)
+
+t.test('tabletRequestRoster: SECURITY -- UNTOUCHED by the widening above -- a caller holding ONLY k9.givexp (no k9.audit, not high command) is still denied the full roster', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'GRANTER2', { name = 'police', grade = { level = 1 } })
+    f.addPermRow('GRANTER2', 'k9.givexp', 'HC', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestRoster')(src, '')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+end)
+
 t.test('tabletRequestPersonSummary: invalid_args for a non-string / empty target citizenid', function()
     local f = newFixture({ isHighCommand = function() return true end })
     local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })

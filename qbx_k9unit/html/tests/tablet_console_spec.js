@@ -18,7 +18,15 @@
 
 const t = require('./testkit');
 const { createHarness, jsonResponse } = require('./tablet-sandbox');
-const { findByText, findByTag } = require('./tablet-dom-stub');
+const { findByText, findByTag, findAll } = require('./tablet-dom-stub');
+
+/** findByText() only matches an EXACT textContent string -- several of the
+ * new hint/notice paragraphs below are full sentences, so substring
+ * assertions use this instead of a brittle exact-copy-paste of the whole
+ * sentence (same helper tablet_help_tab_spec.js already established). */
+function findByTextContaining(node, substring) {
+    return findAll(node, (n) => typeof n._textContent === 'string' && n._textContent.indexOf(substring) !== -1);
+}
 
 function routeFetch(handlers) {
     return function (url, init) {
@@ -235,6 +243,148 @@ t.test('Give XP is only offered to a viewer holding k9.givexp, and disables self
     t.equals(findByText(h.getRoot(), 'Give XP').length, 1, 'give-XP control rendered for a k9.givexp holder');
     const giveBtn = findByText(h.getRoot(), 'Give XP')[0];
     t.equals(giveBtn.getAttribute('disabled'), 'disabled', 'self-targeted Give XP is disabled client-side when allowSelfGrant is false (a UX convenience -- the server independently enforces the real rule)');
+});
+
+// ============================================================================
+// WORKFLOW AUDIT FINDING #1, 2026-08-26 -- a viewer holding ONLY
+// 'k9.certify' or 'k9.givexp' (no 'k9.audit', not high command) now gets a
+// NARROWED path into the Console tab: the "open by exact citizen ID" box
+// and the Person screen it leads to, never the roster search/listing
+// (that stays 'k9.audit'/high-command only -- server/tablet.lua's
+// CallerHasConsoleAccess, deliberately unchanged; see this suite's own
+// header note on "written as if a hidden control could still be reached").
+// ============================================================================
+
+t.test('WORKFLOW AUDIT #1: a viewer holding ONLY k9.certify (no k9.audit, not high command) sees the Console tab, but a NARROWED screen -- no search bar, no roster table -- and can still open and certify a specific person by exact citizen ID', async () => {
+    let rosterCalls = 0;
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({
+                ok: true,
+                viewer: { citizenid: 'CERTONLY1', name: 'Sergeant Certifier', isHighCommand: false, effectivePermissions: ['k9.certify'], allowSelfGrant: false },
+                certifications: [], xp: null, tierLabel: null, myFeatures: [],
+            }),
+            'tablet:requestRoster': () => { rosterCalls++; return { ok: true, rows: [], truncated: false }; },
+            'tablet:requestPersonSummary': () => ({
+                ok: true,
+                target: { citizenid: 'TARGET9', name: 'New Recruit' },
+                certifications: [{ departmentKey: 'police', departmentLabel: 'Los Santos Police Department', active: false, grantedBy: null }],
+                xp: 0, tierLabel: 'Recruit K9', permissions: [],
+            }),
+        }),
+    });
+
+    h.postMessage('tablet:open', {});
+    await settle(h);
+    t.isTrue(findByText(h.getRoot(), 'Command Console').length >= 1, 'the Console tab is now reachable for a bare k9.certify holder');
+
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle(h);
+
+    // NARROWED: no search bar, no roster table, no refresh button -- see
+    // buildConsoleScreen()'s own fullAccess branch.
+    const searchInputs = findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('placeholder') && i.getAttribute('placeholder').indexOf('Search by name') !== -1);
+    t.equals(searchInputs.length, 0, 'the roster search bar is absent for this viewer');
+    t.equals(findByText(h.getRoot(), 'Refresh').length, 0, 'the roster refresh button is absent too -- there is no roster to refresh');
+    t.equals(rosterCalls, 0, 'tablet:requestRoster is never called for this viewer -- not even once, on tab open');
+
+    // The narrowed-access notice explains why, in plain language.
+    t.isTrue(findByTextContaining(h.getRoot(), 'Browsing or searching the full roster needs the Audit capability or High Command').length >= 1);
+
+    // The "open by exact citizen ID" box is still fully present and usable.
+    const idInput = findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('placeholder') === 'Open by exact citizen ID...')[0];
+    t.isDefined(idInput, 'the open-by-ID input is present for this viewer');
+    idInput.typeValue('TARGET9');
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(h);
+
+    t.isTrue(findByText(h.getRoot(), 'New Recruit').length >= 1, 'the Person screen opened for the typed citizenid');
+    t.isTrue(findByText(h.getRoot(), 'Certify').length >= 1, 'this viewer\'s own k9.certify capability still controls what they can DO on the Person screen, unchanged by how they reached it');
+    t.equals(rosterCalls, 0, 'still never called tablet:requestRoster, even after opening a person');
+});
+
+t.test('WORKFLOW AUDIT #1: a viewer holding ONLY k9.givexp (no k9.audit, not high command) reaches the same narrowed Console and sees Give XP, not Certify', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({
+                ok: true,
+                viewer: { citizenid: 'XPONLY1', name: 'XP Granter', isHighCommand: false, effectivePermissions: ['k9.givexp'], allowSelfGrant: false },
+                certifications: [], xp: null, tierLabel: null, myFeatures: [],
+            }),
+            'tablet:requestPersonSummary': () => ({
+                ok: true,
+                target: { citizenid: 'TARGET10', name: 'Existing K9' },
+                certifications: [], xp: 0, tierLabel: 'Recruit K9', permissions: [],
+            }),
+        }),
+    });
+
+    h.postMessage('tablet:open', {});
+    await settle(h);
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle(h);
+
+    const idInput = findByTag(h.getRoot(), 'input').filter((i) => i.getAttribute('placeholder') === 'Open by exact citizen ID...')[0];
+    idInput.typeValue('TARGET10');
+    findByText(h.getRoot(), 'Open')[0].click();
+    await settle(h);
+
+    t.equals(findByText(h.getRoot(), 'Give XP').length, 1, 'k9.givexp holder sees the Give XP control on the person they opened');
+    t.equals(findByText(h.getRoot(), 'Certify').length, 0, 'but not Certify -- this viewer holds no k9.certify capability');
+});
+
+t.test('WORKFLOW AUDIT #1: a viewer with NEITHER k9.certify/k9.givexp NOR k9.audit still never sees the Console tab at all -- the widening is specific, not "any capability"', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({
+                ok: true,
+                viewer: { citizenid: 'PLAINHANDLER1', name: 'Plain Handler', isHighCommand: false, effectivePermissions: ['k9.access'], allowSelfGrant: false },
+                certifications: [], xp: null, tierLabel: null, myFeatures: [],
+            }),
+        }),
+    });
+    h.postMessage('tablet:open', {});
+    await settle(h);
+    t.equals(findByText(h.getRoot(), 'Command Console').length, 0, 'a bare k9.access holder still gets no Console tab -- unchanged by this pass');
+});
+
+// ============================================================================
+// WORKFLOW AUDIT FINDING #2, 2026-08-26 -- the roster only ever lists
+// people who already hold an active certification, so a brand-new person
+// (exactly who "Set Up a New Handler" is for) can never appear there by
+// name or partial ID. The empty-results message and the "open by exact
+// citizen ID" box now both say so in plain English.
+// ============================================================================
+
+t.test('WORKFLOW AUDIT #2: an empty roster search explains that a brand-new (never-certified) person will never show up here, and points at the citizen-ID box instead', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: { citizenid: 'V', name: 'V', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:requestRoster': () => ({ ok: true, rows: [], truncated: false }),
+        }),
+    });
+    h.postMessage('tablet:open', {});
+    await settle(h);
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle(h);
+
+    t.isTrue(findByTextContaining(h.getRoot(), 'This list only ever shows people who already hold a certification').length >= 1, 'explains WHY the search came up empty');
+    t.isTrue(findByTextContaining(h.getRoot(), 'Use "Open by exact citizen ID" for them instead').length >= 1, 'and tells the operator exactly what to do about it');
+});
+
+t.test('WORKFLOW AUDIT #2: the "open by exact citizen ID" box always carries its own hint that it works even for someone never certified, for a full-access viewer', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: { citizenid: 'V', name: 'V', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false }, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:requestRoster': () => ({ ok: true, rows: [{ citizenid: 'A', name: 'A', departmentLabel: 'Police', certified: true, xp: 0, tierLabel: 'Recruit K9' }], truncated: false }),
+        }),
+    });
+    h.postMessage('tablet:open', {});
+    await settle(h);
+    findByText(h.getRoot(), 'Command Console')[0].click();
+    await settle(h);
+
+    t.isTrue(findByTextContaining(h.getRoot(), 'even someone who has never held a certification').length >= 1);
 });
 
 t.run();

@@ -742,7 +742,7 @@
         retry_label: 'Retry',
         search_placeholder: 'Search by name, citizen ID, or department...',
         refresh_label: 'Refresh',
-        empty_roster: 'No results.',
+        empty_roster: 'No results. This list only ever shows people who already hold a certification -- it will never include someone who has never been certified before (for example, a brand-new handler). Use "Open by exact citizen ID" for them instead.',
         column_name: 'Name',
         column_citizenid: 'Citizen ID',
         column_department: 'Department',
@@ -816,6 +816,19 @@
         open_by_id_placeholder: 'Open by exact citizen ID...',
         open_by_id_label: 'Open',
         open_by_id_empty: 'Enter a citizen ID first.',
+        // Workflow audit finding #2, 2026-08-26 -- this box previously had
+        // no text of its own explaining what makes it different from the
+        // search bar above it. Shared verbatim by buildConsoleScreen() and
+        // the Guided Flows' buildFlowPersonPicker(), the two places this
+        // box appears.
+        open_by_id_hint: 'Works for any citizen ID, even someone who has never held a certification -- for example, a brand-new person you are about to set up.',
+        // Workflow audit finding #1, 2026-08-26 -- shown on the Console
+        // screen to a viewer who reaches it holding only 'k9.certify'/
+        // 'k9.givexp' (canOpenPersonRecord() true, canAccessConsole()
+        // false): explains why the search bar and roster table an
+        // audit/high-command viewer would see are simply not here, so a
+        // smaller screen reads as a deliberate boundary, not a bug.
+        console_person_only_notice: 'You can open a specific handler or K9\'s record below if you already know their exact citizen ID. Browsing or searching the full roster needs the Audit capability or High Command.',
 
         // ---- K9 role control (person screen, high command only) --
         // owner's own words: "assign de assign give certs remove certs
@@ -899,6 +912,13 @@
         cert_tier_error_unknown_tier: 'That tier no longer exists.',
         cert_tier_error_protected_tier: '"Certified" is a protected tier and can never be deleted.',
         cert_tier_error_tier_in_use: 'This tier cannot be deleted -- {count} certification record(s) still reference it. Move them to a different tier first, then delete.',
+        // Deliberately a SEPARATE key/message from cert_tier_error_tier_in_use
+        // above -- see server/certtiers.lua's own DeleteTier doc comment for
+        // why: "3 certification records use this" and "2 shop items require
+        // this" need different actions from the reader, and one combined
+        // number would send them to the wrong screen (Cert Tiers vs. Shop
+        // Items).
+        cert_tier_error_tier_in_use_by_shop_items: 'This tier cannot be deleted -- {count} supply shop item(s) still require it: {items}. Change or clear those items\' tier requirement on the Shop Items screen first, then delete the tier.',
         cert_tier_error_must_include_every_tier: 'The new order must include every existing tier, with none missing or duplicated.',
         cert_tier_error_invalid_key_set: 'The new order must include every existing tier, with none missing or duplicated.',
         cert_tier_error_db_error: 'A database error occurred. Try again.',
@@ -1354,6 +1374,19 @@
         home_high_command_heading: 'High Command Tools',
         home_high_command_hint: 'Settings that affect the whole server: how the tablet looks, certification ranks, permission keys, the supply shop, which features are turned on, XP ranks, and the audit trail.',
         home_high_command_tabs_pointer: "You'll find all of these in the tabs at the top of the screen -- they're grouped together there, set apart from your own tabs, so they're easy to spot.",
+        // Workflow audit finding #3, 2026-08-26 -- a delegate holding one
+        // (or more) of the four delegable capabilities below gets a
+        // version of this section describing ONLY what they actually
+        // hold, never the full high-command list above. See
+        // buildHomeHighCommandSignpost()'s own doc comment for the full
+        // writeup.
+        home_high_command_scope_theme: 'how the tablet looks',
+        home_high_command_scope_shop_locations: 'which supply shop locations are active',
+        home_high_command_scope_shop_items: 'what the supply shop sells',
+        home_high_command_scope_runtime_control: 'which features are turned on',
+        home_high_command_delegate_hint_template: "You've been granted access to: {scope}.",
+        home_high_command_delegate_tabs_pointer: "You'll find these in the tabs at the top of the screen -- grouped together there, set apart from your own tabs, so they're easy to spot.",
+        list_join_and: 'and',
         home_no_certification_title: "You're not certified yet",
         home_no_certification_body: 'Ask a certifier or a High Command officer to certify you in a department. Once certified, your abilities and record will appear here.',
         home_no_certification_next_steps: 'Not sure how to get started? The Help tab walks you through it, and the Commands tab shows everything there is to earn.',
@@ -1780,7 +1813,7 @@
         help_tab_my_record_desc: "The full, detailed version of your own record: every certification (active or expired), your XP, and every single ability with its exact status, not just the ready-to-use ones Home shows. Open it to check something specific about yourself.",
         help_tab_commands_desc: "A searchable list of every command this tablet's resource has, grouped by what you are trying to do, each with a live yes/no on whether you personally can use it right now and why. Open it when you know roughly what you want to do and need the exact command.",
         help_tab_help_desc: "This page. Open it any time something else on the tablet does not make sense.",
-        help_tab_console_desc: "Look up any handler or K9 by name or citizen ID, and manage their certifications, tiers, XP, and permissions. Open it to check on or make a change to someone else's record.",
+        help_tab_console_desc: "Open a specific handler or K9's record by their exact citizen ID -- this always works, even for someone who has never been certified. If you also hold the Audit capability or are High Command, this tab additionally lets you browse and search the full roster by name, citizen ID, or department (that search only ever shows people who already hold a certification, so it will never find someone brand new -- open them by citizen ID instead).",
         help_tab_flows_desc: "A guided, step-by-step version of the four admin jobs you will do most often: setting up a new handler, offboarding one, handling a problem player, and tuning server-wide settings. Open it instead of the individual screens below when you want to be walked through the whole job in order.",
         help_tab_theme_desc: "Change the tablet's own colors and title for every player on the server. Open it to re-brand the tablet, not to fix anything broken.",
         help_tab_cert_tiers_desc: "Add, rename, or remove certification tiers (like Trainee, Certified, Senior) and decide which extra abilities each tier unlocks. Open it before you certify anyone if the default tiers do not match how your server is organized.",
@@ -1838,7 +1871,7 @@
         help_task_scent_vision_2: "2. Only a handful of the closest people's trails are shown at once, each its own colour, and the dots fade out and disappear as they get older.",
         help_task_scent_vision_3: "3. If pressing the key does nothing, either this feature is turned off on this server, or this server has set it to run for everyone automatically instead of needing the key -- ask High Command.",
         help_task_hc_certify_someone_heading: "Certify Someone",
-        help_task_hc_certify_someone_1: "1. Go to the Console tab and find them by name or citizen ID. Most certification actions require the target to be online.",
+        help_task_hc_certify_someone_1: "1. Go to the Console tab. If they already hold a certification somewhere, you can search for them there by name or citizen ID; if this is a brand-new person, use \"Open by exact citizen ID\" instead -- the search will never find someone who has never been certified. Most certification actions require the target to be online.",
         help_task_hc_certify_someone_2_template: "2. Open their record and press {certifyLabel} under their department. Pick a tier and any specializations if your server uses them.",
         help_task_hc_certify_someone_3: "3. Prefer to be walked through it instead? Open the Guided Flows tab and use \"Set Up a New Handler\" -- it is the exact same actions, in order, with nothing skipped.",
         help_task_hc_flow_steps_template: "That flow's steps, in order: {steps}.",
@@ -3059,6 +3092,33 @@
     }
 
     /**
+     * Gate for the NARROWED path a 'k9.certify'/'k9.givexp' holder gets
+     * into the Console tab and the Person screen it leads to -- workflow
+     * audit finding #1, 2026-08-26. Mirrors server/tablet.lua's own
+     * CallerHasPersonAccess() EXACTLY (canAccessConsole() OR a held
+     * 'k9.certify'/'k9.givexp' capability), which is the real enforcement
+     * for tabletRequestPersonSummary specifically. Deliberately does NOT
+     * widen canAccessConsole() itself, and tabletRequestRoster's own
+     * server-side gate is UNCHANGED -- a viewer who qualifies here but not
+     * for canAccessConsole() still cannot browse or search the roster by
+     * name/department, only open a citizenid they already know (see
+     * buildConsoleScreen()'s own narrowed rendering for that case). Before
+     * this pass, the two capabilities this exists for were real,
+     * server-granted, and completely inert: buildPersonScreen() already
+     * gates its own Certify/Give XP controls on exactly these two
+     * capabilities, but neither of the screen's only two entry points (the
+     * roster's "Manage" button, the "Open by exact citizen ID" box) was
+     * ever reachable without canAccessConsole() -- so a delegated
+     * certifier/XP-granter had a real permission and no way to use it.
+     * Convenience only, per THE SECURITY RULE: CallerHasPersonAccess() is
+     * the actual authorization.
+     * @returns {boolean}
+     */
+    function canOpenPersonRecord() {
+        return canAccessConsole() || hasDelegatedCapability('k9.certify') || hasDelegatedCapability('k9.givexp');
+    }
+
+    /**
      * Shared body for the four capability-delegation gates immediately
      * below (canManageTabletTheme/canManageShopLocations/canManageShopItems/
      * canManageRuntimeControl) -- SAME isHighCommand-OR-specific-capability
@@ -3490,13 +3550,19 @@
             return backdrop;
         }
 
-        // canAccessConsole() -- SAME rule server/tablet.lua's own
-        // CallerHasConsoleAccess() enforces (isHighCommand OR
-        // effectivePermissions includes 'k9.audit'), NOT "any non-empty
+        // canOpenPersonRecord() -- SAME rule server/tablet.lua's own
+        // CallerHasPersonAccess() enforces (canAccessConsole() OR a held
+        // 'k9.certify'/'k9.givexp' capability), NOT "any non-empty
         // effectivePermissions" (fixed this pass -- see canAccessConsole()'s
         // own doc comment for why the old, broader expression was a bug:
         // it let every ordinary certified handler see a Console tab/card
-        // that the server would then refuse).
+        // that the server would then refuse). Widened from canAccessConsole()
+        // alone (workflow audit finding #1, 2026-08-26) so a
+        // 'k9.certify'/'k9.givexp' holder who is not high command and does
+        // not hold 'k9.audit' has SOME path to a person's record -- see
+        // canOpenPersonRecord()'s own doc comment for the full writeup and
+        // buildConsoleScreen()'s narrowed rendering for what that viewer
+        // actually sees (never the full roster).
         // ALWAYS rendered now (this pass) -- previously gated on
         // canManageRoster, which meant a viewer with zero effective
         // permissions (in practice: someone certified nowhere at all, not
@@ -3504,11 +3570,11 @@
         // every certified handler/K9 -- see server/tablet.lua's
         // ResolveEffectivePermissions) saw NO navigation at all, not even
         // a way back to 'my_record'. buildTabs() itself now gates its own
-        // Command Console entry on this SAME canAccessConsole() gate (see
-        // that function) so this widening never exposes a tab that would
-        // silently dead-end into the wrong screen -- the Home tab (and,
-        // for a resolved viewer, My Record) are the only two every viewer
-        // is guaranteed to see.
+        // Command Console entry on this SAME canOpenPersonRecord() gate
+        // (see that function) so this widening never exposes a tab that
+        // would silently dead-end into the wrong screen -- the Home tab
+        // (and, for a resolved viewer, My Record) are the only two every
+        // viewer is guaranteed to see.
         panel.appendChild(buildTabs());
 
         if (state.screen === 'home') {
@@ -3519,9 +3585,9 @@
             panel.appendChild(buildPartnershipsScreen());
         } else if (state.screen === 'help') {
             panel.appendChild(buildHelpScreen());
-        } else if (state.screen === 'console' && canAccessConsole()) {
+        } else if (state.screen === 'console' && canOpenPersonRecord()) {
             panel.appendChild(buildConsoleScreen());
-        } else if (state.screen === 'person' && canAccessConsole()) {
+        } else if (state.screen === 'person' && canOpenPersonRecord()) {
             panel.appendChild(buildPersonScreen());
         } else if (state.screen === 'theme' && canManageTabletTheme()) {
             panel.appendChild(buildThemeScreen());
@@ -3823,7 +3889,7 @@
         tabs.appendChild(helpTab);
 
         // Command Console -- ONLY meaningful for a viewer who actually has
-        // console access. Previously appended unconditionally (safe only
+        // SOME access here. Previously appended unconditionally (safe only
         // because buildBackdrop() used to skip calling buildTabs() at all
         // for a canAccessConsole() === false viewer) -- now guarded HERE
         // explicitly, since this pass widens buildBackdrop() to always
@@ -3831,17 +3897,24 @@
         // everyone); without this guard a viewer with no console access
         // would see a Console tab that silently dead-ends into My Record
         // instead (buildBackdrop()'s own 'console' branch already requires
-        // canAccessConsole()) -- exactly the "button exists, does something
-        // else" trap this codebase's own consistency rules forbid. Uses
-        // canAccessConsole() (isHighCommand OR effectivePermissions
-        // includes 'k9.audit' specifically) rather than "any non-empty
-        // effectivePermissions" -- see that function's own doc comment for
-        // why the broader check was a bug fixed this pass.
-        if (canAccessConsole()) {
+        // canOpenPersonRecord()) -- exactly the "button exists, does
+        // something else" trap this codebase's own consistency rules
+        // forbid. Uses canOpenPersonRecord() (canAccessConsole() OR a held
+        // 'k9.certify'/'k9.givexp' capability -- workflow audit finding #1,
+        // 2026-08-26) rather than "any non-empty effectivePermissions" --
+        // see that function's own doc comment for why the broader check
+        // was a bug fixed in an earlier pass, and for why this widening is
+        // still deliberately narrower than "any capability at all". A
+        // 'k9.certify'/'k9.givexp'-only holder who reaches this tab gets
+        // buildConsoleScreen()'s own NARROWED rendering (the "open by
+        // exact citizen ID" box only, never the roster search/listing) --
+        // this tab is never a dead end for them, just a smaller room than
+        // an audit/high-command viewer sees behind the same door.
+        if (canOpenPersonRecord()) {
             var consoleTab = mkButton(S('tab_console'), 'k9tablet-tab' + (state.screen === 'console' || state.screen === 'person' ? ' k9tablet-tab--active' : ''), function () {
                 state.screen = 'console';
                 render();
-                loadRoster(state.rosterQuery);
+                if (canAccessConsole()) loadRoster(state.rosterQuery);
             });
             tabs.appendChild(consoleTab);
         }
@@ -4139,7 +4212,17 @@
     function goToConsoleScreen() {
         state.screen = 'console';
         render();
-        loadRoster(state.rosterQuery);
+        // Guarded on canAccessConsole() (this pass, workflow audit finding
+        // #1): a 'k9.certify'/'k9.givexp'-only viewer (canOpenPersonRecord()
+        // true, canAccessConsole() false) can still reach this screen --
+        // from the Person screen's own "Back" button, reused here (see that
+        // call site's own comment) -- but tabletRequestRoster stays
+        // k9.audit/high-command only server-side (CallerHasConsoleAccess,
+        // untouched). Calling it anyway would just draw a guaranteed
+        // 'not_authorized' for a screen that never renders the roster for
+        // this viewer in the first place (buildConsoleScreen()'s own
+        // narrowed branch) -- pointless network noise, not a real request.
+        if (canAccessConsole()) loadRoster(state.rosterQuery);
     }
 
     /**
@@ -4342,6 +4425,22 @@
     }
 
     /**
+     * Plain-English "A, B, and C" join -- no Intl.ListFormat dependency
+     * (every other list this page hand-builds, e.g. the invalid-department/
+     * invalid-specialization hint text server-side, already joins by hand
+     * rather than reaching for a locale-aware API for a single-locale
+     * page). Only ever called with 1-4 short phrases here.
+     * @param {string[]} items
+     * @returns {string}
+     */
+    function joinEnglishList(items) {
+        if (items.length === 0) return '';
+        if (items.length === 1) return items[0];
+        if (items.length === 2) return items[0] + ' ' + S('list_join_and') + ' ' + items[1];
+        return items.slice(0, -1).join(', ') + ', ' + S('list_join_and') + ' ' + items[items.length - 1];
+    }
+
+    /**
      * HIGH-COMMAND-OR-DELEGATED SIGNPOST (this pass) -- called for the same
      * viewers as before (see buildHomeScreen()'s own call site: high
      * command, or a non-high-command officer holding any one of the four
@@ -4363,12 +4462,44 @@
      * for that boundary. NEVER decides what to show by itself: the caller
      * (buildHomeScreen()) already re-checks state.viewer.isHighCommand OR
      * one of the four canManageX() capabilities before calling this at
-     * all, exactly as before. */
+     * all, exactly as before.
+     *
+     * WORKFLOW AUDIT FINDING #3, 2026-08-26: the heading ("High Command
+     * Tools") and body used to be ONE fixed pair of sentences naming EVERY
+     * admin capability this resource has (certification ranks, permission
+     * keys, the supply shop, feature toggles, XP ranks, the audit trail),
+     * shown verbatim to a non-high-command delegate who holds exactly ONE
+     * of those -- someone granted only 'k9.equipmentshoplocations', say,
+     * would read a promise covering six different admin surfaces and find
+     * exactly one real tab. The heading stays the same for every viewer
+     * (a real, useful landmark either way), but the BODY now branches: a
+     * true high-command viewer keeps the original full-scope text
+     * unchanged (accurate for them -- they really do have all of it), and
+     * a delegate instead gets a sentence built from ONLY the capabilities
+     * canManageTabletTheme()/canManageShopLocations()/canManageShopItems()/
+     * canManageRuntimeControl() actually resolve true for them right now.
+     */
     function buildHomeHighCommandSignpost() {
         var section = mk('div', { class: 'k9tablet-home-section k9tablet-home-highcommand' });
         section.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('home_high_command_heading') }));
-        section.appendChild(mk('p', { class: 'k9tablet-muted', text: S('home_high_command_hint') }));
-        section.appendChild(mk('p', { class: 'k9tablet-hint', text: S('home_high_command_tabs_pointer') }));
+
+        if (state.viewer.isHighCommand) {
+            section.appendChild(mk('p', { class: 'k9tablet-muted', text: S('home_high_command_hint') }));
+            section.appendChild(mk('p', { class: 'k9tablet-hint', text: S('home_high_command_tabs_pointer') }));
+            return section;
+        }
+
+        var heldScopePhrases = [];
+        if (canManageTabletTheme()) heldScopePhrases.push(S('home_high_command_scope_theme'));
+        if (canManageShopLocations()) heldScopePhrases.push(S('home_high_command_scope_shop_locations'));
+        if (canManageShopItems()) heldScopePhrases.push(S('home_high_command_scope_shop_items'));
+        if (canManageRuntimeControl()) heldScopePhrases.push(S('home_high_command_scope_runtime_control'));
+
+        section.appendChild(mk('p', {
+            class: 'k9tablet-muted',
+            text: formatTemplate(S('home_high_command_delegate_hint_template'), { scope: joinEnglishList(heldScopePhrases) }),
+        }));
+        section.appendChild(mk('p', { class: 'k9tablet-hint', text: S('home_high_command_delegate_tabs_pointer') }));
         return section;
     }
 
@@ -4702,7 +4833,12 @@
         { tabLabelKey: 'tab_partnerships', descKey: 'help_tab_partnerships_desc', visible: helpAlwaysVisible },
         { tabLabelKey: 'tab_commands', descKey: 'help_tab_commands_desc', visible: helpAlwaysVisible },
         { tabLabelKey: 'tab_help', descKey: 'help_tab_help_desc', visible: helpAlwaysVisible },
-        { tabLabelKey: 'tab_console', descKey: 'help_tab_console_desc', visible: canAccessConsole },
+        // Widened from canAccessConsole to canOpenPersonRecord (workflow
+        // audit finding #1, 2026-08-26) -- the SAME real predicate
+        // buildTabs() itself now gates this tab on, so a 'k9.certify'/
+        // 'k9.givexp' holder who sees the tab also sees it explained here,
+        // never a described-but-invisible or visible-but-unexplained tab.
+        { tabLabelKey: 'tab_console', descKey: 'help_tab_console_desc', visible: canOpenPersonRecord },
         { tabLabelKey: 'tab_flows', descKey: 'help_tab_flows_desc', visible: helpHighCommandOnly },
         // Theme/Shop Locations/Shop Items/Runtime Control each moved off a
         // bare state.viewer.isHighCommand check onto their own
@@ -4922,12 +5058,27 @@
         //   - Check What Someone Did: canViewAudit() -- the SAME gate the
         //     Audit Trail tab itself uses, already isHighCommand-inclusive.
         if (helpHasCapability('k9.certify')) {
-            wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_certify_someone_heading'), [
+            var certifySomeoneSteps = [
                 S('help_task_hc_certify_someone_1'),
                 formatTemplate(S('help_task_hc_certify_someone_2_template'), { certifyLabel: S('certify_label') }),
-                S('help_task_hc_certify_someone_3'),
-                formatTemplate(S('help_task_hc_flow_steps_template'), { steps: flowOnboardStepLabels().join(' → ') }),
-            ]));
+            ];
+            // Workflow audit finding #1, 2026-08-26 -- the Guided Flows
+            // pointer (and the derived step-sequence line right after it)
+            // used to render for EVERY viewer who sees this walkthrough,
+            // including a 'k9.certify' delegate who is not high command.
+            // Guided Flows has no capability delegation at all (see
+            // buildTabs()'s own comment on its tab: "no server-side
+            // delegation exists for the guided-flow hub itself"), so that
+            // delegate could not see or use the very tab step 3 told them
+            // to open -- sends-you-to-a-tab-you-cannot-see, the exact bug
+            // class this audit finding is about. Only ever added for a
+            // TRUE high-command viewer now, who is the only one who can
+            // actually reach Guided Flows.
+            if (helpHighCommandOnly()) {
+                certifySomeoneSteps.push(S('help_task_hc_certify_someone_3'));
+                certifySomeoneSteps.push(formatTemplate(S('help_task_hc_flow_steps_template'), { steps: flowOnboardStepLabels().join(' → ') }));
+            }
+            wrap.appendChild(buildHelpTaskBlock(S('help_task_hc_certify_someone_heading'), certifySomeoneSteps));
         }
 
         if (helpHighCommandOnly()) {
@@ -5371,18 +5522,35 @@
     function buildConsoleScreen() {
         var wrap = mk('div', { class: 'k9tablet-screen' });
 
-        var toolbar = mk('div', { class: 'k9tablet-toolbar' });
-        var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('search_placeholder') } });
-        search.value = state.rosterQuery;
-        search.addEventListener('input', function (e) {
-            var q = e.target.value;
-            state.rosterQuery = q;
-            clearTimeout(searchDebounceTimer);
-            searchDebounceTimer = setTimeout(function () { loadRoster(q); }, SEARCH_DEBOUNCE_MS);
-        });
-        toolbar.appendChild(search);
-        toolbar.appendChild(mkButton(S('refresh_label'), 'k9tablet-btn', function () { loadRoster(state.rosterQuery); }));
-        wrap.appendChild(toolbar);
+        // NARROWED-ACCESS NOTICE (workflow audit finding #1, 2026-08-26) --
+        // a 'k9.certify'/'k9.givexp' holder who lacks 'k9.audit'/high
+        // command reaches this screen via canOpenPersonRecord() (see that
+        // function's own doc comment), but the roster search/listing below
+        // stays k9.audit/high-command only, deliberately (server/tablet.lua's
+        // OWNER'S DECISION on CallerHasConsoleAccess, untouched). This
+        // notice is the ONLY thing telling that viewer why the search box
+        // and table they might expect are simply not here -- without it,
+        // a smaller screen with no explanation looks like a bug, not a
+        // deliberate boundary.
+        var fullAccess = canAccessConsole();
+        if (!fullAccess) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('console_person_only_notice') }));
+        }
+
+        if (fullAccess) {
+            var toolbar = mk('div', { class: 'k9tablet-toolbar' });
+            var search = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('search_placeholder') } });
+            search.value = state.rosterQuery;
+            search.addEventListener('input', function (e) {
+                var q = e.target.value;
+                state.rosterQuery = q;
+                clearTimeout(searchDebounceTimer);
+                searchDebounceTimer = setTimeout(function () { loadRoster(q); }, SEARCH_DEBOUNCE_MS);
+            });
+            toolbar.appendChild(search);
+            toolbar.appendChild(mkButton(S('refresh_label'), 'k9tablet-btn', function () { loadRoster(state.rosterQuery); }));
+            wrap.appendChild(toolbar);
+        }
 
         // "Open by exact citizen ID" -- see this file's header note on
         // tablet:revertK9Ped's own NO-UNBOUNDED-TRAP contract. The roster
@@ -5393,8 +5561,20 @@
         // still be reachable to revert their appearance. This box calls
         // tablet:requestPersonSummary directly by citizenid, which (per
         // that callback's own contract) works for ANY citizenid regardless
-        // of certification state, bypassing the roster's own filter.
+        // of certification state, bypassing the roster's own filter. ALWAYS
+        // rendered regardless of fullAccess -- server/tablet.lua's
+        // CallerHasPersonAccess() admits a 'k9.certify'/'k9.givexp' holder
+        // here specifically, so this is that viewer's ONLY way in.
         var idBar = mk('div', { class: 'k9tablet-toolbar k9tablet-id-toolbar' });
+        // Workflow audit finding #2, 2026-08-26: this box previously had no
+        // text distinguishing it from the search bar above, so nothing told
+        // an operator it exists specifically FOR the case the roster search
+        // can never cover -- a person who has never held a certification
+        // (exactly who "Set Up a New Handler" targets). Rendered here for
+        // both fullAccess and narrowed viewers alike (the fact is true for
+        // both, and a narrowed viewer has no search bar to compare it
+        // against at all).
+        idBar.appendChild(mk('p', { class: 'k9tablet-hint k9tablet-open-by-id-hint', text: S('open_by_id_hint') }));
         var idInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('open_by_id_placeholder') } });
         idInput.value = state.openByIdValue;
         idInput.addEventListener('input', function (e) { state.openByIdValue = e.target.value; });
@@ -5414,6 +5594,16 @@
             openPerson(id, null);
         }));
         wrap.appendChild(idBar);
+
+        if (!fullAccess) {
+            // No roster to load/show for this viewer at all -- see the
+            // narrowed-access notice above. Never calls loadRoster()
+            // (goToConsoleScreen()/the tab button already skip that call
+            // for exactly this viewer, see their own comments) and never
+            // renders state.rosterLoading/rosterError/roster, all of which
+            // belong to a fetch this viewer's own tab never triggers.
+            return wrap;
+        }
 
         if (state.rosterLoading && !state.roster) {
             wrap.appendChild(mk('p', { text: S('loading') }));
@@ -9759,6 +9949,14 @@
         wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('flow_select_person_prompt') }));
 
         var idBar = mk('div', { class: 'k9tablet-toolbar k9tablet-id-toolbar' });
+        // Workflow audit finding #2, 2026-08-26 -- see buildConsoleScreen()'s
+        // identical hint for the full writeup: "Set Up a New Handler" is
+        // the ONE flow whose whole point is a person the search below can
+        // never find (it only ever lists people who already hold a
+        // certification), so this hint matters here MOST of all three
+        // flows that share this picker, even though it is worded generally
+        // enough to stay true for Offboarding/Problem Player too.
+        idBar.appendChild(mk('p', { class: 'k9tablet-hint k9tablet-open-by-id-hint', text: S('open_by_id_hint') }));
         var idInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('open_by_id_placeholder') } });
         idBar.appendChild(idInput);
         idBar.appendChild(mkButton(S('open_by_id_label'), 'k9tablet-btn', function () {
@@ -11079,7 +11277,8 @@
     }
 
     /** Substitutes `{key}`-style tokens in `template` from `replacements`
-     * -- this file's only string-formatting need (currently just
+     * -- this file's own lightweight string-formatting need (used by
+     * several *_template-suffixed locale keys throughout this file, e.g.
      * cert_tier_error_tier_in_use's `{count}`), so a tiny token replace is
      * used rather than pulling in a template-literal/sprintf dependency.
      * @param {string} template @param {Record<string, string|number>} replacements @returns {string} */
@@ -11249,12 +11448,23 @@
             case 'busy': return S('cert_tier_error_busy');
             case 'too_many_tiers': return S('cert_tier_error_too_many_tiers');
             case 'unknown_tier': return S('cert_tier_error_unknown_tier');
-            // 'protected_tier'/'tier_in_use' are REFUSALS ("cannot, and
-            // here is why"), not generic failures -- per this task's own
-            // instruction, given their own explanatory copy rather than a
-            // bare machine code or S('action_failed').
+            // 'protected_tier'/'tier_in_use'/'tier_in_use_by_shop_items' are
+            // REFUSALS ("cannot, and here is why"), not generic failures --
+            // per this task's own instruction, given their own explanatory
+            // copy rather than a bare machine code or S('action_failed').
             case 'protected_tier': return S('cert_tier_error_protected_tier');
             case 'tier_in_use': return formatTemplate(S('cert_tier_error_tier_in_use'), { count: typeof result.referenceCount === 'number' ? result.referenceCount : '' });
+            // The OTHER referrer DeleteTier checks (server/certtiers.lua,
+            // commit a32a554) -- a supply shop item requiring this tier.
+            // Kept in the SAME category as 'tier_in_use' immediately above
+            // (a real refusal with its own explanatory copy), never folded
+            // into that same message: "N certification records" and "N
+            // shop items" need different actions from the reader, and one
+            // combined count would send them to the wrong screen.
+            case 'tier_in_use_by_shop_items': return formatTemplate(S('cert_tier_error_tier_in_use_by_shop_items'), {
+                count: typeof result.referenceCount === 'number' ? result.referenceCount : '',
+                items: Array.isArray(result.shopItemKeys) ? result.shopItemKeys.join(', ') : '',
+            });
             case 'must_include_every_tier': return S('cert_tier_error_must_include_every_tier');
             case 'invalid_key_set': return S('cert_tier_error_invalid_key_set');
             case 'invalid_payload': return S('cert_tier_error_invalid_payload');
