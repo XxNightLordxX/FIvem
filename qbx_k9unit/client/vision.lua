@@ -615,19 +615,36 @@ local function EnsureCameraFeedThreadRunning()
     end)
 end
 
---- Toggles the K9<->handler partner camera feed. See this file's header
---- "CAMERA FEED" section for the full contract. Toggle-off (pressing the
---- same key again while a feed is active) always succeeds unconditionally
---- through StopCameraFeed() -- mirrors this resource's established
---- "termination must never be gated" posture (client/partnership.lua's
---- BreakPartnership(), client/movement.lua's DetachLeash()) -- only
---- STARTING a feed is gated.
-function ToggleCameraFeed()
-    if cameraFeedState.active then
-        StopCameraFeed('cameraFeed.feed_ended_manual')
-        return
-    end
+-- STALE-CAM GUARD (same bug class as client/kennel.lua's own
+-- "STALE-KENNEL GUARD" and client/fetch.lua's own "STALE-CARRY GUARD" --
+-- read either one first, not re-derived here -- and the identical
+-- re-entrancy shape as client/agility.lua's own `vaultInProgress` around
+-- TryVault()'s async obstacle sweep). StartCameraFeedAttempt() below calls
+-- RefreshPartnershipStateFromServer(), which YIELDS (client/partnership.lua's
+-- own doc comment: "an ox_lib callback round-trip"). `cameraFeedState.active`
+-- is only ever set true at the very end of a successful attempt, AFTER that
+-- yield returns -- so a second ToggleCameraFeed() dispatch (keybind
+-- double-press, engine auto-repeat, or two inputs landing in the same/
+-- adjacent frame) arriving while a first attempt's own round trip is still
+-- in flight would see `cameraFeedState.active` as still false, run its own
+-- independent StartCameraFeedAttempt(), and its own `cameraFeedState.cam =
+-- cam` assignment at the end would silently overwrite the first attempt's
+-- only handle to the cam IT already created via CreateCam -- orphaned,
+-- DestroyCam never called on it, StopCameraFeed()/onResourceStop below can
+-- only ever destroy whichever cam happens to still be in
+-- `cameraFeedState.cam` when they run. This flag closes that window: a
+-- second call arriving while a start attempt is already in flight is
+-- rejected outright, silently, same posture as `vaultInProgress`'s own
+-- rejection branch.
+local cameraFeedStartInProgress = false
 
+--- Runs every gate + the actual CreateCam/attach/activate sequence for
+--- starting a camera feed. Extracted out of ToggleCameraFeed() so that
+--- function can wrap this ENTIRE sequence (every internal `return` included)
+--- in the cameraFeedStartInProgress guard above with a single set/call/clear,
+--- rather than needing that guard reset duplicated at every one of this
+--- function's own early-return branches.
+local function StartCameraFeedAttempt()
     if not CanShowK9UI() then
         DenyK9UIAccess()
         return
@@ -718,6 +735,32 @@ function ToggleCameraFeed()
     })
 
     EnsureCameraFeedThreadRunning()
+end
+
+--- Toggles the K9<->handler partner camera feed. See this file's header
+--- "CAMERA FEED" section for the full contract. Toggle-off (pressing the
+--- same key again while a feed is active) always succeeds unconditionally
+--- through StopCameraFeed() -- mirrors this resource's established
+--- "termination must never be gated" posture (client/partnership.lua's
+--- BreakPartnership(), client/movement.lua's DetachLeash()) -- only
+--- STARTING a feed is gated (both by StartCameraFeedAttempt()'s own checks
+--- and by the cameraFeedStartInProgress guard immediately below, which that
+--- function's own doc comment explains).
+function ToggleCameraFeed()
+    if cameraFeedState.active then
+        StopCameraFeed('cameraFeed.feed_ended_manual')
+        return
+    end
+
+    if cameraFeedStartInProgress then
+        -- See cameraFeedStartInProgress's own declaration comment above --
+        -- silent rejection, same posture client/agility.lua's own
+        -- `vaultInProgress` branch already established for this bug class.
+        return
+    end
+    cameraFeedStartInProgress = true
+    StartCameraFeedAttempt()
+    cameraFeedStartInProgress = false
 end
 
 if Config.Features.CameraFeedPiP then

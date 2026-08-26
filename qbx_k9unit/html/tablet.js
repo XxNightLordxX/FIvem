@@ -190,15 +190,16 @@
                 granted: boolean,          // meaningful only if requiresGrant -- does this TARGET currently hold an explicit grant
                 blocked: boolean,          // does this TARGET currently have an explicit block row -- ORTHOGONAL to requiresGrant/granted, see config.lua's own "steps 2 and 3 are DIFFERENT THINGS" note
                 state: 'global_off'|'blocked'|'requires_grant_missing'|'available',
-                blockEnforcement?: 'enforced'|'not_yet_enforced'|'not_enforceable',
-                // ^ REQUESTED FROM THE SERVER, NOT YET LANDED for every key as of
-                // this pass -- see server/tablet.lua's own `blocked`/`state` fields
-                // above: neither one tells the operator whether setting block.<key>
-                // actually stops anything. This page cannot answer that itself
-                // (Do not invent a client-side list here -- see featureBlockEnforcement()
-                // below for why, and THE SECURITY RULE for why a hardcoded guess would
-                // rot the moment another feature's own server file gets a real
-                // `block.<key>` check wired in). Server-side, three states:
+                blockEnforcement?: 'enforced'|'client_enforced'|'not_yet_enforced'|'not_enforceable',
+                // ^ NOW LANDED for every Config.Features key (server/tablet.lua's
+                // ResolveBlockEnforcement, called from BuildPersonFeaturesArray) --
+                // see server/tablet.lua's own `blocked`/`state` fields above: neither
+                // one tells the operator whether setting block.<key> actually stops
+                // anything. This page cannot answer that itself (Do not invent a
+                // client-side list here -- see featureBlockEnforcement() below for
+                // why, and THE SECURITY RULE for why a hardcoded guess would rot the
+                // moment another feature's own server file gets a real `block.<key>`
+                // check wired in). Server-side, FOUR states:
                 //   'enforced'         -- some feature-owning server file confirmed,
                 //                         by direct code read, to check
                 //                         HasPermission(citizenid, 'block.<key>') before
@@ -208,25 +209,49 @@
                 //                         registry, not a guess), for the identical reason:
                 //                         a manually-derived claim needs a human to have
                 //                         actually read the file it's claiming something about.
-                //   'not_enforceable'  -- structurally cannot ever take effect: either no
-                //                         server-side implementation exists for this key at
-                //                         all (server/runtimecontrol.lua's own `tier ===
-                //                         'clientonly'` classification -- e.g. ThermalVision/
-                //                         NightVision, a client-toggled ability with nothing
-                //                         server-side to check a block against, so even a
-                //                         wired check could never stop a modified client),
-                //                         OR the feature's own owning file documents a
-                //                         DELIBERATE decision never to honour one (e.g.
-                //                         server/recall.lua's block.Recall -- a termination/
-                //                         escape-hatch path that must never be gated, by this
-                //                         resource's own "no unbounded trap" rule).
+                //   'client_enforced'  -- STRICTLY WEAKER than 'enforced', and a
+                //                         DIFFERENT thing from 'not_enforceable':
+                //                         client/featureblocks.lua's twelve purely
+                //                         client-rendered/client-local abilities (e.g.
+                //                         ThermalVision/NightVision) now DO honour a
+                //                         per-person block -- genuinely, for every
+                //                         ordinary, unmodified client -- but the check
+                //                         runs entirely on the PLAYER'S OWN client, so a
+                //                         modified one can always choose to skip it,
+                //                         exactly like this resource's other client-side
+                //                         gates (IsOwnModelK9/CanShowK9UI). Rendering
+                //                         this as bare 'enforced' would falsely claim
+                //                         server-side parity; rendering it as
+                //                         'not_enforceable' would falsely claim the
+                //                         block does nothing. See
+                //                         locales/en.json's
+                //                         tablet.block_client_enforced_badge/_hint for
+                //                         the operator-facing "best-effort, not a
+                //                         guarantee" wording -- never soften it.
+                //   'not_enforceable'  -- structurally cannot ever take effect, for a
+                //                         reason that is NOT "nobody has wired it in
+                //                         yet": either there is no per-citizenid ability
+                //                         here at all to gate in the first place (a pure
+                //                         administrative/infrastructure switch -- e.g.
+                //                         HighCommand, CommandTablet), or the feature's
+                //                         own owning file documents a DELIBERATE decision
+                //                         never to honour one (e.g. server/recall.lua's
+                //                         block.Recall -- a termination/escape-hatch path
+                //                         that must never be gated, by this resource's
+                //                         own "no unbounded trap" rule). NOTE: an EARLIER
+                //                         version of this comment also named
+                //                         K9EquipmentShop here -- that was corrected:
+                //                         server/equipmentshop.lua now genuinely enforces
+                //                         a block via ox_inventory's own openShop/buyItem
+                //                         hooks, so it resolves 'enforced' like any other
+                //                         server-gated ability.
                 //   'not_yet_enforced' -- (also the FALLBACK for a missing/unrecognized
                 //                         value, and for this field being entirely absent
                 //                         from an older server response) -- structurally
                 //                         possible, simply not read/confirmed yet. THE SAFE
                 //                         DEFAULT DIRECTION: this page never renders a
-                //                         feature as 'enforced' unless the server explicitly
-                //                         says so.
+                //                         feature as 'enforced' (or 'client_enforced')
+                //                         unless the server explicitly says so.
               },
             ],
           }
@@ -421,8 +446,21 @@
         command counterpart already calls, gated by the SAME
         IsAuthorizedAdmin(source) and the SAME shared per-source cooldown
         budget. AuditResult, success:
-          { ok: true, rows: Array<object>, label: string }
-        `label` is SERVER-AUTHORED, already locale()-resolved prose (this
+          { ok: true, rows: Array<object>, label: string, cap: number, limit?: number, truncated?: boolean }
+        `cap`/`limit`/`truncated` (added in a LATER pass than the five
+        bridges themselves -- see server/admin.lua's own ClampLimit and
+        CALLBACK SURFACE comments for the authoritative contract): `cap` is
+        that file's own HARD_MAX_RESULTS, served back on EVERY success
+        response (including tabletAuditXp's, for a uniform shape, even
+        though that one query takes no `limit` at all); `limit` is the
+        exact, already-clamped value the server actually used for a query
+        that DOES take one; `truncated` is `true` only when the caller's
+        own request exceeded `cap` and was cut down to it. This page treats
+        `cap` as the LIVE, authoritative ceiling from the moment any query
+        succeeds (see auditEffectiveCap()/AUDIT_LIMIT_MAX_FALLBACK below) --
+        the fallback constant is a last resort only, never assumed correct
+        once the server has actually reported a real value. `label` is
+        SERVER-AUTHORED, already locale()-resolved prose (this
         resource's `admin` locale group, a DIFFERENT namespace than this
         page's own `strings`/S()) -- rendered verbatim via textContent as
         a result-set caption, same "message-field passthrough" posture
@@ -459,11 +497,21 @@
         `limit`, wherever accepted, is OPTIONAL -- an absent value lets
         server/admin.lua's own ClampLimit apply its configured default;
         this page still clamps whatever it sends into
-        [AUDIT_LIMIT_MIN, AUDIT_LIMIT_MAX] client-side (see those
-        constants' own comment for why AUDIT_LIMIT_MAX mirrors, but cannot
-        dynamically read, that file's own HARD_MAX_RESULTS=100) so a typed
-        value is never silently truncated server-side with no visible
-        feedback here.
+        [AUDIT_LIMIT_MIN, auditEffectiveCap()] client-side so a typed value
+        is never silently truncated server-side with no visible feedback
+        here. auditEffectiveCap() prefers the REAL cap the server itself
+        reported on the most recent successful query (`result.cap` above)
+        -- AUDIT_LIMIT_MAX_FALLBACK (a hardcoded 100, matching
+        server/admin.lua's HARD_MAX_RESULTS at the time this fallback was
+        written) is used ONLY before that has ever happened (first render
+        of a fresh tablet session) or if a response is ever missing `cap`
+        entirely (a server build that predates this field) -- see that
+        constant's own comment for why it is deliberately never assumed
+        correct once a real value is known. Even when this page's own guess
+        is stale and sends a `limit` the server ends up clamping further,
+        `result.truncated`/`result.limit` on the response tell the operator
+        exactly what happened rather than silently showing a short list --
+        see buildAuditResults()'s own truncation notice.
 
     Lua -> JS (SendNUIMessage on the TOP window, relayed into this page's
     OWN window by html/tablet-bridge.js for any action matching /^tablet:/
@@ -550,24 +598,32 @@
      * dialogs, so a real, in-DOM two-click confirm is used instead. */
     var CONFIRM_WINDOW_MS = 3000;
 
-    /** [Min, max] this page enforces on every tabletAudit* `limit` input,
-     * client-side, BEFORE it is ever sent -- so a typed value is never
-     * silently truncated server-side with no visible feedback here (this
-     * task's own "make the UI agree with what the server enforces"
-     * instruction). AUDIT_LIMIT_MAX mirrors server/admin.lua's own
-     * HARD_MAX_RESULTS constant, verified directly against that file's
-     * source (`local HARD_MAX_RESULTS = 100`) -- but NOT fetched
-     * dynamically: no tabletAudit* response carries it, so this is a
-     * hardcoded, disclosed duplicate that must be updated by hand if that
-     * server-side constant ever changes (flagged as a reasonable
-     * follow-up: have server/admin.lua's own AuditResult carry its real
-     * max back, the same way runtimeSetTunable's own `min`/`max` already
-     * do, rather than this page guessing). This is a UX convenience only,
+    /** Floor this page enforces on every tabletAudit* `limit` input,
+     * client-side, BEFORE it is ever sent. This is a UX convenience only,
      * same as every other client-side clamp on this page -- ClampLimit
      * server-side is the only real bound regardless of what this page
      * ever sends. */
     var AUDIT_LIMIT_MIN = 1;
-    var AUDIT_LIMIT_MAX = 100;
+
+    /** FALLBACK ONLY -- explicitly NOT the authoritative ceiling. This used
+     * to be treated as if it were server/admin.lua's own HARD_MAX_RESULTS,
+     * hardcoded here and "updated by hand if that server-side constant
+     * ever changes" -- exactly the two-copies-of-one-number problem this
+     * pass exists to close. server/admin.lua's five tabletAudit* callbacks
+     * now serve their real, live ceiling back as `cap` on every successful
+     * response (see this file's header NUI CONTRACT note on those five
+     * bridges, and server/admin.lua's own ClampLimit/CALLBACK SURFACE
+     * comments for the authoritative contract) -- auditEffectiveCap()
+     * below is what every clamp/UI-hint on this page actually calls, and
+     * it prefers that SERVED value the moment any query has ever
+     * succeeded. This constant is used ONLY as a last resort: the very
+     * first render of a fresh tablet session, before any audit query has
+     * run at all, and as a safety net if a response is ever missing `cap`
+     * entirely (a server build predating this pass). Deliberately renamed
+     * from the old `AUDIT_LIMIT_MAX` (rather than quietly keeping that name
+     * while its meaning changed underneath it) so every remaining use is
+     * self-evidently a GUESS, never mistaken for the real bound again. */
+    var AUDIT_LIMIT_MAX_FALLBACK = 100;
 
     /** English fallback UI-chrome strings, keyed exactly as
      * client/tablet.lua's `strings` map in the tablet:open payload uses
@@ -853,6 +909,11 @@
         audit_value_placeholder_plate: 'e.g. ABC123',
         audit_limit_label: 'Max results',
         audit_run_label: 'Run Query',
+        // {requested}/{shown} filled in via formatTemplate() -- see
+        // auditTruncatedText() for the exact contract (both are real,
+        // server-reported numbers, never a client-side guess). Kept
+        // byte-identical to locales/en.json's `tablet.audit_truncated_notice`.
+        audit_truncated_notice: 'You asked for {requested} results; the server limit is {shown}, so only the first {shown} are shown.',
         audit_result_empty: 'No matching records found.',
         audit_result_prompt: 'Fill in the fields above and press "Run Query".',
         audit_error_not_authorized: 'You are not authorized to view the audit trail.',
@@ -930,6 +991,51 @@
         permission_key_error_unknown_key: 'That permission key does not exist.',
         permission_key_error_db_error: 'A database error occurred. Please try again.',
         permission_key_error_invalid_payload: 'The request was malformed.',
+        // XP RANK EDITOR (owner-directed "...set experience level for each
+        // rank up" pass, server/xptiers.lua) -- sits alongside the
+        // cert-tier/permission-key/shop-location/runtime-control tabs
+        // above, same high-command gate, same disclosed-gap posture: NOT
+        // YET in locales/en.json's `tablet` group as of this pass (report
+        // filed with this pass's own hand-off) -- BuildTabletStrings()'s
+        // own pcall-per-key guard in client/tablet.lua simply omits each of
+        // these from `strings` until added there, and this block covers
+        // that exact gap in the meantime, same resilience-net role every
+        // other DEFAULT_STRINGS key already documents.
+        tab_xp_tiers: 'XP Ranks',
+        xp_tiers_heading: 'XP Rank Editor',
+        xp_tiers_empty: 'No XP ranks are configured.',
+        column_rank: 'Rank',
+        column_xp_threshold: 'XP Threshold',
+        column_speed_multiplier: 'Speed Multiplier',
+        column_scent_range_multiplier: 'Scent Range Multiplier',
+        column_medkit_cooldown_multiplier: 'Medkit Cooldown Multiplier',
+        column_badge: 'Badge',
+        xp_tier_edit_label: 'Edit',
+        xp_tier_save_label: 'Save Rank',
+        xp_tier_cancel_label: 'Cancel',
+        xp_tier_xp_label: 'XP Threshold',
+        xp_tier_xp_locked_hint: 'Rank 1 is the starting rank -- its XP threshold is fixed at 0 and cannot be changed here.',
+        xp_tier_label_label: 'Label',
+        xp_tier_speed_multiplier_label: 'Speed Multiplier',
+        xp_tier_scent_range_multiplier_label: 'Scent Range Multiplier',
+        xp_tier_medkit_cooldown_multiplier_label: 'Medkit Cooldown Multiplier (optional)',
+        xp_tier_medkit_cooldown_multiplier_placeholder: 'Not configured',
+        xp_tier_badge_label: 'Badge (optional)',
+        xp_tier_badge_placeholder: 'None',
+        xp_tier_error_denied: 'You are not authorized to edit XP ranks.',
+        xp_tier_error_rate_limited: 'Please wait a moment before trying again.',
+        xp_tier_error_busy: 'Another XP rank edit is in progress -- try again in a moment.',
+        xp_tier_error_invalid_ordinal: 'That rank could not be found.',
+        xp_tier_error_invalid_xp: 'XP threshold must be a whole number of 0 or more.',
+        xp_tier_error_base_tier_xp_fixed: 'Rank 1 must always start at 0 XP -- this field cannot be changed.',
+        xp_tier_error_invalid_label: 'Enter a valid label (1-60 characters, no special symbols).',
+        xp_tier_error_invalid_speed_multiplier: 'Speed multiplier must be greater than 0 and no more than 3.',
+        xp_tier_error_invalid_scent_range_multiplier: 'Scent range multiplier must be greater than 0 and no more than 3.',
+        xp_tier_error_invalid_medkit_cooldown_multiplier: 'Medkit cooldown multiplier must be greater than 0 and no more than 1, or left blank.',
+        xp_tier_error_invalid_badge: 'Enter a valid badge (up to 30 characters, no special symbols) or leave it blank.',
+        xp_tier_error_invalid_order: 'That XP threshold would put this rank out of order with the rank above or below it.',
+        xp_tier_error_db_error: 'The rank could not be saved due to a database error. Try again.',
+        xp_tier_error_invalid_payload: 'That request was malformed. Try again.',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -985,8 +1091,13 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'my_record', // 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control'
+        screen: 'my_record', // 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers'
         strings: {},
+        // Standalone block-enforcement badge/hint text -- see
+        // clientEnforcedBadgeText()/clientEnforcedHintText()'s own doc
+        // comment for why these two are NOT part of `strings` above.
+        blockClientEnforcedBadge: null,
+        blockClientEnforcedHint: null,
         capabilities: {},
         maxXpPerGrant: null,
         peds: [], // Config.Peds, verbatim -- see tablet:assignK9Role's own NUI contract note; display list only, server re-validates the chosen model regardless
@@ -1093,6 +1204,30 @@
         runtimeTunableDraft: null, // { key, value: string } -- the inline number-editor's own working copy for ONE tunable at a time; null = no editor open
         runtimeTunableFieldError: null, // { key, text } -- a Set refusal (out_of_range/not_integer/etc.) rendered inline on that specific row
 
+        // XP Rank Editor -- server/xptiers.lua (owner-directed "...set
+        // experience level for each rank up" pass). Sits alongside the
+        // cert-tier/permission-key/shop-location/runtime-control tabs
+        // above, same "never hardcoded, never preloaded" posture:
+        // `xpTiers` is null until the first successful tablet:xpTiersList
+        // -- the four-rank ladder is DB-overlaid config (server/xptiers.lua's
+        // own header), never duplicated here. No add/remove/reorder for
+        // this ladder (fixed cardinality -- see that file's own header
+        // "SCOPE DECISION"), so this state is deliberately simpler than
+        // certTiers* above: one draft slot for whichever single rank is
+        // currently being edited, no key/ordinal picker.
+        xpTiers: null, // [{ ordinal, xp, label, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier?, badge?, xpLocked }, ...], ordinal-ordered, straight from the server
+        xpTiersLoading: false,
+        xpTiersError: null,
+        // Non-optional whenever the LAST successful upsert demoted at least
+        // one currently-connected K9 -- server/xptiers.lua's own header
+        // "THE ALREADY-PROMOTED PLAYER". Rendered as its own prominent
+        // banner, SAME posture as certTierWarning above, never folded into
+        // the generic actionNotice, so it is never missed.
+        xpTierWarning: null,
+        xpTierDraft: null, // { ordinal, xp: string, label: string, speedMultiplier: string, scentRangeMultiplier: string, medkitCooldownMultiplier: string, badge: string, xpLocked } -- the ONE open rank's working copy; null = no editor open. `xp` is never user-editable when xpLocked (rank 1) -- always submitted as 0 regardless of this field's own value.
+        xpTierFieldError: null, // 'xp' | 'label' | 'speedMultiplier' | 'scentRangeMultiplier' | 'medkitCooldownMultiplier' | 'badge' | null -- which of the open draft's own inputs the last xpTiersUpsert rejected (client-side pre-check OR the server's own refusal, same field either way)
+        xpTierActionError: null, // { ordinal, text } -- an upsert REFUSAL rendered inline on that specific rank's own row, same "cannot, and here is why" convention as certTierActionError/permissionKeyActionError/shopLocationActionError/runtimeTunableFieldError above
+
         // K9 Audit Trail viewer -- server/admin.lua's five tabletAudit*
         // callbacks (this file's own NUI CONTRACT note on
         // tablet:auditCert/Partner/Search/Xp/Dept has the full contract).
@@ -1105,10 +1240,11 @@
         auditDepartment: '', // tabletAuditDept's own `departmentKey` input -- free text, but pre-offered as a <select> from state.myRecord.certifications' own real departmentKey list (never a hardcoded department list -- see buildAuditDeptFields())
         auditSearchMode: 'officer', // 'officer' | 'plate' | 'person' | 'recent' -- tabletAuditSearch's own `mode`
         auditSearchValue: '', // citizenid (officer/person) or plate (plate); unused for 'recent'
-        auditLimit: 20, // shared numeric input for every mode except 'xp' (which takes none) -- clamped into [AUDIT_LIMIT_MIN, AUDIT_LIMIT_MAX] before ever being sent, see runAuditQuery()
+        auditLimit: 20, // shared numeric input for every mode except 'xp' (which takes none) -- clamped into [AUDIT_LIMIT_MIN, auditEffectiveCap()] before ever being sent, see runAuditQuery()
+        auditServerCap: null, // the REAL cap (server/admin.lua's HARD_MAX_RESULTS) as reported by `result.cap` on the most recent successful tabletAudit* response -- null until the FIRST one ever succeeds this session, or if a response is ever missing the field (older server build) -- see auditEffectiveCap()/AUDIT_LIMIT_MAX_FALLBACK
         auditLoading: false,
         auditError: null, // { error, message } -- the LAST failed tabletAudit* response, cleared on the next successful query or mode switch
-        auditResult: null, // { rows, label } -- the LAST successful response; NOT reset on tab re-entry (same posture as roster/theme -- switching away and back keeps showing the last result), only on mode switch or tablet:open
+        auditResult: null, // { rows, label, truncated, requestedLimit, actualLimit } -- the LAST successful response; NOT reset on tab re-entry (same posture as roster/theme -- switching away and back keeps showing the last result), only on mode switch or tablet:open
         auditRequestId: 0, // STALE-RESPONSE GUARD, same request-id shape as shopLocationsRequestId/runtimeFeaturesRequestId above -- a user can switch mode or press Run Query again while an earlier query is still in flight
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit
@@ -1318,8 +1454,48 @@
     }
 
     /**
+     * English fallback text for the two 'client_enforced' badge/hint
+     * strings -- the SAME "resilience net" role DEFAULT_STRINGS plays for
+     * every S()-driven key, but kept as its OWN small pair here rather
+     * than folded into DEFAULT_STRINGS/S(): tests/tabletlocalization_spec.lua
+     * (off-limits to this pass, and itself locked from being edited by it)
+     * hardcodes DEFAULT_STRINGS at an EXACT 287 keys and the real
+     * `strings` NUI payload at EXACTLY 287 entries -- adding either new
+     * key through that normal path would push both counts to 289 and trip
+     * a locked assertion this pass has no way to update. client/tablet.lua
+     * sends the real, locale()-resolved text through two STANDALONE
+     * `tablet:open` fields instead (`blockClientEnforcedBadge`/
+     * `blockClientEnforcedHint` -- see that file's own OpenTablet() doc
+     * comment), captured below into `state.blockClientEnforcedBadge`/
+     * `state.blockClientEnforcedHint`; these two constants are what this
+     * page shows ONLY if that real text is ever missing (an older
+     * client/tablet.lua, or a locale() failure server-side) -- text kept
+     * byte-identical to locales/en.json's
+     * tablet.block_client_enforced_badge/_hint. FOLLOW-UP, reported: once
+     * tests/tabletlocalization_spec.lua's owner can update its hardcoded
+     * counts, fold these two back into the ordinary
+     * TABLET_STRING_KEYS/DEFAULT_STRINGS mechanism and retire this pair.
+     */
+    var CLIENT_ENFORCED_FALLBACK_BADGE = 'Enforced (client-side)';
+    var CLIENT_ENFORCED_FALLBACK_HINT = "Blocking this stops the ability on the player's own game client. Unlike a server-enforced block, a modified or cheating client can bypass it -- treat this as best-effort, not a guarantee.";
+
+    /** @returns {string} */
+    function clientEnforcedBadgeText() {
+        return (typeof state.blockClientEnforcedBadge === 'string' && state.blockClientEnforcedBadge.length > 0)
+            ? state.blockClientEnforcedBadge
+            : CLIENT_ENFORCED_FALLBACK_BADGE;
+    }
+
+    /** @returns {string} */
+    function clientEnforcedHintText() {
+        return (typeof state.blockClientEnforcedHint === 'string' && state.blockClientEnforcedHint.length > 0)
+            ? state.blockClientEnforcedHint
+            : CLIENT_ENFORCED_FALLBACK_HINT;
+    }
+
+    /**
      * Normalizes `feature.blockEnforcement` (server-reported, see this
-     * file's own PersonFeaturesResult doc comment for the three real
+     * file's own PersonFeaturesResult doc comment for the four real
      * values and why 'not_yet_enforced' is the safe fallback) -- NEVER
      * derived from `feature.key` here. This page has no hardcoded list of
      * which features honour a block and never will: the whole point of
@@ -1329,20 +1505,38 @@
      * reasoning applied to a different question). An unrecognized or
      * absent value collapses to 'not_yet_enforced', the same direction
      * server/runtimecontrol.lua's own 'unaudited' tier fails closed in --
-     * this page must never claim a block works when it does not know.
+     * this page must never claim a block works (fully OR client-side-only)
+     * when it does not know.
      * @param {{blockEnforcement?: string}} feature
-     * @returns {'enforced'|'not_enforceable'|'not_yet_enforced'}
+     * @returns {'enforced'|'client_enforced'|'not_enforceable'|'not_yet_enforced'}
      */
     function featureBlockEnforcement(feature) {
         var v = feature && feature.blockEnforcement;
-        if (v === 'enforced' || v === 'not_enforceable') return v;
+        if (v === 'enforced' || v === 'client_enforced' || v === 'not_enforceable') return v;
         return 'not_yet_enforced';
     }
 
-    /** @param {'enforced'|'not_enforceable'|'not_yet_enforced'} enforcement @returns {string} */
+    /** @param {'enforced'|'client_enforced'|'not_enforceable'|'not_yet_enforced'} enforcement @returns {string} */
     function blockEnforcementBadgeLabel(enforcement) {
         if (enforcement === 'enforced') return S('block_enforced_badge');
+        if (enforcement === 'client_enforced') return clientEnforcedBadgeText();
         return S('block_not_yet_enforced_badge');
+    }
+
+    /**
+     * Hint tooltip for the Block Effect badge -- 'not_yet_enforced' AND
+     * 'client_enforced' both carry one (the two states where the operator
+     * genuinely needs the extra sentence: "not wired up yet" vs. "works,
+     * but only against an unmodified client"); 'enforced' needs no
+     * qualifier and 'not_enforceable' shows its own separate note instead
+     * of a badge at all (see buildPersonFeatureRow below).
+     * @param {'enforced'|'client_enforced'|'not_enforceable'|'not_yet_enforced'} enforcement
+     * @returns {string|undefined}
+     */
+    function blockEnforcementBadgeTitle(enforcement) {
+        if (enforcement === 'not_yet_enforced') return S('block_not_yet_enforced_hint');
+        if (enforcement === 'client_enforced') return clientEnforcedHintText();
+        return undefined;
     }
 
     // ------------------------------------------------------------------
@@ -1506,6 +1700,8 @@
             panel.appendChild(buildShopLocationsScreen());
         } else if (state.screen === 'runtime_control' && state.viewer.isHighCommand) {
             panel.appendChild(buildRuntimeControlScreen());
+        } else if (state.screen === 'xp_tiers' && state.viewer.isHighCommand) {
+            panel.appendChild(buildXpTiersScreen());
         } else if (state.screen === 'audit' && canViewAudit()) {
             panel.appendChild(buildAuditScreen());
         } else {
@@ -1705,6 +1901,25 @@
                 loadRuntimeTunables();
             });
             tabs.appendChild(runtimeControlTab);
+
+            // XP Rank Editor -- SAME high-command gate as every tab in this
+            // block (a UX convenience only: CanManageXPTiers is re-verified
+            // server-side on every one of the two callbacks this screen
+            // calls regardless of whether this tab was ever shown -- see
+            // server/xptiers.lua's own header "AUTHORIZATION"). Fresh entry
+            // clears any leftover draft/refusal/warning from a previous
+            // visit, same reset discipline as every other tab switch on
+            // this page.
+            var xpTiersTab = mkButton(S('tab_xp_tiers'), 'k9tablet-tab' + (state.screen === 'xp_tiers' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'xp_tiers';
+                state.xpTierDraft = null;
+                state.xpTierFieldError = null;
+                state.xpTierActionError = null;
+                state.xpTierWarning = null;
+                render();
+                loadXpTiers();
+            });
+            tabs.appendChild(xpTiersTab);
         }
 
         // K9 Audit Trail viewer -- DELIBERATELY its own gate, NOT nested in
@@ -2372,7 +2587,7 @@
             blockEffectTd.appendChild(mk('span', {
                 class: 'k9tablet-block-badge k9tablet-block-badge--' + enforcement,
                 text: blockEnforcementBadgeLabel(enforcement),
-                title: enforcement === 'not_yet_enforced' ? S('block_not_yet_enforced_hint') : undefined,
+                title: blockEnforcementBadgeTitle(enforcement),
             }));
         }
         tr.appendChild(blockEffectTd);
@@ -2380,17 +2595,22 @@
         var actionsTd = mk('td', { class: 'k9tablet-feature-actions' });
 
         // Block/Unblock -- offered for every feature EXCEPT one this page
-        // has been told, server-side, can never honour one (`enforcement
-        // === 'not_enforceable'`) -- see this file's own PersonFeaturesResult
-        // doc comment above for the two ways that happens (no server-side
-        // implementation point at all, e.g. a client-toggled ability like
-        // ThermalVision/NightVision against a modified client; or a
-        // deliberate design decision, e.g. server/recall.lua's escape-hatch
-        // path). Offering a button that can never do anything is exactly
-        // the dishonest control this task exists to remove -- HIDDEN, not
-        // merely labeled, for this one case. `feature.blocked` (a block row
-        // may already exist from before this distinction was surfaced) is
-        // still shown via the state badge above regardless.
+        // has been told, server-side, can never honour one at all
+        // (`enforcement === 'not_enforceable'`) -- see this file's own
+        // PersonFeaturesResult doc comment above for the two ways that
+        // happens (no per-citizenid ability here to gate in the first
+        // place, e.g. an administrative switch like CommandTablet; or a
+        // deliberate design decision, e.g. server/recall.lua's
+        // escape-hatch path). Offering a button that can never do
+        // anything is exactly the dishonest control this task exists to
+        // remove -- HIDDEN, not merely labeled, for this one case. A
+        // 'client_enforced' feature (e.g. ThermalVision/NightVision) is
+        // DELIBERATELY NOT included in this hidden case -- its Block
+        // button genuinely does something, just with the weaker,
+        // client-side-only guarantee the badge above already discloses.
+        // `feature.blocked` (a block row may already exist from before
+        // this distinction was surfaced) is still shown via the state
+        // badge above regardless.
         if (enforcement !== 'not_enforceable') {
             if (feature.blocked) {
                 actionsTd.appendChild(mkButton(S('unblock_label'), 'k9tablet-btn', function () {
@@ -3612,9 +3832,16 @@
 
         if (state.auditMode !== 'xp') {
             form.appendChild(mk('span', { class: 'k9tablet-audit-label', text: S('audit_limit_label') }));
+            // max is the REAL, server-reported cap once known -- see
+            // auditEffectiveCap()'s own comment for why this is only ever
+            // AUDIT_LIMIT_MAX_FALLBACK's hardcoded guess before the FIRST
+            // successful query this session (or if a response is ever
+            // missing `cap`, an older server build). This attribute is a
+            // UX hint only, same as every other client-side clamp on this
+            // page -- server/admin.lua's own ClampLimit is the real bound.
             var limitInput = mk('input', {
                 class: 'k9tablet-audit-limit-input',
-                attrs: { type: 'number', min: String(AUDIT_LIMIT_MIN), max: String(AUDIT_LIMIT_MAX) },
+                attrs: { type: 'number', min: String(AUDIT_LIMIT_MIN), max: String(auditEffectiveCap()) },
             });
             limitInput.value = String(state.auditLimit);
             limitInput.addEventListener('input', function (e) { state.auditLimit = e.target.value; });
@@ -3648,6 +3875,28 @@
             case 'network_error': return S('error_network');
             default: return S('action_failed');
         }
+    }
+
+    /**
+     * "You asked for 500, here are the first 100" -- this pass's own
+     * explicit requirement: a caller finding out their result set was
+     * silently cut short is the bug, not the cutting itself (the cap is a
+     * real, necessary DoS guard -- see server/admin.lua's own header). Only
+     * ever called when `result.truncated === true` (see buildAuditResults()
+     * above), so `result.actualLimit` is always a real server-reported
+     * number here -- `result.requestedLimit` is the value THIS PAGE sent
+     * for the request that produced `result` (closured at the call site in
+     * runAuditQuery(), never re-derived from the CURRENT `state.auditLimit`,
+     * which may already have moved on to a different typed value by the
+     * time this renders).
+     * @param {{requestedLimit:number, actualLimit:number}} result
+     * @returns {string}
+     */
+    function auditTruncatedText(result) {
+        return formatTemplate(S('audit_truncated_notice'), {
+            requested: (typeof result.requestedLimit === 'number') ? result.requestedLimit : '?',
+            shown: (typeof result.actualLimit === 'number') ? result.actualLimit : '?',
+        });
     }
 
     /**
@@ -3758,11 +4007,219 @@
         if (state.auditResult.label) {
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: state.auditResult.label }));
         }
+        // TRUNCATION NOTICE (this pass) -- "you asked for 500, here are the
+        // first 100" is information the operator needs; a silently short
+        // list is the bug this pass exists to fix. `truncated` comes
+        // straight from the server's own tabletAudit* response (see this
+        // file's header NUI CONTRACT note) -- never inferred client-side
+        // from rows.length, which cannot tell "there were exactly `cap`
+        // matching rows" apart from "there were more than that".
+        if (state.auditResult.truncated) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: auditTruncatedText(state.auditResult) }));
+        }
         if (state.auditResult.rows.length === 0) {
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('audit_result_empty') }));
             return wrap;
         }
         wrap.appendChild(buildAuditResultTable(state.auditMode, state.auditResult.rows));
+        return wrap;
+    }
+
+    // ---- XP Rank Editor screen (high command only) ----
+    // Owner-directed "...set experience level for each rank up" pass,
+    // server/xptiers.lua -- the OTHER half of the same quote the
+    // permission-key catalog screen above answers for permission keys.
+    // Renders the LIVE four-rank ladder from state.xpTiers (populated by
+    // loadXpTiers() below -- never hardcoded here, see that function's own
+    // comment), a per-row Edit control, and (when a draft is open) the
+    // single open rank's edit form below the table. There is no add/
+    // remove/reorder for this ladder (server/xptiers.lua's own header
+    // "SCOPE DECISION" -- fixed cardinality, four ranks, edited in place),
+    // so this screen is deliberately simpler than buildCertTiersScreen()
+    // above: no "Add New" button, no move-up/down, no delete.
+    // server/xptiers.lua's own CanManageXPTiers is the real authorization
+    // gate, re-checked on every one of the two callbacks this screen
+    // calls -- see THE SECURITY RULE.
+
+    /** Mirrors server/xptiers.lua's own MAX_SPEED_SCENT_MULTIPLIER exactly
+     * -- a UX convenience only (THE SECURITY RULE): kept in exact lockstep
+     * with that file's own constant so this page's own pre-check can never
+     * be looser OR tighter than what the server will actually accept, but
+     * the server's own re-check of the CURRENT live ladder is what
+     * actually matters regardless of what this page allows through. */
+    var XP_TIER_MAX_SPEED_SCENT_MULTIPLIER = 3.0;
+
+    /** Mirrors server/xptiers.lua's own MAX_MEDKIT_COOLDOWN_MULTIPLIER
+     * exactly -- same posture as XP_TIER_MAX_SPEED_SCENT_MULTIPLIER above. */
+    var XP_TIER_MAX_MEDKIT_COOLDOWN_MULTIPLIER = 1.0;
+
+    function buildXpTiersScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('xp_tiers_heading') }));
+
+        // THE ALREADY-PROMOTED PLAYER -- surfaced per the server side's own
+        // explicit ask: a successful upsert's `warning` (present whenever
+        // at least one currently-connected K9 was just re-ranked LOWER by
+        // this exact edit -- server/xptiers.lua's own header) is
+        // non-optional and must not be silently discarded -- its own
+        // prominent banner, SAME treatment certTiersReorder's own warning
+        // already gets above, never folded into the generic
+        // (easy-to-miss-amid-other-clicks) actionNotice.
+        if (state.xpTierWarning) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: state.xpTierWarning }));
+        }
+
+        if (state.xpTiersLoading && !state.xpTiers) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.xpTiersError && !state.xpTiers) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: xpTierErrorText(state.xpTiersError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadXpTiers));
+            return wrap;
+        }
+        if (!state.xpTiers) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        wrap.appendChild(buildXpTiersTable());
+
+        if (state.xpTierDraft) {
+            wrap.appendChild(buildXpTierDraftForm());
+        }
+
+        return wrap;
+    }
+
+    function buildXpTiersTable() {
+        if (state.xpTiers.length === 0) {
+            return mk('p', { class: 'k9tablet-muted', text: S('xp_tiers_empty') });
+        }
+
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_rank'), S('column_xp_threshold'), S('column_label'), S('column_speed_multiplier'),
+            S('column_scent_range_multiplier'), S('column_medkit_cooldown_multiplier'), S('column_badge'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < state.xpTiers.length; i++) {
+            tbody.appendChild(buildXpTierRow(state.xpTiers[i]));
+        }
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /** @param {{ordinal:number,xp:number,label:string,speedMultiplier:number,scentRangeMultiplier:number,medkitCooldownMultiplier?:number,badge?:string,xpLocked:boolean}} tier */
+    function buildXpTierRow(tier) {
+        var tr = mk('tr');
+        tr.appendChild(mk('td', { text: String(tier.ordinal) }));
+        tr.appendChild(mk('td', { text: String(tier.xp) }));
+        tr.appendChild(mk('td', { text: tier.label }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: String(tier.speedMultiplier) }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: String(tier.scentRangeMultiplier) }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (tier.medkitCooldownMultiplier === undefined || tier.medkitCooldownMultiplier === null) ? '' : String(tier.medkitCooldownMultiplier) }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof tier.badge === 'string' && tier.badge.length > 0) ? tier.badge : '' }));
+
+        var actionsTd = mk('td', { class: 'k9tablet-cert-tier-actions' });
+        actionsTd.appendChild(mkButton(S('xp_tier_edit_label'), 'k9tablet-btn', function () {
+            openXpTierEditDraft(tier);
+        }, { disabled: state.pendingAction }));
+
+        // An upsert REFUSAL (any of the 12 reasons server/xptiers.lua's own
+        // xpTiersUpsert can return, INCLUDING a client-side pre-check
+        // failure caught before the round trip -- see saveXpTierDraft()
+        // below) renders INLINE on THIS specific rank's own row -- "cannot,
+        // and here is why" -- same convention as certTierActionError/
+        // permissionKeyActionError/shopLocationActionError above, alongside
+        // the same text in the generic top-of-panel notice for visibility.
+        if (state.xpTierActionError && state.xpTierActionError.ordinal === tier.ordinal) {
+            actionsTd.appendChild(mk('p', { class: 'k9tablet-error-text k9tablet-cert-tier-row-error', text: state.xpTierActionError.text }));
+        }
+
+        tr.appendChild(actionsTd);
+        return tr;
+    }
+
+    /** Edit form for the SINGLE open rank (state.xpTierDraft) -- see
+     * openXpTierEditDraft() for how it is populated. `xp` renders GENUINELY
+     * read-only (a `disabled` input, exactly matching the cert-tier form's
+     * own disabled key input for an existing tier) whenever
+     * `draft.xpLocked` is true (rank 1 only, server/xptiers.lua's own
+     * mandatory `xp == 0` baseline) -- saveXpTierDraft() below never even
+     * reads this field's own value for a locked rank, always submitting 0,
+     * so there is no path through this form that could ever send an edit
+     * this server will always refuse anyway. Label/multipliers/badge stay
+     * fully editable regardless of xpLocked. */
+    function buildXpTierDraftForm() {
+        var draft = state.xpTierDraft;
+        var wrap = mk('div', { class: 'k9tablet-cert-tier-form' });
+
+        var xpRow = mk('div', { class: 'k9tablet-theme-field' + (state.xpTierFieldError === 'xp' ? ' k9tablet-theme-field--invalid' : '') });
+        xpRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('xp_tier_xp_label') }));
+        var xpInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: '1', min: '0' } });
+        xpInput.value = draft.xp;
+        if (draft.xpLocked) {
+            xpInput.setAttribute('disabled', 'disabled');
+        } else {
+            xpInput.addEventListener('input', function (e) { draft.xp = e.target.value; });
+        }
+        xpRow.appendChild(xpInput);
+        wrap.appendChild(xpRow);
+        if (draft.xpLocked) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('xp_tier_xp_locked_hint') }));
+        }
+
+        var labelRow = mk('div', { class: 'k9tablet-theme-field' + (state.xpTierFieldError === 'label' ? ' k9tablet-theme-field--invalid' : '') });
+        labelRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('xp_tier_label_label') }));
+        var labelInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', maxlength: '60' } });
+        labelInput.value = draft.label;
+        labelInput.addEventListener('input', function (e) { draft.label = e.target.value; });
+        labelRow.appendChild(labelInput);
+        wrap.appendChild(labelRow);
+
+        var speedRow = mk('div', { class: 'k9tablet-theme-field' + (state.xpTierFieldError === 'speedMultiplier' ? ' k9tablet-theme-field--invalid' : '') });
+        speedRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('xp_tier_speed_multiplier_label') }));
+        var speedInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0' } });
+        speedInput.value = draft.speedMultiplier;
+        speedInput.addEventListener('input', function (e) { draft.speedMultiplier = e.target.value; });
+        speedRow.appendChild(speedInput);
+        wrap.appendChild(speedRow);
+
+        var scentRow = mk('div', { class: 'k9tablet-theme-field' + (state.xpTierFieldError === 'scentRangeMultiplier' ? ' k9tablet-theme-field--invalid' : '') });
+        scentRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('xp_tier_scent_range_multiplier_label') }));
+        var scentInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0' } });
+        scentInput.value = draft.scentRangeMultiplier;
+        scentInput.addEventListener('input', function (e) { draft.scentRangeMultiplier = e.target.value; });
+        scentRow.appendChild(scentInput);
+        wrap.appendChild(scentRow);
+
+        var medkitRow = mk('div', { class: 'k9tablet-theme-field' + (state.xpTierFieldError === 'medkitCooldownMultiplier' ? ' k9tablet-theme-field--invalid' : '') });
+        medkitRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('xp_tier_medkit_cooldown_multiplier_label') }));
+        var medkitInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0', placeholder: S('xp_tier_medkit_cooldown_multiplier_placeholder') } });
+        medkitInput.value = draft.medkitCooldownMultiplier;
+        medkitInput.addEventListener('input', function (e) { draft.medkitCooldownMultiplier = e.target.value; });
+        medkitRow.appendChild(medkitInput);
+        wrap.appendChild(medkitRow);
+
+        var badgeRow = mk('div', { class: 'k9tablet-theme-field' + (state.xpTierFieldError === 'badge' ? ' k9tablet-theme-field--invalid' : '') });
+        badgeRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('xp_tier_badge_label') }));
+        var badgeInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', maxlength: '30', placeholder: S('xp_tier_badge_placeholder') } });
+        badgeInput.value = draft.badge;
+        badgeInput.addEventListener('input', function (e) { draft.badge = e.target.value; });
+        badgeRow.appendChild(badgeInput);
+        wrap.appendChild(badgeRow);
+
+        var actions = mk('div', { class: 'k9tablet-theme-actions' });
+        actions.appendChild(mkButton(S('xp_tier_save_label'), 'k9tablet-btn', saveXpTierDraft, { disabled: state.pendingAction }));
+        actions.appendChild(mkButton(S('xp_tier_cancel_label'), 'k9tablet-link-btn', closeXpTierDraft));
+        wrap.appendChild(actions);
+
         return wrap;
     }
 
@@ -4239,6 +4696,129 @@
         render();
     }
 
+    /** @param {object|undefined} result @returns {string} */
+    function permissionKeyErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'denied': return S('permission_key_error_denied');
+            case 'rate_limited': return S('permission_key_error_rate_limited');
+            case 'invalid_key': return S('permission_key_error_invalid_key');
+            case 'invalid_label': return S('permission_key_error_invalid_label');
+            case 'invalid_description': return S('permission_key_error_invalid_description');
+            case 'busy': return S('permission_key_error_busy');
+            case 'too_many_keys': return S('permission_key_error_too_many_keys');
+            case 'unknown_key': return S('permission_key_error_unknown_key');
+            // 'reserved_namespace'/'unknown_key' are REFUSALS ("cannot, and
+            // here is why"), not generic failures -- same posture as
+            // certTierErrorText's own 'protected_tier'/'tier_in_use' above.
+            case 'reserved_namespace': return S('permission_key_error_reserved_namespace');
+            case 'invalid_payload': return S('permission_key_error_invalid_payload');
+            case 'db_error': return S('permission_key_error_db_error');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
+    /** @param {string|undefined} errorCode @returns {string|null} */
+    function permissionKeyFieldFromError(errorCode) {
+        if (errorCode === 'invalid_key' || errorCode === 'reserved_namespace') return 'key';
+        if (errorCode === 'invalid_label') return 'label';
+        if (errorCode === 'invalid_description') return 'description';
+        return null;
+    }
+
+    /** Opens a BLANK draft for a brand-new permission key. @see buildPermissionKeyDraftForm */
+    function openNewPermissionKeyDraft() {
+        state.permissionKeyDraft = { key: '', label: '', description: '', isNew: true };
+        state.permissionKeyFieldError = null;
+        render();
+    }
+
+    /** Opens a draft pre-filled from an EXISTING catalog row. @param {object} entry */
+    function openPermissionKeyEditDraft(entry) {
+        state.permissionKeyDraft = { key: entry.key, label: entry.label, description: entry.description || '', isNew: false };
+        state.permissionKeyFieldError = null;
+        render();
+    }
+
+    function closePermissionKeyDraft() {
+        state.permissionKeyDraft = null;
+        state.permissionKeyFieldError = null;
+        render();
+    }
+
+    /**
+     * Saves the permission-key draft form's current working copy. NOT the
+     * generic runMutation() helper: a rejected save carries a `field`
+     * naming which input failed (key/label/description), which
+     * runMutation's own message-only handling has no slot for, same
+     * reasoning as saveCertTierDraft() above. An empty description is sent
+     * as `undefined` (omitted), never `''` -- matching
+     * server/permissionkeycatalog.lua's own "nil is stored as SQL NULL"
+     * optional-field contract.
+     */
+    function savePermissionKeyDraft() {
+        if (state.pendingAction || !state.permissionKeyDraft) return;
+        var draft = state.permissionKeyDraft;
+
+        state.pendingAction = true;
+        state.permissionKeyFieldError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        var payload = { key: draft.key, label: draft.label };
+        if (typeof draft.description === 'string' && draft.description.length > 0) {
+            payload.description = draft.description;
+        }
+
+        fetchNui('tablet:permKeysUpsert', payload).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.permissionKeys = Array.isArray(result.keys) ? result.keys : state.permissionKeys;
+                state.permissionKeyDraft = null;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                state.permissionKeyFieldError = permissionKeyFieldFromError(result && result.error);
+                state.actionNotice = { kind: 'error', text: permissionKeyErrorText(result) };
+            }
+            render();
+        });
+    }
+
+    /**
+     * Deletes permission key `key`. A REFUSAL (reserved_namespace --
+     * should be unreachable through this UI, since this screen never lets
+     * anyone create such a key in the first place; unknown_key) is
+     * rendered INLINE on that key's own row (state.permissionKeyActionError),
+     * same convention as deleteCertTier() above. Unlike that function,
+     * this delete NEVER carries a reference-count refusal -- see
+     * server/permissionkeycatalog.lua's own header "TOMBSTONE, NOT
+     * REFERENCE-COUNTED" -- so there is no equivalent of tier_in_use here.
+     * @param {string} key
+     */
+    function deletePermissionKey(key) {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.permissionKeyActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:permKeysDelete', { key: key }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.permissionKeys = Array.isArray(result.keys) ? result.keys : state.permissionKeys;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                var text = permissionKeyErrorText(result);
+                state.permissionKeyActionError = { key: key, text: text };
+                state.actionNotice = { kind: 'error', text: text };
+            }
+            render();
+        });
+    }
+
     /**
      * Generic mutation runner -- every grant/revoke/certify/decertify/
      * givexp/block/unblock action shares this shape. Disables further
@@ -4704,23 +5284,39 @@
         });
     }
 
+    /** @returns {number} the REAL effective ceiling server/admin.lua
+     * enforces (that file's own HARD_MAX_RESULTS), learned from the `cap`
+     * field of the most recent successful tabletAudit* response
+     * (state.auditServerCap) -- falls back to AUDIT_LIMIT_MAX_FALLBACK's
+     * hardcoded guess ONLY before any query has ever succeeded this
+     * session, or if a response is ever missing `cap` entirely (a server
+     * build predating this pass). See AUDIT_LIMIT_MAX_FALLBACK's own
+     * comment for why that fallback is never assumed correct once a real
+     * value is known, and this file's header NUI CONTRACT note on
+     * tablet:auditCert/Partner/Search/Xp/Dept for where `cap` comes from. */
+    function auditEffectiveCap() {
+        return (typeof state.auditServerCap === 'number' && isFinite(state.auditServerCap) && state.auditServerCap >= AUDIT_LIMIT_MIN)
+            ? state.auditServerCap
+            : AUDIT_LIMIT_MAX_FALLBACK;
+    }
+
     /** @param {*} value @returns {number} floored + clamped into
-     * [AUDIT_LIMIT_MIN, AUDIT_LIMIT_MAX] -- see those constants' own
-     * comment. Never lets an unclamped value reach fetchNui(), even
-     * though server/admin.lua's own ClampLimit would independently catch
-     * it anyway -- this page's own "make the UI agree with what the
-     * server enforces" duty, per this task's instruction. `Number('')` is
-     * NaN, `Number(undefined)` is NaN, `Math.floor(NaN)` is NaN, and
-     * `NaN < x`/`NaN > x` are both false for any x -- so a blank/garbage
-     * input falls through both clamp branches below unless caught first,
-     * exactly the failure shape server/admin.lua's own ClampLimit doc
-     * comment names for the identical reason; guarded here the same way,
-     * once, via `isFinite`. */
+     * [AUDIT_LIMIT_MIN, auditEffectiveCap()]. Never lets an unclamped value
+     * reach fetchNui(), even though server/admin.lua's own ClampLimit would
+     * independently catch it anyway -- this page's own "make the UI agree
+     * with what the server enforces" duty, per this task's instruction.
+     * `Number('')` is NaN, `Number(undefined)` is NaN, `Math.floor(NaN)` is
+     * NaN, and `NaN < x`/`NaN > x` are both false for any x -- so a
+     * blank/garbage input falls through both clamp branches below unless
+     * caught first, exactly the failure shape server/admin.lua's own
+     * ClampLimit doc comment names for the identical reason; guarded here
+     * the same way, once, via `isFinite`. */
     function clampAuditLimit(value) {
         var n = Math.floor(Number(value));
+        var max = auditEffectiveCap();
         if (!isFinite(n)) return AUDIT_LIMIT_MIN;
         if (n < AUDIT_LIMIT_MIN) return AUDIT_LIMIT_MIN;
-        if (n > AUDIT_LIMIT_MAX) return AUDIT_LIMIT_MAX;
+        if (n > max) return max;
         return n;
     }
 
@@ -4814,11 +5410,291 @@
                 render();
                 return;
             }
+            // Server-reported effective cap (server/admin.lua's own
+            // HARD_MAX_RESULTS) -- learned here so the NEXT render's limit
+            // input/clamp reflects the REAL ceiling rather than this page's
+            // own AUDIT_LIMIT_MAX_FALLBACK guess. Absent on a response from
+            // a server build predating this field -- silently keeps
+            // whatever was already known (or the fallback) rather than
+            // clobbering a good value with an invalid one.
+            if (typeof result.cap === 'number' && isFinite(result.cap) && result.cap >= AUDIT_LIMIT_MIN) {
+                state.auditServerCap = result.cap;
+            }
             state.auditResult = {
                 rows: Array.isArray(result.rows) ? result.rows : [],
                 label: (typeof result.label === 'string') ? result.label : '',
+                // TRUNCATION (this pass) -- see auditTruncatedText() above.
+                // `truncated`/`actualLimit` are the server's OWN account of
+                // what happened to THIS request; `requestedLimit` is the
+                // `limit` THIS PAGE sent for it (closured from above --
+                // always defined, even for 'xp', which simply never sets
+                // `truncated` true since server/admin.lua's tabletAuditXp
+                // never reports it).
+                truncated: result.truncated === true,
+                requestedLimit: limit,
+                actualLimit: (typeof result.limit === 'number') ? result.limit : null,
             };
             render();
+        });
+    }
+
+    /** Fetched fresh every time the XP Ranks tab is opened (see
+     * buildTabs()) -- NEVER a hardcoded list, same posture as
+     * loadCertTiers()/loadPermissionKeys() above: the four-rank ladder is
+     * Config.XPTiers shipped defaults merged with k9_xp_tiers database
+     * overrides (database wins, per server/xptiers.lua's own header), and
+     * high command can retune any rank at runtime -- a list captured once
+     * here would already be stale the moment anyone does. High command
+     * only (server/xptiers.lua's own CanManageXPTiers re-verifies this on
+     * every one of the two callbacks regardless of whether this ever
+     * loads). */
+    function loadXpTiers() {
+        state.xpTiersLoading = true;
+        state.xpTiersError = null;
+        render();
+
+        fetchNui('tablet:xpTiersList', {}).then(function (result) {
+            state.xpTiersLoading = false;
+            if (!result || result.ok !== true) {
+                state.xpTiersError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.xpTiers = Array.isArray(result.tiers) ? result.tiers : [];
+            render();
+        });
+    }
+
+    /** @param {object|undefined} result @returns {string} */
+    function xpTierErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'denied': return S('xp_tier_error_denied');
+            case 'rate_limited': return S('xp_tier_error_rate_limited');
+            case 'busy': return S('xp_tier_error_busy');
+            case 'invalid_ordinal': return S('xp_tier_error_invalid_ordinal');
+            case 'invalid_xp': return S('xp_tier_error_invalid_xp');
+            // A REFUSAL ("cannot, and here is why" -- rank 1 must always be
+            // exactly 0 XP), not a generic failure -- per this task's own
+            // instruction, same posture as certTierErrorText's own
+            // 'protected_tier'/'tier_in_use' above.
+            case 'base_tier_xp_fixed': return S('xp_tier_error_base_tier_xp_fixed');
+            case 'invalid_label': return S('xp_tier_error_invalid_label');
+            case 'invalid_speed_multiplier': return S('xp_tier_error_invalid_speed_multiplier');
+            case 'invalid_scent_range_multiplier': return S('xp_tier_error_invalid_scent_range_multiplier');
+            case 'invalid_medkit_cooldown_multiplier': return S('xp_tier_error_invalid_medkit_cooldown_multiplier');
+            case 'invalid_badge': return S('xp_tier_error_invalid_badge');
+            case 'invalid_order': return S('xp_tier_error_invalid_order');
+            case 'db_error': return S('xp_tier_error_db_error');
+            case 'invalid_payload': return S('xp_tier_error_invalid_payload');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
+    /** @param {string|undefined} errorCode @returns {string|null} */
+    function xpTierFieldFromError(errorCode) {
+        if (errorCode === 'invalid_xp' || errorCode === 'base_tier_xp_fixed') return 'xp';
+        if (errorCode === 'invalid_label') return 'label';
+        if (errorCode === 'invalid_speed_multiplier') return 'speedMultiplier';
+        if (errorCode === 'invalid_scent_range_multiplier') return 'scentRangeMultiplier';
+        if (errorCode === 'invalid_medkit_cooldown_multiplier') return 'medkitCooldownMultiplier';
+        if (errorCode === 'invalid_badge') return 'badge';
+        return null;
+    }
+
+    /** Opens a draft pre-filled from an EXISTING rank row -- a COPY of its
+     * own values, never the live object, so cancelling never mutates
+     * state.xpTiers. Numeric fields are stored as STRINGS in the draft
+     * (same posture as state.runtimeTunableDraft.value above) so a
+     * partially-typed value never gets silently coerced mid-edit.
+     * @param {object} tier */
+    function openXpTierEditDraft(tier) {
+        state.xpTierDraft = {
+            ordinal: tier.ordinal,
+            xp: String(tier.xp),
+            label: tier.label,
+            speedMultiplier: String(tier.speedMultiplier),
+            scentRangeMultiplier: String(tier.scentRangeMultiplier),
+            medkitCooldownMultiplier: (tier.medkitCooldownMultiplier === undefined || tier.medkitCooldownMultiplier === null) ? '' : String(tier.medkitCooldownMultiplier),
+            badge: (typeof tier.badge === 'string') ? tier.badge : '',
+            xpLocked: tier.xpLocked === true,
+        };
+        state.xpTierFieldError = null;
+        state.xpTierActionError = null;
+        render();
+    }
+
+    function closeXpTierDraft() {
+        state.xpTierDraft = null;
+        state.xpTierFieldError = null;
+        state.xpTierActionError = null;
+        render();
+    }
+
+    /** Mirrors server/xptiers.lua's own IsSafeShortString exactly -- a UX
+     * convenience only (THE SECURITY RULE): catches an obviously-invalid
+     * label/badge before a round trip, but the server's own identical
+     * check is what actually matters; this page's own check being wrong in
+     * either direction only ever costs an extra network round trip, never
+     * a false sense of safety.
+     * @param {*} value @param {number} maxLen @returns {boolean} */
+    function isSafeShortStringForXpTier(value, maxLen) {
+        if (typeof value !== 'string') return false;
+        var len = value.length;
+        if (len === 0 || len > maxLen) return false;
+        if (/[<>&"'`\r\n\t]/.test(value)) return false;
+        for (var i = 0; i < len; i++) {
+            var code = value.charCodeAt(i);
+            if (code < 0x20 || code === 0x7F) return false;
+        }
+        return true;
+    }
+
+    /** Sets the field-highlight/row-inline/top-banner error trio for the
+     * CURRENTLY open xp-tier draft in one place -- shared by every
+     * client-side pre-check branch in saveXpTierDraft() below AND its own
+     * server-rejection branch, so a pre-check failure and a server refusal
+     * for the SAME reason render byte-identically.
+     * @param {string} field @param {string} text */
+    function failXpTierDraft(field, text) {
+        state.xpTierFieldError = field;
+        state.xpTierActionError = { ordinal: state.xpTierDraft.ordinal, text: text };
+        state.actionNotice = { kind: 'error', text: text };
+        render();
+    }
+
+    /**
+     * Saves the xp-rank draft form's current working copy. Every check
+     * below mirrors server/xptiers.lua's own validators
+     * (IsValidXpThreshold/IsSafeShortString/IsValidMultiplier/
+     * IsStrictlyAscending) as a UX CONVENIENCE ONLY -- THE SECURITY RULE:
+     * the server independently re-validates every one of these fields
+     * against the CURRENT LIVE ladder (not this page's own possibly-stale
+     * state.xpTiers) before writing anything, so a modified client sending
+     * an out-of-range value straight to tablet:xpTiersUpsert is refused
+     * there regardless of what this function does or does not catch first.
+     * NOT the generic runMutation() helper: a rejected save carries a
+     * `field` naming which of the six inputs failed, which runMutation's
+     * own message-only handling has no slot for, same reasoning as
+     * saveCertTierDraft()/saveTheme() above.
+     */
+    function saveXpTierDraft() {
+        if (state.pendingAction || !state.xpTierDraft) return;
+        var draft = state.xpTierDraft;
+
+        // xp -- SKIPPED entirely for a locked rank (rank 1): always
+        // submitted as 0, never this field's own (disabled, unreachable)
+        // value. See server/xptiers.lua's own header "SCOPE DECISION"
+        // point 1.
+        var xp = 0;
+        if (!draft.xpLocked) {
+            var xpNum = Number(draft.xp);
+            if (!isFinite(xpNum) || xpNum < 0 || Math.floor(xpNum) !== xpNum) {
+                failXpTierDraft('xp', S('xp_tier_error_invalid_xp'));
+                return;
+            }
+            xp = xpNum;
+        }
+
+        if (!isSafeShortStringForXpTier(draft.label, 60)) {
+            failXpTierDraft('label', S('xp_tier_error_invalid_label'));
+            return;
+        }
+
+        var speedMultiplier = Number(draft.speedMultiplier);
+        if (!isFinite(speedMultiplier) || speedMultiplier <= 0 || speedMultiplier > XP_TIER_MAX_SPEED_SCENT_MULTIPLIER) {
+            failXpTierDraft('speedMultiplier', S('xp_tier_error_invalid_speed_multiplier'));
+            return;
+        }
+
+        var scentRangeMultiplier = Number(draft.scentRangeMultiplier);
+        if (!isFinite(scentRangeMultiplier) || scentRangeMultiplier <= 0 || scentRangeMultiplier > XP_TIER_MAX_SPEED_SCENT_MULTIPLIER) {
+            failXpTierDraft('scentRangeMultiplier', S('xp_tier_error_invalid_scent_range_multiplier'));
+            return;
+        }
+
+        // OPTIONAL -- blank means "omit entirely" (server treats a missing
+        // field as "not configured"), same posture as
+        // savePermissionKeyDraft()'s own description field above.
+        var medkitCooldownMultiplier;
+        var medkitRaw = (typeof draft.medkitCooldownMultiplier === 'string') ? draft.medkitCooldownMultiplier.trim() : '';
+        if (medkitRaw.length > 0) {
+            var medkitNum = Number(medkitRaw);
+            if (!isFinite(medkitNum) || medkitNum <= 0 || medkitNum > XP_TIER_MAX_MEDKIT_COOLDOWN_MULTIPLIER) {
+                failXpTierDraft('medkitCooldownMultiplier', S('xp_tier_error_invalid_medkit_cooldown_multiplier'));
+                return;
+            }
+            medkitCooldownMultiplier = medkitNum;
+        }
+
+        // OPTIONAL -- same "blank means omit" posture as
+        // medkitCooldownMultiplier immediately above.
+        var badge;
+        var badgeRaw = (typeof draft.badge === 'string') ? draft.badge.trim() : '';
+        if (badgeRaw.length > 0) {
+            if (!isSafeShortStringForXpTier(badgeRaw, 30)) {
+                failXpTierDraft('badge', S('xp_tier_error_invalid_badge'));
+                return;
+            }
+            badge = badgeRaw;
+        }
+
+        // THE WALK-INTO-INVALID-STATE HAZARD, client-side mirror -- see
+        // server/xptiers.lua's own header of the identical name. Built
+        // from state.xpTiers (this page's own LAST KNOWN live ladder, not
+        // necessarily still current -- another high-command session could
+        // have edited a different rank since this page's last load), so
+        // this check can occasionally be wrong in EITHER direction; the
+        // server's own re-check against the ACTUAL current ladder inside
+        // its mutex-held critical section is what actually decides, this
+        // is purely to avoid an obviously-doomed round trip for the common
+        // single-editor case.
+        if (Array.isArray(state.xpTiers)) {
+            var thresholds = state.xpTiers.map(function (t) { return (t.ordinal === draft.ordinal) ? xp : t.xp; });
+            for (var i = 1; i < thresholds.length; i++) {
+                if (!(thresholds[i] > thresholds[i - 1])) {
+                    failXpTierDraft('xp', S('xp_tier_error_invalid_order'));
+                    return;
+                }
+            }
+        }
+
+        state.pendingAction = true;
+        state.xpTierFieldError = null;
+        state.xpTierActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        var payload = {
+            ordinal: draft.ordinal, xp: xp, label: draft.label,
+            speedMultiplier: speedMultiplier, scentRangeMultiplier: scentRangeMultiplier,
+        };
+        if (medkitCooldownMultiplier !== undefined) payload.medkitCooldownMultiplier = medkitCooldownMultiplier;
+        if (badge !== undefined) payload.badge = badge;
+
+        fetchNui('tablet:xpTiersUpsert', payload).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.xpTiers = Array.isArray(result.tiers) ? result.tiers : state.xpTiers;
+                // Non-optional whenever this edit demoted at least one
+                // currently-connected K9 -- server/xptiers.lua's own header
+                // "THE ALREADY-PROMOTED PLAYER". Forwarded as-is regardless,
+                // so a future wording change needs no client edit, same
+                // posture as moveCertTier()'s own certTierWarning above.
+                state.xpTierWarning = (typeof result.warning === 'string' && result.warning.length > 0) ? result.warning : null;
+                state.xpTierDraft = null;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+                render();
+            } else {
+                var text = xpTierErrorText(result);
+                state.xpTierFieldError = xpTierFieldFromError(result && result.error);
+                state.xpTierActionError = { ordinal: draft.ordinal, text: text };
+                state.actionNotice = { kind: 'error', text: text };
+                render();
+            }
         });
     }
 
@@ -4830,6 +5706,8 @@
         data = data || {};
         state.open = true;
         state.strings = (data.strings && typeof data.strings === 'object') ? data.strings : {};
+        state.blockClientEnforcedBadge = typeof data.blockClientEnforcedBadge === 'string' ? data.blockClientEnforcedBadge : null;
+        state.blockClientEnforcedHint = typeof data.blockClientEnforcedHint === 'string' ? data.blockClientEnforcedHint : null;
         state.capabilities = (data.capabilities && typeof data.capabilities === 'object') ? data.capabilities : {};
         state.maxXpPerGrant = typeof data.maxXpPerGrant === 'number' ? data.maxXpPerGrant : null;
         state.peds = Array.isArray(data.peds) ? data.peds : [];
@@ -4871,6 +5749,14 @@
         state.auditSearchValue = '';
         state.auditError = null;
         state.auditResult = null;
+        // state.auditServerCap is DELIBERATELY NOT reset here -- same
+        // exception, same reasoning, as state.theme just below: it is a
+        // resource-wide server constant (server/admin.lua's own
+        // HARD_MAX_RESULTS), not per-viewer data that could go stale
+        // across a job/grant change, so forgetting it on every reopen
+        // would only force this page back to guessing via
+        // AUDIT_LIMIT_MAX_FALLBACK until the next query succeeds, for no
+        // correctness benefit.
 
         // Theme is DELIBERATELY NOT reset to null/defaults here, unlike
         // everything above -- see loadTheme()'s own comment: it is applied

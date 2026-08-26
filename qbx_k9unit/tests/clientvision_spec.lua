@@ -944,6 +944,90 @@ t.test('ToggleCameraFeed: StopCameraFeed is idempotent against an already-destro
 end)
 
 -- ------------------------------------------------------------------
+-- STALE-CAM GUARD -- BUG (found + fixed this pass): ToggleCameraFeed()'s
+-- own RefreshPartnershipStateFromServer() call YIELDS (an ox_lib callback
+-- round trip, per client/partnership.lua's own doc comment), but
+-- `cameraFeedState.active` was only ever set true AFTER that round trip
+-- returned. A second ToggleCameraFeed() dispatch (keybind double-press,
+-- engine auto-repeat, or two inputs landing in the same/adjacent frame)
+-- arriving while a first attempt's round trip was still in flight saw
+-- `cameraFeedState.active` as still false, ran its own independent
+-- CreateCam, and its own `cameraFeedState.cam = cam` assignment silently
+-- overwrote the first attempt's only handle to the cam IT already created
+-- -- orphaned, DestroyCam never called on it. Same bug class, and the same
+-- fix shape, as client/agility.lua's own `vaultInProgress` guard around
+-- TryVault()'s async obstacle sweep -- driven with two independent,
+-- hand-created coroutines for the identical reason that file's own header
+-- gives (Sandbox.newThreadRunner() steps a CreateThread-created coroutine,
+-- not a plain function call like ToggleCameraFeed() -- these two calls need
+-- independent coroutines this test controls directly).
+-- ------------------------------------------------------------------
+
+t.test('BUG (found + fixed this pass): a second ToggleCameraFeed() invocation overlapping the first call\'s still-in-flight RefreshPartnershipStateFromServer() round trip is rejected, not raced into a second CreateCam that orphans the first cam', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+
+    -- Replaces the fixture's own synchronous RefreshPartnershipStateFromServer
+    -- stub with one that yields exactly once before answering -- modeling the
+    -- real production function's ox_lib callback await. Safe to reassign
+    -- post-construction: client/vision.lua looks this name up on the sandbox
+    -- env fresh at EVERY call (a normal global reference inside the loaded
+    -- chunk), not a reference captured once at file-load time -- only the
+    -- one-time `type(RefreshPartnershipStateFromServer) == 'function'` gate
+    -- needed the real function to already be present at load, which
+    -- `partnershipAvailable = true` above already guaranteed.
+    local refreshCalls = 0
+    f.env.RefreshPartnershipStateFromServer = function()
+        refreshCalls = refreshCalls + 1
+        coroutine.yield()
+        return true, 42
+    end
+
+    local coA = coroutine.create(function() f.env.ToggleCameraFeed() end)
+    local coB = coroutine.create(function() f.env.ToggleCameraFeed() end)
+
+    local okA = coroutine.resume(coA)
+    assert(okA, 'coroutine A errored before its first yield')
+    assert(coroutine.status(coA) == 'suspended', 'expected A to be mid-flight (suspended inside the RefreshPartnershipStateFromServer stub\'s own yield), not already finished')
+
+    -- THE BUG WINDOW: A has not returned yet, so cameraFeedState.active is
+    -- still false and cameraFeedState.cam is still nil -- B's own
+    -- cameraFeedState.active check passes trivially, exactly like a real
+    -- double-press would, on the unfixed code.
+    local okB = coroutine.resume(coB)
+    assert(okB, 'coroutine B errored')
+    t.equals(coroutine.status(coB), 'dead', 'B must be rejected and return immediately by the cameraFeedStartInProgress guard -- it must never itself reach (and therefore never yield at) RefreshPartnershipStateFromServer')
+    t.equals(refreshCalls, 1, 'B must never have called RefreshPartnershipStateFromServer at all -- only A\'s own in-flight call counts')
+
+    -- Drain A to completion.
+    while coroutine.status(coA) ~= 'dead' do
+        local ok, err = coroutine.resume(coA)
+        assert(ok, 'coroutine A errored mid-flight: ' .. tostring(err))
+    end
+
+    t.equals(#f.createCamCalls, 1, 'exactly one cam was ever created -- B never got the chance to race a second CreateCam into cameraFeedState.cam')
+    t.equals(refreshCalls, 1, 'still exactly one RefreshPartnershipStateFromServer call after A finishes')
+end)
+
+t.test('RE-ENTRANCY GUARD RESET: once an in-flight start attempt fully completes (success or failure), a genuinely NEW, later ToggleCameraFeed() call is not permanently blocked by the guard', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+
+    f.env.ToggleCameraFeed() -- on -- completes synchronously in this fixture's default (non-yielding) stub
+    t.equals(#f.createCamCalls, 1)
+
+    f.env.ToggleCameraFeed() -- off
+    t.equals(#f.destroyCamCalls, 1)
+
+    -- A fresh start attempt AFTER the first one fully completed (on, then
+    -- off) must succeed normally -- proves cameraFeedStartInProgress is
+    -- reset on the success path too, not just on an early-return failure
+    -- path, and that it does not leak `true` forever once a feed has
+    -- actually gone active and been stopped again.
+    f.env.ToggleCameraFeed() -- on again
+    t.equals(#f.createCamCalls, 2, 'the guard must not have been left permanently true by the first, already-completed attempt')
+end)
+
+-- ------------------------------------------------------------------
 -- Per-frame tracking/exit-condition thread. STEPPING NOTES FOR THIS
 -- THREAD: its body is `while cameraFeedState.active do Wait(0) ... end`
 -- -- the loop CONDITION is the very first thing evaluated (unlike this

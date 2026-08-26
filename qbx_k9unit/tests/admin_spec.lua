@@ -1361,4 +1361,196 @@ t.test('tabletAuditDept: console (source == 0) IS NOT a valid caller of a callba
     Config.AdminAudit.TrustConsole = false
 end)
 
+-- ----------------------------------------------------------------------
+-- cap / limit / truncated (this pass) -- server/admin.lua's HARD_MAX_RESULTS
+-- is now echoed back on every successful tabletAudit* response instead of
+-- being a private number html/tablet.js had to separately hardcode and
+-- hope stayed in sync. See ClampLimit's own doc comment (second return
+-- value, `truncated`) and the CALLBACK SURFACE comment block above the
+-- five lib.callback.register calls in server/admin.lua for the exact
+-- contract these cases lock in.
+-- ----------------------------------------------------------------------
+
+t.test('tabletAuditCert: cap is always HARD_MAX_RESULTS (100), and a request within range is reported truncated = false with limit = the value actually used', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234', 30)
+    t.isTrue(result.ok)
+    t.equals(result.cap, 100)
+    t.equals(result.limit, 30)
+    t.isFalse(result.truncated)
+end)
+
+t.test('tabletAuditCert: an absent limit falls back to the configured default (50) and is never reported truncated', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234')
+    t.isTrue(result.ok)
+    t.equals(result.cap, 100)
+    t.equals(result.limit, 50)
+    t.isFalse(result.truncated)
+end)
+
+t.test('tabletAuditCert: requesting more than the cap (999999) reports truncated = true and limit = 100 -- "you asked for 999999, here are the first 100"', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234', 999999)
+    t.isTrue(result.ok)
+    t.equals(result.cap, 100)
+    t.equals(result.limit, 100)
+    t.isTrue(result.truncated)
+end)
+
+t.test('tabletAuditCert: requesting EXACTLY the cap (100) is NOT reported truncated -- the caller got exactly what they asked for', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234', 100)
+    t.isTrue(result.ok)
+    t.equals(result.limit, 100)
+    t.isFalse(result.truncated)
+end)
+
+t.test('tabletAuditCert: a raw +infinity Lua number (only reachable via a callback) clamps to the cap and reports truncated = true, no crash', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local ok, result = pcall(registeredCallbacks['qbx_k9unit:server:tabletAuditCert'], src, 'ABCD1234', math.huge)
+    t.isTrue(ok, 'a +infinity limit must never raise an uncaught error: ' .. tostring(result))
+    t.isTrue(result.ok)
+    t.equals(result.limit, 100)
+    t.isTrue(result.truncated)
+end)
+
+t.test('tabletAuditCert: a raw -infinity Lua number clamps to the floor (1) and is NOT reported truncated -- that clamp is a different, lower-bound case', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local ok, result = pcall(registeredCallbacks['qbx_k9unit:server:tabletAuditCert'], src, 'ABCD1234', -math.huge)
+    t.isTrue(ok, 'a -infinity limit must never raise an uncaught error: ' .. tostring(result))
+    t.isTrue(result.ok)
+    t.equals(result.limit, 1)
+    t.isFalse(result.truncated)
+end)
+
+t.test('tabletAuditCert: a NaN limit falls back to the configured default and is NOT reported truncated', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local nan = 0 / 0
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234', nan)
+    t.isTrue(result.ok)
+    t.equals(result.limit, 50)
+    t.isFalse(result.truncated)
+end)
+
+t.test('tabletAuditPartner: requesting more than the cap reports truncated = true and limit = 100', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditPartner'](src, 'ABCD1234', 500)
+    t.isTrue(result.ok)
+    t.equals(result.cap, 100)
+    t.equals(result.limit, 100)
+    t.isTrue(result.truncated)
+end)
+
+t.test('tabletAuditSearch ("recent" mode): requesting more than the cap reports truncated = true and limit = 100', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'recent', nil, 500)
+    t.isTrue(result.ok)
+    t.equals(result.cap, 100)
+    t.equals(result.limit, 100)
+    t.isTrue(result.truncated)
+end)
+
+t.test('tabletAuditSearch ("officer" mode): a within-range limit is reported truncated = false with the exact limit used', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditSearch'](src, 'officer', 'OFFICER1', 12)
+    t.isTrue(result.ok)
+    t.equals(result.limit, 12)
+    t.isFalse(result.truncated)
+end)
+
+t.test('tabletAuditDept: requesting more than the cap reports truncated = true and limit = 100', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditDept'](src, 'police', 999999)
+    t.isTrue(result.ok)
+    t.equals(result.cap, 100)
+    t.equals(result.limit, 100)
+    t.isTrue(result.truncated)
+end)
+
+t.test('tabletAuditXp: carries cap for a uniform response shape, but no limit/truncated fields -- there is nothing to clamp (citizenid is the PRIMARY KEY, always 0 or 1 rows)', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditXp'](src, 'ABCD1234')
+    t.isTrue(result.ok)
+    t.equals(result.cap, 100)
+    t.isNil(result.limit, 'tabletAuditXp takes no limit argument at all -- limit must be absent, never a guessed/default value')
+    t.isNil(result.truncated, 'truncated is meaningless with no limit concept -- must be absent, never false')
+end)
+
+-- ----------------------------------------------------------------------
+-- "Do not widen authorization" -- an unauthorized/rate-limited/malformed
+-- caller must learn NOTHING new from this pass's cap/limit/truncated
+-- fields. Every refusal branch returns before HARD_MAX_RESULTS is ever
+-- attached to a response -- these cases lock that in across all three
+-- refusal kinds, on both a limit-taking callback (tabletAuditCert) and the
+-- one that never takes a limit at all (tabletAuditXp).
+-- ----------------------------------------------------------------------
+
+t.test('tabletAuditCert: not_authorized carries no cap/limit/truncated -- an unauthorized caller learns nothing about the server-side cap', function()
+    resetCaptures()
+    local src = 9301 -- no playersBySource entry -- unresolvable, denied
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234', 999999)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+    t.isNil(result.cap)
+    t.isNil(result.limit)
+    t.isNil(result.truncated)
+end)
+
+t.test('tabletAuditCert: rate_limited carries no cap/limit/truncated', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    fakeNow = fakeNow + 100000
+    registeredCommands.k9auditcert(src, { 'ABCD1234' })
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, 'ABCD1234', 999999)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'rate_limited')
+    t.isNil(result.cap)
+    t.isNil(result.limit)
+    t.isNil(result.truncated)
+end)
+
+t.test('tabletAuditCert: invalid_args carries no cap/limit/truncated', function()
+    resetCaptures()
+    local src = freshAuthorizedSource()
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditCert'](src, '', 999999)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'invalid_args')
+    t.isNil(result.cap)
+    t.isNil(result.limit)
+    t.isNil(result.truncated)
+end)
+
+t.test('tabletAuditXp: not_authorized carries no cap either -- the no-limit callback must not leak the cap any more freely than the limit-taking ones', function()
+    resetCaptures()
+    local src = 9302
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditXp'](src, 'ABCD1234')
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+    t.isNil(result.cap)
+end)
+
+t.test('tabletAuditDept: not_authorized carries no cap/limit/truncated', function()
+    resetCaptures()
+    local src = 9303
+    local result = registeredCallbacks['qbx_k9unit:server:tabletAuditDept'](src, 'police', 999999)
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+    t.isNil(result.cap)
+    t.isNil(result.limit)
+    t.isNil(result.truncated)
+end)
+
 os.exit(t.summary())

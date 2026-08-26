@@ -987,17 +987,51 @@ t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- a fast but plausible app
     t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
 end)
 
-t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- less than MIN_TELEPORT_CHECK_ELAPSED_MS since the last sample is inconclusive, never itself a rejection', function()
+t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- a genuinely tiny movement less than MIN_TELEPORT_CHECK_ELAPSED_MS since the last sample is never a false-positive rejection', function()
     local f = newCombatFixture()
     local k9Ped = wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
     f.addOnline(K9_SRC)
     f.runOneTick() -- samples at t = 0
 
+    -- 1m of real movement in 100ms (10 m/s) -- ordinary walking/running
+    -- speed, comfortably plausible once the divisor is floored at 200ms
+    -- (1m / 0.2s = 5 m/s, still far under the 60 m/s ceiling). Must never
+    -- be flagged just because the elapsed time since the last background
+    -- sample happens to be small.
+    f.setCoords(k9Ped, 1, 0, 0)
+    wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.advance(100) -- under the 200ms floor
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'a genuinely tiny movement must never itself cause a rejection')
+end)
+
+-- QA-FIX (this pass, coder-security): the check used to SKIP entirely
+-- (never reject, regardless of distance) whenever elapsedMs was under
+-- MIN_TELEPORT_CHECK_ELAPSED_MS -- see that constant's own declaration
+-- comment in server/combat.lua for the full writeup. Because a REJECTED
+-- ValidateCombatRequest call costs a hostile client nothing (the cooldown
+-- is only Touch'd after a successful validation), that skip was a
+-- practically-guaranteed retry bypass: teleport next to the target, then
+-- fire requestBiteHold repeatedly (well under 200ms apart) until one
+-- attempt happens to land inside the skip window, which recurs on roughly
+-- 20% of every K9_POSITION_SAMPLE_INTERVAL_MS sampling cycle at shipped
+-- defaults. This test pins the fix: an implausible jump within that same
+-- sub-200ms window must still be refused.
+t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- an implausible jump is still refused even when less than MIN_TELEPORT_CHECK_ELAPSED_MS has elapsed since the last sample (closes the retry-bypass)', function()
+    local f = newCombatFixture()
+    local k9Ped = wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    f.addOnline(K9_SRC)
+    f.runOneTick() -- samples K9PositionHistory[K9_SRC] = { pos = (0,0,0), time = 0 }
+
+    -- 1000m in 100ms -- an obvious teleport, timed deliberately inside the
+    -- pre-fix "skip" window (under MIN_TELEPORT_CHECK_ELAPSED_MS) to prove
+    -- the floored divisor still catches it (1000m / 0.2s = 5000 m/s, far
+    -- past MAX_PLAUSIBLE_K9_SPEED_MPS).
     f.setCoords(k9Ped, 1000, 0, 0)
     wireNpcTarget(f, 500, { x = 1000, y = 0, z = 0 })
-    f.advance(100) -- under the 200ms floor -- too little elapsed time to evaluate
+    f.advance(100) -- under the 200ms floor -- must NOT bypass the check
     f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
-    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'too little elapsed time since the last sample must never itself cause a rejection')
+    t.equals(#f.clientEvents, 0, 'a huge implausible jump must be refused even inside the sub-200ms window, closing the retry-bypass')
 end)
 
 t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- playerDropped clears K9PositionHistory so a reused source id never inherits a stranger\'s stale sample', function()

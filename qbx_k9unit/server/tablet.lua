@@ -706,6 +706,161 @@ local function ResolveTargetHasK9Access(citizenid, activePermSet)
 end
 
 -- ======================================================================
+-- BLOCK ENFORCEMENT CLASSIFICATION -- html/tablet.js's PersonFeaturesResult
+-- doc comment (its own `blockEnforcement?` field, immediately above
+-- featureBlockEnforcement()) is the canonical four-state contract this
+-- section implements: THE TABLET MUST NEVER TELL AN OPERATOR A BLOCK DOES
+-- MORE, OR LESS, THAN IT ACTUALLY DOES. Every key below was placed by
+-- directly reading the feature-owning file's own per-person gate (or
+-- confirming, by grep, that none exists) -- never guessed from the
+-- feature's name. See each table's own comment for the exact evidence.
+-- ======================================================================
+
+--- The twelve features client/featureblocks.lua's own header names as
+--- purely client-rendered/client-local, with NO server-side registration
+--- point a `block.<Name>` check could ever be wired into (that file's own
+--- header: confirmed by a grep across every server/*.lua file before it
+--- was written, not assumed from the name). Kept BYTE-FOR-BYTE identical
+--- to that file's own CLIENT_ENFORCED_FEATURES set -- if either table is
+--- ever edited, update the other in the same pass.
+---
+--- These twelve DO now have a real, working per-person block --
+--- client/featureblocks.lua's IsK9FeatureBlocked(), fed by a server push
+--- -- but it is enforced BY THE PLAYER'S OWN CLIENT, which is a strictly
+--- WEAKER guarantee than every other entry in this file's `features`
+--- array: a modified client can always choose to skip its own check,
+--- exactly as it could already fake this resource's model/access checks
+--- (IsOwnModelK9/CanShowK9UI). Calling this 'enforced' would falsely claim
+--- server-side parity; calling it 'not_enforceable' would falsely claim
+--- the block does nothing. 'client_enforced' is the honest third answer --
+--- see locales/en.json's tablet.block_client_enforced_badge/_hint for the
+--- operator-facing "best-effort, not a guarantee" wording.
+local CLIENT_ENFORCED_FEATURES = {
+    RadialMenu = true,
+    VehicleEntryExit = true,
+    AgilityBasicJump = true,
+    AgilityAdvanced = true,
+    ThermalVision = true,
+    NightVision = true,
+    HealthStaminaHUD = true,
+    ContrabandScreenFX = true,
+    AdvancedBarkRadial = true,
+    ProximityAudioFX = true,
+    WaterTrackingDecay = true,
+    CameraFeedPiP = true,
+}
+
+--- Every OTHER Config.Features key confirmed, by direct code read this
+--- pass (a grep for `block.<Name>` -- literal and the dynamic
+--- `'block.' .. featureName` shape several files share -- across every
+--- server/*.lua file), to have NO server-side point that would EVER
+--- consult `block.<Name>`, for a reason that is NOT "nobody has wired it
+--- in yet" (that case is the safe 'not_yet_enforced' fallback this
+--- function deliberately does not return for these):
+---
+---   RECALL -- see server/recall.lua's own header "NO UNBOUNDED TRAP":
+---   THIS IS A DELIBERATE, LOAD-BEARING DESIGN DECISION, NOT A GAP. DO NOT
+---   "FIX" THIS BY WIRING A block.Recall CHECK INTO server/recall.lua.
+---   Recall is this resource's escape hatch for every non-consensual
+---   engagement (bite-and-hold, takedown, drag) -- the path that lets a
+---   handler call their K9 off even if their OWN certification, or their
+---   K9's, was just revoked mid-bite. Gating it on block.Recall would let
+---   a single block row strand someone in an active engagement with no
+---   way out -- reopening the exact "termination path silently gated
+---   behind the same check that gates initiating the thing being escaped"
+---   bug class this resource has already shipped and fixed once.
+---   server/recall.lua's event handler applies exactly three gates
+---   (Config.Features.Recall itself, a per-caller rate limit, and "is the
+---   caller genuinely this K9's established partner") and NEVER
+---   HasPermission/block.Recall, on either party, by design. Grouped here
+---   by RESULT ('not_enforceable', same as the entries below) -- never by
+---   REASON, which is entirely different from theirs; this comment exists
+---   specifically so nobody reading only this table mistakes Recall for
+---   an ordinary unimplemented case.
+---
+---   K9EQUIPMENTSHOP -- REMOVED FROM THIS TABLE, this pass. A PRIOR
+---   version of this comment (and of server/equipmentshop.lua's own
+---   header) concluded K9EquipmentShop was structurally exempt, reasoning
+---   that the buy/sell transaction never reaches this resource's own
+---   code. That reasoning was WRONG, not merely superseded: re-reading
+---   ox_inventory's own real source found it fires a genuine, per-attempt,
+---   server-side `registerHook('openShop', ...)` / `registerHook('buyItem',
+---   ...)` pair this resource's own K9Compat inventory adapter can already
+---   register against (a fully generic `RegisterHook` pass-through,
+---   shared/compat/inventory.lua). server/equipmentshop.lua now registers
+---   both -- IsEquipmentShopPermittedForCitizenId there implements the
+---   SAME four-step Config.FeatureControl resolution every other
+---   blockable feature uses, and a genuine `HasPermission(citizenid,
+---   'block.K9EquipmentShop')` call site now exists (see that file's own
+---   "PER-PERSON FEATURE CONTROL" sections for the full writeup). This key
+---   therefore now falls through to the ordinary 'enforced' classification
+---   below, exactly like any other server-gated ability.
+---
+---   RESOURCEAUTODETECT / HIGHCOMMAND / PERMISSIONGRANTS / COMMANDTABLET /
+---   CERTIFICATIONEXPIRY / RUNTIMEFEATURECONTROL / TABLETTHEMING -- these
+---   are administrative/infrastructure switches, not a K9 ability any
+---   single citizenid "does" -- grepped end to end this pass for
+---   `block.<Name>` (literal and dynamic) across every server/*.lua file:
+---   zero matches for any of these seven keys, in sharp contrast to
+---   ordinary abilities like BasicBarkSounds/LeashMechanics/etc. (which
+---   ARE something a person does, and DO have their own `block.<Name>`
+---   check -- see their omission from this table). config.lua's own
+---   Config.FeatureControl per-person-block contract ("high command can
+---   turn an individual feature on or off for ONE specific K9 or
+---   handler") only makes sense for a feature that is something a
+---   specific person does; these seven structurally are not that.
+---
+--- DISCLOSED: server/permissions.lua's IsValidPermissionKey still lets a
+--- high-command operator WRITE a `block.<Name>` row for any of these eight
+--- keys (it validates only `Config.Features[Name] ~= nil`, never whether
+--- anything actually reads that row) -- this table exists specifically so
+--- the tablet tells that operator, honestly, that doing so would have no
+--- effect at all, rather than implying either that it works ('enforced')
+--- or that it merely hasn't been wired up yet ('not_yet_enforced').
+local NOT_ENFORCEABLE_FEATURES = {
+    Recall = true,
+    ResourceAutoDetect = true,
+    HighCommand = true,
+    PermissionGrants = true,
+    CommandTablet = true,
+    CertificationExpiry = true,
+    RuntimeFeatureControl = true,
+    TabletTheming = true,
+}
+
+--- @param key string -- a Config.Features key
+--- @return string -- 'client_enforced' | 'not_enforceable' | 'enforced'
+--- NEVER returns 'not_yet_enforced' -- that value exists purely as
+--- html/tablet.js's own client-side fallback for a `blockEnforcement`
+--- field this function did not send at all (an older server build, or a
+--- key this function has genuinely never heard of -- structurally
+--- impossible today, since ListFeatureKeys() and this function iterate
+--- the exact same, real-time Config.Features table). Every key this
+--- function DOES resolve for lands in EXACTLY one of the two explicit
+--- tables above, by a direct, disclosed code read; 'enforced' is the
+--- DEFAULT for every remaining key precisely because every ordinary
+--- K9-ability feature file in this resource follows the same "PER-PERSON
+--- FEATURE CONTROL" convention (HasPermission(citizenid, 'block.' .. key)
+--- checked, static or via a shared `featureName`/`featureKey` parameter,
+--- before the ability's own effect runs) -- confirmed, not assumed, for
+--- every key currently in Config.Features (see this pass's own report for
+--- the full per-key evidence list: server/main.lua, server/search.lua,
+--- server/tracking.lua, server/wellbeing.lua, server/combat.lua and
+--- eighteen further single-feature files each their own `block.<Name>`
+--- check). A FUTURE feature added to Config.Features without being placed
+--- in either table above will default to 'enforced' here -- whoever adds
+--- it is expected to add it to one of the two tables above in the SAME
+--- pass it lands its own `block.<Name>` check (or its own reason not to),
+--- mirroring this file's existing Config.CommandTablet.ActionableFeatures
+--- convention for exactly this "a small, explicit, code-owner-maintained
+--- registry, never silently stale" reason.
+local function ResolveBlockEnforcement(key)
+    if NOT_ENFORCEABLE_FEATURES[key] == true then return 'not_enforceable' end
+    if CLIENT_ENFORCED_FEATURES[key] == true then return 'client_enforced' end
+    return 'enforced'
+end
+
+-- ======================================================================
 -- FEATURE STATE RESOLUTION -- see this file's header "STATE RESOLUTION".
 -- ======================================================================
 
@@ -783,6 +938,7 @@ local function BuildPersonFeaturesArray(hasK9Access, activePermSet)
             granted = activePermSet['feature.' .. key] == true,
             blocked = activePermSet['block.' .. key] == true,
             state = ResolveFeatureState(key, hasK9Access, activePermSet),
+            blockEnforcement = ResolveBlockEnforcement(key), -- see this file's own "BLOCK ENFORCEMENT CLASSIFICATION" section above
         }
     end
     return out

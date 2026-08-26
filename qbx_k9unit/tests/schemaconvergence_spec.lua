@@ -205,6 +205,7 @@ local MIGRATION_FILES_THAT_CREATE_TABLES = {
     '0010_create_k9_certification_tiers.sql',
     '0011_create_k9_equipment_shop_locations.sql',
     '0013_create_k9_permission_keys.sql',
+    '0014_create_k9_equipment_shop_items.sql',
     '0015_create_k9_xp_tiers.sql',
 }
 

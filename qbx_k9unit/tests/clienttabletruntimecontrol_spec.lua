@@ -49,6 +49,12 @@ local function newFixture()
     local nuiCallbacks = {}
     local function RegisterNUICallback(name, handler) nuiCallbacks[name] = handler end
     local function AddEventHandler() end
+    -- client/tablet.lua now calls RegisterNetEvent for
+    -- qbx_k9unit:client:themeUpdated (see tests/clienttablet_spec.lua's own
+    -- dedicated coverage of that name/registration mechanism) -- this file
+    -- never exercises that event, so a no-op stub is all that is needed to
+    -- keep the whole production file loadable here.
+    local function RegisterNetEvent() end
     local function GetCurrentResourceName() return 'qbx_k9unit' end
     local function GetResourceState() return 'started' end
     local function DisableControlAction() end
@@ -81,7 +87,8 @@ local function newFixture()
         IsEntityDead = IsEntityDead, PlayerPedId = PlayerPedId,
         CreateThread = CreateThread, Wait = Wait,
         RegisterCommand = RegisterCommand, RegisterNUICallback = RegisterNUICallback,
-        AddEventHandler = AddEventHandler, GetCurrentResourceName = GetCurrentResourceName,
+        AddEventHandler = AddEventHandler, RegisterNetEvent = RegisterNetEvent,
+        GetCurrentResourceName = GetCurrentResourceName,
         GetResourceState = GetResourceState, K9Compat = fakeK9Compat,
         CanShowK9UI = function() return true end,
         HasK9Access = function() return true end,

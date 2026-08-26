@@ -736,11 +736,44 @@ local PED_DEAD_HEALTH_THRESHOLD = 100
 local K9_POSITION_SAMPLE_INTERVAL_MS = 1000
 
 -- MIN_TELEPORT_CHECK_ELAPSED_MS: the plausibility check in
--- ValidateCombatRequest below is SKIPPED (never rejects) when less than
--- this much time has elapsed since the K9's own last background sample --
--- guards against dividing by a near-zero elapsed time (which would make
--- even ordinary, non-teleport movement read as an absurd implied speed) in
--- the narrow window right after the sampling thread's own most recent tick.
+-- ValidateCombatRequest below FLOORS the elapsed-time DIVISOR at this value
+-- when less than this much time has elapsed since the K9's own last
+-- background sample -- guards against dividing by a near-zero elapsed time
+-- (which would make even ordinary, non-teleport movement read as an absurd
+-- implied speed) in the narrow window right after the sampling thread's own
+-- most recent tick.
+--
+-- QA-FIX (this pass, coder-security -- red-team retry-bypass, found testing
+-- against this exact check's own "an implausible jump is refused" test
+-- immediately below in this file's usage): this used to SKIP the check
+-- entirely (return with no opinion at all) rather than floor the divisor,
+-- on the theory that "too little elapsed time to evaluate" should never
+-- itself cause a rejection. That is true for a GENUINE small movement, but
+-- the skip made the check a NO-OP for ANY movement, however large, landing
+-- inside the first MIN_TELEPORT_CHECK_ELAPSED_MS of every
+-- K9_POSITION_SAMPLE_INTERVAL_MS sampling cycle (~20% of every cycle at
+-- shipped defaults, 200/1000) -- and a REJECTED ValidateCombatRequest call
+-- costs the caller nothing (requestBiteHold/requestDrag only ever
+-- IsOnCooldown/Touch a cooldown AFTER ValidateCombatRequest already
+-- returned ok == true, so a failed attempt never burns anything). A hostile
+-- client could therefore teleport next to a target and simply retry
+-- requestBiteHold/requestDrag every well-under-200ms until one attempt
+-- happened to land inside that window, bypassing this entire check on a
+-- practically guaranteed handful of attempts -- silently defeating the
+-- exact "teleport-bite"/"teleport-drag" fix this constant exists to
+-- implement (HandleTakedownRequest's own SECOND, post-yield
+-- ValidateCombatRequest call happens to make takedown far less exposed to
+-- this specific retry, since a real teleport that slipped through the FIRST
+-- call's skip window is then measured again ~speedSampleWindowMs later,
+-- almost never inside a second skip window against the SAME stale sample --
+-- but requestBiteHold/requestDrag call ValidateCombatRequest exactly once
+-- each, with no such second chance to catch it). FLOORING the divisor
+-- instead of skipping keeps the intended anti-jitter property (a genuinely
+-- tiny real movement over a genuinely tiny elapsed time still computes a
+-- low speed once floored) while ensuring a LARGE distance over a tiny
+-- elapsed time is still caught -- flooring can only ever make the computed
+-- speed larger (stricter), never smaller, than the skip it replaces, so no
+-- previously-legitimate request is newly rejected by this change.
 local MIN_TELEPORT_CHECK_ELAPSED_MS = 200
 
 -- MAX_PLAUSIBLE_K9_SPEED_MPS: deliberately generous -- ~216 km/h, well above
@@ -1464,11 +1497,16 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         local history = K9PositionHistory[src]
         if history then
             local elapsedMs = GetGameTimer() - history.time
-            if elapsedMs >= MIN_TELEPORT_CHECK_ELAPSED_MS then
-                local impliedSpeed = #(k9Pos - history.pos) / (elapsedMs / 1000.0)
-                if impliedSpeed > MAX_PLAUSIBLE_K9_SPEED_MPS then
-                    return false, nil, nil, nil, nil, 'implausible_movement'
-                end
+            -- FLOOR, never skip -- see MIN_TELEPORT_CHECK_ELAPSED_MS's own
+            -- declaration comment above for the full retry-bypass writeup
+            -- this replaces. A negative elapsedMs (should not normally
+            -- happen, but cheaply guarded here rather than assumed away)
+            -- floors the same way a too-small positive one does.
+            local speedElapsedMs = elapsedMs >= MIN_TELEPORT_CHECK_ELAPSED_MS
+                and elapsedMs or MIN_TELEPORT_CHECK_ELAPSED_MS
+            local impliedSpeed = #(k9Pos - history.pos) / (speedElapsedMs / 1000.0)
+            if impliedSpeed > MAX_PLAUSIBLE_K9_SPEED_MPS then
+                return false, nil, nil, nil, nil, 'implausible_movement'
             end
         end
     end

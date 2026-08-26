@@ -1127,17 +1127,31 @@ lib.callback.register('qbx_k9unit:server:certTiersUpsert', function(source, payl
     local currentCapSet = {}
     for _, row in ipairs(currentCapRows) do currentCapSet[row.capability_key] = true end
 
-    local added, removed = {}, {}
+    -- `added`/`removed` record ONLY what actually landed (the write's own
+    -- `ok` return checked, per the SafeWrite contract -- TierCap_Insert/
+    -- TierCap_Delete degrade a thrown DB error to `false` rather than
+    -- propagating, so a mid-loop DB blip must not be allowed to silently
+    -- fall through as if every requested change applied).
+    -- `failedAdds`/`failedRemoves` record the requested changes that did
+    -- NOT land, so the caller is told exactly what failed rather than
+    -- receiving a bare `ok = true` for a partially-applied edit.
+    local added, removed, failedAdds, failedRemoves = {}, {}, {}, {}
     for capKey in pairs(capsSet) do
         if not currentCapSet[capKey] then
-            added[#added + 1] = capKey
-            K9Store.TierCap_Insert(key, capKey, citizenid or 'unknown')
+            if K9Store.TierCap_Insert(key, capKey, citizenid or 'unknown') then
+                added[#added + 1] = capKey
+            else
+                failedAdds[#failedAdds + 1] = capKey
+            end
         end
     end
     for capKey in pairs(currentCapSet) do
         if not capsSet[capKey] then
-            removed[#removed + 1] = capKey
-            K9Store.TierCap_Delete(key, capKey)
+            if K9Store.TierCap_Delete(key, capKey) then
+                removed[#removed + 1] = capKey
+            else
+                failedRemoves[#failedRemoves + 1] = capKey
+            end
         end
     end
 
@@ -1152,12 +1166,30 @@ lib.callback.register('qbx_k9unit:server:certTiersUpsert', function(source, payl
         action = 'tier_create'
     end
 
+    -- Audit only what actually succeeded -- `added`/`removed` above already
+    -- exclude anything that failed, so this line never overstates what
+    -- happened, even though `action` (create/restore/update) itself is
+    -- independent of the capability reconciliation outcome.
     WriteTierAudit(action, key,
         ('label=%q ordinal=%d capabilities_added=[%s] capabilities_removed=[%s]'):format(
             payload.label, ordinal, table.concat(added, ','), table.concat(removed, ',')),
         citizenid or 'unknown')
 
+    -- Refresh from DB truth regardless of outcome -- if any capability
+    -- write failed above, this ensures every reader (including this
+    -- call's own response below) sees exactly what actually landed, never
+    -- the fully-requested-but-not-fully-applied `capsSet`.
     RefreshCertificationTierCatalog()
+
+    if #failedAdds > 0 or #failedRemoves > 0 then
+        return {
+            ok = false,
+            reason = 'capability_write_failed',
+            failedCapabilities = { added = failedAdds, removed = failedRemoves },
+            tiers = ListCertificationTiers(),
+            capabilityCatalog = PublicCapabilityCatalog(),
+        }
+    end
 
     return { ok = true, tiers = ListCertificationTiers(), capabilityCatalog = PublicCapabilityCatalog() }
 end)

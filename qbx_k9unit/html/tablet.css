@@ -490,11 +490,18 @@ body {
 /* Block Effect column -- html/tablet.js's featureBlockEnforcement()/
    buildPersonFeatureRow(). THE HONESTY REQUIREMENT this task exists to
    satisfy: 'enforced' (green, matches .k9tablet-feature-state--available)
-   vs 'not_yet_enforced' (amber, matches the other non-blocking states --
-   this is a warning, not a failure: the control still works, it just
-   does not yet stop anything in-game) vs 'not_enforceable' (red-muted --
-   no Block/Unblock control is rendered at all for this one, see that
-   function's own comment on why it is hidden, not merely labeled). */
+   vs 'client_enforced' (the operator's own THEME ACCENT colour --
+   deliberately neither the plain "works" green nor the plain "warning"
+   amber below: it is a real, working, genuinely different THIRD thing --
+   enforced, but only client-side, so a modified client can bypass it --
+   and reusing the accent custom property here, rather than a fourth
+   hardcoded hex, is what makes this one badge distinct without inventing
+   a brand-new fixed colour meaning) vs 'not_yet_enforced' (amber, matches
+   the other non-blocking states -- this is a warning, not a failure: the
+   control still works, it just does not yet stop anything in-game) vs
+   'not_enforceable' (red-muted -- no Block/Unblock control is rendered at
+   all for this one, see that function's own comment on why it is hidden,
+   not merely labeled). */
 .k9tablet-block-badge {
     display: inline-block;
     font-size: 12px;
@@ -503,6 +510,18 @@ body {
 
 .k9tablet-block-badge--enforced {
     color: #9bd17f;
+}
+
+.k9tablet-block-badge--client_enforced {
+    /* --k9tablet-accent is the SAME operator-customizable custom property
+       applyBrandingSeedTheme()/applyLiveThemeVars() already drive from
+       Config.CommandTablet.branding.theme / a saved TabletTheming save --
+       see this file's own :root block below. Reusing it here (rather than
+       a new hardcoded colour) is deliberate: this state is not a fixed
+       pass/fail semantic like the other three, so it is the one badge
+       that inherits the tablet's own branding instead of a hardcoded hue. */
+    color: var(--k9tablet-accent, #f59e0b);
+    cursor: help;
 }
 
 .k9tablet-block-badge--not_yet_enforced {
@@ -795,3 +814,17 @@ body {
     padding: 7px 10px;
     font-size: 13px;
 }
+
+/*
+    PERMISSION-KEY CATALOG EDITING (its own tab, high command only,
+    alongside the certification-tier tab) -- owner-directed "...even add
+    or remove permissions" pass, server/permissionkeycatalog.lua.
+    Introduces NO new class of its own: html/tablet.js's
+    buildPermissionKeysScreen() reuses the SAME .k9tablet-table/
+    .k9tablet-cert-tier-form/.k9tablet-theme-field/
+    .k9tablet-cert-tier-key-input/.k9tablet-cert-tier-label-input/
+    .k9tablet-cert-tier-actions/.k9tablet-cert-tier-row-error/
+    .k9tablet-muted rules already defined above for the certification-tier,
+    shop-location, and runtime-control screens -- one visual language, not
+    a fifth one.
+*/

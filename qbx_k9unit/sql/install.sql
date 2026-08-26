@@ -3,22 +3,24 @@
 --
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
--- This is a hard requirement, not a recommendation. Four of the twenty
--- tables below (k9_certifications, k9_certification_specializations,
--- k9_partnerships, k9_permissions) declare an INDEXED VIRTUAL GENERATED
--- COLUMN backing a UNIQUE KEY (`k9_certifications.active_cert_key`,
+-- This is a hard requirement, not a recommendation. Four of the
+-- twenty-two (22) tables below (k9_certifications,
+-- k9_certification_specializations, k9_partnerships, k9_permissions)
+-- declare an INDEXED VIRTUAL GENERATED COLUMN backing a UNIQUE KEY
+-- (`k9_certifications.active_cert_key`,
 -- `k9_certification_specializations.active_spec_key`,
 -- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
--- `k9_permissions.active_permission_key`) -- the other sixteen
+-- `k9_permissions.active_permission_key`) -- the other eighteen
 -- (k9_search_log, k9_progression, k9_runtime_feature_overrides,
 -- k9_runtime_override_audit, k9_tablet_theme, k9_tablet_theme_audit,
 -- k9_ped_assignments, k9_certification_tiers,
 -- k9_certification_tier_capabilities, k9_certification_tier_audit,
 -- k9_equipment_shop_locations, k9_equipment_shop_locations_audit,
--- k9_permission_keys, k9_permission_key_audit, k9_xp_tiers,
--- k9_xp_tier_audit) need nothing from this floor and would run on an
--- older server on their own, but this resource has one stated minimum for
--- the schema as a whole, not a per-table one.
+-- k9_permission_keys, k9_permission_key_audit, k9_equipment_shop_items,
+-- k9_equipment_shop_item_audit, k9_xp_tiers, k9_xp_tier_audit) need
+-- nothing from this floor and would run on an older server on their own,
+-- but this resource has one stated minimum for the schema as a whole, not
+-- a per-table one.
 -- -- the DB-level backstop for this resource's "at most one active
 -- certification per (citizenid, job)", "at most one active partnership
 -- per party" and "at most one active permission grant per (citizenid,
@@ -1259,6 +1261,67 @@ CREATE TABLE IF NOT EXISTS `k9_permission_key_audit` (
 
   PRIMARY KEY (`id`),
   KEY `idx_permission_key_changed_at` (`permission_key`, `changed_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_equipment_shop_items / k9_equipment_shop_item_audit
+--
+-- Added alongside `sql/migrations/0014_create_k9_equipment_shop_items.sql`,
+-- byte-for-byte the same shape -- see that file's own header for the full
+-- design rationale (why this overlays server/equipmentshop.lua's
+-- Config.K9EquipmentShop.items catalog the same way k9_certification_tiers
+-- overlays Config.CertificationTiers, why `deleted` is a tombstone rather
+-- than a real row DELETE, why `required_tier_key`/`required_specialization`
+-- are two plain nullable columns rather than a capabilities-style sibling
+-- table, and why neither table declares an FK) -- not repeated a second
+-- time here.
+--
+-- db-schema convergence pass, 2026-08-26: this section was previously
+-- completely absent from this file even though migration 0014 itself has
+-- shipped since this same pass -- the exact class of silent gap migrations
+-- 0010/0011/0013/0015 already had fixed here once before for THIS file (see
+-- this file's own top-of-header table count, which this addition brings
+-- back in sync with the real CREATE TABLE count below). Without this
+-- section, a FRESH install via this file alone never created these two
+-- tables at all, so every real-database write server/equipmentshop.lua's
+-- own item-catalog editor makes would have silently failed (K9Store's own
+-- pcall-guarded SafeWrite contract logs and degrades rather than crashing,
+-- so nothing would have thrown -- it would just never have persisted,
+-- which is worse: the tablet would report success on every edit while
+-- nothing survived a restart).
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates these tables, run
+-- `sql/migrations/0014_create_k9_equipment_shop_items.sql` instead (a
+-- guaranteed no-op if this file already created them).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_equipment_shop_items` (
+  `item_key`                VARCHAR(50)  NOT NULL,
+  `label`                   VARCHAR(60)  DEFAULT NULL,
+  `price`                   INT UNSIGNED NOT NULL,
+  `currency`                VARCHAR(50)  DEFAULT NULL,
+  `sort_order`              INT          NOT NULL,
+  `required_tier_key`       VARCHAR(32)  DEFAULT NULL,
+  `required_specialization` VARCHAR(50)  DEFAULT NULL,
+  `deleted`                 TINYINT(1)   NOT NULL DEFAULT 0,
+  `created_at`              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_by`              VARCHAR(50)  NOT NULL,
+  `updated_at`              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`item_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `k9_equipment_shop_item_audit` (
+  `id`           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `action`       VARCHAR(20)  NOT NULL,
+  `item_key`     VARCHAR(50)  NOT NULL,
+  `detail`       TEXT         NOT NULL,
+  `changed_by`   VARCHAR(50)  NOT NULL,
+  `changed_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  KEY `idx_item_key_changed_at` (`item_key`, `changed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================================

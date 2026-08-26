@@ -359,11 +359,37 @@
       qbx_k9unit:server:tabletAuditSearch  (source, mode, value, limit)
       qbx_k9unit:server:tabletAuditXp      (source, citizenid)
       qbx_k9unit:server:tabletAuditDept    (source, job, limit)
-    Every one returns `{ ok = true, rows = <table>, label = <string> }` on
-    success or `{ ok = false, error = 'not_authorized'|'rate_limited'|'invalid_args', message = string? }`
-    otherwise — never a formatted string. No NUI callback and no
-    client/tablet.lua change are part of this pass; this is the
-    server-side contract a follow-up tablet screen builds against.
+    Every one returns `{ ok = true, rows = <table>, label = <string>,
+    cap = <number> }` on success — the four that take a `limit` argument
+    (every one except tabletAuditXp, which takes none — see its own doc
+    comment) also carry `limit = <number>` (the exact, already-clamped value
+    this call actually used) and `truncated = <boolean>` (true only when the
+    caller's own request exceeded `cap` and was cut down to it — this task's
+    own "you asked for 500, here are the first 100" case) — or
+    `{ ok = false, error = 'not_authorized'|'rate_limited'|'invalid_args', message = string? }`
+    otherwise — never a formatted string, and NEVER `cap`/`limit`/`truncated`
+    on a refusal: all three failure branches in every callback below return
+    before HARD_MAX_RESULTS is ever attached to a response, so an
+    unauthorized/rate-limited/malformed caller learns nothing new from this
+    pass that IsAuthorizedAdmin didn't already refuse to tell them. `cap` is
+    `HARD_MAX_RESULTS` below, verbatim — added THIS pass (closing the exact
+    gap this task was opened to fix: html/tablet.js previously hardcoded its
+    own guess of this same number) so a consumer is TOLD the real ceiling
+    rather than duplicating it, mirroring runtimeSetTunable's own `min`/`max`
+    echo (server/runtimecontrol.lua) exactly. See the full "CALLBACK
+    SURFACE" comment block immediately above the five
+    `lib.callback.register(...)` calls near the end of this file for the
+    exact per-callback field list.
+
+    CORRECTION (this pass): the sentence that used to close this section —
+    "No NUI callback and no client/tablet.lua change are part of this pass"
+    — was true when this section was first written and has been FALSE since
+    a later pass built exactly that: client/tablet.lua's own tablet:audit*
+    bridges (that file's own "K9 AUDIT TRAIL VIEWER" section) call all five
+    of these callbacks directly, and html/tablet.js's Audit Trail tab is the
+    real, live consumer this section originally only anticipated. Left here,
+    corrected rather than deleted, per this project's own standing rule that
+    a confidently-worded but stale comment costs the next reader real time.
 
     RATE LIMITING: one shared NewCooldown() instance (server/cooldowns.lua
     — per this task's explicit "use the shared constructors" convention)
@@ -754,19 +780,39 @@ end
 --- `rawArg` (falls back to `defaultValue`, then still runs through the
 --- SAME floor+range clamp below, same as every other path through this
 --- function).
+---
+--- SOUNDNESS RE-CHECK (this pass, per this task's explicit instruction to
+--- read this function rather than trust it): re-verified directly against a
+--- real Lua 5.4 interpreter, not just re-read, against every shape this
+--- task named by name -- non-numeric ('abc', '', a table, a boolean),
+--- NaN (both `0/0` and the string 'nan'), infinite (`math.huge`/`-math.huge`
+--- and the overflow-to-infinity strings '1e400'/'-1e400'), negative, zero,
+--- fractional (both positive and negative), and absurdly large finite
+--- (`1e300`). Every case returns a plain, finite Lua number already inside
+--- `[1, hardMax]`, with NO error thrown in any case -- `math.floor` on a
+--- non-finite float does not raise in this Lua build (it returns the float
+--- unchanged when it has no integer representation, which the `> hardMax` /
+--- `< 1` comparisons below still resolve correctly since `-huge < 1` and
+--- `huge > hardMax` are both true, and `nan`'s self-inequality is caught
+--- one line above math.floor ever runs on it). CONCLUSION: the clamping
+--- logic itself needed no change -- it was already sound. The only change
+--- this pass makes is the SECOND return value below, `truncated`, which
+--- carries NEW information the callback surface needs but the clamp itself
+--- never previously reported.
 --- @param rawArg string|number|nil -- a RegisterCommand string arg, a lib.callback numeric arg, or nil/absent
 --- @param defaultValue number
 --- @param hardMax number
---- @return number limit
+--- @return number limit -- always in [1, hardMax], the exact value embedded in a query
+--- @return boolean truncated -- true ONLY when a genuine, parseable request exceeded `hardMax` and was cut down to it (this task's own "you asked for 500, here are the first 100" case). NEVER true when `rawArg` was absent/unparseable/NaN and `defaultValue` was substituted instead -- every `Config.AdminAudit.MaxResults.*` value is itself asserted at resource start (see the onResourceStart block below) to already be <= hardMax, so the default path can structurally never trigger this. Also never true for a below-floor request (negative/zero/-infinity) -- that clamp exists to reject a nonsensical LOW request, not to report "asked for more than available", which is what this flag is specifically for.
 local function ClampLimit(rawArg, defaultValue, hardMax)
     local parsed = tonumber(rawArg)
     if parsed == nil or parsed ~= parsed then
         parsed = defaultValue
     end
     parsed = math.floor(parsed)
-    if parsed < 1 then return 1 end
-    if parsed > hardMax then return hardMax end
-    return parsed
+    if parsed < 1 then return 1, false end
+    if parsed > hardMax then return hardMax, true end
+    return parsed, false
 end
 
 --- @param value string?
@@ -1399,7 +1445,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- RETURN SHAPE mirrors server/tablet.lua's own established
     -- `{ ok, error, message, ... }` convention (see e.g. that file's
     -- tabletRequestPersonSummary) rather than inventing a new one:
-    --   success: { ok = true, rows = <table>, label = <string> }
+    --   success: { ok = true, rows = <table>, label = <string>, cap = <number>, limit = <number>?, truncated = <boolean>? }
     --     `rows` is the RAW array K9Store.* already returns for that query
     --     (see each Query* function's own doc comment a few hundred lines
     --     above for the exact column list) -- the entire point of this
@@ -1407,13 +1453,30 @@ AddEventHandler('onResourceStart', function(resourceName)
     --     readable description (via the SAME `locale(...)` call) the
     --     command path already builds for its own toast/console header --
     --     included purely as a display convenience, never itself a source
-    --     of additional data.
+    --     of additional data. `cap` (THIS PASS) is `HARD_MAX_RESULTS`
+    --     verbatim, the real ceiling this file enforces regardless of what
+    --     any caller asks for -- present on EVERY success response,
+    --     including tabletAuditXp's (which has no `limit` concept at all --
+    --     see that callback's own comment -- but still carries `cap` for a
+    --     uniform response shape across all five). `limit` and `truncated`
+    --     (THIS PASS) are present on the four callbacks that take a `limit`
+    --     argument (tabletAuditCert/Partner/Search/Dept): `limit` is the
+    --     EXACT, already-`ClampLimit`-clamped value this call actually used
+    --     (always <= `cap`), and `truncated` is `true` only when the
+    --     caller's own request exceeded `cap` and was cut down to it --
+    --     see `ClampLimit`'s own doc comment above for the exact contract
+    --     both values come from, unmodified.
     --   failure: { ok = false, error = 'not_authorized' | 'rate_limited' | 'invalid_args', message = string? }
     --     `message` is only ever populated on `not_authorized` (the SAME
     --     `locale('admin.not_authorized')` text NotifyPlayer already sends
     --     for a denied command), matching server/tablet.lua's own
     --     documented "message stays optional, absence is a clean fallback"
-    --     contract for its other two error codes.
+    --     contract for its other two error codes. NEVER `cap`/`limit`/
+    --     `truncated` here -- every failure branch in every callback below
+    --     returns before HARD_MAX_RESULTS is ever attached to anything, so
+    --     an unauthorized/rate-limited/malformed caller cannot use this
+    --     pass's new fields to learn the configured cap without first
+    --     passing IsAuthorizedAdmin.
     -- A callback NEVER exposes a wider column set than its command
     -- counterpart already prints -- e.g. tabletAuditDept's rows are the
     -- SAME `citizenid, granted_by, granted_at` triple `/k9auditdept`'s own
@@ -1426,11 +1489,19 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- the console log can tell which path -- console/chat command vs.
     -- tablet callback -- a given invocation came through.
     --
-    -- NUI/CLIENT WIRING IS DELIBERATELY OUT OF SCOPE HERE: no
-    -- `client/tablet.lua` change and no NUI callback are part of this pass
-    -- -- these five `lib.callback.register` names, their argument shapes,
-    -- and their `{ ok, rows, label, error, message }` return shape are the
-    -- CONTRACT a follow-up tablet screen builds against, not built here.
+    -- NUI/CLIENT WIRING -- STATUS CORRECTED (this pass): this paragraph used
+    -- to say "no `client/tablet.lua` change and no NUI callback are part of
+    -- this pass" and that these five `lib.callback.register` names were only
+    -- a CONTRACT a follow-up tablet screen would build against, not built
+    -- here. That follow-up has SINCE landed: client/tablet.lua's own
+    -- tablet:audit* bridges (its own "K9 AUDIT TRAIL VIEWER" section) call
+    -- all five of these directly, and html/tablet.js's Audit Trail tab is
+    -- the real, live consumer of the `{ ok, rows, label, cap, limit,
+    -- truncated, error, message }` shape below (`cap`/`limit`/`truncated`
+    -- added THIS pass -- see this file's header CALLBACK SURFACE section
+    -- for why). Left here, corrected rather than deleted, so the ORIGINAL
+    -- "not built here" framing doesn't keep misleading whoever reads this
+    -- block next.
     -- ======================================================================
 
     --- 'qbx_k9unit:server:tabletAuditCert' -- mirrors '/k9auditcert'. See
@@ -1438,7 +1509,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- @param source number
     --- @param citizenid string?
     --- @param limit number?
-    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    --- @return table { ok: boolean, rows: table?, label: string?, cap: number?, limit: number?, truncated: boolean?, error: string?, message: string? }
     lib.callback.register('qbx_k9unit:server:tabletAuditCert', function(source, citizenid, limit)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'tabletAuditCert', 'n/a', 'denied')
@@ -1455,12 +1526,17 @@ AddEventHandler('onResourceStart', function(resourceName)
             return { ok = false, error = 'invalid_args' }
         end
 
-        local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
+        local clampedLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
         local rows = QueryCertificationHistory(citizenid, clampedLimit)
         local label = locale('admin.cert_history_label', citizenid)
 
         LogAuditInvocation(source, 'tabletAuditCert', citizenid, 'ok')
-        return { ok = true, rows = rows, label = label }
+        -- cap/limit/truncated (this pass): see this file's header CALLBACK
+        -- SURFACE section and the CALLBACK SURFACE comment block above for
+        -- the full contract. Computed and attached ONLY after
+        -- IsAuthorizedAdmin has already returned true above -- none of the
+        -- three refusal branches above ever reach this line.
+        return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = clampedLimit, truncated = wasTruncated }
     end)
 
     --- 'qbx_k9unit:server:tabletAuditPartner' -- mirrors '/k9auditpartner'.
@@ -1470,7 +1546,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- @param source number
     --- @param citizenid string?
     --- @param limit number?
-    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    --- @return table { ok: boolean, rows: table?, label: string?, cap: number?, limit: number?, truncated: boolean?, error: string?, message: string? }
     lib.callback.register('qbx_k9unit:server:tabletAuditPartner', function(source, citizenid, limit)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'tabletAuditPartner', 'n/a', 'denied')
@@ -1487,12 +1563,13 @@ AddEventHandler('onResourceStart', function(resourceName)
             return { ok = false, error = 'invalid_args' }
         end
 
-        local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.Partnerships, HARD_MAX_RESULTS)
+        local clampedLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.Partnerships, HARD_MAX_RESULTS)
         local rows = QueryPartnershipHistory(citizenid, clampedLimit)
         local label = locale('admin.partnership_history_label', citizenid)
 
         LogAuditInvocation(source, 'tabletAuditPartner', citizenid, 'ok')
-        return { ok = true, rows = rows, label = label }
+        -- cap/limit/truncated: see tabletAuditCert above for the full contract.
+        return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = clampedLimit, truncated = wasTruncated }
     end)
 
     --- 'qbx_k9unit:server:tabletAuditSearch' -- mirrors '/k9auditsearch'.
@@ -1507,7 +1584,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- @param mode string? -- 'officer' | 'plate' | 'person' | 'recent'
     --- @param value string? -- citizenid (officer/person) or plate (plate); ignored for 'recent'
     --- @param limit number?
-    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    --- @return table { ok: boolean, rows: table?, label: string?, cap: number?, limit: number?, truncated: boolean?, error: string?, message: string? }
     lib.callback.register('qbx_k9unit:server:tabletAuditSearch', function(source, mode, value, limit)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'tabletAuditSearch', 'n/a', 'denied')
@@ -1524,15 +1601,21 @@ AddEventHandler('onResourceStart', function(resourceName)
             return { ok = false, error = 'invalid_args' }
         end
 
-        local rows, label
+        -- `effectiveLimit`/`wasTruncated` are declared alongside `rows`/
+        -- `label` (rather than as a `local` inside each branch, the shape
+        -- this file had before this pass) specifically so the cap/limit/
+        -- truncated response fields below can read whichever branch's
+        -- ClampLimit call actually ran, exactly the same "declare above,
+        -- assign inside each branch" shape `rows`/`label` already used.
+        local rows, label, effectiveLimit, wasTruncated
 
         if mode == 'officer' or mode == 'person' then
             if not IsValidCitizenId(value) then
                 LogAuditInvocation(source, 'tabletAuditSearch', 'n/a', 'invalid_args')
                 return { ok = false, error = 'invalid_args' }
             end
-            local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
-            rows = (mode == 'officer') and QuerySearchLogByOfficer(value, clampedLimit) or QuerySearchLogByPerson(value, clampedLimit)
+            effectiveLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
+            rows = (mode == 'officer') and QuerySearchLogByOfficer(value, effectiveLimit) or QuerySearchLogByPerson(value, effectiveLimit)
             label = locale('admin.search_log_label_by_value', mode, value)
         elseif mode == 'plate' then
             local plate = NormalizePlateArg(value)
@@ -1540,17 +1623,18 @@ AddEventHandler('onResourceStart', function(resourceName)
                 LogAuditInvocation(source, 'tabletAuditSearch', 'n/a', 'invalid_args')
                 return { ok = false, error = 'invalid_args' }
             end
-            local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
-            rows = QuerySearchLogByPlate(plate, clampedLimit)
+            effectiveLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
+            rows = QuerySearchLogByPlate(plate, effectiveLimit)
             label = locale('admin.search_log_label_plate', plate)
         else -- 'recent'
-            local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
-            rows = QuerySearchLogRecent(clampedLimit)
+            effectiveLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.SearchLog, HARD_MAX_RESULTS)
+            rows = QuerySearchLogRecent(effectiveLimit)
             label = locale('admin.search_log_label_recent')
         end
 
         LogAuditInvocation(source, 'tabletAuditSearch', label, 'ok')
-        return { ok = true, rows = rows, label = label }
+        -- cap/limit/truncated: see tabletAuditCert above for the full contract.
+        return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = effectiveLimit, truncated = wasTruncated }
     end)
 
     --- 'qbx_k9unit:server:tabletAuditXp' -- mirrors '/k9auditxp'. No
@@ -1560,7 +1644,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- supplies.
     --- @param source number
     --- @param citizenid string?
-    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    --- @return table { ok: boolean, rows: table?, label: string?, cap: number?, error: string?, message: string? }
     lib.callback.register('qbx_k9unit:server:tabletAuditXp', function(source, citizenid)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'tabletAuditXp', 'n/a', 'denied')
@@ -1581,7 +1665,14 @@ AddEventHandler('onResourceStart', function(resourceName)
         local label = locale('admin.xp_snapshot_label', citizenid)
 
         LogAuditInvocation(source, 'tabletAuditXp', citizenid, 'ok')
-        return { ok = true, rows = rows, label = label }
+        -- `cap` only, for a UNIFORM AuditResult shape across all five
+        -- callbacks -- see tabletAuditCert above for the full cap/limit/
+        -- truncated contract. This endpoint takes NO `limit` argument at all
+        -- (citizenid is k9_progression's own PRIMARY KEY -- see
+        -- QueryProgressionSnapshot's own doc comment above), so `limit`/
+        -- `truncated` are deliberately never included here: there is
+        -- nothing to clamp and nothing that could ever be truncated.
+        return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS }
     end)
 
     --- 'qbx_k9unit:server:tabletAuditDept' -- mirrors '/k9auditdept'. See
@@ -1591,7 +1682,7 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- @param source number
     --- @param job string? -- must be a configured Config.Departments key
     --- @param limit number?
-    --- @return table { ok: boolean, rows: table?, label: string?, error: string?, message: string? }
+    --- @return table { ok: boolean, rows: table?, label: string?, cap: number?, limit: number?, truncated: boolean?, error: string?, message: string? }
     lib.callback.register('qbx_k9unit:server:tabletAuditDept', function(source, job, limit)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'tabletAuditDept', 'n/a', 'denied')
@@ -1608,12 +1699,13 @@ AddEventHandler('onResourceStart', function(resourceName)
             return { ok = false, error = 'invalid_args' }
         end
 
-        local clampedLimit = ClampLimit(limit, Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
+        local clampedLimit, wasTruncated = ClampLimit(limit, Config.AdminAudit.MaxResults.Certifications, HARD_MAX_RESULTS)
         local rows = QueryDepartmentRoster(job, clampedLimit)
         local label = locale('admin.dept_roster_label', job)
 
         LogAuditInvocation(source, 'tabletAuditDept', job, 'ok')
-        return { ok = true, rows = rows, label = label }
+        -- cap/limit/truncated: see tabletAuditCert above for the full contract.
+        return { ok = true, rows = rows, label = label, cap = HARD_MAX_RESULTS, limit = clampedLimit, truncated = wasTruncated }
     end)
 
     print('[qbx_k9unit] admin.lua: audit commands registered (k9auditcert, k9auditpartner, k9auditsearch, k9auditxp, k9auditdept); audit callbacks registered (tabletAuditCert, tabletAuditPartner, tabletAuditSearch, tabletAuditXp, tabletAuditDept).')

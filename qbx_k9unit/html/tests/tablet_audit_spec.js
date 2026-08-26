@@ -11,7 +11,9 @@
 
     Server contract verified directly against server/admin.lua (not
     assumed): every tabletAudit* callback returns
-    `{ok:true, rows, label}` on success or
+    `{ok:true, rows, label, cap, limit?, truncated?}` on success (cap/limit/
+    truncated added in a later pass than the rest of this file -- see the
+    "cap / limit / truncated" section below) or
     `{ok:false, error:'not_authorized'|'rate_limited'|'invalid_args', message?}`
     otherwise -- never a formatted string -- and `rows`' column shape is
     DIFFERENT PER MODE (see server/datastore.lua's own K9Store.Cert_GetHistory,
@@ -69,6 +71,15 @@ function findAllTag(root, tag) {
 
 function findInputByPlaceholder(root, placeholder) {
     return findAll(root, (n) => n.tagName === 'input' && n.getAttribute('placeholder') === placeholder)[0];
+}
+
+/** Case-insensitive substring search across every element's OWN text node
+ * (mirrors findByText's exact-match shape, but for asserting an absence/
+ * presence of a phrase inside a longer, templated sentence whose exact
+ * numbers vary per test -- e.g. the truncation notice). */
+function findByTextIncluding(root, substring) {
+    const needle = substring.toLowerCase();
+    return findAll(root, (n) => typeof n._textContent === 'string' && n._textContent.toLowerCase().includes(needle));
 }
 
 // ======================================================================
@@ -461,6 +472,180 @@ t.test('auditEnabled=false shows the disabled note and disables Run Query', asyn
     t.isTrue(findByText(h.getRoot(), 'The audit command surface is disabled server-wide. Queries cannot be run until it is re-enabled.').length >= 1);
     const runBtn = findByText(h.getRoot(), 'Run Query')[0];
     t.isDefined(runBtn.getAttribute('disabled'));
+});
+
+// ======================================================================
+// cap / limit / truncated (this pass) -- server/admin.lua's five
+// tabletAudit* callbacks now serve their real HARD_MAX_RESULTS back as
+// `cap` on every success response (plus `limit`/`truncated` on the four
+// that take a limit argument), closing the gap where this page used to
+// carry its own hardcoded, driftable guess of that same number
+// (AUDIT_LIMIT_MAX_FALLBACK, now used ONLY before any query has ever
+// succeeded, or when a response is missing the field entirely).
+// ======================================================================
+
+t.test('a served cap reaches the page: the limit input\'s max attribute adopts the server-reported cap, not the hardcoded fallback', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:auditCert': () => ({ ok: true, rows: [], label: '', cap: 60, limit: 20, truncated: false }),
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+
+    let numberInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('type') === 'number')[0];
+    t.equals(numberInput.getAttribute('max'), '100', 'before any query has ever succeeded, the max hint is still the hardcoded fallback');
+
+    findInputByPlaceholder(h.getRoot(), 'e.g. ABC12345').typeValue('ABC123');
+    findByText(h.getRoot(), 'Run Query')[0].click();
+    await settle();
+
+    numberInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('type') === 'number')[0];
+    t.equals(numberInput.getAttribute('max'), '60', 'the REAL served cap (60) now drives the max hint, not the old hardcoded 100');
+});
+
+t.test('the served cap also drives the CLIENT-SIDE clamp, not only the input\'s max hint: a typed value above the served cap is clamped to it before being sent', async () => {
+    let sentBody = null;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:auditCert': (body) => { sentBody = body; return { ok: true, rows: [], label: '', cap: 60, limit: Math.min(body.limit, 60), truncated: body.limit > 60 }; },
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+
+    findInputByPlaceholder(h.getRoot(), 'e.g. ABC12345').typeValue('ABC123');
+    findByText(h.getRoot(), 'Run Query')[0].click(); // first query: learns cap=60 (default limit 20 is well under both 60 and 100, so this call itself is not truncated)
+    await settle();
+
+    findInputByPlaceholder(h.getRoot(), 'e.g. ABC12345').typeValue('ABC123');
+    let numberInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('type') === 'number')[0];
+    numberInput.typeValue('90'); // above the served cap (60) but below the old hardcoded fallback (100)
+    findByText(h.getRoot(), 'Run Query')[0].click();
+    await settle();
+
+    t.equals(sentBody.limit, 60, 'clamped client-side to the SERVED cap (60), never the stale 100 fallback');
+});
+
+t.test('TRUNCATION NOTICE: "you asked for X, here are the first Y" is shown to the operator when the server reports truncated=true', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:auditCert': () => ({ ok: true, rows: [{ job: 'police', active: 1, granted_by: 'SGT1', granted_at: 't', revoked_by: null, revoked_at: null }], label: 'Certification history for ABC123', cap: 60, limit: 60, truncated: true }),
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+
+    findInputByPlaceholder(h.getRoot(), 'e.g. ABC12345').typeValue('ABC123');
+    const numberInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('type') === 'number')[0];
+    numberInput.typeValue('20'); // the actual number THIS PAGE sent -- the notice must echo the request THIS PAGE made, not the server's clamped result
+    findByText(h.getRoot(), 'Run Query')[0].click();
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'You asked for 20 results; the server limit is 60, so only the first 60 are shown.').length >= 1, 'the operator is told the truncation happened, not left with a silently short list');
+});
+
+t.test('no truncation notice appears when the server does not report truncated=true', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:auditCert': () => ({ ok: true, rows: [], label: 'Certification history for ABC123', cap: 100, limit: 20, truncated: false }),
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+    findInputByPlaceholder(h.getRoot(), 'e.g. ABC12345').typeValue('ABC123');
+    findByText(h.getRoot(), 'Run Query')[0].click();
+    await settle();
+
+    t.equals(findByTextIncluding(h.getRoot(), 'you asked for').length, 0);
+});
+
+t.test('FALLBACK, MADE OBVIOUS: a response predating this pass (no cap/limit/truncated fields at all) does not crash, and the input keeps using the hardcoded fallback (100), not some derived garbage value', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:auditCert': () => ({ ok: true, rows: [], label: 'Certification history for ABC123' }), // no cap, no limit, no truncated -- an old server build
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+    findInputByPlaceholder(h.getRoot(), 'e.g. ABC12345').typeValue('ABC123');
+    findByText(h.getRoot(), 'Run Query')[0].click();
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Certification history for ABC123').length >= 1, 'the rest of the response still renders fine with the new fields absent');
+    t.equals(findByTextIncluding(h.getRoot(), 'you asked for').length, 0, 'no truncation notice fabricated from a response that never claimed one');
+
+    const numberInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('type') === 'number')[0];
+    t.equals(numberInput.getAttribute('max'), '100', 'still the disclosed hardcoded fallback -- never silently broken by a missing field');
+});
+
+t.test('SECURITY: a spurious `cap` field on a not_authorized (failure) response is never adopted -- an unauthorized caller\'s response cannot be used to learn or change the served cap', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            // ok:false but WITH a cap field anyway -- simulates a hostile or buggy
+            // server; this page must never read fields off a failure response.
+            'tablet:auditCert': () => ({ ok: false, error: 'not_authorized', message: 'You are not authorized to view this.', cap: 5 }),
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+    findInputByPlaceholder(h.getRoot(), 'e.g. ABC12345').typeValue('ABC123');
+    findByText(h.getRoot(), 'Run Query')[0].click();
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'You are not authorized to view this.').length >= 1);
+    const numberInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('type') === 'number')[0];
+    t.equals(numberInput.getAttribute('max'), '100', 'the spurious cap=5 on a failure response must never be adopted -- still the fallback, not 5');
+});
+
+// ======================================================================
+// Bad `limit` shapes -- client-side clampAuditLimit() must agree with
+// server/admin.lua's own ClampLimit: every shape below is neutralized to
+// something in [AUDIT_LIMIT_MIN, effective cap], never sent raw, and never
+// throws.
+// ======================================================================
+
+t.test('BAD LIMIT SHAPES: negative, fractional, non-numeric, and (+/-)Infinity are all clamped client-side before being sent, never raw', async () => {
+    let sentBody = null;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:requestMyRecord': () => ({ ok: true, viewer: HIGH_COMMAND_VIEWER, certifications: [], xp: null, tierLabel: null, myFeatures: [] }),
+            'tablet:auditCert': (body) => { sentBody = body; return { ok: true, rows: [], label: '', cap: 100, limit: body.limit, truncated: false }; },
+        })),
+    });
+    await openTablet(h);
+    findByText(h.getRoot(), 'Audit Trail')[0].click();
+    await settle();
+
+    const cases = [
+        ['-5', 1],
+        ['0', 1],
+        ['3.9', 3],
+        ['abc', 1],
+        ['Infinity', 1],
+        ['-Infinity', 1],
+        ['', 1],
+    ];
+    for (const [typed, expected] of cases) {
+        findInputByPlaceholder(h.getRoot(), 'e.g. ABC12345').typeValue('ABC123');
+        const numberInput = findAll(h.getRoot(), (n) => n.tagName === 'input' && n.getAttribute('type') === 'number')[0];
+        numberInput.typeValue(typed);
+        findByText(h.getRoot(), 'Run Query')[0].click();
+        await settle();
+        t.equals(sentBody.limit, expected, 'typed ' + JSON.stringify(typed) + ' must clamp to ' + expected);
+    }
 });
 
 t.run();

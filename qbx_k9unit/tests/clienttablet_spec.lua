@@ -152,6 +152,17 @@ local function newTabletFixture(opts)
         eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
     end
 
+    -- RegisterNetEvent -- kept in a SEPARATE table from AddEventHandler's
+    -- own eventHandlers above on purpose: this sandbox must be able to
+    -- prove a given event name was registered as a genuinely NETWORKED
+    -- handler (the only kind a real server->client TriggerClientEvent can
+    -- ever reach) rather than merely a same-realm AddEventHandler one a
+    -- server-fired event never invokes at all -- see
+    -- tests/clientequipmentshop_spec.lua's own identical `netEvents`
+    -- table/assertion for the sibling case this mirrors.
+    local netEvents = {}
+    local function RegisterNetEvent(eventName, handler) netEvents[eventName] = handler end
+
     local RESOURCE_NAME = 'qbx_k9unit'
     local function GetCurrentResourceName() return RESOURCE_NAME end
 
@@ -227,7 +238,8 @@ local function newTabletFixture(opts)
         IsEntityDead = IsEntityDead, PlayerPedId = PlayerPedId,
         CreateThread = CreateThread, Wait = Wait,
         RegisterCommand = RegisterCommand, RegisterNUICallback = RegisterNUICallback,
-        AddEventHandler = AddEventHandler, GetCurrentResourceName = GetCurrentResourceName,
+        AddEventHandler = AddEventHandler, RegisterNetEvent = RegisterNetEvent,
+        GetCurrentResourceName = GetCurrentResourceName,
         GetResourceState = GetResourceState, K9Compat = fakeK9Compat,
         ExecuteCommand = ExecuteCommand, TriggerServerEvent = TriggerServerEvent,
 
@@ -343,14 +355,35 @@ local function newTabletFixture(opts)
             end
         end,
         --- Generic AddEventHandler-firing helper for events this file
-        --- doesn't already expose a named shortcut for (e.g.
-        --- qbx_k9unit:client:themeUpdated) -- mirrors fireResourceStop/
-        --- fireItemUse's own shape exactly, just not hardcoded to one name.
+        --- doesn't already expose a named shortcut for -- mirrors
+        --- fireResourceStop/fireItemUse's own shape exactly, just not
+        --- hardcoded to one name. Only ever finds a handler for a name
+        --- registered via AddEventHandler -- see fireNetEvent below for
+        --- anything server-fired (e.g. qbx_k9unit:client:themeUpdated),
+        --- which a real AddEventHandler-only registration could never
+        --- reach at all.
         fireEvent = function(eventName, ...)
             for _, handler in ipairs(eventHandlers[eventName] or {}) do
                 handler(...)
             end
         end,
+        --- Asserts `eventName` was actually registered via RegisterNetEvent
+        --- -- the only kind of registration a real, network-originated
+        --- TriggerClientEvent can ever reach -- and fires it. Use this,
+        --- never fireEvent, for any event this file documents as
+        --- server-fired (qbx_k9unit:client:themeUpdated,
+        --- qbx_k9unit:client:equipmentShopLocationsUpdated's OWN real
+        --- registration in client/equipmentshop.lua, ...): same
+        --- registration-mechanism assertion as
+        --- tests/clientequipmentshop_spec.lua's own triggerLocationsUpdated
+        --- helper, generalized to any event name instead of one hardcoded
+        --- shortcut.
+        fireNetEvent = function(eventName, ...)
+            local handler = netEvents[eventName]
+            assert(handler, 'client/tablet.lua did not register ' .. tostring(eventName) .. ' via RegisterNetEvent')
+            handler(...)
+        end,
+        isRegisteredAsNetEvent = function(eventName) return netEvents[eventName] ~= nil end,
         --- Awaits a NUI callback the same way FiveM's own dispatch would:
         --- calls the captured handler and returns whatever it passed to `cb`.
         --- @param name string
@@ -1242,12 +1275,28 @@ end)
 -- ----------------------------------------------------------------------
 -- qbx_k9unit:client:themeUpdated push -- relayed verbatim into
 -- SendNUIMessage, registered unconditionally (not only while tabletOpen).
+--
+-- MUST be fired via fireNetEvent (RegisterNetEvent), never fireEvent
+-- (AddEventHandler): server/runtimecontrol.lua's own tabletSetTheme/
+-- tabletResetTheme/runtime theme reload all reach this ONLY through a
+-- real TriggerClientEvent, which a plain AddEventHandler-only
+-- registration can never receive at all -- see client/tablet.lua's own
+-- comment on this handler for the full wiring-bug history (an
+-- already-open tablet never updated live until this was fixed to
+-- RegisterNetEvent). The dedicated registration-mechanism test below
+-- fails loudly if this ever regresses back to AddEventHandler.
 -- ----------------------------------------------------------------------
+
+t.test('qbx_k9unit:client:themeUpdated is registered via RegisterNetEvent, not merely AddEventHandler -- a real, network-originated TriggerClientEvent must actually be able to reach it', function()
+    local f = newTabletFixture()
+    t.isTrue(f.isRegisteredAsNetEvent('qbx_k9unit:client:themeUpdated'),
+        'client/tablet.lua must call RegisterNetEvent for this name -- AddEventHandler alone never receives a server-fired TriggerClientEvent')
+end)
 
 t.test('themeUpdated push: relayed into SendNUIMessage as {action="tablet:themeUpdated", data=theme}, verbatim', function()
     local f = newTabletFixture()
     local theme = { primaryColor = '#ff0000', density = 'compact', headerTitle = 'Bark Squad HQ' }
-    f.fireEvent('qbx_k9unit:client:themeUpdated', theme)
+    f.fireNetEvent('qbx_k9unit:client:themeUpdated', theme)
     t.equals(#f.sendNuiMessageCalls, 1)
     t.equals(f.sendNuiMessageCalls[1].action, 'tablet:themeUpdated')
     t.equals(f.sendNuiMessageCalls[1].data, theme)
@@ -1256,16 +1305,41 @@ end)
 t.test('themeUpdated push: fires even while the tablet is CLOSED -- this file never gates the listener on tabletOpen', function()
     local f = newTabletFixture()
     -- Tablet never opened this test at all.
-    f.fireEvent('qbx_k9unit:client:themeUpdated', { density = 'compact' })
+    f.fireNetEvent('qbx_k9unit:client:themeUpdated', { density = 'compact' })
     t.equals(#f.sendNuiMessageCalls, 1, 'the push must reach SendNUIMessage regardless of local open/closed state')
 end)
 
 t.test('themeUpdated push: fires again while the tablet IS open, alongside the original tablet:open push', function()
     local f = newTabletFixture()
     f.env.OpenTablet()
-    f.fireEvent('qbx_k9unit:client:themeUpdated', { density = 'compact' })
+    f.fireNetEvent('qbx_k9unit:client:themeUpdated', { density = 'compact' })
     t.equals(#f.sendNuiMessageCalls, 2)
     t.equals(f.sendNuiMessageCalls[2].action, 'tablet:themeUpdated')
+end)
+
+t.test('themeUpdated push: a nil payload never throws and is still forwarded to the NUI (data simply absent) -- html/tablet.js\'s own handleThemeUpdated is the layer that actually guards against blanking the visible theme', function()
+    local f = newTabletFixture()
+    f.fireNetEvent('qbx_k9unit:client:themeUpdated', nil)
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(f.sendNuiMessageCalls[1].action, 'tablet:themeUpdated')
+    t.isNil(f.sendNuiMessageCalls[1].data)
+end)
+
+t.test('themeUpdated push: a malformed (non-table) payload never throws and is forwarded as-is -- this file does no field validation itself, matching equipmentShopLocationsUpdated\'s own additive listener above; server/runtimecontrol.lua\'s ValidateFullTheme is the real gate, html/tablet.js\'s own type/field fallbacks are the NUI-side defense in depth', function()
+    local f = newTabletFixture()
+    f.fireNetEvent('qbx_k9unit:client:themeUpdated', 'not-a-table')
+    t.equals(#f.sendNuiMessageCalls, 1)
+    t.equals(f.sendNuiMessageCalls[1].action, 'tablet:themeUpdated')
+    t.equals(f.sendNuiMessageCalls[1].data, 'not-a-table')
+end)
+
+t.test('themeUpdated push: a partial theme (missing most fields) is still forwarded verbatim, not stripped or replaced with a full default table -- html/tablet.js\'s own per-field DEFAULT_THEME fallback is what keeps this from blanking any one field', function()
+    local f = newTabletFixture()
+    local partial = { primaryColor = '#abcdef' }
+    f.fireNetEvent('qbx_k9unit:client:themeUpdated', partial)
+    t.equals(f.sendNuiMessageCalls[1].data, partial)
+    t.isNil(f.sendNuiMessageCalls[1].data.headerTitle)
+    t.isNil(f.sendNuiMessageCalls[1].data.density)
 end)
 
 -- ----------------------------------------------------------------------

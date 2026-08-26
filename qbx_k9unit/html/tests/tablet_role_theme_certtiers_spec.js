@@ -327,6 +327,92 @@ t.test('a Lua-initiated qbx_k9unit:client:themeUpdated push applies live -- head
     t.isTrue(findByText(h.getRoot(), 'Pushed Title').length >= 1, 'the header re-renders immediately from the pushed theme, no round trip needed');
 });
 
+t.test('a themeUpdated push arriving before the tablet has ever been opened is harmless -- no throw, nothing rendered', async () => {
+    const h = createHarness({ fetchImpl: routeFetch(baseHandlers()) });
+    // Tablet never opened this test at all -- the page's own postMessage
+    // listener is registered unconditionally at init(), independent of
+    // state.open, matching client/tablet.lua's own "registered
+    // unconditionally, not only while tabletOpen" posture for the Lua side
+    // of this same push.
+    h.postMessage('tablet:themeUpdated', { primaryColor: '#000000', accentColor: '#111111', backgroundColor: '#222222', textColor: '#ffffff', density: 'compact', headerTitle: 'Pushed While Closed' });
+    await settle();
+
+    t.equals(h.getRoot()._children.length, 0, 'a closed tablet renders nothing at all, even right after a live theme push');
+});
+
+t.test('a themeUpdated push arriving mid-open (before its own tablet:open fetches have resolved) never throws and never produces a half-themed mix of old and new fields', async () => {
+    const h = createHarness({ fetchImpl: routeFetch(baseHandlers()) });
+    h.postMessage('tablet:open', {});
+    // Deliberately NOT awaiting settle() first -- this fires while
+    // requestMyRecord/getTheme are still in flight, exercising the
+    // "mid-open" ordering this task's own brief calls out by name.
+    //
+    // Whichever of the two independent full-theme writers (this push, or
+    // getTheme's own in-flight response) resolves LAST simply wins outright
+    // -- both client/tablet.lua's push handler and this page's loadTheme()/
+    // handleThemeUpdated() always replace the WHOLE theme object, never
+    // merge it field-by-field, so no ordering guard is needed for
+    // correctness here (nor is a specific winner guaranteed or asserted --
+    // that would make this test fragile to unrelated timing changes). The
+    // two guarantees that DO actually matter, and that this test checks,
+    // are: neither writer ever throws for arriving out of its "expected"
+    // order, and the result is always one COMPLETE, self-consistent theme,
+    // never a mix of the two (title from one, density from the other).
+    h.postMessage('tablet:themeUpdated', { primaryColor: '#123456', accentColor: '#654321', backgroundColor: '#000000', textColor: '#ffffff', density: 'compact', headerTitle: 'Pushed Mid-Open' });
+    await settle(6);
+
+    const titleIsPushed = findByText(h.getRoot(), 'Pushed Mid-Open').length >= 1;
+    const titleIsFetched = findByText(h.getRoot(), 'K9 Command Tablet').length >= 1;
+    t.isTrue(titleIsPushed || titleIsFetched, 'exactly one of the two full themes must have applied -- never blank/neither');
+    t.isFalse(titleIsPushed && titleIsFetched, 'never both at once -- the theme is fully replaced, not merged');
+
+    const isCompact = findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-density-compact')).length >= 1;
+    // The pushed theme's density is 'compact'; the fetched default's is
+    // 'comfortable' -- whichever title won must carry ITS OWN density too,
+    // never the other theme's field (that would be the half-themed mix this
+    // test exists to rule out).
+    t.equals(isCompact, titleIsPushed, 'density must come from the SAME theme object as whichever title won -- never a field-level mix of push and fetch');
+});
+
+t.test('a partial themeUpdated push (missing most fields) never blanks the UI -- every consumer falls back per-field instead of rendering empty text', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:getTheme': () => ({ ok: true, theme: { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'compact', headerTitle: 'Established Title' } }),
+        })),
+    });
+    await openTablet(h);
+    t.isTrue(findByText(h.getRoot(), 'Established Title').length >= 1);
+    t.isTrue(findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-density-compact')).length >= 1, 'compact density from the initial fetch is applied');
+
+    // Only one field survives the push -- headerTitle/density (among
+    // others) are simply ABSENT, not explicitly reset -- the exact
+    // "partial or malformed payload" shape this task's own brief warns
+    // about.
+    h.postMessage('tablet:themeUpdated', { primaryColor: '#abcdef' });
+    await settle();
+
+    t.equals(findByText(h.getRoot(), 'Established Title').length, 0, 'the stale title is genuinely replaced, not left stuck');
+    t.isTrue(findByText(h.getRoot(), 'K9 Command Tablet').length >= 1, 'a missing headerTitle falls back to the default title text -- never blank/empty');
+    t.equals(findAll(h.getRoot(), (n) => n.classList && n.classList.contains('k9tablet-density-compact')).length, 0, 'a missing density falls back to comfortable (no compact class), never left half-applied');
+});
+
+t.test('a non-object themeUpdated push (null or a bare string) is ignored entirely -- the previously applied theme is left untouched, and nothing throws', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:getTheme': () => ({ ok: true, theme: { primaryColor: '#2563eb', accentColor: '#f59e0b', backgroundColor: '#111827', textColor: '#f9fafb', density: 'comfortable', headerTitle: 'Established Title' } }),
+        })),
+    });
+    await openTablet(h);
+    t.isTrue(findByText(h.getRoot(), 'Established Title').length >= 1);
+
+    h.postMessage('tablet:themeUpdated', null);
+    await settle();
+    h.postMessage('tablet:themeUpdated', 'not-a-theme-object');
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'Established Title').length >= 1, 'a malformed push must never blank or replace the previously applied theme');
+});
+
 // ======================================================================
 // CERTIFICATION TIER EDITING -- server/certtiers.lua
 // ======================================================================

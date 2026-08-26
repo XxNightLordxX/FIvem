@@ -92,25 +92,30 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_keys')
     UNION ALL SELECT 'k9_permission_key_audit',
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_key_audit')
+    UNION ALL SELECT 'k9_equipment_shop_items',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items')
+    UNION ALL SELECT 'k9_equipment_shop_item_audit',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit')
     UNION ALL SELECT 'k9_xp_tiers',
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tiers')
     UNION ALL SELECT 'k9_xp_tier_audit',
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_xp_tier_audit')
 ) t
 ORDER BY t.table_name;
--- NOTE: install.sql now converges with sql/migrations/0001-0013/0015 (20
--- tables total, including k9_progression's idx_xp, migration 0010's three
+-- NOTE: install.sql now converges with sql/migrations/0001-0015 (22 tables
+-- total, including k9_progression's idx_xp, migration 0010's three
 -- certification-tier tables, migration 0011's two equipment-shop-location
--- tables, migration 0013's two permission-key-catalog tables, and
--- migration 0015's two XP-rank-override tables) -- migration 0015 is the
--- owner-directed "set experience level for each rank up" pass (0014 is a
--- separate, concurrently-landing equipment-shop-item pass -- see that
--- migration's own header). If this comment and install.sql's real table
+-- tables, migration 0013's two permission-key-catalog tables, migration
+-- 0014's two equipment-shop-item tables, and migration 0015's two
+-- XP-rank-override tables). If this comment and install.sql's real table
 -- count ever disagree again, install.sql is out of date; report it rather
 -- than trust this file. (This comment previously said "0001-0011 / 16
--- tables" and did not mention migration 0013 at all -- the exact class of
--- silent omission this note exists to flag, fixed once already, then
--- extended here in the same way for migration 0015.)
+-- tables", then "0001-0013/0015 / 20 tables" while claiming migration
+-- 0014's own two tables were a still-pending, separately-landing pass --
+-- that was itself the exact class of silent omission this note exists to
+-- flag: migration 0014 had already shipped as a real migration file for
+-- some time by then, install.sql was simply never updated to match it.
+-- Fixed here, along with install.sql itself, in the same change.)
 
 
 -- ---------------------------------------------------------------------
@@ -362,6 +367,29 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_permission_key_audit')
 ) t;
 
+-- 0014: CREATE TABLE x2 (k9_equipment_shop_items / k9_equipment_shop_item_audit)
+-- -- owner-directed "give high command real control over the equipment
+-- shop" pass, the shop's ITEM CATALOG half (server/equipmentshop.lua's own
+-- pre-existing migration 0011 already covers the shop's LOCATIONS half):
+-- this migration was previously completely absent from this report, the
+-- same class of omission migrations 0010/0011/0013 already had fixed here
+-- once before (see the PART 1 note above). Independent of every other
+-- table (see that migration's own header "ORDERING" section -- no FK, no
+-- dependency on any other table), so there is no "BLOCKED" case to report
+-- here, same as 0010/0011/0013 above.
+SELECT
+    t.table_name AS `0014_create_k9_equipment_shop_items.sql would...`,
+    CASE WHEN t.tbl_exists = 0
+         THEN CONCAT('CREATE TABLE `', t.table_name, '` (currently absent)')
+         ELSE CONCAT('no-op -- `', t.table_name, '` already exists')
+    END AS plan
+FROM (
+    SELECT 'k9_equipment_shop_items' AS table_name,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_items') AS tbl_exists
+    UNION ALL SELECT 'k9_equipment_shop_item_audit',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_item_audit')
+) t;
+
 -- 0015: CREATE TABLE x2 (k9_xp_tiers / k9_xp_tier_audit) -- owner-directed
 -- "set experience level for each rank up" pass (0014 is a separate,
 -- concurrently-landing equipment-shop-item pass, not this one -- see that
@@ -401,6 +429,7 @@ WHERE TABLE_SCHEMA = DATABASE()
                       'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit',
                       'k9_equipment_shop_locations','k9_equipment_shop_locations_audit',
                       'k9_permission_keys','k9_permission_key_audit',
+                      'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                       'k9_xp_tiers','k9_xp_tier_audit')
 ORDER BY TABLE_NAME;
 
@@ -428,6 +457,7 @@ WHERE TABLE_SCHEMA = DATABASE()
                           'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit',
                           'k9_equipment_shop_locations','k9_equipment_shop_locations_audit',
                           'k9_permission_keys','k9_permission_key_audit',
+                          'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                           'k9_xp_tiers','k9_xp_tier_audit');
 
 SELECT 'DRY RUN COMPLETE -- nothing was changed by this report. Run sql/k9_setup.sh (without --dry-run) to actually apply the plan above; it backs up your whole database first, automatically, and refuses to write anything if that backup fails.' AS final_note;

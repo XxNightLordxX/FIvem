@@ -236,6 +236,49 @@
 
     var rootEl = null;
 
+    /** English fallback for the Distraction status row's text values --
+     * see applyDistractionStatus() below. This is the SAME "resilience
+     * net" pattern html/tablet.js's DEFAULT_STRINGS/S() already use for
+     * the tablet surface (state.strings[key] first, this object as the
+     * fallback only): the `hud:updateVitals` contract does not YET carry
+     * a `strings` sub-object the way `tablet:open` does, so today this
+     * fallback is ALWAYS what renders -- but wiring the lookup this way
+     * now, rather than hardcoding the two literals inline, means the day
+     * client/hud.lua starts sending locale()-resolved text here (e.g.
+     * `data.strings = { distraction_active = locale('hud.distraction_active'), ... }`,
+     * mirroring client/tablet.lua's own BuildTabletStrings()), this file
+     * needs zero changes to pick it up -- only this object needs to stay
+     * as the non-authoritative fallback. Reported to the locale owner:
+     * locales/en.json has no `hud` group yet; the two keys below
+     * (`distraction_active`/`distraction_clear`) are the ones needed,
+     * with this exact English text, once client/hud.lua adds a `strings`
+     * field to its payload.
+     * @type {Record<string,string>} */
+    var HUD_DEFAULT_STRINGS = {
+        distraction_active: 'Distracted',
+        distraction_clear: 'Clear',
+    };
+
+    /**
+     * Resolves one Distraction-row string key, preferring a server-sent
+     * `data.strings[key]` (once client/hud.lua sends one -- see
+     * HUD_DEFAULT_STRINGS' own comment; this payload has no such field
+     * today, so `strings` is always undefined/absent in practice right
+     * now) over the English fallback. Same `typeof ... === 'string' &&
+     * length > 0` guard every other type-strictness check in this file
+     * already uses, so a malformed/empty value degrades to the fallback
+     * rather than rendering blank.
+     * @param {*} strings
+     * @param {string} key
+     * @returns {string}
+     */
+    function hudString(strings, key) {
+        if (strings && typeof strings[key] === 'string' && strings[key].length > 0) {
+            return strings[key];
+        }
+        return HUD_DEFAULT_STRINGS[key];
+    }
+
     /** Bar-row stat keys whose owning Config.Features flag can be off,
      * i.e. every row added this pass except the original four vitals
      * (health/stamina/hunger/thirst are gated only by
@@ -309,8 +352,12 @@
      * continuous magnitude. Absent key (feature off) hides the row
      * entirely, same as applyGatedBarStat above.
      * @param {*} rawDistracted
+     * @param {*} [strings] optional `data.strings` from the payload -- see
+     *   hudString()/HUD_DEFAULT_STRINGS' own comments; not part of the
+     *   contract yet, so this is normally undefined and the English
+     *   fallback renders.
      */
-    function applyDistractionStatus(rawDistracted) {
+    function applyDistractionStatus(rawDistracted, strings) {
         var els = statusEls.distraction;
         if (!els) return;
 
@@ -320,10 +367,15 @@
 
         // textContent only -- see this file's header "NO SetNuiFocus"
         // block's sibling rule (not restated there, but followed
-        // identically throughout this file): never innerHTML, this is a
-        // fixed, code-authored string, never a value echoed from the
-        // network payload verbatim.
-        els.value.textContent = rawDistracted ? 'Distracted' : 'Clear';
+        // identically throughout this file): never innerHTML. hudString()
+        // resolves through a locale-ready fallback table rather than a
+        // literal inline here -- see its own comment -- but the VALUE it
+        // returns is still fixed, code-authored (or code/locale-owner
+        // authored) text, never a value echoed from the network payload
+        // verbatim.
+        els.value.textContent = rawDistracted
+            ? hudString(strings, 'distraction_active')
+            : hudString(strings, 'distraction_clear');
     }
 
     /**
@@ -359,8 +411,12 @@
      * pass follow the identical "skip touching DOM while root is hidden"
      * rule -- their own PER-ROW gating (applyGatedBarStat/
      * applyDistractionStatus/applyXPTierStatus) is a SEPARATE, additional
-     * layer on top of this, not a replacement for it.
-     * @param {{ visible: boolean, health: number, stamina: number, hunger: number, thirst: number, wellbeing?: object, xpTier?: object }} data
+     * layer on top of this, not a replacement for it. `strings` (optional,
+     * not part of the contract as of this pass -- see HUD_DEFAULT_STRINGS'
+     * own comment) is forwarded to applyDistractionStatus() so a future
+     * client/hud.lua revision can override its English fallback text
+     * without any further app.js change.
+     * @param {{ visible: boolean, health: number, stamina: number, hunger: number, thirst: number, wellbeing?: object, xpTier?: object, strings?: Record<string,string> }} data
      */
     function handleUpdateVitals(data) {
         if (!data || !rootEl) return;
@@ -381,7 +437,7 @@
             var stat = GATED_BAR_STATS[i];
             applyGatedBarStat(stat, wellbeing[stat]);
         }
-        applyDistractionStatus(wellbeing.distracted);
+        applyDistractionStatus(wellbeing.distracted, data.strings);
 
         var xpTier = data.xpTier || {};
         applyXPTierStatus(xpTier.label);

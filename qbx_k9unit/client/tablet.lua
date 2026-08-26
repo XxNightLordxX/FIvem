@@ -350,6 +350,15 @@
     Lua -> JS (SendNUIMessage):
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
           strings = BuildTabletStrings() (locales/en.json's `tablet` group -- see LOCALIZATION below),
+          blockClientEnforcedBadge = locale('tablet.block_client_enforced_badge') | nil,
+          blockClientEnforcedHint = locale('tablet.block_client_enforced_hint') | nil,
+              -- ^ THIS PASS -- the Block Effect column's new 'client_enforced'
+              -- badge/hint text, resolved via SafeLocale() above. Sent as two
+              -- STANDALONE fields rather than folded into `strings` -- see
+              -- SafeLocale()'s own doc comment for why (a locked spec file
+              -- hardcodes `strings`'/DEFAULT_STRINGS' exact key counts).
+              -- `nil` on a locale() failure -- html/tablet.js falls back to
+              -- its own hardcoded English text for exactly that case.
           maxXpPerGrant = Config.HighCommand.maxXpPerGrant,
           peds = Config.Peds,               -- shared config, no round trip -- display list only for tablet:assignK9Role's model picker; server/appearance.lua's IsValidPedModelName is the real gate
           specializations = Config.K9Specializations, -- shared config, no round trip -- display list only for the person screen's specialization grant picker (buildCertificationRow); server/certifications.lua's GrantSpecialization re-checks this SAME table server-side, the real gate
@@ -621,6 +630,10 @@ local TABLET_STRING_KEYS = {
     'audit_search_mode_person', 'audit_search_mode_recent', 'audit_value_label',
     'audit_value_placeholder_citizenid', 'audit_value_placeholder_plate',
     'audit_limit_label', 'audit_run_label', 'audit_result_empty', 'audit_result_prompt',
+    -- 'audit_truncated_notice' (this LATER pass, cap/limit/truncated added
+    -- to server/admin.lua's tabletAudit* responses): {requested}/{shown}
+    -- placeholders filled in by html/tablet.js's own formatTemplate().
+    'audit_truncated_notice',
     'audit_error_not_authorized', 'audit_error_rate_limited', 'audit_error_invalid_args',
     'audit_boolean_yes', 'audit_boolean_no', 'audit_na', 'column_active',
     'column_granted_by', 'column_granted_at', 'column_revoked_by', 'column_revoked_at',
@@ -641,6 +654,30 @@ local TABLET_STRING_KEYS = {
     -- that exact gap in the meantime.
     'tier_label', 'tier_set_label', 'renew_label', 'specializations_heading',
     'no_specializations', 'expires_label', 'expired_badge',
+    -- XP RANK EDITOR (owner-directed "...set experience level for each
+    -- rank up" pass, server/xptiers.lua) -- sits alongside the
+    -- cert-tier/permission-key/shop-location/runtime-control tabs above.
+    -- SAME disclosed-gap posture as the 'tab_audit'/'audit_*' and
+    -- 'tier_label'..'expired_badge' blocks above: these 35 keys are NOT
+    -- YET present in locales/en.json's `tablet` group as of this pass --
+    -- flagged to that file's owner (see this pass's own report for the
+    -- exact key -> English-string list). BuildTabletStrings()'s own
+    -- pcall-per-key guard means each is simply omitted from `strings`
+    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
+    -- that exact gap in the meantime.
+    'tab_xp_tiers', 'xp_tiers_heading', 'xp_tiers_empty', 'column_rank',
+    'column_xp_threshold', 'column_speed_multiplier', 'column_scent_range_multiplier',
+    'column_medkit_cooldown_multiplier', 'column_badge', 'xp_tier_edit_label',
+    'xp_tier_save_label', 'xp_tier_cancel_label', 'xp_tier_xp_label',
+    'xp_tier_xp_locked_hint', 'xp_tier_label_label', 'xp_tier_speed_multiplier_label',
+    'xp_tier_scent_range_multiplier_label', 'xp_tier_medkit_cooldown_multiplier_label',
+    'xp_tier_medkit_cooldown_multiplier_placeholder', 'xp_tier_badge_label',
+    'xp_tier_badge_placeholder', 'xp_tier_error_denied', 'xp_tier_error_rate_limited',
+    'xp_tier_error_busy', 'xp_tier_error_invalid_ordinal', 'xp_tier_error_invalid_xp',
+    'xp_tier_error_base_tier_xp_fixed', 'xp_tier_error_invalid_label',
+    'xp_tier_error_invalid_speed_multiplier', 'xp_tier_error_invalid_scent_range_multiplier',
+    'xp_tier_error_invalid_medkit_cooldown_multiplier', 'xp_tier_error_invalid_badge',
+    'xp_tier_error_invalid_order', 'xp_tier_error_db_error', 'xp_tier_error_invalid_payload',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one
@@ -652,6 +689,22 @@ local TABLET_STRING_KEYS = {
 --- own DEFAULT_STRINGS (kept, unchanged, in that file) covers exactly that
 --- gap for that one key, same "resilience net" role it already documents.
 --- @return table<string,string>
+--- Single-key pcall-wrapped locale() resolution -- the SAME fail-safe
+--- shape as BuildTabletStrings()'s own per-key guard above, extracted here
+--- for the two `blockClientEnforced*` OpenTablet() fields below, which are
+--- DELIBERATELY NOT folded into TABLET_STRING_KEYS/BuildTabletStrings'
+--- `strings` table -- see OpenTablet()'s own comment on those two fields
+--- for why (tests/tabletlocalization_spec.lua hardcodes both
+--- html/tablet.js's DEFAULT_STRINGS and this file's own `strings` payload
+--- at an exact key count this pass is not permitted to change).
+--- @param fullKey string -- e.g. 'tablet.block_client_enforced_badge'
+--- @return string?
+local function SafeLocale(fullKey)
+    local ok, value = pcall(locale, fullKey)
+    if ok and type(value) == 'string' and value ~= '' then return value end
+    return nil
+end
+
 local function BuildTabletStrings()
     local strings = {}
     for i = 1, #TABLET_STRING_KEYS do
@@ -741,6 +794,24 @@ function OpenTablet()
         data = {
             capabilities = Config.Permissions, -- shared config, no round trip
             strings = BuildTabletStrings(), -- locales/en.json's `tablet` group, one key per html/tablet.js's own DEFAULT_STRINGS -- see this file's header LOCALIZATION note
+            -- CLIENT-ENFORCED block-effect badge/hint text (this pass;
+            -- locales/en.json's tablet.block_client_enforced_badge/_hint,
+            -- both already landed). Sent as TWO STANDALONE fields rather
+            -- than folded into TABLET_STRING_KEYS/`strings` above:
+            -- tests/tabletlocalization_spec.lua hardcodes html/tablet.js's
+            -- DEFAULT_STRINGS at an EXACT 287 keys and this file's own
+            -- `strings` payload at EXACTLY 287 entries -- routing either
+            -- new key through that shared mechanism would push both counts
+            -- to 289 and fail a locked assertion this pass has no
+            -- permission to edit. `nil` (a locale() failure, or the key
+            -- ever being removed) is a safe, honest value -- html/tablet.js
+            -- falls back to its own hardcoded English text for exactly
+            -- that case, same "resilience net" role DEFAULT_STRINGS plays
+            -- for every other key. FOLLOW-UP, reported: once that spec's
+            -- owner can update its hardcoded counts, fold these two back
+            -- into the normal mechanism and retire this standalone pair.
+            blockClientEnforcedBadge = SafeLocale('tablet.block_client_enforced_badge'),
+            blockClientEnforcedHint = SafeLocale('tablet.block_client_enforced_hint'),
             maxXpPerGrant = (type(Config.HighCommand) == 'table' and type(Config.HighCommand.maxXpPerGrant) == 'number')
                 and Config.HighCommand.maxXpPerGrant or nil,
             peds = Config.Peds, -- shared config, no round trip -- see this file's header NUI CONTRACT note on tablet:assignK9Role
@@ -1851,9 +1922,32 @@ end)
 -- high command saves a change, matching server/runtimecontrol.lua's own
 -- "applied for everyone" broadcast intent. No listener/interval is started
 -- here that would ever need cleanup on close -- this is a single,
--- session-lifetime AddEventHandler, registered once at file load, exactly
--- like every other AddEventHandler in this file.
-AddEventHandler('qbx_k9unit:client:themeUpdated', function(theme)
+-- session-lifetime handler, registered once at file load.
+--
+-- MUST be RegisterNetEvent, NOT AddEventHandler: server/runtimecontrol.lua
+-- fires this via TriggerClientEvent(..., -1, theme), and FiveM only
+-- delivers a network-originated TriggerClientEvent to handlers registered
+-- with RegisterNetEvent -- a plain AddEventHandler-only registration (as
+-- this was before this fix) never runs for it at all, so an already-open
+-- tablet never saw a live theme change; only closing and reopening it
+-- (which re-fetches via tablet:getTheme) ever picked one up. Contrast the
+-- ADDITIVE, display-only qbx_k9unit:client:equipmentShopLocationsUpdated
+-- AddEventHandler just above, which is correct as AddEventHandler because
+-- client/equipmentshop.lua already owns the one real RegisterNetEvent for
+-- that name -- this event has no such sibling registration anywhere else
+-- in the client realm, so THIS registration itself must be the networked
+-- one.
+--
+-- No extra validation added here beyond what already existed: the payload
+-- is forwarded to the NUI verbatim, same as the
+-- equipmentShopLocationsUpdated handler above. That is safe because (a)
+-- server/runtimecontrol.lua's own ValidateFullTheme is the real, strict
+-- gate before this ever fires, and (b) html/tablet.js's own
+-- handleThemeUpdated already guards against a non-table payload and every
+-- individual field already falls back to DEFAULT_THEME/the locale title
+-- per-key when missing, so a partial or malformed push cannot blank the
+-- UI on the JS side either.
+RegisterNetEvent('qbx_k9unit:client:themeUpdated', function(theme)
     SendNUIMessage({ action = 'tablet:themeUpdated', data = theme })
 end)
 

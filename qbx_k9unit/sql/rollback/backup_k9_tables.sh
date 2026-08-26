@@ -30,6 +30,12 @@
 #                         (config defaults plus any custom key added,
 #                         relabeled, or tombstoned), and the full history of
 #                         every catalog edit made
+#     k9_equipment_shop_items / k9_equipment_shop_item_audit
+#                         the high-command-editable K9 equipment shop ITEM
+#                         catalog (price/label/order/purchase-requirement
+#                         overrides and additions on top of config.lua's own
+#                         defaults, plus tombstones), and the full history of
+#                         every create/edit/reorder/delete made
 #     k9_xp_tiers / k9_xp_tier_audit
 #                         every high-command-edited XP-rank field override
 #                         (threshold/label/multipliers/badge) on top of
@@ -141,15 +147,21 @@ fi
 # job and may not even be readable by this database user. migration 0013
 # (owner-directed "add or remove permissions" pass): the same class of gap,
 # this time for the two permission-key-catalog tables -- flagged explicitly
-# by sql/rollback/0013_down.sql's own header, fixed here the same way. The
-# DRIFT GUARD immediately below is the backstop for the next table a future
-# migration adds here.
+# by sql/rollback/0013_down.sql's own header, fixed here the same way.
+# migration 0014 (owner-directed "give high command real control over the
+# equipment shop" pass, item-catalog half): the same class of gap, this
+# time for the two equipment-shop-item tables -- flagged explicitly by
+# sql/rollback/0014_down.sql's own header ("report to the sql/** owner that
+# these two table names need adding to that script's own table list"),
+# fixed here the same way. The DRIFT GUARD immediately below is the
+# backstop for the next table a future migration adds here.
 ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_permissions
             k9_certification_specializations k9_runtime_feature_overrides
             k9_runtime_override_audit k9_tablet_theme k9_tablet_theme_audit k9_ped_assignments
             k9_certification_tiers k9_certification_tier_capabilities k9_certification_tier_audit
             k9_equipment_shop_locations k9_equipment_shop_locations_audit
             k9_permission_keys k9_permission_key_audit
+            k9_equipment_shop_items k9_equipment_shop_item_audit
             k9_xp_tiers k9_xp_tier_audit)
 PRESENT=()
 MISSING=()
