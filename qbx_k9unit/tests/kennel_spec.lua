@@ -178,6 +178,15 @@ local function newKennelFixture(opts)
         },
     }
 
+    -- PER-PERSON FEATURE CONTROL (this pass) -- mirrors
+    -- tests/pursuitsprint_spec.lua's own `permissionGrants`/
+    -- `defaultHasPermission`/`grantPermission` fixture shape, for
+    -- IsDeployableKennelPermittedForCitizenId.
+    local permissionGrants = {} -- [citizenid][key] = true/false
+    local function defaultHasPermission(citizenid, key)
+        return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+    end
+
     local pedBySource = {} -- source -> ped handle (unset/0 == "disconnected mid-flight")
     local function GetPlayerPed(src) return pedBySource[src] or 0 end
 
@@ -224,6 +233,7 @@ local function newKennelFixture(opts)
             deployCooldownMs = opts.deployCooldownMs or DEPLOY_COOLDOWN_MS,
             pendingPlacementTtlMs = PENDING_TTL_MS,
         },
+        FeatureControl = { RequireGrant = {} },
     }
 
     local env = Sandbox.newEnv({
@@ -234,6 +244,7 @@ local function newKennelFixture(opts)
         TriggerClientEvent = TriggerClientEvent,
         NotifyPlayer = NotifyPlayer,
         HasK9Access = HasK9Access,
+        HasPermission = defaultHasPermission,
         exports = exportsStub,
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
@@ -265,6 +276,12 @@ local function newKennelFixture(opts)
         advance = function(deltaMs) fakeNow = fakeNow + deltaMs end,
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
         setPlayer = function(src, citizenid) playersBySource[src] = citizenid end,
+        -- PER-PERSON FEATURE CONTROL (this pass) -- see this fixture's own
+        -- header comment above.
+        grantPermission = function(citizenid, key, value)
+            permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+            permissionGrants[citizenid][key] = value
+        end,
         setPed = function(src, pedHandle, coords, heading)
             pedBySource[src] = pedHandle
             coordsByHandle[pedHandle] = coords
@@ -566,6 +583,66 @@ t.test('requestDeployKennel: spawn coords at heading 90 use the heading-derived 
     local instruction = lastClientEvent(f, 'qbx_k9unit:client:deployKennelAt')
     approxEquals(instruction.args[1], 98.0, 'spawnX (pedX - 2.0m at heading 90)')
     approxEquals(instruction.args[2], 200.0, 'spawnY (unchanged at heading 90)')
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsDeployableKennelPermittedForCitizenId, checked at
+-- requestDeployKennel (the "opening" action) -- never at
+-- requestPickupKennel, this feature's own "no unbounded trap" exit path
+-- ("exit a kennel" is one of the specific termination actions this pass is
+-- required to leave unconditional). Mirrors
+-- tests/pursuitsprint_spec.lua's own section of the same name.
+-- ----------------------------------------------------------------------
+
+t.test('requestDeployKennel BLOCK: an explicit block.DeployableKennel grant denies, and burns NO deploy cooldown', function()
+    local f = newKennelFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.grantPermission('ABC123', 'block.DeployableKennel', true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 0)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('kennel.not_authorized_to_deploy'))
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed DeployCooldown, this would now be silently rate-limited
+    -- instead of succeeding.
+    f.grantPermission('ABC123', 'block.DeployableKennel', false)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 1, 'a block must never burn the cooldown a legitimate follow-up deploy still needs')
+end)
+
+t.test('requestDeployKennel not blocked: an ordinary handler with no grant/block row at all still deploys (default allow, step 4)', function()
+    local f = newKennelFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 1)
+end)
+
+t.test('requestDeployKennel RequireGrant listed + no grant held -- denied even though every other check passes', function()
+    local f = newKennelFixture()
+    f.config.FeatureControl.RequireGrant.DeployableKennel = true
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    -- deliberately NOT granted
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 0)
+end)
+
+t.test('requestDeployKennel RequireGrant listed + an active feature.DeployableKennel grant -- allowed', function()
+    local f = newKennelFixture()
+    f.config.FeatureControl.RequireGrant.DeployableKennel = true
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.grantPermission('ABC123', 'feature.DeployableKennel', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDeployKennel', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:deployKennelAt'), 1)
 end)
 
 -- ----------------------------------------------------------------------

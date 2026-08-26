@@ -209,6 +209,15 @@ local function newFetchFixture(opts)
         },
     }
 
+    -- PER-PERSON FEATURE CONTROL (this pass) -- mirrors
+    -- tests/pursuitsprint_spec.lua's own `permissionGrants`/
+    -- `defaultHasPermission`/`grantPermission` fixture shape, for
+    -- IsFetchMechanicPermittedForCitizenId.
+    local permissionGrants = {} -- [citizenid][key] = true/false
+    local function defaultHasPermission(citizenid, key)
+        return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+    end
+
     local pedBySource = {} -- source -> ped handle (unset/0 == "disconnected mid-flight")
     local function GetPlayerPed(src) return pedBySource[src] or 0 end
 
@@ -266,6 +275,7 @@ local function newFetchFixture(opts)
             pickupCooldownMs = opts.pickupCooldownMs or PICKUP_COOLDOWN_MS,
             releaseCooldownMs = opts.releaseCooldownMs, -- deliberately never read by the production file -- see releaseFetchBall tests
         },
+        FeatureControl = { RequireGrant = {} },
     }
 
     local runner = Sandbox.newThreadRunner()
@@ -279,6 +289,7 @@ local function newFetchFixture(opts)
         TriggerClientEvent = TriggerClientEvent,
         NotifyPlayer = NotifyPlayer,
         HasK9Access = HasK9Access,
+        HasPermission = defaultHasPermission,
         IsConfiguredK9Model = IsConfiguredK9Model,
         exports = exportsStub,
         GetPlayerPed = GetPlayerPed,
@@ -314,6 +325,12 @@ local function newFetchFixture(opts)
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
         setK9Role = function(src, hasRole) hasRoleBySource[src] = hasRole end,
         setPlayer = function(src, citizenid) playersBySource[src] = citizenid end,
+        -- PER-PERSON FEATURE CONTROL (this pass) -- see this fixture's own
+        -- header comment above.
+        grantPermission = function(citizenid, key, value)
+            permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+            permissionGrants[citizenid][key] = value
+        end,
         setPed = function(src, pedHandle, coords, heading, modelHash)
             pedBySource[src] = pedHandle
             coordsByHandle[pedHandle] = vec3(coords.x, coords.y, coords.z)
@@ -639,6 +656,63 @@ t.test('requestThrowFetchBall: success opens a pending throw and notifies nothin
 end)
 
 -- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsFetchMechanicPermittedForCitizenId, checked at
+-- requestThrowFetchBall (this section). Mirrors
+-- tests/pursuitsprint_spec.lua's own section of the same name.
+-- ----------------------------------------------------------------------
+
+t.test('requestThrowFetchBall BLOCK: an explicit block.FetchMechanic grant denies, and burns NO throw cooldown', function()
+    local f = newFetchFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.grantPermission('ABC123', 'block.FetchMechanic', true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestThrowFetchBall', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:throwFetchBallAt'), 0)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('fetch.not_authorized_equipment'))
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed ThrowCooldown, this would now be silently rate-limited
+    -- instead of succeeding.
+    f.grantPermission('ABC123', 'block.FetchMechanic', false)
+    f.dispatchNetEvent('qbx_k9unit:server:requestThrowFetchBall', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:throwFetchBallAt'), 1, 'a block must never burn the cooldown a legitimate follow-up throw still needs')
+end)
+
+t.test('requestThrowFetchBall not blocked: an ordinary handler with no grant/block row at all still throws (default allow, step 4)', function()
+    local f = newFetchFixture()
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestThrowFetchBall', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:throwFetchBallAt'), 1)
+end)
+
+t.test('requestThrowFetchBall RequireGrant listed + no grant held -- denied even though every other check passes', function()
+    local f = newFetchFixture()
+    f.config.FeatureControl.RequireGrant.FetchMechanic = true
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    -- deliberately NOT granted
+    f.dispatchNetEvent('qbx_k9unit:server:requestThrowFetchBall', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:throwFetchBallAt'), 0)
+end)
+
+t.test('requestThrowFetchBall RequireGrant listed + an active feature.FetchMechanic grant -- allowed', function()
+    local f = newFetchFixture()
+    f.config.FeatureControl.RequireGrant.FetchMechanic = true
+    f.setAccess(1, true)
+    f.setPlayer(1, 'ABC123')
+    f.setPed(1, 5001, { x = 0, y = 0, z = 0 })
+    f.grantPermission('ABC123', 'feature.FetchMechanic', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestThrowFetchBall', 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:throwFetchBallAt'), 1)
+end)
+
+-- ----------------------------------------------------------------------
 -- cancelFetchThrow
 -- ----------------------------------------------------------------------
 
@@ -937,6 +1011,82 @@ t.test('requestPickupFetchBall: a carried ball cannot be picked up by a second K
     f.setPlayer(3, 'CCC333')
     f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 3, netId)
     t.equals(f.notifyCalls[#f.notifyCalls].description, locale('fetch.not_available_to_pickup'))
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsFetchMechanicPermittedForCitizenId, checked at
+-- requestPickupFetchBall (this section) -- the SAME predicate
+-- requestThrowFetchBall's own section above already exercises, consulted
+-- again here since pickup is this feature's OTHER "opening" action (a K9
+-- starting to carry a ball someone else threw).
+-- ----------------------------------------------------------------------
+
+t.test('requestPickupFetchBall BLOCK: an explicit block.FetchMechanic grant denies, and burns NO pickup cooldown', function()
+    local f = newFetchFixture()
+    local netId = throwSuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'BBB222')
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 }, 0.0, K9_PED_HASH)
+    f.grantPermission('BBB222', 'block.FetchMechanic', true)
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 2, netId)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:carryFetchBall'), 0)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('fetch.not_authorized_equipment'))
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed PickupCooldown, this would now be silently rate-limited
+    -- instead of succeeding.
+    f.grantPermission('BBB222', 'block.FetchMechanic', false)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 2, netId)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:carryFetchBall'), 1, 'a block must never burn the cooldown a legitimate follow-up pickup still needs')
+end)
+
+t.test('requestPickupFetchBall not blocked: an ordinary K9 with no grant/block row at all still picks up (default allow, step 4)', function()
+    local f = newFetchFixture()
+    local netId = throwSuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'BBB222')
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 }, 0.0, K9_PED_HASH)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 2, netId)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:carryFetchBall'), 1)
+end)
+
+t.test('requestPickupFetchBall RequireGrant listed + no grant held -- denied even though every other check passes', function()
+    local f = newFetchFixture()
+    -- Thrown BEFORE RequireGrant is turned on -- this test is only about
+    -- the PICKUP side's own RequireGrant resolution, isolated from the
+    -- throw's own identical (and separately tested) resolution above.
+    local netId = throwSuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    f.config.FeatureControl.RequireGrant.FetchMechanic = true
+    f.setAccess(2, true)
+    f.setPlayer(2, 'BBB222')
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 }, 0.0, K9_PED_HASH)
+    -- deliberately NOT granted
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 2, netId)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:carryFetchBall'), 0)
+end)
+
+t.test('requestPickupFetchBall RequireGrant listed + an active feature.FetchMechanic grant -- allowed', function()
+    local f = newFetchFixture()
+    local netId = throwSuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    f.config.FeatureControl.RequireGrant.FetchMechanic = true
+    f.setAccess(2, true)
+    f.setPlayer(2, 'BBB222')
+    f.setPed(2, 5002, { x = 0, y = 0, z = 0 }, 0.0, K9_PED_HASH)
+    f.grantPermission('BBB222', 'feature.FetchMechanic', true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestPickupFetchBall', 2, netId)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:carryFetchBall'), 1)
+end)
+
+t.test('TERMINATION PATH UNAFFECTED: releaseFetchBall still works instantly for a carrier who is now block.FetchMechanic-blocked -- "drop a ball" must never be gated', function()
+    local f = newFetchFixture()
+    local netId = throwSuccessfully(f, 1, 'ABC123', 5001, { x = 0, y = 0, z = 0 })
+    pickupSuccessfully(f, 2, 'BBB222', 5002, netId, { x = 0, y = 0, z = 0 })
+
+    f.grantPermission('BBB222', 'block.FetchMechanic', true)
+    f.dispatchNetEvent('qbx_k9unit:server:releaseFetchBall', 2)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:endFetchCarry'), 1, 'a blocked carrier must still be able to voluntarily drop the ball')
 end)
 
 t.test('requestPickupFetchBall: an entity that fails re-resolution or model-check notifies "pickup unconfirmed"', function()
