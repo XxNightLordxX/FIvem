@@ -195,6 +195,20 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9throwfetchball = 'fetch',
     k9dropfetchball = 'fetch',
     k9recallfetchball = 'fetch',
+    -- family #4: training (3 -> 1, 'k9train') -- client/training.lua.
+    -- Same interim shape as fetch's three -- real COMMAND_REFERENCE
+    -- entries exist today (confirmed by reading html/tablet.js), not yet
+    -- removed.
+    k9training = 'training',
+    k9trainsearch = 'training',
+    k9trainbite = 'training',
+    -- family #5: kennel (ADDITIVE, 'k9kennel') -- client/kennel.lua +
+    -- client/keybinds.lua. k9deploykennel/k9exitkennel keep their own
+    -- registration forever (see tests/commandsuggestions_spec.lua's own
+    -- matching comment) -- only their COMMAND_REFERENCE visibility is
+    -- targeted for removal here, once batched with the rest.
+    k9deploykennel = 'kennel',
+    k9exitkennel = 'kennel',
 }
 
 -- COMMANDS_TAB_CLEANUP_COMPLETE -- coordination table, project-lead-owned.
@@ -257,6 +271,8 @@ local COMMANDS_TAB_CLEANUP_COMPLETE = {
 local PENDING_NEW_CANONICAL_COMMANDS = {
     k9dog = true, -- family #2 (dog record) -- needs cmdref_k9dog_usage/_does/_needs; see client/commandsuggestions.lua's own PENDING_LOCALE_KEYS for the exact interim _does/_usage text already in use client-side.
     k9fetch = true, -- family #3 (fetch) -- needs cmdref_k9fetch_usage/_does/_needs; same interim text location.
+    k9train = true, -- family #4 (training) -- needs cmdref_k9train_usage/_does/_needs; same interim text location.
+    k9kennel = true, -- family #5 (kennel, ADDITIVE) -- needs cmdref_k9kennel_usage/_does/_needs; same interim text location.
 }
 
 --- Pure text-in, set-out extraction -- exactly the

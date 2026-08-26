@@ -2089,7 +2089,32 @@ local function TickWellbeing()
                             -- is never gated.
                             if speed >= Config.Wellbeing.Fatigue.sprintSpeedThreshold
                                 and IsWellbeingFeaturePermittedForCitizenId(citizenid, 'FatigueSystem') then
-                                stats.fatigue = Clamp(stats.fatigue - Config.Wellbeing.Fatigue.sprintDecayPerTick, 0, Config.Wellbeing.Fatigue.max)
+                                -- PER-CITIZENID STAMINA OVERRIDE (this pass,
+                                -- coder-backend) -- owner's own words: "be
+                                -- able to make the stamina as high as i want
+                                -- and be able to make the stamina ...
+                                -- permanant". Resolved through
+                                -- server/k9profiles.lua's own
+                                -- GetK9EffectiveMultipliers, the SAME seam
+                                -- server/tracking.lua's own
+                                -- ResolveMaxRangeForCitizenId already copies
+                                -- for the sibling scent-range field: soft-
+                                -- guarded (`type(...) == 'function'`),
+                                -- pcall-wrapped, falls back to the raw
+                                -- Config.Wellbeing.Fatigue.sprintDecayPerTick
+                                -- global read on any failure/absence. 0 is a
+                                -- valid effective value here (the "permanent
+                                -- stamina" sentinel) -- Clamp below simply
+                                -- subtracts 0, a genuine no-op tick, never a
+                                -- special case.
+                                local sprintDecayPerTick = Config.Wellbeing.Fatigue.sprintDecayPerTick
+                                if type(GetK9EffectiveMultipliers) == 'function' then
+                                    local ok, effective = pcall(GetK9EffectiveMultipliers, citizenid)
+                                    if ok and type(effective) == 'table' and type(effective.sprintDecayPerTick) == 'number' then
+                                        sprintDecayPerTick = effective.sprintDecayPerTick
+                                    end
+                                end
+                                stats.fatigue = Clamp(stats.fatigue - sprintDecayPerTick, 0, Config.Wellbeing.Fatigue.max)
                             else
                                 -- REST-SOURCE REGEN, THIS PASS: a stationary/
                                 -- non-sprinting K9 within restRadius of any

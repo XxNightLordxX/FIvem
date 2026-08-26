@@ -198,6 +198,10 @@ local PENDING_LOCALE_KEYS = {
     ['tablet.cmdref_k9dog_usage'] = '/k9dog <target>',
     ['tablet.cmdref_k9fetch_does'] = 'Throws, recalls, or drops the fetch ball -- whichever one makes sense right now. Old names /k9throwfetchball, /k9recallfetchball and /k9dropfetchball still work too.',
     ['tablet.cmdref_k9fetch_usage'] = '/k9fetch',
+    ['tablet.cmdref_k9train_does'] = 'Turns Training Mode on or off (whichever it isn\'t right now). Use /k9train search or /k9train bite for a specific drill. Old names /k9training, /k9trainsearch and /k9trainbite still work too.',
+    ['tablet.cmdref_k9train_usage'] = '/k9train',
+    ['tablet.cmdref_k9kennel_does'] = 'Deploys, enters, or exits your kennel -- whichever one makes sense right now. Old names /k9deploykennel and /k9exitkennel still work too.',
+    ['tablet.cmdref_k9kennel_usage'] = '/k9kennel',
 }
 local function pendingLocale(key, ...)
     local ok, value = pcall(locale, key, ...)
@@ -254,8 +258,14 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9nosehunt', keySuffix = 'k9nosehunt' },
     -- client/pursuitsprint.lua (qbx_k9unit: namespace -- RegisterKeyMapping global-uniqueness requirement)
     { command = 'qbx_k9unit:pursuitsprint', keySuffix = 'pursuitsprint' },
-    -- client/kennel.lua
-    { command = 'k9deploykennel', keySuffix = 'k9deploykennel' },
+    -- client/kennel.lua -- COMMAND_CONSOLIDATION_SPEC.md #5 (ADDITIVE):
+    -- k9deploykennel keeps its own registration forever (RegisterKeyMapping/
+    -- radial.lua both call it directly by this literal name -- see that
+    -- file's own comment), but is no longer chat-suggested under its own
+    -- name now that 'k9kennel' exists as the one thing a player sees --
+    -- same HIDDEN_ALIAS_COMMANDS treatment as a folded-away name, even
+    -- though this one's registration is NOT going away.
+    { command = 'k9kennel', keySuffix = 'k9kennel' },
     -- client/keybinds.lua
     { command = 'k9bitehold', keySuffix = 'k9bitehold' },
     { command = 'k9takedown', keySuffix = 'k9takedown' },
@@ -264,13 +274,17 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9sit', keySuffix = 'k9sit' },
     { command = 'k9bark', keySuffix = 'k9bark' },
     { command = 'k9scentvision', keySuffix = 'k9scentvision' },
-    { command = 'k9exitkennel', keySuffix = 'k9exitkennel' },
+    -- k9exitkennel: same ADDITIVE hidden treatment as k9deploykennel above
+    -- -- RegisterKeyMapping('k9exitkennel', ..., 'O') in this same file
+    -- still needs the real registration to keep the rebinding UI working;
+    -- only the chat suggestion is gone.
     -- client/agility.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:vault', keySuffix = 'vault' },
-    -- client/training.lua
-    { command = 'k9training', keySuffix = 'k9training' },
-    { command = 'k9trainsearch', keySuffix = 'k9trainsearch' },
-    { command = 'k9trainbite', keySuffix = 'k9trainbite' },
+    -- client/training.lua -- COMMAND_CONSOLIDATION_SPEC.md #4:
+    -- k9training/k9trainsearch/k9trainbite are now HIDDEN ALIASES of
+    -- 'k9train' (still real, working RegisterCommand calls -- see that
+    -- file's own comment), never chat-suggested under their own names.
+    { command = 'k9train', keySuffix = 'k9train' },
     -- client/vision.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:toggleCameraFeed', keySuffix = 'toggle_camera_feed' },
     { command = 'qbx_k9unit:toggleThermalVision', keySuffix = 'toggle_thermal_vision' },

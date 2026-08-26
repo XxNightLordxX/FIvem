@@ -470,9 +470,10 @@ end
 -- internally no-op.
 -- ========================================================================
 
-t.test('FIXED: feature off registers NOTHING at all -- no command, no net events, no onResourceStart/onResourceStop handlers, no threads', function()
+t.test('FIXED: feature off registers no net events, onResourceStart/onResourceStop handlers, or threads -- ONLY k9kennel survives, unconditionally, exit-path-critical (COMMAND_CONSOLIDATION_SPEC.md #5)', function()
     local f = newKennelFixture({ deployableKennel = false })
-    t.equals(#f.commands, 0, 'k9deploykennel is not registered with the feature off')
+    t.equals(#f.commands, 1, 'k9deploykennel is not registered with the feature off, but k9kennel IS -- its own exit branch must survive a toggled-off feature, same reasoning as k9exitkennel')
+    t.equals(f.commands[1].name, 'k9kennel')
     t.equals(f.netEventCount(), 0, 'none of this file\'s six net events is registered with the feature off')
     t.equals(f.onResourceStartHandlerCount(), 0)
     t.equals(f.onResourceStopHandlerCount(), 0)
@@ -506,10 +507,13 @@ end)
 -- Sanity + happy path
 -- ========================================================================
 
-t.test('feature on: registers exactly 1 command, 6 net events, 1 onResourceStart, 1 onResourceStop, and starts the shared watchdog thread', function()
+t.test('feature on: registers exactly 2 commands (k9deploykennel + the additive k9kennel), 6 net events, 1 onResourceStart, 1 onResourceStop, and starts the shared watchdog thread', function()
     local f = newKennelFixture()
-    t.equals(#f.commands, 1)
-    t.equals(f.commands[1].name, 'k9deploykennel')
+    t.equals(#f.commands, 2)
+    local names = {}
+    for _, c in ipairs(f.commands) do names[c.name] = true end
+    t.isTrue(names['k9deploykennel'])
+    t.isTrue(names['k9kennel'])
     t.equals(f.netEventCount(), 6)
     t.isNotNil(f.netEventNames['qbx_k9unit:client:deployKennelAt'])
     t.isNotNil(f.netEventNames['qbx_k9unit:client:removeKennel'])
@@ -1408,6 +1412,169 @@ t.test('RequestDeployKennel: a call AFTER a real kennel is already confirmed is 
     f.env.RequestDeployKennel()
     t.equals(#f.serverEvents, 1, 'once myKennelNetId is set, a second RequestDeployKennel must not reach the server')
     t.equals(f.lastNotify().description, locale('kennel.already_deployed'))
+end)
+
+-- ========================================================================
+-- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #5, ADDITIVE) -- the
+-- new 'k9kennel' entry point + RequestKennelContextual(). k9deploykennel
+-- above is UNCHANGED (proven by every test above it) -- these tests are
+-- about the NEW additive layer specifically.
+-- ========================================================================
+
+--- @param f table -- newKennelFixture() result
+--- @return fun(...) k9kennel handler
+local function findK9Kennel(f)
+    for _, c in ipairs(f.commands) do
+        if c.name == 'k9kennel' then return c.handler end
+    end
+    error('k9kennel command not registered')
+end
+
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel DEPLOYS when nothing is active (no rest, no carry, nothing deployed)', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+
+    k9kennel(nil, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestDeployKennel')
+    t.equals(f.notifyCalls[1].description, locale('kennel.contextual_deploying'))
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel ENTERS this client\'s own deployed kennel when close enough', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+
+    -- Deploys at (1,0,0) -- MY_PED starts at (0,0,0), 1.0m < interactDistanceMeters (2.5).
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 1.0, 0.0, 0.0)
+    local kennelNetId = f.lastServerEvent().args[1]
+
+    k9kennel(nil, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestEnterKennel')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+    t.equals(f.notifyCalls[#f.notifyCalls - 1].description, locale('kennel.contextual_entering'), 'the decision notify fires before the request, so it is second-to-last once requestEnterKennel also notifies nothing extra')
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel refuses to enter (never guesses a second deploy) when this client\'s own kennel is deployed but too far away', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+
+    -- Deploys far away (50m) -- well past interactDistanceMeters (2.5).
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 50.0, 0.0, 0.0)
+    local eventsBefore = #f.serverEvents
+
+    k9kennel(nil, {})
+
+    t.equals(#f.serverEvents, eventsBefore, 'too far to enter must never fall through to deploying a second kennel')
+    t.equals(f.lastNotify().description, locale('kennel.enter_too_far'))
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel PUTS DOWN when this client is currently carrying a kennel', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 1.0, 0.0, 0.0)
+    local kennelNetId = f.lastServerEvent().args[1]
+    f.dispatchNetEvent('qbx_k9unit:client:pickupKennelConfirmed', 65535, kennelNetId)
+    t.isTrue(f.env.IsCarryingKennel())
+
+    k9kennel(nil, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestPutDownKennel')
+    t.equals(f.notifyCalls[#f.notifyCalls - 1].description, locale('kennel.contextual_putting_down'))
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9kennel EXITS when this client is currently resting -- highest priority, overrides everything else', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+
+    local netId = 900
+    f.registerForeignEntity(netId, 55, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.isTrue(f.env.IsRestingInKennel())
+
+    k9kennel(nil, {})
+
+    t.isFalse(f.env.IsRestingInKennel())
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestExitKennel')
+end)
+
+t.test('EXPLICIT OVERRIDE: /k9kennel deploy|enter|exit force that exact action', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+
+    k9kennel(nil, { 'deploy' })
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestDeployKennel')
+
+    local kennelNetId = f.lastServerEvent().args[1]
+    -- fake a deploy confirm so myKennelNetId is set for the 'enter' override
+    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 0.0, 0.0, 0.0)
+    kennelNetId = f.lastServerEvent().args[1]
+
+    k9kennel(nil, { 'enter' })
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestEnterKennel')
+    t.equals(f.lastServerEvent().args[1], kennelNetId)
+
+    local netId = 901
+    f.registerForeignEntity(netId, 56, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    k9kennel(nil, { 'exit' })
+    t.isFalse(f.env.IsRestingInKennel())
+end)
+
+t.test('GATE NEVER WIDENED BY THE MERGE: bare /k9kennel (deploy branch) still refuses without CanShowK9UI, identically to /k9deploykennel', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+    f.setCanShowK9UI(false)
+
+    k9kennel(nil, {})
+
+    t.equals(#f.serverEvents, 0, 'no deploy request must reach the server for an unauthorized caller')
+    t.equals(f.denyCallCount(), 1)
+end)
+
+t.test('GATE NEVER WIDENED BY THE MERGE: explicit /k9kennel deploy ALSO refuses without CanShowK9UI, identically to /k9deploykennel', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+    f.setCanShowK9UI(false)
+
+    k9kennel(nil, { 'deploy' })
+
+    t.equals(#f.serverEvents, 0)
+    t.equals(f.denyCallCount(), 1)
+end)
+
+t.test('GATE NEVER WIDENED: exiting via bare /k9kennel while resting stays UNGATED even with CanShowK9UI false (never gate the stop)', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+    local netId = 902
+    f.registerForeignEntity(netId, 57, GetHashKey(PRIMARY_MODEL))
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    f.setCanShowK9UI(false)
+
+    k9kennel(nil, {})
+
+    t.isFalse(f.env.IsRestingInKennel())
+    t.equals(f.denyCallCount(), 0, 'exiting must never be denied, even with CanShowK9UI false')
+end)
+
+t.test('NO-ARGUMENT DISCOVERABILITY / unrecognized word: an argument that is not deploy/enter/exit shows the usage notice, never guesses', function()
+    local f = newKennelFixture()
+    local k9kennel = findK9Kennel(f)
+
+    k9kennel(nil, { 'bogus' })
+
+    t.equals(#f.serverEvents, 0, 'an unrecognized word must never fall through to a guessed action')
+    t.equals(f.lastNotify().description, locale('kennel.usage_k9kennel'))
+end)
+
+t.test('ADDITIVE, NOT A REPLACEMENT: k9deploykennel keeps working exactly as before, unaffected by k9kennel existing alongside it', function()
+    local f = newKennelFixture()
+    local byName = {}
+    for _, c in ipairs(f.commands) do byName[c.name] = c.handler end
+
+    byName['k9deploykennel']()
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestDeployKennel')
 end)
 
 os.exit(t.summary())

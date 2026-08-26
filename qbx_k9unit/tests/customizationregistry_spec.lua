@@ -504,7 +504,18 @@ end
 -- by directly reading every call site of the named checker function
 -- (2026-08-26), not assumed from the file's own general purpose:
 --   server/wellbeing.lua's IsWellbeingFeaturePermittedForCitizenId(citizenid,
---     featureName) is called with exactly these five literal arguments.
+--     featureName) is called with exactly these six literal arguments --
+--     HungerThirstSystem added this pass (coder-backend, config-landing
+--     pass): TickWellbeing's own Hunger/Thirst passive-decay branch already
+--     called this checker with the literal 'HungerThirstSystem' argument
+--     BEFORE Config.Features.HungerThirstSystem/Config.Wellbeing.Hunger/
+--     .Thirst existed in config.lua at all -- the block PATH was real from
+--     the day that branch was written, it just had no config to turn the
+--     feature on with. Same "immunity from harm, never a freeze" shape as
+--     the other five: gates only the passive DECAY direction, never
+--     feedK9Hunger/giveK9Water/drinkFromBowl (the relief actions), matching
+--     this checker's own header ("a block ... is implemented as IMMUNITY
+--     FROM THAT STAT'S NEGATIVE EFFECTS, never as a freeze").
 --   server/search.lua's IsSearchFeaturePermittedForCitizenId(citizenid,
 --     featureName) is called with exactly these two.
 --   server/combat.lua's IsCombatFeaturePermittedForCitizenId(citizenid,
@@ -524,7 +535,7 @@ end
 -- added here in the same change.
 local DYNAMIC_BLOCK_COVERAGE = {
     MoodSystem = true, InjuryLimping = true, DistractionSystem = true,
-    FearStressSystem = true, FatigueSystem = true,
+    FearStressSystem = true, FatigueSystem = true, HungerThirstSystem = true,
     SearchZones = true, ContrabandAlerts = true,
     BiteAndHold = true, NonLethalTakedown = true, PropDragging = true,
     ScentTracking = true, BloodTracking = true, GunpowderSniffing = true,

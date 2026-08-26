@@ -1458,7 +1458,12 @@
         "placement_failed_unconfirmed": "Kennel placement failed — the object could not be confirmed.",
         "placement_failed_wrong_model": "Kennel placement failed — unexpected object model.",
         "placement_timed_out": "Kennel placement timed out — try again.",
-        "prop_load_failed": "Kennel prop failed to load."
+        "prop_load_failed": "Kennel prop failed to load.",
+        "usage_k9kennel": "/k9kennel by itself deploys, enters, or exits your kennel depending on what's happening right now. Use /k9kennel deploy, /k9kennel enter, or /k9kennel exit to force one specifically. (Old names /k9deploykennel and /k9exitkennel still work too.)",
+        "contextual_exiting": "Getting out of the kennel.",
+        "contextual_putting_down": "Putting the kennel back down.",
+        "contextual_entering": "Getting into your kennel to rest.",
+        "contextual_deploying": "Deploying a kennel."
     },
     "leaderboard": {
         "no_access": "You must be a certified K9 handler to view the leaderboard.",

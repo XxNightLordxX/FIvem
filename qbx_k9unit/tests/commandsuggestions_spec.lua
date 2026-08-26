@@ -116,6 +116,19 @@ local HIDDEN_ALIAS_COMMANDS = {
     k9throwfetchball = true,
     k9dropfetchball = true,
     k9recallfetchball = true,
+    -- family #4: training (3 -> 1, 'k9train') -- client/training.lua
+    k9training = true,
+    k9trainsearch = true,
+    k9trainbite = true,
+    -- family #5: kennel (ADDITIVE, 'k9kennel') -- client/kennel.lua +
+    -- client/keybinds.lua. Unlike every other entry in this table,
+    -- k9deploykennel/k9exitkennel are NOT being folded away -- both keep
+    -- their own registration forever (RegisterKeyMapping/radial.lua need
+    -- the literal name) -- only their chat-suggestion visibility is hidden,
+    -- so the player sees one thing (k9kennel) per the project-owner's own
+    -- "additive still means the player sees one thing" instruction.
+    k9deploykennel = true,
+    k9exitkennel = true,
 }
 
 --- Identical shape to tests/commandreferenceregistry_spec.lua's own

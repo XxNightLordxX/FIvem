@@ -398,6 +398,151 @@ function RequestDeployKennel()
     TriggerServerEvent('qbx_k9unit:server:requestDeployKennel')
 end
 
+--- Explicit-only entry point (COMMAND_CONSOLIDATION_SPEC.md #5's own
+--- additive design -- there was previously NO standalone command for this
+--- at all, only the "Rest in Kennel" ox_target option on the specific
+--- kennel prop). Attempts to enter THIS client's OWN deployed kennel
+--- (`myKennelNetId`) -- mirrors RegisterKennelOxTargetOption's own
+--- 'qbx_k9unit:enterKennel' canInteract/onSelect pair EXACTLY (same
+--- CanShowK9UI() gate, same IsInK9Vehicle() mutual guard, same
+--- interactDistanceMeters proximity bound, same
+--- 'qbx_k9unit:server:requestEnterKennel' event) -- a display-optimization
+--- mirror only, same as that ox_target option's own canInteract: the
+--- server's own requestEnterKennel handler independently re-verifies
+--- everything regardless of what this function decided locally. Declared
+--- OUTSIDE the REGISTRATION-TIME FEATURE GATE further down, same as
+--- RequestDeployKennel() above -- reachable-but-inert with the feature off.
+--- @return boolean ok -- false means "did not even attempt it" (nothing deployed, too far, blocked) -- callers that want to explain why use the more specific locale keys this function itself already notifies with
+function RequestEnterOwnKennel()
+    if not Config.Features.DeployableKennel then return false end
+    if not myKennelNetId then return false end -- nothing of mine deployed to enter
+
+    if not CanShowK9UI() then
+        DenyK9UIAccess()
+        return false
+    end
+
+    -- MUTUAL GUARD vs. client/vehicle.lua's real vehicle seating -- see
+    -- RegisterKennelOxTargetOption's own 'qbx_k9unit:enterKennel' onSelect
+    -- comment for the full reasoning; mirrored verbatim.
+    if type(IsInK9Vehicle) == 'function' and IsInK9Vehicle() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_by_vehicle'), type = 'error' })
+        return false
+    end
+
+    local entity = ResolveNetworkEntity(myKennelNetId, 3)
+    if not entity then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.enter_too_far'), type = 'error' })
+        return false
+    end
+
+    local myCoords = GetEntityCoords(PlayerPedId())
+    local kennelCoords = GetEntityCoords(entity)
+    if #(myCoords - kennelCoords) > Config.DeployableKennel.interactDistanceMeters then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.enter_too_far'), type = 'error' })
+        return false
+    end
+
+    TriggerServerEvent('qbx_k9unit:server:requestEnterKennel', myKennelNetId)
+    return true
+end
+
+-- ======================================================================
+-- '/k9kennel' -- COMMAND_CONSOLIDATION_SPEC.md #5, ADDITIVE (not a
+-- replacement -- see this file's header for why): k9deploykennel above and
+-- k9exitkennel (client/keybinds.lua) are UNCHANGED, keep their own literal
+-- names, and keep working for their existing RegisterKeyMapping bindings
+-- and the radial menu's own direct calls -- this is a NEW, ADDITIONAL
+-- entry point layered on top, calling the exact same
+-- RequestDeployKennel()/ExitKennelRest()/RequestEnterOwnKennel() globals
+-- those existing entry points already call. Neither k9deploykennel nor
+-- k9exitkennel is a hidden alias of this command (they are not being
+-- folded away) -- both stay fully first-class, documented commands in
+-- their own right.
+--
+-- CONTEXTUAL DISPATCH: bare '/k9kennel' reads THIS CLIENT'S OWN real local
+-- state and picks the one action that state actually implies --
+--   IsRestingInKennel()  -> EXIT (ExitKennelRest()) -- highest priority:
+--                           nothing else makes sense while resting.
+--   IsCarryingKennel()   -> PUT DOWN (RequestDeployKennel(), whose own
+--                           "put it back down" branch fires first).
+--   myKennelNetId ~= nil -> ENTER own kennel if in range
+--                           (RequestEnterOwnKennel()), otherwise a
+--                           `kennel.enter_too_far` notice -- deploying a
+--                           SECOND kennel is never attempted here, matching
+--                           RequestDeployKennel()'s own
+--                           `kennel.already_deployed` refusal.
+--   none of the above    -> DEPLOY (RequestDeployKennel()).
+-- Every branch calls a function that already re-runs its own real gate
+-- (CanShowK9UI()/Config.Features.DeployableKennel/etc) -- this dispatcher
+-- performs no authorization check of its own to skip, so the merge cannot
+-- widen access.
+--
+-- EXPLICIT OVERRIDE: '/k9kennel <deploy|enter|exit>' forces that action
+-- directly, regardless of current state, identical to calling the
+-- matching resource-global directly (deploy/exit are exactly what
+-- k9deploykennel/k9exitkennel already do).
+--
+-- REGISTERED UNCONDITIONALLY (NOT inside the REGISTRATION-TIME FEATURE
+-- GATE below) -- same reasoning as k9exitkennel's own unconditional
+-- registration in client/keybinds.lua: the 'exit' branch (both explicit
+-- and contextual, when IsRestingInKennel() is true) must stay reachable
+-- even with Config.Features.DeployableKennel off or toggled off mid-session
+-- for an already-resting occupant. The deploy/enter branches themselves
+-- still internally check the flag (RequestDeployKennel()/
+-- RequestEnterOwnKennel() both already do) and simply no-op when it's off.
+-- ======================================================================
+--- Bare-dispatch body, extracted as its own resource-global -- same
+--- "global helper, private per-file state" convention as
+--- RequestDeployKennel()/ExitKennelRest()/RequestEnterOwnKennel() above,
+--- specifically so client/radial.lua can call this EXACT SAME path once
+--- it replaces its own current two flat 'k9_deploy_kennel'/'k9_exit_kennel'
+--- items with one entry (reported to project-lead separately -- see this
+--- pass's own report for the exact item definition). Declared OUTSIDE the
+--- REGISTRATION-TIME FEATURE GATE further down, same as every other
+--- function in this block -- reachable-but-inert with the feature off (the
+--- exit branch below still works regardless, matching every other
+--- never-gate-the-stop path in this file).
+function RequestKennelContextual()
+    -- CONFIRMATION NAMES THE DECISION (project-owner's own requirement):
+    -- notified BEFORE the resolved action runs.
+    if IsRestingInKennel() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_exiting'), type = 'inform' })
+        ExitKennelRest()
+    elseif IsCarryingKennel() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_putting_down'), type = 'inform' })
+        RequestDeployKennel()
+    elseif myKennelNetId then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_entering'), type = 'inform' })
+        RequestEnterOwnKennel()
+    else
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.contextual_deploying'), type = 'inform' })
+        RequestDeployKennel()
+    end
+end
+
+local KENNEL_EXPLICIT_ACTIONS = {
+    deploy = function() RequestDeployKennel() end,
+    enter = function() RequestEnterOwnKennel() end,
+    exit = function() ExitKennelRest() end,
+}
+
+RegisterCommand('k9kennel', function(_source, args)
+    local explicit = args[1] and KENNEL_EXPLICIT_ACTIONS[args[1]]
+    if explicit then
+        explicit()
+        return
+    end
+
+    if args[1] then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.usage_k9kennel'), type = 'error' })
+        return
+    end
+
+    -- Bare '/k9kennel' -- contextual dispatch, see RequestKennelContextual() above.
+    RequestKennelContextual()
+end, false)
+
 -- ======================================================================
 -- REGISTRATION-TIME FEATURE GATE (coder-frontend precedent) -- mirrors
 -- client/propattachment.lua's own identically-shaped fix; read that file's

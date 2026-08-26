@@ -344,23 +344,32 @@ local function newWellbeingFixture(opts)
         env.Config.Features[key] = value
     end
 
-    -- HUNGER/THIRST config seed -- real config.lua has no
-    -- Config.Wellbeing.Hunger/.Thirst yet either (this file does not own
-    -- config.lua); seeded here with the same shipped-default ARITHMETIC
-    -- this task's own report gives config.lua, so LiveWellbeingTunables'
-    -- own boot-time seed (read at client/wellbeing.lua's file-load time,
-    -- below) has real numbers to seed from. `opts.wellbeingHunger`/
-    -- `opts.wellbeingThirst` let an individual test override this, e.g. to
-    -- exercise bowlSources. Passing `false` explicitly (not merely omitting
-    -- the option) leaves the subtable ABSENT altogether, for the
-    -- config-defensive "old config.lua never added this section at all"
-    -- test -- `nil`/omitted is what selects THIS fixture's own default seed.
+    -- HUNGER/THIRST config seed. CORRECTED (this pass, coder-backend, real
+    -- config.lua now carries Config.Wellbeing.Hunger/.Thirst -- see
+    -- config.lua's own Config.Features.HungerThirstSystem comment):
+    -- `Sandbox.loadInto('../config.lua', env)` above already populated
+    -- `env.Config.Wellbeing.Hunger`/`.Thirst` with the REAL, live
+    -- config.lua values -- this used to be harmless when real config.lua
+    -- had no such keys at all (loading it left both `nil`, exactly what
+    -- `opts.wellbeingHunger == false` wanted to simulate), but now that
+    -- real config.lua defines them for real, the old `elseif ... ~= false
+    -- then ... end` shape did NOTHING for `false`, silently leaving the
+    -- REAL config.lua table in place instead of the "old config.lua never
+    -- added this section at all" state the CONFIG-DEFENSIVE test below
+    -- exists to simulate. Every one of the three branches is now explicit,
+    -- so `false` genuinely clears the subtable regardless of what real
+    -- config.lua ships. `nil`/omitted still selects THIS fixture's own
+    -- default seed (kept in sync, by comment, with real config.lua's own
+    -- shipped ARITHMETIC), `opts.wellbeingHunger`/`opts.wellbeingThirst`
+    -- as a table still overrides it (e.g. to exercise bowlSources).
     if opts.wellbeingHunger == nil then
         env.Config.Wellbeing.Hunger = {
             max = 100, decayPerTick = 0.093, lowThreshold = 30, speedPenaltyMultiplier = 0.95,
             feedItemName = 'k9_food', feedRegenAmount = 35, feedCooldownMs = 120000,
         }
-    elseif opts.wellbeingHunger ~= false then
+    elseif opts.wellbeingHunger == false then
+        env.Config.Wellbeing.Hunger = nil
+    else
         env.Config.Wellbeing.Hunger = opts.wellbeingHunger
     end
     if opts.wellbeingThirst == nil then
@@ -369,7 +378,9 @@ local function newWellbeingFixture(opts)
             drinkItemName = 'k9_water', drinkRegenAmount = 35, drinkCooldownMs = 90000,
             bowlSources = {}, bowlRegenAmount = 15, bowlCooldownMs = 60000, bowlInteractRange = 2.0,
         }
-    elseif opts.wellbeingThirst ~= false then
+    elseif opts.wellbeingThirst == false then
+        env.Config.Wellbeing.Thirst = nil
+    else
         env.Config.Wellbeing.Thirst = opts.wellbeingThirst
     end
 

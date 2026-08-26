@@ -216,6 +216,108 @@ t.test('/k9training with no/unrecognized argument sends NOTHING to the server an
 end)
 
 -- ----------------------------------------------------------------------
+-- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #4) -- the merged
+-- '/k9train' entry point. k9training/k9trainsearch/k9trainbite stay
+-- registered forever as HIDDEN ALIASES (proven above, unchanged).
+-- ----------------------------------------------------------------------
+
+t.test('COMMAND CONSOLIDATION: /k9train is registered whenever k9training/k9trainsearch/k9trainbite are', function()
+    local f = newTrainingFixture()
+    t.isNotNil(f.commands.k9train)
+    t.isNotNil(f.commands.k9training)
+    t.isNotNil(f.commands.k9trainsearch)
+    t.isNotNil(f.commands.k9trainbite)
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9train turns Training Mode ON when it is currently off, and notifies the decision first', function()
+    local f = newTrainingFixture()
+    t.isFalse(f.isTrainingModeActive())
+
+    f.commands.k9train(1, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:setTrainingMode')
+    t.equals(f.lastServerEvent().args[1], true)
+    t.equals(f.notifyCalls[1].description, Sandbox.locale('training.contextual_turning_on'))
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9train turns Training Mode OFF when it is currently on (deterministic toggle, no zone/state guessing)', function()
+    local f = newTrainingFixture()
+    f.fireTrainingModeChanged(true)
+    t.isTrue(f.isTrainingModeActive())
+
+    f.commands.k9train(1, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:setTrainingMode')
+    t.equals(f.lastServerEvent().args[1], false)
+    t.equals(f.notifyCalls[1].description, Sandbox.locale('training.contextual_turning_off'))
+end)
+
+t.test('EXPLICIT OVERRIDE: /k9train on|off|search|bite force that exact action regardless of current trainingModeActive state', function()
+    local f = newTrainingFixture()
+
+    f.commands.k9train(1, { 'on' })
+    t.equals(f.lastServerEvent().args[1], true)
+
+    -- Explicit 'on' again even though nothing confirmed it yet locally --
+    -- proves this is a forced call, not a re-read of local state.
+    f.commands.k9train(1, { 'on' })
+    t.equals(f.lastServerEvent().args[1], true)
+
+    f.commands.k9train(1, { 'off' })
+    t.equals(f.lastServerEvent().args[1], false)
+
+    f.fireTrainingModeChanged(true)
+    f.commands.k9train(1, { 'search' })
+    t.equals(f.callbackCallLog[#f.callbackCallLog].event, 'qbx_k9unit:server:trainingSearch', 'search must reach the same drill path as /k9trainsearch, never guessed by the dispatcher')
+end)
+
+t.test('AMBIGUITY NEVER GUESSED: search vs bite always require the explicit word -- nothing in real state (there is no client-visible training-zone concept) picks one over the other', function()
+    local f = newTrainingFixture()
+    f.fireTrainingModeChanged(true)
+
+    f.commands.k9train(1, { 'bite' })
+    t.equals(f.callbackCallLog[#f.callbackCallLog].event, 'qbx_k9unit:server:trainingBiteHold')
+end)
+
+t.test('GATE NEVER WIDENED BY THE MERGE: bare /k9train (turn-on branch) still refuses without HasK9Access, identically to /k9training on', function()
+    local f = newTrainingFixture({ hasK9Access = false })
+
+    f.commands.k9train(1, {})
+
+    t.equals(#f.serverEvents, 0, 'no setTrainingMode request must reach the server for an unauthorized caller')
+    t.equals(f.denyCallCount(), 1)
+end)
+
+t.test('GATE NEVER WIDENED BY THE MERGE: explicit /k9train on ALSO refuses without HasK9Access, identically to /k9training on', function()
+    local f = newTrainingFixture({ hasK9Access = false })
+
+    f.commands.k9train(1, { 'on' })
+
+    t.equals(#f.serverEvents, 0)
+    t.equals(f.denyCallCount(), 1)
+end)
+
+t.test('GATE NEVER WIDENED: turning OFF via bare /k9train while trainingModeActive stays UNGATED, identically to /k9training off (never gate the stop)', function()
+    local f = newTrainingFixture({ hasK9Access = false })
+    f.fireTrainingModeChanged(true)
+
+    f.commands.k9train(1, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:setTrainingMode')
+    t.equals(f.lastServerEvent().args[1], false)
+    t.equals(f.denyCallCount(), 0, 'turning off must never be denied, even with HasK9Access false')
+end)
+
+t.test('NO-ARGUMENT DISCOVERABILITY / unrecognized word: an argument that is not on/off/search/bite shows the usage notice, never guesses', function()
+    local f = newTrainingFixture()
+
+    f.commands.k9train(1, { 'sideways' })
+
+    t.equals(#f.serverEvents, 0)
+    t.equals(f.lastNotify().description, Sandbox.locale('training.usage_k9train'))
+end)
+
+-- ----------------------------------------------------------------------
 -- trainingModeChanged -- SOURCE-ORIGIN GUARD + "server-confirmed only"
 -- ----------------------------------------------------------------------
 

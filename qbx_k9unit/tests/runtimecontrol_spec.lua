@@ -1534,7 +1534,12 @@ end)
 -- ============================================================================
 
 --- @return table fixture -- { env, callbacks, fakeNow }
-local function bootAgainstRealConfig()
+--- @param opts table? -- { maxSpeedScentMultiplier: number? -- override REAL
+---   config.lua's own Config.MaxSpeedScentMultiplier (10.0) BEFORE
+---   server/runtimecontrol.lua's own TUNABLE_REGISTRY is built, simulating
+---   an operator having set a different value in their own config.lua. }
+local function bootAgainstRealConfig(opts)
+    opts = opts or {}
     local callbacks = {}
     local lib = { callback = { register = function(name, handler) callbacks[name] = handler end } }
     local eventHandlers = {}
@@ -1573,6 +1578,14 @@ local function bootAgainstRealConfig()
     Sandbox.loadInto('../config.lua', env)
     env.Config.Database = env.Config.Database or {}
     env.Config.Database.enabled = false -- route K9Store through its in-memory backend -- see runtimefeaturetiers_spec.lua's identical "NO MYSQL STUB NEEDED" note
+    if opts.maxSpeedScentMultiplier ~= nil then
+        -- Applied AFTER loading real config.lua but BEFORE
+        -- server/runtimecontrol.lua (whose own ResolveMaxSpeedScentMultiplier
+        -- resolves this at THAT file's load time, below) -- simulates an
+        -- operator having set a different value in their own config.lua,
+        -- without needing a second, hand-built fake Config table.
+        env.Config.MaxSpeedScentMultiplier = opts.maxSpeedScentMultiplier
+    end
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env)

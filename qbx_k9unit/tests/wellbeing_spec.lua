@@ -2060,6 +2060,140 @@ t.test('NO NEGATIVE/WRAPPED FATIGUE: even at the tunable\'s own maximum (20.0/ti
 end)
 
 -- ========================================================================
+-- PER-CITIZENID STAMINA OVERRIDE WIRING (this pass, coder-backend, Part B
+-- of the owner's "keep the speed and stamina editing where i can edit it
+-- to as high as i want" request). server/k9profiles.lua's
+-- GetK9EffectiveMultipliers is an accessor nothing calls unless it is
+-- actually wired somewhere real -- these tests prove TickWellbeing's own
+-- Fatigue sprint-decay branch genuinely consults it (soft-guarded,
+-- pcall-wrapped, exactly the idiom server/tracking.lua's own
+-- ResolveMaxRangeForCitizenId already established for the sibling
+-- scent-range field), not merely that the accessor exists in isolation.
+-- ========================================================================
+
+t.test('STAMINA OVERRIDE WIRING: when GetK9EffectiveMultipliers is available and returns a per-citizenid sprintDecayPerTick, TickWellbeing uses THAT value, not the raw Config.Wellbeing.Fatigue.sprintDecayPerTick global', function()
+    local cfg = baselineWellbeingConfig() -- Fatigue.sprintDecayPerTick = 2.0 (the global default)
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfg })
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    -- Simulates a high-command individual override of 0.5/tick for this
+    -- exact citizenid -- a real server/k9profiles.lua would resolve this
+    -- from its own OverrideByCitizenId/StaminaOverrideByCitizenId tables;
+    -- this fixture never loads that file, so it stubs the ONE seam
+    -- TickWellbeing actually calls, exactly like tests/tracking_spec.lua's
+    -- own fixture stubs GetK9EffectiveMultipliers for the sibling
+    -- scent-range wiring.
+    local calls = {}
+    f.env.GetK9EffectiveMultipliers = function(citizenid)
+        calls[#calls + 1] = citizenid
+        return { sprintDecayPerTick = 0.5 }
+    end
+
+    f.runOneTick()
+    local x = 0
+    for _ = 1, 10 do x = sprintTick(f, 9001, x, 30) end
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.fatigue, 95, '10 sprinting ticks at an OVERRIDDEN 0.5/tick must lose exactly 5 fatigue, not 20 (the raw global 2.0/tick would have produced)')
+    t.isTrue(#calls > 0, 'GetK9EffectiveMultipliers must actually have been called, not merely be available and unused')
+    t.equals(calls[1], 'K9-CID', 'must be called with THIS citizenid, never a different one or a raw source id')
+end)
+
+t.test('STAMINA OVERRIDE WIRING: sprintDecayPerTick = 0 from the override is a genuine "permanent stamina" no-op, exactly like the global-default 0 case above', function()
+    local cfg = baselineWellbeingConfig() -- Fatigue.sprintDecayPerTick = 2.0 (the global default, deliberately NON-zero here)
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfg })
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    f.env.GetK9EffectiveMultipliers = function() return { sprintDecayPerTick = 0 } end
+
+    f.runOneTick()
+    local x = 0
+    for _ = 1, 50 do x = sprintTick(f, 9001, x, 30) end
+
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.fatigue, 100, 'an OVERRIDDEN 0/tick must behave exactly like the global-default 0 case: fatigue never drops, even after 50 sustained-sprint ticks, even though the raw Config default here is a non-zero 2.0')
+end)
+
+t.test('STAMINA OVERRIDE WIRING: GetK9EffectiveMultipliers ABSENT (an install predating server/k9profiles.lua) falls back to the raw Config.Wellbeing.Fatigue.sprintDecayPerTick global -- exactly today\'s behavior, unaffected', function()
+    local cfg = baselineWellbeingConfig()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfg })
+    -- Deliberately never setting f.env.GetK9EffectiveMultipliers -- this
+    -- fixture's own Sandbox.newEnv seeds every global from the REAL _G,
+    -- which has no such function either, so `type(GetK9EffectiveMultipliers)
+    -- == 'function'` is false here, exactly modelling an install that
+    -- predates that file.
+    t.isNil(f.env.GetK9EffectiveMultipliers)
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    f.runOneTick()
+    local x = 0
+    for _ = 1, 10 do x = sprintTick(f, 9001, x, 30) end
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.fatigue, 80, 'must fall back to the raw global (2.0/tick * 10 ticks = 20 lost), exactly matching this section\'s own earlier "shipped default" sanity check')
+end)
+
+t.test('STAMINA OVERRIDE WIRING: a THROWING GetK9EffectiveMultipliers is caught (pcall) and falls back to the raw Config global -- never crashes TickWellbeing for every other online K9', function()
+    local cfg = baselineWellbeingConfig()
+    local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfg })
+    f.setOnline({ 1 })
+    f.setPlayer(1, 'K9-CID')
+    f.setPed(1, 9001)
+    f.setModel(9001, 555)
+    f.setIsK9Model(555, true)
+    f.setCoords(9001, 0, 0, 0)
+
+    f.env.GetK9EffectiveMultipliers = function() error('simulated failure in server/k9profiles.lua') end
+
+    f.runOneTick()
+    local x = 0
+    local ok = pcall(function()
+        for _ = 1, 10 do x = sprintTick(f, 9001, x, 30) end
+    end)
+    t.isTrue(ok, 'a throwing GetK9EffectiveMultipliers must never crash TickWellbeing itself')
+    local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+    t.equals(snap.fatigue, 80, 'must fall back to the raw global exactly as if the function were absent')
+end)
+
+t.test('STAMINA OVERRIDE WIRING: a malformed return value (not a table, or a non-number sprintDecayPerTick) is ignored -- falls back to the raw Config global, never a crash or a nonsense subtraction', function()
+    local cfg = baselineWellbeingConfig()
+    for _, badReturn in ipairs({ nil, false, 'not a table', {}, { sprintDecayPerTick = 'not a number' }, { sprintDecayPerTick = false } }) do
+        local f = newWellbeingFixture({ featuresOverride = { FatigueSystem = true }, wellbeingCfg = cfg })
+        f.setOnline({ 1 })
+        f.setPlayer(1, 'K9-CID')
+        f.setPed(1, 9001)
+        f.setModel(9001, 555)
+        f.setIsK9Model(555, true)
+        f.setCoords(9001, 0, 0, 0)
+
+        f.env.GetK9EffectiveMultipliers = function() return badReturn end
+
+        f.runOneTick()
+        local x = 0
+        local ok = pcall(function()
+            for _ = 1, 10 do x = sprintTick(f, 9001, x, 30) end
+        end)
+        t.isTrue(ok, ('must never crash for a malformed return value: %s'):format(tostring(badReturn)))
+        local snap = f.invokeCallback('qbx_k9unit:server:getWellbeingSnapshot', 1)
+        t.equals(snap.fatigue, 80, ('must fall back to the raw global for a malformed return value: %s'):format(tostring(badReturn)))
+    end
+end)
+
+-- ========================================================================
 -- HUNGER/THIRST (this pass, coder-backend). Config.Features.HungerThirstSystem.
 -- See server/wellbeing.lua's header "HUNGER/THIRST" section for the full
 -- design writeup this section proves.

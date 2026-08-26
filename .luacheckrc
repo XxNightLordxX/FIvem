@@ -826,6 +826,14 @@ globals = {
     "ToggleNightVision",
     -- client/kennel.lua (Phase 5 R&D, DeployableKennel)
     "RequestDeployKennel",
+    -- RequestEnterOwnKennel / RequestKennelContextual: client/kennel.lua's
+    -- command-consolidation pass -- the merged "/k9kennel" works out deploy
+    -- vs enter vs exit from what is actually around you, instead of the
+    -- player picking between three separate commands. Both are declared
+    -- here rather than left to the file, because a resource-global that
+    -- luacheck has never been told about reads as a typo forever.
+    "RequestEnterOwnKennel",
+    "RequestKennelContextual",
     -- IsRestingInKennel/IsCarryingKennel: client/kennel.lua's own K9-can-
     -- ride-along pass, same "engagement predicate" shape as
     -- IsPropAttachmentEngaged/IsInK9Vehicle above -- exposed for a future
