@@ -593,6 +593,322 @@ local TUNABLE_REGISTRY = {
     ['AdminAudit.MaxResults.SearchLog']        = { path = { 'AdminAudit', 'MaxResults', 'SearchLog' },        min = 1,     max = 100,       integer = true },
 
     ['CertificationExpiryCheckIntervalMs']     = { path = { 'CertificationExpiryCheckIntervalMs' },           min = 30000, max = 3600000,   integer = true },
+
+    -- ==================================================================
+    -- EXPANSION PASS (2026-08-26). Every entry below was individually
+    -- confirmed READ FRESH AT THE POINT OF USE by direct read of the file
+    -- that consumes it, matching exclusion rule 3 above -- not assumed from
+    -- a field's name or from another field's precedent. A large class of
+    -- config.lua numbers were read and REJECTED for this registry along the
+    -- way; see this pass's own hand-off report for the full skip list and
+    -- reasoning (captured-once-at-load locals, values applied only by an
+    -- independent CLIENT copy of config.lua with no server enforcement
+    -- point, economy-adjacent XP/reward tables, and a handful of values a
+    -- sibling file's own comment explicitly calls "a hard safety ceiling,
+    -- not a server-tunable-to-anything toggle").
+    -- ==================================================================
+
+    -- server/integrations.lua (Config.Features.K9DownDispatch, rawtoplevel).
+    -- `local tuning = Config.K9DownDispatch` is a TABLE REFERENCE, not a
+    -- copy -- PollK9Health reads tuning.healthThreshold/minDurationMs fresh
+    -- every poll pass, and the poll thread's own Wait(tuning.pollIntervalMs)
+    -- re-reads pollIntervalMs every iteration. reFireCooldownMs is
+    -- DELIBERATELY EXCLUDED -- it is baked once into K9DownFireCooldown's
+    -- own NewCooldown(...) constructor call and never re-read afterward
+    -- (Consume(src) below is called with no per-call override), the exact
+    -- "constructor default" shape exclusion rule 3 rules out.
+    ['K9DownDispatch.healthThreshold']          = { path = { 'K9DownDispatch', 'healthThreshold' },             min = 1,     max = 200,       integer = true },
+    ['K9DownDispatch.minDurationMs']            = { path = { 'K9DownDispatch', 'minDurationMs' },                min = 0,     max = 60000,     integer = true },
+    ['K9DownDispatch.pollIntervalMs']           = { path = { 'K9DownDispatch', 'pollIntervalMs' },               min = 500,   max = 30000,     integer = true },
+
+    -- server/scenttrail.lua (Config.Features.ScentTrailHunt, live).
+    -- `local ScentHuntConfig = Config.ScentTrailHunt` is likewise a live
+    -- reference -- RollHuntTarget reads minRadius/maxRadius fresh per hunt
+    -- start, pollScentHunt reads arrivalRadius/maxHuntDurationMs fresh per
+    -- poll. startCooldownMs is EXCLUDED (baked into StartHuntCooldown's own
+    -- NewCooldown(...) constructor). pollIntervalMs is EXCLUDED -- it is
+    -- never read anywhere in server/scenttrail.lua at all (grepped); the
+    -- growl's actual poll cadence is a client/scenttrail.lua-only value this
+    -- file has no enforcement point over, matching the "clientonly, no
+    -- server read point" exclusion this registry has always applied.
+    ['ScentTrailHunt.minRadius']                = { path = { 'ScentTrailHunt', 'minRadius' },                    min = 1.0,   max = 100.0,     integer = false },
+    ['ScentTrailHunt.maxRadius']                = { path = { 'ScentTrailHunt', 'maxRadius' },                    min = 5.0,   max = 150.0,     integer = false },
+    ['ScentTrailHunt.arrivalRadius']            = { path = { 'ScentTrailHunt', 'arrivalRadius' },                min = 1.0,   max = 20.0,      integer = false },
+    ['ScentTrailHunt.maxHuntDurationMs']        = { path = { 'ScentTrailHunt', 'maxHuntDurationMs' },            min = 30000, max = 1800000,   integer = true },
+
+    -- server/pursuitsprint.lua (Config.Features.PursuitSprint, rawtoplevel).
+    -- requestRangeMeters is re-read directly off Config in the request
+    -- handler (that file's own comment says so explicitly) -- genuinely
+    -- live. speedMultiplier/durationMs are DELIBERATELY EXCLUDED even though
+    -- this file normalizes them back onto Config at load: the granted-sprint
+    -- event carries NO PAYLOAD (that file's own header) -- the speed boost
+    -- and its duration are applied entirely by the K9's OWN CLIENT reading
+    -- its OWN independent shared_scripts copy of config.lua, never this
+    -- server's in-memory table. A live edit here would be a silent no-op for
+    -- the one thing an operator would actually be trying to change.
+    -- cooldownMs is EXCLUDED (baked into PursuitCooldown's own NewCooldown
+    -- constructor).
+    ['PursuitSprint.requestRangeMeters']        = { path = { 'PursuitSprint', 'requestRangeMeters' },            min = 5.0,   max = 100.0,     integer = false },
+
+    -- server/sarcalls.lua (Config.Features.SARCalls, rawtoplevel).
+    -- `local tuning = Config.SARCalls` is a live reference; RollSarTarget/
+    -- TierForDistance/the tick loop all read straight off `tuning` every
+    -- call. startCooldownMs is EXCLUDED (NewCooldown constructor default).
+    -- revealDurationMs/missingPersonPedModel/lostPropertyPropModel are
+    -- EXCLUDED -- this file's own CONFIG-SAFETY GUARD comment states outright
+    -- those three "are read and validated by client/sarcalls.lua alone --
+    -- this file never touches them."
+    ['SARCalls.minRadius']                      = { path = { 'SARCalls', 'minRadius' },                          min = 5.0,   max = 200.0,     integer = false },
+    ['SARCalls.maxRadius']                      = { path = { 'SARCalls', 'maxRadius' },                          min = 10.0,  max = 300.0,     integer = false },
+    ['SARCalls.arrivalRadius']                  = { path = { 'SARCalls', 'arrivalRadius' },                      min = 1.0,   max = 30.0,      integer = false },
+    ['SARCalls.burningDistance']                = { path = { 'SARCalls', 'burningDistance' },                    min = 1.0,   max = 50.0,      integer = false },
+    ['SARCalls.hotDistance']                    = { path = { 'SARCalls', 'hotDistance' },                        min = 1.0,   max = 100.0,     integer = false },
+    ['SARCalls.warmDistance']                   = { path = { 'SARCalls', 'warmDistance' },                       min = 1.0,   max = 150.0,     integer = false },
+    ['SARCalls.pollIntervalMs']                 = { path = { 'SARCalls', 'pollIntervalMs' },                     min = 500,   max = 30000,     integer = true },
+    ['SARCalls.maxCallDurationMs']              = { path = { 'SARCalls', 'maxCallDurationMs' },                  min = 30000, max = 1800000,   integer = true },
+
+    -- server/combat.lua (Config.Features.BiteAndHold / NonLethalTakedown /
+    -- PropDragging, all `live`). Every entry below is read straight off
+    -- `Config.Combat.*` inline, inside the request handler or the shared
+    -- maintenance-thread check, on every single invocation -- confirmed by
+    -- direct read, not inferred. cooldownMs/targetCooldownMs for all three
+    -- mechanics are EXCLUDED (each is baked into its own NewCooldown
+    -- constructor; the one exception, requestBiteHold/requestTakedown's OWN
+    -- cooldown checks, was deliberately changed AWAY from a per-call Config
+    -- re-read this same pass specifically to stop shadowing the safe
+    -- constructor default -- see that file's own "QA sandbox repro" comment
+    -- -- so re-exposing it here as a live tunable would reopen exactly the
+    -- bug that change closed). healthFloor is EXCLUDED -- the server-side
+    -- SetEntityHealth call on the NPC path was REMOVED as a suspected silent
+    -- no-op; the real, load-bearing floor is applied entirely by
+    -- client/combat.lua reading its own shared_scripts copy. ragdollFallTimeMs/
+    -- ragdollFallTimeP2/AgilityAdvanced.* are EXCLUDED -- never read anywhere
+    -- in server/combat.lua (grepped), client-only. NonComplianceDetection.*
+    -- (biteHoldIdleCeiling/biteHoldSpeedTolerance/biteHoldViolationSamples/
+    -- takedownNetDisplacementMeters/dragComplianceSlackMeters/
+    -- positionSampleWindowMs) are ALL EXCLUDED even though several ARE read
+    -- fresh inside SampleCompliance: the sampling thread that ever calls
+    -- SampleCompliance is only created if
+    -- Config.Combat.NonComplianceDetection.enabled was ALREADY true when
+    -- this file loaded (`if Config.Combat.NonComplianceDetection.enabled
+    -- then CreateThread(...) end`, confirmed by direct read) -- and unlike a
+    -- top-level Config.Features flag, that nested boolean has no entry of
+    -- its own in ListFeatures for an operator to see WHY a live edit here
+    -- did nothing. positionSampleWindowMs specifically is ALSO captured once
+    -- into a local (`PositionSampleWindowMs`) feeding the thread's own
+    -- Wait() -- doubly non-live.
+    ['Combat.BiteAndHold.range']                = { path = { 'Combat', 'BiteAndHold', 'range' },                 min = 0.5,   max = 10.0,      integer = false },
+    ['Combat.BiteAndHold.maxDurationMs']        = { path = { 'Combat', 'BiteAndHold', 'maxDurationMs' },         min = 5000,  max = 60000,     integer = true },
+    ['Combat.NonLethalTakedown.range']          = { path = { 'Combat', 'NonLethalTakedown', 'range' },           min = 0.5,   max = 10.0,      integer = false },
+    ['Combat.NonLethalTakedown.minTargetSpeed'] = { path = { 'Combat', 'NonLethalTakedown', 'minTargetSpeed' },  min = 0.5,   max = 15.0,      integer = false },
+    ['Combat.NonLethalTakedown.speedSampleWindowMs'] = { path = { 'Combat', 'NonLethalTakedown', 'speedSampleWindowMs' }, min = 100, max = 2000, integer = true },
+    ['Combat.NonLethalTakedown.ragdollDurationMs'] = { path = { 'Combat', 'NonLethalTakedown', 'ragdollDurationMs' }, min = 1000, max = 30000,  integer = true },
+    ['Combat.PropDragging.range']               = { path = { 'Combat', 'PropDragging', 'range' },                min = 0.5,   max = 10.0,      integer = false },
+    ['Combat.PropDragging.maxDragDistance']     = { path = { 'Combat', 'PropDragging', 'maxDragDistance' },      min = 5.0,   max = 200.0,     integer = false },
+    ['Combat.PropDragging.maxDragDurationMs']   = { path = { 'Combat', 'PropDragging', 'maxDragDurationMs' },    min = 5000,  max = 60000,     integer = true },
+
+    -- server/defense.lua (Config.Features.HandlerDownDefense, live).
+    -- handlerHealthThreshold/triggerRadius/hostileLookbackSeconds are each
+    -- read directly off Config.Combat.HandlerDownDefense inline, inside
+    -- IsHandlerDown/TryNotifyPartnerK9, called fresh every maintenance-tick
+    -- pass. pollIntervalMs is EXCLUDED -- that file's own comment states
+    -- outright it is "still captured once into a local (not re-read from
+    -- Config every loop iteration)". retriggerCooldownMs/
+    -- attackerReportCooldownMs are EXCLUDED (each baked into its own
+    -- NewCooldown constructor). promptTtlMs/confirmKey are EXCLUDED -- never
+    -- read server-side at all (that value is a client-local clock/keybind).
+    ['Combat.HandlerDownDefense.handlerHealthThreshold'] = { path = { 'Combat', 'HandlerDownDefense', 'handlerHealthThreshold' }, min = 1, max = 200, integer = true },
+    ['Combat.HandlerDownDefense.triggerRadius'] = { path = { 'Combat', 'HandlerDownDefense', 'triggerRadius' },  min = 1.0,   max = 50.0,      integer = false },
+    ['Combat.HandlerDownDefense.hostileLookbackSeconds'] = { path = { 'Combat', 'HandlerDownDefense', 'hostileLookbackSeconds' }, min = 1, max = 300, integer = true },
+
+    -- server/partnership.lua (Config.Features.HandlerPartnership, live).
+    -- ProximityMeters is read inline at the confirm step; RequestTTLMs is
+    -- read inline when a request record is created. RequestCooldownMs is
+    -- EXCLUDED (NewCooldown constructor default).
+    ['Partnership.ProximityMeters']             = { path = { 'Partnership', 'ProximityMeters' },                 min = 1.0,   max = 15.0,      integer = false },
+    ['Partnership.RequestTTLMs']                = { path = { 'Partnership', 'RequestTTLMs' },                    min = 5000,  max = 300000,    integer = true },
+
+    -- server/tenure.lua (Config.Features.PartnershipTenureBonus, live).
+    -- A genuine RARITY in this codebase, called out by that file's own
+    -- comment in full: "this file re-reads the value every iteration" --
+    -- checkIntervalMs is read fresh from Config.Partnership.TenureBonus on
+    -- every single pass of the tick loop, not captured once like every
+    -- sibling poll-interval this pass otherwise had to exclude.
+    ['Partnership.TenureBonus.checkIntervalMs'] = { path = { 'Partnership', 'TenureBonus', 'checkIntervalMs' },  min = 10000, max = 3600000,   integer = true },
+
+    -- server/kennel.lua (Config.Features.DeployableKennel, live).
+    -- placementForwardOffsetMeters/pendingPlacementTtlMs are both read
+    -- inline inside the deploy-request handler, fresh per request.
+    -- deployCooldownMs is EXCLUDED (NewCooldown constructor default).
+    -- interactDistanceMeters is EXCLUDED -- never read anywhere in
+    -- server/kennel.lua (grepped); it is a client-only ox_target radius.
+    ['DeployableKennel.placementForwardOffsetMeters'] = { path = { 'DeployableKennel', 'placementForwardOffsetMeters' }, min = 0.5, max = 10.0, integer = false },
+    ['DeployableKennel.pendingPlacementTtlMs']  = { path = { 'DeployableKennel', 'pendingPlacementTtlMs' },      min = 2000,  max = 120000,    integer = true },
+
+    -- server/propattachment.lua (Config.Features.PropAttachments,
+    -- rawtoplevel). toggleCooldownMs is passed as an EXPLICIT per-call
+    -- override to ToggleCooldown.Consume (never baked into the constructor)
+    -- -- the same "read fresh, passed per call" shape server/admin.lua's own
+    -- CommandCooldownMs already established as genuinely live.
+    -- pendingConfirmTtlMs/confirmDistanceTolerance are both read inline.
+    -- boneIndex/offsetX/Y/Z/rotX/Y/Z are EXCLUDED -- never read anywhere in
+    -- server/propattachment.lua outside its own load-time `assert` shape
+    -- checks (grepped); the actual AttachEntityToEntity call is entirely
+    -- client-side, reading its own shared_scripts copy.
+    ['PropAttachments.toggleCooldownMs']        = { path = { 'PropAttachments', 'toggleCooldownMs' },            min = 500,   max = 60000,     integer = true },
+    ['PropAttachments.pendingConfirmTtlMs']     = { path = { 'PropAttachments', 'pendingConfirmTtlMs' },         min = 2000,  max = 120000,    integer = true },
+    ['PropAttachments.confirmDistanceTolerance'] = { path = { 'PropAttachments', 'confirmDistanceTolerance' },   min = 1.0,   max = 20.0,      integer = false },
+
+    -- server/fetch.lua (Config.Features.FetchMechanic, rawtoplevel).
+    -- `local cfg = Config.FetchMechanic` inside the throw-request handler
+    -- (called fresh per throw, not hoisted to file scope) reads
+    -- throwForwardOffsetMeters/throwUpOffsetMeters/throwForceForward/
+    -- throwForceUp/pendingThrowTtlMs live -- and UNLIKE PursuitSprint's
+    -- identical-looking speedMultiplier/durationMs above, these ARE
+    -- genuinely server-authoritative: the computed spawn position and force
+    -- vector are sent AS the 'qbx_k9unit:client:throwFetchBallAt' payload,
+    -- not left for an independent client copy to apply. maxBallLifetimeMs/
+    -- pickupInteractDistanceMeters/deliverProximityMeters are each read
+    -- inline at their own call sites. throwCooldownMs/pickupCooldownMs are
+    -- EXCLUDED (each baked into its own NewCooldown constructor).
+    -- maintenanceIntervalMs is EXCLUDED -- captured once into
+    -- FETCH_MAINTENANCE_INTERVAL_MS, feeding that thread's own Wait().
+    -- mouthBoneIndex/mouthOffsetX/Y/Z/mouthCarryMode are non-numeric/
+    -- client-cosmetic and out of scope for this registry.
+    ['FetchMechanic.throwForwardOffsetMeters']  = { path = { 'FetchMechanic', 'throwForwardOffsetMeters' },      min = 0.2,   max = 5.0,       integer = false },
+    ['FetchMechanic.throwUpOffsetMeters']       = { path = { 'FetchMechanic', 'throwUpOffsetMeters' },           min = 0.2,   max = 5.0,       integer = false },
+    ['FetchMechanic.throwForceForward']         = { path = { 'FetchMechanic', 'throwForceForward' },             min = 1.0,   max = 50.0,      integer = false },
+    ['FetchMechanic.throwForceUp']              = { path = { 'FetchMechanic', 'throwForceUp' },                  min = 0.0,   max = 30.0,      integer = false },
+    ['FetchMechanic.maxBallLifetimeMs']         = { path = { 'FetchMechanic', 'maxBallLifetimeMs' },             min = 30000, max = 1800000,   integer = true },
+    ['FetchMechanic.pickupInteractDistanceMeters'] = { path = { 'FetchMechanic', 'pickupInteractDistanceMeters' }, min = 0.5, max = 10.0,       integer = false },
+    ['FetchMechanic.pendingThrowTtlMs']         = { path = { 'FetchMechanic', 'pendingThrowTtlMs' },             min = 2000,  max = 120000,    integer = true },
+    ['FetchMechanic.deliverProximityMeters']    = { path = { 'FetchMechanic', 'deliverProximityMeters' },        min = 0.5,   max = 15.0,      integer = false },
+
+    -- server/medkit.lua (Config.Features.K9Medkit, live). range/
+    -- healthRestore/injuryRestore are each read inline at their own call
+    -- sites. cooldownMs is read live too -- `MedkitCooldown = NewCooldown()`
+    -- has NO constructor default; both the sweep's staleAfterMs calculation
+    -- AND IsOnCooldown's own call pass Config.K9Medkit.cooldownMs as an
+    -- explicit per-call argument, the same genuinely-live shape as
+    -- PropAttachments.toggleCooldownMs above.
+    ['K9Medkit.range']                          = { path = { 'K9Medkit', 'range' },                              min = 0.5,   max = 10.0,      integer = false },
+    ['K9Medkit.healthRestore']                  = { path = { 'K9Medkit', 'healthRestore' },                      min = 1,     max = 200,       integer = true },
+    ['K9Medkit.injuryRestore']                  = { path = { 'K9Medkit', 'injuryRestore' },                      min = 0,     max = 100,       integer = true },
+    ['K9Medkit.cooldownMs']                     = { path = { 'K9Medkit', 'cooldownMs' },                         min = 5000,  max = 600000,    integer = true },
+
+    -- server/inventory.lua (Config.Features.K9Inventory, live).
+    -- interactRange is read live inline at the stash-open proximity check.
+    -- slots/maxWeight are DELIBERATELY EXCLUDED, not because the read is
+    -- stale, but because the read only happens ONCE PER CITIZENID PER
+    -- SESSION: EnsureK9Stash memoizes `EnsuredK9Stashes[citizenid] = true`
+    -- after the first successful RegisterStash call and never calls
+    -- RegisterStash again for that citizenid this session. A live edit
+    -- would apply to a K9 opening their stash for the very first time this
+    -- session and be a silent no-op for every K9 who already had -- exactly
+    -- the "wrong applied-live claim with no distinguishing symptom" rule 3
+    -- warns against.
+    ['K9Inventory.interactRange']               = { path = { 'K9Inventory', 'interactRange' },                   min = 0.5,   max = 10.0,      integer = false },
+
+    -- server/main.lua (Config.Features.DoorInteraction, live).
+    -- interactDistance and scratchCooldownMs are each read live inline
+    -- (scratchCooldownMs passed as an explicit per-call override to
+    -- IsOnCooldown, same live shape as this section's other cooldowns).
+    ['DoorInteraction.interactDistance']        = { path = { 'DoorInteraction', 'interactDistance' },            min = 0.5,   max = 5.0,       integer = false },
+    ['DoorInteraction.scratchCooldownMs']       = { path = { 'DoorInteraction', 'scratchCooldownMs' },           min = 500,   max = 60000,     integer = true },
+
+    -- server/search.lua (Config.Features.SearchZones, live).
+    -- vehicleSearchDistance/personSearchDistance/searchCooldownMs/
+    -- sniffAnimDurationMs are all read live inline (the latter two both
+    -- passed as explicit per-call overrides to IsOnCooldown --
+    -- sniffAnimDurationMs doubles as the per-source, any-target flood floor,
+    -- that file's own comment explaining exactly why). alertBroadcastRadius
+    -- is DELIBERATELY EXCLUDED -- that file's own onResourceStart assert
+    -- says outright it "is a hard safety ceiling, not a
+    -- server-tunable-to-anything toggle": a contraband alert is
+    -- distance-filtered specifically so it never leaks a specific
+    -- vehicle/person's flagged status to an accomplice server-wide, and
+    -- this registry takes that sentence at face value rather than exposing
+    -- it with a matching cap anyway.
+    ['SearchZones.vehicleSearchDistance']       = { path = { 'SearchZones', 'vehicleSearchDistance' },           min = 0.5,   max = 10.0,      integer = false },
+    ['SearchZones.personSearchDistance']        = { path = { 'SearchZones', 'personSearchDistance' },            min = 0.5,   max = 10.0,      integer = false },
+    ['SearchZones.sniffAnimDurationMs']         = { path = { 'SearchZones', 'sniffAnimDurationMs' },             min = 1000,  max = 30000,     integer = true },
+    ['SearchZones.searchCooldownMs']            = { path = { 'SearchZones', 'searchCooldownMs' },                min = 1000,  max = 120000,    integer = true },
+
+    -- server/appearance.lua (Config.Features.HighCommand-adjacent, always
+    -- registered). modelLoadTimeoutMs feeds ApplyRequestTtlMs(), called
+    -- fresh every swap request -- a server-side backstop window distinct
+    -- from (and in addition to) the client's own independent load timeout.
+    ['K9Appearance.modelLoadTimeoutMs']         = { path = { 'K9Appearance', 'modelLoadTimeoutMs' },             min = 2000,  max = 60000,     integer = true },
+
+    -- server/wellbeing.lua (Config.Features.MoodSystem / FearStressSystem /
+    -- InjuryLimping / DistractionSystem, all `live`). Every value below is
+    -- read directly off Config.Wellbeing.* inline inside the callback or
+    -- tick-loop body that consumes it, confirmed by direct read.
+    -- tickIntervalMs is EXCLUDED -- captured once into TICK_INTERVAL_MS,
+    -- feeding the shared tick thread's own Wait() and every dtSeconds
+    -- calculation. Fatigue.*/Mood.performancePenalty*/
+    -- Injury.speedPenaltyMultiplier/Injury.jumpBlockThreshold/
+    -- Injury.sprintBlockThreshold are ALL EXCLUDED -- grepped zero
+    -- occurrences anywhere in server/wellbeing.lua outside comments; every
+    -- one of these move-rate/input-block values is applied entirely by
+    -- client/movement.lua and client/wellbeing.lua reading their own
+    -- shared_scripts copy, the same "independent client copy, no server
+    -- enforcement point" shape PursuitSprint's speedMultiplier was excluded
+    -- for above (and, per config.lua's own documented incident, exactly the
+    -- kind of value where independently-reasonable-looking numbers already
+    -- compounded into a live balance bug once -- a further reason not to
+    -- offer a live dial this file cannot even confirm reaches the client).
+    -- Fatigue.max/Mood.max/FearStress.max/Injury.max are ALSO EXCLUDED even
+    -- though several are read live server-side -- each stat's `max` is ALSO
+    -- read independently by the client for its own HUD gauge scaling, and a
+    -- server-only change here would desync the server's clamp ceiling from
+    -- the client's displayed one with no mechanism to keep them in sync.
+    -- FearStress.gunfireRadius/gunfireLookbackSeconds/
+    -- risePerNearbyShotPerTick/hesitationThreshold/hesitationDurationMs are
+    -- ALL EXCLUDED on purpose -- these are the exact values this file's own
+    -- header documents as the live, disclosed, FORGEABLE lever behind a
+    -- real combat-lockout interaction (a forged relayWeaponFire chain
+    -- driving IsHesitating(), which server/combat.lua's
+    -- ValidateCombatRequest checks): loosening any one of them shifts the
+    -- balance of an already-tricky, already-documented security tradeoff,
+    -- which this pass is not confident stating a universally safe range
+    -- for. calmDownReduceAmount/calmDownCooldownMs are the RECOVERY side of
+    -- that same mechanic (a handler calming their OWN K9) and are kept --
+    -- widening them only ever helps the victim of that exploit, never the
+    -- forger.
+    ['Wellbeing.Mood.damageDecayAmount']        = { path = { 'Wellbeing', 'Mood', 'damageDecayAmount' },         min = 1,     max = 100,       integer = true },
+    ['Wellbeing.Mood.petCooldownMs']            = { path = { 'Wellbeing', 'Mood', 'petCooldownMs' },             min = 1000,  max = 120000,    integer = true },
+    ['Wellbeing.Mood.petRegenAmount']           = { path = { 'Wellbeing', 'Mood', 'petRegenAmount' },            min = 1,     max = 100,       integer = true },
+    ['Wellbeing.Mood.feedRegenAmount']          = { path = { 'Wellbeing', 'Mood', 'feedRegenAmount' },           min = 1,     max = 100,       integer = true },
+    ['Wellbeing.Mood.passiveRegenPerTick']      = { path = { 'Wellbeing', 'Mood', 'passiveRegenPerTick' },       min = 0.1,   max = 20.0,      integer = false },
+    ['Wellbeing.FearStress.calmDownReduceAmount'] = { path = { 'Wellbeing', 'FearStress', 'calmDownReduceAmount' }, min = 1,  max = 100,       integer = true },
+    ['Wellbeing.FearStress.calmDownCooldownMs'] = { path = { 'Wellbeing', 'FearStress', 'calmDownCooldownMs' },  min = 1000,  max = 120000,    integer = true },
+    ['Wellbeing.FearStress.passiveDecayPerTick'] = { path = { 'Wellbeing', 'FearStress', 'passiveDecayPerTick' }, min = 0.1,  max = 20.0,      integer = false },
+    ['Wellbeing.Injury.damageDecayAmount']      = { path = { 'Wellbeing', 'Injury', 'damageDecayAmount' },       min = 1,     max = 100,       integer = true },
+    ['Wellbeing.Injury.passiveRegenPerTick']    = { path = { 'Wellbeing', 'Injury', 'passiveRegenPerTick' },     min = 0.1,   max = 20.0,      integer = false },
+    -- config.lua's own comment on this exact field: "CONFIGURABLE: set to 0
+    -- to disable entirely... or any value in [0, Injury.max]" -- the [0,100]
+    -- bound below is not this pass's own judgment call, it is that comment's
+    -- explicitly documented safe range, transcribed.
+    ['Wellbeing.Injury.deathRespawnRestoreAmount'] = { path = { 'Wellbeing', 'Injury', 'deathRespawnRestoreAmount' }, min = 0, max = 100,      integer = true },
+    ['Wellbeing.Distraction.meatBaitRadius']    = { path = { 'Wellbeing', 'Distraction', 'meatBaitRadius' },     min = 1.0,   max = 30.0,      integer = false },
+    ['Wellbeing.Distraction.meatBaitDurationMs'] = { path = { 'Wellbeing', 'Distraction', 'meatBaitDurationMs' }, min = 1000, max = 60000,     integer = true },
+    ['Wellbeing.Distraction.whistleRadius']     = { path = { 'Wellbeing', 'Distraction', 'whistleRadius' },      min = 1.0,   max = 50.0,      integer = false },
+    ['Wellbeing.Distraction.whistleDurationMs'] = { path = { 'Wellbeing', 'Distraction', 'whistleDurationMs' },  min = 1000,  max = 60000,     integer = true },
+    ['Wellbeing.Distraction.perTargetCooldownMs'] = { path = { 'Wellbeing', 'Distraction', 'perTargetCooldownMs' }, min = 1000, max = 120000, integer = true },
+
+    -- server/bonetool.lua (Config.Features.BoneSweepDevTool, onstart --
+    -- ALSO requires the qbx_k9unit_enable_bone_dev_tool convar, checked once
+    -- at onResourceStart, and a boss-rank caller regardless of this flag --
+    -- see that feature's own FEATURE_TIERS note above, already disclosed on
+    -- the tablet's features panel). CommandCooldownMs is passed as an
+    -- explicit per-call override to BoneToolCooldown.Consume (never baked
+    -- into the constructor); MaxBoneIndex is read live inline where a
+    -- caller-requested index is clamped. Both are dev-tool-only in practice
+    -- but genuinely live and genuinely safe -- a debug marker sweep, never
+    -- networked, never touching another player.
+    ['BoneSweepTool.CommandCooldownMs']         = { path = { 'BoneSweepTool', 'CommandCooldownMs' },             min = 100,   max = 10000,     integer = true },
+    ['BoneSweepTool.MaxBoneIndex']              = { path = { 'BoneSweepTool', 'MaxBoneIndex' },                  min = 1,     max = 500,       integer = true },
 }
 
 --- Navigates a dotted registry `path` against the live `Config` table.
@@ -1076,7 +1392,36 @@ lib.callback.register('qbx_k9unit:server:runtimeResetFeature', function(source, 
     ActiveOverrides[overrideKey] = nil
 
     LogAuditInvocation(source, 'runtimeResetFeature', ('name=%s restored=%s'):format(name, tostring(defaultValue)), 'ok')
-    return { ok = true, value = defaultValue, restartRequired = false }
+
+    -- TIER-AWARE RESPONSE -- FIXED (this pass): this callback used to
+    -- unconditionally return `restartRequired = false` regardless of the
+    -- feature's own tier, the exact asymmetry this file's own
+    -- runtimeSetFeature above does NOT have. A reset is just a write of
+    -- `defaultValue` through the identical ApplyFeatureOverride/Config
+    -- mutation path SetFeature uses -- it is gated by the SAME engine
+    -- constraint (THE ENGINE CONSTRAINT, this file's own header): an
+    -- onstart-tier feature's handler only re-checks its flag at server
+    -- start, and a rawtoplevel-tier feature's registration is gated before
+    -- this resource's own onResourceStart ever fires, REGARDLESS of whether
+    -- the write that changed Config.Features.<Name> was a SetFeature call or
+    -- a ResetFeature call. Telling an operator "done, restartRequired =
+    -- false" after resetting e.g. FetchMechanic back to its shipped default
+    -- would be exactly the over-promising "already applied" claim this
+    -- file's header says a TUNING value must never make -- the same
+    -- standard is applied here to a FEATURE reset. Mirrors SetFeature's own
+    -- tier branch below field-for-field (tier/note included) rather than
+    -- duplicating a second, driftable copy of that logic's reasoning without
+    -- its shape.
+    local tier = GetFeatureTier(name)
+    if tier == 'live' then
+        return { ok = true, value = defaultValue, appliedLive = true, restartRequired = false, tier = tier }
+    elseif tier == 'onstart' then
+        return { ok = true, value = defaultValue, appliedLive = false, restartRequired = true, tier = tier, note = 'This feature only re-checks this flag at server start. Restored to its config.lua default -- it will take effect after the next resource restart, but nothing has changed for players on this session.' }
+    elseif tier == 'rawtoplevel' then
+        return { ok = true, value = defaultValue, appliedLive = false, restartRequired = true, configEditRequired = true, tier = tier, note = 'This feature is gated before this resource finishes starting. A restart of THIS resource alone is not enough -- Config.Features.' .. name .. ' must also match this default in config.lua for this to take effect.' }
+    else -- 'clientonly' -- and, defensively, 'protected'/'unaudited': SetFeature refuses both of those before ever creating an override, so a reset of either is normally a no-op restoring an already-current value, but this callback does not itself gate on tier the way SetFeature does (see above) -- falling through to the same "cannot confirm" response SetFeature gives 'clientonly' is the safe direction of error for a tier this file does not fully trust here, never a false "no restart needed".
+        return { ok = true, value = defaultValue, appliedLive = false, restartRequired = true, tier = tier, note = 'No confirmed server-side enforcement point this file can guarantee applies this restore live -- this value is saved, but this file cannot confirm it will have any live effect this session.' }
+    end
 end)
 
 -- ======================================================================

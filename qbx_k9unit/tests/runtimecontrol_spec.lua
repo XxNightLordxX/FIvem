@@ -363,6 +363,57 @@ t.test('a tier=rawtoplevel feature reports restartRequired+configEditRequired fo
     t.isTrue(result.configEditRequired)
 end)
 
+t.test('LOAD-BEARING: ResetFeature on a tier=onstart feature reports restartRequired, matching SetFeature\'s own tier-awareness (regression test for the reset/set asymmetry this pass fixed)', function()
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+
+    -- AdminAuditCommands starts `false` in this fixture's defaultConfig --
+    -- SetFeature(true) first so there is a real override in place for
+    -- ResetFeature to actually remove (Config.Features.AdminAuditCommands
+    -- flips true -> false again on reset, back to the config.lua default).
+    f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'AdminAuditCommands', true)
+    f.fakeNow.value = f.fakeNow.value + 2000
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'AdminAuditCommands')
+    t.isTrue(result.ok)
+    t.equals(result.value, false, 'restored to the config.lua default (false)')
+    t.isFalse(result.appliedLive, 'an onstart-tier feature does not re-check its flag after registration -- a reset must not claim this is live now, exactly like SetFeature does not')
+    t.isTrue(result.restartRequired, 'BUG THIS PASS FIXED: this used to unconditionally report restartRequired = false regardless of tier')
+    t.isNil(result.configEditRequired, 'onstart tier needs a restart, not a config.lua edit')
+    t.equals(result.tier, 'onstart')
+end)
+
+t.test('LOAD-BEARING: ResetFeature on a tier=rawtoplevel feature reports BOTH restartRequired AND configEditRequired, matching SetFeature', function()
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+
+    -- FetchMechanic starts `false` in this fixture -- flip it on via
+    -- SetFeature first so there is an override to reset away.
+    f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'FetchMechanic', true)
+    f.fakeNow.value = f.fakeNow.value + 2000
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'FetchMechanic')
+    t.isTrue(result.ok)
+    t.equals(result.value, false)
+    t.isFalse(result.appliedLive)
+    t.isTrue(result.restartRequired, 'BUG THIS PASS FIXED: rawtoplevel reset used to falsely report restartRequired = false')
+    t.isTrue(result.configEditRequired, 'a restart of THIS resource alone is not sufficient for a rawtoplevel-tier feature, on reset exactly as on set')
+    t.equals(result.tier, 'rawtoplevel')
+end)
+
+t.test('ResetFeature on a tier=live feature still reports restartRequired = false (the fix must not regress the already-correct live case)', function()
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+    f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'BasicBarkSounds', false)
+    f.fakeNow.value = f.fakeNow.value + 2000
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'BasicBarkSounds')
+    t.isTrue(result.ok)
+    t.isTrue(result.appliedLive)
+    t.isFalse(result.restartRequired)
+    t.equals(result.tier, 'live')
+end)
+
 t.test('protected features (HighCommand, PermissionGrants) refuse SetFeature outright, regardless of caller', function()
     local f = boot()
     f.env.IsHighCommand = function() return true end
@@ -810,6 +861,143 @@ t.test('rate limiting is per-OFFICER, not global -- a different officer is unaff
     f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'BasicBarkSounds', false)
     local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](OTHER_HC_SOURCE, 'DoorInteraction', false)
     t.isTrue(result.ok, 'a different officer, same fakeNow, must not be blocked by the first officer\'s cooldown')
+end)
+
+-- ============================================================================
+-- SECTION 10 -- LOAD-BEARING DRIFT GUARD: every TUNABLE_REGISTRY entry's
+-- `path` actually resolves against the REAL, unmodified config.lua, and the
+-- value config.lua ships with today falls INSIDE that entry's own declared
+-- [min, max] -- the exact class of mistake a hand-typed `path` array (a
+-- typo'd key, a table nested one level differently than assumed) or an
+-- overly-narrow range would otherwise ship silently: SetTunable would refuse
+-- config.lua's OWN shipped default as "out_of_range" the first time anyone
+-- reset to it, or GetConfigByPath would silently resolve to `nil` forever.
+-- Mirrors tests/runtimefeaturetiers_spec.lua's own "load the REAL config.lua,
+-- never a fixture stand-in" discipline for the identical reason: a curated
+-- fixture Config table could never catch a `path` that only breaks against
+-- the real shape.
+-- ============================================================================
+
+--- @return table fixture -- { env, callbacks, fakeNow }
+local function bootAgainstRealConfig()
+    local callbacks = {}
+    local lib = { callback = { register = function(name, handler) callbacks[name] = handler end } }
+    local eventHandlers = {}
+    local function AddEventHandlerStub(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
+    -- Mutable, unlike runtimefeaturetiers_spec.lua's own fixed `return 0`
+    -- (that spec never calls a mutating/rate-limited callback more than
+    -- once) -- this section's own tests call multiple mutating SetTunable
+    -- callbacks back to back from the SAME officer, which would otherwise
+    -- collide with RuntimeControlActionCooldown's real 1000ms anti-fat-
+    -- finger window every single time.
+    local fakeNow = { value = 0 }
+
+    local env = Sandbox.newEnv({
+        AddEventHandler        = AddEventHandlerStub,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        GetGameTimer           = function() return fakeNow.value end,
+        print                  = printStub,
+        lib                    = lib,
+        TriggerClientEvent     = function() end,
+        exports                = { qbx_core = { GetPlayer = function() return nil end } },
+        IsHighCommand          = function() return true end,
+    })
+
+    -- REAL config.lua -- see this section's own header for why a fixture
+    -- Config table cannot substitute here.
+    Sandbox.loadInto('../config.lua', env)
+    env.Config.Database = env.Config.Database or {}
+    env.Config.Database.enabled = false -- route K9Store through its in-memory backend -- see runtimefeaturetiers_spec.lua's identical "NO MYSQL STUB NEEDED" note
+
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/runtimecontrol.lua', env)
+    for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do handler('qbx_k9unit') end
+
+    return { env = env, callbacks = callbacks, printedLines = printedLines, fakeNow = fakeNow }
+end
+
+t.test('LOAD-BEARING DRIFT GUARD: every TUNABLE_REGISTRY path resolves against the REAL config.lua, to a value inside that entry\'s own [min, max]', function()
+    local f = bootAgainstRealConfig()
+
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    t.isTrue(listed.ok)
+
+    local problems = {}
+    for _, row in ipairs(listed.tunables) do
+        if row.currentValue == nil then
+            problems[#problems + 1] = row.key .. ' (path does not resolve against real config.lua -- currentValue is nil; check for a mistyped key or a differently-nested table)'
+        elseif type(row.currentValue) ~= 'number' then
+            problems[#problems + 1] = row.key .. (' (config.lua value is a %s, not a number: %s)'):format(type(row.currentValue), tostring(row.currentValue))
+        else
+            if row.currentValue < row.min or row.currentValue > row.max then
+                problems[#problems + 1] = row.key .. (' (config.lua ships %s, outside this entry\'s own declared [%s, %s] -- SetTunable would refuse config.lua\'s OWN default)'):format(tostring(row.currentValue), tostring(row.min), tostring(row.max))
+            end
+            if row.integer and row.currentValue ~= math.floor(row.currentValue) then
+                problems[#problems + 1] = row.key .. (' (marked integer = true but config.lua ships a fractional value: %s)'):format(tostring(row.currentValue))
+            end
+        end
+    end
+
+    if #problems > 0 then
+        table.sort(problems)
+        error(('%d TUNABLE_REGISTRY entr(ies) failed against the real config.lua:\n  - %s'):format(#problems, table.concat(problems, '\n  - ')), 0)
+    end
+
+    -- Sanity: this really exercised a substantially-expanded registry, not
+    -- an accidentally-empty or truncated one -- mirrors
+    -- runtimefeaturetiers_spec.lua's own ">= 56" sanity floor for the
+    -- identical reason (a loadfile typo silently producing a near-empty
+    -- table would otherwise make the loop above pass vacuously).
+    t.isTrue(#listed.tunables >= 90, ('sanity: only saw %d tunable(s) registered -- expected at least 90 after this pass\'s expansion'):format(#listed.tunables))
+end)
+
+t.test('every out-of-range rejection for a newly-added tunable still names the exact configured bounds back to the caller (spot-check across the expansion, not just the original 20)', function()
+    local f = bootAgainstRealConfig()
+
+    -- RuntimeControlActionCooldown.Consume runs BEFORE the range check in
+    -- the real callback -- an out-of-range rejection still consumes the
+    -- officer's own anti-fat-finger window, exactly like a successful call
+    -- does. fakeNow is advanced past RUNTIME_CONTROL_ACTION_COOLDOWN_MS
+    -- between every call below for that reason, matching the primary
+    -- boot() fixture's own convention throughout this file, so this test
+    -- proves the range/bounds behavior and never accidentally collides with
+    -- the rate limiter instead.
+    local r1 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'K9DownDispatch.minDurationMs', -1)
+    t.isFalse(r1.ok); t.equals(r1.reason, 'out_of_range'); t.equals(r1.min, 0)
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r2 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Wellbeing.Injury.deathRespawnRestoreAmount', 101)
+    t.isFalse(r2.ok); t.equals(r2.reason, 'out_of_range'); t.equals(r2.max, 100)
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r3 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Combat.BiteAndHold.maxDurationMs', 4999)
+    t.isFalse(r3.ok); t.equals(r3.reason, 'out_of_range'); t.equals(r3.min, 5000)
+
+    -- And a genuinely in-range write to one of them actually applies live,
+    -- proving these new paths are not merely well-formed but functional
+    -- end to end against the real Config table.
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local ok = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'SearchZones.searchCooldownMs', 20000)
+    t.isTrue(ok.ok)
+    t.equals(f.env.Config.SearchZones.searchCooldownMs, 20000)
+end)
+
+t.test('SearchZones.alertBroadcastRadius is deliberately NOT a tunable -- that file\'s own onResourceStart assert calls it "a hard safety ceiling, not a server-tunable-to-anything toggle"', function()
+    local f = bootAgainstRealConfig()
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'SearchZones.alertBroadcastRadius', 50.0)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'invalid_key')
 end)
 
 os.exit(t.summary())
