@@ -459,10 +459,16 @@ local FEATURE_TIERS = {
     DistractionSystem      = { tier = 'live' },
     InjuryLimping          = { tier = 'live' },
     PartnershipTenureBonus = { tier = 'live', note = 'The milestone check itself re-verifies HandlerPartnership/XPProgression/PartnershipTenureBonus fresh every tick. The tick thread only starts if all three were already true when server/tenure.lua loaded -- if it was off at boot, turning it on mid-session has nothing polling to notice a milestone until this resource restarts.' },
+    -- ADDED 2026-08-26 (closing the 11-feature audit gap -- see header "UPDATED 2026-08-26"):
+    FindAlerts             = { tier = 'live', note = 'server/findalert.lua registers both AddEventHandlers (qbx_k9unit:events:searchCompleted, qbx_k9unit:server:reportTrackSourceArrival) unconditionally at file-load time -- no raw top-level gate exists in this file at all. The shared DispatchFindAlertReaction helper both handlers funnel through re-checks Config.Features.FindAlerts fresh on every single call (its own first line: "if not Config.Features.FindAlerts then return end -- real no-op, not just hidden"), so toggling this off/on stops/starts the bark-on-find reaction genuinely and immediately, with nothing captured once at registration time.' },
+    ScentTrailHunt         = { tier = 'live', note = 'server/scenttrail.lua also has no raw top-level gate -- startScentHunt and pollScentHunt (both lib.callback.register) are always registered and each re-checks Config.Features.ScentTrailHunt fresh on every call ("if not Config.Features.ScentTrailHunt then return { started = false, reason = \'denied\' } end" / "... return { active = false } end"). stopScentHunt is UNCONDITIONAL by design (this resource\'s own "no unbounded trap" rule for a termination path, matching server/recall.lua\'s requestRecall) -- never gated on this flag at all, so an already-active hunt can always be cancelled regardless of this flag\'s state.' },
 
     -- tier = 'onstart' -- registered inside AddEventHandler('onResourceStart', ...); this file's own override re-application runs first (see FXMANIFEST PLACEMENT), so a persisted override reliably applies on the NEXT restart, never within the current session.
     AdminAuditCommands     = { tier = 'onstart' },
     BoneSweepDevTool       = { tier = 'onstart', note = 'Also requires the qbx_k9unit_enable_bone_dev_tool convar and a boss-rank caller regardless of this flag -- see config.lua\'s own comment on this feature.' },
+    -- ADDED 2026-08-26:
+    K9EquipmentShop        = { tier = 'onstart', note = 'server/equipmentshop.lua registers the actual ox_inventory shop (RegisterShop plus item/currency verification) AND loads persisted runtime shop locations, BOTH inside their own AddEventHandler(\'onResourceStart\', ...) handlers, gated on Config.Features.K9EquipmentShop == true at that point only -- neither re-checks the flag again afterward, so having a purchasable shop at all needs a restart in EITHER direction, same shape as AdminAuditCommands/BoneSweepDevTool above. DISCLOSED PARTIAL LIVENESS, not folded into a false "live" claim: the runtime-shop-location management callbacks (equipmentShopGetLocations/AddLocation/MoveLocation and their siblings) ARE always registered and DO re-check the flag live on every call -- but they only manage WHERE an already-registered shop\'s ped stands, never whether the shop exists at all, so this entry reports the tier that governs the actual "can a player buy anything here" effect.' },
+    ResourceAutoDetect     = { tier = 'onstart', note = 'shared/compat/core.lua (not owned by this pass -- read-only audit, this file does not edit it) is not gated by a raw top-level early return or a plain onResourceStart registration in the usual sense: DetectSystem() reads Config.Features.ResourceAutoDetect fresh on every call, and K9Compat.Redetect() (which calls DetectSystem for every system) DOES run again later -- on another resource starting/stopping when Config.Compat.redetectOnResourceRestart is true, and opportunistically from several feature files\' own defensive "redetect if the cached adapter looks stale" calls this file does not control. None of those later triggers are caused BY this file\'s own SetFeature call, though -- the only trigger this file can rely on with certainty is ScheduleInitialDetection\'s own CreateThread(Wait(startupGraceMs) then Redetect()), which fires exactly once, on THIS resource\'s own onResourceStart. Classified onstart, never live, so a SetFeature response never over-promises "already applied" for an effect this file cannot guarantee happens before the next restart -- an override may well take effect sooner in practice, opportunistically, but that is a bonus this file does not document as its contract.' },
 
     -- tier = 'rawtoplevel' -- gated before this resource\'s own onResourceStart ever fires; no restart of THIS resource alone can apply an override -- config.lua itself must be edited.
     FetchMechanic          = { tier = 'rawtoplevel' },
@@ -470,6 +476,16 @@ local FEATURE_TIERS = {
     Recall                 = { tier = 'rawtoplevel', note = 'This resource\'s one termination/escape-hatch path. If it shipped ON, it stays reachable all session regardless of this file\'s override -- toggling it here can only ever fail to silently turn it ON when it was off, never trap anyone who could already call their K9 off.' },
     PropAttachments        = { tier = 'rawtoplevel' },
     CommandTablet          = { tier = 'rawtoplevel', note = 'Multiple files register their own CommandTablet-gated tablet callbacks this same way (server/permissions.lua confirmed by direct read; others may exist). Turning this off here does not close an already-registered tablet callback anywhere in this resource.' },
+    -- ADDED 2026-08-26 -- all six confirmed by direct read of a bare
+    -- `if not Config.Features.X then return end` at that file's own raw
+    -- top level, before any RegisterCommand/RegisterNetEvent/lib.callback
+    -- call -- identical shape to FetchMechanic above:
+    K9DownDispatch         = { tier = 'rawtoplevel', note = 'server/integrations.lua opens with "if not Config.Features.K9DownDispatch then return end" -- the poll thread, the NewCooldown construction, and the playerDropped handler are never even reached when the flag is off at load time.' },
+    K9Leaderboard          = { tier = 'rawtoplevel', note = 'server/leaderboard.lua opens with "if not (Config.Features and Config.Features.K9Leaderboard == true) then return end" before its own RegisterCommand(\'k9stats\', ...) -- the command is never registered at all when the flag is off at load time.' },
+    PursuitSprint          = { tier = 'rawtoplevel', note = 'server/pursuitsprint.lua opens with "if not Config.Features.PursuitSprint then return end" before its own config asserts and RegisterNetEvent(\'qbx_k9unit:server:requestPursuitSprint\', ...) -- the net event is never registered at all when the flag is off at load time.' },
+    SARCalls               = { tier = 'rawtoplevel', note = 'server/sarcalls.lua opens with "if not Config.Features.SARCalls then return end" before its own asserts, cooldown construction, and callback/command registrations -- the entire file is inert while the flag is off.' },
+    ScentLineup            = { tier = 'rawtoplevel', note = 'server/scentlineup.lua opens with "if not Config.Features.ScentLineup then return end" before its own registrations -- the entire file is inert while the flag is off.' },
+    TrainingMode           = { tier = 'rawtoplevel', note = 'server/training.lua opens with "if not Config.Features.TrainingMode then return end" before its own registrations -- the entire file is inert while the flag is off.' },
 
     -- tier = 'clientonly' -- zero occurrences in any server/*.lua file (grepped before writing this list); nothing server-side to toggle.
     RadialMenu             = { tier = 'clientonly' },
@@ -483,6 +499,8 @@ local FEATURE_TIERS = {
     AdvancedBarkRadial     = { tier = 'clientonly' },
     ProximityAudioFX       = { tier = 'clientonly' },
     WaterTrackingDecay     = { tier = 'clientonly' },
+    -- ADDED 2026-08-26:
+    CameraFeedPiP          = { tier = 'clientonly', note = 'Unlike every other entry in this tier, this one has ZERO implementing code anywhere in this resource -- not server, not client (grepped the whole tree before writing this entry; the only references are config.lua\'s own comment and this note). config.lua\'s own header on this exact flag says so directly: "DELIBERATELY FALSE, and the only flag in this table that is... there is NO IMPLEMENTING CODE ANYWHERE IN THIS RESOURCE for it... Flip it to true only in the same change that adds the code." Filed under clientonly rather than inventing a sixth tier for one entry, because the practical consequence for THIS file is identical to every other clientonly entry: nothing here can ever flip anything for it, in either direction, and the tablet should grey it out the same way. Toggling it through SetFeature is honest (the value is saved, nothing breaks) but genuinely inert until real code exists.' },
 
     -- tier = 'protected' -- see header for why these two cannot be toggled through this system at all.
     HighCommand            = { tier = 'protected' },
@@ -512,6 +530,33 @@ end
 local function GetFeatureNote(name)
     local entry = FEATURE_TIERS[name]
     return entry and entry.note or nil
+end
+
+-- ======================================================================
+-- STARTUP AUDIT WARNING -- loud, unmissable, printed once at THIS FILE'S
+-- OWN LOAD TIME (not deferred into onResourceStart, so it appears
+-- regardless of whether this resource ever finishes starting, and
+-- regardless of whether anyone ever opens the tablet) for every
+-- Config.Features key this table does not yet classify. This is the exact
+-- loud warning "FEATURE REGISTRY" above promises in place of the SILENT
+-- gap this file's own history already proved happens for real: eleven
+-- shipped features went unclassified for an entire pass with nothing
+-- printing a single word about it, and runtimeSetFeature quietly toggled
+-- them anyway. Config is guaranteed already fully populated by this point
+-- (config.lua is a shared_script, loaded in full before any server_scripts
+-- file, this one included, per FXMANIFEST PLACEMENT above).
+-- ======================================================================
+do
+    local unauditedNames = {}
+    for name in pairs(Config.Features or {}) do
+        if GetFeatureTier(name) == 'unaudited' then
+            unauditedNames[#unauditedNames + 1] = name
+        end
+    end
+    if #unauditedNames > 0 then
+        table.sort(unauditedNames)
+        print(('[qbx_k9unit] runtimecontrol.lua: WARNING -- %d Config.Features key(s) have NO FEATURE_TIERS entry in this file: %s. Runtime toggling via the tablet is REFUSED for every one of these (reason = "unaudited_feature") until classified. FIX: read that feature\'s real server/client implementation (does its handler re-check the flag live, once at onResourceStart, once at a raw file-top gate, or nowhere server-side at all?), then add FEATURE_TIERS.<Name> = { tier = ... } to server/runtimecontrol.lua matching one of the five tiers documented in this file\'s own header ("THE FULL AUDIT") -- see tests/runtimefeaturetiers_spec.lua, which exists specifically to catch this before it ships again.'):format(#unauditedNames, table.concat(unauditedNames, ', ')))
+    end
 end
 
 -- ======================================================================
@@ -955,6 +1000,24 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
         return { ok = false, reason = 'protected_feature' }
     end
 
+    -- FAILS CLOSED, FOR REAL, NOT JUST IN THIS FILE'S OWN COMMENTS: an
+    -- 'unaudited' feature is one this file's own FEATURE_TIERS table has
+    -- never actually read -- see "FEATURE REGISTRY" above for the exact
+    -- history of why this check has to exist (this header used to CLAIM
+    -- this refusal happened while the code silently did not). Refused the
+    -- same way 'protected' is refused, PLUS a named, actionable console
+    -- warning every single time someone tries -- a silent denial here
+    -- would reproduce the exact bug this check exists to close, just one
+    -- layer down. This is never expected to fire for one of the 56
+    -- features known to this file today (see the STARTUP AUDIT WARNING
+    -- above, which already caught it at boot if it did) -- it exists as
+    -- the safety net for feature 57, not a routine block on a real one.
+    if tier == 'unaudited' then
+        LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s'):format(name), 'unaudited_feature')
+        print(('[qbx_k9unit] runtimecontrol.lua: WARNING: refused to toggle %q -- this Config.Features key has no FEATURE_TIERS entry in this file, so this file does not know what toggling it would actually do. Read its real server/client implementation and add FEATURE_TIERS.%s = { tier = ... } to server/runtimecontrol.lua before it can be toggled at runtime -- see this file\'s header "THE FULL AUDIT" for the five tiers and how each is decided.'):format(name, name))
+        return { ok = false, reason = 'unaudited_feature' }
+    end
+
     local oldValue = Config.Features[name]
     local overrideKey = 'feature:' .. name
     local valueStr = newValue and 'true' or 'false'
@@ -978,7 +1041,7 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
         return { ok = true, appliedLive = false, restartRequired = true, tier = tier, note = 'This feature only re-checks this flag at server start. Saved -- it will take effect after the next resource restart, but nothing has changed for players on this session.' }
     elseif tier == 'rawtoplevel' then
         return { ok = true, appliedLive = false, restartRequired = true, configEditRequired = true, tier = tier, note = 'This feature is gated before this resource finishes starting. A restart of THIS resource alone is not enough -- Config.Features.' .. name .. ' must also be changed in config.lua for this to take effect.' }
-    else -- 'clientonly' or 'unaudited'
+    else -- 'clientonly' -- the only tier that still reaches here; 'protected' and 'unaudited' are both refused above, before any write.
         return { ok = true, appliedLive = false, restartRequired = true, tier = tier, note = 'No confirmed server-side enforcement point for this feature -- this value is saved, but this file cannot confirm it will have any live effect.' }
     end
 end)

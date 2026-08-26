@@ -970,13 +970,15 @@ end)
 --
 -- The one residual degrade left to disclose: if qb-inventory's own
 -- `AddHook('ItemDropped', ...)` registration specifically fails while the
--- unrelated `AddHook('ItemAdded', ...)` veto registration succeeds (both go
--- through the identical `AddHook` export, so this is not expected to ever
--- actually diverge, but is not assumed impossible either), `RegisterHook`
--- still returns `true` here (the capability this feature does NOT depend on
--- keeps working) -- shared/compat/inventory.lua's own adapter prints a
--- dedicated, one-time warning for exactly that narrower case, so it is
--- still never a silent gap even in that edge case; this call site needs no
+-- unrelated `AddHook('ItemAdded', ...)` veto registration succeeds -- a REAL
+-- possibility, not merely a hypothetical one: fxmanifest.lua's
+-- `dependencies` mechanism has no version-constraint syntax, so an operator
+-- could genuinely be running an older qb-inventory build (or a fork) that
+-- predates `Events.ItemDropped` while still having `Events.ItemAdded` --
+-- `RegisterHook` still returns `true` here (the capability this feature does
+-- NOT depend on keeps working) -- shared/compat/inventory.lua's own adapter
+-- prints a dedicated, one-time warning for exactly that narrower case, so it
+-- is still never a silent gap even then; this call site needs no
 -- separate handling for it.
 local function RegisterScentInventoryHook()
     if not Config.Features.ScentTracking then return end -- nothing to gate for; do not probe/warn about a disabled-by-default feature

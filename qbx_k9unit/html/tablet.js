@@ -1807,6 +1807,21 @@
         render();
 
         fetchNui('tablet:requestRoster', { query: query || '' }).then(function (result) {
+            // STALE-RESPONSE GUARD: the search box's debounce only SPACES
+            // requests out, it does not cancel one already sent -- a fast
+            // retype (or a slow/lagged server response) can let an OLDER
+            // query's fetch resolve AFTER a newer one already has, or while
+            // a newer one is still in flight. Without this check, an
+            // out-of-order response for a query the user has since moved on
+            // from would silently overwrite the currently-displayed roster
+            // with results for text no longer in the search box -- a
+            // silent-failure path, not a visible error, exactly the class
+            // of bug this file's own header warns loudest about. Discarding
+            // here leaves whatever the CURRENT (matching) request already
+            // wrote to rosterLoading/rosterError/roster untouched, which is
+            // correct either way (still in flight, or already settled).
+            if (query !== state.rosterQuery) return;
+
             state.rosterLoading = false;
             if (!result || result.ok !== true) {
                 state.rosterError = result || { error: 'unknown_error' };
@@ -1842,6 +1857,21 @@
         render();
 
         fetchNui('tablet:requestPersonSummary', { targetCitizenId: citizenid }).then(function (result) {
+            // STALE-RESPONSE GUARD: openPerson()/the console's "open by
+            // exact citizen ID" box can navigate to a DIFFERENT person (or
+            // back to the console/my-record screen entirely) while this
+            // request is still in flight -- nothing here cancels the
+            // underlying fetch. Without this check, an out-of-order
+            // response for a citizenid no longer on screen would silently
+            // apply THAT person's certifications/XP/permissions under the
+            // CURRENTLY-displayed person's name/header -- a wrong-data bug
+            // with no visible error, not merely a stale-but-harmless retry
+            // (contrast loadMyRecord/loadTheme/loadCertTiers, which have no
+            // target parameter and are safe to apply regardless of arrival
+            // order). Discarding here leaves whatever the CURRENT
+            // navigation's own request already wrote untouched.
+            if (!state.person || state.person.citizenid !== citizenid) return;
+
             state.personSummaryLoading = false;
             if (!result || result.ok !== true) {
                 state.personSummaryError = result || { error: 'unknown_error' };
@@ -1867,6 +1897,12 @@
         render();
 
         fetchNui('tablet:requestPersonFeatures', { targetCitizenId: citizenid }).then(function (result) {
+            // STALE-RESPONSE GUARD -- see loadPersonSummary()'s identical
+            // comment just above; same race, same fix, applied to the
+            // Abilities table instead of the certifications/XP/permissions
+            // block.
+            if (!state.person || state.person.citizenid !== citizenid) return;
+
             state.personFeaturesLoading = false;
             if (!result || result.ok !== true) {
                 state.personFeaturesError = result || { error: 'unknown_error' };

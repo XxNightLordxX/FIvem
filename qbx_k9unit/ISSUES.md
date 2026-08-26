@@ -4,15 +4,56 @@
 a decision waiting on you — goes here and nowhere else. If it is not in this
 file, it is not tracked.
 
-Last updated: 2026-08-26 (watchdog pass; nothing new waiting on you)
+Last updated: 2026-08-26 (two decisions now genuinely need you — section 1)
 
 ---
 
 ## 1. Waiting on you
 
-**Nothing.** All four open decisions were answered on 2026-08-25 and are
-recorded below with what was done about each. New items go here as they
-come up.
+Two things genuinely need you rather than more code. Both are about
+features that are **switched on in the config you'd ship today**, so they
+are not hypothetical.
+
+Everything below the horizontal rule is a decision already made — kept for
+the record, not asking anything of you.
+
+### Decide: is the bite/takedown trust boundary good enough? — NEEDS A LIVE TEST
+
+Three features (bite and hold, non-lethal takedown, and dragging) are
+protected against a player running a modified game client by a guard that
+checks where the instruction came from. The guard is written, reviewed and
+believed correct. **Nobody has ever attacked it on a running server**, which
+is the only way to actually know.
+
+`OPERATOR_RUNBOOK.md` §3 describes the test. It needs a live server and
+someone willing to try to break it — no amount of further code reading
+settles it. All three features are `true` in the shipped config.
+
+Your options: run the test, accept the risk as-is, or switch those three
+off until it's been done.
+
+### Decide: the fear/stress griefing tradeoff — POLICY, NOT CODE
+
+`FearStressSystem` is on by default, and there is a way for a player to
+repeatedly wind up someone else's dog. It can be made *harder* but not
+eliminated, because the mechanic's whole point is that the dog reacts to
+what happens around it — a dog that can't be upset isn't the feature.
+
+This is a call about your server's players, not a bug: some servers want
+the emergent chaos, others don't. Leave it on, switch it off, or ask for
+the cooldowns to be tightened.
+
+### Checked and NOT a risk: the bone sweep dev tool
+
+Raised as a concern, so recording the answer here to stop it being raised
+again. `Config.Features.BoneSweepDevTool` is `true` in the shipped config,
+and its own comment says never to enable it on a production server — which
+reads alarming. It is fine, because that flag alone does nothing.
+
+The command is only registered if the flag is on **and** you have explicitly
+set `qbx_k9unit_enable_bone_dev_tool 1` in your server config. That convar
+defaults to `0`. If you have never heard of it, the tool is not running on
+your server.
 
 ### Decided: a K9 on a human body keeps jump and crouch — DONE
 
@@ -81,8 +122,6 @@ need action.
 | Find alerts on trails | Covered — the reaction no longer depends on the XP system being switched on. |
 | Partnership survives disconnect | On purpose. Partnerships are meant to last across a shift; leashes are not. |
 | Audio near clustered K9s | **This row was wrong until 2026-08-26 and is now corrected.** It claimed the cost grows faster than the number of dogs. It does not. Each player's own game independently tracks the K9s within about 25m of them, and that cost is linear in the dogs near *them* — the periodic scan behind it costs the same whether there is one dog or ten. A big cluster of dogs *and* players multiplies the total across the whole server, but no single player ever pays that sum, and real handler counts are nowhere near high enough for it to matter. Nothing to watch. |
-| Scent tracking on qb-inventory | **The one to know about.** If you run `qb-inventory` rather than `ox_inventory`, the K9 will not pick up scent from items dropped on the ground. Everything else about tracking works. This one is called out separately because of HOW it fails: the connection reports success and then quietly does nothing, because qb-inventory never announces a ground drop at all. Nothing appears in your console. |
-| Vehicle search on qb-inventory | Searching a vehicle always comes back empty on `qb-inventory`. Searching a person still works. This one does report a failure rather than pretending. |
 | Inventories we cannot support | Five of the eight inventories in the compat list are paid scripts with no readable source. They are listed but stay inert, and say why in the console rather than pretending. Confirming one needs a live install, not more searching. |
 | Tenure database check | Runs one small indexed query every five minutes per fully-tenured pair rather than skipping it. Deliberate, documented and tested — do not "fix" it. |
 
@@ -157,6 +196,16 @@ that stops it recurring, not as a changelog.
   can run that tool would have read the wrong answer off the manifest.
   *Rule: the pass that finds a problem either fixes it or writes it in this
   file — "someone should" is not a handoff.*
+- **Two "permanent limitations" were neither.** Both qb-inventory gaps —
+  scent tracking never firing, and vehicle search always coming back empty —
+  were written up as things the backend simply could not do. Re-reading
+  qb-inventory's actual source found the drop hook the earlier pass said did
+  not exist, and found that vehicle trunks just use a different id format
+  than the one being asked for. Both now work. The earlier research had also
+  miscounted that project's own file list, which is likely how the real code
+  got missed. *Rule: "this is impossible" is a claim about someone's reading,
+  not about the other project — re-read the source before writing it down as
+  permanent.*
 - **A dependency was reported dead that was not.** Two archive banners on a
   fork led to the wrong conclusion about the real project. *Rule: read the
   repository the manifest actually names, and take dates from the feed, not

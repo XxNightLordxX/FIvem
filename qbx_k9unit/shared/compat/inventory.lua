@@ -868,15 +868,22 @@ local function BuildQbInventoryServer()
         --- "translate its own real hook mechanism into that same
         --- vocabulary" job this file's header assigns every non-ox_inventory
         --- adapter. The two registrations are independent for capability
-        --- purposes too: if `ItemAdded` registers but `ItemDropped` somehow
-        --- does not (both go through the identical `AddHook` export, so this
-        --- is not expected to ever actually diverge, but is not assumed
-        --- impossible either), this method still returns `true` (the veto
-        --- capability this backend has always genuinely provided keeps
-        --- working) and prints ONE distinct, dedicated warning naming the
-        --- drop-specific gap, rather than either silently losing the
-        --- ScentTracking capability or rolling it into the unrelated
-        --- ItemAdded failure message.
+        --- purposes too, and this is NOT purely theoretical: fxmanifest.lua's
+        --- `dependencies` mechanism has no version-constraint syntax at all
+        --- (confirmed elsewhere in this codebase, server/tracking.lua's own
+        --- COMPAT-LAYER MIGRATION note) -- an operator could genuinely be
+        --- running an OLDER qb-inventory build that predates this session's
+        --- `ItemDropped` discovery (or a fork that dropped it while keeping
+        --- `ItemAdded`), in which case `Events.ItemDropped` would not exist
+        --- at all and `AddHook('ItemDropped', ...)` fails closed to `nil`
+        --- (its own confirmed "Invalid hook type" branch,
+        --- server/functions.lua) -- a REAL, not merely hypothetical, way for
+        --- exactly this divergence to happen. When it does, this method
+        --- still returns `true` (the veto capability this backend has always
+        --- genuinely provided keeps working) and prints ONE distinct,
+        --- dedicated warning naming the drop-specific gap, rather than
+        --- either silently losing the ScentTracking capability or rolling it
+        --- into the unrelated ItemAdded failure message.
         --- @param eventName string -- only 'swapItems' has a confirmed translation on this backend
         --- @param callback fun(payload: table): boolean|nil
         --- @return boolean success

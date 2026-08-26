@@ -377,6 +377,50 @@ t.test('protected features (HighCommand, PermissionGrants) refuse SetFeature out
     t.equals(r2.reason, 'protected_feature')
 end)
 
+t.test('LOAD-BEARING: SetFeature refuses tier=unaudited outright (the fail-closed net for a feature nobody has classified yet), with a named console warning', function()
+    -- A Config.Features key that exists ONLY in this test's fixture config,
+    -- never in the real FEATURE_TIERS table server/runtimecontrol.lua ships
+    -- with -- genuinely 'unaudited' from that real, unmodified production
+    -- file's own point of view, exactly the shape of the bug this refusal
+    -- exists to close (see server/runtimecontrol.lua's header "UPDATED
+    -- 2026-08-26" / "FEATURE REGISTRY").
+    local f = boot({ config = { Features = { RuntimeFeatureControl = true, HighCommand = true, TabletTheming = false, SomeBrandNewFeatureNobodyClassifiedYet = true }, AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} } } })
+    f.env.IsHighCommand = function() return true end
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'SomeBrandNewFeatureNobodyClassifiedYet', false)
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'unaudited_feature')
+    t.isTrue(f.env.Config.Features.SomeBrandNewFeatureNobodyClassifiedYet, 'must be completely unchanged, exactly like a protected-feature refusal')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('SomeBrandNewFeatureNobodyClassifiedYet', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'the refusal must print a loud, named warning identifying the exact feature -- a silent denial here would reproduce the exact bug this check exists to close')
+end)
+
+t.test('a Config.Features key with no FEATURE_TIERS entry is loudly warned about at BOOT TIME too, not only when someone tries to toggle it', function()
+    local f = boot({ config = { Features = { RuntimeFeatureControl = true, HighCommand = true, AnotherUnclassifiedOne = true }, AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} } } })
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('WARNING', 1, true) and line:find('AnotherUnclassifiedOne', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'an unclassified Config.Features key must be visible on every boot, not only discovered later via a failed toggle attempt')
+end)
+
+t.test('tier=clientonly still applies via SetFeature (never refused) -- only protected/unaudited are refused, clientonly is a KNOWN, classified tier', function()
+    local f = boot({ config = { Features = { RuntimeFeatureControl = true, HighCommand = true, RadialMenu = true }, AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} } } })
+    f.env.IsHighCommand = function() return true end
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'RadialMenu', false)
+    t.isTrue(result.ok)
+    t.isFalse(result.appliedLive)
+    t.isTrue(result.restartRequired)
+    t.equals(result.tier, 'clientonly')
+    t.isFalse(f.env.Config.Features.RadialMenu)
+end)
+
 t.test('an unrecognized feature name is rejected as invalid_feature, never silently accepted', function()
     local f = boot()
     f.env.IsHighCommand = function() return true end
