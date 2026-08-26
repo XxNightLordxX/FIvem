@@ -275,11 +275,17 @@ Config.Features = {
     K9DownDispatch       = true,
 
     -- shared/compat/*.lua. AUTO-DETECT WHAT YOU ACTUALLY RUN. Turn this on
-    -- (it is on) and this resource works out the inventory, target, core
-    -- framework, dispatch and ambulance/downed system YOUR server runs, at
-    -- startup, and talks to whichever one it finds -- instead of assuming
-    -- everyone runs the same handful of scripts. Set it to `false` only if
-    -- you want to pin every system by hand in Config.Compat below.
+    -- (it is on) and this resource works out which inventory, targeting,
+    -- dispatch and ambulance script YOUR server runs, at startup, and talks
+    -- to whichever one it finds -- instead of assuming everyone runs the
+    -- same handful of scripts. Set it to `false` only if you want to pin
+    -- every system by hand in Config.Compat below.
+    --
+    -- ONE HONEST EXCEPTION: your core FRAMEWORK is detected but not
+    -- actually adapted to. This resource requires Qbox and will not run on
+    -- qb-core or ESX regardless of what detection reports. The full
+    -- explanation is on Config.Compat.Systems.framework further down --
+    -- read it before assuming otherwise.
     -- Run /k9compat in game (see Config.Compat.diagnosticCommand) to print
     -- exactly what it found and what it could not find.
     ResourceAutoDetect   = true,
@@ -2430,6 +2436,26 @@ Config.Compat = {
         -- FRAMEWORK -- who a player is: their citizen id, their job, their
         -- rank. This is the one system this resource genuinely cannot run
         -- without, because every permission check in it reads a job rank.
+        --
+        -- READ THIS BEFORE YOU TRUST THE LIST BELOW. Auto-detection is real
+        -- and works for your inventory and your targeting script -- swap
+        -- either of those and this resource adapts. **Framework is the
+        -- exception, and right now it does not work that way.** The
+        -- qb-core and es_extended entries below are researched and correct
+        -- as far as they go, but only one file in this entire resource
+        -- actually routes through them. Everything else -- certifications,
+        -- permissions, the tablet, XP, combat, roughly 169 places -- calls
+        -- Qbox directly, and Qbox is also a hard requirement in
+        -- fxmanifest.lua, so FiveM will not start this resource without it.
+        --
+        -- What that means in practice: if you run qb-core or ESX, detection
+        -- will correctly identify it, and the resource still will not work.
+        -- Do not read this list as a compatibility promise.
+        --
+        -- This is written down rather than quietly fixed because making it
+        -- true is a large job (converting those 169 call sites), not a
+        -- small one, and it is your call whether it is worth doing. It is
+        -- recorded in ISSUES.md as a decision waiting on you.
         -- ==============================================================
         framework = {
             override = nil,
