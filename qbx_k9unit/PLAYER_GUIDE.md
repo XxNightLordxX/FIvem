@@ -1,595 +1,482 @@
 # K9 Unit — Player Guide
 
-This guide is for people who **play** on a server that has this add-on
-installed — not for developers. It tells you what you can do, exactly what
-to type or click, and what you'll see when it works or doesn't.
+This guide is for people who **play** on a server with this add-on
+installed. It tells you what you can do, what to type or click, and what
+you'll see when it works or doesn't. Checked directly against the current
+code, not against a plan.
 
-Everything in this guide was checked directly against the actual code as it
-exists right now, not against a plan or a wish-list. Where something isn't
-turned on by default, that's said plainly, in the same sentence — not buried
-in a footnote.
+## A few words used below
 
-## Words used in this guide
+- **Resource** — this K9 add-on.
+- **Feature flag** — a switch, in a settings file only your server's staff
+  can edit, that turns one piece of this resource on or off. If something
+  below doesn't work, ask staff whether that piece is switched off for
+  your server, or for you specifically (see "Personal permissions" below).
+- **Radial menu** — the circular quick-actions wheel your server already
+  uses. Open it however you normally do, then pick the "K9 Unit" icon.
+- **ox_target** — the "look at something and press a key" prompt your
+  server uses for interactions. Whenever this guide says "walk up to X,"
+  this is what appears.
+- **Server ID** — the number FiveM assigns a connected player for that
+  session; changes on reconnect. Usually visible on a scoreboard or admin
+  menu.
+- **Citizen ID** — a character's permanent ID, used for commands that
+  target someone who isn't online.
 
-A few words come up a lot below. Here's what they mean in plain English:
+No command in this resource is gated by an ACE permission. Every gate is
+either your character's job/rank, an explicit grant from high command, or
+(for one developer-only tool near the end) a server-wide switch staff has
+to turn on deliberately.
 
-- **Resource** — an add-on a FiveM server installs. "This resource" means
-  this K9 add-on specifically.
-- **Feature flag** — a switch, in a settings file only server owners can
-  edit, that turns one small piece of this resource on or off. You can't
-  flip these yourself — if something below isn't working and this guide
-  says it should be on, ask your server's staff whether they've switched
-  that specific piece off.
-- **Radial menu** — a circular pop-up wheel of quick actions. You open it
-  with a keybind (set by your server, not by this resource — check your
-  keybind settings or ask staff if you don't already use one), then click
-  or hover over an icon to pick an action.
-- **ox_target** — the add-on this server uses to show a small pop-up option
-  (like "Search Vehicle") when you look at something and stand close
-  enough to it. Whenever this guide says "walk up to X," this is what pops
-  up.
-- **Server ID** — a number FiveM assigns to a connected player for that
-  session. It changes every time they reconnect. Several commands below
-  need it. Most servers show it somewhere — a scoreboard, the pause menu,
-  or an admin console command — ask your server's staff if you can't find
-  it.
-- **Citizen ID** — a permanent ID for one specific character, unlike a
-  server ID. Used for commands that need to work on someone who isn't
-  online right now.
-- **ACE permission** — a permission flag server owners grant to specific
-  people, separate from any in-game job or rank. As of 2026-08-25, **no
-  command in this guide is gated by one any more.** `/k9bonetool` (the
-  developer-only tool near the end) used to need one; it's now gated by
-  being a department boss instead, the same style of check the staff audit
-  commands use, plus a separate server-wide switch staff must turn on on
-  purpose before the command is even reachable at all. See "Staff-only and
-  developer-only commands" below.
+## Is this stuff turned on for me?
 
-## Is this stuff even turned on for me?
+This resource ships with around fifty independently-switched pieces.
+**Nearly all of them ship on by default** — tracking, searching, combat,
+gear, wellbeing, fetch, kennels, vests, XP, training, the shop, and the
+command tablet included. The two exceptions are a camera feature with no
+code behind it yet (nothing to notice either way) and certification
+expiry (off by default; ask staff if your server uses it). Your server's
+staff can still switch any individual piece off, so if something below
+doesn't work or a command isn't recognized, that's the most likely reason
+— not a mistake on your part.
 
-This resource ships with roughly forty separate pieces, each with its own
-on/off switch, that your server's staff controls. **As of this guide's last
-check (2026-08-25), essentially all of them are turned on** — including
-tracking, searching, combat, gear, health/mood systems, fetch, kennels,
-vests, and XP. That's a change: earlier versions of this guide said only
-five were on by default, and that used to be true. It no longer is. (The
-one exception, a picture-in-picture camera feature, has no code behind it
-at all yet either way, so there's nothing to notice as a player regardless
-of its switch position.)
+**A handful of features also need a personal OK from high command on top
+of the server-wide switch**: Bite & Hold, Non-Lethal Takedown, Dragging,
+Find Alerts, Scent Trail Hunt, Pursuit Sprint, Scent Lineup, and SAR
+Calls. If one of these is on for the server but you still get refused,
+ask a high-command officer to grant it to you specifically from the
+command tablet.
 
-**Your server's staff can still turn any individual piece back off at any
-time**, so if you try something below and nothing happens, or the game
-says it doesn't recognize a command, that means the feature has been
-switched off on your server specifically — not that you did something
-wrong, and not that this guide is wrong. Ask your server's staff if
-something below doesn't seem to work.
-
-One thing worth knowing, plainly: the combat features (Bite & Hold,
-Non-Lethal Takedown, Dragging — see below) come with an unresolved
-technical question about whether a cheating player could exploit them,
-and a separate, known way a stranger could repeatedly jam one K9's combat
-commands for about a minute at a time. Neither is something you as a
-player can fix, and neither means the features are broken for normal play
-— they're mentioned here so you know this isn't a secret if you notice
-odd behavior. Ask your server's staff if you want the technical detail
-(it's written up in `DEVELOPER_REFERENCE.md` §17).
+One more thing worth knowing plainly: the combat features (Bite & Hold,
+Non-Lethal Takedown, Dragging) rely on the *target's own game* to apply
+the hold/ragdoll/slow-down, so a cheating player can ignore the effect.
+That's a known, disclosed limitation, not a secret bug — see
+`DEVELOPER_REFERENCE.md` if you want the technical detail.
 
 ---
 
 ## Quick command reference
 
-Type these into your in-game chat box exactly as shown. Square brackets
-mean "put a real value here, without the brackets."
+Type these into chat exactly as shown; square brackets mean "put a real
+value here."
 
-### Commands anyone can try (these exist on every server)
+### Certification and roster
 
-| Command | What it does | Who can actually use it |
+| Command | What it does | Who can use it |
 |---|---|---|
-| `/k9certify [server id]` | Certifies another player as a working K9 for their department | Only a department supervisor or boss — see [Certifying a K9](#certifying-a-k9-becoming-official) |
-| `/k9decertify [server id]` | Removes an online player's K9 certification | Same as above |
-| `/k9decertifyoffline [citizen id] [job]` | Removes an *offline* player's K9 certification | Same as above |
+| `/k9certify [server id]` | Certifies someone as a K9 for their department | A qualifying supervisor/boss |
+| `/k9decertify [server id]` | Revokes an online player's certification | Same |
+| `/k9decertifyoffline [citizen id] [job]` | Revokes an offline player's certification | Same |
+| `/k9recertify [server id]` | Renews a certification before it lapses | Same |
+| `/k9settier [server id] [tier]` | Changes a K9's certification tier | Same |
+| `/k9specialize [server id] [specialization]` | Grants a specialization (e.g. `narcotics`) | Same |
+| `/k9unspecialize [server id] [specialization]` | Removes an online K9's specialization | Same |
+| `/k9unspecializeoffline [citizen id] [job] [specialization]` | Same, offline | Same |
 
-### Commands that exist, but need a feature turned on to do anything
-
-Every feature in the "needs" column below is turned on by default as of
-this guide's last check — these commands should work out of the box. If
-your server's staff has switched one back off, the matching command below
-stops working (see "On a server where the feature is off," further down).
-
-| Command | What it does | Feature it needs |
-|---|---|---|
-| `/k9calmdown` | Calms your own stressed-out K9 down | Fear/Stress system |
-| `/k9meatbait` | Uses a meat-bait item to distract a nearby K9 — **anyone can use this, even someone a K9 is chasing** | Distraction system |
-| `/k9whistle` | Uses an ultrasonic whistle to distract a nearby K9 — same, open to anyone | Distraction system |
-| `/k9propattach` | Puts on or takes off a cosmetic K9 vest | Prop Attachments (experimental) |
-| `/k9throwfetchball` | Throws a fetch ball | Fetch |
-| `/k9dropfetchball` | Drops the fetch ball you're currently carrying | Fetch |
-| `/k9recallfetchball` | Cancels your own throw and removes the ball | Fetch |
-| `/k9deploykennel` | Places a portable kennel | Deployable Kennel (experimental) |
-| `/k9recall` | Calls your partnered K9 off whatever it's doing | Handler Partnership **and** Recall |
-
-On a server where a feature has been switched back off, the matching
-command usually doesn't exist at all — your game will say it doesn't
-recognize the command, exactly as if you'd typed something made up.
-`/k9calmdown` is the one exception: it always exists, but quietly does
-nothing if Fear/Stress has been switched off.
-
-### Staff-only and developer-only commands
-
-You'll probably never be able to run these — the audit commands (all but
-the last row) check for a high-enough rank in an eligible department, not
-a special staff permission. `/k9bonetool` now uses the same kind of
-check (department boss only), but on top of that it also needs a separate
-server-wide switch your server's staff must turn on on purpose — it's
-something server owners are told never to turn on for regular play at all.
-Listed here only for completeness.
+### Everyday K9 work (on by default)
 
 | Command | What it does |
 |---|---|
-| `/k9auditcert [citizen id] [limit]` | Staff: look up someone's certification history |
-| `/k9auditpartner [citizen id] [limit]` | Staff: look up partnership history |
-| `/k9auditsearch <officer\|plate\|person\|recent> [value] [limit]` | Staff: look up search records |
-| `/k9auditxp [citizen id]` | Staff: look up a K9's XP |
-| `/k9auditdept [job] [limit]` | Staff: list everyone certified in a department |
-| `/k9bonetool ...` | Developer tool for lining up cosmetic attachment points — never enabled on a real server |
+| `/k9calmdown` | Calms your own stressed K9 down early |
+| `/k9meatbait` | Uses a meat-bait item to distract a nearby K9 — anyone can use this |
+| `/k9whistle` | Same, with an ultrasonic whistle |
+| `/k9propattach` | Puts on/takes off the cosmetic K9 vest |
+| `/k9throwfetchball` / `/k9dropfetchball` / `/k9recallfetchball` | Fetch: throw, drop, cancel |
+| `/k9deploykennel` | Places a portable kennel |
+| `/k9recall` | Calls your partnered K9 off whatever it's doing |
+| `/k9nosehunt` / `/k9nosehunt stop` | Starts/abandons a scent-trail hunt |
+| `/k9sarcall` / `/k9sarcall stop` | Starts/abandons a search-and-rescue call |
+| `/k9lineup [id] [id] ...` | Starts a scent lineup with the listed players |
+| `/k9lineuppick [id]` | Names your one guess in a lineup you're running |
+| `/k9lineupcancel` | Cancels a lineup you're running |
+| `/k9training on` / `off` | Enters/leaves the training yard drill mode |
+| `/k9trainsearch` / `/k9trainbite` | Runs a practice drill (training mode only, no real target) |
+| `/k9stats` | Shows the top K9 handlers by XP |
+| `/k9tablet` | Opens the K9 Command Tablet (unless your server made it item-only) |
+
+### Staff-only and developer-only
+
+These check a high rank in an eligible department, not a special staff
+grant — you'll likely never run these unless you're senior in a K9
+department yourself.
+
+| Command | What it does |
+|---|---|
+| `/k9givexp [server id] [amount]` | High command: grants XP directly |
+| `/k9auditcert [citizen id] [limit]` | High-rank: certification history for one citizen |
+| `/k9auditpartner [citizen id] [limit]` | High-rank: partnership history |
+| `/k9auditsearch <officer\|plate\|person\|recent> [value] [limit]` | High-rank: search records |
+| `/k9auditxp [citizen id]` | High-rank: a K9's current XP total |
+| `/k9auditdept [job] [limit]` | High-rank: everyone currently certified in a department |
+| `/k9bonetool ...` | Developer tool for lining up cosmetic attachment points. Needs a department-boss rank **and** a server-wide switch staff must turn on on purpose. Never on for regular play. |
 
 ---
 
 ## How this whole thing works
 
-Two different players are usually involved:
+Two roles are usually involved, and — this is new — neither one requires
+looking like a dog to start with:
 
-- **The K9** — a player whose character already looks like a dog (a German
-  Shepherd, Rottweiler, Husky, "Chop," or another dog model your server
-  added). **Choosing to look like a dog is not something this resource
-  does at all** — that happens through your server's normal
-  character-creation or appearance system, before any of this. This
-  resource only manages what a dog-looking character is *allowed to do*,
-  and only after they're certified (see below).
-- **The officer** — a regular department employee (police, sheriff, or a
-  similar eligible job on your server) who works with the K9. The officer
-  does **not** need to look like a dog and does **not** need their own K9
-  certification to do most of the things in this guide.
+- **The K9** — the certified/assigned party. By default, the moment
+  someone is certified (or given the K9 role by high command), this
+  resource **changes their character's appearance** to a configured K9
+  model and remembers what they looked like before. Losing the role
+  changes them back. Some servers turn this automatic swap off, in which
+  case "the K9" is simply whoever already chose to look like a dog.
+- **The handler** — a regular department employee who works with the K9.
+  They don't need their own K9 certification for most of what's below.
 
 A character can be both — nothing stops a supervisor from certifying
-themselves if they also happen to be playing a dog.
+themselves if they also qualify.
 
 ---
 
 ## Becoming a K9 (certification)
 
-Certification is what turns "a player who looks like a dog" into "a working
-K9 the game actually treats as one." Without it, none of the K9-only
-options below will appear for you.
+Certification turns "a department member" into "a working K9 the game
+treats as one." Without it, none of the K9-only options below appear.
 
-### What you need before you can be certified
+### What's needed
 
-1. Your character must already be one of the dog models your server
-   recognizes for this. By default that's a German Shepherd, Rottweiler,
-   Husky, or Chop — your server may have added more.
-2. You must be hired into a K9-eligible department. By default that's
-   police, sheriff, or BCSO (Blaine County Sheriff) — your server may have
-   changed this list.
-3. A supervisor in that department has to certify you (see below). By
-   default, a supervisor needs to be a department boss, or hold a high
-   enough rank — exactly how high is set per department by your server.
+1. You're hired into a K9-eligible department (police, sheriff, or BCSO by
+   default — your server may have changed this).
+2. A supervisor at or above the department's own rank threshold (or the
+   department boss) certifies you.
+
+You do **not** need to already be playing a dog-modeled character first —
+if your server has the automatic appearance change on (the default), you
+become one the moment you're certified.
 
 ### Getting certified
 
-1. Stand close to the supervisor who will certify you — by default, within
-   about 5 meters (roughly the length of a small car).
-2. Either:
-   - The supervisor **walks up to you and looks at you**, and an
-     "ox_target" pop-up option called **Certify K9 Handler** appears for
-     them to click, or
-   - The supervisor types `/k9certify [your server ID]`.
-3. If it works, you'll see **"You have been certified as a K9 handler."**
-   and the supervisor sees **"Target has been certified as a K9
-   handler."**
+1. Stand close to the supervisor — within about 5 meters by default.
+2. Either the supervisor walks up and clicks **Certify K9 Handler**, or
+   types `/k9certify [your server ID]`.
+3. You'll see **"You have been certified as a K9 handler."** If your
+   server has the appearance swap on, your character changes to the
+   configured K9 model within a few seconds.
 
-### What can go wrong (and what you'll see)
-
-| Message | What it means |
-|---|---|
-| "Target is not playing a recognized K9 model." | You don't currently look like one of the dog models your server recognizes. |
-| "Target is not employed by an eligible department." | Your job isn't one your server allows K9s in. |
-| "Target already holds an active certification for this department." | You're already certified — nothing to do. |
-| "Target is too far away to certify." | Get closer (see the distance above). |
-| "Target must be online to be certified." | The person being certified has to be connected. |
-| "You are not authorized to certify K9 handlers." | You (the one trying to certify) aren't ranked high enough, or aren't in an eligible department yourself. |
-| "Self-certification is disabled on this server." | Some servers turn off certifying yourself; ask a supervisor instead. |
-
-### Losing certification
-
-A supervisor removes your certification the same two ways, in reverse:
-
-- Walk up to the K9 and click **Revoke K9 Certification**, or
-- Type `/k9decertify [server id]` if they're online.
-
-If the K9 isn't online right now, use:
-
-```
-/k9decertifyoffline [citizen id] [job]
-```
-
-You'll need their **citizen ID** (their permanent character ID, not their
-server ID) and the exact job name (e.g. `police`) — ask staff if you don't
-have these.
-
-Certification is also removed automatically and immediately if you quit
-your K9-eligible job, or lose it for any other reason.
-
----
-
-## Putting a leash on a K9 (on by default)
-
-A leash keeps an officer and a K9 close together. Either side can start it,
-and **either side can end it whenever they want, with no permission
-needed** — nobody can be trapped on a leash.
-
-### Attaching
-
-1. Walk up to the other person (officer walks up to K9, or K9 walks up to
-   officer — either works).
-2. Click the **Attach Leash** option that pops up, or open the [radial
-   menu](#the-k9-radial-menu) and pick **Attach/Detach Leash**.
-3. The other player gets a pop-up window on their screen asking:
-   **"[Your name] wants to attach a leash to you. Accept?"** with **Accept**
-   and **Decline** buttons. Nothing happens until they click Accept.
-4. Once accepted, you'll both see a message — the K9 sees **"You are now
-   leashed."**, the officer sees **"You are now anchoring the leash."**
-
-**Who counts as the K9 side:** whichever one of you is actually playing a
-recognized dog model and is certified. If somehow both of you look like
-dogs, whoever gets *asked* to accept ends up being the one on the leash.
-
-### While leashed
-
-The leashed K9 gets gently pulled back toward the officer if they wander
-too far — by default this starts at around 6 meters and the leash snaps
-completely (with the message **"Leash snapped — you got too far from your
-handler."**) at around 12 meters. This is a soft pull, not a hard stop —
-you can still move, just not indefinitely far from your partner.
-
-### Detaching
-
-Either person can end it at any time:
-
-- Open the [radial menu](#the-k9-radial-menu) and pick **Attach/Detach
-  Leash** again (it becomes "Detach" while leashed), or
-- Type nothing — there's no dedicated detach command; use the radial menu.
-
-You'll see **"Leash detached."** If your partner disconnects, you'll see
-**"Leash detached — your partner disconnected."** instead.
+Self-certification (`/k9certify` on your own ID) works by default, but
+only from the chat command — the ox_target option excludes targeting
+yourself.
 
 ### What can go wrong
 
 | Message | What it means |
 |---|---|
-| "You are too far apart to attach a leash." | Get closer before requesting. |
-| "One of you is already leashed to someone else." | One side is already leashed — detach first. |
-| "Neither party is playing a recognized K9 model." | Neither of you currently looks like a dog. |
-| "The K9 is not certified for K9 duty." | The dog-looking side hasn't been certified yet. |
-| "The handler must be employed by an eligible department." | The officer side needs an eligible job — they do **not** need their own K9 certification. |
+| "Target is not employed by an eligible department." | Their job isn't one your server allows K9s in. |
+| "Target already holds an active certification for this department." | Already certified — nothing to do. |
+| "Target is too far away to certify." | Get closer. |
+| "Target must be online to be certified." | They have to be connected. |
+| "You are not authorized to certify K9 handlers." | You aren't ranked high enough, or aren't in an eligible department. |
+| "Self-certification is disabled on this server." | Ask a supervisor instead. |
+
+### Tiers, renewal, and specializations
+
+Every certification has a **tier** — `Trainee`, `Certified`, or `Senior`
+by default (a supervisor sets it with `/k9settier`; your server's high
+command can add more tiers from the command tablet). A K9 can also hold
+one or more **specializations** — `narcotics`, `explosives`, or `patrol`
+by default — granted the same way certification is.
+
+If your server has **certification expiry** turned on, a certification
+lapses a set number of days after it was granted (90 by default) unless a
+supervisor renews it with `/k9recertify` first. You'll get an
+in-session warning before it lapses — you should never find out by an
+ability silently refusing to work. Most servers leave this off.
+
+### Losing certification
+
+A supervisor reverses the same two ways: click **Revoke K9 Certification**,
+or `/k9decertify [server id]` (online) / `/k9decertifyoffline [citizen id]
+[job]` (offline). Certification is also removed automatically and
+immediately if you quit or lose your K9-eligible job. If your server has
+the appearance swap on, losing certification changes your character back
+to what you looked like before — unless nothing was ever recorded (a very
+old install), in which case you're switched to a fallback human model
+instead of being left stuck.
+
+High command can also directly assign or remove the K9 role/appearance
+for any citizen from the command tablet, independent of certification —
+that's their tool, not something you trigger yourself.
+
+---
+
+## Putting a leash on a K9 (on by default)
+
+Either side can start it, and **either side can end it whenever they
+want, with no permission needed.**
+
+1. Walk up to the other person and click **Attach Leash**, or use the
+   radial menu's **Attach/Detach Leash**.
+2. They get an Accept/Decline prompt. Nothing happens until they accept.
+3. Once accepted: the K9 sees **"You are now leashed,"** the handler sees
+   **"You are now anchoring the leash."**
+
+While leashed, the K9 gets gently pulled back if they wander past about 6
+meters, and the leash snaps entirely around 12 meters (**"Leash snapped —
+you got too far from your handler."**). Either side can detach at any time
+from the radial menu. If your partner disconnects, you'll see **"Leash
+detached — your partner disconnected."**
+
+| Message | What it means |
+|---|---|
+| "You are too far apart to attach a leash." | Get closer first. |
+| "One of you is already leashed to someone else." | Detach first. |
+| "The K9 is not certified for K9 duty." | The dog side isn't certified yet. |
+| "The handler must be employed by an eligible department." | The handler side needs an eligible job (not their own K9 certification). |
 | "Your leash request was declined." | Exactly what it says. |
 
 ---
 
 ## The K9 Radial Menu (on by default)
 
-This resource adds a **"K9 Unit"** icon into your server's regular radial
-menu (the round pop-up wheel of quick actions). Open your radial menu the
-same way you always do on this server, then click the K9 Unit icon to open
-its own sub-menu.
+Opens a **"K9 Unit"** sub-menu from your server's regular radial. On a
+default server it contains **Sit**, **Bark**, **Attach/Detach Leash**, and
+**Enter/Exit Vehicle**. Every other item in this guide (tracking, combat,
+fetch, kennel, gear, partnership, and so on) only appears here if your
+server has that specific feature turned on.
 
-**On a default server, that sub-menu only contains:**
-
-- **Sit** — makes your dog character sit down. Works until you move again.
-- **Bark** — makes your dog character bark (see the audio note below).
-- **Attach/Detach Leash** — see the [leash section](#putting-a-leash-on-a-k9-on-by-default) above.
-- **Enter/Exit Vehicle** — see [vehicles](#riding-in-a-patrol-vehicle-on-by-default) below.
-
-Every other item described later in this guide (tracking, combat, fetch,
-kennel, gear, and so on) only appears in this same menu **if your server
-has turned that specific feature on.** If you don't see an option
-mentioned below, it's switched off — not missing by mistake.
-
-### About Bark's sound
-
-Bark is turned on, and as of this guide's last check, **every bark and
-ambient sound this resource can play now has a real, properly-licensed
-sound file behind it** — the plain Bark, all three "different bark styles"
-variants (Alert/Aggressive/Calm), and the continuous ambient "K9 presence"
-sound that plays based on how close you are to a K9. All five are
-confirmed to actually reach your game client, so you should genuinely hear
-something for each one.
-
-This resource is actively being worked on by multiple people at once, so
-if any of these is ever silent for you, that's worth reporting to your
-server's staff rather than assuming it's expected — check
-`html/sounds/CREDITS.md` in this resource's files for the current,
-up-to-date record of exactly which sounds exist and where they came from.
+Bark, and the three alternate bark styles under **Advanced Bark Radial**
+(Alert/Aggressive/Calm), plus the ambient "K9 presence" sound that plays
+based on distance, all have real audio behind them by default.
 
 ---
 
 ## Riding in a patrol vehicle (on by default)
 
-By default this works on marked police and sheriff cars (`police`,
-`police2`, `police3`, `police4`, `sheriff`, `sheriff2` — your server may
-have added more).
+Works on marked cars — `police`, `police2`, `police3`, `police4`,
+`sheriff`, `sheriff2` by default.
 
-1. Walk up to one of those vehicles, within about 3 meters.
-2. Click **Load K9 Into Vehicle**. Your character is hidden and tucked
-   into the vehicle (so it can ride along without needing its own seat).
-   You'll see **"Loaded into the vehicle."**
-3. To get back out, either walk up to that same vehicle and click
-   **Release K9 From Vehicle**, or use **Enter/Exit Vehicle** from the
-   [radial menu](#the-k9-radial-menu). You'll see **"Released from the
-   vehicle."**
-
-If you try this while you're already sitting in a vehicle normally
-(through the game's own controls, not this system), you'll see **"You
-can't do that while already sitting in a vehicle."**
+1. Walk up to one, within about 3 meters, and click **Load K9 Into
+   Vehicle**. You're tucked into the vehicle without needing your own
+   seat. **"Loaded into the vehicle."**
+2. To get out: walk up and click **Release K9 From Vehicle**, or use
+   **Enter/Exit Vehicle** from the radial. **"Released from the vehicle."**
 
 ---
 
-## Basic dog things (on by default)
+## Basic dog things (on by default, no certification needed)
 
-These work automatically for anyone playing a recognized dog character —
-you do **not** need to be certified for these three:
-
-- **First/third-person camera** — press **L** to switch your camera
-  between first-person (dog's-eye view) and third-person. You'll see a
-  small confirmation message either way. This only works while you're
-  playing a dog character.
-- **Jump and crouch** — work exactly like they do for any other character.
-  Nothing extra to learn. (If your server has turned this off, a dog
-  character's jump and crouch stop working — but that isn't the default.)
-- **Sit** — from the [radial menu](#the-k9-radial-menu), described above.
-  This one *does* need certification.
+- **First/third-person camera** — press **L** to switch view. Only works
+  while playing a K9-modeled character.
+- **Jump and crouch** — work normally (your server can disable this for
+  K9s, but that isn't the default).
+- **Sit** — from the radial menu. This one *does* need certification.
 
 ---
 
 ## World interactions, at a glance (ox_target)
 
-This table lists every "walk up and look at something" option this
-resource can add. Every one of them is turned on as of this guide's last
-check (2026-08-25) — the **Feature switch** column names which one your
-server's staff could turn back off if you ever stop seeing an option
-listed here.
-
-| Walk up to... | Option you'll see | What it does | Feature switch |
+| Walk up to... | Option | What it does | Needs |
 |---|---|---|---|
-| A nearby player | **Attach Leash** | Starts the leash consent request | Leash Mechanics |
-| A nearby player who looks like a K9 | **Certify K9 Handler** | Certifies them (if you're a qualifying supervisor) | always available, no switch |
-| A nearby player who looks like a K9 | **Revoke K9 Certification** | Removes their certification | always available, no switch |
-| An eligible patrol vehicle | **Load K9 Into Vehicle** | Tucks you into the vehicle | Vehicle Entry/Exit |
-| The vehicle you're tucked into | **Release K9 From Vehicle** | Lets you back out | Vehicle Entry/Exit |
-| A door | **Scratch to Alert** | Plays a scratching sound to alert nearby people — cosmetic only | Door Interaction |
-| A door | **Nudge Door** | Plays a push animation — this can **never** open a locked door, by design | Door Interaction |
-| A vehicle | **Search Vehicle** | Sniffs it for contraband | Search Zones |
-| A person | **Search Person** | Sniffs them for contraband | Search Zones |
-| A nearby player | **Partner Up** | Sends a long-term partnership request (separate from a leash) | Handler Partnership |
-| A deployed kennel | **Pick Up Kennel** | Picks the kennel back up | Deployable Kennel |
-| A K9 player | **Pet K9** | Improves the K9's mood | Mood system |
-| A K9 player | **Feed K9** | Improves the K9's mood using a treat item | Mood system |
-| A K9 player | **Open K9 Gear** | Opens the K9's small item storage | K9 Inventory |
-| A thrown fetch ball | **Pick Up Ball** | Picks up the ball | Fetch |
-| A nearby player, while carrying a ball | **Deliver Fetch Item** | Delivers it to a handler | Fetch |
-| A K9 player | **Treat K9** | Heals an injured K9 with a medkit item | K9 Medkit |
+| Any department member | **Certify K9 Handler** / **Revoke K9 Certification** | Grants/removes certification | Always available (rank-gated, not switch-gated) |
+| A nearby player | **Attach Leash** | Starts a leash request | Leash Mechanics |
+| An eligible patrol vehicle | **Load/Release K9** | Tucks you in/out | Vehicle Entry/Exit |
+| A door | **Scratch to Alert** / **Nudge Door** | Alert sound / push animation — nudge can never open a locked door | Door Interaction |
+| A vehicle or person | **Search Vehicle** / **Search Person** | Sniffs for contraband | Search Zones |
+| A nearby player | **Partner Up** | Sends a long-term partnership request | Handler Partnership |
+| A deployed kennel | **Pick Up Kennel** | Picks it back up | Deployable Kennel |
+| A K9 player | **Pet K9** / **Feed K9** | Improves mood | Mood System |
+| A K9 player | **Open K9 Gear** | Opens shared department storage for that K9 | K9 Inventory |
+| A thrown fetch ball | **Pick Up Ball** | Picks it up | Fetch |
+| A nearby player, carrying a ball | **Deliver Fetch Item** | Hands it over | Fetch |
+| A K9 player | **Treat K9** | Heals with a medkit item | K9 Medkit |
+| A K9 supply ped | *(opens the shop)* | Buy K9 items | K9 Supply Shop |
 
 ---
 
-## The rest of what this resource can do
+## Searching, tracking, and combat
 
-Everything from here down is **on by default** as of this guide's last
-check (2026-08-25). Each heading names the feature switch it needs, so if
-something below stops working, you know which switch to ask your server's
-staff about — they may have turned that specific piece back off. If a
-switch is off, you'll either not see the option at all, or (for a few
-commands) typing it will do nothing.
+**Searching** (needs Search Zones) — **Search Vehicle**/**Search Person**,
+about a 4-second sniff, then **"Nothing found"**, **"Contraband
+detected!"** (with a reaction sound scaled to how much was found), or a
+real error. A 10-second cooldown per target stops repeat-fishing.
 
-### Searching people and vehicles — needs "Search Zones"
+**Tracking** (needs its own switch per type: Scent/Blood/Gunpowder) — the
+radial gets a **Track [type]** item that searches roughly 40 meters for
+something trackable and draws a marker trail if found. Water breaks the
+trail by default. **Find Alerts**, if also on, makes your K9 automatically
+sit and bark on a real find or a completed trail — the same result you
+already get, with a stronger reaction on top.
 
-Once enabled, a certified K9 can walk up to a vehicle or person and click
-**Search Vehicle** / **Search Person**. A short sniffing animation plays
-(about 4 seconds by default), then one of these appears:
+**Combat** (Bite & Hold / Non-Lethal Takedown / Dragging, each its own
+switch) — only ever usable against a player your server's dispatch has
+flagged **wanted**, never an ordinary bystander:
 
-- **"Nothing found."** — clean.
-- **"Contraband detected!"** — something was found. Depending on how much,
-  nearby people may also hear a reaction sound (a soft whine for a small
-  amount, an aggressive bark for a large stash).
-- **"The search could not be completed — try again."** — a real error, not
-  the same as "nothing found."
+- **Bite & Hold / Release** — holds a target in place, up to 15 seconds
+  automatically.
+- **Non-Lethal Takedown** — only works on a fast-moving (fleeing) target.
+- **Drag / Release** — drags a target, up to 30 meters or 20 seconds.
 
-You can't repeat a search on the exact same target for a while afterward
-(10 seconds by default) — this stops fishing for a different result by
-searching the same thing over and over.
+You'll see messages like "That target is not currently eligible," "You
+are too far from the target," or "You must wait before attempting that
+again" if a request is refused.
 
-### Tracking scent, blood, or gunpowder — needs "Scent Tracking" / "Blood Tracking" / "Gunpowder Sniffing"
+**Advanced Agility** (needs its own switch) — press **X** near a low
+obstacle (up to ~1.2m) to vault it. Short cooldown between attempts.
 
-Each is its own switch. When on, the [radial menu](#the-k9-radial-menu)
-gets a **Track Scent**, **Track Blood**, or **Track Gunpowder** item. As a
-certified K9, picking one searches nearby (about 40 meters by default) for
-something trackable — a dropped item for scent, a recent injury for blood,
-recent gunfire for gunpowder — and if one is found, draws a visible trail
-of markers toward it. Walking through water breaks the trail by default,
-and you'd need to search again once across the water. Picking the same
-item again while tracking stops the trail early.
+**Pursuit Sprint** (needs its own switch, own personal grant) — a short
+burst (a few seconds, on a cooldown) where a certified K9 is genuinely
+faster than the wanted target it's chasing. Meant to end a chase already
+going your way, not to make escape impossible.
 
-### Combat actions — needs "Bite & Hold" / "Non-Lethal Takedown" / "Prop Dragging"
+---
 
-These let a certified K9 physically engage a target. Each is its own
-switch, and all of them are restricted to targets your server's dispatch
-system has flagged as **wanted** (this never applies to ordinary bystander
-NPCs, only to marked suspects).
+## Handler Partnership, Handler-Down Defense, and Recall
 
-- **Bite & Hold / Release** (radial) — holds a nearby eligible target in
-  place. Ends automatically after 15 seconds if nobody releases it sooner,
-  so nothing can be held forever.
-- **Non-Lethal Takedown** (radial) — only works on a target that's
-  currently moving fast (fleeing). Knocks them down briefly.
-- **Drag / Release** (radial) — drags a target along with the K9, up to
-  30 meters or 20 seconds, whichever comes first.
+**Partnership** (needs its own switch) — a longer-term bond, separate
+from the leash. Walk up and click **Partner Up**, or use the radial; the
+other side gets an Accept/Decline prompt. Either side can **Break
+Partnership** at any time, no confirmation needed.
 
-You'll see messages like **"That target is not currently eligible."**,
-**"You are too far from the target."**, or **"You must wait before
-attempting that again."** if a request is rejected.
+**Handler-Down Defense** (needs Partnership **and** its own switch) — if
+a partnered handler's health drops low near their K9, the K9 sees
+**"Your handler is under attack! Press G to respond, or use the radial
+menu."** (`G` by default). Confirming brings up the same response a
+player could pick manually, faster — the K9 never acts on its own.
 
-### Advanced agility (fence/window vaulting) — needs "Advanced Agility"
+**Recall** (needs Partnership **and** its own switch) — the handler types
+`/k9recall` or uses the radial's **Recall K9** to immediately call their
+K9 off whatever it's doing. This always works, with only a short cooldown
+between uses, so a partner is never stuck.
 
-Press **X** as a certified K9 near a low obstacle (up to about 1.2 meters
-by default) to hop over it. There's a short cooldown (2 seconds by
-default) between attempts.
+---
 
-### Handler Partnership — needs "Handler Partnership"
+## K9 wellbeing (five independent switches, all on by default)
 
-This is a longer-term bond between one officer and one K9, separate from
-the momentary leash above.
-
-1. Walk up to the other player and click **Partner Up**, or use the
-   [radial menu](#the-k9-radial-menu)'s **Partner Up** item.
-2. They get an Accept/Decline pop-up, same style as a leash request:
-   **"[Name] wants to partner up with you. Accept?"**
-3. Once accepted, both sides see a confirmation message.
-
-To end it, either side picks **Break Partnership** from the radial menu —
-this always works immediately, with no confirmation needed, even if
-something about your access has changed since.
-
-**Handler-Down Defense** (needs Handler Partnership **and** its own
-switch): if a partnered officer's health drops low near their partnered
-K9, the K9 sees **"Your handler is under attack! Press G to respond, or
-use the radial menu."** (the key is `G` by default). Confirming lets the
-K9 respond against whoever the game thinks is responsible — this is a
-faster way to bring up the same option a player could pick manually, not
-the K9 acting on its own.
-
-**Recall** (needs Handler Partnership **and** its own switch): the
-partnered officer can type `/k9recall` or use the radial menu's **Recall
-K9** item at any time to immediately call their K9 off whatever it's
-doing — this always works, with no cooldown beyond a couple of seconds
-between uses, specifically so a partner is never stuck.
-
-### K9 wellbeing — needs its own switches (all on by default)
-
-Five separate systems, each its own switch:
-
-- **Mood** — walk up to a K9 and **Pet K9** (free) or **Feed K9** (needs a
-  treat item) to improve their mood. Low mood slightly slows the K9 down.
-- **Fatigue** — builds up while sprinting, recovers while resting (near a
-  water bowl object, if your server has one placed). Low fatigue slightly
-  slows the K9 down.
-- **Fear/Stress** — rises from nearby gunfire. High stress makes the K9
-  refuse combat actions temporarily ("Your K9 hesitates, too stressed to
-  act."). The K9 can use `/k9calmdown` to reduce it themselves (a
-  15-second cooldown applies).
+- **Mood** — **Pet K9** (free) or **Feed K9** (needs a treat item).
+- **Fatigue** — builds while sprinting, recovers while resting (faster
+  near a water bowl object, if your server placed one).
+- **Fear/Stress** — rises from nearby gunfire; high stress makes the K9
+  refuse combat commands temporarily ("Your K9 hesitates, too stressed to
+  act."). Use `/k9calmdown` to reduce it yourself.
 - **Distraction** — `/k9meatbait` and `/k9whistle` are deliberately open
-  to **any player**, not just K9s — a suspect being chased can use one of
-  these items against the K9 following them.
-- **Injury/Limping** — builds up from damage. Low values block sprinting
-  or jumping entirely until treated. The main way to recover is a K9
-  Medkit (below); it also recovers very slowly on its own.
+  to **any player**, including someone being chased.
+- **Injury/Limping** — blocks sprint/jump entirely below a threshold; the
+  main fix is a K9 Medkit, plus slow natural recovery.
 
-### K9 Medkit — needs "K9 Medkit"
+Low Mood, Fatigue, or Injury each slightly slow the K9 down; they can
+stack.
 
-Walk up to an injured K9 and click **Treat K9** (requires a medkit item in
-your own inventory, and typically requires being in an eligible department
-or the ambulance service). There's a cooldown (1 minute by default) on
-re-treating the same K9. You'll see **"K9 treated."** on success.
+## K9 Medkit (needs its own switch)
 
-### K9 Gear (a small shared storage box) — needs "K9 Inventory"
+Walk up to an injured K9 and click **Treat K9** — needs a medkit item and
+usually an eligible department or ambulance job. A cooldown applies per
+K9. **"K9 treated."** on success.
 
-Walk up to a K9 and click **Open K9 Gear** — this opens a small storage
-container ("stash") tied to that specific K9, 5 slots by default. Anyone
-in an eligible department can open a given K9's gear, not just that K9's
-own player — think of it as shared department equipment, the same way a
-patrol car's trunk usually works.
+## K9 Gear (needs "K9 Inventory")
 
-### Fetch — needs "Fetch"
+**Open K9 Gear** opens a small shared storage container tied to that K9 —
+anyone in an eligible department can use it, the same way a patrol car's
+trunk usually works.
 
-1. An officer types `/k9throwfetchball` or uses the radial menu's **Fetch**
-   submenu → **Throw/Drop Fetch Ball**. You don't need to currently be
-   playing a dog to throw it.
-2. A K9 walks up to the thrown ball and clicks **Pick Up Ball**.
-3. The K9 walks up to a handler and clicks **Deliver Fetch Item** to hand
-   it over.
-4. The K9 can drop it early with `/k9dropfetchball`, and whoever threw it
-   can cancel the whole thing early with `/k9recallfetchball`.
+## Fetch (needs its own switch)
 
-A ball disappears on its own after 5 minutes if nobody finishes the cycle.
-Note that the K9 does not walk the ball back automatically — an actual
-player has to carry it back, on foot.
+`/k9throwfetchball` (or radial: Fetch → Throw) — a K9 walks up and clicks
+**Pick Up Ball**, then delivers it with **Deliver Fetch Item** near a
+handler. `/k9dropfetchball` drops it early; `/k9recallfetchball` (the
+thrower's own command) cancels the whole thing. A ball disappears after 5
+minutes if nobody finishes. The K9 doesn't walk it back on its own — a
+real player carries it, on foot.
 
-### Deployable Kennel — needs "Deployable Kennel" (experimental)
+## Deployable Kennel (needs its own switch)
 
-A certified K9 can type `/k9deploykennel` or use the radial menu's
-**Deploy Kennel** to place a portable kennel a couple of meters in front of
-them. You can only have one deployed at a time — pick it up (**Pick Up
-Kennel**, walking up to it) before deploying another. This feature is
-flagged by its own developers as experimental — the object used to
-represent the kennel may not look like an actual doghouse; if the intended
-model fails to load, it falls back to an obviously-wrong placeholder shape
-on purpose, as a signal to server staff that the real object still needs
-fixing.
+`/k9deploykennel` (or radial: Deploy Kennel) places a portable kennel a
+couple of meters ahead. Only one at a time — pick it up first
+(**Pick Up Kennel**) before placing another.
 
-### K9 Vest — needs "Prop Attachments" (experimental)
+## K9 Vest (needs "Prop Attachments")
 
-A certified K9 can type `/k9propattach` or use the radial menu's **Toggle
-K9 Vest** to put on or take off a cosmetic vest. Like the kennel above,
-this is experimental — the intended vest model isn't confirmed to load
-correctly, and may fall back to an obviously-wrong placeholder look.
+`/k9propattach` (or radial: Toggle K9 Vest) toggles a cosmetic vest. The
+attach point hasn't been fine-tuned on every server yet, so it may sit at
+an odd spot until your staff runs the calibration tool.
 
-### Thermal and night vision — needs "Thermal Vision" / "Night Vision"
+## Thermal and night vision (two independent switches)
 
-Two independent switches. If turned on:
+**K** toggles thermal, **J** toggles night vision (your server may have
+remapped these). Work for **any** player currently on a K9-modeled
+character, even uncertified — treated as the dog's own senses, not a
+department privilege. Turning one on turns the other off.
 
-- **K** toggles thermal vision.
-- **J** toggles night vision.
+## Training Mode (on by default)
 
-Unlike most K9-only actions, these work for **any player currently
-playing a dog character**, even one who isn't certified — the reasoning
-being that this is treated as the dog's own natural senses, not a granted
-department privilege. Turning one on turns the other off automatically if
-both were somehow active.
+A practice sandbox. Stand in a training yard (your server's staff sets
+where), type `/k9training on`, then run `/k9trainsearch` or
+`/k9trainbite` to rehearse the search or bite-and-hold flow against a
+scripted dummy. Nothing here touches a real player, a real inventory, or
+awards any XP — it's purely practice. `/k9training off` leaves the mode.
 
-### XP and tiers — needs "XP Progression"
+## K9 Supply Shop (needs its own switch)
 
-If turned on, a K9 quietly earns experience for real actions (finding
-contraband, successfully tracking something down, and a few combat
-actions, if those are also enabled). There are four tiers:
+Walk up to the K9 Supply ped (a real, visible dog attendant — your
+server's staff sets its location) to buy medkits, treats, meat bait, and
+whistles. Prices and payment come out of your inventory's own currency
+item, same as any other in-game shop.
+
+## The K9 Command Tablet (on by default)
+
+Open it with `/k9tablet` (unless your server made it item-only — check
+for a "K9 Tablet" item instead), or from the radial menu. Everyone gets a
+read-only view of their own certification, XP, and any personal grants.
+High command additionally gets a full roster and controls to certify,
+assign/revert the K9 role and appearance, grant permissions, and adjust
+what individual people can access. The tablet never grants anything by
+itself — every button it offers is re-checked exactly like the matching
+chat command would be.
+
+## XP and tiers (needs "XP Progression")
+
+Real actions (finding contraband, resolving a track, certain combat/SAR
+actions) earn XP.
 
 | Tier | XP needed | Bonus |
 |---|---|---|
 | Recruit K9 | 0 | none |
 | Trained K9 | 1,250 | slightly faster, slightly better tracking range |
-| Veteran K9 | 4,000 | more of the same |
-| Elite K9 | 9,000 | the most of the same |
+| Veteran K9 | 4,000 | more of the same, plus a shorter K9 Medkit cooldown |
+| Elite K9 | 9,000 | the most of the same, plus a cosmetic HUD badge |
 
-(Figures checked directly against `config.lua` on 2026-08-25 — these were
-raised from an earlier 500/1,500/3,500 scale once measured play showed the
-old numbers let a K9 reach the top tier in under an evening; re-check
-`config.lua`'s `Config.XPTiers` yourself if it's been a while, since these
-are tuning numbers a server can change.)
+**"Your K9 has reached the [tier] tier!"** on level-up. Only the
+staff-only `/k9auditxp` command shows your exact number; `/k9stats` (needs
+"K9 Leaderboard") shows the server's top handlers by XP to anyone with K9
+access — that means other players' citizen IDs and totals are visible to
+each other on servers that leave this on.
 
-You'll see **"Your K9 has reached the [tier] tier!"** the moment you level
-up. There's no command to check your XP as a player — only the staff-only
-`/k9auditxp` command can look it up.
+## Vitality display (needs "Health/Stamina HUD")
 
-### Vitality display — needs "Health/Stamina HUD"
+A small passive on-screen readout of your K9's health and stamina.
+Nothing to click.
 
-A small, passive on-screen display of your K9's health and stamina. It
-just shows up in the corner of your screen if this is turned on — there's
-nothing to click or press for it.
+## Contraband screen effect (needs its own switch, and Search Zones)
+
+A brief, disorienting effect on *your own* screen (the searching K9's)
+when a search turns up a large stash. Feedback for you, not a penalty on
+whoever you searched.
 
 ---
 
-## Contraband screen effect — needs "Contraband Screen FX" (and Search Zones)
+## Scent Trail Hunt, SAR Calls, and Scent Lineup
 
-If both of these are on, finding a large stash during a search gives
-*your own* screen (the searching K9's) a brief, disorienting visual effect
-— a few seconds long. This is meant as feedback to you, not a penalty
-applied to whoever you searched.
+Three "hunting" mini-games, each its own switch and each requiring a
+personal grant from high command on top of that switch (see "Personal
+permissions" above).
+
+- **Scent Trail Hunt** — `/k9nosehunt` sets your K9 off after a hidden
+  spot somewhere nearby. There's no marker or blip — only a growl that
+  pulses faster as you get closer. The location is never sent to your
+  game at all, only a distance, so there's nothing to read the answer out
+  of. `/k9nosehunt stop` abandons it. No XP.
+- **SAR Calls** — `/k9sarcall` requests a search-and-rescue call: your dog
+  reacts more strongly the closer you get to a hidden target. Finding it
+  always resolves as a rescue — nobody is arrested, and the "missing
+  person" is scenery that only appears once the call is already solved,
+  never a real player. `/k9sarcall stop` gives up early.
+- **Scent Lineup** — `/k9lineup [id] [id] ...` invites 2–6 other online
+  players to line up (everyone has to accept). Once they have, the server
+  secretly picks one — nobody, not even you, is told who until you commit
+  your one guess with `/k9lineuppick [id]`. `/k9lineupcancel` calls it
+  off. No XP, since the outcome is random.
 
 ---
 
@@ -597,26 +484,21 @@ applied to whoever you searched.
 
 | Message | What it means |
 |---|---|
-| "You cannot use K9 features right now." | You're either not playing a recognized dog character, not certified, or both. |
-| "This only works while playing a K9 character." | Applies to camera/vision toggles — you need to look like a dog right now. |
-| "That player is no longer online." | Whoever you targeted disconnected before your action went through. |
+| "You cannot use K9 features right now." | You're not certified, not a K9 model (if your server still requires one), or both. |
+| "This only works while playing a K9 character." | Applies to camera/vision toggles. |
+| "That player is no longer online." | They disconnected before your action went through. |
 | "Get closer to the K9 first." | Move closer and try again. |
-| (No message at all) | Some actions are deliberately silent when you retry too quickly — this is intentional spam prevention, not a bug. |
-
----
+| (No message at all) | Some actions are silent on a repeat attempt that's too soon — intentional, not a bug. |
 
 ## A note on fairness and safety
 
-A few design choices worth knowing about, since they affect what you can
-rely on:
-
-- **You can never be permanently trapped.** Leashes, bite holds, drags, and
-  partnerships can always be ended by at least one side, and several have
-  hard time limits even if nobody acts (a bite hold ends by itself after
-  15 seconds no matter what).
-- **Combat actions only ever target players your server's own dispatch
-  system has marked "wanted."** An ordinary bystander can't be targeted
-  by Bite & Hold, Takedown, or Dragging.
-- **Distraction items (meat bait, whistle) are deliberately open to
-  everyone**, including someone actively being chased — this is by
-  design, not an oversight.
+- **You can never be permanently trapped.** Leashes, bite holds, drags,
+  and partnerships can always be ended by at least one side, and several
+  have hard time limits regardless.
+- **Combat actions only ever target a wanted player** — never an ordinary
+  bystander.
+- **Distraction items are deliberately open to everyone**, including
+  someone actively being chased. By design, not an oversight.
+- The combat mechanics' known cheat-resistance limits are disclosed, not
+  hidden — ask your server's staff or see `DEVELOPER_REFERENCE.md` if
+  you want the detail.
