@@ -247,8 +247,47 @@ local function newFixture(opts)
     -- Config.Compat.startupGraceMs left unset, that function resolves
     -- graceMs to 0 and never calls Wait at all, so a bare `fn()` is
     -- sufficient and deterministic).
-    local function CreateThreadStub(fn) fn() end
-    local function WaitStub() end
+    --
+    -- RUNTIME TOGGLE-ON WATCHER (this pass, coder-backend): server/
+    -- equipmentshop.lua now ALSO calls CreateThread once, at its own file
+    -- load time (top level, not inside any onResourceStart handler), for
+    -- its own genuine `while true do Wait(...) ... end` runtime-toggle-on
+    -- poll loop -- see that file's own "RUNTIME TOGGLE-ON WATCHER" header.
+    -- Running THAT body to completion synchronously against a no-op Wait
+    -- (the old CreateThreadStub above) would hang this entire test process
+    -- forever, since the loop never terminates on its own. Fixed by
+    -- capturing (never auto-running) that ONE specific thread via the
+    -- shared cooperative thread runner (fixtures/sandbox.lua's own
+    -- Sandbox.newThreadRunner, the exact same mechanism
+    -- tests/wellbeing_spec.lua already established for a real sweep
+    -- thread), while every OTHER CreateThread call this fixture ever sees
+    -- (shared/compat/core.lua's ScheduleInitialDetection, the only other
+    -- caller) keeps running synchronously, completely unchanged.
+    --
+    -- WHY ORDER, NOT IDENTITY: fxmanifest.lua's own script load order
+    -- guarantees server/equipmentshop.lua's own top-level CreateThread call
+    -- fires DURING Sandbox.loadInto('../server/equipmentshop.lua', env)
+    -- below -- strictly before ANY test calls fireResourceStart(), which is
+    -- the only thing that ever triggers shared/compat/core.lua's own
+    -- CreateThread call (inside ITS OWN onResourceStart handler). The FIRST
+    -- CreateThread call this fixture ever sees is therefore always
+    -- equipmentshop.lua's own watcher, and every call after it is always
+    -- shared/compat/core.lua's (confirmed by reading modules/shops/server.lua's
+    -- OWN K9Compat.Get -- it lazily self-detects synchronously on first use
+    -- regardless of whether ScheduleInitialDetection's thread ever actually
+    -- runs, so capturing-not-running that second thread changes nothing any
+    -- test here observes).
+    local equipmentShopThreadRunner = Sandbox.newThreadRunner()
+    local createThreadCallCount = 0
+    local function CreateThreadStub(fn)
+        createThreadCallCount = createThreadCallCount + 1
+        if createThreadCallCount == 1 then
+            equipmentShopThreadRunner.CreateThread(fn)
+        else
+            fn()
+        end
+    end
+    local function WaitStub(...) return equipmentShopThreadRunner.Wait(...) end
 
     local env = Sandbox.newEnv({
         GetCurrentResourceName = GetCurrentResourceName,
@@ -341,6 +380,23 @@ local function newFixture(opts)
 
     Sandbox.loadInto('../server/equipmentshop.lua', env)
 
+    -- Drives server/equipmentshop.lua's own runtime-toggle-on watcher
+    -- thread forward ONE poll tick per call -- see fixtures/sandbox.lua's
+    -- own Sandbox.newThreadRunner doc comment: "because every sweep thread
+    -- in this resource calls Wait(...) as its FIRST statement inside the
+    -- loop, the FIRST runner.step() call only reaches that initial Wait
+    -- and yields immediately -- it primes the coroutine but performs no
+    -- sweep pass." Mirrors tests/wellbeing_spec.lua's own
+    -- primeIfNeeded()/runOneTick() shape exactly.
+    local equipmentShopWatcherPrimed = false
+    local function stepEquipmentShopWatcher()
+        if not equipmentShopWatcherPrimed then
+            equipmentShopThreadRunner.step()
+            equipmentShopWatcherPrimed = true
+        end
+        equipmentShopThreadRunner.step()
+    end
+
     return {
         printedLines = printedLines,
         registerShopCalls = registerShopCalls,
@@ -349,6 +405,7 @@ local function newFixture(opts)
         callbacks = callbacks,
         broadcasts = broadcasts,
         fakeNow = fakeNow,
+        stepEquipmentShopWatcher = stepEquipmentShopWatcher,
         --- @param resourceName string?
         fireResourceStart = function(resourceName)
             for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do

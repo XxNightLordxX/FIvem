@@ -688,6 +688,25 @@ do
         t.isFalse(f.env.HasPermission('K9-1', 'not.a.real.permission'))
     end)
 
+    -- CONFIRMED, NOT ASSUMED (this pass -- flagged alongside the
+    -- RevokePermission "revoking a retired key must always be possible"
+    -- fix): HasPermission must keep calling the real, catalog-aware
+    -- IsValidPermissionKey (unlike RevokePermission's own, deliberately
+    -- narrower IsPlausiblePermissionKeyShape) -- a tombstoned key's row
+    -- staying `active = 1` in the database must NEVER confer the
+    -- capability while it sits there waiting to be revoked.
+    t.test('HasPermission: a TOMBSTONED key (removed from Config.Permissions after being granted) resolves false even while its grant row is still active', function()
+        local g = newFixture({ isHighCommand = function(source) return source == 900 end })
+        local gHcSrc = g.registerPlayer(900, 'HC-TOMBSTONE', { name = 'police', isboss = true, grade = { level = 0 } })
+        g.registerPlayer(3, 'K9-3', { name = 'police', grade = { level = 1 } })
+        g.env.Config.Permissions['k9.tobetombstoned'] = { label = 'Temporary' }
+        local ok = g.env.GrantPermission(gHcSrc, 'K9-3', 'k9.tobetombstoned')
+        t.isTrue(ok)
+        t.isTrue(g.env.HasPermission('K9-3', 'k9.tobetombstoned'), 'must read true before the tombstone')
+        g.env.Config.Permissions['k9.tobetombstoned'] = nil -- tombstoned
+        t.isFalse(g.env.HasPermission('K9-3', 'k9.tobetombstoned'), 'a tombstoned key must confer nothing, regardless of the still-active DB row')
+    end)
+
     t.test('HasPermission: false when Config.Features.PermissionGrants is off, even with an active grant', function()
         f.registerPlayer(2, 'K9-2', { name = 'police', grade = { level = 1 } })
         local hc = newFixture({ isHighCommand = function() return true end })
@@ -955,11 +974,75 @@ do
         t.equals(outcome, 'denied')
     end)
 
-    t.test('RevokePermission: an unconfigured permission key is rejected', function()
+    -- SECURITY FIX (this pass -- "revoking a retired permission key must
+    -- always be possible"): RevokePermission used to reuse GrantPermission's
+    -- own catalog-membership IsValidPermissionKey check, which rejected
+    -- 'invalid_permission' for ANY key not currently known to
+    -- Config.Permissions/the permission-key catalog -- including a
+    -- perfectly real key that high command had since TOMBSTONED, stranding
+    -- every existing grant of it forever (see server/permissions.lua's own
+    -- IsPlausiblePermissionKeyShape doc comment for the full writeup).
+    -- RevokePermission now only requires a PLAUSIBLE SHAPE, then lets
+    -- K9Store.Perm_RevokeActive's own real "does this citizenid actually
+    -- hold this exact row" answer decide -- so an unrecognized-but-
+    -- plausible-shaped key that was never granted to this target correctly
+    -- resolves 'not_granted', the SAME outcome a real key nobody holds
+    -- already produced, never 'invalid_permission'.
+    t.test('RevokePermission: an unrecognized (never-configured, never-catalog-known) but PLAUSIBLY-SHAPED key that was never granted reports not_granted, not invalid_permission', function()
         f.advanceTime(2000)
         local ok, outcome = f.env.RevokePermission(hcSrc, 'X', 'not.real')
         t.isFalse(ok)
-        t.equals(outcome, 'invalid_permission')
+        t.equals(outcome, 'not_granted')
+    end)
+
+    t.test('RevokePermission: a genuinely malformed permission key (non-string, empty, or over the 50-char DoS-lite bound) is rejected as invalid_permission', function()
+        f.advanceTime(2000)
+        local ok1, outcome1 = f.env.RevokePermission(hcSrc, 'X', nil)
+        t.isFalse(ok1)
+        t.equals(outcome1, 'invalid_permission')
+
+        f.advanceTime(2000)
+        local ok2, outcome2 = f.env.RevokePermission(hcSrc, 'X', '')
+        t.isFalse(ok2)
+        t.equals(outcome2, 'invalid_permission')
+
+        f.advanceTime(2000)
+        local ok3, outcome3 = f.env.RevokePermission(hcSrc, 'X', string.rep('a', 51))
+        t.isFalse(ok3)
+        t.equals(outcome3, 'invalid_permission')
+    end)
+
+    t.test('RevokePermission: SECURITY FIX -- a TOMBSTONED key (real, but no longer catalog-known) can still be revoked from a citizenid actively holding it', function()
+        -- Simulates server/permissionkeycatalog.lua tombstoning a key AFTER
+        -- it was granted: IsKnownPermissionCatalogKey now says no (so
+        -- IsValidPermissionKey/HasPermission both correctly treat it as
+        -- inert), but the k9_permissions row itself is untouched, still
+        -- `active = 1`, until someone actually revokes it -- which must
+        -- still be possible.
+        f.advanceTime(2000)
+        f.registerPlayer(299, 'TOMBSTONE-TARGET', { name = 'police', grade = { level = 1 } })
+        f.env.Config.Permissions['k9.retiredkey'] = { label = 'Retired Key' }
+        local grantOk = f.env.GrantPermission(hcSrc, 'TOMBSTONE-TARGET', 'k9.retiredkey')
+        t.isTrue(grantOk, 'setup: the grant itself must succeed before this test can prove anything about revoking it')
+        f.advanceTime(2000)
+
+        -- Tombstone it: remove it from Config.Permissions entirely -- with
+        -- no permission-key catalog loaded in this fixture (see this file's
+        -- own header on IsValidPermissionKey's fallback), this is the
+        -- direct equivalent of a live catalog tombstone for this test's
+        -- purposes: the key is no longer known/valid by ANY route.
+        f.env.Config.Permissions['k9.retiredkey'] = nil
+
+        -- HasPermission must ALREADY resolve this as false while the row
+        -- sits there inert, confirming the "grantable-in-the-database-but-
+        -- inert" state IsPlausiblePermissionKeyShape's own doc comment
+        -- promises never changes.
+        t.isFalse(f.env.HasPermission('TOMBSTONE-TARGET', 'k9.retiredkey'), 'a tombstoned key must confer nothing even while its grant row is still active')
+
+        local ok, outcome, stillHasAccess = f.env.RevokePermission(hcSrc, 'TOMBSTONE-TARGET', 'k9.retiredkey')
+        t.isTrue(ok, 'revoking a tombstoned-but-held key must succeed, not report invalid_permission')
+        t.equals(outcome, 'ok')
+        t.isNil(stillHasAccess, 'a retired key has no legacy rank tier to fall back to -- revoking it must fully remove it')
     end)
 
     t.test('RevokePermission: an invalid target citizenid is rejected', function()
@@ -1333,10 +1416,43 @@ do
         t.equals(outcome, 'denied')
     end)
 
-    t.test('ListPermissionRoster: an unconfigured permission key is rejected', function()
-        local ok, outcome = f.env.ListPermissionRoster(hcSrc, 'not.real')
-        t.isFalse(ok)
-        t.equals(outcome, 'invalid_permission')
+    -- SECURITY FIX (this pass, same "revoke direction" reasoning as
+    -- RevokePermission above): an unconfigured/unknown-but-plausibly-shaped
+    -- key must resolve to an EMPTY roster, not invalid_permission -- an
+    -- officer trying to find every remaining holder of a just-tombstoned
+    -- key (in order to revoke each one) must not be refused for asking.
+    t.test('ListPermissionRoster: an unconfigured/unknown-but-plausibly-shaped permission key returns an EMPTY roster, not invalid_permission', function()
+        local ok, roster = f.env.ListPermissionRoster(hcSrc, 'not.real')
+        t.isTrue(ok)
+        t.equals(#roster, 0)
+    end)
+
+    t.test('ListPermissionRoster: a genuinely malformed permission key (non-string, empty, or over the 50-char bound) is still rejected as invalid_permission', function()
+        local ok1, outcome1 = f.env.ListPermissionRoster(hcSrc, nil)
+        t.isFalse(ok1)
+        t.equals(outcome1, 'invalid_permission')
+
+        local ok2, outcome2 = f.env.ListPermissionRoster(hcSrc, '')
+        t.isFalse(ok2)
+        t.equals(outcome2, 'invalid_permission')
+
+        local ok3, outcome3 = f.env.ListPermissionRoster(hcSrc, string.rep('a', 51))
+        t.isFalse(ok3)
+        t.equals(outcome3, 'invalid_permission')
+    end)
+
+    t.test('ListPermissionRoster: SECURITY FIX -- a TOMBSTONED key (real, but no longer catalog-known) still lists its remaining holders', function()
+        f.advanceTime(2000) -- clear the shared per-source grant/revoke cooldown before this test's own GrantPermission call
+        f.env.Config.Permissions['k9.retiredroster'] = { label = 'Retired Roster Key' }
+        local grantOk = f.env.GrantPermission(hcSrc, 'ROSTER-RETIRED', 'k9.retiredroster')
+        t.isTrue(grantOk, 'setup: the grant itself must succeed before this test can prove anything about the roster read')
+        f.advanceTime(2000)
+        f.env.Config.Permissions['k9.retiredroster'] = nil -- tombstoned
+
+        local ok, roster = f.env.ListPermissionRoster(hcSrc, 'k9.retiredroster')
+        t.isTrue(ok, 'a tombstoned key must still be listable, or its remaining holders could never be found to revoke')
+        t.equals(#roster, 1)
+        t.equals(roster[1].citizenid, 'ROSTER-RETIRED')
     end)
 
     t.test('ListPermissionRoster: returns every citizenid holding the given permission', function()
@@ -1400,9 +1516,19 @@ do
         t.equals(result.reason, 'rank_or_high_command', 'the UI must be told this did not actually remove their access')
     end)
 
-    t.test('tabletRevokePermission: failure returns { ok = false, reason = <outcome> }', function()
+    t.test('tabletRevokePermission: failure (not_granted) returns { ok = false, reason = <outcome> }', function()
+        -- 'not.real' is a plausible SHAPE but was never granted to
+        -- TABLET-TARGET -- see this pass's own RevokePermission SECURITY FIX
+        -- above: this must resolve not_granted, never invalid_permission.
         f.advanceTime(2000)
         local result = f.callbacks['qbx_k9unit:server:tabletRevokePermission'](hcSrc, 'TABLET-TARGET', 'not.real')
+        t.isFalse(result.ok)
+        t.equals(result.reason, 'not_granted')
+    end)
+
+    t.test('tabletRevokePermission: failure (invalid_permission) for a genuinely malformed permission key', function()
+        f.advanceTime(2000)
+        local result = f.callbacks['qbx_k9unit:server:tabletRevokePermission'](hcSrc, 'TABLET-TARGET', string.rep('a', 51))
         t.isFalse(result.ok)
         t.equals(result.reason, 'invalid_permission')
     end)

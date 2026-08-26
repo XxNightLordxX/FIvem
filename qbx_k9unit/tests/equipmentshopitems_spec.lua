@@ -208,8 +208,31 @@ local function newFixture(opts)
     local hasPermission = opts.hasPermission
 
     local fakeNow = { value = 0 }
-    local function CreateThreadStub(fn) fn() end
-    local function WaitStub() end
+
+    -- RUNTIME TOGGLE-ON WATCHER -- see tests/equipmentshop_spec.lua's own,
+    -- much fuller comment on this exact fixture pattern (this file mirrors
+    -- it verbatim): server/equipmentshop.lua's own top-level CreateThread
+    -- call (its runtime-toggle-on poll loop, a genuine
+    -- `while true do Wait(...) ... end`) is always the FIRST CreateThread
+    -- call this fixture ever sees (fxmanifest.lua's own load order --
+    -- fired during Sandbox.loadInto('../server/equipmentshop.lua', env)
+    -- below, strictly before any test calls fireResourceStart(), which is
+    -- the only thing that triggers shared/compat/core.lua's own
+    -- CreateThread call). Captured (never auto-run) via the shared
+    -- cooperative thread runner instead of run to completion, which would
+    -- hang this entire test process forever against a no-op Wait. Every
+    -- OTHER CreateThread call keeps running synchronously, unchanged.
+    local equipmentShopThreadRunner = Sandbox.newThreadRunner()
+    local createThreadCallCount = 0
+    local function CreateThreadStub(fn)
+        createThreadCallCount = createThreadCallCount + 1
+        if createThreadCallCount == 1 then
+            equipmentShopThreadRunner.CreateThread(fn)
+        else
+            fn()
+        end
+    end
+    local function WaitStub(...) return equipmentShopThreadRunner.Wait(...) end
 
     -- Soft-dependency certification globals -- stubbed directly (never the
     -- real, heavier server/certtiers.lua/server/certifications.lua) since
@@ -265,6 +288,18 @@ local function newFixture(opts)
 
     Sandbox.loadInto('../server/equipmentshop.lua', env)
 
+    -- See tests/equipmentshop_spec.lua's own identical helper for the full
+    -- "prime then execute" reasoning (fixtures/sandbox.lua's own
+    -- Sandbox.newThreadRunner doc comment).
+    local equipmentShopWatcherPrimed = false
+    local function stepEquipmentShopWatcher()
+        if not equipmentShopWatcherPrimed then
+            equipmentShopThreadRunner.step()
+            equipmentShopWatcherPrimed = true
+        end
+        equipmentShopThreadRunner.step()
+    end
+
     return {
         printedLines = printedLines,
         registerShopCalls = registerShopCalls,
@@ -275,6 +310,7 @@ local function newFixture(opts)
         callbacks = callbacks,
         broadcasts = broadcasts,
         fakeNow = fakeNow,
+        stepEquipmentShopWatcher = stepEquipmentShopWatcher,
         fireResourceStart = function(resourceName)
             for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do
                 handler(resourceName or 'qbx_k9unit')

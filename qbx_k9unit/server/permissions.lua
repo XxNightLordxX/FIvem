@@ -604,6 +604,57 @@ local function IsValidPermissionKey(value)
     return type(Config.Permissions) == 'table' and Config.Permissions[value] ~= nil
 end
 
+--- SECURITY FIX (this pass -- "revoking a retired permission key must
+--- always be possible", the same-shape bug one layer deeper than the
+--- tablet-aggregation finding this pass also closes: a key nobody can even
+--- SEE as held is bad; a key nobody can ever TAKE AWAY is worse). A bare
+--- SHAPE check for `permissionKey` -- type/non-empty/length only, the EXACT
+--- SAME numeric bound IsValidPermissionKey itself starts with (a plain
+--- sanity/DoS-lite cap, not an injection backstop -- this value only ever
+--- reaches a bound `?` placeholder, same reasoning as IsValidCitizenId
+--- above) -- DELIBERATELY NEVER a catalog/Config.Permissions MEMBERSHIP
+--- check. RevokePermission below is this function's ONLY caller.
+---
+--- THE BUG THIS REPLACES: RevokePermission used to call the same
+--- IsValidPermissionKey gate GrantPermission calls. That gate is correct
+--- for GRANT (nobody should be able to grant a key that does not currently
+--- exist) and WRONG for REVOKE (a key server/permissionkeycatalog.lua has
+--- tombstoned is, by that file's own design, EXCLUDED from
+--- IsKnownPermissionCatalogKey/IsValidPermissionKey -- see that file's own
+--- header "TOMBSTONE, NOT REFERENCE-COUNTED" -- so the old check refused
+--- 'invalid_permission' for EVERY revoke of a retired key, forever, with no
+--- other path to remove it: high command retires a key, and anyone still
+--- holding a grant of it keeps it PERMANENTLY, through every surface,
+--- including the tablet's own "retired, revoke-only" row that exists
+--- SPECIFICALLY for this case (html/tablet.js's own resolveCapabilityRows
+--- third bucket) -- a button that rendered and always failed server-side.
+---
+--- WHY THIS IS SAFE WITHOUT THE CATALOG CHECK: revoking is the inherently
+--- SAFE direction (it only ever narrows access, never widens it), and this
+--- function is followed immediately by RevokePermission's own real
+--- authority check -- does this EXACT (citizenid, permissionKey) pair have
+--- a currently-ACTIVE row at all (K9Store.Perm_RevokeActive's own
+--- affectedRows, reported as the 'not_granted' outcome below when it is
+--- zero). That is the correct "membership" test for a revoke: not "is this
+--- key still creatable", but "does this citizenid actually hold it right
+--- now" -- a garbage/never-existed/already-tombstoned-and-never-granted key
+--- reaches that exact same, already-safe 'not_granted' outcome through the
+--- normal no-rows-affected path, never a false "revoked" success and never
+--- a SQL concern (parameterized regardless of this function's own answer).
+---
+--- HasPermission's OWN posture is UNCHANGED and confirmed still correct: it
+--- still calls the real, catalog-aware IsValidPermissionKey (not this
+--- function), so a tombstoned key's still-active row confers NOTHING while
+--- it sits there waiting to be revoked -- "grantable-in-the-database-but-
+--- inert" is exactly the intended state a tombstoned-but-held key is in,
+--- and this function's own narrower shape check does not, and must not,
+--- change that.
+--- @param value any
+--- @return boolean
+local function IsPlausiblePermissionKeyShape(value)
+    return type(value) == 'string' and value ~= '' and #value <= 50
+end
+
 --- Returns true if `err` (the value pcall caught around the grant INSERT)
 --- represents a MySQL/MariaDB duplicate-key error (1062) on
 --- `uq_one_active_permission_per_citizen`. Same shape-agnostic detection as
@@ -1181,6 +1232,20 @@ end
 --- CASE" for the full `stillHasAccess` contract -- this is the return value
 --- the tablet MUST surface distinctly, per this task's own explicit
 --- requirement.
+---
+--- REVOKING A RETIRED KEY MUST ALWAYS BE POSSIBLE (this pass, SECURITY
+--- FIX): unlike GrantPermission, this function does NOT require
+--- `permissionKey` to currently be catalog-known/valid -- only that it is a
+--- plausible string shape (IsPlausiblePermissionKeyShape above) AND that
+--- `targetCitizenid` actually holds an ACTIVE row for it right now (the
+--- real gate, enforced naturally by K9Store.Perm_RevokeActive's own
+--- affectedRows below -- zero rows affected is reported as 'not_granted',
+--- the exact same outcome a garbage or never-granted key already produced
+--- before this pass). See IsPlausiblePermissionKeyShape's own doc comment
+--- for the full "why the old, grant-shaped check here was actively
+--- harmful" writeup -- a tombstoned key's grant must remain revocable
+--- forever, or high command retiring a key permanently strands it on
+--- everyone who already held it.
 --- @param granterSrc number
 --- @param targetCitizenid string
 --- @param permissionKey string
@@ -1202,7 +1267,11 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
         return false, 'rate_limited'
     end
 
-    if not IsValidPermissionKey(permissionKey) then
+    -- SHAPE ONLY, NOT CATALOG-VALID -- see IsPlausiblePermissionKeyShape's
+    -- own doc comment for why this deliberately differs from GrantPermission's
+    -- IsValidPermissionKey check just below this same file's own similarly-
+    -- named guards.
+    if not IsPlausiblePermissionKeyShape(permissionKey) then
         LogAuditInvocation(granterSrc, 'revokePermission', ('permission=%s target=%s'):format(tostring(permissionKey), tostring(targetCitizenid)), 'invalid_permission')
         return false, 'invalid_permission'
     end
@@ -1406,6 +1475,18 @@ end
 --- Lists every citizenid currently holding `permissionKey` (the tablet's
 --- roster view for one capability). Uses idx_permission_active -- the exact
 --- query shape that index's own sql/install.sql comment documents.
+---
+--- SAME "REVOKE DIRECTION" REASONING AS RevokePermission (this pass): uses
+--- the SHAPE-ONLY IsPlausiblePermissionKeyShape, never the catalog-valid
+--- IsValidPermissionKey. Finding out WHO still holds a TOMBSTONED key is a
+--- read squarely in service of the exact same "a retired key must remain
+--- manageable" requirement -- a roster caller trying to locate every
+--- straggler of a just-retired key so each one can be revoked must not
+--- itself be refused 'invalid_permission' for asking about that same key. A
+--- key nobody has ever granted simply resolves to an empty roster below
+--- (K9Store.Perm_GetActiveRosterByPermission's own natural "no rows"
+--- answer) -- exactly as before this pass for that case, never a new,
+--- different outcome.
 --- @param callerSrc number
 --- @param permissionKey string
 --- @return boolean ok
@@ -1414,7 +1495,7 @@ function ListPermissionRoster(callerSrc, permissionKey)
     if not (type(IsHighCommand) == 'function' and IsHighCommand(callerSrc)) then
         return false, 'denied'
     end
-    if not IsValidPermissionKey(permissionKey) then
+    if not IsPlausiblePermissionKeyShape(permissionKey) then
         return false, 'invalid_permission'
     end
 

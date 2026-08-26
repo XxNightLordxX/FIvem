@@ -333,6 +333,127 @@ local function WarnIfItemMissing(itemName, configPath)
 end
 
 -- ======================================================================
+-- RUNTIME TOGGLE-ON FORWARD DECLARATIONS -- this pass (coder-backend),
+-- closing the "the shop cannot be turned on at runtime" gap found by an
+-- economy red-team pass. THE PROBLEM, CONFIRMED before writing a single
+-- line below: both the original RegisterShop call (this section) and the
+-- two ox_inventory purchase-enforcement hooks (this file's own "EQUIPMENT
+-- SHOP ITEM CATALOG" section, far below) used to run ONLY inside their own
+-- `onResourceStart` handlers, gated on Config.Features.K9EquipmentShop
+-- being true AT THAT ONE MOMENT. `onResourceStart` fires exactly once.
+-- server/runtimecontrol.lua's own `runtimeSetFeature` (confirmed by
+-- reading it directly this pass) DOES flip the live `Config.Features.
+-- K9EquipmentShop` table entry immediately when high command uses the
+-- tablet -- but nothing was ever watching for that flip, so a server that
+-- shipped with the flag false never gained a shop, no matter how long
+-- after boot the flag was turned on. Failed in the SAFE direction (no
+-- shop, not an unguarded one) -- but not genuinely toggleable, which this
+-- resource's own owner has asked for repeatedly.
+--
+-- REGISTERING TWICE -- VERIFIED, NOT ASSUMED, against ox_inventory's real,
+-- current source (overextended/ox_inventory main branch,
+-- modules/shops/server.lua + modules/hooks/server.lua, fetched and read
+-- directly this pass):
+--   * `RegisterShop` (`registerShopType`) is a single, unconditional,
+--     non-yielding `Shops[shopType] = { ... }` table OVERWRITE -- see this
+--     file's own header, point 2, and the "EQUIPMENT SHOP ITEM CATALOG"
+--     section's "THE EDIT/PURCHASE RACE" writeup for the fuller citation.
+--     Safe to call any number of times, from any code path, at any time.
+--   * `registerHook(event, ref, options)` is NOT idempotent and has NO
+--     de-duplication of its own: `eventHooks[event]` is a plain,
+--     ever-growing ARRAY (`eventHooks[event][#eventHooks[event] + 1] =
+--     ref`), and `TriggerEventHooks` iterates every entry in it on every
+--     single openShop/buyItem attempt. A second `registerHook('openShop',
+--     ...)` call for the SAME logical hook does not replace the first --
+--     it appends a second, fully redundant copy that fires forever
+--     alongside it for the rest of the resource's life. ox_inventory does
+--     expose a real `removeHooks(id)` export, but shared/compat/
+--     inventory.lua's own `RegisterHook` wrapper discards the real
+--     ox_inventory-assigned hookId (`local callOk = SafeExportCall(...)`
+--     keeps only pcall's own success boolean, never the second return
+--     value `registerHook` itself returns) -- there is currently no way
+--     for THIS file to ask for that hookId back through the compat layer
+--     at all. Reported to main/coder-backend as a shared/compat/
+--     inventory.lua finding, not fixed here (out of this file's scope --
+--     see this session's own report). The fix that stays entirely inside
+--     THIS file: each hook-registration function below now registers with
+--     ox_inventory AT MOST ONCE, ever, per server session, guarded by its
+--     own dedicated flag (see EquipmentShopOpenHookRegistered/
+--     EquipmentShopBuyHookRegistered far below) -- a later activation
+--     attempt (a subsequent toggle-on edge, or an item-catalog edit
+--     arriving before the shop was ever activated) always finds the
+--     already-registered hook and skips straight past it, never appending
+--     a duplicate.
+--
+-- HOOKS FIRST, ALWAYS -- ActivateEquipmentShopIfEnabled (defined at the
+-- bottom of this file, once its own dependencies exist -- forward-declared
+-- as a `local` immediately below, same idiom this file already uses for
+-- ItemByKey/ItemOrder further down) registers BOTH ox_inventory
+-- purchase-enforcement hooks and refuses to ever call RegisterShop unless
+-- BOTH succeed. Confirmed against real source that this ordering is safe:
+-- ox_inventory's own `openShop`/`buyItem` callbacks look up `Shops[shopType]`
+-- FIRST and bail out (`if not shop then return end`) BEFORE ever invoking
+-- `TriggerEventHooks` -- so a hook registered for a shopType that is not
+-- (yet) in `Shops` is completely inert, never a live, unguarded shop with
+-- no hook attached. The reverse -- RegisterShop succeeding while a hook
+-- registration silently failed -- is exactly the bug this ordering
+-- prevents: a shop that exists in ox_inventory with no per-person block
+-- and no purchase-tier/specialization enforcement would be worse than no
+-- shop at all, so a failed hook registration REFUSES the whole activation
+-- and says why in the console, rather than opening an unguarded shop.
+-- This closes a real, PRE-EXISTING gap in this exact ordering: before this
+-- pass, the original RegisterShop call below ran in an EARLIER
+-- onResourceStart handler than the hook registrations (this file's own
+-- "EQUIPMENT SHOP ITEM CATALOG" section, far below) -- a hook-registration
+-- failure at BOOT, not just at runtime, already left an unguarded shop
+-- live. Also closes a second instance of the identical bug: every one of
+-- the three item-catalog edit callbacks (equipmentShopItemsUpsert/Reorder/
+-- Delete, far below) used to call LiveRefreshRegisteredShop() -- which
+-- calls RegisterShop -- UNCONDITIONALLY, with no Config.Features check and
+-- no dependency on the hooks ever having registered at all. An item-price
+-- edit made by a `k9.equipmentshopitems` permission holder while the
+-- master flag was OFF (hooks never registered) would silently create a
+-- live, unguarded, purchasable shop. EnsureEquipmentShopReflectsCurrentCatalog
+-- (also forward-declared below, real body at the bottom of this file) now
+-- gates that: it only calls LiveRefreshRegisteredShop directly once the
+-- shop is ALREADY fully activated (hooks confirmed); otherwise it routes
+-- through ActivateEquipmentShopIfEnabled, the one and only gate that may
+-- ever cause RegisterShop to run for the first time.
+--
+-- THE EXISTING LIVE-REFRESH PATH -- LiveRefreshRegisteredShop (this file's
+-- own "EQUIPMENT SHOP ITEM CATALOG" section) is NOT duplicated or
+-- reimplemented here. RegisterEquipmentShopFromConfig below is the
+-- ORIGINAL, byte-for-byte UNCHANGED validation/registration logic this
+-- section has always had (raw Config.K9EquipmentShop.items, no database
+-- overlay) -- extracted into a named, callable-more-than-once function
+-- rather than rewritten, so the boot-time-on path behaves EXACTLY as it
+-- did before this pass (see tests/equipmentshop_spec.lua, entirely
+-- unchanged by this pass). ActivateEquipmentShopIfEnabled below calls this
+-- FIRST, then (like this file's own pre-existing boot sequence already
+-- did) layers any k9_equipment_shop_items database overlay on top via the
+-- EXISTING RefreshEquipmentShopItemCatalog + LiveRefreshRegisteredShop
+-- pair -- two established, independent, already-tested functions
+-- sequenced correctly behind the hooks, never a third, competing
+-- implementation of "how to call RegisterShop."
+--
+-- TOGGLE-OFF MUST NOT STRAND ANYONE -- gate the OPENING, never the
+-- CLOSING. Nothing added by this pass touches ox_inventory's own
+-- inventory-close path at all (there is no such hook anywhere in this
+-- file). A player with the shop UI already open when the flag flips off
+-- keeps whatever ox_inventory itself allows for closing an already-open
+-- inventory, completely untouched by this file. The two enforcement hooks
+-- (openShop / buyItem) already re-check Config.Features.K9EquipmentShop
+-- LIVE, fresh, on every single invocation (IsEquipmentShopPermittedForCitizenId's
+-- own step 1) -- once registered, a toggle OFF is therefore enforced
+-- immediately and correctly with NO further code needed here: the very
+-- next open/buy attempt is vetoed. This is also exactly why hooks are
+-- registered AT MOST ONCE, ever: they do not need to be re-registered on
+-- every toggle to keep working correctly in both directions.
+-- ======================================================================
+local ActivateEquipmentShopIfEnabled
+local EnsureEquipmentShopReflectsCurrentCatalog
+
+-- ======================================================================
 -- REGISTRATION -- gated at the TOP on Config.Features.K9EquipmentShop, so a
 -- server that has not added the flag (or has it false) does ABSOLUTELY
 -- NOTHING below this point: no warning prints, no ox_inventory calls, no
@@ -341,24 +462,33 @@ end
 -- flag that may not exist yet at all rather than one that exists and is
 -- merely off.
 -- ======================================================================
-AddEventHandler('onResourceStart', function(resourceName)
-    if GetCurrentResourceName() ~= resourceName then return end
-    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return end
 
+--- Validates Config.K9EquipmentShop and, if usable, registers the K9
+--- Supply shop with ox_inventory from its RAW config items (no database
+--- overlay -- see RefreshEquipmentShopItemCatalog/LiveRefreshRegisteredShop
+--- for that separate, already-existing layer). THE ORIGINAL, byte-for-byte
+--- UNCHANGED validation/registration logic this section has always had,
+--- from before this pass -- only extracted into a named function so it can
+--- be called from ActivateEquipmentShopIfEnabled below as well as from
+--- this section's own onResourceStart handler. Safe to call any number of
+--- times (RegisterShop's own real implementation is a safe, unconditional
+--- full overwrite -- see this file's header "THE EDIT/PURCHASE RACE").
+--- @return boolean ok -- true only when RegisterShop was actually called and reported success
+local function RegisterEquipmentShopFromConfig()
     local shopConfig = Config.K9EquipmentShop
     if type(shopConfig) ~= 'table' then
         print('[qbx_k9unit] equipmentshop: WARNING: Config.Features.K9EquipmentShop is true but Config.K9EquipmentShop is missing or not a table -- the K9 Supply shop will NOT be registered. Add Config.K9EquipmentShop (shopType/label/currencyItem/items) to config.lua.')
-        return
+        return false
     end
 
     if type(shopConfig.shopType) ~= 'string' or shopConfig.shopType == '' then
         print('[qbx_k9unit] equipmentshop: WARNING: Config.K9EquipmentShop.shopType must be a non-empty string -- the K9 Supply shop will NOT be registered.')
-        return
+        return false
     end
 
     if type(shopConfig.items) ~= 'table' or #shopConfig.items == 0 then
         print('[qbx_k9unit] equipmentshop: WARNING: Config.K9EquipmentShop.items must be a non-empty array -- the K9 Supply shop will NOT be registered (there would be nothing to sell).')
-        return
+        return false
     end
 
     -- currencyItem defaults to ox_inventory's own 'money' item (its built-in
@@ -401,7 +531,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 
     if #inventoryItems == 0 then
         print('[qbx_k9unit] equipmentshop: WARNING: every configured item failed validation or does not exist in this server\'s ox_inventory -- the K9 Supply shop will NOT be registered (there is nothing left to sell). See the WARNING lines above for the exact item(s) to fix.')
-        return
+        return false
     end
 
     -- Job restriction, derived from THIS resource's own already-existing
@@ -449,10 +579,25 @@ AddEventHandler('onResourceStart', function(resourceName)
 
     if not registered then
         print('[qbx_k9unit] equipmentshop: WARNING: RegisterShop failed -- the K9 Supply shop is NOT available this session. This can mean no compatible inventory backend is currently detected/running (see /k9compat, if enabled), or the detected backend rejected this shop\'s shape.')
-        return
+        return false
     end
 
     print(('[qbx_k9unit] equipmentshop: K9 Supply shop registered (%d/%d configured items resolved).'):format(#inventoryItems, #shopConfig.items))
+    return true
+end
+
+--- Boot entry point -- unconditionally routed through
+--- ActivateEquipmentShopIfEnabled (real body far below, in this file's own
+--- "EQUIPMENT SHOP ITEM CATALOG" section, once its own dependencies --
+--- the two purchase-enforcement hooks and the item-catalog overlay --
+--- exist) rather than calling RegisterEquipmentShopFromConfig directly, so
+--- boot-time-on and a later runtime toggle-on share the exact same
+--- hooks-first activation gate -- see this file's own "RUNTIME TOGGLE-ON
+--- FORWARD DECLARATIONS" header above for the full "why" writeup.
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return end
+    ActivateEquipmentShopIfEnabled()
 end)
 
 -- ======================================================================
@@ -674,10 +819,31 @@ EquipmentShopLocationActionCooldown.RegisterPlayerDropped()
 -- having validated successfully (a broken `items` list still leaves the
 -- shop ped worth spawning at its configured spot; ox_inventory simply has
 -- nothing to sell there until that's fixed, same as today).
+--
+-- UNCONDITIONAL ON Config.Features.K9EquipmentShop (this pass, coder-
+-- backend) -- ANOTHER instance of the same "boot-only, does not respond to
+-- a runtime toggle" class this pass's own task explicitly asked to hunt
+-- for. Before this pass, this ENTIRE handler was gated on the flag being
+-- true at boot -- so a server that shipped with the flag off, then turned
+-- it on later from the tablet, would activate the shop (see
+-- ActivateEquipmentShopIfEnabled above) with RuntimeShopLocations still
+-- completely EMPTY: every `db:<id>` location a high-command officer had
+-- ever added would be silently missing from BuildEffectiveLocations until
+-- a full resource restart reloaded them, even though
+-- equipmentShopGetLocations/AddLocation/MoveLocation/RemoveLocation were
+-- already always registered and already re-checked the flag live. Loading
+-- this small, harmless (no ox_inventory call, no player-visible effect on
+-- its own -- equipmentShopGetLocations and friends remain the only thing
+-- that ever exposes this table, and THEY still gate on the flag every
+-- single call, unchanged) in-memory cache regardless of the flag closes
+-- that gap for free. The diagnostic print stays flag-gated, not the load
+-- itself -- purely so an operator who has never touched this feature does
+-- not see a console line about it (matches tests/equipmentshop_spec.lua's
+-- own "absence is a clean no-op" print-count assertions), never because
+-- the load itself needs the flag to be safe.
 -- ======================================================================
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
-    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return end
 
     local rows = K9Store.ShopLocation_GetAll()
     for _, row in ipairs(rows) do
@@ -687,7 +853,9 @@ AddEventHandler('onResourceStart', function(resourceName)
         }
     end
 
-    print(('[qbx_k9unit] equipmentshop.lua: %d runtime shop location(s) loaded from the database.'):format(#rows))
+    if Config.Features and Config.Features.K9EquipmentShop == true then
+        print(('[qbx_k9unit] equipmentshop.lua: %d runtime shop location(s) loaded from the database.'):format(#rows))
+    end
 end)
 
 -- ======================================================================
@@ -1540,10 +1708,11 @@ end
 --- table overwrite -- see this section's own header "THE EDIT/PURCHASE
 --- RACE"). A WARNING ONLY on failure, never a thrown error -- mirrors
 --- this file's own pre-existing REGISTRATION section's identical posture.
+--- @return boolean ok -- true only when RegisterShop was actually called and reported success (this pass, coder-backend -- so ActivateEquipmentShopIfEnabled can tell whether activation via the overlay path actually succeeded)
 local function LiveRefreshRegisteredShop()
     local shopConfig = Config.K9EquipmentShop
     if type(shopConfig) ~= 'table' or type(shopConfig.shopType) ~= 'string' or shopConfig.shopType == '' then
-        return -- nothing to refresh -- the original REGISTRATION handler already warned about this shape problem
+        return false -- nothing to refresh -- the original REGISTRATION handler already warned about this shape problem
     end
 
     local currencyItem = shopConfig.currencyItem
@@ -1552,7 +1721,7 @@ local function LiveRefreshRegisteredShop()
     local inventoryItems = BuildValidatedShopInventoryArray(currencyItem)
     if #inventoryItems == 0 then
         print('[qbx_k9unit] equipmentshop: WARNING: the merged item catalog has nothing left to sell after validation -- the live shop refresh was skipped (ox_inventory keeps whatever it last had registered, if anything).')
-        return
+        return false
     end
 
     local groups = nil
@@ -1571,7 +1740,10 @@ local function LiveRefreshRegisteredShop()
 
     if not registered then
         print('[qbx_k9unit] equipmentshop: WARNING: live shop refresh (RegisterShop) failed -- the most recent item edit will not be visible to players until the next resource restart.')
+        return false
     end
+
+    return true
 end
 
 -- Cross-file-pattern critical-section lock, keyed by item_key -- see this
@@ -1730,7 +1902,7 @@ lib.callback.register('qbx_k9unit:server:equipmentShopItemsUpsert', function(sou
         citizenid or 'unknown')
 
     RefreshEquipmentShopItemCatalog()
-    LiveRefreshRegisteredShop()
+    EnsureEquipmentShopReflectsCurrentCatalog()
 
     return { ok = true, items = ListEquipmentShopItems() }
 end)
@@ -1794,7 +1966,7 @@ lib.callback.register('qbx_k9unit:server:equipmentShopItemsReorder', function(so
         citizenid or 'unknown')
 
     RefreshEquipmentShopItemCatalog()
-    LiveRefreshRegisteredShop()
+    EnsureEquipmentShopReflectsCurrentCatalog()
 
     return { ok = true, items = ListEquipmentShopItems() }
 end)
@@ -1829,7 +2001,7 @@ lib.callback.register('qbx_k9unit:server:equipmentShopItemsDelete', function(sou
     WriteShopItemAudit('item_delete', key, ('item %s removed from sale (tombstoned)'):format(key), citizenid or 'unknown')
 
     RefreshEquipmentShopItemCatalog()
-    LiveRefreshRegisteredShop()
+    EnsureEquipmentShopReflectsCurrentCatalog()
 
     return { ok = true, items = ListEquipmentShopItems() }
 end)
@@ -1873,8 +2045,23 @@ end)
 --- one level in, with an EXPLICIT `false` (veto/deny) on failure, so an
 --- unanticipated bug in this function denies the shop-open attempt instead
 --- of silently granting it.
+--- REGISTERS AT MOST ONCE, EVER, PER SERVER SESSION (this pass, coder-
+--- backend -- see this file's own "RUNTIME TOGGLE-ON FORWARD DECLARATIONS"
+--- header for the full citation). ox_inventory's own real `registerHook`
+--- has no de-duplication of its own -- `eventHooks[event]` is a plain,
+--- ever-growing array a second call would simply APPEND to, producing a
+--- second, fully redundant copy of this exact veto logic that fires
+--- forever alongside the first. This function may now be called any
+--- number of times (a subsequent toggle-on edge, or an item-catalog edit
+--- arriving before the shop was ever activated) -- EquipmentShopOpenHookRegistered
+--- guards every call after the first successful one down to a plain
+--- `return true`, never touching ox_inventory again.
 --- @param shopType string -- Config.K9EquipmentShop.shopType, captured once at registration time
+--- @return boolean ok
+local EquipmentShopOpenHookRegistered = false
 local function RegisterEquipmentShopOpenShopBlockHook(shopType)
+    if EquipmentShopOpenHookRegistered then return true end
+
     local function EvaluateOpenShopHook(payload)
         if type(payload) ~= 'table' or payload.shopType ~= shopType then return end -- not our shop -- never touch anyone else's
 
@@ -1903,9 +2090,13 @@ local function RegisterEquipmentShopOpenShopBlockHook(shopType)
         return veto
     end)
 
-    if not registered then
+    if registered then
+        EquipmentShopOpenHookRegistered = true
+    else
         print('[qbx_k9unit] equipmentshop: WARNING: could not register the openShop per-person block/grant hook -- a `block.K9EquipmentShop`/`feature.K9EquipmentShop` permission grant will NOT be enforced this session (expected/inert on a non-ox_inventory backend -- see shared/compat/inventory.lua\'s own "RegisterHook VOCABULARY" section: only ox_inventory currently translates the \'openShop\' event). The server-wide Config.Features.K9EquipmentShop flag is unaffected either way.')
     end
+
+    return registered
 end
 
 --- Gates ox_inventory's own `buyItem` event with THIS item's own
@@ -1925,8 +2116,16 @@ end
 --- a tier/specialization-gated item to ANY buyer the instant either
 --- function had a bug, with no purchase-time signal that the gate was ever
 --- bypassed.
+--- REGISTERS AT MOST ONCE, EVER, PER SERVER SESSION -- see
+--- RegisterEquipmentShopOpenShopBlockHook's own doc comment immediately
+--- above for the full "why" (ox_inventory's own registerHook has no
+--- de-duplication of its own).
 --- @param shopType string
+--- @return boolean ok
+local EquipmentShopBuyHookRegistered = false
 local function RegisterEquipmentShopBuyItemRequirementHook(shopType)
+    if EquipmentShopBuyHookRegistered then return true end
+
     local function EvaluateBuyItemHook(payload)
         if type(payload) ~= 'table' or payload.shopType ~= shopType then return end -- not our shop
 
@@ -1986,38 +2185,174 @@ local function RegisterEquipmentShopBuyItemRequirementHook(shopType)
         return veto
     end)
 
-    if not registered then
+    if registered then
+        EquipmentShopBuyHookRegistered = true
+    else
         print('[qbx_k9unit] equipmentshop: WARNING: could not register the buyItem purchase-requirement hook -- any tier/specialization requirement set on a shop item will NOT be enforced this session (expected/inert on a non-ox_inventory backend -- see shared/compat/inventory.lua\'s own "RegisterHook VOCABULARY" section: only ox_inventory currently translates the \'buyItem\' event).')
     end
+
+    return registered
 end
 
 -- ======================================================================
--- BOOT -- layer the persisted DB item overrides on top of config.lua's own
--- shipped defaults, refresh the live shop registration ONLY if there is
--- actually an overlay to apply (see RefreshEquipmentShopItemCatalog's own
--- doc comment for why -- a fresh install with zero tablet edits ever made
--- must register the shop exactly ONCE, unchanged from this resource's
--- pre-existing behavior), and register both purchase-time hooks. A
--- SEPARATE, ADDITIONAL onResourceStart handler from BOTH this file's own
--- pre-existing ones above (AddEventHandler allows any number of handlers
--- for the same event; all three run, in registration order, when the
--- event actually fires) -- deliberately not folded into either existing
--- handler, so this section stays independently readable/reviewable, same
--- reasoning this file's own RUNTIME SHOP LOCATIONS boot handler gives for
--- its own separateness.
+-- ACTIVATION -- the single gate that may ever cause this shop to become
+-- live in ox_inventory, on boot OR on a later runtime toggle-on. See this
+-- file's own "RUNTIME TOGGLE-ON FORWARD DECLARATIONS" header (top of file)
+-- for the full design writeup -- these are the real bodies for the two
+-- names forward-declared there, assigned now (not `local function`) since
+-- both are already `local` upvalues from that earlier declaration -- same
+-- idiom this file already uses for ItemByKey/ItemOrder. Defined HERE,
+-- after RegisterEquipmentShopOpenShopBlockHook/
+-- RegisterEquipmentShopBuyItemRequirementHook/RefreshEquipmentShopItemCatalog/
+-- LiveRefreshRegisteredShop all exist, because this function calls every
+-- one of them.
+-- ======================================================================
+
+--- True once RegisterShop has actually succeeded at least once THIS
+--- session (via either RegisterEquipmentShopFromConfig or
+--- LiveRefreshRegisteredShop) AND both purchase-enforcement hooks are
+--- confirmed registered. Once true, ActivateEquipmentShopIfEnabled becomes
+--- a permanent no-op for the rest of this resource's life -- ongoing item
+--- edits flow through EnsureEquipmentShopReflectsCurrentCatalog's OTHER
+--- branch instead (a direct LiveRefreshRegisteredShop call, never back
+--- through this function -- see that function's own doc comment).
+local EquipmentShopFullyActivated = false
+
+--- @see this file's own "RUNTIME TOGGLE-ON FORWARD DECLARATIONS" header
+function ActivateEquipmentShopIfEnabled()
+    if EquipmentShopFullyActivated then return end
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return end
+
+    local shopConfig = Config.K9EquipmentShop
+    local shopType = type(shopConfig) == 'table' and shopConfig.shopType or nil
+
+    if type(shopType) ~= 'string' or shopType == '' then
+        -- No usable shopType to filter a hook on at all -- let
+        -- RegisterEquipmentShopFromConfig print its own specific shape
+        -- warning (table missing vs shopType missing/empty) exactly like
+        -- it always has, and stop there.
+        RegisterEquipmentShopFromConfig()
+        return
+    end
+
+    -- HOOKS FIRST, ALWAYS -- see header "THE HOOKS ARE THE ENFORCEMENT" /
+    -- "HOOKS FIRST, ALWAYS". Each call is individually idempotent (its own
+    -- EquipmentShopOpenHookRegistered/EquipmentShopBuyHookRegistered guard)
+    -- -- calling this whole function again later after a partial failure
+    -- never re-registers a hook that already succeeded, and never appends
+    -- a duplicate to ox_inventory's own ever-growing hook array.
+    local openOk = RegisterEquipmentShopOpenShopBlockHook(shopType)
+    local buyOk = RegisterEquipmentShopBuyItemRequirementHook(shopType)
+    if not (openOk and buyOk) then
+        print('[qbx_k9unit] equipmentshop: ERROR: REFUSING to activate the K9 Supply shop -- one or both ox_inventory purchase-enforcement hooks (openShop block / buyItem requirement) failed to register (see the WARNING line(s) immediately above for which, and why). A shop that exists in ox_inventory with no enforcement hook attached would have no per-person block and no purchase-tier/specialization requirement -- worse than no shop at all -- so RegisterShop is being skipped entirely this attempt. Will retry automatically on the next toggle-on edge or item-catalog edit.')
+        return
+    end
+
+    -- BOTH the original, byte-for-byte-unchanged raw-config registration
+    -- AND the existing database-overlay live-refresh -- the two pre-
+    -- existing, independent, already-tested registration paths this file
+    -- has always had, now simply sequenced correctly behind the hooks
+    -- above, never a third, competing implementation of either.
+    local baseOk = RegisterEquipmentShopFromConfig()
+    local hasOverlay = RefreshEquipmentShopItemCatalog()
+    local overlayOk = hasOverlay and LiveRefreshRegisteredShop() or false
+
+    if baseOk or overlayOk then
+        EquipmentShopFullyActivated = true
+    end
+end
+
+--- Called after every successful item-catalog write
+--- (equipmentShopItemsUpsert/Reorder/Delete). If the shop is already fully
+--- activated this session, simply re-registers from the just-updated
+--- merged catalog via the EXISTING LiveRefreshRegisteredShop -- never a
+--- second, parallel implementation of "how to call RegisterShop." If the
+--- shop has NOT yet been activated (e.g. Config.Features.K9EquipmentShop
+--- was off at boot and an admin edited an item before ever toggling it
+--- on), this does NOT call RegisterShop directly on its own -- it routes
+--- through ActivateEquipmentShopIfEnabled instead, so an item-catalog edit
+--- can never be the thing that creates a shop with no enforcement hooks
+--- attached (see this file's own "RUNTIME TOGGLE-ON FORWARD DECLARATIONS"
+--- header for the pre-existing bug this closes).
+--- @see this file's own "RUNTIME TOGGLE-ON FORWARD DECLARATIONS" header
+function EnsureEquipmentShopReflectsCurrentCatalog()
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return end
+    if EquipmentShopFullyActivated then
+        LiveRefreshRegisteredShop()
+        return
+    end
+    ActivateEquipmentShopIfEnabled()
+end
+
+-- ======================================================================
+-- BOOT -- register the two purchase-time hooks (and, transitively, the
+-- shop itself -- see ActivateEquipmentShopIfEnabled above) when the
+-- feature is already on at boot. A SEPARATE, ADDITIONAL onResourceStart
+-- handler from this file's own pre-existing ones above (AddEventHandler
+-- allows any number of handlers for the same event; all run, in
+-- registration order, when the event actually fires) -- kept separate so
+-- this section stays independently readable/reviewable, same reasoning
+-- this file's own RUNTIME SHOP LOCATIONS boot handler gives for its own
+-- separateness. ActivateEquipmentShopIfEnabled is itself idempotent, so it
+-- makes no difference that this file's very first onResourceStart handler
+-- (the REGISTRATION section, top of file) already calls it too -- whichever
+-- of the two runs first (registration order: the REGISTRATION section's
+-- handler was registered earlier in this file, so it runs first) performs
+-- the real activation; this one is then a guaranteed no-op.
 -- ======================================================================
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
     if not (Config.Features and Config.Features.K9EquipmentShop == true) then return end
+    ActivateEquipmentShopIfEnabled()
+end)
 
-    local hasOverlay = RefreshEquipmentShopItemCatalog()
-    if hasOverlay then
-        LiveRefreshRegisteredShop()
-    end
+-- ======================================================================
+-- RUNTIME TOGGLE-ON WATCHER -- the actual fix for "the shop cannot be
+-- turned on at runtime". Every boot-time path above only ever runs once
+-- (onResourceStart fires exactly once); this is what makes a LATER
+-- toggle-on (server/runtimecontrol.lua's own runtimeSetFeature, confirmed
+-- by reading it directly this pass, flips the live Config.Features.
+-- K9EquipmentShop table entry immediately, with no event of its own for
+-- another file to react to) actually do something.
+--
+-- EDGE-TRIGGERED, not level-triggered: Config.Features.K9EquipmentShop is
+-- re-read once per poll and compared against the last value THIS thread
+-- itself last saw; ActivateEquipmentShopIfEnabled is attempted only on a
+-- false -> true transition, never on every single tick while the flag
+-- merely stays true. Two reasons, both deliberate: (1) once activated,
+-- ActivateEquipmentShopIfEnabled is already a cheap, guarded no-op, so
+-- re-calling it every tick would be harmless but wasteful; (2) if the
+-- config is genuinely broken (e.g. no valid items), re-attempting on every
+-- single tick would re-print the same shape warning forever for as long
+-- as the flag stays on, which an edge-trigger avoids -- a fresh attempt,
+-- and a fresh warning if it is still broken, happens once per toggle-on,
+-- not once every EQUIPMENT_SHOP_ACTIVATION_POLL_MS forever.
+--
+-- BOUNDED LATENCY, DISCLOSED: up to EQUIPMENT_SHOP_ACTIVATION_POLL_MS
+-- after a live toggle-on, never instant -- there is no push notification
+-- anywhere in this resource for a Config.Features change (ApplyFeatureOverride,
+-- server/runtimecontrol.lua, is a plain table write with no event fired),
+-- so polling is the only mechanism available that stays entirely inside
+-- this file. 5000ms matches this resource's own established tick-interval
+-- magnitude elsewhere (server/wellbeing.lua's own default TICK_INTERVAL_MS).
+--
+-- TOGGLE-OFF IS NOT THIS THREAD'S JOB -- see this file's own "TOGGLE-OFF
+-- MUST NOT STRAND ANYONE" header note: the two already-registered hooks
+-- re-check the live flag on every single open/buy attempt on their own,
+-- so a toggle OFF is enforced by them immediately, with nothing for this
+-- watcher to do.
+-- ======================================================================
+local EQUIPMENT_SHOP_ACTIVATION_POLL_MS = 5000
 
-    local shopConfig = Config.K9EquipmentShop
-    if type(shopConfig) == 'table' and type(shopConfig.shopType) == 'string' and shopConfig.shopType ~= '' then
-        RegisterEquipmentShopOpenShopBlockHook(shopConfig.shopType)
-        RegisterEquipmentShopBuyItemRequirementHook(shopConfig.shopType)
+CreateThread(function()
+    local lastSeenEnabled = Config.Features and Config.Features.K9EquipmentShop == true
+    while true do
+        Wait(EQUIPMENT_SHOP_ACTIVATION_POLL_MS)
+
+        local nowEnabled = Config.Features and Config.Features.K9EquipmentShop == true
+        if nowEnabled and not lastSeenEnabled then
+            ActivateEquipmentShopIfEnabled()
+        end
+        lastSeenEnabled = nowEnabled
     end
 end)
