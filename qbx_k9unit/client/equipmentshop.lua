@@ -34,34 +34,34 @@
     error.
 
     ======================================================================
-    A REAL PED, NOT A BARE SPHERE (originally coder-frontend). The owner's
-    own words: "make the shop a dog ped." Previously this file built an
-    invisible `ox_target` sphere zone at each configured location; it now
-    spawns a real, visible ped there instead and targets THAT PED directly
-    via `K9Compat.Get('target').AddLocalEntity` -- the correct primitive for
+    A REAL PED, NOT A BARE SPHERE. The owner's own words: "make the shop a
+    dog ped." Previously this file built an invisible `ox_target` sphere
+    zone at each configured location; it now spawns a real, visible ped
+    there instead and targets THAT PED directly via
+    `K9Compat.Get('target').AddLocalEntity` -- the correct primitive for
     a locally-created (non-networked) entity handle, originally confirmed by
     reading ox_target's own client/api.lua directly (`addEntity` takes a
     NETWORK ID and is for networked entities; `addLocalEntity` takes a raw
     entity handle and is the one this file's own non-networked peds need),
     and now also confirmed for qb-target/qtarget/sleepless_interact -- see
     shared/compat/target.lua's own per-adapter comments for the full,
-    per-backend confirmation record this method goes through since this
-    pass). Which model, and any idle scenario it plays, is
-    fully operator-configurable (Config.K9EquipmentShop.pedModel/
-    pedHeading/pedScenario, or a per-location override of any of those three
-    plus `label`) -- never hardcoded, and never validated against
-    Config.Peds, since a shop attendant is not a K9.
+    per-backend confirmation record this method goes through). Which model,
+    and any idle scenario it plays, is fully operator-configurable
+    (Config.K9EquipmentShop.pedModel/pedHeading/pedScenario, or a
+    per-location override of any of those three plus `label`) -- never
+    hardcoded, and never validated against Config.Peds, since a shop
+    attendant is not a K9.
 
     ======================================================================
-    COMPAT LAYER (this pass). Both third-party calls this
-    file makes -- targeting the ped, and opening the shop UI -- now go
-    through `K9Compat.Get(...)` (shared/compat/core.lua) instead of a direct
+    COMPAT LAYER. Both third-party calls this file makes -- targeting the
+    ped, and opening the shop UI -- go through `K9Compat.Get(...)`
+    (shared/compat/core.lua) instead of a direct
     `exports.ox_target`/`exports.ox_inventory` call, so this feature keeps
     working on a server running qb-target/qtarget/sleepless_interact for
     targeting, or a non-ox_inventory backend for the shop UI, per
     Config.Compat. This closes a real gap: `AddLocalEntity`/
-    `RemoveLocalEntity` were never part of the target adapter contract until
-    this pass, because this shop-ped feature was built AFTER that contract
+    `RemoveLocalEntity` were not originally part of the target adapter
+    contract, because this shop-ped feature was built AFTER that contract
     was first written and nobody re-checked its call sites against it (see
     DEVELOPER_REFERENCE.md §21 for the fuller writeup of that failure
     shape). `K9Compat.Get('target')`/`K9Compat.Get('inventory')` are NEVER
@@ -80,7 +80,7 @@
     fxmanifest.lua), so `K9Compat` is always defined by the time this file's
     own top-level code runs.
 
-    NATIVES VERIFIED THIS PASS, against https://runtime.fivem.net/doc/natives.json
+    NATIVES VERIFIED, against https://runtime.fivem.net/doc/natives.json
     (every one of these has NO decl page at
     https://raw.githubusercontent.com/citizenfx/fivem/master/ext/native-decls/ --
     all nine returned HTTP 404 there, which per this resource's own
@@ -201,16 +201,16 @@
       [SOURCE-ORIGIN GUARDED -- see the handler itself]
 
     ======================================================================
-    FXMANIFEST.LUA PLACEMENT: unchanged from before this pass --
-    `client/equipmentshop.lua` is already listed in client_scripts, no
-    reordering needed. Reads only `Config`, already loaded via
-    shared_scripts; calls only `K9Compat.Get(...)` (shared/compat/*.lua,
-    ALSO loaded via shared_scripts, and therefore already defined by the
-    time any client_scripts entry runs -- see fxmanifest.lua's own
-    shared_scripts ordering), which in turn reaches `exports.ox_target`/
-    `exports.ox_inventory` (or whatever else Config.Compat resolved) on this
-    file's behalf; plus `lib.callback.await`, already a hard dependency of
-    this whole resource via ox_lib.
+    FXMANIFEST.LUA PLACEMENT: `client/equipmentshop.lua` is already listed
+    in client_scripts, no reordering needed. Reads only `Config`, already
+    loaded via shared_scripts; calls only `K9Compat.Get(...)`
+    (shared/compat/*.lua, ALSO loaded via shared_scripts, and therefore
+    already defined by the time any client_scripts entry runs -- see
+    fxmanifest.lua's own shared_scripts ordering), which in turn reaches
+    `exports.ox_target`/`exports.ox_inventory` (or whatever else
+    Config.Compat resolved) on this file's behalf; plus
+    `lib.callback.await`, already a hard dependency of this whole resource
+    via ox_lib.
 ]]
 
 -- ======================================================================
@@ -430,36 +430,36 @@ local function SpawnShopPed(key, loc)
     -- Target THE PED directly (AddLocalEntity, a raw entity handle -- see
     -- this file's header for why this, not AddModel/a bare sphere zone).
     -- Routed through K9Compat (shared/compat/core.lua) rather than
-    -- `exports.ox_target:addLocalEntity` directly this pass -- see this
-    -- file's own "COMPAT LAYER" header section. The returned handle is
-    -- OPAQUE and private to whichever adapter produced it (see
-    -- shared/compat/target.lua's own header) -- recorded here, passed to
-    -- RemoveLocalEntity UNTOUCHED in DespawnShopPed below, never inspected.
-    -- A `nil` handle (no usable target adapter detected) is recorded as-is;
-    -- DespawnShopPed's own `if handle then` guard already treats that as
-    -- "nothing to remove", so no ped is targetable but nothing errors.
-    -- ROLE ICON (this pass, "3rd eye" UX coordination -- resource-wide
-    -- settled scheme: fa-dog = K9-role/CanShowK9UI()-gated, fa-user-tie = a
-    -- separate human acting on/for a K9, fa-handshake = partnership,
-    -- fa-id-badge = high command/credentialing). This option carries NO
-    -- CanShowK9UI() gate at all -- any eligible department member can walk
-    -- up and buy gear, K9 or not -- so it is a HANDLER-bucket action
-    -- (fa-user-tie), not a K9-role one, even though it previously used a
-    -- shopping-basket icon that named the ACTION rather than who performs
-    -- it. `groups` below (ox_target's own department/grade filter) already
-    -- keeps this option from ever appearing to someone outside the
-    -- configured department at all -- see this file's header on why that
-    -- is a real, engine-level filter, not merely a canInteract convenience.
-    -- KNOWN, DISCLOSED GAP left for this pass: a per-citizenid
-    -- `block.K9EquipmentShop` grant (server/equipmentshop.lua's
-    -- IsEquipmentShopPermittedForCitizenId, surfaced to the player only via
-    -- equipmentshop.blocked_from_shop AFTER they already select this
-    -- option and the shop UI refuses to open) is invisible to this file --
-    -- there is no existing round trip this client can cheaply read to hide
-    -- the option in advance for a specifically-blocked player, and adding
-    -- one is a server-side surface change outside this file's ownership.
-    -- Flagged to main/coder-backend rather than silently left; every OTHER
-    -- refusal this pass could reach client-side is fixed.
+    -- `exports.ox_target:addLocalEntity` directly -- see this file's own
+    -- "COMPAT LAYER" header section. The returned handle is OPAQUE and
+    -- private to whichever adapter produced it (see shared/compat/target.lua's
+    -- own header) -- recorded here, passed to RemoveLocalEntity UNTOUCHED
+    -- in DespawnShopPed below, never inspected. A `nil` handle (no usable
+    -- target adapter detected) is recorded as-is; DespawnShopPed's own
+    -- `if handle then` guard already treats that as "nothing to remove",
+    -- so no ped is targetable but nothing errors.
+    -- ROLE ICON (resource-wide settled scheme: fa-dog = K9-role/
+    -- CanShowK9UI()-gated, fa-user-tie = a separate human acting on/for a
+    -- K9, fa-handshake = partnership, fa-id-badge = high
+    -- command/credentialing). This option carries NO CanShowK9UI() gate at
+    -- all -- any eligible department member can walk up and buy gear, K9
+    -- or not -- so it is a HANDLER-bucket action (fa-user-tie), not a
+    -- K9-role one, even though it previously used a shopping-basket icon
+    -- that named the ACTION rather than who performs it. `groups` below
+    -- (ox_target's own department/grade filter) already keeps this option
+    -- from ever appearing to someone outside the configured department at
+    -- all -- see this file's header on why that is a real, engine-level
+    -- filter, not merely a canInteract convenience.
+    -- KNOWN, DISCLOSED GAP: a per-citizenid `block.K9EquipmentShop` grant
+    -- (server/equipmentshop.lua's IsEquipmentShopPermittedForCitizenId,
+    -- surfaced to the player only via equipmentshop.blocked_from_shop
+    -- AFTER they already select this option and the shop UI refuses to
+    -- open) is invisible to this file -- there is no existing round trip
+    -- this client can cheaply read to hide the option in advance for a
+    -- specifically-blocked player, and adding one is a server-side surface
+    -- change outside this file's ownership. Flagged rather than silently
+    -- left; every OTHER refusal this file could reach client-side is
+    -- fixed.
     local handle = K9Compat.Get('target').AddLocalEntity(ped, {
         {
             name = 'qbx_k9unit:equipmentShop:' .. key,
@@ -508,11 +508,10 @@ end
 --
 -- Wait(PED_DISTANCE_CHECK_INTERVAL_MS) between checks, not Wait(0): a
 -- walk-up shop ped has no need for per-frame responsiveness, and this
--- resource's own performance convention (see this file's own task brief)
--- is to use the largest Wait() that still meets a feature's real
--- responsiveness need -- 1 second is imperceptible for "a ped appears as
--- you approach a shop", the exact same order of magnitude as
--- client/movement.lua's own LEASH_IDLE_TICK_MS.
+-- resource's own performance convention is to use the largest Wait() that
+-- still meets a feature's real responsiveness need -- 1 second is
+-- imperceptible for "a ped appears as you approach a shop", the exact
+-- same order of magnitude as client/movement.lua's own LEASH_IDLE_TICK_MS.
 -- ======================================================================
 
 local PED_SPAWN_RADIUS = 30.0

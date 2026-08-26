@@ -1,39 +1,38 @@
 --[[
     qbx_k9unit/server/inventory.lua
 
-    Phase 4 implementation (coder-backend), DEVELOPER_REFERENCE.md §13.4.2
-    ("K9 Inventory", `Config.Features.K9Inventory`) — read in full before this
-    file was written, along with §13.2's `Config.K9Inventory` sketch, §13.3's
-    file/module plan (this file + client/inventory.lua, a NEW pair, not
-    folded into an existing file, "for the same real ox_inventory capability
-    grant deserves the certification-file's level of scrutiny reasoning
-    §11.3 already gave for splitting client/search.lua from
-    client/tracking.lua by TRUST MODEL"), and server/search.lua's own header/
-    structure (this file's explicit modeling template per the task that
-    produced it: proximity-before-mutation, target re-verification,
-    server-authoritative item consumption/transfer, TOCTOU-safe cooldown
-    stamping via server/cooldowns.lua's shared constructors — no hand-rolled
-    cooldown table). `Config.Features.K9Inventory` stays `false` shipped, per
-    this resource's "ship disabled until acceptance criteria are fully met"
-    convention (DEVELOPER_REFERENCE.md §9 item 4 / DEVELOPER_REFERENCE.md §13.6 item 8 both still
-    apply: every numeric placeholder in Config.K9Inventory needs a
-    config-validator pass, and §13.6 item 7's ox_inventory export-signature
-    verification pass — see the CONFIDENCE NOTEs below — has not happened
-    this session).
+    DEVELOPER_REFERENCE.md §13.4.2 ("K9 Inventory", `Config.Features.K9Inventory`)
+    — read in full before this file was written, along with §13.2's
+    `Config.K9Inventory` sketch, §13.3's file/module plan (this file +
+    client/inventory.lua, a NEW pair, not folded into an existing file —
+    the same real ox_inventory capability grant deserves the
+    certification-file's level of scrutiny reasoning §11.3 already gives
+    for splitting client/search.lua from client/tracking.lua by TRUST
+    MODEL), and server/search.lua's own header/structure (this file's
+    explicit modeling template: proximity-before-mutation, target
+    re-verification, server-authoritative item consumption/transfer,
+    TOCTOU-safe cooldown stamping via server/cooldowns.lua's shared
+    constructors — no hand-rolled cooldown table). `Config.Features.K9Inventory`
+    stays `false` shipped, per this resource's "ship disabled until
+    acceptance criteria are fully met" convention (DEVELOPER_REFERENCE.md §9
+    item 4 / DEVELOPER_REFERENCE.md §13.6 item 8 both still apply: every
+    numeric placeholder in Config.K9Inventory needs a config-validator pass,
+    and §13.6 item 7's ox_inventory export-signature verification pass —
+    see the CONFIDENCE NOTEs below — has not fully happened).
 
     ======================================================================
     RESOLVED DESIGN DECISION — Config.K9Inventory.accessScope
     (DEVELOPER_REFERENCE.md §13.4.2 open question 1 / §13.6 item 3)
 
-    coder-security FINDING (this pass), CONFIRMED and independently
-    RE-VERIFIED against the live, current `overextended/ox_inventory` `main`
-    branch source (fetched fresh this session — modules/inventory/
-    server.lua's `loadInventoryData`, root `server.lua`'s `openInventory`/
-    `forceOpenInventory`, modules/bridge/server.lua's `hasGroup`,
-    `registerStash`'s own doc comment): the previous version of this header
-    described `accessScope = 'ownerOnly'` as "a fully supported, symmetric
-    code path... flippable per-deployment with zero code change." That claim
-    was FALSE, and was itself part of the defect — 'ownerOnly' provided NO
+    CONFIRMED and independently RE-VERIFIED against the live, current
+    `overextended/ox_inventory` `main` branch source (fetched fresh from
+    source — modules/inventory/server.lua's `loadInventoryData`, root
+    `server.lua`'s `openInventory`/`forceOpenInventory`,
+    modules/bridge/server.lua's `hasGroup`, `registerStash`'s own doc
+    comment): an earlier version of this header described
+    `accessScope = 'ownerOnly'` as "a fully supported, symmetric code
+    path... flippable per-deployment with zero code change." That claim was
+    FALSE, and was itself part of the defect — 'ownerOnly' provided NO
     actual access control:
 
     - ox_inventory's stash-open path (`loadInventoryData`'s stash branch,
@@ -93,24 +92,24 @@
     failure, per server/main.lua's `nudgeRequiresUnlocked` assert and
     server/search.lua's own `onResourceStart` config-invariant asserts.
 
-    UPDATED THIS PASS (coder-security review) — CHANGED FROM A HARD
-    `assert` TO A WARN-AND-FORCE GUARD, deliberately NOT given the same
-    treatment as those two sibling asserts: this field is the one case in
-    this file (unlike a missing/wrong-type Config TABLE, which has no sane
-    substitute) where an obvious, strictly NARROWER safe fallback exists —
-    `'department'` is already the correct, intended, shipped value, and is
-    the ONLY value this file implements real access control for at all.
-    Aborting this file's ENTIRE `onResourceStart` chain (K9 stash
-    registration, the `allowedItems` hook, everything else registered in
-    that same handler) over one mistyped config field is a disproportionate
-    failure mode when the one correct value is already known and
-    unambiguous — unlike server/main.lua's/server/search.lua's own asserts,
-    each of which guards a shape with no such safe substitute to fall back
-    to. `ResolveConfiguredAccessScope` (below) — same clamp-and-warn SHAPE
-    as server/cooldowns.lua's `ResolveConfiguredThresholdMs` — now WARNS
-    LOUDLY, naming the exact bad value found, on any non-'department'
-    value, then FORCES `Config.K9Inventory.accessScope` back to
-    `'department'` for this session, writing the corrected value BACK onto
+    CHANGED FROM A HARD `assert` TO A WARN-AND-FORCE GUARD, deliberately NOT
+    given the same treatment as those two sibling asserts: this field is
+    the one case in this file (unlike a missing/wrong-type Config TABLE,
+    which has no sane substitute) where an obvious, strictly NARROWER safe
+    fallback exists — `'department'` is already the correct, intended,
+    shipped value, and is the ONLY value this file implements real access
+    control for at all. Aborting this file's ENTIRE `onResourceStart` chain
+    (K9 stash registration, the `allowedItems` hook, everything else
+    registered in that same handler) over one mistyped config field is a
+    disproportionate failure mode when the one correct value is already
+    known and unambiguous — unlike server/main.lua's/server/search.lua's
+    own asserts, each of which guards a shape with no such safe substitute
+    to fall back to. `ResolveConfiguredAccessScope` (below) — same
+    clamp-and-warn SHAPE as server/cooldowns.lua's
+    `ResolveConfiguredThresholdMs` — now WARNS LOUDLY, naming the exact bad
+    value found, on any non-'department' value, then FORCES
+    `Config.K9Inventory.accessScope` back to `'department'` for this
+    session, writing the corrected value BACK onto
     `Config.K9Inventory.accessScope` itself (never just a local), exactly
     like server/pursuitsprint.lua's own
     `Config.PursuitSprint.speedMultiplier =
@@ -131,16 +130,15 @@
     still fail closed for any non-'department' value as defense-in-depth (in
     case a future edit ever reads a DIFFERENT, uncorrected copy of this
     field without going through `ResolveConfiguredAccessScope`), but that
-    code path is UNREACHABLE in a running resource today, exactly as before
-    this pass — 'ownerOnly' is not an implemented, selectable option, it is
-    a rejected one. Still flagged for an explicit human product sign-off
-    before `Config.Features.K9Inventory` ever defaults to `true` on a live
-    server.
+    code path is UNREACHABLE in a running resource today — 'ownerOnly' is
+    not an implemented, selectable option, it is a rejected one. Still
+    flagged for an explicit human product sign-off before
+    `Config.Features.K9Inventory` ever defaults to `true` on a live server.
 
     ======================================================================
     CONFIDENCE NOTES — every ox_inventory export/shape this file's body
-    depends on, graded honestly per this session's own verification (or lack
-    of it), same discipline server/search.lua's header and
+    depends on, graded honestly per the verification performed (or lack of
+    it), same discipline server/search.lua's header and
     DEVELOPER_REFERENCE.md#contraband-search §1 already established for
     Phase 2's export surface:
 
@@ -151,7 +149,7 @@
       via `openInventory` below) is what actually presents/moves items once
       access is granted.
     - `exports.ox_inventory:RegisterStash(id, label, slots, weight, owner,
-      groups)` — VERIFIED this session, directly against the current
+      groups)` — VERIFIED directly against the current
       `overextended/ox_inventory` `main` branch `registerStash` function
       (root server.lua): signature is exactly `registerStash(name, label,
       slots, maxWeight, owner, groups, coords, instance)` — HIGH confidence,
@@ -160,7 +158,7 @@
       request); `registerStash` is fully generic over call timing, nothing
       in it special-cases "declared once at file-load" vs. "called
       lazily at runtime."
-    - `owner`/`groups` semantics — VERIFIED this session against the same
+    - `owner`/`groups` semantics — VERIFIED directly against the same
       source, including `registerStash`'s own doc comment and the actual
       access-check code in `loadInventoryData`/`openInventory`
       (modules/inventory/server.lua, root server.lua): `groups` —
@@ -173,25 +171,23 @@
       `true`) is NOT an access gate at all — confirmed used exclusively for
       `Inventories` table keying and DB persistence, never compared against
       the requesting player's identity anywhere in either function (see the
-      RESOLVED DESIGN DECISION section above for the full trace — this is
-      the coder-security finding this pass fixes).
+      RESOLVED DESIGN DECISION section above for the full trace).
     - `exports.ox_inventory:openInventory('stash', stashId)` (the CLIENT-side
-      call, client/inventory.lua) — VERIFIED this session: this exact call
-      shape (`'stash', stash.name`) appears in ox_inventory's own
+      call, client/inventory.lua) — VERIFIED: this exact call shape
+      (`'stash', stash.name`) appears in ox_inventory's own
       modules/inventory/client.lua. HIGH confidence.
 
     ======================================================================
-    `Config.K9Inventory.allowedItems` ENFORCEMENT — IMPLEMENTED this pass
-    (previously "DELIBERATELY NOT IMPLEMENTED... has NO effect", per both
-    this file's own prior header text and config.lua's own comment on the
-    field — that comment is now stale and needs a follow-up edit by
-    config.lua's owner; this file cannot edit it, see this task's own
-    constraints).
+    `Config.K9Inventory.allowedItems` ENFORCEMENT (previously "DELIBERATELY
+    NOT IMPLEMENTED... has NO effect", per both this file's own prior
+    header text and config.lua's own comment on the field — that comment is
+    now stale; config.lua's own comment on Config.K9Inventory.allowedItems
+    should be updated to match).
 
-    MECHANISM, and the source actually read to confirm it this session
+    MECHANISM, and the source actually read to confirm it
     (raw.githubusercontent.com/overextended/ox_inventory, `main` branch,
-    fetched fresh this session — no SHA pin available, GitHub's API was not
-    reachable this session to resolve one, only the raw file endpoint was):
+    fetched fresh — no SHA pin available; GitHub's API was not reachable to
+    resolve one, only the raw file endpoint was):
 
     - `exports.ox_inventory:registerHook(event, callback)` — confirmed real,
       `modules/hooks/server.lua`'s `TriggerEventHooks(event, payload)`: for
@@ -211,7 +207,7 @@
       (the single server-side entry point that handles EVERY client-driven
       "move an item from inventory A to inventory B" action — drag-drop
       swap/stack/move onto an existing or empty slot, and drop-to-ground) —
-      traced end to end this session, all four `TriggerEventHooks('swapItems',
+      traced end to end, all four `TriggerEventHooks('swapItems',
       hookPayload)` call sites inside it (`action` = 'swap'/'stack'/'move',
       plus `dropItem`'s separate 'drop' case) — confirms `if not
       hooks.success then return end` runs BEFORE any of that action's actual
@@ -238,26 +234,26 @@
       prefix is this resource's own naming convention, keeps the filter
       correctly scoped to only the stashes this resource itself registers).
     - `ox_inventory:giveItem` (player-to-player) and the shop `'buyItem'`
-      hook were also traced this session and confirmed to NEVER target a
-      stash `toInventory` at all (`giveItem` returns immediately unless
+      hook were also traced and confirmed to NEVER target a stash
+      `toInventory` at all (`giveItem` returns immediately unless
       `toInventory.player` is truthy; the shop's `TriggerEventHooks('buyItem',
       ...)` call always sets `toInventory = playerInv.id`, the buying
       player's own inventory) — so `swapItems` is confirmed the ONLY
       client-reachable path by which an item can end up owned by a stash,
       not merely the most obvious one.
 
-    WHAT IS DELIBERATELY NEVER FILTERED (the task's own "no unbounded trap"
-    constraint, and this file's own "filter what goes IN, never what comes
-    OUT" framing): the hook body below only inspects `payload.fromSlot` (the
-    item entering `toInventory`) and only ever acts when `payload.toInventory`
-    resolves to a K9 stash AND differs from `payload.fromInventory` — an
-    item already inside a K9 stash moving to a DIFFERENT slot in that SAME
-    stash (`fromInventory == toInventory`, e.g. reorganizing/restacking) is
-    never re-filtered, and taking an item OUT of a K9 stash into any other
-    inventory is structurally invisible to this filter (`toInventory` is the
-    destination the OTHER inventory in that case, never the K9 stash) —
-    ox_inventory's own slot/weight limits are the only restriction on
-    withdrawals, exactly as before this pass. This also means an item that
+    WHAT IS DELIBERATELY NEVER FILTERED (this resource's own "no unbounded
+    trap" constraint, and this file's own "filter what goes IN, never what
+    comes OUT" framing): the hook body below only inspects
+    `payload.fromSlot` (the item entering `toInventory`) and only ever acts
+    when `payload.toInventory` resolves to a K9 stash AND differs from
+    `payload.fromInventory` — an item already inside a K9 stash moving to a
+    DIFFERENT slot in that SAME stash (`fromInventory == toInventory`, e.g.
+    reorganizing/restacking) is never re-filtered, and taking an item OUT
+    of a K9 stash into any other inventory is structurally invisible to
+    this filter (`toInventory` is the destination the OTHER inventory in
+    that case, never the K9 stash) — ox_inventory's own slot/weight limits
+    are the only restriction on withdrawals. This also means an item that
     was already sitting in a K9 stash before `allowedItems` was configured
     (or before it was tightened) is never retroactively stuck — it can
     always be taken back out, only never re-deposited once removed if it is
@@ -269,19 +265,17 @@
     header has the full "why a runtime check, not a `dependencies` version
     pin" writeup — not re-derived here). A small LOCAL copy of that
     capability check lives in this file (`IsOxInventoryHookCapable` below) —
-    NOT extracted to a shared resource-global, because this task's own scope
-    is limited to this file pair only; flagged as a REFACTOR_ROADMAP
-    candidate (a second independent copy now exists) for whoever next
-    touches both files with broader scope. If the capability check fails
+    NOT extracted to a shared resource-global, so a second independent copy
+    now exists; flagged as a REFACTOR_ROADMAP candidate for a future
+    consolidation pass touching both files. If the capability check fails
     while `Config.Features.K9Inventory` AND a non-nil `Config.K9Inventory.
     allowedItems` are both configured, this file prints ONE warning and
     leaves the whitelist genuinely unenforced (the stash itself keeps
-    working, unfiltered) — never a fake/silent pass, matching this task's
-    explicit instruction for the "cannot verify" case. This was NOT the path
-    taken here: the mechanism above WAS independently verified against real,
-    current ox_inventory source this session, so the hook is registered for
-    real whenever the capability check passes (expected to be the normal
-    case on any current ox_inventory install).
+    working, unfiltered) — never a fake/silent pass. This was NOT the path
+    taken here: the mechanism above WAS independently verified against
+    real, current ox_inventory source, so the hook is registered for real
+    whenever the capability check passes (expected to be the normal case on
+    any current ox_inventory install).
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 4.
@@ -351,21 +345,20 @@
     - THIS FILE owns `K9InventoryOpenCooldown` and `K9InventoryOpenMutex`
       below as file-local state, each a server/cooldowns.lua tracker
       instance (DEVELOPER_REFERENCE.md item 1's established convention — no
-      hand-rolled cooldown/mutex table, per this file's own task-level
-      instruction).
+      hand-rolled cooldown/mutex table).
     - THIS FILE calls `ResolveNetworkEntity(netId, expectedEntityType?)` and
       `ResolveConnectedPlayerFromPed(entity)`, both resource-globals from
       server/entities.lua (DEVELOPER_REFERENCE.md item 2/item 2b) — do not
       re-implement either resolve/existence-guard sequence here.
       HandleOpenK9Inventory below used to define its own bare
       `if entity == 0 then` check (no `DoesEntityExist` guard at all — the
-      weakest surviving copy of this pattern in the whole resource, per the
-      Revision 5 audit) plus a small local copy of
-      `ResolveConnectedPlayerFromPed`, duplicated from server/search.lua's
-      function of the same name/purpose because, at the time this file was
-      written, server/search.lua exposed no resource-global functions to
-      reuse. Both are now the shared server/entities.lua globals instead —
-      see HandleOpenK9Inventory's own comment for the exact migration.
+      weakest surviving copy of this pattern in the whole resource) plus a
+      small local copy of `ResolveConnectedPlayerFromPed`, duplicated from
+      server/search.lua's function of the same name/purpose because, at the
+      time this file was written, server/search.lua exposed no
+      resource-global functions to reuse. Both are now the shared
+      server/entities.lua globals instead — see HandleOpenK9Inventory's own
+      comment for the exact migration.
     - THIS FILE also CONSUMES a second export from ox_inventory (a
       dependency in the "this file's runtime behavior is contingent on
       external code" sense, not a call THIS FILE initiates) —
@@ -394,12 +387,12 @@ K9InventoryOpenCooldown.RegisterPlayerDropped()
 
 -- Defensive per-interactor-source mutex, mirroring server/search.lua's
 -- SearchMutex — added even though RegisterStash is NOT confirmed to be a
--- yielding call this session (see this file's header CONFIDENCE NOTE): if
--- it turns out to yield on some ox_inventory internal path this session
--- didn't observe, this closes the exact same same-source concurrent-call
--- race server/search.lua's SearchMutex closes for GetInventoryItems, at
--- negligible cost if it never actually yields. Set synchronously before any
--- potentially-yielding work, cleared on every exit path.
+-- yielding call (see this file's header CONFIDENCE NOTE): if it turns out
+-- to yield on some ox_inventory internal path not observed here, this
+-- closes the exact same same-source concurrent-call race server/search.lua's
+-- SearchMutex closes for GetInventoryItems, at negligible cost if it never
+-- actually yields. Set synchronously before any potentially-yielding work,
+-- cleared on every exit path.
 local K9InventoryOpenMutex = NewMutex()
 K9InventoryOpenMutex.RegisterPlayerDropped()
 
@@ -407,12 +400,12 @@ K9InventoryOpenMutex.RegisterPlayerDropped()
 -- RegisterStash'd this server session — avoids re-registering (and
 -- re-deriving owner/groups) on every single open request. Deliberately
 -- never evicted: unlike server/certifications.lua's Certifications table
--- (which was a regression-tester finding specifically because it held
--- security-relevant, potentially-stale state), a stale entry here can never
--- cause an incorrect access decision — it only ever skips a redundant
--- RegisterStash call for a citizenid this session has already seen. Bounded
--- in practice by the number of distinct K9 characters actually accessed in
--- one server session, not unbounded resource-lifetime growth.
+-- (which held security-relevant, potentially-stale state), a stale entry
+-- here can never cause an incorrect access decision — it only ever skips a
+-- redundant RegisterStash call for a citizenid this session has already
+-- seen. Bounded in practice by the number of distinct K9 characters
+-- actually accessed in one server session, not unbounded resource-lifetime
+-- growth.
 local EnsuredK9Stashes = {}
 
 -- Precomputed `table<jobName, minGrade>` for the 'department' accessScope
@@ -427,24 +420,23 @@ for jobName in pairs(Config.Departments) do
     K9InventoryDepartmentGroups[jobName] = 0
 end
 
--- CONFIG-SAFETY GUARD (coder-security finding, originally an `assert` —
--- CHANGED THIS PASS to a warn-and-force guard, see this file's header
--- RESOLVED DESIGN DECISION section, "UPDATED THIS PASS", for the full
--- before/after reasoning and the failure-direction proof). `'department'`
--- is the ONLY `Config.K9Inventory.accessScope` value this file implements a
--- real ox_inventory access control for — `'ownerOnly'` (or any other value)
--- relies on ox_inventory's `owner` RegisterStash argument, which is never
--- checked against the calling player's identity anywhere in ox_inventory's
--- own open-inventory path (independently verified against the live,
--- current `overextended/ox_inventory` source this session): `groups` via
--- `server.hasGroup` is the only real gate, and a nil `groups` (what
--- 'ownerOnly' produces) short-circuits to ALLOW for every caller. Warning
--- loudly and forcing the one safe value here, at resource start, rather
--- than letting a misconfigured value silently grant world-readable
--- read/write access to every K9's stash — placed in THIS file (not
--- centralized) because this is the file whose security model actually
--- depends on it, same reasoning server/search.lua's own header already
--- gives for that placement choice.
+-- CONFIG-SAFETY GUARD (originally a hard assert, changed to a
+-- warn-and-force guard — see this file's header RESOLVED DESIGN DECISION
+-- section for the full before/after reasoning and the failure-direction
+-- proof). `'department'` is the ONLY `Config.K9Inventory.accessScope`
+-- value this file implements a real ox_inventory access control for --
+-- `'ownerOnly'` (or any other value) relies on ox_inventory's `owner`
+-- RegisterStash argument, which is never checked against the calling
+-- player's identity anywhere in ox_inventory's own open-inventory path
+-- (independently verified against the live, current
+-- `overextended/ox_inventory` source): `groups` via `server.hasGroup` is
+-- the only real gate, and a nil `groups` (what 'ownerOnly' produces)
+-- short-circuits to ALLOW for every caller. Warning loudly and forcing the
+-- one safe value here, at resource start, rather than letting a
+-- misconfigured value silently grant world-readable read/write access to
+-- every K9's stash — placed in THIS file (not centralized) because this is
+-- the file whose security model actually depends on it, same reasoning
+-- server/search.lua's own header already gives for that placement choice.
 --- Same clamp-and-warn SHAPE as server/cooldowns.lua's
 --- ResolveConfiguredThresholdMs: validate, and on failure, print ONE loud
 --- (never silent) warning naming the exact bad value found and what is
@@ -490,8 +482,8 @@ end)
 -- ======================================================================
 -- Config.K9Inventory.allowedItems ENFORCEMENT — see this file's header for
 -- the full mechanism/verification writeup. Everything below this point
--- (through the onResourceStart block that calls registerHook) is new this
--- pass; nothing above this comment changed.
+-- (through the onResourceStart block that calls registerHook) implements
+-- this; nothing above this comment is part of it.
 -- ======================================================================
 
 -- Precomputed `table<itemName, true>` lookup, built once at file load from
@@ -512,12 +504,12 @@ if Config.K9Inventory.allowedItems then
     end
 end
 
---- COMPAT-LAYER MIGRATION (this pass, coder-backend): the local
---- `IsOxInventoryHookCapable()` runtime-capability probe that used to live
---- here (a byte-for-byte duplicate of server/tracking.lua's function of the
---- same name — `GetResourceState('ox_inventory') == 'started'` +
---- pcall'd export-access, run BEFORE the actual `registerHook` call below)
---- is DELETED outright, not kept alongside the new call. `K9Compat.Get('inventory').RegisterHook`
+--- COMPAT-LAYER MIGRATION: the local `IsOxInventoryHookCapable()`
+--- runtime-capability probe that used to live here (a byte-for-byte
+--- duplicate of server/tracking.lua's function of the same name —
+--- `GetResourceState('ox_inventory') == 'started'` + pcall'd export-access,
+--- run BEFORE the actual `registerHook` call below) is DELETED outright,
+--- not kept alongside the new call. `K9Compat.Get('inventory').RegisterHook`
 --- (shared/compat/core.lua's RequiredMethods.inventory.server.RegisterHook,
 --- registered against real signatures in shared/compat/inventory.lua)
 --- already performs the identical capability check internally, per-adapter,
@@ -533,17 +525,17 @@ end
 --- own header already documents — see that function's own doc comment for
 --- the full updated writeup.
 ---
---- Config.K9Inventory.allowedItems ENFORCEMENT (this pass). GATED AT
---- REGISTRATION, same "config-gated registration, not just config-gated
---- behavior" convention server/tracking.lua's ScentTracking block already
---- establishes for this identical export: if Config.Features.K9Inventory is
---- false, OR Config.K9Inventory.allowedItems is nil (no whitelist
---- configured — nothing to enforce), the hook is never registered at all.
---- If a whitelist IS configured but IsOxInventoryHookCapable() fails, this
+--- Config.K9Inventory.allowedItems ENFORCEMENT. GATED AT REGISTRATION, same
+--- "config-gated registration, not just config-gated behavior" convention
+--- server/tracking.lua's ScentTracking block already establishes for this
+--- identical export: if Config.Features.K9Inventory is false, OR
+--- Config.K9Inventory.allowedItems is nil (no whitelist configured —
+--- nothing to enforce), the hook is never registered at all. If a
+--- whitelist IS configured but IsOxInventoryHookCapable() fails, this
 --- prints ONE warning and leaves the whitelist genuinely unenforced (the K9
 --- stash itself keeps working, unfiltered) rather than pretending — same
---- honest-soft-disable posture this task requires and server/tracking.lua's
---- ScentTracking block already established for this exact export.
+--- honest-soft-disable posture server/tracking.lua's ScentTracking block
+--- already established for this exact export.
 ---
 --- Invoked from `onResourceStart` on TWO triggers (see the `AddEventHandler`
 --- below this function's body for the dispatch), not just THIS resource's
@@ -564,32 +556,31 @@ end
 --- `payload.toInventory` is ever inspected, and why that scope can never
 --- trap an item already inside a K9 stash).
 ---
---- PULLED OUT TO A NAMED FUNCTION (this pass, LIFECYCLE FIX): so it can be
---- invoked from BOTH lifecycle points registered below it -- THIS resource's
---- own onResourceStart (the original, only call site before this pass) and,
---- NEW this pass, ox_inventory's OWN onResourceStart. Mirrors
---- server/tracking.lua's RegisterScentInventoryHook fix for the identical
---- gap against the identical export -- see that function's own doc comment
---- for the full source-verified "ox_inventory's `eventHooks` table is a
---- plain file-local Lua variable, re-initialized empty on every ox_inventory
---- (re)load, with no symmetric mechanism to ask a still-running OTHER
---- resource to re-register after ox_inventory itself restarts" writeup (not
---- re-derived here). Without the second trigger, a bare `restart
---- ox_inventory` (a normal ops action, e.g. after an ox_inventory update)
---- that does not also restart qbx_k9unit would leave allowedItems
---- enforcement silently, permanently disabled for the rest of qbx_k9unit's
---- uptime -- worse than the already-accepted "silently inert, loudly warned
---- ONCE" posture below, since in that specific case no warning would ever
---- print either (nothing about THIS resource changed to trigger one).
---- Idempotent to call repeatedly across however many times either resource
---- restarts, for the same reason RegisterScentInventoryHook is: each
---- ox_inventory restart already wiped its own hook table clean first, so
---- there is never anything stale here to duplicate.
+--- PULLED OUT TO A NAMED FUNCTION (LIFECYCLE FIX) so it can be invoked from
+--- BOTH lifecycle points registered below it -- THIS resource's own
+--- onResourceStart (the original call site) and ox_inventory's OWN
+--- onResourceStart. Mirrors server/tracking.lua's RegisterScentInventoryHook
+--- fix for the identical gap against the identical export -- see that
+--- function's own doc comment for the full source-verified "ox_inventory's
+--- `eventHooks` table is a plain file-local Lua variable, re-initialized
+--- empty on every ox_inventory (re)load, with no symmetric mechanism to ask
+--- a still-running OTHER resource to re-register after ox_inventory itself
+--- restarts" writeup (not re-derived here). Without the second trigger, a
+--- bare `restart ox_inventory` (a normal ops action, e.g. after an
+--- ox_inventory update) that does not also restart qbx_k9unit would leave
+--- allowedItems enforcement silently, permanently disabled for the rest of
+--- qbx_k9unit's uptime -- worse than the already-accepted "silently inert,
+--- loudly warned ONCE" posture below, since in that specific case no
+--- warning would ever print either (nothing about THIS resource changed to
+--- trigger one). Idempotent to call repeatedly across however many times
+--- either resource restarts, for the same reason RegisterScentInventoryHook
+--- is: each ox_inventory restart already wiped its own hook table clean
+--- first, so there is never anything stale here to duplicate.
 local function RegisterK9InventoryItemFilterHook()
     if not Config.Features.K9Inventory then return end -- nothing to gate for; do not probe/warn about a disabled-by-default feature
     if not K9InventoryAllowedItemSet then return end -- no whitelist configured -- Config.K9Inventory.allowedItems' own documented `nil` meaning; inert by config choice, not by missing capability, so no warning either
 
-    -- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+    -- ROUTED THROUGH K9Compat.Get('inventory') --
     -- shared/compat/core.lua's RequiredMethods.inventory.server.RegisterHook
     -- -- never a direct `exports.ox_inventory:registerHook` call. The
     -- capability check that used to gate this call (`IsOxInventoryHookCapable()`,
@@ -635,11 +626,11 @@ local function RegisterK9InventoryItemFilterHook()
         -- always be the full item table for every swapItems branch that can
         -- reach a stash toInventory (see header). Defensive type checks
         -- only: a shape mismatch here means some other resource/ox_inventory
-        -- version is driving this hook differently than confirmed this
-        -- session -- fail OPEN (never filter) rather than reject on a shape
-        -- this file cannot actually interpret, matching this file's own
-        -- "never a fake/silent pass, but also never a confidently-wrong
-        -- reject" posture.
+        -- version is driving this hook differently than confirmed here --
+        -- fail OPEN (never filter) rather than reject on a shape this file
+        -- cannot actually interpret, matching this file's own "never a
+        -- fake/silent pass, but also never a confidently-wrong reject"
+        -- posture.
         local incomingItem = payload.fromSlot
         if type(incomingItem) ~= 'table' or type(incomingItem.name) ~= 'string' then
             return
@@ -659,13 +650,14 @@ local function RegisterK9InventoryItemFilterHook()
     end
 end
 
--- LIFECYCLE FIX (this pass): dispatches to RegisterK9InventoryItemFilterHook()
--- above on TWO distinct triggers, not just one -- see that function's own doc
--- comment for the full writeup of why the second branch is required (mirrors
--- server/tracking.lua's identical fix for the identical export/gap).
+-- LIFECYCLE FIX: dispatches to RegisterK9InventoryItemFilterHook() above on
+-- TWO distinct triggers, not just one -- see that function's own doc
+-- comment for the full writeup of why the second branch is required
+-- (mirrors server/tracking.lua's identical fix for the identical
+-- export/gap).
 --
 -- Branch 1 (original, unchanged behavior): THIS resource's own start.
--- Branch 2 (COMPAT-LAYER MIGRATION, this pass): used to hardcode
+-- Branch 2 (COMPAT-LAYER MIGRATION): used to hardcode
 -- `resourceName == 'ox_inventory'` -- now asks K9Compat itself which
 -- resource actually backs the 'inventory' system, same pattern
 -- client/inventory.lua's own RegisterK9InventoryOxTargetOption dispatch
@@ -674,8 +666,8 @@ end
 -- onResourceStart redetect hook having already run for this SAME event)
 -- so this check is correct regardless of relative handler-registration
 -- order between the two files. Hardcoding 'ox_inventory' here would have
--- silently reopened exactly the single-backend gap this whole pass exists
--- to close: a qb-inventory server restarting qb-inventory would never
+-- silently reopened exactly the single-backend gap this fix exists to
+-- close: a qb-inventory server restarting qb-inventory would never
 -- re-trigger this branch at all.
 AddEventHandler('onResourceStart', function(resourceName)
     if resourceName == GetCurrentResourceName() then
@@ -757,7 +749,7 @@ end
 --- calls the (session-unverified, see this file's header) RegisterStash
 --- export once per citizenid per session.
 ---
---- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
+--- ROUTED THROUGH K9Compat.Get('inventory') --
 --- shared/compat/core.lua's RequiredMethods.inventory.server.RegisterStash
 --- -- never a direct `exports.ox_inventory:RegisterStash` call.
 --- `K9Compat.Get('inventory').RegisterStash` already pcall-wraps the
@@ -768,12 +760,12 @@ end
 --- (same disclosed trade-off as this file's RegisterShop-equivalent sibling,
 --- server/equipmentshop.lua).
 ---
---- STUB-DEGRADE ANALYSIS (this task's own explicit question, answered here
---- since this is THE security-critical mutation this file grants):
---- ox_inventory is a hard fxmanifest.lua dependency today, so this call has
---- never had to survive it being absent. Routed through K9Compat, a fully
---- undetected inventory (the no-op stub) makes RegisterStash return `nil`
---- (falsy) -- this function returns `false`, HandleOpenK9Inventory's caller
+--- STUB-DEGRADE ANALYSIS (this is the security-critical mutation this file
+--- grants, so it is answered here explicitly): ox_inventory is a hard
+--- fxmanifest.lua dependency today, so this call has never had to survive
+--- it being absent. Routed through K9Compat, a fully undetected inventory
+--- (the no-op stub) makes RegisterStash return `nil` (falsy) -- this
+--- function returns `false`, HandleOpenK9Inventory's caller
 --- (lib.callback.register('qbx_k9unit:server:openK9Inventory', ...)) reports
 --- `{ ok = false, reason = 'stash_failed' }`, and client/inventory.lua's own
 --- K9_INVENTORY_REASON_MESSAGES table already has a `stash_failed` entry
@@ -781,7 +773,7 @@ end
 --- error notify -- a genuinely clean "feature switched off" degrade, not a
 --- hang or an uncaught error, and not a NEW code path either: this is the
 --- exact same reason value/notify this file already returned before this
---- pass whenever the (previously ox_inventory-only) pcall'd RegisterStash
+--- change whenever the (previously ox_inventory-only) pcall'd RegisterStash
 --- call failed. On qb-inventory specifically (the other CONFIRMED backend),
 --- RegisterStash is REAL (composed onto `CreateInventory`, per
 --- shared/compat/inventory.lua's own qb-inventory section) so the K9
@@ -793,12 +785,12 @@ end
 --- backend at all, per that adapter's own header) -- meaning the real access
 --- boundary for a qb-inventory-backed K9 stash is ENTIRELY this file's own
 --- server-side checks (HasK9Access, IsAuthorizedForK9Inventory, proximity),
---- never anything qb-inventory itself enforces. That is unchanged by this
---- pass (those checks all ran before EnsureK9Stash is ever reached, and
---- still do) -- flagged here only because it is the one place "which
---- backend is active" changes what is actually the security boundary,
---- which is worth a reader knowing explicitly rather than assuming
---- ox_inventory's groups-based enforcement is universal.
+--- never anything qb-inventory itself enforces. That is unchanged (those
+--- checks all ran before EnsureK9Stash is ever reached, and still do) --
+--- flagged here only because it is the one place "which backend is active"
+--- changes what is actually the security boundary, which is worth a reader
+--- knowing explicitly rather than assuming ox_inventory's groups-based
+--- enforcement is universal.
 --- @param citizenid string
 --- @return boolean ok
 local function EnsureK9Stash(citizenid)
@@ -830,15 +822,15 @@ end
 ---      cross-check its REAL type is a ped in one call — never trust a
 ---      claimed type (there's no client-supplied targetType here at all,
 ---      unlike search.lua, since this feature only ever targets a K9 ped).
----      DEVELOPER_REFERENCE.md item 2 (Revision 5 migration): was this
----      function's own bare `if entity == 0 then` check — no
----      `DoesEntityExist` call, no netId-type guard at all, the weakest
----      surviving copy of this pattern in the resource per the Revision 5
----      audit — followed by a SEPARATE `GetEntityType(entity) ~= 1` check.
----      Both are now server/entities.lua's shared `ResolveNetworkEntity()`,
----      called with expectedEntityType = 1 (ped-only, same restriction as
----      before, not loosened) to fold both into one call and add the
----      missing `DoesEntityExist` guard.
+---      DEVELOPER_REFERENCE.md item 2: was this function's own bare
+---      `if entity == 0 then` check — no `DoesEntityExist` call, no
+---      netId-type guard at all, the weakest surviving copy of this
+---      pattern in the resource — followed by a SEPARATE
+---      `GetEntityType(entity) ~= 1` check. Both are now
+---      server/entities.lua's shared `ResolveNetworkEntity()`, called with
+---      expectedEntityType = 1 (ped-only, same restriction as before, not
+---      loosened) to fold both into one call and add the missing
+---      `DoesEntityExist` guard.
 ---   3. Resolve the entity to a currently-connected player (never an NPC).
 ---   4. Confirm the target's LIVE server-side ped model is a configured K9
 ---      model (IsConfiguredK9Model) — this is specifically a "K9 gear"
@@ -876,11 +868,11 @@ local function HandleOpenK9Inventory(source, targetNetId)
     end
 
     -- WIDENED (K9 role/model decoupling, server/appearance.lua), NOT
-    -- DELETED: a first pass at this site considered simply removing this
-    -- check outright, reasoning that the HasK9Access(targetServerId) check
-    -- immediately below already "is" the role check. That reasoning does
-    -- not hold up: HasK9Access is deliberately BROADER than the K9 role
-    -- (HasK9Role) -- it also returns true for a high-command bypass
+    -- DELETED: removing this check outright was considered and rejected,
+    -- reasoning that the HasK9Access(targetServerId) check immediately
+    -- below already "is" the role check. That reasoning does not hold up:
+    -- HasK9Access is deliberately BROADER than the K9 role (HasK9Role) --
+    -- it also returns true for a high-command bypass
     -- (server/highcommand.lua's IsHighCommand) or an officer above
     -- Config.Departments' autoAccessGrade threshold, NEITHER of whom is
     -- actually the K9 in a handler/K9 pairing. Deleting this line outright
@@ -895,8 +887,8 @@ local function HandleOpenK9Inventory(source, targetNetId)
     -- genuine K9-role holder can be targeted at all, and HasK9Access below
     -- still independently confirms that access hasn't since lapsed. Same
     -- `type(...) == 'function'` guard/fail-closed reasoning as every other
-    -- widened site this pass (server/main.lua's CheckLeashEligibility has
-    -- the fullest writeup).
+    -- site widened the same way (server/main.lua's CheckLeashEligibility
+    -- has the fullest writeup).
     if not (IsConfiguredK9Model(GetEntityModel(entity)) or (type(HasK9Role) == 'function' and HasK9Role(targetServerId))) then
         return { ok = false, reason = 'invalid_target' } -- not currently playing a recognized K9 model, and does not hold the decoupled K9 role either
     end
@@ -931,9 +923,9 @@ local function HandleOpenK9Inventory(source, targetNetId)
     end
 
     -- Stamp the cooldown NOW, before the possibly-yielding RegisterStash
-    -- call below (DEVELOPER_REFERENCE.md#contraband-search §3 step 13's exact
-    -- "stamp before the awaited work" discipline, applied here defensively
-    -- even though RegisterStash is not confirmed to yield this session).
+    -- call below (DEVELOPER_REFERENCE.md#contraband-search §3 step 13's
+    -- exact "stamp before the awaited work" discipline, applied here
+    -- defensively even though RegisterStash is not confirmed to yield).
     K9InventoryOpenCooldown.Touch(source)
 
     if not EnsureK9Stash(targetCitizenid) then

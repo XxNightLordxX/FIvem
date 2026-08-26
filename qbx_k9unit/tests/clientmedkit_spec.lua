@@ -141,7 +141,7 @@ local function newMedkitFixture(opts)
     local notifyCalls = {}
     local libStub = {
         callback = { await = function() return awaitResult end },
-        notify = function(opts) notifyCalls[#notifyCalls + 1] = opts end,
+        notify = function(notifyOpts) notifyCalls[#notifyCalls + 1] = notifyOpts end,
     }
 
     local overrides = {

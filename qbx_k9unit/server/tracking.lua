@@ -1559,6 +1559,41 @@ end)
 -- this pass's own report), not an oversight; nothing here prevents adding
 -- that later as a genuinely separate, additive reveal source.
 --
+-- THE "NO WALLHACK" DESIGN TENSION, WEIGHED EXPLICITLY (qa-tester finding,
+-- this pass -- not silently left unwritten the way this resource's own
+-- convention forbids): client/scenttrail.lua's header argues, at length,
+-- against "a menu that hands you the answer" (its own citation of the
+-- Batman/Witcher detective-vision criticism) and deliberately ships a
+-- SMALLER information surface than even THIS file's own Track Scent/Blood/
+-- Gunpowder trio for exactly that reason. ScentVision does not touch that
+-- hunt mechanic's own hidden coordinate at all (separate state, separate
+-- files, confirmed by direct read before this feature was built) -- but it
+-- IS, honestly, a LARGER reveal than the trio it sits next to in this same
+-- file: Track Blood/Gunpowder/Scent only ever produce a point when the
+-- SUBJECT does something specific (bleeds, fires a weapon, drops an item)
+-- -- a triggered, event-shaped disclosure. ScentVision instead reveals
+-- every nearby connected player's ordinary walked path, continuously, with
+-- NO triggering act required of the subject at all -- the closest thing
+-- this resource has shipped to "always know roughly who has been nearby."
+-- This was weighed, not overlooked, and the answer is: built anyway, on the
+-- owner's own explicit, repeated, increasingly specific direction (a
+-- keybind, colours per person, a "handful near the dog", a 45-second
+-- per-dot timer) -- not a case of this file's own judgment call filling a
+-- gap the owner left open. The mitigations actually in place are the ones
+-- the owner himself asked for and that also happen to narrow the exposure:
+-- range-limited (queryRangeMeters), count-limited (maxVisibleTrails x
+-- queryMaxPointsPerTrail), time-limited (dotLifetimeMs), and per-person
+-- block/grant-gated the same as every other tracking feature in this file
+-- (IsTrackingFeaturePermittedForCitizenId('ScentVision')) -- so an operator
+-- who decides this crosses a line for their server can narrow it (lower the
+-- range/handful/lifetime) or block it per-person without touching code. A
+-- narrower design -- e.g. only ever showing a trail for a citizenid already
+-- wanted/flagged by something else in this resource -- was NOT built this
+-- pass: that is a scope/gameplay-design call for the owner/product side,
+-- not one this file's own author should make unilaterally by quietly
+-- narrowing what was explicitly asked for. Recorded here so the next reader
+-- does not mistake silence for the question never having been asked.
+--
 -- SCALE, WORKED OUT, NOT ASSUMED (owner's own explicit requirement: this
 -- must stay smooth on a populated server) -- full arithmetic in this pass's
 -- own report; summarised at each bound below:

@@ -147,10 +147,35 @@ Config.Features = {
     BloodTracking        = true,
     WaterTrackingDecay   = true,
     GunpowderSniffing    = true,
+
+    -- client/tracking.lua + server/tracking.lua (owner-directed pass:
+    -- "make scent tracking... a keybind that makes a colour dot appear
+    -- where players['] blood etc have walked"). A K9 handler presses a
+    -- keybind (RegisterKeyMapping, Config.Tracking.ScentVision.keybind) and
+    -- sees a live overlay of ground-level coloured dots marking where
+    -- OTHER connected players have recently walked -- each dot expires on
+    -- its OWN individual timer from the moment it was recorded (never a
+    -- whole-trail timer), so a trail visibly eats itself from the tail end
+    -- while its fresh end keeps growing. Distinct from Track Scent/Blood/
+    -- Gunpowder above (client/tracking.lua's existing Start*Track()
+    -- trio): those resolve and walk toward exactly ONE nearest logged
+    -- event (a damage hit, a gunshot, an item drop); this instead shows
+    -- several people's general walked paths at once, colour-coded per
+    -- person so multiple trails through the same area can be told apart.
+    -- Server-authoritative throughout: the server samples every connected
+    -- player's own position on its own timer (never a value the client
+    -- supplies), and a querying K9's client is only ever handed the
+    -- nearest HANDFUL of trails within range, pre-coloured, never raw
+    -- identity and never the whole server's positions -- see
+    -- Config.Tracking.ScentVision below and server/tracking.lua's own
+    -- header for the full design (including why "handful", not
+    -- "everyone", is also what keeps this cheap on a populated server).
+    ScentVision          = true,
+
     SearchZones          = true,
     ContrabandAlerts     = true,
 
-    -- server/findalert.lua + client/findalert.lua (K9_IDEAS.md §1, "Make
+    -- server/findalert.lua + client/findalert.lua (PROJECT_HISTORY.md §1, "Make
     -- finds feel like a real alert, not a pop-up message"). A pure REACTION
     -- layer over the search outcome server/search.lua already computes --
     -- it adds no detection logic of its own. When a search comes back
@@ -159,7 +184,7 @@ Config.Features = {
     -- you already get is unchanged; this is on top of it, not instead of it.
     FindAlerts           = true,
 
-    -- client/scenttrail.lua + server/scenttrail.lua (K9_IDEAS.md §2,
+    -- client/scenttrail.lua + server/scenttrail.lua (PROJECT_HISTORY.md §2,
     -- "follow your nose"). Turns a search into a hunt: the K9 sets off
     -- after a hidden spot somewhere near them, guided ONLY by a growl that
     -- pulses faster as they get warmer. No marker, no blip, and -- this is
@@ -168,20 +193,20 @@ Config.Features = {
     -- read the answer out of their own client. Awards no XP.
     ScentTrailHunt       = true,
 
-    -- client/pursuitsprint.lua + server/pursuitsprint.lua (K9_IDEAS.md §5).
+    -- client/pursuitsprint.lua + server/pursuitsprint.lua (PROJECT_HISTORY.md §5).
     -- A short burst where the dog is genuinely faster than the person it is
     -- chasing. Only usable against a WANTED target, only in short bursts,
     -- and on a cooldown -- it ends a foot chase, it does not remove them.
     PursuitSprint        = true,
 
-    -- client/scentlineup.lua + server/scentlineup.lua (K9_IDEAS.md §4).
+    -- client/scentlineup.lua + server/scentlineup.lua (PROJECT_HISTORY.md §4).
     -- "Sniff the row and pick the match": several players stand in a line,
     -- the server secretly picks one, and the K9 gets ONE guess. Nobody --
     -- not even the K9 running it -- is told the answer until that guess is
     -- committed, so it cannot be read out of anyone's game. Awards no XP.
     ScentLineup          = true,
 
-    -- client/sarcalls.lua + server/sarcalls.lua (K9_IDEAS.md §3).
+    -- client/sarcalls.lua + server/sarcalls.lua (PROJECT_HISTORY.md §3).
     -- Missing-person and search-and-rescue calls: the same hunting feel as
     -- the scent trail, pointed at a lost hiker or a piece of property
     -- instead of contraband. Nobody is arrested and nothing bad happens --
@@ -688,11 +713,24 @@ Config.HighCommand = {
     -- key or a double-submitted chat line.
     grantCooldownMs = 1500,
 
-    -- Whether high command may grant XP to THEMSELVES. Defaults false --
-    -- not because it is exploitable (they could trivially ask a peer), but
-    -- because a self-grant is the one case with no second person in the
-    -- audit trail, and keeping it off makes the log meaningful.
-    allowSelfGrant = false,
+    -- Whether high command may grant XP to THEMSELVES. OWNER DECISION:
+    -- "High command can grant anything they want to themselves -- xp
+    -- promotions permissions etc" -- so this now DEFAULTS TRUE, matching
+    -- Config.FeatureControl.allowHighCommandSelfGrant below (self-grant of
+    -- a permission/feature/block entry), which this pass also widened and
+    -- defaults true. The self-grant is never invisible either way:
+    -- server/highcommand.lua audits every '/k9givexp' invocation with an
+    -- explicit `self_grant=true/false` field naming the SAME citizenid as
+    -- both granter and recipient whenever it fires, so "high command gave
+    -- themselves XP" is always a distinguishable, greppable line, not a
+    -- silent mint. Set this to `false` if your server wants the STRICTER,
+    -- pre-owner-decision behaviour back -- a self-grant is the one case
+    -- with no second person in the audit trail, and some operators may
+    -- still want a peer to be the one who presses the button even though
+    -- nothing stops that peer from being asked. Read as `~= false`
+    -- wherever this is consulted, never `x or default`, so an explicit
+    -- `false` is never misread as "not set".
+    allowSelfGrant = true,
 }
 
 -- ======================================================================
@@ -808,46 +846,61 @@ Config.FeatureControl = {
         SARCalls          = true,
     },
 
-    -- CRITICAL DAY-ONE FIX (server/permissions.lua's own "SELF-GRANT"
-    -- header section documents the full reasoning this augments -- read
-    -- that before changing this). Config.Permissions grants/RequireGrant
-    -- feature grants alike may only ever be issued by a high-command
-    -- officer (server/permissions.lua's GrantPermission re-verifies
-    -- IsHighCommand server-side), and self-grant of a NAMED CAPABILITY
-    -- (k9.access/k9.certify/k9.audit/k9.givexp) is unconditionally blocked
-    -- with no escape hatch at all -- see that file's header for why that
-    -- one is correct as-is and is NOT touched by this flag.
+    -- OWNER DECISION (this pass -- server/permissions.lua's own
+    -- "SELF-GRANT" header section documents the full reasoning this
+    -- implements; read that before changing this). The project owner's own
+    -- words: "High command can grant anything they want to themselves --
+    -- xp promotions permissions etc." This flag now governs self-grant for
+    -- EVERY permission namespace server/permissions.lua validates: a
+    -- high-command officer granting THEMSELVES a 'feature.<Name>'/
+    -- RequireGrant entry from THIS table, a 'block.<Name>' entry, OR one of
+    -- the four named capabilities (k9.access/k9.certify/k9.audit/
+    -- k9.givexp) from Config.Permissions above -- all four are the SAME
+    -- decision to the owner, and are now WIDENED (this pass) from a
+    -- previous version that exempted 'feature.<Name>' alone. Every grant
+    -- issued through this flag still requires the officer to independently
+    -- already BE high command (server/permissions.lua's GrantPermission
+    -- re-verifies IsHighCommand server-side on every call, from the
+    -- caller's own live job, never a client claim) -- this flag only ever
+    -- changes what an ALREADY-VERIFIED high-command officer may do to
+    -- their own citizenid, never who counts as high command.
     --
-    -- This flag governs a narrower, different case: a high-command officer
-    -- granting THEMSELVES a 'feature.<Name>'/RequireGrant entry from THIS
-    -- table. Left unconditionally blocked (as it originally shipped), this
-    -- produces a genuine day-one deadlock on the single most common
-    -- topology there is -- a server with exactly ONE high-command officer
-    -- (the owner, on day one, before any second officer is promoted):
-    -- nobody can ever grant that officer 'feature.AdminAuditCommands' (or
-    -- any other entry above), because only high command can grant it, and
-    -- self-grant was blocked outright. Concretely, this made the tablet's
-    -- entire Audit tab permanently unreachable for that officer, forever,
-    -- on the most common day-one server shape there is.
+    -- HISTORY, FOR CONTEXT: this flag was originally added to close a
+    -- genuine day-one deadlock on the single most common topology there
+    -- is -- a server with exactly ONE high-command officer (the owner, on
+    -- day one, before any second officer is promoted): with self-grant of
+    -- 'feature.<Name>' blocked outright, nobody could ever grant that
+    -- officer 'feature.AdminAuditCommands' (or any other RequireGrant
+    -- entry above), permanently locking the tablet's entire Audit tab. The
+    -- four named capabilities and 'block.<Name>' were deliberately left out
+    -- of that earlier fix, since a high-command officer already bypasses
+    -- those checks directly via IsHighCommand regardless of any grant, so
+    -- self-granting them fixed no deadlock. That reasoning still holds --
+    -- it is simply no longer the deciding factor now that the owner has
+    -- asked for self-service across the board as a matter of what his
+    -- server should allow, not as a bug fix.
     --
-    -- DEFAULT TRUE HERE, the OPPOSITE default from
-    -- Config.HighCommand.allowSelfGrant (default false, see that flag's own
-    -- comment) -- deliberately, not an oversight. That flag guards
-    -- self-granting XP: a real, numeric, minted economy value, where the
-    -- judgment call being made ("how much") is genuinely different person
-    -- to person and a missing second-person witness is a real, if small,
-    -- self-dealing-optics concern worth defaulting off. A 'feature.<Name>'
-    -- grant mints nothing and is not a judgment call at all -- it is a
-    -- binary switch that ANY high-command officer already has standing
-    -- authority to flip for ANY citizenid, including this one; a
-    -- high-command officer granting it to themselves reaches no state a
-    -- second high-command officer's rubber stamp would not have produced
-    -- identically. Set this to false only if your department specifically
-    -- wants a second high-command officer's sign-off on every officer's own
-    -- feature access, and accepts that a server with exactly one
-    -- high-command officer then has NO way to grant that officer any
-    -- RequireGrant-listed feature (Audit tab included) until a second one
-    -- is promoted.
+    -- DEFAULT TRUE, matching Config.HighCommand.allowSelfGrant above (this
+    -- pass flipped that flag's own default to match, for the identical
+    -- reason: the owner's decision applies uniformly, not per-mechanism).
+    -- Every self-grant issued under this default is still audited and
+    -- distinguishable from an ordinary grant -- server/permissions.lua's
+    -- LogAuditInvocation prints an explicit `self=true/false` field on
+    -- every GrantPermission audit line, naming the SAME citizenid as both
+    -- granter and recipient whenever it fires. Self-service is the owner's
+    -- decision; invisible self-service is not something this resource
+    -- ships quietly.
+    --
+    -- Set this to false if your server wants the STRICTER, pre-owner-
+    -- decision behaviour back instead -- a second high-command officer's
+    -- own action required on every grant, even to another high-command
+    -- officer, even for a capability IsHighCommand already grants them
+    -- directly -- and accepts that a server with exactly one high-command
+    -- officer then has NO way to grant that officer any RequireGrant-listed
+    -- feature (Audit tab included), any named capability, or any block
+    -- entry, until a second high-command officer is promoted. Read as
+    -- `~= false` wherever this is consulted, never `x or default`, so an
+    -- explicit `false` is never misread as "not set".
     allowHighCommandSelfGrant = true,
 
     -- Whether a handler/K9 may open the tablet and see what they hold.
@@ -1440,7 +1493,7 @@ Config.ContrabandAlertTiers = {
 }
 
 -- ======================================================================
--- FIND ALERTS (Config.Features.FindAlerts) -- K9_IDEAS.md §1. A reaction
+-- FIND ALERTS (Config.Features.FindAlerts) -- PROJECT_HISTORY.md §1. A reaction
 -- layer over the tier names Config.ContrabandAlertTiers above already
 -- defines. It adds no new tiers; it only says how the SEARCHING K9's own
 -- character should react to each existing one.
@@ -1505,6 +1558,115 @@ Config.Tracking = {
         markerSpacing    = 3.0,
         searchCooldownMs = 5000,
         relayCooldownMs  = 300,   -- per-shooter cap on how often relayWeaponFire may log a new entry, same rationale as Blood.relayCooldownMs above. Placeholder pending tuning.
+    },
+
+    -- ==================================================================
+    -- ScentVision (Config.Features.ScentVision). See that flag's own
+    -- comment above for the feature summary. SERVER-SIDE (server/tracking.lua),
+    -- every one of these is read fresh at the point of use (never captured
+    -- once at load) -- a config edit there takes effect on the very next
+    -- capture pass/query, no restart needed, matching this resource's
+    -- DEVELOPER_REFERENCE.md §3 convention. Non-positive *Ms/*Meters values are never
+    -- read as "forever"/"unlimited" -- they are clamped to a safe built-in
+    -- default with a loud one-time warning naming the bad field, the same
+    -- ResolveConfiguredThresholdMs discipline server/cooldowns.lua
+    -- documents and this resource applies everywhere a millisecond
+    -- threshold is read out of an operator-editable Config field.
+    --
+    -- CLIENT-SIDE EXCEPTION, DISCLOSED (qa-tester finding): `pollIntervalMs`
+    -- and `fadeStartFraction` are resolved ONCE, at client/tracking.lua's own
+    -- file-load time, into a local constant -- NOT re-read on every poll or
+    -- every frame. This does not contradict the "live, no restart" claim
+    -- above in practice TODAY: this codebase has no mechanism anywhere to
+    -- push a live config value to an ALREADY-CONNECTED client at all (every
+    -- client loads its own independent copy of this shared_script once, at
+    -- its own resource start) -- so a client-side value already requires
+    -- that client to reconnect/the resource to restart for ANY edit to reach
+    -- it, identically to every other client-only Config field in this
+    -- resource (see server/runtimecontrol.lua's own `tier = 'clientonly'`
+    -- classification for the general shape of this same gap). Flagged
+    -- explicitly so this stops being an implicit assumption the moment a
+    -- future pass ever adds live client-config push: `fadeEnabled` and the
+    -- 45000ms dot-lifetime CLIENT-SIDE FALLBACK default (used only until the
+    -- first server response arrives, which always echoes back the lifetime
+    -- it actually enforced) share this same "resolved once, client-only"
+    -- shape, for the identical reason.
+    -- ==================================================================
+    ScentVision = {
+        -- CAPTURE (server/tracking.lua's position-sampling thread):
+        sampleIntervalMs        = 4000, -- how often EACH connected player's own live position is sampled into their own trail. Lower = a denser, more continuous-looking trail at a higher per-tick native-call cost across the whole population; higher = cheaper but coarser. 4s at typical on-foot speed spaces dots a few metres apart, matching the "well-spaced dots, not a photograph of every footstep" brief.
+        minSampleMovementMeters  = 2.0, -- a new point is only recorded if the player has moved at least this far since their OWN last recorded point -- keeps a stationary/AFK player from stacking redundant, visually-overlapping dots at one spot.
+        maxPointsPerPerson       = 15,  -- hard per-person ring-buffer ceiling, enforced on every capture (oldest evicted first) independent of the age-based expiry below -- this is the real worst-case bound the memory math in this pass's own report is computed from; a misconfigured tiny sampleIntervalMs can never exceed it.
+        dotLifetimeMs            = 45000, -- EACH DOT'S OWN age-out timer (45s shipped default), timestamped at the moment that specific dot was recorded -- never a single timer for the whole trail. The oldest dot vanishes first; the trail's remaining length is itself the "how long ago did they pass" signal. Non-positive is refused (never "forever") -- see this table's own header note above.
+        fadeEnabled              = true,  -- true: a dot's opacity ramps down to 0 over the tail end of its own dotLifetimeMs rather than blinking out; false: full opacity until the instant it expires, then gone. Client-only cosmetic -- flip off for hard edges.
+        fadeStartFraction        = 0.5,   -- fadeEnabled only: a dot stays fully opaque until this fraction of ITS OWN lifetime has elapsed (0.5 = halfway, ~22.5s in at the shipped default), then fades linearly the rest of the way to exactly 0 at expiry. Clamped to [0, 1) at read time.
+
+        -- REVEAL (server/tracking.lua's getScentVisionPoints callback) --
+        -- see server/tracking.lua's own header for why colours are scoped
+        -- to a small "handful" of nearby trails rather than the whole
+        -- server, and why that is also what keeps a query cheap at a large
+        -- population.
+        queryRangeMeters         = 40.0, -- how far from the QUERYING K9's own live position a dot must be to be revealed at all.
+        maxVisibleTrails         = 5,    -- "a handful" (the owner's own word) -- how many DISTINCT people's trails one K9 is ever shown at once, nearest-first. This is also the exact ceiling on genuinely distinguishable colours this feature promises -- see `palette` below and server/tracking.lua's header. Raising this past #palette below reuses colours (a loud one-time warning is printed) rather than silently doing nothing.
+        queryMaxPointsPerTrail   = 12,   -- per shown trail, at most this many of that person's own dots are revealed, nearest-to-the-K9-first -- a second cap on top of maxPointsPerPerson so a single trail's own on-screen density can be tuned independently of the storage-side cap.
+        queryCooldownMs          = 1000, -- server-enforced FLOOR between one caller's queries, independent of the client's own poll cadence below -- defense-in-depth against a modified client polling faster than intended.
+        pollIntervalMs           = 1500, -- the CLIENT's own target poll cadence while the ability is toggled on.
+
+        -- KEYBIND (client/keybinds.lua). A DEFAULT only, per this
+        -- resource's standing RegisterKeyMapping convention -- a player who
+        -- rebinds this in Settings keeps their own choice across a config
+        -- edit or a resource update.
+        --
+        -- 'Z' -- NOT 'B'. A first pass shipped 'B' here without checking
+        -- that Config.Combat.BiteAndHold.toggleKeybind (further down this
+        -- same file) ALSO defaults to 'B' -- a real, ship-blocking
+        -- collision found by the coordinator while wiring the tablet's
+        -- Commands page entry for this command, not caught by this file's
+        -- own header claim of having checked every existing
+        -- RegisterKeyMapping default: that check only ever looked at
+        -- LITERAL keys typed directly into a RegisterKeyMapping(...) call
+        -- (grep-visible), never at a config-driven default like this one or
+        -- BiteAndHold's own -- a config value has to be resolved, not
+        -- grepped, to know what key it actually is. VERIFIED THIS TIME by
+        -- reading the RESOLVED VALUE (not just the call site) of every
+        -- RegisterKeyMapping default across this whole resource: 'X' (vault,
+        -- client/agility.lua), 'N' (pursuit sprint, client/pursuitsprint.lua),
+        -- 'L' (camera, client/movement.lua), 'H' (camera feed,
+        -- Config.CameraFeed.toggleKey above), 'K'/'J' (thermal/night vision,
+        -- Config.Vision.Thermal/.Night.toggleKey above), 'G' (handler-down
+        -- confirm, Config.Combat.HandlerDownDefense.confirmKey below), 'V'/
+        -- 'C'/'U' (sit/bark/recall, literals in client/keybinds.lua), 'B'
+        -- (BiteAndHold.toggleKeybind, below), 'T' (NonLethalTakedown.keybind,
+        -- below), 'Y' (PropDragging.toggleKeybind, below). 'Z' is not among
+        -- them. If this file's own set of RegisterKeyMapping defaults grows
+        -- again, re-verify by resolving every config-driven default's real
+        -- value, not by grepping for literal single-quoted keys alone.
+        --
+        -- IF THIS CHANGES AGAIN: html/tablet.js's Commands page entry for
+        -- `/k9scentvision` hardcodes `defaultKeybind: 'Z'` to match -- update
+        -- both together, or the tablet teaches players the wrong key, which
+        -- is worse than not mentioning one at all.
+        keybind = 'Z',
+
+        -- One fixed, curated swatch per `maxVisibleTrails` slot -- NOT a
+        -- hash into an arbitrarily large colour space. Colour assignment is
+        -- scoped to the small, proximity-ranked visible set above, so a
+        -- fixed one-swatch-per-slot palette this length makes a colour
+        -- collision between two SIMULTANEOUSLY SHOWN trails structurally
+        -- impossible, as long as this array is at least `maxVisibleTrails`
+        -- long. Chosen for maximum hue/lightness separation at a glance,
+        -- not a rigorous colour-vision-deficiency-optimised set -- flagged
+        -- for a coder-ui/native-api-assistant pass if that guarantee is
+        -- ever needed. Extra entries beyond `maxVisibleTrails` are simply
+        -- never used; fewer entries than `maxVisibleTrails` triggers the
+        -- reuse warning noted above.
+        palette = {
+            { r = 230, g = 25,  b = 75  }, -- red
+            { r = 60,  g = 180, b = 75  }, -- green
+            { r = 255, g = 225, b = 25  }, -- yellow
+            { r = 0,   g = 130, b = 200 }, -- blue
+            { r = 245, g = 130, b = 48  }, -- orange
+        },
     },
 }
 
@@ -2790,7 +2952,7 @@ Config.Compat = {
         -- This is written down rather than quietly fixed because making it
         -- true is a large job (converting every one of those direct-call
         -- sites, whatever the current count is), not a small one, and it is
-        -- your call whether it is worth doing. It is recorded in ISSUES.md
+        -- your call whether it is worth doing. It is recorded in KNOWN_ISSUES.md
         -- as a decision waiting on you.
         -- ==============================================================
         framework = {
@@ -2986,7 +3148,7 @@ Config.K9EquipmentShop = {
 }
 
 -- ======================================================================
--- SCENT TRAIL HUNT (Config.Features.ScentTrailHunt) -- K9_IDEAS.md §2.
+-- SCENT TRAIL HUNT (Config.Features.ScentTrailHunt) -- PROJECT_HISTORY.md §2.
 -- client/scenttrail.lua + server/scenttrail.lua.
 --
 -- Different from the scent tracking above, and deliberately so: that one
@@ -3071,7 +3233,7 @@ Config.Database = {
 }
 
 -- ======================================================================
--- PURSUIT SPRINT (Config.Features.PursuitSprint) -- K9_IDEAS.md §5.
+-- PURSUIT SPRINT (Config.Features.PursuitSprint) -- PROJECT_HISTORY.md §5.
 -- client/pursuitsprint.lua + server/pursuitsprint.lua.
 --
 -- A short burst where the dog is genuinely faster than the person running
@@ -3106,7 +3268,7 @@ Config.PursuitSprint = {
 }
 
 -- ======================================================================
--- SCENT LINEUP (Config.Features.ScentLineup) -- K9_IDEAS.md §4.
+-- SCENT LINEUP (Config.Features.ScentLineup) -- PROJECT_HISTORY.md §4.
 -- server/scentlineup.lua + client/scentlineup.lua.
 --
 -- "Sniff the row and pick the match." A K9 invites several online players
@@ -3143,7 +3305,7 @@ Config.ScentLineup = {
 }
 
 -- ======================================================================
--- SEARCH AND RESCUE CALLS (Config.Features.SARCalls) -- K9_IDEAS.md §3.
+-- SEARCH AND RESCUE CALLS (Config.Features.SARCalls) -- PROJECT_HISTORY.md §3.
 -- client/sarcalls.lua + server/sarcalls.lua.
 --
 -- Dispatch hands the K9 a missing-person or lost-property call. Somewhere

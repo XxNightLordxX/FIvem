@@ -1315,6 +1315,9 @@
         cmdref_k9bark_usage: '/k9bark',
         cmdref_k9bark_does: 'Plays a basic bark.',
         cmdref_k9bark_needs: 'K9 access, and Basic Bark Sounds enabled on this server.',
+        cmdref_k9scentvision_usage: '/k9scentvision',
+        cmdref_k9scentvision_does: 'Toggles Scent Vision: coloured dots on the ground showing where nearby people recently walked. Each dot fades on its own timer, so a longer trail means someone passed more recently.',
+        cmdref_k9scentvision_needs: 'K9 access, and Scent Vision enabled on this server.',
         cmdref_k9bitehold_usage: '/k9bitehold',
         cmdref_k9bitehold_does: 'Toggles Bite & Hold on the nearest eligible target, or releases it if your K9 is already holding one.',
         cmdref_k9bitehold_needs: 'K9 access, and Bite & Hold enabled on this server.',
@@ -1877,6 +1880,7 @@
         // has never rebound that key, and never moves an existing one. ----
         { command: 'k9sit', category: 'basic_commands', adminOnly: false, usageKey: 'cmdref_k9sit_usage', doesKey: 'cmdref_k9sit_does', needsKey: 'cmdref_k9sit_needs', gate: { kind: 'access' }, defaultKeybind: 'V' },
         { command: 'k9bark', category: 'basic_commands', adminOnly: false, usageKey: 'cmdref_k9bark_usage', doesKey: 'cmdref_k9bark_does', needsKey: 'cmdref_k9bark_needs', gate: { kind: 'access', featureKey: 'BasicBarkSounds' }, defaultKeybind: 'C' },
+        { command: 'k9scentvision', category: 'basic_commands', adminOnly: false, usageKey: 'cmdref_k9scentvision_usage', doesKey: 'cmdref_k9scentvision_does', needsKey: 'cmdref_k9scentvision_needs', gate: { kind: 'access', featureKey: 'ScentVision' }, defaultKeybind: 'Z' },
 
         // ---- Combat & Restraint (client/keybinds.lua) -- same
         // `defaultKeybind` provenance note as Basic K9 Commands above.

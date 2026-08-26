@@ -243,6 +243,17 @@ local function newTrackingFixture(opts)
     local isPedShooting = false
     local function IsPedShooting(entity) return isPedShooting end
 
+    -- CLIENT CLOCK STUB (ScentVision, this pass) -- NOT previously needed by
+    -- this file (the ORIGINAL client/tracking.lua never calls GetGameTimer()
+    -- at all; every existing thread's cadence is Wait()-driven, not
+    -- elapsed-time-driven). ScentVision's own per-dot expiry math
+    -- (DrawScentVisionPoints, see client/tracking.lua's own comment on
+    -- `ageMs`/`receivedAtClientMs`) is the first thing in this file that
+    -- needs a controllable clock -- a plain mutable value + setter, same
+    -- shape as this fixture's own `pedCoords`/`pedDead` above.
+    local gameTimerMs = 0
+    local function GetGameTimer() return gameTimerMs end
+
     -- PER-PERSON BLOCK (client/featureblocks.lua hand-off item 1,
     -- WaterTrackingDecay, added this pass) -- same "controllable stand-in,
     -- soft dependency" convention clientagility_spec.lua/
@@ -267,6 +278,7 @@ local function newTrackingFixture(opts)
         TriggerServerEvent = TriggerServerEvent,
         AddEventHandler = AddEventHandler,
         IsPedShooting = IsPedShooting,
+        GetGameTimer = GetGameTimer,
         CreateThread = runner.CreateThread,
         Wait = runner.Wait,
     }
@@ -325,6 +337,8 @@ local function newTrackingFixture(opts)
         setWaterHeightFn = function(fn) waterHeightFn = fn end,
         setPedShooting = function(v) isPedShooting = v end,
         setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
+        setGameTimer = function(ms) gameTimerMs = ms end,
+        advanceGameTimer = function(ms) gameTimerMs = gameTimerMs + ms end,
 
         triggerGameEvent = function(eventName, data)
             assert(gameEventHandler, 'client/tracking.lua did not register a gameEventTriggered handler')
@@ -965,6 +979,149 @@ t.test('XP arrival trigger: still fires with XPProgression off, because a second
 
     f.stepOne(1) -- lingering inside the radius must still not refire
     t.equals(#f.triggerServerEventCalls, 1)
+end)
+
+-- ----------------------------------------------------------------------
+-- SCENT VISION (Config.Features.ScentVision) -- owner-directed pass. A
+-- SEPARATE feature/state from the Track <Type> trio above (`ToggleScentVision`/
+-- `IsScentVisionActive`, no relation to `trackingState`) that shares only the
+-- per-frame RENDER decision (threads[2], purely for perf -- see
+-- client/tracking.lua's own `DrawScentVisionPoints` forward-declaration
+-- comment). Its own poll thread is created LAZILY, only once
+-- ToggleScentVision() first turns it on -- it does not exist as
+-- `threads[4]` until a test actually calls that function, matching this
+-- fixture's real `runner.CreateThread` shape (a plain append, not a
+-- fixed-size preallocation).
+-- ----------------------------------------------------------------------
+
+t.test('ScentVision: ToggleScentVision() denies access when Config.Features.ScentVision is off, and never activates', function()
+    local f = newTrackingFixture()
+    f.env.Config.Features.ScentVision = false
+    local before = f.denyCallCount()
+
+    f.env.ToggleScentVision()
+
+    t.equals(f.denyCallCount(), before + 1, 'a disabled feature must deny, not silently no-op')
+    t.isFalse(f.env.IsScentVisionActive())
+    t.equals(#f.threads, 3, 'a denied toggle must never create the poll thread')
+end)
+
+t.test('ScentVision: ToggleScentVision() denies access via CanShowK9UI() when the caller cannot use K9 UI', function()
+    local f = newTrackingFixture({ canShowK9UI = false })
+
+    f.env.ToggleScentVision()
+
+    t.isTrue(f.denyCallCount() > 0)
+    t.isFalse(f.env.IsScentVisionActive())
+    t.equals(#f.threads, 3)
+end)
+
+t.test('ScentVision: ToggleScentVision() turns on, creates exactly one poll thread, and polls the documented callback', function()
+    local f = newTrackingFixture()
+
+    f.env.ToggleScentVision()
+
+    t.isTrue(f.env.IsScentVisionActive())
+    t.equals(#f.threads, 4, 'activating must create exactly one new poll thread')
+
+    f.queueCallbackResponse({ points = {}, dotLifetimeMs = 45000 })
+    f.stepOne(4) -- this fixture's own convention: a thread's FIRST resume performs its real first pass, not merely a prime (see this file's header)
+
+    t.equals(f.lastCallbackCall().event, 'qbx_k9unit:server:getScentVisionPoints')
+end)
+
+t.test('ScentVision: toggling OFF is unconditional (never gated) and does not error even with nothing active', function()
+    local f = newTrackingFixture()
+    f.env.ToggleScentVision() -- on
+    f.env.ToggleScentVision() -- off
+    t.isFalse(f.env.IsScentVisionActive())
+
+    -- Calling it a third time (off -> on again) must not be blocked by
+    -- anything the first on/off cycle left behind.
+    f.env.ToggleScentVision()
+    t.isTrue(f.env.IsScentVisionActive())
+end)
+
+t.test('ScentVision: a received point is drawn by the SHARED render thread with its own colour, and the thread runs at Wait(0) while it is live', function()
+    local f = newTrackingFixture()
+    f.env.ToggleScentVision()
+    f.queueCallbackResponse({ points = { { x = 1, y = 2, z = 3, r = 10, g = 20, b = 30, ageMs = 0 } }, dotLifetimeMs = 45000 })
+    f.stepOne(4) -- poll pass: stores the snapshot
+
+    f.stepOne(2) -- shared render thread: one frame
+
+    t.isTrue(#f.drawMarkerCalls >= 1, 'the received point must be drawn')
+    local call = f.drawMarkerCalls[#f.drawMarkerCalls]
+    -- DrawMarker(type, x,y,z, dirX,dirY,dirZ, rotX,rotY,rotZ, sX,sY,sZ, r,g,b,a, ...) -- verified argument order, see client/tracking.lua's own DrawScentVisionPoints doc comment.
+    t.equals(call[14], 10, 'red')
+    t.equals(call[15], 20, 'green')
+    t.equals(call[16], 30, 'blue')
+    t.equals(f.waitLog[2], 0, 'the shared render thread must run at full frame rate while a scent-vision dot is still live')
+end)
+
+t.test('ScentVision: a dot expires against its OWN timestamp (client clock advanced directly, no extra frames) and the render thread goes back to idling', function()
+    local f = newTrackingFixture()
+    f.setGameTimer(100000)
+    f.env.ToggleScentVision()
+    f.queueCallbackResponse({ points = { { x = 1, y = 2, z = 3, r = 10, g = 20, b = 30, ageMs = 0 } }, dotLifetimeMs = 1000 })
+    f.stepOne(4) -- received at client time 100000
+
+    f.stepOne(2)
+    t.equals(#f.drawMarkerCalls, 1)
+    t.equals(f.waitLog[2], 0)
+
+    -- Advance the CLIENT'S OWN clock directly past the dot's lifetime -- no
+    -- additional poll pass, no additional frames beyond the one that
+    -- observes it -- proving expiry is evaluated against a timestamp, never
+    -- a per-frame-decremented countdown (owner's own explicit requirement).
+    f.advanceGameTimer(1001)
+    f.stepOne(2)
+
+    t.equals(#f.drawMarkerCalls, 1, 'no NEW DrawMarker call once the dot has expired')
+    t.equals(f.waitLog[2], 250, 'must go back to idling (TRACK_RENDER_IDLE_TICK_MS) once every scent-vision dot has expired')
+end)
+
+t.test('ScentVision: toggling OFF does not clear an already-received snapshot -- the dot keeps being drawn (and fading) on its own timer until it expires on its own', function()
+    local f = newTrackingFixture()
+    f.setGameTimer(0)
+    f.env.ToggleScentVision()
+    f.queueCallbackResponse({ points = { { x = 1, y = 2, z = 3, r = 10, g = 20, b = 30, ageMs = 0 } }, dotLifetimeMs = 5000 })
+    f.stepOne(4)
+
+    f.env.ToggleScentVision() -- OFF -- must not clear the last-received snapshot
+    t.isFalse(f.env.IsScentVisionActive())
+
+    f.advanceGameTimer(1000) -- still well under dotLifetimeMs
+    f.stepOne(2)
+    t.equals(#f.drawMarkerCalls, 1, 'the dot must still be drawn after toggling off, exactly the "delay before markers go away" the owner asked for')
+
+    f.advanceGameTimer(4001) -- now past dotLifetimeMs (5000 total elapsed)
+    f.stepOne(2)
+    t.equals(#f.drawMarkerCalls, 1, 'no further draw once the dot has finally, individually expired')
+    t.equals(f.waitLog[2], 250, 'the shared render thread must idle again -- nothing left to draw, and the ability is off, so nothing will ever poll for more')
+end)
+
+t.test('ScentVision: an expired dot fades (reduced alpha) rather than staying at full opacity right up to the instant it disappears, when fadeEnabled', function()
+    local f = newTrackingFixture()
+    f.setGameTimer(0)
+    f.env.Config.Tracking.ScentVision.fadeEnabled = true
+    f.env.Config.Tracking.ScentVision.fadeStartFraction = 0.5
+    f.env.ToggleScentVision()
+    f.queueCallbackResponse({ points = { { x = 1, y = 2, z = 3, r = 10, g = 20, b = 30, ageMs = 0 } }, dotLifetimeMs = 1000 })
+    f.stepOne(4)
+
+    f.stepOne(2)
+    local freshAlpha = f.drawMarkerCalls[#f.drawMarkerCalls][17]
+    t.equals(freshAlpha, 200, 'a brand-new dot (well before fadeStartFraction) must draw at full opacity')
+
+    -- 90% of the way through its life -- past fadeStartFraction (0.5) --
+    -- must be visibly dimmer than the fresh draw above, and not yet 0
+    -- (still technically alive at 900/1000ms).
+    f.advanceGameTimer(900)
+    f.stepOne(2)
+    local fadingAlpha = f.drawMarkerCalls[#f.drawMarkerCalls][17]
+    t.isTrue(fadingAlpha < freshAlpha, 'a dot past fadeStartFraction must be dimmer than a fresh one')
+    t.isTrue(fadingAlpha >= 0, 'alpha must never go negative')
 end)
 
 os.exit(t.summary())

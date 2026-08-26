@@ -1,8 +1,8 @@
 --[[
     qbx_k9unit/server/k9profiles.lua
 
-    OWNER-DIRECTED PASS. Owner's own words, verbatim, for THIS pass: high
-    command should be "a god over that tablet with full customization over
+    Project owner's own words, verbatim, for this feature: high command
+    should be "a god over that tablet with full customization over
     everything related to that K9", and separately, "make this a tier
     system."
 
@@ -11,7 +11,7 @@
     after)
     ======================================================================
 
-    Two tier ladders already existed in this codebase before this pass:
+    Two tier ladders already exist in this codebase:
 
       * `k9_certification_tiers` (migration 0010, server/certtiers.lua) --
         trainee/certified/senior, plus anything an operator adds. Carries
@@ -21,15 +21,15 @@
         Trained/Veteran/Elite. THIS ONE ALREADY CARRIES, PER RANK,
         `speedMultiplier`/`scentRangeMultiplier`/`medkitCooldownMultiplier`
         -- i.e. "each tier of dog gets a longer sprint" was already true,
-        PER RANK, before this pass touched anything. Verified by reading
+        PER RANK, before this file existed. Verified by reading
         server/progression.lua and server/xptiers.lua in full before
         writing a line of this file.
 
     CONCLUSION, STATED PLAINLY: the "make this a tier system" half of the
     owner's ask is ALREADY DONE for the three values this codebase has ever
-    made tier-dependent. This pass does NOT add a third parallel ladder --
+    made tier-dependent. This file does NOT add a third parallel ladder --
     doing so would let three places disagree about what "this K9's speed"
-    means, with no way to say which one wins. Instead this pass answers the
+    means, with no way to say which one wins. Instead this file answers the
     OTHER half of the sentence: "everything related to THAT K9" -- an
     individual dog, by citizenid, not a rank everyone in it shares.
 
@@ -51,9 +51,9 @@
       1. GLOBAL DEFAULT: Config.XPTiers[1] (the base rank -- 0 XP, no
          bonus). Every citizenid starts here.
       2. XP TIER PROFILE: GetXPTier(citizenid) (server/progression.lua,
-         unmodified by this pass). This already folds the global default in
+         unmodified by this file). This already folds the global default in
          as its own floor -- an uncached/never-earned citizenid resolves to
-         exactly rank 1 -- so in practice this pass only ever needs to
+         exactly rank 1 -- so in practice this file only ever needs to
          consult this ONE accessor, never the global default separately.
       3. INDIVIDUAL OVERRIDE (THIS FILE, new): a per-citizenid,
          PER-FIELD override in `k9_individual_overrides`. A field left
@@ -68,7 +68,7 @@
       medkit-cooldown actually be right now" -- never GetXPTier directly if
       an individual override is meant to apply (see "INTEGRATION HANDOFF"
       near the bottom of this header for exactly why no existing consumer
-      has been switched over by this pass).
+      has been switched over here).
 
     ======================================================================
     SCOPE -- ONLY THREE FIELDS, DELIBERATELY, NOT "EVERYTHING"
@@ -94,8 +94,7 @@
         farmability concern"). Nothing about making the override
         per-INDIVIDUAL instead of per-RANK changes that finding -- the
         missing composer is the same missing composer either way, and
-        server/wellbeing.lua is both off-limits to this pass and not
-        something this pass's own agent may edit regardless.
+        server/wellbeing.lua is not edited by this file regardless.
       * COMBAT ACTION COOLDOWNS (BiteAndHold/NonLethalTakedown target
         cooldowns, and every anti-XP-farm mint cooldown in
         server/progression.lua/server/combat.lua/server/search.lua/
@@ -203,39 +202,37 @@
     anywhere in this file or its own tests).
 
     ======================================================================
-    INTEGRATION HANDOFF -- UPDATED, PARTIALLY CLOSED THIS PASS (GAP 1
-    closure). ORIGINAL TEXT PRESERVED BELOW, MARKED WHERE IT NO LONGER HOLDS.
+    INTEGRATION HANDOFF -- PARTIALLY CLOSED (GAP 1 closure).
     ======================================================================
 
     `GetK9EffectiveMultipliers` exists, is fully validated, fully audited,
-    and fully unit-tested -- ORIGINALLY (a prior pass) it had NO consumer
-    outside this file's own tests. That is NOW PARTIALLY WIRED, from THIS
-    file's own side of the seam, since `GetK9EffectiveMultipliers` is now a
-    resource-global (see its own updated doc comment above) specifically so
-    server/progression.lua -- which this pass DOES own -- can call it:
+    and fully unit-tested -- it originally had NO consumer outside this
+    file's own tests. That is now PARTIALLY WIRED, from THIS file's own
+    side of the seam, since `GetK9EffectiveMultipliers` is now a
+    resource-global (see its own updated doc comment above) so
+    server/progression.lua can call it:
 
       * server/progression.lua's `GetXPTierMedkitCooldownMs(citizenid,
-        baseCooldownMs)` -- WIRED, THIS PASS. Now consults
+        baseCooldownMs)` -- WIRED. Now consults
         `GetK9EffectiveMultipliers(citizenid).medkitCooldownMultiplier`
         (soft-guarded, `type(...) == 'function'`) instead of reading
         `GetXPTier(citizenid).medkitCooldownMultiplier` raw, so a hand-tuned
         dog's medkit cooldown reflects its override the moment
         server/medkit.lua's own already-reported, still-unapplied one-line
-        integration (that file has a live owner and is not touched by
-        either pass) calls this accessor.
+        integration (that file is not touched here) calls this accessor.
       * The server->client `qbx_k9unit:client:xpTierChanged` snapshot push
-        -- WIRED, THIS PASS, in server/progression.lua (`PushTierSnapshot` /
-        its new `BuildEffectiveTierSnapshot` helper). The payload now carries
+        -- WIRED, in server/progression.lua (`PushTierSnapshot` / its new
+        `BuildEffectiveTierSnapshot` helper). The payload now carries
         the OVERRIDDEN effective speedMultiplier/scentRangeMultiplier/
         medkitCooldownMultiplier, not the raw `Config.XPTiers[n]` row, so
         `client/movement.lua`'s `K9MoveRateModifiers.xpTier` (via
         client/progression.lua's existing, UNCHANGED handler -- neither
         client file needed editing, since both already trust whatever the
         server sends) reflects an override on the citizenid's NEXT snapshot.
-      * THE REMAINING PIECE, ALSO CLOSED THIS PASS (found and fixed only
-        after re-tracing the FULL chain end to end, not assumed complete
-        from the two bullets above alone): those two bullets alone were NOT
-        enough to make an edit LIVE for an ALREADY-CONNECTED citizenid --
+      * THE REMAINING PIECE, ALSO CLOSED (found only after re-tracing the
+        FULL chain end to end, not assumed complete from the two bullets
+        above alone): those two bullets alone were NOT enough to make an
+        edit LIVE for an ALREADY-CONNECTED citizenid --
         `PushTierSnapshot` is only ever CALLED from PlayerLoaded, the
         onResourceStart backfill loop, and a real XP-tier CROSSING inside
         AwardXP/AwardXPDirect, none of which fire merely because THIS file's
@@ -244,8 +241,8 @@
         would sit correct-in-the-database-and-in-GetK9EffectiveMultipliers
         but INVISIBLE on that citizenid's own screen until their next real
         tier crossing, reconnect, or a server restart -- the exact "set it to
-        3.0 and NOTHING HAPPENS" symptom this whole pass exists to close,
-        merely deferred rather than fixed. CLOSED by a new resource-global,
+        3.0 and NOTHING HAPPENS" symptom this file exists to close, merely
+        deferred rather than fixed. CLOSED by a new resource-global,
         server/progression.lua's `PushXPTierSnapshotIfOnline(citizenid)`
         (a thin "resolve the online source, then call the same
         PushTierSnapshot" wrapper -- no second implementation of the
@@ -259,13 +256,13 @@
         speed/scent, as opposed to one individual K9's override, or an
         XP-driven crossing/login) pushes through a SEPARATE channel
         (`server/xptiers.lua:806`) that does not compose this file's own
-        override at all -- reported to that file's owner, not fixed here
-        (out of this pass's own file ownership).
+        override at all -- not fixed here, since it requires editing
+        server/xptiers.lua.
       * server/tracking.lua's own SERVER-SIDE scent-range consumer
         (`GetXPTier(trackerCitizenid).scentRangeMultiplier`, used for a
-        real, live search-radius calculation) -- STILL NOT WIRED. That file
-        has a live owner this pass and is not touched here. The one-line fix
-        is `local effective = GetK9EffectiveMultipliers(trackerCitizenid);
+        real, live search-radius calculation) -- STILL NOT WIRED, since
+        server/tracking.lua is not touched here. The one-line fix is
+        `local effective = GetK9EffectiveMultipliers(trackerCitizenid);
         local scentMult = (effective and effective.scentRangeMultiplier) or
         tier.scentRangeMultiplier` in place of the raw tier read at that
         file's own maxRange calculation -- reported, not applied.
@@ -288,15 +285,14 @@
       RecomputeK9MoveRate() (client/movement.lua, also unchanged)
       -> which calls SetPedMoveRateOverride on that K9's own ped.
     That last native call is the real, in-game, player-visible effect --
-    every link in this chain was read, this pass, to confirm it, not
-    assumed from an accessor existing. Its MEDKIT-COOLDOWN component is
-    wired all the way to the one remaining ready-to-apply patch in
-    server/medkit.lua (unchanged from the prior pass's own disclosure --
-    that file has a live owner and the accessor itself, not its one caller,
-    is what this pass owns). Its SCENT-RANGE component is not yet visible
+    every link in this chain was read to confirm it, not assumed from an
+    accessor existing. Its MEDKIT-COOLDOWN component is wired all the way
+    to the one remaining ready-to-apply patch in server/medkit.lua (that
+    file is not edited here; the accessor itself, not its one caller, is
+    what this file owns). Its SCENT-RANGE component is not yet visible
     anywhere a player could observe it, because its one real consumer
-    (server/tracking.lua) is server-side, in a file neither this nor the
-    prior pass may edit -- disclosed above, not silently dropped.
+    (server/tracking.lua) is server-side, in a file not edited here --
+    disclosed above, not silently dropped.
 ]]
 
 -- ======================================================================
@@ -410,22 +406,22 @@ end
 -- yield), exactly like every other accessor this resource exposes across
 -- the tier catalogs.
 --
--- PROMOTED TO A RESOURCE-GLOBAL THIS PASS (GAP 1 closure -- the owner's own
--- "set a K9's speed multiplier to 3.0 and NOTHING HAPPENS" finding). This
--- used to be `local`, deliberately, exactly as the paragraph this replaces
--- explained: nothing outside this file called it yet. That is no longer
--- true -- server/progression.lua's GetXPTierMedkitCooldownMs and its own
--- client-facing tier-snapshot composer now call this function directly (both
--- behind a `type(GetK9EffectiveMultipliers) == 'function'` soft-dependency
--- guard, this resource's standard convention, since server/k9profiles.lua
--- loads AFTER server/progression.lua in fxmanifest.lua's server_scripts list
--- -- the guard is what makes that safe: every call happens at RUNTIME, long
--- after both files have finished loading, never at either file's own
--- load-time). The matching `.luacheckrc` `globals` entry is added in the
--- SAME change, per this resource's own established "add the allowlist entry
--- in the same pass that creates the cross-file need" convention (see e.g.
--- that file's own `ForceRevertK9Appearance` entry and comment for the
--- precedent this follows).
+-- PROMOTED TO A RESOURCE-GLOBAL (GAP 1 closure -- the owner's own "set a
+-- K9's speed multiplier to 3.0 and NOTHING HAPPENS" finding). This used to
+-- be `local`, deliberately: nothing outside this file called it yet. That
+-- is no longer true -- server/progression.lua's GetXPTierMedkitCooldownMs
+-- and its own client-facing tier-snapshot composer now call this function
+-- directly (both behind a `type(GetK9EffectiveMultipliers) == 'function'`
+-- soft-dependency guard, this resource's standard convention, since
+-- server/k9profiles.lua loads AFTER server/progression.lua in
+-- fxmanifest.lua's server_scripts list -- the guard is what makes that
+-- safe: every call happens at RUNTIME, long after both files have finished
+-- loading, never at either file's own load-time). The matching
+-- `.luacheckrc` `globals` entry is added in the SAME change, per this
+-- resource's own established "add the allowlist entry in the same change
+-- that creates the cross-file need" convention (see e.g. that file's own
+-- `ForceRevertK9Appearance` entry and comment for the precedent this
+-- follows).
 -- GetK9IndividualOverride/ListK9IndividualOverrides immediately below stay
 -- `local` -- still no consumer outside this file's own callbacks.
 -- ======================================================================
@@ -575,8 +571,8 @@ end
 -- server/xptiers.lua's own `{ ok, reason, ... }` convention exactly, for
 -- consistency across this resource's tablet-facing surfaces.
 --
--- EVERY WRITE'S RETURN VALUE IS CHECKED (task rule, restated as a fact
--- about this file's own code, not merely a promise): K9Store.IndividualOverride_Upsert/
+-- EVERY WRITE'S RETURN VALUE IS CHECKED (restated as a fact about this
+-- file's own code, not merely a promise): K9Store.IndividualOverride_Upsert/
 -- Override_Tombstone/OverrideAudit_Append all degrade a thrown DB error to
 -- `false` rather than throwing (the SafeWrite contract, server/datastore.lua's
 -- own header). Every call site below inspects that boolean and returns
@@ -713,8 +709,8 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     -- snapshot to their own client RIGHT NOW -- otherwise an
     -- already-online K9 would keep showing its OLD speed until its next
     -- real XP-tier crossing, reconnect, or a resource restart, which is
-    -- exactly the "set it to 3.0 and NOTHING HAPPENS" complaint this whole
-    -- pass exists to close. Soft-guarded (`type(...) == 'function'`,
+    -- exactly the "set it to 3.0 and NOTHING HAPPENS" complaint this file
+    -- exists to close. Soft-guarded (`type(...) == 'function'`,
     -- pcall-wrapped) -- server/progression.lua loads BEFORE this file in
     -- fxmanifest.lua's server_scripts list, so this is a genuine runtime
     -- existence guard, not a load-order assumption; a missing/throwing

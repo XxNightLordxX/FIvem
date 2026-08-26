@@ -503,6 +503,19 @@ local FEATURE_TIERS = {
     -- ADDED 2026-08-26 (closing the 11-feature audit gap -- see header "UPDATED 2026-08-26"):
     FindAlerts             = { tier = 'live', note = 'server/findalert.lua registers both AddEventHandlers (qbx_k9unit:events:searchCompleted, qbx_k9unit:server:reportTrackSourceArrival) unconditionally at file-load time -- no raw top-level gate exists in this file at all. The shared DispatchFindAlertReaction helper both handlers funnel through re-checks Config.Features.FindAlerts fresh on every single call (its own first line: "if not Config.Features.FindAlerts then return end -- real no-op, not just hidden"), so toggling this off/on stops/starts the bark-on-find reaction genuinely and immediately, with nothing captured once at registration time.' },
     ScentTrailHunt         = { tier = 'live', note = 'server/scenttrail.lua also has no raw top-level gate -- startScentHunt and pollScentHunt (both lib.callback.register) are always registered and each re-checks Config.Features.ScentTrailHunt fresh on every call ("if not Config.Features.ScentTrailHunt then return { started = false, reason = \'denied\' } end" / "... return { active = false } end"). stopScentHunt is UNCONDITIONAL by design (this resource\'s own "no unbounded trap" rule for a termination path, matching server/recall.lua\'s requestRecall) -- never gated on this flag at all, so an already-active hunt can always be cancelled regardless of this flag\'s state.' },
+    -- ADDED post-2026-08-26 (coder-frontend/coder-architect's ScentVision
+    -- feature, landed concurrently with this pass -- classified here per
+    -- their own analysis, independently re-confirmed by direct read of
+    -- server/tracking.lua before trusting it): the CAPTURE thread is a bare
+    -- `while true do if Config.Features.ScentVision then ... else
+    -- Wait(idle) end end` (no raw top-level gate, no onResourceStart-only
+    -- registration) -- re-checked fresh every single loop pass. The QUERY
+    -- side, getScentVisionPoints (lib.callback.register), opens with "if
+    -- not Config.Features.ScentVision then return { points = {} } end" --
+    -- also re-checked fresh on every call. Genuinely live in both
+    -- directions, no partial-liveness caveat needed (unlike ScentTracking's
+    -- own drop-hook gap above).
+    ScentVision            = { tier = 'live' },
 
     -- tier = 'onstart' -- registered inside AddEventHandler('onResourceStart', ...); this file's own override re-application runs first (see FXMANIFEST PLACEMENT), so a persisted override reliably applies on the NEXT restart, never within the current session.
     AdminAuditCommands     = { tier = 'onstart' },
@@ -516,7 +529,6 @@ local FEATURE_TIERS = {
     HandlerDownDefense     = { tier = 'rawtoplevel' },
     Recall                 = { tier = 'rawtoplevel', note = 'This resource\'s one termination/escape-hatch path. If it shipped ON, it stays reachable all session regardless of this file\'s override -- toggling it here can only ever fail to silently turn it ON when it was off, never trap anyone who could already call their K9 off.' },
     PropAttachments        = { tier = 'rawtoplevel' },
-    CommandTablet          = { tier = 'rawtoplevel', note = 'Multiple files register their own CommandTablet-gated tablet callbacks this same way (server/permissions.lua confirmed by direct read; others may exist). Turning this off here does not close an already-registered tablet callback anywhere in this resource.' },
     -- ADDED 2026-08-26 -- all six confirmed by direct read of a bare
     -- `if not Config.Features.X then return end` at that file's own raw
     -- top level, before any RegisterCommand/RegisterNetEvent/lib.callback
@@ -527,6 +539,22 @@ local FEATURE_TIERS = {
     SARCalls               = { tier = 'rawtoplevel', note = 'server/sarcalls.lua opens with "if not Config.Features.SARCalls then return end" before its own asserts, cooldown construction, and callback/command registrations -- the entire file is inert while the flag is off.' },
     ScentLineup            = { tier = 'rawtoplevel', note = 'server/scentlineup.lua opens with "if not Config.Features.ScentLineup then return end" before its own registrations -- the entire file is inert while the flag is off.' },
     TrainingMode           = { tier = 'rawtoplevel', note = 'server/training.lua opens with "if not Config.Features.TrainingMode then return end" before its own registrations -- the entire file is inert while the flag is off.' },
+    -- LOCKOUT-RISK (see "LOCKOUT-RISK FEATURES" below this table): turning
+    -- this off, then actually following through with the config.lua edit +
+    -- restart this tier already requires, removes the ONLY in-game surface
+    -- (command/item) that opens the tablet at all, for EVERYONE including
+    -- high command -- there would be no screen left to turn it back on.
+    -- `lockoutRisk = true` gates SetFeature/ResetFeature behind an explicit
+    -- confirm, same mechanism as HighCommand/PermissionGrants below.
+    -- NOT `sessionOnly`: unlike HighCommand/PermissionGrants, a persisted
+    -- override for a `rawtoplevel` feature can never itself brick anything
+    -- -- it already cannot take effect without a deliberate config.lua edit
+    -- (configEditRequired, below), which is the same conscious, disclosed
+    -- step that already protects every other rawtoplevel entry above.
+    CommandTablet          = { tier = 'rawtoplevel', lockoutRisk = true,
+        note = 'Multiple files register their own CommandTablet-gated tablet callbacks this same way (server/permissions.lua confirmed by direct read; others may exist). Turning this off here does not close an already-registered tablet callback anywhere in this resource.',
+        lockoutWarning = 'Disabling Config.Features.CommandTablet, once a matching config.lua edit and a restart both actually happen (a runtime toggle alone can never enable or disable this feature -- see configEditRequired on the response), removes the tablet\'s command/item registration entirely for EVERYONE, including high command -- there is then no in-game screen left to turn it back on. RECOVERY: edit Config.Features.CommandTablet back to true in config.lua and restart this resource.',
+    },
 
     -- tier = 'clientonly' -- zero occurrences in any server/*.lua file (grepped before writing this list); nothing server-side to toggle.
     RadialMenu             = { tier = 'clientonly' },
@@ -543,20 +571,102 @@ local FEATURE_TIERS = {
     -- ADDED 2026-08-26:
     CameraFeedPiP          = { tier = 'clientonly', note = 'Live toggle takes effect for a client on their next resource start, same as every other clientonly entry. THIS NOTE SAID THE OPPOSITE UNTIL 2026-08-26: it claimed the flag had zero implementing code anywhere and was genuinely inert. That was true when it was written and is not now -- client/vision.lua implements the feature (ToggleCameraFeed / StartCameraFeedAttempt / StopCameraFeed, bound to a command and a keybind when the flag is on), and config.lua\'s own comment on this flag was corrected to match. The old text was served verbatim to operators in this tablet\'s own runtime control screen, telling them a working, shipped, documented feature does nothing. What it IS: a full-screen switch to an active partner\'s viewpoint, not a true picture-in-picture inset -- the engine has no native for a second simultaneous viewport, which is the part that remains genuinely impossible.' },
 
-    -- tier = 'protected' -- see header for why these two cannot be toggled through this system at all.
-    HighCommand            = { tier = 'protected' },
-    PermissionGrants       = { tier = 'protected' },
+    -- ==================================================================
+    -- OWNER DIRECTIVE (2026-08-26), stated twice, verbatim: "High command
+    -- can grant anything they want to themselves xp promotions permissions
+    -- etc" / "If its high command they should have the ability to grant
+    -- whatever they want edit whatever they want etc." These two were
+    -- `tier = 'protected'` -- refused unconditionally, regardless of
+    -- caller, no exceptions -- see header "THE ENGINE CONSTRAINT" for the
+    -- ORIGINAL reasoning that shipped with that tier. That reasoning is
+    -- kept verbatim above because it is still exactly correct as a
+    -- description of the RISK; this pass is a deliberate, owner-directed
+    -- decision to accept that risk with guardrails, not a retraction of
+    -- the reasoning. OPENED THIS PASS, tier = 'live' (the HONEST tier --
+    -- both are genuinely re-checked live on every call: server/
+    -- highcommand.lua's IsHighCommand, line 382-383, `if not
+    -- (Config.Features and Config.Features.HighCommand == true) then
+    -- return false end`; server/permissions.lua's HasPermission, line
+    -- 1039-1040, the identical shape for PermissionGrants -- both
+    -- re-confirmed by direct read this pass), gated by two new mechanisms
+    -- documented in full immediately below this table ("LOCKOUT-RISK
+    -- FEATURES"):
+    --   `lockoutRisk = true` -- SetFeature/ResetFeature both REFUSE to
+    --   change either of these without the caller's own `confirm`
+    --   argument matching the feature name EXACTLY (reason =
+    --   'confirmation_required', the response carrying this entry's own
+    --   `lockoutWarning` text back to the caller) -- "the refusal-to-change
+    --   becomes a confirmed-change, not a silent one" (this task's own
+    --   words), never a bare, silent flip of a value this dangerous.
+    --   `sessionOnly = true` -- THE ONE THING THAT GENUINELY MATTERS HERE.
+    --   Disabling Config.Features.HighCommand from the tablet, persisted
+    --   the NORMAL way (K9Store.Override_Upsert, re-applied at the next
+    --   boot by this file's own onResourceStart handler, which the
+    --   FXMANIFEST PLACEMENT contract guarantees runs BEFORE every other
+    --   file's), would let a STORED override survive a restart and WIN
+    --   OVER a corrected config.lua -- an operator editing config.lua back
+    --   to `HighCommand = true` and restarting would find the resource
+    --   still boots with it OFF, because the stale DB row gets re-applied
+    --   on top of the freshly-corrected value. THAT is a real bricking
+    --   bug, and a self-inflicted, mid-session lockout of the one screen
+    --   that could undo it is exactly the "worse than the day-one
+    --   deadlock" scenario this task named directly. Closed by
+    --   construction, not by hoping nobody hits it: SetFeature/
+    --   ResetFeature never call K9Store.Override_Upsert/Override_Delete at
+    --   all for a `sessionOnly` feature -- the change is a live Config
+    --   mutation ONLY, kept in `ActiveOverrides` for THIS session's tablet
+    --   display, and still fully audited via K9Store.OverrideAudit_Append
+    --   (a permanent, append-only history row -- see that table's own
+    --   migration comment confirming it needs no matching current-override
+    --   row to exist) -- so there is never a row for the boot-time reapply
+    --   loop to find in the first place. The boot loop ALSO defensively
+    --   excludes `sessionOnly` features outright regardless (see that
+    --   loop's own comment), so even a manually-inserted row, or a row
+    --   left over from before this design existed (true today for
+    --   RuntimeFeatureControl/TabletTheming below, which shipped `live`
+    --   and toggleable, without this protection, before this very pass),
+    --   can never win over config.lua on the next boot either. RESULT:
+    --   config.lua on disk is the SOLE source of truth for this flag after
+    --   EVERY restart, no exception -- recovery needs nothing more than
+    --   restarting this resource; editing config.lua first only makes that
+    --   recovery permanent instead of one-restart-temporary.
+    -- ==================================================================
+    HighCommand            = {
+        tier = 'live', lockoutRisk = true, sessionOnly = true,
+        note = 'Genuinely live in both directions (IsHighCommand re-checks this flag on every call) -- but see lockoutWarning: this is the single highest-blast-radius flag in this resource, since every OTHER high-command bypass in this resource stops working the same instant this does.',
+        lockoutWarning = 'Disabling Config.Features.HighCommand immediately revokes IsHighCommand-based access for EVERY high-command officer on this server -- not just this tablet\'s High Command screens, but every high-command bypass across this entire resource (permission grants, XP grants, appearance swaps, and any other IsHighCommand-gated action), all at once. Nobody can use this screen to turn it back on once it is off, because this screen\'s own high-command check depends on the same flag. RECOVERY: this toggle is session-only -- simply restarting this resource, with or without editing config.lua first, restores whatever Config.Features.HighCommand is set to in config.lua on disk. To make this change permanent instead, edit Config.Features.HighCommand in config.lua and restart.',
+    },
+    PermissionGrants       = {
+        tier = 'live', lockoutRisk = true, sessionOnly = true,
+        note = 'Genuinely live in both directions (HasPermission re-checks this flag on every call) -- see lockoutWarning: turning this off removes the grant-based access path for anyone who reaches this screen only via an explicit k9.runtimecontrol/k9.tablettheme grant rather than IsHighCommand.',
+        lockoutWarning = 'Disabling Config.Features.PermissionGrants immediately makes every explicitly granted permission (k9.access, k9.certify, k9.audit, k9.givexp, k9.runtimecontrol, k9.tablettheme, and any per-person RequireGrant feature grant) stop working for whoever holds it -- only rank-based access (IsHighCommand or the legacy rank gate) keeps working. Nobody can use a grant to turn this back on once it is off. RECOVERY: this toggle is session-only -- simply restarting this resource, with or without editing config.lua first, restores whatever Config.Features.PermissionGrants is set to in config.lua on disk. To make this change permanent instead, edit Config.Features.PermissionGrants in config.lua and restart.',
+    },
 
-    -- This file's own two flags are deliberately NOT protected -- see
-    -- header "THE ENGINE CONSTRAINT" bullet on `protected` for why the
-    -- blast radius here is self-contained (losing tablet control over
-    -- features/theming, recoverable by a config.lua edit + restart) and
-    -- not comparable to losing IsHighCommand/HasPermission resource-wide.
-    -- Both are internally self-hosting (this file's own callbacks are
-    -- ALWAYS registered, unconditionally, and re-check their own flag
-    -- live on every call -- see "SELF-HOSTING" below), so both are `live`.
-    RuntimeFeatureControl  = { tier = 'live' },
-    TabletTheming          = { tier = 'live' },
+    -- This file's own two flags. Internally self-hosting (this file's own
+    -- callbacks are ALWAYS registered, unconditionally, and re-check their
+    -- own flag live on every call -- see "SELF-HOSTING" below), so both are
+    -- genuinely `live`. FLAGGED `lockoutRisk`/`sessionOnly` THIS PASS, for
+    -- the IDENTICAL reason as HighCommand above -- found while verifying
+    -- this task's own "does a restart actually recover" requirement, NOT
+    -- something the owner asked opened (neither was ever `protected`; both
+    -- shipped `live` and toggleable from this file's very first version).
+    -- Every one of this file's own Part-1 callbacks begins `if not
+    -- (Config.Features and Config.Features.RuntimeFeatureControl == true)
+    -- then return { ok = false, reason = 'feature_disabled' } end` --
+    -- disabling it locks out the only screen that could turn it back on,
+    -- the exact self-referential shape this task's own "one thing that
+    -- genuinely matters" section describes. Left unfixed, this file would
+    -- have opened a NEW lockout hole while closing an OLD one. Fixed here,
+    -- in the same file, the same pass.
+    RuntimeFeatureControl  = {
+        tier = 'live', lockoutRisk = true, sessionOnly = true,
+        lockoutWarning = 'Disabling Config.Features.RuntimeFeatureControl immediately disables every callback this screen itself depends on (feature toggles and tuning, both Set and Reset) -- nobody can use this screen to turn it back on once it is off. RECOVERY: this toggle is session-only -- simply restarting this resource, with or without editing config.lua first, restores whatever Config.Features.RuntimeFeatureControl is set to in config.lua on disk.',
+    },
+    TabletTheming          = {
+        tier = 'live', lockoutRisk = true, sessionOnly = true,
+        note = 'Cosmetic only (see header PART 2) -- disabling this loses the ABILITY to re-theme until a restart, never any access or functionality.',
+        lockoutWarning = 'Disabling Config.Features.TabletTheming immediately disables SetTheme/ResetTheme -- nobody can change or reset the tablet theme until this resource restarts (GetTheme, viewing the current theme, is unaffected -- this is cosmetic only, no access or functionality is lost). RECOVERY: this toggle is session-only -- simply restarting this resource, with or without editing config.lua first, restores whatever Config.Features.TabletTheming is set to in config.lua on disk.',
+    },
 }
 
 --- @param name string
@@ -571,6 +681,46 @@ end
 local function GetFeatureNote(name)
     local entry = FEATURE_TIERS[name]
     return entry and entry.note or nil
+end
+
+-- ======================================================================
+-- LOCKOUT-RISK FEATURES -- see FEATURE_TIERS' own HighCommand/
+-- PermissionGrants/RuntimeFeatureControl/TabletTheming/CommandTablet
+-- entries above for the full reasoning behind each one individually. Read
+-- with `entry.lockoutRisk == true`/`entry.sessionOnly == true` directly
+-- (never `entry.lockoutRisk`/`entry.sessionOnly` alone, and never `or
+-- false` -- both would be correct here since neither field is ever the
+-- number 0, but this file's own task brief is explicit that a boolean
+-- must always be read as `~= false`, never `x or default`, as a blanket
+-- discipline -- applied here for consistency even though this specific
+-- pair of fields could not actually trip the "0 is falsy-adjacent"
+-- footgun that rule exists to prevent).
+--- @param name string
+--- @return boolean
+local function GetFeatureLockoutRisk(name)
+    local entry = FEATURE_TIERS[name]
+    return entry ~= nil and entry.lockoutRisk == true
+end
+
+--- @param name string
+--- @return boolean
+local function GetFeatureSessionOnly(name)
+    local entry = FEATURE_TIERS[name]
+    return entry ~= nil and entry.sessionOnly == true
+end
+
+--- @param name string
+--- @return string warning -- never nil for a lockoutRisk feature (every
+--- entry with lockoutRisk = true carries its own lockoutWarning -- a
+--- missing one would silently hand the tablet an empty confirmation
+--- dialog for exactly the class of change this mechanism exists to make
+--- loud, so this falls back to a generic-but-still-real warning rather
+--- than nil/empty if a future lockoutRisk entry is ever added without one).
+local function GetFeatureLockoutWarning(name)
+    local entry = FEATURE_TIERS[name]
+    local warning = entry and entry.lockoutWarning
+    if type(warning) == 'string' and warning ~= '' then return warning end
+    return ('Changing Config.Features.%s carries a lockout risk this file could not resolve a specific warning for -- proceed only if you understand exactly what this flag gates and how to recover via config.lua + a restart if it goes wrong.'):format(tostring(name))
 end
 
 -- ======================================================================
@@ -1069,6 +1219,245 @@ local TUNABLE_REGISTRY = {
     -- networked, never touching another player.
     ['BoneSweepTool.CommandCooldownMs']         = { path = { 'BoneSweepTool', 'CommandCooldownMs' },             min = 100,   max = 10000,     integer = true },
     ['BoneSweepTool.MaxBoneIndex']              = { path = { 'BoneSweepTool', 'MaxBoneIndex' },                  min = 1,     max = 500,       integer = true },
+
+    -- ==================================================================
+    -- OWNER DIRECTIVE (2026-08-26), stated twice, verbatim: "High command
+    -- can grant anything they want to themselves xp promotions permissions
+    -- etc" / "If its high command they should have the ability to grant
+    -- whatever they want edit whatever they want etc." This section opens
+    -- the two POLICY exclusion rules stated in this file's own header
+    -- above ("PART 1B", rules 1 and 2) -- Config.HighCommand.*, every
+    -- numeric key under Config.XP, and Config.CertificationExpiryDays/
+    -- WarningDays ("anything governing who may do what"). These are
+    -- POLICY exclusions being deliberately overridden by the owner's own
+    -- instruction, NOT technical "cannot be read live" exclusions -- every
+    -- exclusion further above this point in this table (K9Medkit.cooldownMs,
+    -- SearchZones.alertBroadcastRadius, the FearStress forgery-adjacent
+    -- values, etc.) is UNCHANGED and remains correctly excluded; opening a
+    -- POLICY restriction is not licence to also open a CORRECTNESS/SECURITY
+    -- one that happens to sit near it.
+    --
+    -- WHAT IS DELIBERATELY STILL **NOT** OPENED, from this same directive,
+    -- and why -- read before assuming an omission here is an oversight:
+    --   * Config.Departments (the `highCommandGrade`/`certifierGrade`/etc.
+    --     rank thresholds that literally DEFINE who is high command) --
+    --     NEVER a candidate for this registry, at any point, for any
+    --     reason. This task's own non-negotiable: widening WHAT high
+    --     command may edit is the decision; widening WHO COUNTS AS high
+    --     command is a different one this pass must not make, and a
+    --     two-hop path where editing a tunable could promote its own
+    --     editor into high command would defeat this entire mechanism's
+    --     one real safety property. tests/runtimecontrol_spec.lua's own
+    --     "no TUNABLE_REGISTRY path may ever touch Config.Departments"
+    --     regression test exists specifically to keep this true by
+    --     construction, not merely by this comment's promise.
+    --   * Config.HighCommand.allowSelfGrant -- a BOOLEAN, not a number, so
+    --     it is not a candidate for this registry's own mechanism at all
+    --     (SetTunable's own `isFiniteNumber` check refuses anything that
+    --     is not a number by construction, further below) -- and it is
+    --     squarely the OTHER agent's self-GRANT scope in
+    --     server/highcommand.lua/server/permissions.lua, which this task's
+    --     own instruction explicitly says not to touch.
+    --   * Config.XP.mintXpForNpcCombatTargets (boolean) and
+    --     Config.XP.scopePerCitizenidOrJob (a fixed enum string,
+    --     server/progression.lua's own onResourceStart currently asserts
+    --     it must be exactly 'citizenid') -- same "not a number, no
+    --     mechanism for it" reasoning as allowSelfGrant above.
+    --   * Config.XPTiers (the tier threshold/multiplier table) -- NOT
+    --     named by this file's own original exclusion rule 1 at all (that
+    --     rule only ever named Config.XP and Config.HighCommand), and
+    --     server/xptiers.lua is on this task's own DO-NOT-EDIT list, which
+    --     makes independently re-confirming its own "read fresh at point
+    --     of use" behaviour (this registry's own rule 3) a heavier lift
+    --     than this pass's owner-directed scope actually asked for. Left
+    --     out of this pass deliberately, reported as a candidate for a
+    --     FUTURE pass if the owner wants it too, not silently forgotten.
+    -- ==================================================================
+
+    -- Config.HighCommand.maxXpPerGrant / grantCooldownMs
+    -- (server/highcommand.lua, NOT edited by this pass -- read-only
+    -- audit). Both confirmed read FRESH at their point of use:
+    -- '/k9givexp' AND tabletGiveXp both re-read
+    -- Config.HighCommand.maxXpPerGrant (IsValidGrantAmount's own call
+    -- site) / Config.HighCommand.grantCooldownMs
+    -- (HighCommandGrantCooldown.Consume's own call site) LIVE on every
+    -- single invocation -- a live edit here genuinely changes the
+    -- ceiling/cooldown for the NEXT grant, no restart needed.
+    --
+    -- ONE DISCLOSED PARTIAL LIVENESS, same class as this file's other
+    -- "request-time gate is live, registration is not" entries further
+    -- above: whether '/k9givexp' gets REGISTERED AT ALL is decided ONCE,
+    -- at server/highcommand.lua's own onResourceStart, from THAT boot's
+    -- STARTING Config.HighCommand.maxXpPerGrant value (must already be a
+    -- valid positive finite number, or the command is never registered
+    -- this session at all -- that file's own "infinite maxXpPerGrant
+    -- DISABLES '/k9givexp'" comment) -- raising/lowering it live through
+    -- this registry cannot retroactively register a command that never
+    -- was, if config.lua itself shipped an invalid starting value. Not
+    -- relevant on a normal boot -- the shipped default (5000) is valid.
+    --
+    -- BOUNDS, NOT LITERALLY "ANYTHING": max = 1,000,000 is a deliberately
+    -- enormous but still FINITE ceiling -- "whatever they want" does not
+    -- mean literally unbounded/math.huge, which server/highcommand.lua's
+    -- own registration guard treats as INVALID and refuses to ever
+    -- register '/k9givexp' for at all (see the disclosure above) -- a
+    -- finite max, however large, can never accidentally trip that guard
+    -- the way a literal infinity could. grantCooldownMs's min of 100ms
+    -- mirrors this file's own cooldowns.lua-footgun discipline (0 is never
+    -- in range -- see header) even though config.lua's own comment on this
+    -- field says this specific cooldown is an anti-fat-finger guard, not
+    -- an abuse limit.
+    --
+    -- NOT SUBJECT TO THE XP MINT BUDGET -- disclosed for the operator's
+    -- own risk awareness, not because it changes this entry's bounds:
+    -- '/k9givexp' calls AwardXPDirect, NOT AwardXP -- server/progression.lua's
+    -- own header comment on AwardXPDirect states outright it is
+    -- "Deliberately NOT subject to AwardXPCooldown or the shared XP mint
+    -- budget." Raising maxXpPerGrant therefore has NO interaction with,
+    -- and is not bounded by, XP_MINT_BUDGET_CAP_XP -- unlike
+    -- Config.XP.awards.* immediately below, which very much is.
+    ['HighCommand.maxXpPerGrant']       = { path = { 'HighCommand', 'maxXpPerGrant' },   min = 1,   max = 1000000, integer = true },
+    ['HighCommand.grantCooldownMs']     = { path = { 'HighCommand', 'grantCooldownMs' }, min = 100, max = 600000,  integer = true },
+
+    -- Config.XP.awards.* / trackArrivalRadius / trackArrivalTTLMs
+    -- (server/progression.lua, NOT edited by this pass -- read-only
+    -- audit). Every `awards` key is read fresh inside AwardXP's own
+    -- `Config.XP.awards[actionKey]` lookup, on every call, confirmed by
+    -- direct read; trackArrivalRadius/trackArrivalTTLMs are likewise read
+    -- inline wherever a track-arrival report is validated.
+    --
+    -- A REAL FOOTGUN FOUND WHILE OPENING THIS, NOT PRE-EXISTING IN THIS
+    -- REGISTRY, WHICH THIS PASS'S OWN [min,max] BOUNDS EXIST SPECIFICALLY
+    -- TO PREVENT: server/progression.lua has its OWN bare
+    -- `assert(amount <= XP_MINT_BUDGET_CAP_XP, ...)` for every single
+    -- Config.XP.awards[*] value, checked ONCE, in a loop over every award
+    -- key, at that file's own onResourceStart (XP_MINT_BUDGET_CAP_XP =
+    -- 3600, a LOCAL constant in that file -- not itself part of Config,
+    -- and therefore not reachable by this registry's own `path` mechanism
+    -- at all). Before this pass, that assert could only ever fail against
+    -- a hand-edited config.lua, caught by whoever edited it, at the exact
+    -- moment they edited it. AFTER opening these as tunables, if any
+    -- Config.XP.awards.* entry were left tunable ABOVE 3600, a
+    -- high-command officer could set one live via this registry's own
+    -- SetTunable (which succeeds immediately -- nothing re-validates
+    -- against that OTHER file's own assert at the moment of the tunable
+    -- write) -- but the persisted override would then be RE-APPLIED, by
+    -- THIS FILE's own onResourceStart handler, BEFORE
+    -- server/progression.lua's onResourceStart ever runs (this file is
+    -- required to load, and therefore register onResourceStart, before
+    -- every other file -- see header "FXMANIFEST PLACEMENT") -- meaning
+    -- Config.XP.awards.<key> would already be the too-large value the
+    -- MOMENT server/progression.lua's own bare assert runs, on the very
+    -- next restart, throwing an uncaught error -- precisely the "one bad
+    -- assert silently kills every registration below it" failure this
+    -- task's own brief warns against, and this file did not previously
+    -- have any way to trigger since nothing here could ever write to
+    -- Config.XP.awards before this pass. CLOSED HERE, not in
+    -- server/progression.lua (not edited this pass, not in this pass's
+    -- file list): every Config.XP.awards.* entry's `max` below is capped
+    -- at EXACTLY 3600 (XP_MINT_BUDGET_CAP_XP, transcribed as a literal
+    -- since that constant is not itself part of Config and so has no
+    -- `path` this registry could point at) -- SetTunable's own [min,max]
+    -- check already refuses anything above that BEFORE it is ever
+    -- persisted or applied, so this specific assert can never be tripped
+    -- through this registry, by construction, regardless of which single
+    -- award key is being tuned (that assert's own loop applies the
+    -- identical 3600 ceiling to every key in Config.XP.awards uniformly).
+    -- IF XP_MINT_BUDGET_CAP_XP IS EVER CHANGED in server/progression.lua,
+    -- these `max` values must be re-reviewed together with it -- they are
+    -- NOT independently derived, and this comment is the only place that
+    -- relationship is recorded.
+    ['XP.awards.searchContrabandFound']  = { path = { 'XP', 'awards', 'searchContrabandFound' },  min = 0, max = 3600, integer = true },
+    ['XP.awards.trackSourceResolved']    = { path = { 'XP', 'awards', 'trackSourceResolved' },    min = 0, max = 3600, integer = true },
+    ['XP.awards.biteHoldSuccess']        = { path = { 'XP', 'awards', 'biteHoldSuccess' },        min = 0, max = 3600, integer = true },
+    ['XP.awards.takedownSuccess']        = { path = { 'XP', 'awards', 'takedownSuccess' },        min = 0, max = 3600, integer = true },
+    ['XP.awards.sarCallCompleted']       = { path = { 'XP', 'awards', 'sarCallCompleted' },       min = 0, max = 3600, integer = true },
+    ['XP.awards.coopSearchBonus']        = { path = { 'XP', 'awards', 'coopSearchBonus' },        min = 0, max = 3600, integer = true },
+    ['XP.awards.partnershipTenure1Day']  = { path = { 'XP', 'awards', 'partnershipTenure1Day' },  min = 0, max = 3600, integer = true },
+    ['XP.awards.partnershipTenure7Day']  = { path = { 'XP', 'awards', 'partnershipTenure7Day' },  min = 0, max = 3600, integer = true },
+    ['XP.awards.partnershipTenure30Day'] = { path = { 'XP', 'awards', 'partnershipTenure30Day' }, min = 0, max = 3600, integer = true },
+
+    -- trackArrivalRadius/trackArrivalTTLMs are NOT part of Config.XP.awards
+    -- (they are separate top-level Config.XP fields), so the mint-budget
+    -- structural-guard loop described above (which iterates
+    -- `pairs(Config.XP.awards)` specifically) never touches them at all --
+    -- no interaction with XP_MINT_BUDGET_CAP_XP, and no shared ceiling
+    -- with the awards above. Bounds below are ordinary radius/TTL
+    -- reasoning, matching this registry's own similar entries elsewhere
+    -- (e.g. Partnership.ProximityMeters, DeployableKennel.pendingPlacementTtlMs).
+    ['XP.trackArrivalRadius']            = { path = { 'XP', 'trackArrivalRadius' },               min = 1.0,   max = 20.0,     integer = false },
+    ['XP.trackArrivalTTLMs']             = { path = { 'XP', 'trackArrivalTTLMs' },                min = 5000,  max = 600000,   integer = true },
+
+    -- Config.CertificationExpiryDays / Config.CertificationExpiryWarningDays
+    -- (server/certifications.lua, NOT edited by this pass -- read-only
+    -- audit). This file's own header (PART 1B, exclusion rule 2)
+    -- previously excluded these on a POLICY ground ("an instant policy
+    -- change to how long every future grant's clock runs is a real
+    -- decision an operator should make in config.lua, not a live dial") --
+    -- overridden by the owner's own explicit "edit whatever they want"
+    -- instruction this pass. Both are confirmed read fresh at their point
+    -- of use (ResolveConfiguredExpiryDays/ResolveConfiguredExpiryWarningDays,
+    -- called fresh from GrantCertification/RenewCertification/
+    -- CheckAndNotifyExpiry -- confirmed by direct read), and BOTH already
+    -- have their own clamp-and-warn discipline in that file (never a bare
+    -- assert -- a misconfigured value there degrades to "no expiry" /
+    -- falls back to the built-in 7-day default, with a one-time console
+    -- warning, never a crash) -- this registry's own [min,max] simply
+    -- keeps a live edit inside the same "positive number" contract that
+    -- file already enforces on its own. ONLY FUTURE grants/renewals are
+    -- affected by a live edit here -- an already-granted certification's
+    -- own stored expiry timestamp is never rewritten retroactively by
+    -- either of these. Not marked `integer` -- neither file asserts a
+    -- whole-number day count, and the `* 86400` arithmetic downstream
+    -- (CheckAndNotifyExpiry) is exact for a fractional value too.
+    ['CertificationExpiryDays']        = { path = { 'CertificationExpiryDays' },        min = 1, max = 3650, integer = false },
+    ['CertificationExpiryWarningDays'] = { path = { 'CertificationExpiryWarningDays' }, min = 1, max = 365,  integer = false },
+
+    -- ==================================================================
+    -- Config.Tracking.ScentVision.* (server/tracking.lua, NOT edited by
+    -- this pass -- read-only audit; ScentVision itself is coder-frontend/
+    -- coder-architect's feature, landed concurrently with this pass, not
+    -- part of the owner directive above). Spec supplied by coder-frontend
+    -- (who did the implementation), each bound independently re-confirmed
+    -- read fresh at its point of use by direct read of server/tracking.lua
+    -- before being added here, per this registry's own rule 3 (never taken
+    -- on trust from another agent's own claim alone): the capture thread's
+    -- own loop body reads sampleIntervalMs/minSampleMovementMeters/
+    -- maxPointsPerPerson/dotLifetimeMs fresh every pass via
+    -- ResolveConfiguredThresholdMs/ResolveScentVisionNumber (both
+    -- clamp-and-warn helpers, never a bare assert); getScentVisionPoints
+    -- re-reads queryCooldownMs/queryRangeMeters/dotLifetimeMs/
+    -- maxVisibleTrails/queryMaxPointsPerTrail fresh via its own
+    -- `local svConfig = Config.Tracking.ScentVision or {}` at the top of
+    -- every single call.
+    --
+    -- NOT INCLUDED, and why -- flagged by coder-frontend themselves, not
+    -- discovered independently:
+    --   * pollIntervalMs -- confirmed by direct grep: ZERO occurrences in
+    --     server/tracking.lua. It is read ONLY by client/tracking.lua's own
+    --     independent copy of config.lua -- this file has no server-side
+    --     enforcement point to confirm a live edit here would do anything
+    --     (see header "WHAT THIS FILE DOES NOT DO": this file has no
+    --     mechanism to push a Config change to an already-connected
+    --     client), the exact "not confirmed read fresh at the point of
+    --     use, so not exposed at all" exclusion rule 3 requires -- same
+    --     class as every other client-only numeric already excluded
+    --     elsewhere in this table (FetchMechanic's mouthBoneIndex, etc).
+    --   * palette (an array of {r,g,b} tables) and fadeEnabled (a boolean)
+    --     -- neither fits this registry's own single-number [min,max]
+    --     shape (palette is variable-length and not a single value;
+    --     fadeEnabled is not a number at all, no different from
+    --     mintXpForNpcCombatTargets/allowSelfGrant above). Not built this
+    --     pass -- reported back to coder-frontend as a shape question for a
+    --     future pass, not silently dropped.
+    ['Tracking.ScentVision.sampleIntervalMs']        = { path = { 'Tracking', 'ScentVision', 'sampleIntervalMs' },        min = 1000, max = 30000,  integer = true },
+    ['Tracking.ScentVision.minSampleMovementMeters'] = { path = { 'Tracking', 'ScentVision', 'minSampleMovementMeters' }, min = 0.0,  max = 20.0,   integer = false },
+    ['Tracking.ScentVision.maxPointsPerPerson']      = { path = { 'Tracking', 'ScentVision', 'maxPointsPerPerson' },      min = 1,    max = 50,     integer = true },
+    ['Tracking.ScentVision.dotLifetimeMs']           = { path = { 'Tracking', 'ScentVision', 'dotLifetimeMs' },           min = 5000, max = 300000, integer = true },
+    ['Tracking.ScentVision.queryRangeMeters']        = { path = { 'Tracking', 'ScentVision', 'queryRangeMeters' },        min = 5.0,  max = 150.0,  integer = false },
+    ['Tracking.ScentVision.maxVisibleTrails']        = { path = { 'Tracking', 'ScentVision', 'maxVisibleTrails' },        min = 1,    max = 10,     integer = true },
+    ['Tracking.ScentVision.queryMaxPointsPerTrail']  = { path = { 'Tracking', 'ScentVision', 'queryMaxPointsPerTrail' },  min = 1,    max = 30,     integer = true },
+    ['Tracking.ScentVision.queryCooldownMs']         = { path = { 'Tracking', 'ScentVision', 'queryCooldownMs' },         min = 250,  max = 10000,  integer = true },
 }
 
 --- Navigates a dotted registry `path` against the live `Config` table.
@@ -1362,6 +1751,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 
     for _, row in ipairs(overrideRows) do
         local applied = false
+        local handledAsSessionOnly = false
 
         if row.kind == 'feature' then
             local name = row.override_key:match('^feature:(.+)$')
@@ -1380,10 +1770,43 @@ AddEventHandler('onResourceStart', function(resourceName)
             -- silent gap this file's own "FAILS CLOSED, FOR REAL" header
             -- claims is closed everywhere. Now excluded here too, matching
             -- runtimeSetFeature's own refusal exactly.
+            -- BELT AND SUSPENDERS (this pass): also excludes any feature
+            -- with `sessionOnly = true` (HighCommand, PermissionGrants,
+            -- RuntimeFeatureControl, TabletTheming -- see FEATURE_TIERS'
+            -- own entries for the full "why"), regardless of how a row for
+            -- one of them got into this table. SetFeature/ResetFeature now
+            -- never WRITE such a row going forward -- but this check does
+            -- not rely on that alone: a manually-inserted row, or a row
+            -- persisted by an EARLIER version of this file (true today, in
+            -- real production databases, for RuntimeFeatureControl/
+            -- TabletTheming specifically, which were tier='live' and
+            -- freely toggleable, with no sessionOnly protection at all,
+            -- before this very pass) must ALSO never be allowed to win
+            -- over a corrected config.lua on a future boot. This is what
+            -- makes "config.lua on disk is the sole source of truth after
+            -- a restart" true unconditionally for these four, not merely
+            -- true "as long as nothing ever wrote a stray row" -- see this
+            -- file's own task brief on why a stored override outliving a
+            -- config fix is a real bricking bug, not a hypothetical one.
             local tier = GetFeatureTier(name)
-            if name and Config.Features and Config.Features[name] ~= nil and tier ~= 'protected' and tier ~= 'unaudited' then
+            local sessionOnly = GetFeatureSessionOnly(name)
+            if name and Config.Features and Config.Features[name] ~= nil and tier ~= 'protected' and tier ~= 'unaudited' and not sessionOnly then
                 ApplyFeatureOverride(name, row.value == 'true')
                 applied = true
+            elseif name and sessionOnly then
+                -- Distinct from the generic "stale/unrecognized" skip
+                -- message below -- this is EXPECTED, BY DESIGN, not a sign
+                -- of drift or corruption, and should never read like one in
+                -- an operator's console log. `handledAsSessionOnly` routes
+                -- this row past the generic skip-message branch further
+                -- down without needing a `goto` -- this loop body has
+                -- locals declared after this point (`key`/`entry` in the
+                -- `tuning` branch below), and Lua forbids a forward `goto`
+                -- into a still-live local's scope, so a flag is the correct
+                -- tool here, not a workaround for one.
+                handledAsSessionOnly = true
+                skippedCount = skippedCount + 1
+                print(('[qbx_k9unit] runtimecontrol.lua: NOT re-applying persisted override %s -- this feature is session-only by design (see FEATURE_TIERS.sessionOnly in server/runtimecontrol.lua). config.lua on disk (currently: %s) is always authoritative for it after a restart, regardless of any prior tablet toggle. This is intentional, not a bug.'):format(tostring(row.override_key), tostring(Config.Features[name])))
             end
         elseif row.kind == 'tuning' then
             local key = row.override_key:match('^tuning:(.+)$')
@@ -1400,7 +1823,13 @@ AddEventHandler('onResourceStart', function(resourceName)
         if applied then
             appliedCount = appliedCount + 1
             ActiveOverrides[row.override_key] = { kind = row.kind, value = row.value, updatedBy = row.updated_by, updatedAt = row.updated_at }
-        else
+        -- `handledAsSessionOnly` rows were already counted and printed
+        -- above, with a message specific to WHY that row is intentionally
+        -- not applied -- must not ALSO fall into the generic
+        -- "stale/unrecognized" branch below, which would both double-count
+        -- it in skippedCount and print a confusing second, contradictory
+        -- line for the same row.
+        elseif not handledAsSessionOnly then
             skippedCount = skippedCount + 1
             print(('[qbx_k9unit] runtimecontrol.lua: skipped stale/unrecognized override %s (kind=%s, value=%s) -- the underlying feature/tuning key no longer exists or is out of its currently configured range.'):format(tostring(row.override_key), tostring(row.kind), tostring(row.value)))
         end
@@ -1446,6 +1875,7 @@ lib.callback.register('qbx_k9unit:server:runtimeListFeatures', function(source)
         local tier = GetFeatureTier(name)
         local overrideKey = 'feature:' .. name
         local override = ActiveOverrides[overrideKey]
+        local lockoutRisk = GetFeatureLockoutRisk(name)
         rows[#rows + 1] = {
             name = name,
             currentValue = currentValue,
@@ -1456,12 +1886,35 @@ lib.callback.register('qbx_k9unit:server:runtimeListFeatures', function(source)
             overriddenBy = override and override.updatedBy or nil,
             overriddenAt = override and override.updatedAt or nil,
             protected = tier == 'protected',
+            -- CONTRACT FOR html/tablet.js (not edited by this pass -- see
+            -- this pass's own hand-off report for the full UI contract):
+            -- `lockoutRisk = true` means SetFeature/ResetFeature for this
+            -- name WILL be refused with reason = 'confirmation_required'
+            -- unless the call also carries `confirm` equal to `name`
+            -- EXACTLY -- the tablet must show `lockoutWarning`'s full text
+            -- in a real confirmation step (not a toast that auto-dismisses)
+            -- before ever sending that second call. `sessionOnly = true`
+            -- means a successful change here is NOT persisted -- the
+            -- tablet should tell the officer this change reverts on the
+            -- next restart unless config.lua is also edited to match.
+            lockoutRisk = lockoutRisk,
+            sessionOnly = GetFeatureSessionOnly(name),
+            lockoutWarning = lockoutRisk and GetFeatureLockoutWarning(name) or nil,
         }
     end
     return { ok = true, features = rows }
 end)
 
-lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, name, newValue)
+--- @param source number
+--- @param name string
+--- @param newValue boolean
+--- @param confirm string? -- REQUIRED, and must equal `name` EXACTLY, for
+--- any feature with `lockoutRisk = true` (see FEATURE_TIERS' own
+--- lockoutRisk entries and "LOCKOUT-RISK FEATURES" above GetFeatureTier
+--- for the full mechanism) -- ignored entirely for every other feature,
+--- so every existing caller of this callback for a non-lockout-risk
+--- feature keeps working unmodified with only 3 arguments.
+lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, name, newValue, confirm)
     if not (Config.Features and Config.Features.RuntimeFeatureControl == true) then
         return { ok = false, reason = 'feature_disabled' }
     end
@@ -1510,42 +1963,92 @@ lib.callback.register('qbx_k9unit:server:runtimeSetFeature', function(source, na
         return { ok = false, reason = 'unaudited_feature' }
     end
 
+    -- LOCKOUT-RISK CONFIRMATION GATE (see FEATURE_TIERS' own lockoutRisk
+    -- entries above, and "LOCKOUT-RISK FEATURES" above GetFeatureTier, for
+    -- the full reasoning). Placed AFTER the rate-limit consume above (an
+    -- unconfirmed attempt on a lockout-risk feature still consumes the
+    -- officer's own anti-fat-finger window, matching this file's existing
+    -- "every rejection past that point still consumes it" convention) and
+    -- AFTER the unaudited/protected checks (so a genuinely bad `name`
+    -- reports THAT problem, not a confusing confirmation prompt for a
+    -- feature that could never be toggled at all). `confirm` must equal
+    -- `name` EXACTLY -- not merely truthy -- so a UI cannot pass a single
+    -- hardcoded `true` for every toggle without actually naming which one
+    -- it is confirming.
+    local lockoutRisk = GetFeatureLockoutRisk(name)
+    if lockoutRisk and confirm ~= name then
+        LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s'):format(name), 'confirmation_required')
+        return { ok = false, reason = 'confirmation_required', lockoutRisk = true, warning = GetFeatureLockoutWarning(name) }
+    end
+
     local oldValue = Config.Features[name]
     local overrideKey = 'feature:' .. name
     local valueStr = newValue and 'true' or 'false'
+    local sessionOnly = GetFeatureSessionOnly(name)
 
-    local wrote = K9Store.Override_Upsert(overrideKey, 'feature', valueStr, citizenid or 'unknown')
-    if not wrote then
-        LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s value=%s'):format(name, valueStr), 'db_error')
-        return { ok = false, reason = 'db_error' }
+    -- SESSION-ONLY PERSISTENCE SKIP (see FEATURE_TIERS' own sessionOnly
+    -- entries for the full "why" -- summary: a stored override for one of
+    -- these could survive a restart and win over a corrected config.lua,
+    -- which is the one bricking shape this pass exists to rule out). The
+    -- CORE toggle below (ApplyFeatureOverride/ActiveOverrides) is
+    -- unconditional either way -- only the DURABLE row is skipped.
+    if not sessionOnly then
+        local wrote = K9Store.Override_Upsert(overrideKey, 'feature', valueStr, citizenid or 'unknown')
+        if not wrote then
+            LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s value=%s'):format(name, valueStr), 'db_error')
+            return { ok = false, reason = 'db_error' }
+        end
     end
 
     -- AUDIT-SWALLOW FIX (this pass): see runtimeResetFeature's identical
     -- comment further below for the full reasoning -- the primary write
-    -- already succeeded, so `ok = true` remains correct, but a failed
-    -- audit-trail insert must not vanish without a trace tying it to this
-    -- specific name/value.
+    -- already succeeded (or was intentionally skipped, for a sessionOnly
+    -- feature -- either way the in-memory change below still happens), so
+    -- `ok = true` remains correct, but a failed audit-trail insert must
+    -- not vanish without a trace tying it to this specific name/value.
+    -- ALWAYS attempted, even for a sessionOnly feature -- "every edit must
+    -- be audited" does not stop being true just because this one is not
+    -- also durably re-appliable at boot; this is the ONE durable record
+    -- that HighCommand/PermissionGrants/RuntimeFeatureControl/TabletTheming
+    -- were ever touched at all, and by whom.
     if not K9Store.OverrideAudit_Append(overrideKey, 'feature', tostring(oldValue), valueStr, citizenid or 'unknown') then
-        print(('[qbx_k9unit] runtimecontrol.lua: runtimeSetFeature audit-trail write failed for name=%s value=%s (the change itself still succeeded and was persisted).'):format(name, valueStr))
+        print(('[qbx_k9unit] runtimecontrol.lua: runtimeSetFeature audit-trail write failed for name=%s value=%s (the change itself still succeeded).'):format(name, valueStr))
     end
 
     ApplyFeatureOverride(name, newValue)
     ActiveOverrides[overrideKey] = { kind = 'feature', value = valueStr, updatedBy = citizenid, updatedAt = os.date('%Y-%m-%d %H:%M:%S') }
 
-    LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s old=%s new=%s tier=%s'):format(name, tostring(oldValue), valueStr, tier), 'ok')
+    LogAuditInvocation(source, 'runtimeSetFeature', ('name=%s old=%s new=%s tier=%s sessionOnly=%s'):format(name, tostring(oldValue), valueStr, tier, tostring(sessionOnly)), 'ok')
 
+    local response
     if tier == 'live' then
-        return { ok = true, appliedLive = true, restartRequired = false, tier = tier }
+        response = { ok = true, appliedLive = true, restartRequired = false, tier = tier }
     elseif tier == 'onstart' then
-        return { ok = true, appliedLive = false, restartRequired = true, tier = tier, note = 'This feature only re-checks this flag at server start. Saved -- it will take effect after the next resource restart, but nothing has changed for players on this session.' }
+        response = { ok = true, appliedLive = false, restartRequired = true, tier = tier, note = 'This feature only re-checks this flag at server start. Saved -- it will take effect after the next resource restart, but nothing has changed for players on this session.' }
     elseif tier == 'rawtoplevel' then
-        return { ok = true, appliedLive = false, restartRequired = true, configEditRequired = true, tier = tier, note = 'This feature is gated before this resource finishes starting. A restart of THIS resource alone is not enough -- Config.Features.' .. name .. ' must also be changed in config.lua for this to take effect.' }
+        response = { ok = true, appliedLive = false, restartRequired = true, configEditRequired = true, tier = tier, note = 'This feature is gated before this resource finishes starting. A restart of THIS resource alone is not enough -- Config.Features.' .. name .. ' must also be changed in config.lua for this to take effect.' }
     else -- 'clientonly' -- the only tier that still reaches here; 'protected' and 'unaudited' are both refused above, before any write.
-        return { ok = true, appliedLive = false, restartRequired = true, tier = tier, note = 'No confirmed server-side enforcement point for this feature -- this value is saved, but this file cannot confirm it will have any live effect.' }
+        response = { ok = true, appliedLive = false, restartRequired = true, tier = tier, note = 'No confirmed server-side enforcement point for this feature -- this value is saved, but this file cannot confirm it will have any live effect.' }
     end
+
+    if lockoutRisk then response.lockoutRisk = true end
+    if sessionOnly then
+        response.sessionOnly = true
+        response.note = (response.note and (response.note .. ' ') or '') ..
+            'SESSION-ONLY: this change is NOT persisted -- the next resource restart (with or without a config.lua edit) reverts Config.Features.' .. name .. ' to whatever config.lua has on disk.'
+    end
+    return response
 end)
 
-lib.callback.register('qbx_k9unit:server:runtimeResetFeature', function(source, name)
+--- @param source number
+--- @param name string
+--- @param confirm string? -- see runtimeSetFeature's own doc comment -- same
+--- exact-name-match requirement, for the same lockoutRisk feature set. A
+--- reset can set a lockoutRisk feature to an unexpected value just as
+--- easily as a Set can (e.g. if config.lua's own shipped default happens
+--- to differ from what the caller expects), so this is symmetric with
+--- SetFeature, never a quieter back door around the same confirmation.
+lib.callback.register('qbx_k9unit:server:runtimeResetFeature', function(source, name, confirm)
     if not (Config.Features and Config.Features.RuntimeFeatureControl == true) then
         return { ok = false, reason = 'feature_disabled' }
     end
@@ -1564,80 +2067,80 @@ lib.callback.register('qbx_k9unit:server:runtimeResetFeature', function(source, 
         return { ok = false, reason = 'invalid_feature' }
     end
 
+    -- LOCKOUT-RISK CONFIRMATION GATE -- see runtimeSetFeature's identical
+    -- gate above for the full reasoning; symmetric here on purpose.
+    local lockoutRisk = GetFeatureLockoutRisk(name)
+    if lockoutRisk and confirm ~= name then
+        LogAuditInvocation(source, 'runtimeResetFeature', ('name=%s'):format(name), 'confirmation_required')
+        return { ok = false, reason = 'confirmation_required', lockoutRisk = true, warning = GetFeatureLockoutWarning(name) }
+    end
+
     local overrideKey = 'feature:' .. name
     local oldValue = Config.Features[name]
     local defaultValue = CONFIG_LUA_DEFAULT_FEATURES[name]
+    local sessionOnly = GetFeatureSessionOnly(name)
 
-    -- CLAIMS-MORE-THAN-HAPPENED FIX (this pass): Override_Delete's own
-    -- boolean return used to be discarded outright here, so a DB failure
-    -- was reported to the caller as an unqualified `ok = true` even though
-    -- the persisted override row was NEVER actually removed -- the exact
-    -- failure class server/appearance.lua's own "DISCARDED-WRITE FIX"
-    -- comments already document and fix for its own writes. The
-    -- consequence here is not merely cosmetic: onResourceStart's own
-    -- override-reapply loop (above) re-reads k9_runtime_feature_overrides
-    -- from the DB on every restart and RE-APPLIES any row still there --
-    -- so a "reset" that silently failed to delete its own row would
-    -- silently UNDO ITSELF on the very next restart, having told the
-    -- operator "done" in the meantime. Checked and refused the same way
-    -- runtimeSetFeature's own Override_Upsert failure is refused above:
-    -- before ANY in-memory Config mutation, so a failed persist can never
-    -- leave this session's live value out of sync with what will survive
-    -- a restart.
-    local deleted = K9Store.Override_Delete(overrideKey)
-    if not deleted then
-        LogAuditInvocation(source, 'runtimeResetFeature', ('name=%s'):format(name), 'db_error')
-        return { ok = false, reason = 'db_error' }
+    -- SESSION-ONLY PERSISTENCE SKIP -- see runtimeSetFeature's identical
+    -- skip above, and FEATURE_TIERS' own sessionOnly entries, for the full
+    -- "why" (a stored override for one of these could otherwise survive a
+    -- restart and win over a corrected config.lua). Nothing was ever
+    -- written to k9_runtime_feature_overrides for a sessionOnly feature in
+    -- the first place (SetFeature above skips it too), so there is
+    -- structurally nothing here TO delete for one of these -- but the
+    -- delete is still attempted defensively for every OTHER feature,
+    -- unchanged, exactly as before this pass.
+    if not sessionOnly then
+        -- CLAIMS-MORE-THAN-HAPPENED FIX (earlier pass, preserved): Override_Delete's
+        -- own boolean return used to be discarded outright here, so a DB
+        -- failure was reported to the caller as an unqualified `ok = true`
+        -- even though the persisted override row was NEVER actually
+        -- removed. Checked and refused before ANY in-memory Config
+        -- mutation, so a failed persist can never leave this session's
+        -- live value out of sync with what will survive a restart.
+        local deleted = K9Store.Override_Delete(overrideKey)
+        if not deleted then
+            LogAuditInvocation(source, 'runtimeResetFeature', ('name=%s'):format(name), 'db_error')
+            return { ok = false, reason = 'db_error' }
+        end
     end
 
-    -- AUDIT-SWALLOW FIX (this pass): OverrideAudit_Append's own boolean
-    -- return used to be discarded here too -- K9Store's own internal
-    -- SafeWrite failure print carries no override_key/action context at
-    -- all (see server/datastore.lua's OverrideAudit_Append), so a failed
-    -- audit-trail insert was previously unlinked, in the logs, from which
-    -- privileged action actually caused it. The PRIMARY write already
-    -- succeeded above (Override_Delete returned true), so this action
-    -- genuinely happened and `ok = true` below remains correct -- but a
-    -- failed audit row must not vanish without a trace tying it to this
-    -- specific reset.
+    -- AUDIT-SWALLOW FIX (earlier pass, preserved): OverrideAudit_Append's
+    -- own boolean return used to be discarded here too. ALWAYS attempted,
+    -- even for a sessionOnly feature -- same "this is the one durable
+    -- record this ever happened" reasoning as runtimeSetFeature above.
     if not K9Store.OverrideAudit_Append(overrideKey, 'feature', tostring(oldValue), nil, citizenid or 'unknown') then
-        print(('[qbx_k9unit] runtimecontrol.lua: runtimeResetFeature audit-trail write failed for name=%s (the reset itself still succeeded and was persisted).'):format(name))
+        print(('[qbx_k9unit] runtimecontrol.lua: runtimeResetFeature audit-trail write failed for name=%s (the reset itself still succeeded).'):format(name))
     end
 
     ApplyFeatureOverride(name, defaultValue)
     ActiveOverrides[overrideKey] = nil
 
-    LogAuditInvocation(source, 'runtimeResetFeature', ('name=%s restored=%s'):format(name, tostring(defaultValue)), 'ok')
+    LogAuditInvocation(source, 'runtimeResetFeature', ('name=%s restored=%s sessionOnly=%s'):format(name, tostring(defaultValue), tostring(sessionOnly)), 'ok')
 
-    -- TIER-AWARE RESPONSE -- FIXED (this pass): this callback used to
-    -- unconditionally return `restartRequired = false` regardless of the
-    -- feature's own tier, the exact asymmetry this file's own
-    -- runtimeSetFeature above does NOT have. A reset is just a write of
-    -- `defaultValue` through the identical ApplyFeatureOverride/Config
-    -- mutation path SetFeature uses -- it is gated by the SAME engine
-    -- constraint (THE ENGINE CONSTRAINT, this file's own header): an
-    -- onstart-tier feature's handler only re-checks its flag at server
-    -- start, and a rawtoplevel-tier feature's registration is gated before
-    -- this resource's own onResourceStart ever fires, REGARDLESS of whether
-    -- the write that changed Config.Features.<Name> was a SetFeature call or
-    -- a ResetFeature call. Telling an operator "done, restartRequired =
-    -- false" after resetting e.g. FetchMechanic back to its shipped default
-    -- would be exactly the over-promising "already applied" claim this
-    -- file's header says a TUNING value must never make -- the same
-    -- standard is applied here to a FEATURE reset. Mirrors SetFeature's own
-    -- tier branch below field-for-field (tier/note included) rather than
-    -- duplicating a second, driftable copy of that logic's reasoning without
-    -- its shape.
+    -- TIER-AWARE RESPONSE -- FIXED (earlier pass, preserved): this
+    -- callback used to unconditionally return `restartRequired = false`
+    -- regardless of the feature's own tier, the exact asymmetry this
+    -- file's own runtimeSetFeature above does NOT have. Mirrors
+    -- SetFeature's own tier branch field-for-field.
     local tier = GetFeatureTier(name)
+    local response
     if tier == 'live' then
-        return { ok = true, value = defaultValue, appliedLive = true, restartRequired = false, tier = tier }
+        response = { ok = true, value = defaultValue, appliedLive = true, restartRequired = false, tier = tier }
     elseif tier == 'onstart' then
-        return { ok = true, value = defaultValue, appliedLive = false, restartRequired = true, tier = tier, note = 'This feature only re-checks this flag at server start. Restored to its config.lua default -- it will take effect after the next resource restart, but nothing has changed for players on this session.' }
+        response = { ok = true, value = defaultValue, appliedLive = false, restartRequired = true, tier = tier, note = 'This feature only re-checks this flag at server start. Restored to its config.lua default -- it will take effect after the next resource restart, but nothing has changed for players on this session.' }
     elseif tier == 'rawtoplevel' then
-        return { ok = true, value = defaultValue, appliedLive = false, restartRequired = true, configEditRequired = true, tier = tier, note = 'This feature is gated before this resource finishes starting. A restart of THIS resource alone is not enough -- Config.Features.' .. name .. ' must also match this default in config.lua for this to take effect.' }
+        response = { ok = true, value = defaultValue, appliedLive = false, restartRequired = true, configEditRequired = true, tier = tier, note = 'This feature is gated before this resource finishes starting. A restart of THIS resource alone is not enough -- Config.Features.' .. name .. ' must also match this default in config.lua for this to take effect.' }
     else -- 'clientonly' -- and, defensively, 'protected'/'unaudited': SetFeature refuses both of those before ever creating an override, so a reset of either is normally a no-op restoring an already-current value, but this callback does not itself gate on tier the way SetFeature does (see above) -- falling through to the same "cannot confirm" response SetFeature gives 'clientonly' is the safe direction of error for a tier this file does not fully trust here, never a false "no restart needed".
-        return { ok = true, value = defaultValue, appliedLive = false, restartRequired = true, tier = tier, note = 'No confirmed server-side enforcement point this file can guarantee applies this restore live -- this value is saved, but this file cannot confirm it will have any live effect this session.' }
+        response = { ok = true, value = defaultValue, appliedLive = false, restartRequired = true, tier = tier, note = 'No confirmed server-side enforcement point this file can guarantee applies this restore live -- this value is saved, but this file cannot confirm it will have any live effect this session.' }
     end
+
+    if lockoutRisk then response.lockoutRisk = true end
+    if sessionOnly then
+        response.sessionOnly = true
+        response.note = (response.note and (response.note .. ' ') or '') ..
+            'SESSION-ONLY: this restore is NOT persisted -- there was never a stored override to remove for this feature; the next resource restart applies whatever config.lua has on disk regardless of this call.'
+    end
+    return response
 end)
 
 -- ======================================================================

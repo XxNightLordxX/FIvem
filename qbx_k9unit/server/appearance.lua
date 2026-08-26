@@ -1,8 +1,8 @@
 --[[
     qbx_k9unit/server/appearance.lua
 
-    coder-architect. Decouples the K9 ROLE from the K9 PED MODEL, per the
-    project owner's three requirements this pass:
+    Decouples the K9 ROLE from the K9 PED MODEL, per the project owner's
+    three requirements:
       1. High command, from the tablet, can either certify a handler (the
          existing server/certifications.lua flow) OR directly "apply K9" to
          any citizenid, and either path PERMANENTLY changes that player's
@@ -46,7 +46,7 @@
     EVENT/CALLBACK CONTRACT:
     Callbacks (ox_lib lib.callback):
       'qbx_k9unit:server:hasK9Role' () -> boolean [THIS FILE]
-      'qbx_k9unit:server:isK9RoleForTarget' (targetServerId: number) -> boolean [THIS FILE -- backs client/appearance.lua's IsK9RoleForPlayer(), the "does THAT OTHER player hold the K9 role" primitive consumed by the ten ox_target canInteract predicates this pass's K9 role/model decoupling widening touches; see that file's own STATEBAG VS CACHED CALLBACK header section for why this is a cached callback, not a replicated statebag]
+      'qbx_k9unit:server:isK9RoleForTarget' (targetServerId: number) -> boolean [THIS FILE -- backs client/appearance.lua's IsK9RoleForPlayer(), the "does THAT OTHER player hold the K9 role" primitive consumed by the ten ox_target canInteract predicates this K9 role/model decoupling widening touches; see that file's own STATEBAG VS CACHED CALLBACK header section for why this is a cached callback, not a replicated statebag]
     Client events (RegisterNetEvent, server->client):
       'qbx_k9unit:client:applyK9Ped' (requestId: string, modelNameOrHash: string|number) [client/appearance.lua]
     Server events (RegisterNetEvent, client->server):
@@ -82,8 +82,7 @@
       Each is guarded at its call site with the established
       `type(...) == 'function'` soft-dependency convention (this file loads
       after server/permissions.lua/server/highcommand.lua/server/cooldowns.lua
-      and before server/certifications.lua in fxmanifest.lua — see the
-      fxmanifest report in this pass's hand-off for the exact lines).
+      and before server/certifications.lua in fxmanifest.lua).
     - THIS FILE calls `HasPermission`/`GrantPermission`/`RevokePermission`
       (server/permissions.lua), `IsHighCommand` (server/highcommand.lua) and
       `NewCooldown` (server/cooldowns.lua, at THIS file's own load time — a
@@ -126,22 +125,22 @@
 -- MaybeRevertK9Appearance are called from certification/permission grant
 -- paths that run regardless).
 --
--- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
--- header ADDENDUM: "does an operator's config.lua edit alone... reach this
--- value? If yes it must be clamped and warned about, never asserted and
--- aborted"). This used to be three hard `assert`s here -- each correctly
--- diagnosing a real risk, but with the wrong remedy: an uncaught error
--- thrown from THIS FILE's own top-level chunk (this guard runs
--- unconditionally, with no deferring onResourceStart/RegisterNetEvent
--- wrapper, and with no Config.Features gate to make it opt-in) aborts
--- server/appearance.lua's load from that line onward -- taking every
--- function this file defines (ApplyK9PedRole, ApplyK9AppearanceOnGrant,
--- MaybeRevertK9Appearance, and everything else below) down with it, for the
--- rest of that server's uptime, over one operator typo in a custom
--- Config.Peds entry added to try a new breed. Other server_scripts files
--- (server/certifications.lua, the tablet, permission grants) call into
--- this file's functions unconditionally and would see them simply not
--- exist, with nothing but one script-error line at boot to explain why.
+-- CLAMP AND WARN, NOT ASSERT (see server/cooldowns.lua's header ADDENDUM:
+-- "does an operator's config.lua edit alone... reach this value? If yes it
+-- must be clamped and warned about, never asserted and aborted"). This
+-- used to be three hard `assert`s here -- each correctly diagnosing a real
+-- risk, but with the wrong remedy: an uncaught error thrown from THIS
+-- FILE's own top-level chunk (this guard runs unconditionally, with no
+-- deferring onResourceStart/RegisterNetEvent wrapper, and with no
+-- Config.Features gate to make it opt-in) aborts server/appearance.lua's
+-- load from that line onward -- taking every function this file defines
+-- (ApplyK9PedRole, ApplyK9AppearanceOnGrant, MaybeRevertK9Appearance, and
+-- everything else below) down with it, for the rest of that server's
+-- uptime, over one operator typo in a custom Config.Peds entry added to
+-- try a new breed. Other server_scripts files (server/certifications.lua,
+-- the tablet, permission grants) call into this file's functions
+-- unconditionally and would see them simply not exist, with nothing but
+-- one script-error line at boot to explain why.
 -- ======================================================================
 if type(Config.K9Appearance) ~= 'table' then
     print(
@@ -213,12 +212,11 @@ AppearanceActionCooldown.RegisterPlayerDropped()
 -- In-memory / ephemeral only, same posture as server/main.lua's
 -- PendingLeashRequests and server/kennel.lua's PendingKennelPlacements.
 --
--- CORRECTED (coder-architect, adversarial-pass finding, this pass -- the
--- ORIGINAL version of this comment claimed "nothing was ever written ...
--- no DB state to clean up" for BOTH kinds; that is only true for 'apply'):
--- a pending 'apply' that never confirms (crash/disconnect/timeout
--- mid-flight) really is a clean no-op -- no pre-existing DB row it could
--- leave dangling, see "STREAMING FAILURE CONTRACT" below. A pending
+-- CORRECTED: an earlier version of this comment claimed "nothing was ever
+-- written ... no DB state to clean up" for BOTH kinds; that is only true
+-- for 'apply' -- a pending 'apply' that never confirms (crash/disconnect/
+-- timeout mid-flight) really is a clean no-op -- no pre-existing DB row it
+-- could leave dangling, see "STREAMING FAILURE CONTRACT" below. A pending
 -- 'revert', by contrast, starts from a PRE-EXISTING `active = 1` row that
 -- must not survive the swap being abandoned -- both the sweep thread
 -- (below, timeout) and the playerDropped handler (below, disconnect)
@@ -252,13 +250,11 @@ local function WhoLabelForSource(source)
 end
 
 --- Matches server/admin.lua's LogAuditInvocation / server/permissions.lua's
---- LogAuditInvocation "%s ran %s(%s) -> %s" format EXACTLY (this task's own
---- explicit instruction — item E, "same format as server/admin.lua's
---- LogAuditInvocation"). `whoLabel` is pre-resolved by the caller so this
---- works uniformly whether the actor is a live source (tablet action) or a
---- system-triggered path (auto-revert on decertify/job-change), matching
---- server/certifications.lua's own 'system:job_change' sentinel precedent
---- for the latter.
+--- LogAuditInvocation "%s ran %s(%s) -> %s" format EXACTLY. `whoLabel` is
+--- pre-resolved by the caller so this works uniformly whether the actor is
+--- a live source (tablet action) or a system-triggered path (auto-revert
+--- on decertify/job-change), matching server/certifications.lua's own
+--- 'system:job_change' sentinel precedent for the latter.
 --- @param whoLabel string
 --- @param action string
 --- @param detail string
@@ -337,20 +333,19 @@ lib.callback.register('qbx_k9unit:server:hasK9Role', function(source)
     return HasK9Role(source)
 end)
 
---- THE "one real gap in the primitives" a peer audit (this pass) correctly
---- flagged: HasK9Role/IsK9Role both answer about the CALLER only. Several
---- ox_target canInteract predicates in files this pass does not own
---- (client/movement.lua's "Certify K9 Handler"/"Revoke Certification"/
---- "Attach Leash", client/partnership.lua's "Partner Up",
+--- THE one real gap in the primitives: HasK9Role/IsK9Role both answer about
+--- the CALLER only. Several ox_target canInteract predicates elsewhere in
+--- this resource (client/movement.lua's "Certify K9 Handler"/"Revoke
+--- Certification"/"Attach Leash", client/partnership.lua's "Partner Up",
 --- client/medkit.lua's "Treat K9", client/wellbeing.lua's "Pet K9"/
 --- "Feed K9") need to ask "is THAT OTHER player, right now, a K9-role
 --- holder" to correctly show their option to/for a role-holder on an
---- unlisted or human model — see this pass's hand-off report. Not
---- security-sensitive to expose (same class of fact as the existing
---- `k9certified` metadata mirror, already broadcast client-side) — this is
---- a CONVENIENCE gate only, same posture as every other canInteract
---- predicate in this resource; every real action still re-verifies
---- server-side via HasK9Role/HasK9Access regardless of what this answers.
+--- unlisted or human model. Not security-sensitive to expose (same class
+--- of fact as the existing `k9certified` metadata mirror, already
+--- broadcast client-side) — this is a CONVENIENCE gate only, same posture
+--- as every other canInteract predicate in this resource; every real
+--- action still re-verifies server-side via HasK9Role/HasK9Access
+--- regardless of what this answers.
 --- @param source number -- the ASKING client (unused; the query is about targetServerId, not the caller)
 --- @param targetServerId number
 lib.callback.register('qbx_k9unit:server:isK9RoleForTarget', function(_source, targetServerId)
@@ -465,19 +460,19 @@ local function TakePendingSwap(citizenid)
     return pending
 end
 
--- SECURITY FIX (coder-architect, adversarial-pass finding, this pass):
--- confirmK9PedSwap below only ever writes `k9_ped_assignments` when the
--- CLIENT reports `ok = true` -- correct and necessary for an APPLY (never
--- half-apply a model that may not have actually loaded), but wrong for a
--- REVERT: client/appearance.lua's IsCurrentlyEngaged() is entirely
--- self-reported (IsLeashed/IsBiteHoldEngaged/IsDragEngaged/
--- IsFetchCarryEngaged/IsInK9Vehicle are all local client-side booleans), so
--- a modified client could reply `false, 'engaged'` forever, or simply never
--- reply at all, and a revert -- including
--- server/tablet.lua's own ForceRevertK9Appearance, high command's explicit
--- "remove K9 ped, revert to human" action -- would never complete. That is
--- exactly the "no unbounded trap" rule from the other direction: a
--- TERMINATION path must not be vetoable by the party it terminates.
+-- SECURITY FIX: confirmK9PedSwap below only ever writes
+-- `k9_ped_assignments` when the CLIENT reports `ok = true` -- correct and
+-- necessary for an APPLY (never half-apply a model that may not have
+-- actually loaded), but wrong for a REVERT: client/appearance.lua's
+-- IsCurrentlyEngaged() is entirely self-reported (IsLeashed/
+-- IsBiteHoldEngaged/IsDragEngaged/IsFetchCarryEngaged/IsInK9Vehicle are all
+-- local client-side booleans), so a modified client could reply `false,
+-- 'engaged'` forever, or simply never reply at all, and a revert --
+-- including server/tablet.lua's own ForceRevertK9Appearance, high
+-- command's explicit "remove K9 ped, revert to human" action -- would
+-- never complete. That is exactly the "no unbounded trap" rule from the
+-- other direction: a TERMINATION path must not be vetoable by the party it
+-- terminates.
 --
 -- This sweep is the fix: any PENDING 'revert' whose grace period
 -- (ApplyRequestTtlMs -- the same generous modelLoadTimeoutMs + margin
@@ -508,9 +503,9 @@ CreateThread(function()
             if now > pending.expiresAt then
                 PendingSwap[citizenid] = nil
                 if pending.kind == 'revert' then
-                    -- DISCARDED-WRITE FIX (this pass): this is the
-                    -- SECURITY-CRITICAL forced-timeout revert this sweep's own
-                    -- header comment documents -- its whole point is that a
+                    -- DISCARDED-WRITE FIX: this is the SECURITY-CRITICAL
+                    -- forced-timeout revert this sweep's own header comment
+                    -- documents -- its whole point is that a
                     -- hostile/unresponsive client cannot hold a revert open
                     -- past its grace period. The write's own boolean result
                     -- was previously discarded, so a DB failure here was
@@ -558,11 +553,11 @@ RegisterNetEvent('qbx_k9unit:server:confirmK9PedSwap', function(requestId, ok, r
     PendingSwap[citizenid] = nil
 
     if ok then
-        -- DISCARDED-WRITE FIX (this pass): WriteAppearanceApplied/
-        -- WriteAppearanceReverted both follow this resource's SafeWrite
-        -- contract (K9Store.Appearance_UpsertApplied/Appearance_MarkReverted
-        -- degrade a thrown DB error to `false` rather than propagating it) --
-        -- their return value was previously discarded outright here, so a DB
+        -- DISCARDED-WRITE FIX: WriteAppearanceApplied/WriteAppearanceReverted
+        -- both follow this resource's SafeWrite contract
+        -- (K9Store.Appearance_UpsertApplied/Appearance_MarkReverted degrade
+        -- a thrown DB error to `false` rather than propagating it) -- their
+        -- return value was previously discarded outright here, so a DB
         -- failure was silently reported to the target as a "success" toast
         -- AND logged as outcome 'ok', even though k9_ped_assignments was
         -- never actually written. The client-side model swap itself already
@@ -583,14 +578,13 @@ RegisterNetEvent('qbx_k9unit:server:confirmK9PedSwap', function(requestId, ok, r
         else
             -- No player-facing message is sent here: this file has no
             -- already-shipped locale key for "the swap displayed but was not
-            -- saved" (reported separately, see this pass's own hand-off), and
-            -- a false "success" would be worse than silence. The accurate
-            -- console/audit trail below is what lets an operator notice and
-            -- retry -- this citizenid's k9_ped_assignments row is unaffected
-            -- (still whatever it was before this confirm), so their NEXT
-            -- reconnect/resource restart re-derives from that unchanged,
-            -- correct row rather than from the visual state that just failed
-            -- to persist.
+            -- saved", and a false "success" would be worse than silence.
+            -- The accurate console/audit trail below is what lets an
+            -- operator notice and retry -- this citizenid's
+            -- k9_ped_assignments row is unaffected (still whatever it was
+            -- before this confirm), so their NEXT reconnect/resource
+            -- restart re-derives from that unchanged, correct row rather
+            -- than from the visual state that just failed to persist.
             print(('[qbx_k9unit] appearance.lua confirmK9PedSwap: %s DB write failed for citizenid=%s -- the client-side swap succeeded but was NOT persisted.'):format(pending.kind, citizenid))
             LogAppearanceAudit(pending.granterLabel, actionLabel, ('citizenid=%s'):format(citizenid), 'db_error')
         end
@@ -632,10 +626,10 @@ function ApplyK9PedRole(granterSrc, targetCitizenid, modelName)
         return false, 'rate_limited'
     end
 
-    -- DOUBLE-APPLY GUARD, THIS PASS (found by this file's own test suite,
-    -- not merely reasoned about): GrantPermission's own hook
-    -- (ApplyK9AppearanceOnGrant, wired in server/permissions.lua's
-    -- GrantPermission) fires automatically for a BRAND NEW grant when
+    -- DOUBLE-APPLY GUARD (found by this file's own test suite, not merely
+    -- reasoned about): GrantPermission's own hook (ApplyK9AppearanceOnGrant,
+    -- wired in server/permissions.lua's GrantPermission) fires
+    -- automatically for a BRAND NEW grant when
     -- Config.K9Appearance.applyPedModelOnCertify is on -- passing
     -- `modelName` straight through as GrantPermission's 4th
     -- (appearanceModelOverride) parameter means that hook applies the
@@ -688,13 +682,13 @@ function ApplyK9PedRole(granterSrc, targetCitizenid, modelName)
     -- below, before the real swap runs against them for the first time).
     local granterPlayer = exports.qbx_core:GetPlayer(granterSrc)
     local granterCitizenid = granterPlayer and granterPlayer.PlayerData and granterPlayer.PlayerData.citizenid
-    -- DISCARDED-WRITE FIX (this pass): this write's boolean result was
-    -- previously discarded outright -- a DB failure here used to be reported
-    -- to the granter as `true, 'persisted_offline'` (an "inform" toast
-    -- promising the role would be there on the target's next login) even
-    -- though nothing was actually persisted. Reported honestly instead,
-    -- matching this resource's established `reason = 'db_error'` convention
-    -- for a SafeWrite-contract write returning `false` (see e.g.
+    -- DISCARDED-WRITE FIX: this write's boolean result was previously
+    -- discarded outright -- a DB failure here used to be reported to the
+    -- granter as `true, 'persisted_offline'` (an "inform" toast promising
+    -- the role would be there on the target's next login) even though
+    -- nothing was actually persisted. Reported honestly instead, matching
+    -- this resource's established `reason = 'db_error'` convention for a
+    -- SafeWrite-contract write returning `false` (see e.g.
     -- server/certtiers.lua's identical pattern).
     local wroteOk = WriteAppearanceApplied(targetCitizenid, modelName, nil, granterCitizenid or granterLabel)
     if not wroteOk then
@@ -722,8 +716,8 @@ function ApplyK9AppearanceOnGrant(targetCitizenid, granterCitizenid, modelName)
 
     local sent = SendSwapRequest(targetCitizenid, 'apply', resolvedModel, granterLabel)
     if not sent then
-        -- DISCARDED-WRITE FIX (this pass): return value previously ignored --
-        -- see confirmK9PedSwap's own identical fix above for the full
+        -- DISCARDED-WRITE FIX: return value previously ignored -- see
+        -- confirmK9PedSwap's own identical fix above for the full
         -- reasoning. This function is a void automatic side effect (its
         -- callers, GrantCertification/GrantPermission, never check a return
         -- value by design), so the only way this failure is ever visible at
@@ -778,8 +772,8 @@ local function PerformRevert(citizenid, granterLabel)
         end
         local sent = SendSwapRequest(citizenid, 'revert', fallback, granterLabel)
         if not sent then
-            -- DISCARDED-WRITE FIX (this pass): this write's boolean result
-            -- was previously discarded -- ForceRevertK9Appearance (this
+            -- DISCARDED-WRITE FIX: this write's boolean result was
+            -- previously discarded -- ForceRevertK9Appearance (this
             -- function's caller) then unconditionally reported `true, 'ok'`
             -- and notified high command "reverted successfully" even when
             -- the row was never actually cleared. That matters MORE here
@@ -803,8 +797,8 @@ local function PerformRevert(citizenid, granterLabel)
         -- out as, which is correct: the swap, if any was ever live, has
         -- already been undone from server-authoritative state.
         --
-        -- DISCARDED-WRITE FIX (this pass): same reasoning as the fallback
-        -- branch immediately above -- see that branch's own comment.
+        -- DISCARDED-WRITE FIX: same reasoning as the fallback branch
+        -- immediately above -- see that branch's own comment.
         if not WriteAppearanceReverted(citizenid) then return false, 'db_error' end
     end
     return true, 'ok'
@@ -824,15 +818,15 @@ function MaybeRevertK9Appearance(citizenid)
     if type(HasPermission) == 'function' and HasPermission(citizenid, 'k9.access') then return end
     if IsCertifiedK9ForAnyJob(citizenid) then return end
 
-    -- DISCARDED-WRITE FIX (this pass): this is a void automatic side effect
-    -- (this function's own callers never check a return value, by design --
-    -- same as ApplyK9AppearanceOnGrant above), so a failed revert was
-    -- previously indistinguishable from a successful one anywhere in the
-    -- logs. Not itself a NEW security gap -- HasK9Role/HasK9Access are
-    -- already false for this citizenid (that's why this reconciliation ran
-    -- at all), so PlayerLoaded's own stale-row HasK9Role backstop still
-    -- refuses to re-apply the model on their next reconnect regardless of
-    -- whether this particular write landed -- but a silent DB failure here
+    -- DISCARDED-WRITE FIX: this is a void automatic side effect (this
+    -- function's own callers never check a return value, by design -- same
+    -- as ApplyK9AppearanceOnGrant above), so a failed revert was previously
+    -- indistinguishable from a successful one anywhere in the logs. Not
+    -- itself a NEW security gap -- HasK9Role/HasK9Access are already false
+    -- for this citizenid (that's why this reconciliation ran at all), so
+    -- PlayerLoaded's own stale-row HasK9Role backstop still refuses to
+    -- re-apply the model on their next reconnect regardless of whether
+    -- this particular write landed -- but a silent DB failure here
     -- deserves a console line, not nothing.
     local ok, outcome = PerformRevert(citizenid, 'system')
     if not ok and outcome == 'db_error' then
@@ -841,18 +835,17 @@ function MaybeRevertK9Appearance(citizenid)
 end
 
 --- The tablet's explicit, high-command-initiated "remove K9 ped, revert to
---- human" action (server/tablet.lua's ForceRevertK9Appearance call site --
---- coder-backend, this pass). Deliberately does NOT run
---- MaybeRevertK9Appearance's credential checks: those exist so an
---- AUTOMATIC reconciliation never undoes an appearance still legitimately
---- backed by a separate credential. This is the opposite case -- a direct
---- command from high command that must succeed EVEN IF the target still
---- holds an active certification/permission on paper (the role and the
---- appearance are being deliberately decoupled by this action, not
---- reconciled) -- and, per the NO UNBOUNDED TRAP rule applied to a
---- TERMINATION path, must ALSO succeed on a target who has ALREADY lost
---- every credential, or revoking someone first would strand them
---- permanently. Authorization is therefore keyed on the GRANTER alone
+--- human" action (server/tablet.lua's ForceRevertK9Appearance call site).
+--- Deliberately does NOT run MaybeRevertK9Appearance's credential checks:
+--- those exist so an AUTOMATIC reconciliation never undoes an appearance
+--- still legitimately backed by a separate credential. This is the
+--- opposite case -- a direct command from high command that must succeed
+--- EVEN IF the target still holds an active certification/permission on
+--- paper (the role and the appearance are being deliberately decoupled by
+--- this action, not reconciled) -- and, per the NO UNBOUNDED TRAP rule
+--- applied to a TERMINATION path, must ALSO succeed on a target who has
+--- ALREADY lost every credential, or revoking someone first would strand
+--- them permanently. Authorization is therefore keyed on the GRANTER alone
 --- (IsHighCommand), never on anything about the target.
 --- @param granterSrc number
 --- @param targetCitizenid string
@@ -898,11 +891,10 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     local row = GetAppearanceRow(citizenid)
     if not row or row.active ~= 1 then return end
 
-    -- SECURITY FIX (coder-architect, adversarial-pass finding, this pass):
-    -- BACKSTOP, independent of the playerDropped fix below -- a persisted
-    -- `active = 1` row must never be trusted blindly on reconnect. Without
-    -- this, ANY way a stale active row could survive past a real
-    -- credential loss (the disconnect-during-revert window the
+    -- SECURITY FIX: BACKSTOP, independent of the playerDropped fix below --
+    -- a persisted `active = 1` row must never be trusted blindly on
+    -- reconnect. Without this, ANY way a stale active row could survive
+    -- past a real credential loss (the disconnect-during-revert window the
     -- playerDropped fix below closes, or any other future path that
     -- writes this table without going through HasK9Role first) would
     -- silently re-apply a K9 model to a citizenid who no longer holds the
@@ -910,8 +902,8 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     -- CanShowK9UI()/every gate ultimately reduces to -- if it says no,
     -- clear the stale row here and now rather than re-apply it.
     if type(HasK9Role) == 'function' and not HasK9Role(src) then
-        -- DISCARDED-WRITE FIX (this pass): return value previously ignored.
-        -- The fail-safe behavior itself is unaffected either way -- this
+        -- DISCARDED-WRITE FIX: return value previously ignored. The
+        -- fail-safe behavior itself is unaffected either way -- this
         -- branch already `return`s below without ever re-applying the model,
         -- regardless of whether the clear-write actually landed -- but the
         -- audit trail must not claim 'stale_row_cleared_no_role' (success)
@@ -958,13 +950,12 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     SendSwapRequest(citizenid, 'apply', row.model, 'system')
 end)
 
--- SECURITY FIX (coder-architect, adversarial-pass finding, this pass):
--- ASYMMETRIC ON PURPOSE, unlike this file's own earlier (WRONG, since
--- corrected) header claim that a dropped pending swap always means
--- "nothing was ever written -- no DB state to clean up": that is true for
--- 'apply' (no pre-existing DB state a drop could leave dangling -- a
--- pending apply that never confirmed correctly stays un-applied) but NOT
--- for 'revert', which starts from a PRE-EXISTING `active = 1` row. A
+-- SECURITY FIX: ASYMMETRIC ON PURPOSE, unlike this file's own earlier
+-- (WRONG, since corrected) header claim that a dropped pending swap always
+-- means "nothing was ever written -- no DB state to clean up": that is
+-- true for 'apply' (no pre-existing DB state a drop could leave dangling
+-- -- a pending apply that never confirmed correctly stays un-applied) but
+-- NOT for 'revert', which starts from a PRE-EXISTING `active = 1` row. A
 -- target who disconnects mid-revert (deliberately -- an alt-F4 the moment
 -- a suspicious model swap arrives, or simply after seeing it -- or by
 -- pure chance) previously left that stale active row untouched, and
@@ -986,9 +977,9 @@ AddEventHandler('playerDropped', function(_reason)
         local pending = PendingSwap[citizenid]
         PendingSwap[citizenid] = nil
         if pending and pending.kind == 'revert' then
-            -- DISCARDED-WRITE FIX (this pass): return value previously
-            -- ignored -- see confirmK9PedSwap's own identical fix above for
-            -- the full reasoning, applied here to the disconnect-commit path.
+            -- DISCARDED-WRITE FIX: return value previously ignored -- see
+            -- confirmK9PedSwap's own identical fix above for the full
+            -- reasoning, applied here to the disconnect-commit path.
             if WriteAppearanceReverted(citizenid) then
                 LogAppearanceAudit(pending.granterLabel, 'k9AppearanceRevert', ('citizenid=%s'):format(citizenid), 'committed_on_disconnect')
             else

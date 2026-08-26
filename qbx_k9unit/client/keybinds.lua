@@ -303,3 +303,31 @@ end
 if Config.Features.Recall then
     RegisterKeyMapping('k9recall', locale('recall.keybind_label'), 'keyboard', 'U')
 end
+
+-- ======================================================================
+-- SCENT VISION -- owner-directed pass: "make scent tracking... a keybind
+-- that makes a colour dot appear where players[' ] blood etc have walked".
+-- A single toggle, the SAME shape as client/vision.lua's
+-- ToggleThermalVision/ToggleNightVision (this file's own header note on
+-- BiteHold/Takedown/Drag's shared-function convention applies here too —
+-- calls the IDENTICAL client/tracking.lua global a future radial/tablet
+-- entry would call, never a second copy of the toggle logic). Gated on
+-- Config.Features.ScentVision specifically, matching every other
+-- conditionally-registered entry in this file. Default key sourced from
+-- config.lua (Config.Tracking.ScentVision.keybind), matching the
+-- BiteAndHold/NonLethalTakedown/PropDragging precedent above (a config-owned
+-- default, not a literal baked into this file) since the owner's own brief
+-- for this specific feature asks for it to be "fully editable... in the
+-- config" — a DEFAULT only, per this file's own header: a player who
+-- rebinds this in Settings keeps their own choice regardless of a later
+-- config edit.
+-- ======================================================================
+if Config.Features.ScentVision then
+    RegisterCommand('k9scentvision', function()
+        if type(ToggleScentVision) == 'function' then
+            ToggleScentVision()
+        end
+    end, false)
+
+    RegisterKeyMapping('k9scentvision', locale('tracking.scent_vision_keybind_label'), 'keyboard', Config.Tracking.ScentVision.keybind)
+end

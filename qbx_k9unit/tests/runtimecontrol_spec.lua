@@ -163,6 +163,7 @@ local function boot(opts)
             AdminAuditCommands = false,
             HighCommand = true,
             PermissionGrants = true,
+            CommandTablet = true,
         },
         Tracking = {
             Scent     = { searchCooldownMs = 5000, relayCooldownMs = 1000, maxRange = 40.0, maxAgeSeconds = 900 },
@@ -414,18 +415,191 @@ t.test('ResetFeature on a tier=live feature still reports restartRequired = fals
     t.equals(result.tier, 'live')
 end)
 
-t.test('protected features (HighCommand, PermissionGrants) refuse SetFeature outright, regardless of caller', function()
+-- ============================================================================
+-- SECTION 2B -- OWNER DIRECTIVE: HighCommand/PermissionGrants/
+-- RuntimeFeatureControl/TabletTheming/CommandTablet are LOCKOUT-RISK, no
+-- longer 'protected'. Covers: (a) an unconfirmed attempt is refused, loudly,
+-- never silently applied; (b) the exact-name `confirm` unlocks it; (c) the
+-- change IS genuinely live; (d) it is NEVER persisted (sessionOnly) and a
+-- fresh boot reverts to config.lua regardless of what was last set --
+-- proving the "config.lua + restart always recovers" guarantee end to end,
+-- not merely asserting it in a comment.
+--
+-- THE DECISION THIS SECTION LOCKS IN, STATED EXPLICITLY (raised directly by
+-- coder-security's review of an earlier, incomplete pass of this same
+-- change: "should a high-command officer be able to disable high command at
+-- all, or should that one value stay refused while everything else opens?"):
+-- YES, IT STAYS EDITABLE -- refusing it outright would directly contradict
+-- the owner's own instruction, given twice, verbatim: "If its high command
+-- they should have the ability to grant whatever they want edit whatever
+-- they want etc." This is not a hedge on that instruction; the mitigation
+-- built here is not "make it safe by refusing it" but "make it safe by
+-- making the failure mode cheap and the recovery unconditional":
+--   - An UNCONFIRMED click can never do this by accident (the
+--     confirmation-required gate below) -- the owner's own "high command
+--     should have the ability" is about deliberate control, not a stray
+--     double-click.
+--   - A CONFIRMED click that does disable it IS a genuine, immediate,
+--     same-session lockout for every high-command officer, with no
+--     in-game path back (CanManageRuntimeControl needs IsHighCommand,
+--     which the very same flag now gates) -- this is not softened, and
+--     this section does not pretend otherwise.
+--   - What IS guaranteed, and proven end to end by the test below named
+--     "THE ONE THING THAT GENUINELY MATTERS": recovery needs NOTHING more
+--     than restarting this resource -- not a database row deleted by
+--     hand, not even a config.lua edit if config.lua's own shipped value
+--     was already correct. A resource restart is a mundane, always-
+--     available server-admin action (console/txAdmin), not a rare or
+--     technical one -- the SAME bounded, well-understood recovery cost
+--     this resource's own day-one-deadlock fix already established as
+--     acceptable for a comparable class of self-inflicted lockout. That
+--     is what makes this an acceptable trade for honoring the owner's
+--     explicit instruction, not a reason to override it.
+-- ============================================================================
+
+t.test('LOCKOUT-RISK: SetFeature on HighCommand/PermissionGrants without a matching `confirm` is refused, loudly, and changes nothing', function()
     local f = boot()
     f.env.IsHighCommand = function() return true end
+
     local r1 = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'HighCommand', false)
     t.isFalse(r1.ok)
-    t.equals(r1.reason, 'protected_feature')
-    t.isTrue(f.env.Config.Features.HighCommand, 'must be completely unchanged')
+    t.equals(r1.reason, 'confirmation_required')
+    t.isTrue(r1.lockoutRisk)
+    t.isTrue(type(r1.warning) == 'string' and #r1.warning > 0, 'must carry the actual warning text back to the caller, not just a flag')
+    t.isTrue(f.env.Config.Features.HighCommand, 'must be completely unchanged without confirmation')
 
     f.fakeNow.value = f.fakeNow.value + 2000
-    local r2 = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'PermissionGrants', false)
+    -- Wrong confirm value (not the exact feature name) must ALSO refuse --
+    -- this is not a bare truthy check.
+    local r2 = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'HighCommand', false, true)
     t.isFalse(r2.ok)
-    t.equals(r2.reason, 'protected_feature')
+    t.equals(r2.reason, 'confirmation_required')
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r3 = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'HighCommand', false, 'PermissionGrants')
+    t.isFalse(r3.ok)
+    t.equals(r3.reason, 'confirmation_required', 'confirming the WRONG name must not unlock a different feature')
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r4 = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'PermissionGrants', false)
+    t.isFalse(r4.ok)
+    t.equals(r4.reason, 'confirmation_required')
+end)
+
+t.test('LOAD-BEARING: SetFeature on HighCommand with the exact-name confirm actually applies live, and is reported sessionOnly', function()
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+    registerPlayer(f, HC_SOURCE, 'HCADMIN1')
+
+    local result = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'HighCommand', false, 'HighCommand')
+    t.isTrue(result.ok, 'the exact-name confirm must unlock it')
+    t.isTrue(result.appliedLive)
+    t.isFalse(result.restartRequired)
+    t.isTrue(result.sessionOnly, 'must disclose that this change does not survive a restart')
+    t.isFalse(f.env.Config.Features.HighCommand, 'the live value really did flip')
+
+    -- Still fully audited, even though nothing durable was written to
+    -- k9_runtime_feature_overrides (see the very next test) -- "every edit
+    -- must be audited" must not become false just because this one cannot
+    -- also be re-applied at boot.
+    t.equals(#f.world.overrideAudit, 1)
+    t.equals(f.world.overrideAudit[1].override_key, 'feature:HighCommand')
+    t.equals(f.world.overrideAudit[1].old_value, 'true')
+    t.equals(f.world.overrideAudit[1].new_value, 'false')
+    t.equals(f.world.overrideAudit[1].changed_by, 'HCADMIN1')
+end)
+
+t.test('THE ONE THING THAT GENUINELY MATTERS: turning HighCommand off from the tablet, persisted the SESSION-ONLY way, does NOT survive a restart -- config.lua always wins, with or without an operator edit', function()
+    local world = newWorld()
+    local first = boot({ world = world })
+    first.env.IsHighCommand = function() return true end
+
+    local setResult = first.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'HighCommand', false, 'HighCommand')
+    t.isTrue(setResult.ok)
+    t.isFalse(first.env.Config.Features.HighCommand, 'off for the rest of THIS session')
+
+    -- NO row was ever written to k9_runtime_feature_overrides for this --
+    -- proving the "never durably persisted" claim directly against the fake
+    -- database, not just against this session's own in-memory state.
+    t.isNil(world.overrides['feature:HighCommand'], 'a lockout-risk sessionOnly feature must never get a durable override row at all')
+
+    -- Simulate a full resource restart WITHOUT any config.lua edit at all --
+    -- the fixture's own defaultConfig always ships HighCommand = true, i.e.
+    -- unchanged from before the officer's toggle.
+    local second = boot({ world = world })
+    t.isTrue(second.env.Config.Features.HighCommand, 'RECOVERY: a plain restart, with no config.lua edit whatsoever, must already restore config.lua\'s own shipped value -- this is the strongest form of the recovery guarantee this task required')
+
+    -- And the audit trail from the FIRST session survives regardless (an
+    -- append-only table, independent of the current-override table) --
+    -- an operator can see who did it, even though nothing was re-applied.
+    t.equals(#world.overrideAudit, 1, 'the permanent audit record of the toggle must still exist after the restart, even though nothing was re-applied')
+end)
+
+t.test('LOCKOUT-RISK: ResetFeature on HighCommand/PermissionGrants also requires the exact-name confirm (symmetric with SetFeature, not a quieter back door)', function()
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+
+    local r1 = f.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'HighCommand')
+    t.isFalse(r1.ok)
+    t.equals(r1.reason, 'confirmation_required')
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r2 = f.callbacks['qbx_k9unit:server:runtimeResetFeature'](HC_SOURCE, 'HighCommand', 'HighCommand')
+    t.isTrue(r2.ok)
+    t.isTrue(r2.sessionOnly)
+end)
+
+t.test('LOCKOUT-RISK: RuntimeFeatureControl/TabletTheming (this file\'s OWN self-hosting flags) are ALSO lockoutRisk + sessionOnly -- found and fixed this pass, not asked for by name, same bug class as HighCommand', function()
+    local world = newWorld()
+    local first = boot({ world = world })
+    first.env.IsHighCommand = function() return true end
+
+    local result = first.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'RuntimeFeatureControl', false, 'RuntimeFeatureControl')
+    t.isTrue(result.ok)
+    t.isTrue(result.sessionOnly)
+    t.isNil(world.overrides['feature:RuntimeFeatureControl'], 'must never be durably persisted either')
+
+    local second = boot({ world = world })
+    t.isTrue(second.env.Config.Features.RuntimeFeatureControl, 'a plain restart must restore config.lua\'s own shipped value for this flag too')
+end)
+
+t.test('LOCKOUT-RISK: CommandTablet requires confirm too, but keeps its existing rawtoplevel/configEditRequired persistence (a persisted override here can never itself brick anything -- it already needs a deliberate config.lua edit to do anything at all)', function()
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+
+    local unconfirmed = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'CommandTablet', false)
+    t.isFalse(unconfirmed.ok)
+    t.equals(unconfirmed.reason, 'confirmation_required')
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local confirmed = f.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'CommandTablet', false, 'CommandTablet')
+    t.isTrue(confirmed.ok)
+    t.equals(confirmed.tier, 'rawtoplevel')
+    t.isTrue(confirmed.configEditRequired)
+    t.isNil(confirmed.sessionOnly, 'CommandTablet is lockoutRisk but NOT sessionOnly -- its own rawtoplevel gate already makes a persisted row harmless')
+    t.equals(f.world.overrides['feature:CommandTablet'].value, 'false', 'unlike HighCommand, this one IS durably persisted -- consistent with every other rawtoplevel feature')
+end)
+
+t.test('runtimeListFeatures reports lockoutRisk/sessionOnly/lockoutWarning so the tablet can render a warning without a second round trip', function()
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+    local result = f.callbacks['qbx_k9unit:server:runtimeListFeatures'](HC_SOURCE)
+    t.isTrue(result.ok)
+
+    local rowByName = {}
+    for _, row in ipairs(result.features) do rowByName[row.name] = row end
+
+    for _, name in ipairs({ 'HighCommand', 'PermissionGrants', 'RuntimeFeatureControl', 'TabletTheming', 'CommandTablet' }) do
+        t.isTrue(rowByName[name].lockoutRisk, name .. ' must be reported as lockoutRisk = true')
+        t.isTrue(type(rowByName[name].lockoutWarning) == 'string' and #rowByName[name].lockoutWarning > 0, name .. ' must carry real warning text, not a placeholder')
+    end
+    t.isTrue(rowByName.HighCommand.sessionOnly)
+    t.isTrue(rowByName.RuntimeFeatureControl.sessionOnly)
+    t.isFalse(rowByName.CommandTablet.sessionOnly, 'CommandTablet is lockoutRisk but not sessionOnly')
+
+    -- A normal feature must show neither flag as true (nil is fine; false
+    -- is also acceptable -- this checks it is never mistakenly true).
+    t.isFalse(rowByName.BasicBarkSounds.lockoutRisk == true)
 end)
 
 t.test('LOAD-BEARING: SetFeature refuses tier=unaudited outright (the fail-closed net for a feature nobody has classified yet), with a named console warning', function()
@@ -959,7 +1133,7 @@ t.test('LOAD-BEARING DRIFT GUARD: every TUNABLE_REGISTRY path resolves against t
     -- runtimefeaturetiers_spec.lua's own ">= 56" sanity floor for the
     -- identical reason (a loadfile typo silently producing a near-empty
     -- table would otherwise make the loop above pass vacuously).
-    t.isTrue(#listed.tunables >= 90, ('sanity: only saw %d tunable(s) registered -- expected at least 90 after this pass\'s expansion'):format(#listed.tunables))
+    t.isTrue(#listed.tunables >= 105, ('sanity: only saw %d tunable(s) registered -- expected at least 105 after this pass\'s owner-directed expansion (HighCommand.*/XP.*/CertificationExpiry*)'):format(#listed.tunables))
 end)
 
 t.test('K9Medkit.cooldownMs must never be exposed as a tunable -- server/medkit.lua\'s own StartSweep prune window (staleAfterMs) is a captured-once-at-load local, not a fresh Config read, so a LIVE RAISE of this value would be silently undermined by the sweep evicting the tracker entry using the OLD, now-too-short window, letting the cooldown reset early', function()
@@ -1014,6 +1188,104 @@ t.test('SearchZones.alertBroadcastRadius is deliberately NOT a tunable -- that f
     local result = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'SearchZones.alertBroadcastRadius', 50.0)
     t.isFalse(result.ok)
     t.equals(result.reason, 'invalid_key')
+end)
+
+-- ============================================================================
+-- SECTION 11 -- OWNER DIRECTIVE: previously-withheld economy/access-control
+-- values, now open. Config.HighCommand.*, Config.XP.*, Config.
+-- CertificationExpiryDays/WarningDays. PLUS the single most important
+-- regression guard in this whole file: no path may ever reach
+-- Config.Departments or Config.HighCommand.allowSelfGrant.
+-- ============================================================================
+
+t.test('OWNER DIRECTIVE: Config.HighCommand.maxXpPerGrant / grantCooldownMs are now tunable, read fresh, genuinely live', function()
+    local f = bootAgainstRealConfig()
+
+    local r1 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'HighCommand.maxXpPerGrant', 250000)
+    t.isTrue(r1.ok)
+    t.equals(f.env.Config.HighCommand.maxXpPerGrant, 250000)
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r2 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'HighCommand.grantCooldownMs', 500)
+    t.isTrue(r2.ok)
+    t.equals(f.env.Config.HighCommand.grantCooldownMs, 500)
+
+    -- Bounds are real, not decorative -- literally unbounded is refused
+    -- outright (server/highcommand.lua's own registration guard treats an
+    -- infinite maxXpPerGrant as INVALID and never registers '/k9givexp' at
+    -- all for it -- this registry must never be able to produce that value).
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r3 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'HighCommand.maxXpPerGrant', math.huge)
+    t.isFalse(r3.ok)
+    t.equals(r3.reason, 'out_of_range')
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r4 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'HighCommand.grantCooldownMs', 0)
+    t.isFalse(r4.ok, 'cooldowns.lua footgun: 0 must never be in range for a cooldown tunable, even an anti-fat-finger one')
+    t.equals(r4.reason, 'out_of_range')
+end)
+
+t.test('OWNER DIRECTIVE: Config.XP.awards.* are now tunable, but each is capped at exactly 3600 (XP_MINT_BUDGET_CAP_XP) -- a real footgun this pass found and closed, not a decorative ceiling', function()
+    local f = bootAgainstRealConfig()
+
+    local ok = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'XP.awards.searchContrabandFound', 3600)
+    t.isTrue(ok.ok, 'exactly 3600 (the mint budget cap itself) must be accepted -- server/progression.lua\'s own assert uses <=, not <')
+    t.equals(f.env.Config.XP.awards.searchContrabandFound, 3600)
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local tooHigh = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'XP.awards.searchContrabandFound', 3601)
+    t.isFalse(tooHigh.ok, 'BUG THIS PASS FOUND AND CLOSED: server/progression.lua has its own bare onResourceStart assert(amount <= XP_MINT_BUDGET_CAP_XP) over every Config.XP.awards.* key -- since this file\'s own onResourceStart reapplies overrides BEFORE that assert ever runs, a tunable above 3600 could otherwise get persisted here and crash that assert on the very next restart. This registry\'s own max must refuse it before it is ever written.')
+    t.equals(tooHigh.reason, 'out_of_range')
+    t.equals(tooHigh.max, 3600)
+
+    -- Spot-check a second award key gets the identical ceiling -- the
+    -- assert this defends against applies uniformly to every key in
+    -- Config.XP.awards, so every tunable entry for that table must too.
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local secondKey = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'XP.awards.partnershipTenure30Day', 3601)
+    t.isFalse(secondKey.ok)
+    t.equals(secondKey.max, 3600)
+end)
+
+t.test('OWNER DIRECTIVE: Config.XP.trackArrivalRadius / trackArrivalTTLMs are tunable and independent of the 3600 mint-budget ceiling (not part of Config.XP.awards)', function()
+    local f = bootAgainstRealConfig()
+    local r1 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'XP.trackArrivalRadius', 10.0)
+    t.isTrue(r1.ok)
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r2 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'XP.trackArrivalTTLMs', 120000)
+    t.isTrue(r2.ok)
+    t.equals(f.env.Config.XP.trackArrivalRadius, 10.0)
+    t.equals(f.env.Config.XP.trackArrivalTTLMs, 120000)
+end)
+
+t.test('OWNER DIRECTIVE: Config.CertificationExpiryDays / CertificationExpiryWarningDays are now tunable', function()
+    local f = bootAgainstRealConfig()
+    local r1 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'CertificationExpiryDays', 180)
+    t.isTrue(r1.ok)
+    t.equals(f.env.Config.CertificationExpiryDays, 180)
+
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local r2 = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'CertificationExpiryWarningDays', 0)
+    t.isFalse(r2.ok, 'a zero/non-positive value here must be refused, matching that file\'s own "must be a positive number" contract -- never silently coerced to the built-in 7-day fallback')
+    t.equals(r2.reason, 'out_of_range')
+end)
+
+t.test('NON-NEGOTIABLE, THE SINGLE MOST IMPORTANT CHECK IN THIS FILE: no TUNABLE_REGISTRY entry may ever reach Config.Departments or Config.HighCommand.allowSelfGrant -- widening what high command may EDIT must never create a path to widening WHO COUNTS AS high command', function()
+    local f = bootAgainstRealConfig()
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    t.isTrue(listed.ok)
+
+    for _, row in ipairs(listed.tunables) do
+        t.isFalse(row.key:find('^Departments%.') ~= nil or row.key == 'Departments', row.key .. ' -- Config.Departments (highCommandGrade/certifierGrade/etc, the rank thresholds that DEFINE who is high command) must NEVER be reachable through this registry -- a two-hop path where an edit here could promote its own editor into high command would defeat this entire mechanism\'s one real safety property')
+        t.isFalse(row.key == 'HighCommand.allowSelfGrant', 'allowSelfGrant is a boolean self-grant switch, squarely the OTHER agent\'s self-GRANT scope (server/highcommand.lua) -- must never be exposed here, and could not be anyway (TUNABLE_REGISTRY has no boolean mechanism)')
+    end
+
+    -- Also confirmed end to end, not just absent from the list: SetTunable
+    -- itself must refuse a fabricated Departments path outright, exactly
+    -- like any other unrecognized key.
+    local attempt = f.callbacks['qbx_k9unit:server:runtimeSetTunable'](HC_SOURCE, 'Departments.police.highCommandGrade', 0)
+    t.isFalse(attempt.ok)
+    t.equals(attempt.reason, 'invalid_key')
 end)
 
 os.exit(t.summary())

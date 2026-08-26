@@ -460,8 +460,13 @@ end
 --     featureKey) is called from requestBiteHold/requestTakedown/
 --     requestPropDrag with exactly these three literal featureKey arguments.
 --   server/tracking.lua's IsTrackingFeaturePermittedForCitizenId(citizenid,
---     featureName) is called with TRACK_TYPE_FEATURE_FLAGS[trackType], whose
---     own table literal maps to exactly these three.
+--     featureName) is called with TRACK_TYPE_FEATURE_FLAGS[trackType] (whose
+--     own table literal maps to exactly ScentTracking/BloodTracking/
+--     GunpowderSniffing) AND, separately (ScentVision pass), with the bare
+--     literal 'ScentVision' at getScentVisionPoints' own call site -- same
+--     shared checker function, a fourth featureName that does not come
+--     through TRACK_TYPE_FEATURE_FLAGS at all since ScentVision has no
+--     trackType of its own.
 -- HAND-MAINTAINED, SAME DISCLOSED TRADEOFF AS SERVER_LUA_FILES ABOVE: a new
 -- literal argument added to one of these four checkers' call sites must be
 -- added here in the same change.
@@ -471,6 +476,7 @@ local DYNAMIC_BLOCK_COVERAGE = {
     SearchZones = true, ContrabandAlerts = true,
     BiteAndHold = true, NonLethalTakedown = true, PropDragging = true,
     ScentTracking = true, BloodTracking = true, GunpowderSniffing = true,
+    ScentVision = true,
 }
 
 -- Features with NO per-person block path anywhere, by explicit, individually

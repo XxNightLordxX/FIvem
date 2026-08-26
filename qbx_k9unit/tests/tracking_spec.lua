@@ -745,4 +745,376 @@ t.test('GAP CLOSURE control: WITHOUT the individual override (a different K9 cit
     t.isFalse(result.found, 'no override was ever set for this citizenid -- the plain configured maxRange (10.0) must still apply to a source 15m away')
 end)
 
+-- ========================================================================
+-- SCENT VISION (Config.Features.ScentVision) -- owner-directed pass: a
+-- keybound coloured-dot "who walked through here" overlay. A NEW, SEPARATE
+-- fixture (never modifies newTrackingFixture above): this feature's capture
+-- thread scans EVERY CONNECTED player (GetPlayers()), not a single resolved
+-- source, and needs a real, steppable CreateThread/Wait pair
+-- (Sandbox.newThreadRunner(), the exact same shape newTrackingFixture
+-- already uses) to drive the capture/prune threads this pass adds -- no
+-- pre-existing test in this file needed either.
+-- ========================================================================
+
+--- @param opts table? { requireGrantListed: table?, trackingOverrides: table? }
+--- @return table fixture
+local function newScentVisionFixture(opts)
+    opts = opts or {}
+
+    local state = { now = 1000000 }
+    local function GetGameTimer() return state.now end
+
+    local threadRunner = Sandbox.newThreadRunner()
+
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
+
+    local playersBySource, pedBySource, connected = {}, {}, {}
+    local function registerPlayer(src, citizenid, pedHandle)
+        playersBySource[src] = { PlayerData = { citizenid = citizenid } }
+        pedBySource[src] = pedHandle
+        connected[src] = true
+    end
+
+    local exportsTable = {
+        qbx_core = {
+            GetPlayer = function(_self, src) return playersBySource[src] end,
+        },
+    }
+
+    local function GetPlayerPed(src) return pedBySource[src] or 0 end
+    local pedCoords = {}
+    local function GetEntityCoords(entity) return pedCoords[entity] or vec3(0, 0, 0) end
+    local function setPedCoords(src, x, y, z) pedCoords[pedBySource[src]] = vec3(x, y, z) end
+
+    -- Real GetPlayers() returns an ARRAY OF STRINGS -- mirrored here exactly
+    -- (server/entities.lua's own ResolveConnectedPlayerFromPed and this
+    -- pass's own capture thread both `tonumber(...)` every entry).
+    local function GetPlayers()
+        local ids = {}
+        for src in pairs(connected) do ids[#ids + 1] = tostring(src) end
+        return ids
+    end
+
+    local hasK9Access = true
+    local function HasK9Access(_src) return hasK9Access end
+
+    local permissionGrants = {}
+    local function defaultHasPermission(citizenid, key)
+        return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+    end
+
+    local requireGrant = {}
+    for k, v in pairs(opts.requireGrantListed or {}) do requireGrant[k] = v end
+
+    local Config = {
+        Features = { ScentVision = true },
+        Tracking = {
+            -- REQUIRED even though this fixture never exercises Scent/Blood/
+            -- Gunpowder directly (qa-tester finding, this pass): server/tracking.lua's
+            -- own PruneTrackableLogs runs on an UNCONDITIONAL thread (no
+            -- Config.Features gate at all) and reads
+            -- Config.Tracking.Scent/Blood/Gunpowder.maxAgeSeconds every
+            -- TRACKABLE_LOG_PRUNE_INTERVAL_MS (15000ms) regardless of which
+            -- feature is under test -- a ScentVision test that advances the
+            -- clock past that threshold and then calls `f.step()` would
+            -- otherwise crash this fixture with "attempt to index a nil
+            -- value (field 'Scent')" the instant that thread's own Wait
+            -- resolves. Real config.lua always ships all four
+            -- Config.Tracking sub-tables together; this fixture must too.
+            Scent     = { maxAgeSeconds = 300 },
+            Blood     = { maxAgeSeconds = 300 },
+            Gunpowder = { maxAgeSeconds = 120 },
+            ScentVision = {
+                sampleIntervalMs        = 4000,
+                minSampleMovementMeters = 2.0,
+                maxPointsPerPerson      = 4,  -- small, deliberately, so the hard cap is easy to reach in a test
+                dotLifetimeMs           = 45000,
+                queryRangeMeters        = 40.0,
+                maxVisibleTrails        = 2,  -- small, deliberately, so "handful" truncation is easy to prove
+                queryMaxPointsPerTrail  = 12,
+                queryCooldownMs         = 1000,
+                palette = {
+                    { r = 230, g = 25,  b = 75  },
+                    { r = 60,  g = 180, b = 75  },
+                },
+            },
+        },
+        FeatureControl = { RequireGrant = requireGrant },
+    }
+    for k, v in pairs(opts.trackingOverrides or {}) do
+        Config.Tracking.ScentVision[k] = v
+    end
+
+    local registeredCallbacks = {}
+    local libStub = { callback = { register = function(name, fn) registeredCallbacks[name] = fn end } }
+
+    local eventHandlers = {}
+    local function AddEventHandler(name, fn)
+        eventHandlers[name] = eventHandlers[name] or {}
+        eventHandlers[name][#eventHandlers[name] + 1] = fn
+    end
+    local function RegisterNetEvent(name, fn)
+        eventHandlers[name] = eventHandlers[name] or {}
+        eventHandlers[name][#eventHandlers[name] + 1] = fn
+    end
+
+    local function GetCurrentResourceName() return 'qbx_k9unit' end
+
+    local env = Sandbox.newEnv({
+        Config = Config,
+        GetGameTimer = GetGameTimer,
+        print = printStub,
+        exports = exportsTable,
+        GetPlayers = GetPlayers,
+        GetPlayerPed = GetPlayerPed,
+        GetEntityCoords = GetEntityCoords,
+        HasK9Access = HasK9Access,
+        HasPermission = defaultHasPermission,
+        lib = libStub,
+        RegisterNetEvent = RegisterNetEvent,
+        AddEventHandler = AddEventHandler,
+        GetCurrentResourceName = GetCurrentResourceName,
+        CreateThread = threadRunner.CreateThread,
+        Wait = threadRunner.Wait,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/tracking.lua', env)
+
+    return {
+        Config = Config,
+        printLog = printLog,
+        advance = function(ms) state.now = state.now + ms end,
+        step = threadRunner.step,
+        registerPlayer = registerPlayer,
+        setPedCoords = setPedCoords,
+        --- Fires every RegisterPlayerDropped-registered handler AND this
+        --- file's own final playerDropped handler -- the real cleanup path,
+        --- not a reimplementation of it.
+        disconnectPlayer = function(src)
+            connected[src] = nil
+            env.source = src
+            for _, fn in ipairs(eventHandlers['playerDropped'] or {}) do fn('test') end
+        end,
+        grantPermission = function(citizenid, key, value)
+            permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+            permissionGrants[citizenid][key] = value
+        end,
+        getScentVisionPoints = function(src)
+            local handler = assert(registeredCallbacks['qbx_k9unit:server:getScentVisionPoints'],
+                'server/tracking.lua did not register qbx_k9unit:server:getScentVisionPoints')
+            return handler(src)
+        end,
+    }
+end
+
+t.test('ScentVision: a moving player is captured across multiple sample passes and revealed to a nearby K9, coloured', function()
+    local f = newScentVisionFixture()
+    f.registerPlayer(1, 'K9-CID', 100)      -- the querying K9
+    f.registerPlayer(2, 'SUSPECT-CID', 200) -- the person being tracked
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 0, 0, 0)
+
+    f.step() -- primes all captured threads (reaches each one's first Wait, no capture work yet)
+
+    -- Walk the suspect a few metres each capture pass -- comfortably past
+    -- minSampleMovementMeters (2.0) every time, so every pass records a NEW point.
+    f.setPedCoords(2, 5, 0, 0)
+    f.step()
+    f.setPedCoords(2, 10, 0, 0)
+    f.step()
+    f.setPedCoords(2, 15, 0, 0)
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.isTrue(#result.points >= 3, ('expected at least 3 captured points, got %d'):format(#result.points))
+    for _, p in ipairs(result.points) do
+        t.isTrue(type(p.r) == 'number' and type(p.g) == 'number' and type(p.b) == 'number', 'every revealed point must carry a colour')
+        t.isNil(p.citizenid, 'the client must never be told WHO a point belongs to')
+        t.isNil(p.source, 'the client must never be told WHO a point belongs to')
+    end
+end)
+
+t.test('ScentVision: each dot expires against its OWN timestamp -- advancing the clock directly (no extra capture passes) expires it', function()
+    local f = newScentVisionFixture({ trackingOverrides = { dotLifetimeMs = 10000 } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+
+    f.step() -- prime
+    f.step() -- capture pass #1 -- one point recorded at the current GetGameTimer()
+
+    local beforeExpiry = f.getScentVisionPoints(1)
+    t.isTrue(#beforeExpiry.points >= 1, 'the point must still be visible before its own lifetime elapses')
+
+    -- Advance the CLOCK directly past dotLifetimeMs -- no additional capture
+    -- passes, no additional frames -- proving expiry is evaluated against a
+    -- TIMESTAMP, never a per-frame-decremented countdown (owner's own
+    -- explicit requirement).
+    f.advance(10001)
+
+    local afterExpiry = f.getScentVisionPoints(1)
+    t.equals(#afterExpiry.points, 0, 'a point older than dotLifetimeMs must never be revealed, regardless of how it got old')
+end)
+
+t.test('ScentVision: maxPointsPerPerson is a hard cap regardless of how many capture passes accumulate', function()
+    local f = newScentVisionFixture({ trackingOverrides = { maxPointsPerPerson = 3 } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 0, 0, 0)
+
+    f.step() -- prime
+
+    for i = 1, 10 do
+        f.setPedCoords(2, i * 3, 0, 0) -- always moves well past minSampleMovementMeters
+        f.step()
+    end
+
+    local result = f.getScentVisionPoints(1)
+    t.isTrue(#result.points <= 3, ('expected at most 3 points (hard cap), got %d'):format(#result.points))
+end)
+
+t.test('ScentVision: only maxVisibleTrails distinct trails are revealed at once -- the FURTHEST is dropped under load', function()
+    local f = newScentVisionFixture() -- maxVisibleTrails = 2 in this fixture's own defaults
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'NEAR-CID', 200)
+    f.registerPlayer(3, 'MID-CID', 300)
+    f.registerPlayer(4, 'FAR-CID', 400)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+    f.setPedCoords(3, 15, 0, 0)
+    f.setPedCoords(4, 25, 0, 0)
+
+    f.step() -- prime
+    f.step() -- capture pass #1 -- all three get their first point recorded
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 2, 'only maxVisibleTrails (2) distinct trails-worth of points may be revealed at once')
+
+    local sawFar = false
+    for _, p in ipairs(result.points) do
+        if p.x == 25 then sawFar = true end
+    end
+    t.isFalse(sawFar, 'the FURTHEST trail (x=25) must be the one dropped when more than maxVisibleTrails are in range')
+end)
+
+t.test('ScentVision: a freed slot is reused by a newcomer, while an UNRELATED still-visible trail keeps its own colour throughout', function()
+    local f = newScentVisionFixture() -- maxVisibleTrails = 2, palette length 2
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'A-CID', 200)
+    f.registerPlayer(3, 'B-CID', 300)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+    f.setPedCoords(3, 10, 0, 0)
+
+    f.step() -- prime
+    f.step() -- capture pass #1 -- A and B both logged
+
+    local first = f.getScentVisionPoints(1)
+    t.equals(#first.points, 2)
+    local colorByX = {}
+    for _, p in ipairs(first.points) do colorByX[p.x] = { r = p.r, g = p.g, b = p.b } end
+    local aColor, bColor = colorByX[5], colorByX[10]
+    t.isNotNil(aColor, 'A must be visible before disconnecting')
+    t.isNotNil(bColor, 'B must be visible throughout')
+
+    -- A disconnects entirely -- their slot frees (see this file's own
+    -- server/tracking.lua header, ResolveScentVisionColors, for the "reassign
+    -- only when it drops out entirely" rule this proves).
+    f.disconnectPlayer(2)
+
+    -- C, a brand-new third person, appears and moves into range, taking the
+    -- now-free slot.
+    f.registerPlayer(4, 'C-CID', 400)
+    f.setPedCoords(4, 15, 0, 0)
+    f.advance(2000) -- clear queryCooldownMs before the next query
+    f.step()
+
+    local second = f.getScentVisionPoints(1)
+    t.equals(#second.points, 2, "B (still visible) plus C (newly visible) fill the same 2 slots")
+    local colorByX2 = {}
+    for _, p in ipairs(second.points) do colorByX2[p.x] = { r = p.r, g = p.g, b = p.b } end
+
+    t.equals(colorByX2[10].r, bColor.r, "B's colour must be UNCHANGED -- it never left the visible set")
+    t.equals(colorByX2[10].g, bColor.g, "B's colour must be UNCHANGED -- it never left the visible set")
+    t.equals(colorByX2[10].b, bColor.b, "B's colour must be UNCHANGED -- it never left the visible set")
+
+    t.equals(colorByX2[15].r, aColor.r, "the freed slot's colour is now held by C, the new occupant")
+    t.equals(colorByX2[15].g, aColor.g, "the freed slot's colour is now held by C, the new occupant")
+    t.equals(colorByX2[15].b, aColor.b, "the freed slot's colour is now held by C, the new occupant")
+end)
+
+t.test("ScentVision: a K9 never sees their own trail", function()
+    local f = newScentVisionFixture()
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(1, 0, 0, 0)
+
+    f.step()
+    f.setPedCoords(1, 5, 0, 0)
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 0, "a K9's own recorded trail must never be revealed back to themselves")
+end)
+
+t.test('ScentVision: a non-positive dotLifetimeMs is clamped to a safe default, never read as "forever" (or the opposite failure -- instant, silent, total blindness)', function()
+    local f = newScentVisionFixture({ trackingOverrides = { dotLifetimeMs = 0 } })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+
+    f.step()
+    f.step()
+
+    -- The safe fallback default (45000ms, server/tracking.lua's own
+    -- ResolveConfiguredThresholdMs call site) must be in effect -- advancing
+    -- well past it must still expire the point, proving 0 did NOT silently
+    -- become "no expiry ever".
+    f.advance(45001)
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 0, 'dotLifetimeMs = 0 must fall back to a safe positive default, never "forever"')
+    t.isTrue(#f.printLog > 0, 'a bad dotLifetimeMs must print a loud, named warning, not fail silently')
+end)
+
+t.test('ScentVision: block.ScentVision denies the reveal outright, even with a fresh in-range trail', function()
+    local f = newScentVisionFixture()
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+    f.grantPermission('K9-CID', 'block.ScentVision', true)
+
+    f.step()
+    f.step()
+
+    local result = f.getScentVisionPoints(1)
+    t.equals(#result.points, 0, 'block.ScentVision must deny the reveal regardless of a real, in-range trail')
+end)
+
+t.test('ScentVision: the server enforces queryCooldownMs regardless of how fast the client asks', function()
+    local f = newScentVisionFixture()
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'SUSPECT-CID', 200)
+    f.setPedCoords(1, 0, 0, 0)
+    f.setPedCoords(2, 5, 0, 0)
+
+    f.step()
+    f.step()
+
+    local firstResult = f.getScentVisionPoints(1)
+    t.isTrue(#firstResult.points > 0)
+
+    -- Same instant, no advance() -- a second immediate query must be refused.
+    local secondResult = f.getScentVisionPoints(1)
+    t.equals(#secondResult.points, 0, 'a query inside queryCooldownMs must be refused, not answered again for free')
+end)
+
 os.exit(t.summary())

@@ -104,6 +104,9 @@ local function newKeybindsFixture(opts)
         serverEvents[#serverEvents + 1] = { event = eventName, args = { ... } }
     end
 
+    local toggleScentVisionCalls = 0
+    local function ToggleScentVision() toggleScentVisionCalls = toggleScentVisionCalls + 1 end
+
     local Config = {
         Features = {
             BiteAndHold = opts.biteAndHold ~= false,
@@ -111,11 +114,31 @@ local function newKeybindsFixture(opts)
             PropDragging = opts.propDragging ~= false,
             BasicBarkSounds = opts.basicBarkSounds ~= false,
             Recall = opts.recall ~= false,
+            -- DELIBERATELY THE ONE FLAG IN THIS TABLE THAT DEFAULTS FALSE,
+            -- unlike its four siblings above (`~= false`, i.e. "on unless
+            -- explicitly turned off"): this fixture's own pre-existing
+            -- "all five feature flags on" test (Section A below) asserts an
+            -- exact commandCount()/#keyMappingCalls total that predates
+            -- ScentVision. Defaulting this flag OFF here keeps every
+            -- existing test in this file passing unchanged; a NEW test that
+            -- wants ScentVision registered passes `{ scentVision = true }`
+            -- explicitly (see the ScentVision section further below).
+            ScentVision = opts.scentVision == true,
         },
         Combat = {
             BiteAndHold = { toggleKeybind = opts.toggleKeybindBite or 'B' },
             NonLethalTakedown = { keybind = opts.keybindTakedown or 'T' },
             PropDragging = { toggleKeybind = opts.toggleKeybindDrag or 'Y' },
+        },
+        Tracking = {
+            -- 'Z' matches config.lua's own real shipped default (changed
+            -- from an earlier 'B', which collided with
+            -- Config.Combat.BiteAndHold.toggleKeybind -- see that field's
+            -- own comment in config.lua) -- this fixture builds its own
+            -- independent Config table (never loads real config.lua), so
+            -- this value has no correctness dependency on the real one, but
+            -- matching it avoids a future reader assuming otherwise.
+            ScentVision = { keybind = opts.keybindScentVision or 'Z' },
         },
     }
 
@@ -127,6 +150,9 @@ local function newKeybindsFixture(opts)
         DenyK9UIAccess = DenyK9UIAccess,
         TriggerServerEvent = TriggerServerEvent,
     }
+    if opts.provideToggleScentVision ~= false then
+        overrides.ToggleScentVision = ToggleScentVision
+    end
     if opts.provideBiteHoldGlobals ~= false then
         overrides.IsBiteHoldEngaged = IsBiteHoldEngaged
         overrides.ReleaseBiteHold = ReleaseBiteHold
@@ -162,6 +188,7 @@ local function newKeybindsFixture(opts)
         requestDragCallCount = function() return requestDragCalls end,
         requestTakedownCallCount = function() return requestTakedownCalls end,
         k9SitCallCount = function() return k9SitCalls end,
+        toggleScentVisionCallCount = function() return toggleScentVisionCalls end,
         commandCount = function()
             local n = 0
             for _ in pairs(commandHandlers) do n = n + 1 end
@@ -436,6 +463,45 @@ t.test('k9bitehold/k9dragtoggle/k9takedown/k9sit/k9bark handlers never touch any
     f.runCommand('k9sit')
     f.runCommand('k9bark')
     -- Reaching here at all (no "attempt to call a nil value" error) is the assertion.
+end)
+
+-- ----------------------------------------------------------------------
+-- SCENT VISION -- owner-directed pass. Same "gate on THIS mechanic's own
+-- flag" convention as BiteAndHold/NonLethalTakedown/PropDragging above;
+-- calls the IDENTICAL client/tracking.lua global a future radial/tablet
+-- entry would call, never a second copy of the toggle logic (this file's
+-- own header "SAME FUNCTION, NEVER A FORKED ENTRY POINT" section).
+-- ----------------------------------------------------------------------
+
+t.test('Config.Features.ScentVision = true: registers k9scentvision, keybound to Config.Tracking.ScentVision.keybind', function()
+    local f = newKeybindsFixture({ scentVision = true, keybindScentVision = 'Z' })
+
+    t.isNotNil(f.commandHandlers['k9scentvision'])
+    local mapping = f.findKeyMapping('k9scentvision')
+    t.isNotNil(mapping, 'k9scentvision must get a RegisterKeyMapping call')
+    t.equals(mapping.defaultKey, 'Z', 'the DEFAULT key must come from config.lua (Config.Tracking.ScentVision.keybind), not a literal baked into this file')
+
+    f.runCommand('k9scentvision')
+    t.equals(f.toggleScentVisionCallCount(), 1, 'k9scentvision must call the SAME client/tracking.lua global a future radial/tablet entry would call')
+end)
+
+t.test('Config.Features.ScentVision = false (the default in this fixture): no k9scentvision command, no keybind for it', function()
+    local f = newKeybindsFixture()
+    t.isNil(f.commandHandlers['k9scentvision'])
+    t.isNil(f.findKeyMapping('k9scentvision'))
+end)
+
+t.test('k9scentvision never errors even if client/tracking.lua (and therefore ToggleScentVision) is not loaded -- soft dependency, not a load-order assumption', function()
+    local f = newKeybindsFixture({ scentVision = true, provideToggleScentVision = false })
+    t.isNil(f.env.ToggleScentVision, 'ToggleScentVision must be genuinely absent from this sandbox for this test to prove anything')
+    f.runCommand('k9scentvision') -- must not throw "attempt to call a nil value"
+end)
+
+t.test('k9scentvision does not touch any movement/task/animation native directly, matching the other five commands in this file', function()
+    local f = newKeybindsFixture({ scentVision = true })
+    f.runCommand('k9scentvision')
+    -- Reaching here at all (no "attempt to call a nil value" error, since
+    -- this fixture never provides any movement/task native) is the assertion.
 end)
 
 os.exit(t.summary())

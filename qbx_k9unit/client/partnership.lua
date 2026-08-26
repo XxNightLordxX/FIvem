@@ -4,15 +4,13 @@
     Phase 3 (HandlerPartnership registry, DEVELOPER_REFERENCE.md §12.0 item 7 /
     §12.3's file-plan entry) — the client half of server/partnership.lua
     (read in full before this file was written; that file's header is the
-    authoritative contract for everything below). Originally delivered
-    exactly what fxmanifest.lua's own comment on this file promised, no
-    more: the Partner Up consent prompt, an ox_target option, and
-    IsPartnered()/GetPartnerServerId() as resource-globals for a future
-    radial entry. A red-team-driven pass (see "KNOWN CACHE-STALENESS GAP,
-    AND ITS FIX" below) later added a fifth resource-global,
-    RefreshPartnershipStateFromServer(), that fxmanifest.lua's own comment
-    on this file does not yet mention — flagged here, and to that
-    comment's owner, rather than silently left out of sync.
+    authoritative contract for everything below). This file provides the
+    Partner Up consent prompt, an ox_target option, and
+    IsPartnered()/GetPartnerServerId()/RefreshPartnershipStateFromServer()
+    as resource-globals; client/radial.lua's own "Partner Up"/"Break
+    Partnership" item calls them directly (see "KNOWN CACHE-STALENESS GAP,
+    AND ITS FIX" below for RefreshPartnershipStateFromServer()'s own
+    reasoning).
 
     This mirrors client/movement.lua's leash subsystem shape wherever the
     two mechanics are actually alike (the consent handshake), and
@@ -58,25 +56,23 @@
             did), then only ever sends a request -- never establishes
             anything locally. NOT a straight CanShowK9UI() gate like
             RequestLeashAttach() -- see this function's own doc comment
-            ("BUG FIX (this pass)") for why an unconditional CanShowK9UI()
-            check would silently deny every officer-initiated request.
+            ("BUG FIX") for why an unconditional CanShowK9UI() check would
+            silently deny every officer-initiated request.
         BreakPartnership()
             Ends the current partnership, zero consent, always available.
-            Exposed for a future client/radial.lua context-sensitive
-            "Partner Up"/"Break Partnership" entry, the same dual-mode
-            shape that file's existing Attach/Detach Leash item already
-            uses (see that file's own header for the precedent) -- NOT
-            wired into radial.lua by this pass, since radial.lua is out of
-            scope here; a future pass gates the call behind
-            `type(BreakPartnership) == 'function'`, this codebase's
-            established soft-dependency convention, exactly like every
-            other conditionally-defined resource-global here (e.g.
-            RestoreInjury, AwardXP/GetXPTier).
+            Exposed for client/radial.lua's context-sensitive "Partner
+            Up"/"Break Partnership" entry, the same dual-mode shape that
+            file's existing Attach/Detach Leash item already uses (see
+            that file's own header for the precedent) -- client/radial.lua
+            calls this behind a `type(BreakPartnership) == 'function'`
+            guard, this codebase's established soft-dependency convention,
+            exactly like every other conditionally-defined resource-global
+            here (e.g. RestoreInjury, AwardXP/GetXPTier).
         IsPartnered() -> boolean
         GetPartnerServerId() -> number?
             Read-only, SYNCHRONOUS (never yields) accessors over this
-            file's local `PartnershipState` cache, for that same future
-            radial entry to decide which of the two above to call. See
+            file's local `PartnershipState` cache, for that same radial
+            entry to decide which of the two above to call. See
             "KNOWN CACHE-STALENESS GAP, AND ITS FIX" below for exactly when
             these two are safe to read directly and when a caller MUST call
             RefreshPartnershipStateFromServer() first instead.
@@ -88,8 +84,8 @@
             values. This is the fix for "KNOWN CACHE-STALENESS GAP, AND ITS
             FIX" below -- call this FIRST, at any decision point where a stale answer
             from the two synchronous accessors above could strand a player
-            (e.g. a future radial item picking between "Partner Up" and
-            "Break Partnership").
+            (e.g. a radial item deciding between "Partner Up" and
+            "Break Partnership" -- see below).
     - THIS FILE calls client/main.lua's CanShowK9UI()/DenyK9UIAccess() for
       the REQUEST side only (see "TERMINATION MUST NEVER BE GATED" below
       for why BreakPartnership() itself does not call either).
@@ -118,10 +114,10 @@
     client/movement.lua, which owns several independently-flagged
     mechanics in one file and could never be gated this bluntly without
     also killing Sit/camera/door-interaction/certify-ox_target along with
-    leash). A file-wide top gate is the concrete fix for the exact gap a
-    red-team pass just found in client/combat.lua (handlers registered
-    unconditionally regardless of that file's own feature flags) --
-    applied here from the start rather than retrofitted.
+    leash). A file-wide top gate is the concrete fix for the exact gap
+    found in client/combat.lua (handlers registered unconditionally
+    regardless of that file's own feature flags) -- applied here from the
+    start rather than retrofitted.
     Server-side safety net this relies on: server/partnership.lua's own
     CheckPartnershipEligibility rejects with 'feature_disabled' whenever
     this flag is false, so no partnership can ever be ESTABLISHED while
@@ -291,14 +287,14 @@ end
 --- @return boolean isPartnered -- the now-fresh value, same as IsPartnered() immediately after this returns
 --- @return number? partnerServerId -- the now-fresh value, same as GetPartnerServerId() immediately after this returns
 function RefreshPartnershipStateFromServer()
-    -- FAIL-CLOSED GUARD (dependency-verification finding, this pass):
-    -- `lib.callback.await` throws rather than returning nil on a timeout
-    -- or unregistered-callback response (confirmed against ox_lib's
-    -- `imports/callback/client.lua` and FiveM's `scheduler.lua`
-    -- `Citizen.Await` directly -- see client/main.lua's HasK9Access() for
-    -- the full citation). pcall it and treat a throw the same as an
-    -- authoritative "not partnered" response, rather than leaving a stale
-    -- PartnershipState in place or letting the throw escape uncaught.
+    -- FAIL-CLOSED GUARD (dependency-verification finding): `lib.callback.await`
+    -- throws rather than returning nil on a timeout or unregistered-callback
+    -- response (confirmed against ox_lib's `imports/callback/client.lua` and
+    -- FiveM's `scheduler.lua` `Citizen.Await` directly -- see
+    -- client/main.lua's HasK9Access() for the full citation). pcall it and
+    -- treat a throw the same as an authoritative "not partnered" response,
+    -- rather than leaving a stale PartnershipState in place or letting the
+    -- throw escape uncaught.
     local ok, isPartneredNow, partnerServerId, isK9 = pcall(lib.callback.await, 'qbx_k9unit:server:getPartnershipState', false)
     if not ok then
         isPartneredNow, partnerServerId, isK9 = false, nil, nil
@@ -318,8 +314,8 @@ function RequestPartnerUp(targetServerId)
     -- check before bothering the server, which re-validates authoritatively
     -- regardless (server/partnership.lua's CheckPartnershipEligibility).
     --
-    -- BUG FIX (this pass): the original version of this check was a
-    -- straight, unconditional `if not CanShowK9UI() then` -- mirroring
+    -- BUG FIX: the original version of this check was a straight,
+    -- unconditional `if not CanShowK9UI() then` -- mirroring
     -- client/movement.lua's RequestLeashAttach() literally, per this
     -- function's own former doc comment. That is wrong FOR THIS FILE
     -- SPECIFICALLY: CanShowK9UI() == IsOwnModelK9() AND HasK9Access(), so
@@ -388,18 +384,16 @@ end
 --- Mirrors client/movement.lua's leashAttachRequest handler exactly.
 --- @param fromServerId number
 RegisterNetEvent('qbx_k9unit:client:partnerUpRequest', function(fromServerId)
-    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
-    -- "SOURCE-ORIGIN GUARD" header block and
-    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
-    -- not re-derived here). Without this, a forged local
+    -- SOURCE-ORIGIN GUARD (see client/combat.lua's "SOURCE-ORIGIN GUARD"
+    -- header block and DEVELOPER_REFERENCE.md#trust-boundary for the full
+    -- writeup; not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:partnerUpRequest', <any server id>)`
     -- would pop this client's real accept/decline prompt with zero server
     -- contact -- annoying/spoofable UX even though accepting still routes
     -- through server/partnership.lua's own re-validated
     -- CheckPartnershipEligibility. Confidence: MEDIUM-HIGH, the official
     -- documented pattern for distinguishing a genuine server-sent event
-    -- from a local self-trigger, not independently verified in-engine
-    -- this pass.
+    -- from a local self-trigger, not independently verified in-engine.
     if source ~= 65535 then return end
 
     local fromPlayer = GetPlayerFromServerId(fromServerId)
@@ -413,7 +407,7 @@ RegisterNetEvent('qbx_k9unit:client:partnerUpRequest', function(fromServerId)
     -- near-duplicate" locale convention. Left under the movement.* group
     -- (not promoted to common.*) because promoting would require also
     -- editing client/movement.lua to point at the new common.* key, and
-    -- that file is out of scope/owned elsewhere for this pass.
+    -- that file is owned elsewhere, outside this file's scope.
     local fromName = (fromPlayer ~= -1 and GetPlayerName(fromPlayer)) or locale('movement.officer_fallback_name', fromServerId)
 
     -- If the local player partners/breaks/disconnects mid-prompt, or
@@ -440,10 +434,9 @@ end)
 --- @param partnerServerId number
 --- @param isK9 boolean -- true only on the client whose OWN character is the K9-role party
 RegisterNetEvent('qbx_k9unit:client:partnershipEstablished', function(partnerServerId, isK9)
-    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
-    -- "SOURCE-ORIGIN GUARD" header block and
-    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
-    -- not re-derived here). Without this, a forged local
+    -- SOURCE-ORIGIN GUARD (see client/combat.lua's "SOURCE-ORIGIN GUARD"
+    -- header block and DEVELOPER_REFERENCE.md#trust-boundary for the full
+    -- writeup; not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:partnershipEstablished', <any
     -- server id>, true)` would make this client BELIEVE it is partnered
     -- with an arbitrary player, with zero server contact -- no
@@ -453,7 +446,7 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEstablished', function(partnerSer
     -- after those land the right order. Confidence: MEDIUM-HIGH, the
     -- official documented pattern for distinguishing a genuine
     -- server-sent event from a local self-trigger, not independently
-    -- verified in-engine this pass.
+    -- verified in-engine.
     if source ~= 65535 then return end
 
     PartnershipState = { partnerServerId = partnerServerId, isK9 = isK9 }
@@ -474,10 +467,9 @@ end)
 --- connected, unlike leash's leashDetached.
 --- @param reason string -- e.g. 'broken' (self-initiated) or a plain reason like 'certification_revoked'/'department_changed' (server-triggered); never the raw 'system:<reason>' DB sentinel, which stays server-internal
 RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
-    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
-    -- "SOURCE-ORIGIN GUARD" header block and
-    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
-    -- not re-derived here). Without this, a forged local
+    -- SOURCE-ORIGIN GUARD (see client/combat.lua's "SOURCE-ORIGIN GUARD"
+    -- header block and DEVELOPER_REFERENCE.md#trust-boundary for the full
+    -- writeup; not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:partnershipEnded', 'anything')`
     -- would desync this client's PartnershipState from the server's real
     -- state with zero server contact (e.g. a player faking their own
@@ -486,7 +478,7 @@ RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
     -- HandlerDownDefense/Recall consuming it). Confidence: MEDIUM-HIGH,
     -- the official documented pattern for distinguishing a genuine
     -- server-sent event from a local self-trigger, not independently
-    -- verified in-engine this pass.
+    -- verified in-engine.
     if source ~= 65535 then return end
 
     PartnershipState = nil
@@ -543,9 +535,9 @@ local PARTNER_TARGET_DISTANCE_FACTOR = 0.5
 -- an operator running qb-target/qtarget/sleepless_interact gets this
 -- option translated automatically instead of losing it outright.
 --
--- LIFECYCLE FIX (this pass): extracted into a named function, sole call
--- site the AddEventHandler('onResourceStart', ...) below, so this option
--- comes back after a bare restart of whatever resource actually backs the
+-- LIFECYCLE FIX: extracted into a named function, sole call site the
+-- AddEventHandler('onResourceStart', ...) below, so this option comes
+-- back after a bare restart of whatever resource actually backs the
 -- 'target' system, not just after this resource's own restart -- ox_target
 -- (and, per each adapter's own header in shared/compat/target.lua, every
 -- other supported target script too) keeps its own registry in a

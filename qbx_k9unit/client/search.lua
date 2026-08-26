@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/search.lua
 
-    Phase 2 (coder-frontend). Owns Search Vehicle / Search Person: the two
+    Phase 2. Owns Search Vehicle / Search Person: the two
     ox_target options that play a sniff animation, then await the server's
     real, server-computed contraband result — DEVELOPER_REFERENCE.md §11.1 sub-phases
     2b/2c, §11.3's `client/search.lua` row. Deliberately a SEPARATE file
@@ -22,8 +22,8 @@
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 2, per DEVELOPER_REFERENCE.md §11.4 item 2. Server
-    side lives in server/search.lua (read directly as part of this pass —
-    see the resolved bystander-alert note below).
+    side lives in server/search.lua (read directly — see the resolved
+    bystander-alert note below).
 
     Callbacks (ox_lib lib.callback):
     1. 'qbx_k9unit:server:searchTarget' (targetType: 'vehicle'|'person', targetNetId: number)
@@ -38,7 +38,7 @@
        outcome).
        `reason` values handled below, per
        DEVELOPER_REFERENCE.md#contraband-search §3 and confirmed against
-       server/search.lua's own header as of this pass: 'invalid_target',
+       server/search.lua's own header: 'invalid_target',
        'feature_disabled', 'no_access', 'search_in_progress', 'on_cooldown',
        'too_far', 'search_failed' (plus 'access_revoked' — see the DISCLOSED
        FINDING note in tests/clientsearch_spec.lua for why that one is
@@ -68,12 +68,11 @@
        own defensive re-check and server/search.lua's real mutex are what
        actually enforce this, unchanged).
 
-    RESOLVED — bystander-alert broadcast event (was an OPEN GAP in this
-    file's earlier scaffold pass; DEVELOPER_REFERENCE.md §11.4 item 2 does not name it,
-    only that it broadcasts "the same way server/main.lua's relayBark
-    does"). Confirmed by reading server/search.lua's own header directly
-    during this pass (that file names and documents this exact event,
-    payload, and receiving file — not guessed):
+    RESOLVED — bystander-alert broadcast event (DEVELOPER_REFERENCE.md §11.4 item 2 does
+    not name it, only that it broadcasts "the same way server/main.lua's
+    relayBark does"). Confirmed by reading server/search.lua's own header
+    directly (that file names and documents this exact event, payload, and
+    receiving file — not guessed):
     2. 'qbx_k9unit:client:playContrabandAlert' (netId: number, alertTier: string)
        [server/search.lua broadcasts; THIS FILE receives, per
        server/search.lua's own header assigning the receive side here
@@ -107,10 +106,10 @@
       client/main.lua's header names as the reason HasK9Access() carries a
       short TTL cache (canInteract can run several times a second while
       hovering).
-    - THIS FILE reads Config.SearchZones (confirmed landed in config.lua as
-      of this pass, including the alertBroadcastRadius amendment beyond
-      §11.2's original text — that field is server/search.lua's own
-      concern for filtering the broadcast, not read by this file directly).
+    - THIS FILE reads Config.SearchZones (confirmed in config.lua,
+      including the alertBroadcastRadius amendment beyond §11.2's original
+      text — that field is server/search.lua's own concern for filtering
+      the broadcast, not read by this file directly).
       Config.SearchContrabandItems is NOT read by this file at all — the
       authoritative contraband list/detection lives server-side only, per
       §11.2's "single source of truth" framing; this file never duplicates
@@ -175,7 +174,7 @@ local function PerformSearch(targetType, targetEntity)
     -- searching (and potentially broadcasting a contraband alert about)
     -- the wrong person/vehicle. Capturing it here, while targetEntity is
     -- still known-fresh from the ox_target callback that just fired,
-    -- closes that window (qa-tester finding).
+    -- closes that window.
     local targetNetId = NetworkGetNetworkIdFromEntity(targetEntity)
 
     searchInProgress = true
@@ -205,11 +204,11 @@ local function PerformSearch(targetType, targetEntity)
         return -- player cancelled/moved away mid-sniff; no server call made at all
     end
 
-    -- qa-tester finding: everything from the awaited callback through the
-    -- result-rendering notifies below is wrapped in pcall so a throw
-    -- anywhere in that span (the callback itself, or anything after it)
-    -- can never leave searchInProgress stuck permanently true — mirrors
-    -- the "always release/reset on every exit, success or error" posture
+    -- Everything from the awaited callback through the result-rendering
+    -- notifies below is wrapped in pcall so a throw anywhere in that span
+    -- (the callback itself, or anything after it) can never leave
+    -- searchInProgress stuck permanently true — mirrors the "always
+    -- release/reset on every exit, success or error" posture
     -- server/search.lua's own SearchMutex already follows. searchInProgress
     -- is reset exactly once, unconditionally, after this pcall regardless
     -- of which branch inside it ran or whether it threw.
@@ -301,16 +300,16 @@ end
 -- operator running a different supported target script gets both options
 -- translated automatically instead of losing them outright.
 --
--- LIFECYCLE FIX (this pass): pulled into a named function so both can be
--- re-run any time the resource actually backing the 'target' system
--- (re)starts, not just once at this file's own load time. Every supported
--- target script keeps its own addGlobalVehicle/addGlobalPlayer-equivalent
--- registries in plain file-local Lua tables inside its OWN client chunk,
--- cleared only by that resource's own `onClientResourceStop` handler when
--- the CALLING resource (this one) stops — a bare restart of that resource
--- while this resource keeps running reloads that chunk with empty tables
--- and nothing else asks anyone to re-register. See the `AddEventHandler`
--- immediately below for the two triggers this now dispatches on, mirroring
+-- LIFECYCLE FIX: pulled into a named function so both can be re-run any
+-- time the resource actually backing the 'target' system (re)starts, not
+-- just once at this file's own load time. Every supported target script
+-- keeps its own addGlobalVehicle/addGlobalPlayer-equivalent registries in
+-- plain file-local Lua tables inside its OWN client chunk, cleared only by
+-- that resource's own `onClientResourceStop` handler when the CALLING
+-- resource (this one) stops — a bare restart of that resource while this
+-- resource keeps running reloads that chunk with empty tables and nothing
+-- else asks anyone to re-register. See the `AddEventHandler` immediately
+-- below for the two triggers this now dispatches on, mirroring
 -- server/tracking.lua's RegisterScentInventoryHook fix for the identical
 -- bug class against ox_inventory. DUPLICATE-VS-REPLACE: both options below
 -- always set `name`, and every adapter's own registration primitive
@@ -328,16 +327,14 @@ local function RegisterSearchOxTargetOptions()
     K9Compat.Get('target').AddGlobalVehicle({
         {
             name = 'qbx_k9unit:searchVehicle',
-            -- ROLE ICON, this pass: 'fas fa-dog' for every ox_target option
-            -- only ever shown while the local player's own ped IS the K9
+            -- ROLE ICON: 'fas fa-dog' for every ox_target option only ever
+            -- shown while the local player's own ped IS the K9
             -- (CanShowK9UI() below) — the same icon client/vehicle.lua's
             -- enter/exit-vehicle options and client/kennel.lua's
             -- pickup-kennel option already use, standardized on here rather
             -- than the unrelated magnifying-glass this option used before,
             -- so every K9-role option reads as one consistent visual family
-            -- regardless of which specific action it performs (coordinated
-            -- with the PLAYERS/PEDS-scope sibling pass, and with
-            -- client/vehicle.lua's/client/kennel.lua's own owning agents).
+            -- regardless of which specific action it performs.
             icon = 'fas fa-dog',
             label = locale('search.vehicle_target_label'),
             distance = Config.SearchZones.vehicleSearchDistance,
@@ -376,15 +373,12 @@ local function RegisterSearchOxTargetOptions()
     K9Compat.Get('target').AddGlobalPlayer({
         {
             name = 'qbx_k9unit:searchPerson',
-            -- ROLE ICON, this pass: same 'fas fa-dog' as "Search Vehicle"
-            -- above and every other CanShowK9UI()-gated ox_target option
-            -- across this resource (settled resource-wide scheme: fa-dog =
-            -- K9-role, fa-user-tie = a separate human acting on/for a K9,
+            -- ROLE ICON: same 'fas fa-dog' as "Search Vehicle" above and
+            -- every other CanShowK9UI()-gated ox_target option across this
+            -- resource (settled resource-wide scheme: fa-dog = K9-role,
+            -- fa-user-tie = a separate human acting on/for a K9,
             -- fa-handshake = partnership, fa-id-badge = high
-            -- command/credentialing) — this option is a PLAYER target, but
-            -- ownership of this whole file, including this option, is
-            -- explicitly settled as this file's own owner's, per the same
-            -- coordination pass that fixed the icon scheme.
+            -- command/credentialing) — this option is a PLAYER target.
             icon = 'fas fa-dog',
             label = locale('search.person_target_label'),
             distance = Config.SearchZones.personSearchDistance,
@@ -434,13 +428,13 @@ end)
 -- 'whine' / 'aggressive_bark') — deliberately never the requester's private
 -- totalWeight/contrabandFound (those never leave the callback above).
 RegisterNetEvent('qbx_k9unit:client:playContrabandAlert', function(netId, alertTier)
-    -- SOURCE-ORIGIN GUARD (coder-security pass — see client/combat.lua's
-    -- own "SOURCE-ORIGIN GUARD" header block for the full sourced
-    -- writeup/confidence grading, not re-derived here). Cosmetic-only
-    -- payoff (a forged call just plays a sound naming an arbitrary
-    -- alertTier string at an arbitrary netId), applied for resource-wide
-    -- consistency with every other `qbx_k9unit:client:*` handler, not
-    -- because this one carries real exploit severity on its own.
+    -- SOURCE-ORIGIN GUARD (see client/combat.lua's own "SOURCE-ORIGIN
+    -- GUARD" header block for the full sourced writeup/confidence grading,
+    -- not re-derived here). Cosmetic-only payoff (a forged call just plays
+    -- a sound naming an arbitrary alertTier string at an arbitrary netId),
+    -- applied for resource-wide consistency with every other
+    -- `qbx_k9unit:client:*` handler, not because this one carries real
+    -- exploit severity on its own.
     if source ~= 65535 then return end
     -- Reuses the same placeholder sound-bank plumbing client/main.lua's
     -- playBark handler already establishes (DEVELOPER_REFERENCE.md §7: bark/alert audio

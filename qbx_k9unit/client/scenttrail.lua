@@ -52,7 +52,7 @@
     growl_ambient.ogg -- already listed in fxmanifest.lua's files{} block
     for Config.Features.ProximityAudioFX) -- this feature ships ZERO new
     audio assets and needs ZERO new html/app.js or client/audio.lua changes,
-    both of which are off-limits to this pass anyway.
+    both of which are outside this file's scope anyway.
 
     Calling PlayK9Sound with THIS client's own ped netId as the "source
     entity" means client/audio.lua's own GainToEntity computes a distance of
@@ -91,28 +91,27 @@
        whole duration, and that file's own onResourceStop/expiry handler
        unconditionally calls ClearTimecycleModifier() with no concept of
        "was that actually mine to clear." Rather than reach into
-       client/screenfx.lua (off-limits to this pass) to add ownership
-       arbitration for a `false`-by-default feature, this pass ships sound
-       alone and leaves a tint layer as a disclosed future addition to
-       coordinate with coder-ui/coder-security, not something silently
-       skipped.
+       client/screenfx.lua (outside this file's scope) to add ownership
+       arbitration for a `false`-by-default feature, this file ships sound
+       alone and leaves a tint layer as a disclosed future addition, not
+       something silently skipped.
     2. NO XP AWARD. See server/scenttrail.lua's own header "THE XP
        DECISION" for the full reasoning -- this feature mints zero XP by
        design, so it adds 0 XP/hr to the shared budget
        server/progression.lua enforces.
-    3. NOT WIRED INTO client/radial.lua. That file is owned by another
-       coder this session and off-limits to this pass's edits (its own
-       registration is a fixed, monolithic RegisterK9RadialMenu() function
-       with no dynamic/exported "add an item" seam to hook into without
-       editing it directly). This feature is fully reachable on its own via
-       the '/k9nosehunt' chat command below (start) and '/k9nosehunt stop'
+    3. NOT WIRED INTO client/radial.lua. That file's own registration is a
+       fixed, monolithic RegisterK9RadialMenu() function with no
+       dynamic/exported "add an item" seam to hook into without editing it
+       directly. This feature is fully reachable on its own via the
+       '/k9nosehunt' chat command below (start) and '/k9nosehunt stop'
        (abandon) -- the exact same "command-only, no radial entry yet"
        shape this resource already ships for k9recall/k9calmdown/
-       k9deploykennel. Flagged for whoever next touches client/radial.lua
-       to add a "Start/Stop Nose Hunt" item calling StartScentHunt()/
-       StopScentHunt() the same context-sensitive way that file's own Track
-       Scent/Blood/Gunpowder items already do -- not done here, since it
-       would require editing a file this pass does not own.
+       k9deploykennel. A future "Start/Stop Nose Hunt" item in
+       client/radial.lua would need this file to expose
+       StartScentHunt()/StopScentHunt() as resource-globals first (both are
+       currently `local`) and would then call them the same
+       context-sensitive way that file's own Track Scent/Blood/Gunpowder
+       items already do -- not done here.
 
     ======================================================================
     EVENT/CALLBACK CONTRACT (server side: server/scenttrail.lua):
@@ -149,12 +148,11 @@
        `huntId` added -- see "STALE-SESSION RACE" below.
     ======================================================================
 
-    STALE-SESSION RACE -- ADDED A LATER PASS (found by a client-side sweep;
-    not present when this file was first written): server/scenttrail.lua's
-    own header carries the full server-side writeup of this same fix, and
-    server/sarcalls.lua's/client/sarcalls.lua's own identically-shaped
-    sections cover the sibling feature this mirrors -- one pattern, not two,
-    for the same underlying gap.
+    STALE-SESSION RACE: server/scenttrail.lua's own header carries the full
+    server-side writeup of this same fix, and server/sarcalls.lua's/
+    client/sarcalls.lua's own identically-shaped sections cover the sibling
+    feature this mirrors -- one pattern, not two, for the same underlying
+    gap.
 
     THE BUG: the 'qbx_k9unit:client:scentHuntFound' handler below used to
     check only `if not huntActive then return end`, with nothing identifying
@@ -201,14 +199,13 @@
     rule, which this fix does not touch.
     ======================================================================
 
-    RESOURCE-STOP HYGIENE -- FIXED THIS PASS (found by a client-side sweep;
-    not present when this file was first written). client/pursuitsprint.lua
-    already resets its own state on `onResourceStop`; this file used to have
-    NO `onResourceStop` handler at all, so a client-side stop (this
-    resource's own copy being independently restarted, or the FXServer
-    client runtime unilaterally stopping just THIS client's copy after
-    repeated script errors -- a real, server-independent event) never told
-    server/scenttrail.lua to release ActiveHunts[source].
+    RESOURCE-STOP HYGIENE: client/pursuitsprint.lua already resets its own
+    state on `onResourceStop`; this file used to have NO `onResourceStop`
+    handler at all, so a client-side stop (this resource's own copy being
+    independently restarted, or the FXServer client runtime unilaterally
+    stopping just THIS client's copy after repeated script errors -- a
+    real, server-independent event) never told server/scenttrail.lua to
+    release ActiveHunts[source].
 
     WORSE THAN A BOUNDED "SELF-HEALS IN MINUTES" GAP: server/scenttrail.lua's
     own header states its expiry check is LAZY, run only "inside
@@ -252,20 +249,18 @@ local ScentHuntConfig = Config.ScentTrailHunt or {}
 -- Fastest pulse cadence, right on top of the hidden spot. MUST stay >=
 -- server/scenttrail.lua's own POLL_RATE_FLOOR_MS (also 500ms, see that
 -- file's declaration comment on that constant) -- both are local
--- implementation constants this pass owns on both ends, so keeping them
--- numerically identical is a one-pass guarantee, not a hand-sync risk
--- across another file this session does not control. If either changes,
--- change both together.
+-- implementation constants, kept numerically identical by convention
+-- rather than shared. If either changes, change both together.
 local PULSE_MIN_INTERVAL_MS = 500
 
 -- Slowest pulse cadence, at/beyond the edge of the hunt area -- config-
 -- tunable (an operator's "how often should a far-away pulse check in"
 -- preference), unlike the fixed close-in floor above.
 --
--- CLAMP AND WARN (bug found + fixed this pass): this used to be a bare
--- `ScentHuntConfig.pollIntervalMs or 2000` -- Lua's `or` only falls through
--- on nil/false, so a configured `pollIntervalMs = 0` (or any other
--- non-positive/invalid value) passed straight through, same bug class as
+-- CLAMP AND WARN: a bare `ScentHuntConfig.pollIntervalMs or 2000` would be
+-- wrong here -- Lua's `or` only falls through on nil/false, so a
+-- configured `pollIntervalMs = 0` (or any other non-positive/invalid
+-- value) would pass straight through, same bug class as
 -- client/proximityaudio.lua's own PROXIMITY_SCAN_INTERVAL_MS fix (see that
 -- file's comment for the fuller writeup) and this resource's own on-record
 -- "a non-positive cooldown must never silently remove a throttle"
@@ -300,9 +295,9 @@ end
 -- (Config is a shared_script, so in practice it does -- this fallback only
 -- matters if ScentHuntConfig itself is missing).
 --
--- CLAMP AND WARN (bug found + fixed this pass, same audit as
--- PULSE_MAX_INTERVAL_MS immediately above): a bare `ScentHuntConfig.maxRadius
--- or 30.0` let a configured `maxRadius = 0` divide-by-zero this file's own
+-- CLAMP AND WARN (same reasoning as PULSE_MAX_INTERVAL_MS immediately
+-- above): a bare `ScentHuntConfig.maxRadius or 30.0` would let a
+-- configured `maxRadius = 0` divide-by-zero this file's own
 -- IntervalForDistance() below (`t = clamped / PULSE_MAX_DISTANCE_METERS`,
 -- i.e. `0 / 0`) -- producing NaN, which then propagates through
 -- `PULSE_MIN_INTERVAL_MS + t * (...)` into a NaN passed straight to
@@ -578,10 +573,10 @@ end
 -- '/k9nosehunt' starts a hunt; '/k9nosehunt stop' abandons one. Mirrors
 -- this resource's existing command-only entry points for a feature not
 -- (yet) wired into client/radial.lua (k9recall, k9calmdown,
--- k9deploykennel) -- see this file's header item 3 for why the radial
--- itself isn't touched by this pass. `false` (not ACE-restricted): access
--- is enforced by CanShowK9UI()/HasK9Access() above and server-side, the
--- same posture every other unrestricted K9 command in this resource uses.
+-- k9deploykennel) -- see this file's header item 3 for the full reasoning.
+-- `false` (not ACE-restricted): access is enforced by
+-- CanShowK9UI()/HasK9Access() above and server-side, the same posture
+-- every other unrestricted K9 command in this resource uses.
 RegisterCommand('k9nosehunt', function(_, args)
     if args[1] and tostring(args[1]):lower() == 'stop' then
         StopScentHunt() -- never gated -- see this file's header EVENT/CALLBACK CONTRACT item 3
