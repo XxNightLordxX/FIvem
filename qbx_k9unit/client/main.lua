@@ -61,9 +61,11 @@
             LOCAL player. This is a real network round-trip; per DEVELOPER_REFERENCE.md
             §4.1 ("checked... on every access point... not just once") it
             must be re-awaited at each point of use, not cached forever —
-            but DO cache it briefly (a TODO below) so a hot call site like
-            an ox_target `canInteract` predicate (which can run many times
-            a second while hovering) doesn't flood the server.
+            but DOES cache it briefly (HAS_K9_ACCESS_CACHE_TTL_MS/
+            hasK9AccessCache below, already implemented, not a pending TODO)
+            so a hot call site like an ox_target `canInteract` predicate
+            (which can run many times a second while hovering) doesn't
+            flood the server.
         CanShowK9UI() -> boolean
             ROLE/MODEL DECOUPLING (coder-architect, this pass —
             client/appearance.lua): with Config.K9Appearance
@@ -295,11 +297,13 @@ end
 --- previously duplicated verbatim across client/radial.lua, client/search.lua,
 --- client/vehicle.lua, client/movement.lua, and client/tracking.lua. All five
 --- have since been migrated to call this shared function directly.
---- FOUR raw copies still remain and are NOT yet migrated, counted by
---- reading rather than grepping: client/agility.lua:240, and
---- client/movement.lua at 328, 1312 and 1424. An earlier revision of this
---- comment claimed zero remained; that was wrong. Update the count here
---- when you migrate one, rather than letting it drift again. Declared as a bare global here per this file's own
+--- RE-VERIFIED (this pass, by grepping for the raw `common.no_k9_access`
+--- locale key across all of client/): zero raw copies remain anywhere —
+--- the four call sites an earlier revision of this comment flagged as
+--- still-unmigrated (client/agility.lua, three in client/movement.lua) now
+--- all call DenyK9UIAccess() directly. If a new raw copy is ever
+--- reintroduced, re-flag it here rather than assuming this stays true
+--- forever. Declared as a bare global here per this file's own
 --- established "declare once, reuse everywhere" convention (see
 --- CanShowK9UI/IsOwnModelK9 above).
 function DenyK9UIAccess()

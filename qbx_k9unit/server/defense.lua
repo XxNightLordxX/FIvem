@@ -240,17 +240,18 @@
       established "place a soft consumer near its producer" convention.
     ======================================================================
 
-    Config surface REQUESTED (not yet landed as of this file -- see this
-    pass's own report for the exact block): `Config.Combat.HandlerDownDefense`
-    with `handlerHealthThreshold`/`triggerRadius`/`hostileLookbackSeconds`
+    Config surface: LANDED (config.lua's Config.Combat.HandlerDownDefense
+    block) with `handlerHealthThreshold`/`triggerRadius`/`hostileLookbackSeconds`
     (DEVELOPER_REFERENCE.md §12.2's original sketch values, still unreviewed
-    placeholders) plus four NEW fields this implementation needs
-    (`pollIntervalMs`, `retriggerCooldownMs`, `promptTtlMs`,
-    `attackerReportCooldownMs`) that DEVELOPER_REFERENCE.md's own sketch did not
-    anticipate, since it did not work out the polling/hint-relay mechanics
-    this file had to design to make the feature buildable at all.
-    `Config.Features.HandlerDownDefense` stays `false` -- this file must
-    never flip it.
+    placeholders) plus the four fields this implementation needed beyond
+    that sketch (`pollIntervalMs`, `retriggerCooldownMs`, `promptTtlMs`,
+    `attackerReportCooldownMs`), since DEVELOPER_REFERENCE.md's own sketch
+    did not work out the polling/hint-relay mechanics this file had to
+    design to make the feature buildable at all. `Config.Features.HandlerDownDefense`
+    was `false` at go-live-review time (this file must never flip it
+    itself, only ever read it) and has SINCE been flipped to `true` by the
+    config owner (confirmed by direct read of the live config.lua) -- this
+    feature is live, not gated off, as of the current config.
 ]]
 
 if not Config.Features.HandlerDownDefense then return end

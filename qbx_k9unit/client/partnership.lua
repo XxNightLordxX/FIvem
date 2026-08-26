@@ -466,12 +466,12 @@ end)
 
 --- The partnership has ended -- self-initiated break by either side, or a
 --- server-triggered teardown (e.g. certification revoke, department
---- change, once server/certifications.lua actually calls
---- ForceBreakPartnershipForCitizenId -- see this file's header for the
---- disclosed finding that it does not yet). Sent to whichever client(s)
---- are still online -- server/partnership.lua's header is explicit this
---- side must NOT assume the other party is connected, unlike leash's
---- leashDetached.
+--- change -- server/certifications.lua calls ForceBreakPartnershipForCitizenId
+--- from four call sites as of commit 94fbc4e; see this file's header
+--- "PREVIOUSLY-DISCLOSED FINDING, NOW CORRECTED" for the verified detail).
+--- Sent to whichever client(s) are still online -- server/partnership.lua's
+--- header is explicit this side must NOT assume the other party is
+--- connected, unlike leash's leashDetached.
 --- @param reason string -- e.g. 'broken' (self-initiated) or a plain reason like 'certification_revoked'/'department_changed' (server-triggered); never the raw 'system:<reason>' DB sentinel, which stays server-internal
 RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's

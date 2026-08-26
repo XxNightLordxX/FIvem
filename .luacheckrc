@@ -417,6 +417,14 @@ globals = {
     -- "UNREGISTERED ... files that are in the tree but do not yet ship" -- was
     -- true when written and was overtaken by the registration pass.
     "AttachPropToOwnPed", "DetachAndDeleteProp", "RequestToggleK9PropAttachment",
+    -- IsPropAttachmentEngaged: client/propattachment.lua's own engagement
+    -- predicate, read by client/appearance.lua's "is this player mid-action"
+    -- check via the same `type(...) == 'function'` soft-dependency guard the
+    -- siblings below use (IsBiteHoldEngaged, IsDragEngaged,
+    -- IsFetchCarryEngaged, IsInK9Vehicle). Added 2026-08-26: appearance.lua
+    -- was consulting the other four and not this one, so a forced revert
+    -- could fire on a player still wearing an attached prop.
+    "IsPropAttachmentEngaged",
     "IsFetchCarryEngaged", "ReleaseFetchBall", "RequestRecallFetchBall", "RequestThrowFetchBall",
     -- server/cooldowns.lua constructors
     "NewCooldown", "NewNestedCooldown", "NewMutex",

@@ -273,8 +273,9 @@ end
 
 --- Radial-facing entry point for scent tracking (Config.Features.ScentTracking).
 --- DEVELOPER_REFERENCE.md §11.3's client/radial.lua row calls this by this exact name —
---- do not rename without updating that row and radial.lua's eventual
---- wiring (still unwired as of this pass).
+--- do not rename without also updating that row and radial.lua's own
+--- Track Scent item, which calls this directly (confirmed wired, see this
+--- file's header FILE-TO-FILE CONTRACT).
 function StartScentTrack()
     StartTrack('scent')
 end

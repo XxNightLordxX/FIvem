@@ -53,12 +53,20 @@
        position-sample: distance travelled between ticks / tickIntervalMs)
        is THIS FILE'S OWN implementation of the general technique
        DEVELOPER_REFERENCE.md §12.5.2 is understood to describe for
-       NonLethalTakedown's speed gate — that document was NOT re-read this
-       pass (out of this session's file-scope boundary; another agent owns
-       Phase 3 combat). MEDIUM confidence: the technique is sound and
-       self-contained, but its exact shape may not match Phase 3's real
-       implementation once that lands — flagged for reconciliation then,
-       not assumed identical now.
+       NonLethalTakedown's speed gate. RECONCILED (checked directly against
+       the now-landed server/combat.lua): NonLethalTakedown's own speed gate
+       samples the TARGET's displacement over a short, bounded
+       `Config.Combat.NonLethalTakedown.speedSampleWindowMs` window taken at
+       request time (two GetEntityCoords calls around a single `Wait`), to
+       decide whether the TARGET is fleeing — it never measures the
+       requesting K9's own movement, has no notion of "the K9 is
+       sprinting," and shares no config key, threshold, or state with this
+       file's `Config.Wellbeing.Fatigue.sprintSpeedThreshold` continuous
+       per-tick sample of the K9's OWN position. Same general
+       distance/time technique, two independent measurements of two
+       different entities for two different purposes — there is nothing
+       here for the two files to actually diverge on, and no reconciliation
+       work remains.
     3. `SetPedMoveRateOverride` itself is not called from this file at all
        (that's client/movement.lua's `RecomputeK9MoveRate()`, DEVELOPER_REFERENCE.md
        §13.0 Decision 2) — this file only ever sets named entries in the

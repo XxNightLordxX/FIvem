@@ -155,9 +155,9 @@
     - Reads `IsBiteHoldEngaged()` (client/combat.lua) behind a
       `type(...) == 'function'` runtime existence guard -- soft dependency,
       not a load-order assumption, this codebase's established convention.
-    - Reads Config.Combat.HandlerDownDefense (config.lua -- REQUESTED, not
-      yet landed as of this file; see this pass's own report for the exact
-      block, including four fields DEVELOPER_REFERENCE.md's own §12.2 sketch did
+    - Reads Config.Combat.HandlerDownDefense (config.lua -- SHIPPED, landed
+      since this file was first written; see that block for the exact
+      fields, including four DEVELOPER_REFERENCE.md's own §12.2 sketch did
       not anticipate: pollIntervalMs/retriggerCooldownMs/promptTtlMs/
       attackerReportCooldownMs/confirmKey -- see server/defense.lua's own
       header for pollIntervalMs/retriggerCooldownMs/attackerReportCooldownMs;

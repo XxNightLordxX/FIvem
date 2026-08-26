@@ -2422,11 +2422,16 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
     -- maxDragDurationMs: a defensive hard-duration backstop ADDED beyond
     -- DEVELOPER_REFERENCE.md §12.2's literal sketch (which names only
     -- maxDragDistance as this mechanic's "no unbounded trap" cap, §12.0
-    -- item 4) — see config.lua's own comment on this field (once added —
-    -- this value is REQUESTED, not yet landed, see this pass's own report)
-    -- for the full disclosed reasoning. Reuses the SAME `hold.expiresAt` /
-    -- maintenance-thread-timeout mechanism bite/takedown already use, no
-    -- new enforcement path.
+    -- item 4) — LANDED in config.lua (Config.Combat.PropDragging.maxDragDurationMs
+    -- = 20000; see that field's own comment there for the full disclosed
+    -- reasoning). Reuses the SAME `hold.expiresAt` / maintenance-thread-timeout
+    -- mechanism bite/takedown already use, no new enforcement path. NOTE:
+    -- unlike the cooldown fields above, this value is read directly with
+    -- no positive-number validation anywhere in this file — a misconfigured
+    -- non-positive/non-numeric value here would either error at this line
+    -- or silently expire a drag hold instantly, not fail loudly the way
+    -- cooldowns.lua's own guarded fields do; flagged, not fixed, since no
+    -- Config.Combat.* field in this file is validated this way today.
     local expiresAt = now + Config.Combat.PropDragging.maxDragDurationMs
 
     ActiveHolds[targetNetId] = {

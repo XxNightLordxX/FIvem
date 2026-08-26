@@ -139,11 +139,30 @@ function DetachAndDeleteProp(entity)
 end
 
 -- This client's own currently-attached vest entity, if any (nil otherwise).
--- Local-only, never read from another file. This is a CLIENT-SIDE MIRROR of
+-- Read from client/appearance.lua (IsPropAttachmentEngaged() below) as of
+-- this pass; otherwise local-only. This is a CLIENT-SIDE MIRROR of
 -- server/propattachment.lua's authoritative PropAttachmentState entry, not
 -- an independent source of truth — see client/kennel.lua's own
 -- myKennelNetId comment for the identical reasoning applied here.
 local myVestEntity = nil
+
+--- Resource-global convenience predicate — "does THIS client currently have
+--- a prop attached to its own ped via this feature". Closes the KNOWN GAP
+--- client/appearance.lua's header previously flagged: a K9 model swap
+--- (SetPlayerModel) must refuse while a vest is attached, the same way it
+--- already refuses for IsLeashed()/IsBiteHoldEngaged()/IsDragEngaged()/
+--- IsFetchCarryEngaged()/IsInK9Vehicle() — this was the missing sixth check,
+--- left as a disclosed gap rather than silently guessed at. Declared OUTSIDE
+--- the `if Config.Features.PropAttachments then` gate below, same as
+--- myVestEntity itself and this file's other shared mechanics, so a caller
+--- can consult it unconditionally via the established
+--- `type(IsPropAttachmentEngaged) == 'function'` soft-dependency check
+--- regardless of whether this feature is enabled on this server (with the
+--- feature off, myVestEntity is never set and this always reads false).
+--- @return boolean
+function IsPropAttachmentEngaged()
+    return myVestEntity ~= nil and DoesEntityExist(myVestEntity)
+end
 
 -- DEFENSE-IN-DEPTH MODEL ALLOWLIST (coder-security pass) — same role as
 -- client/kennel.lua's own KennelPropModelHashes on its removeKennel handler:

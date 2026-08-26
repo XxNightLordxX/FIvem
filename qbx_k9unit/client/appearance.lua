@@ -38,11 +38,12 @@
     those files already exposes a cheap, resource-global "am I currently
     doing this" check for exactly this kind of cross-file consultation —
     reused here, read-only, never called to mutate anything:
-        IsLeashed()            client/movement.lua
-        IsBiteHoldEngaged()    client/combat.lua
-        IsDragEngaged()        client/combat.lua
-        IsFetchCarryEngaged()  client/fetch.lua
-        IsInK9Vehicle()        client/vehicle.lua
+        IsLeashed()               client/movement.lua
+        IsBiteHoldEngaged()       client/combat.lua
+        IsDragEngaged()           client/combat.lua
+        IsFetchCarryEngaged()     client/fetch.lua
+        IsInK9Vehicle()           client/vehicle.lua
+        IsPropAttachmentEngaged() client/propattachment.lua
     If ANY of these is true, the swap is refused outright (before
     RequestModel is even called) and reported back to the server as
     'engaged' — never half-applied, never a guess at cleanup this file has
@@ -50,10 +51,11 @@
     `type(fn) == 'function'` soft-dependency check, since this file has no
     hard load-order requirement on any of theirs.
 
-    KNOWN GAP, DISCLOSED RATHER THAN SILENTLY IGNORED: client/propattachment.lua
-    exposes no equivalent "is a prop currently attached to me" boolean, so
-    a K9 mid-PropAttachment is NOT covered by this check. Reported in this
-    pass's hand-off for that file's owner to add one.
+    CLOSED GAP (this pass): client/propattachment.lua now exposes
+    IsPropAttachmentEngaged() (same shape/convention as the five predicates
+    above), added specifically to close a previously-disclosed gap in this
+    same check — a K9 mid-PropAttachment is covered below exactly like every
+    other engagement kind.
 
     ======================================================================
     STREAMING — RequestModel/HasModelLoaded polling, timed out by
@@ -203,6 +205,7 @@ local function IsCurrentlyEngaged()
     if type(IsDragEngaged) == 'function' and IsDragEngaged() then return true end
     if type(IsFetchCarryEngaged) == 'function' and IsFetchCarryEngaged() then return true end
     if type(IsInK9Vehicle) == 'function' and IsInK9Vehicle() then return true end
+    if type(IsPropAttachmentEngaged) == 'function' and IsPropAttachmentEngaged() then return true end
     return false
 end
 

@@ -11,7 +11,8 @@ code, not against a plan.
 - **Feature flag** — a switch, in a settings file only your server's staff
   can edit, that turns one piece of this resource on or off. If something
   below doesn't work, ask staff whether that piece is switched off for
-  your server, or for you specifically (see "Personal permissions" below).
+  your server, or for you specifically (see "Is this stuff turned on for
+  me?" below).
 - **Radial menu** — the circular quick-actions wheel your server already
   uses. Open it however you normally do, then pick the "K9 Unit" icon.
 - **ox_target** — the "look at something and press a key" prompt your
