@@ -8,12 +8,10 @@
     file before changing anything here.
 
     ======================================================================
-    FILE-TO-FILE CONTRACT — SHARED SURFACE FOR THE CONCURRENTLY-BUILT
-    FetchMechanic FEATURE (per this pass's own task brief: "write the sweep
-    tool so it serves both [PropAttachments and FetchMechanic]" — the same
-    reasoning extends to the plain attach/detach mechanics below, which are
-    generic over "attach some prop to my own ped at some bone index," not
-    specific to a vest):
+    FILE-TO-FILE CONTRACT — SHARED SURFACE WITH THE FetchMechanic FEATURE:
+    the plain attach/detach mechanics below are generic over "attach some
+    prop to my own ped at some bone index," not specific to a vest, so both
+    PropAttachments and FetchMechanic can reuse them:
         AttachPropToOwnPed(modelName: string, boneIndex: number,
             offsetX: number, offsetY: number, offsetZ: number,
             rotX: number, rotY: number, rotZ: number,
@@ -50,10 +48,9 @@
     ======================================================================
 
     - THIS FILE calls client/main.lua's CanShowK9UI()/DenyK9UIAccess(), same
-      as every other gated client action in this resource. CORRECTED
-      2026-08-26: this used to also claim IsOwnModelK9() — this file never
-      calls it (grepped to confirm); CanShowK9UI() alone is the actual gate
-      used below.
+      as every other gated client action in this resource -- CanShowK9UI()
+      alone is the actual gate used below (this file never calls
+      IsOwnModelK9()).
 ]]
 
 -- Milliseconds to wait for RequestModel to actually finish loading before
@@ -141,8 +138,8 @@ function DetachAndDeleteProp(entity)
 end
 
 -- This client's own currently-attached vest entity, if any (nil otherwise).
--- Read from client/appearance.lua (IsPropAttachmentEngaged() below) as of
--- this pass; otherwise local-only. This is a CLIENT-SIDE MIRROR of
+-- Read from client/appearance.lua (IsPropAttachmentEngaged() below);
+-- otherwise local-only. This is a CLIENT-SIDE MIRROR of
 -- server/propattachment.lua's authoritative PropAttachmentState entry, not
 -- an independent source of truth — see client/kennel.lua's own
 -- myKennelNetId comment for the identical reasoning applied here.
@@ -166,10 +163,10 @@ function IsPropAttachmentEngaged()
     return myVestEntity ~= nil and DoesEntityExist(myVestEntity)
 end
 
--- DEFENSE-IN-DEPTH MODEL ALLOWLIST (coder-security pass) — same role as
--- client/kennel.lua's own KennelPropModelHashes on its removeKennel handler:
--- even with the SOURCE-ORIGIN GUARD below, a DeleteEntity driven entirely by
--- a caller-supplied netId should never trust that the resolved entity is
+-- DEFENSE-IN-DEPTH MODEL ALLOWLIST — same role as client/kennel.lua's own
+-- KennelPropModelHashes on its removeKennel handler: even with the
+-- SOURCE-ORIGIN GUARD below, a DeleteEntity driven entirely by a
+-- caller-supplied netId should never trust that the resolved entity is
 -- actually one of THIS feature's own props. Built LAZILY (not at file-load
 -- time like KennelPropModelHashes) because Config.PropAttachments is only
 -- guaranteed to exist once the feature is genuinely enabled and
@@ -221,12 +218,12 @@ function RequestToggleK9PropAttachment()
 end
 
 -- ======================================================================
--- REGISTRATION-TIME FEATURE GATE (coder-security, this pass) — the command
--- below, all three RegisterNetEvent handlers, the own-death auto-detach
--- thread, and the onResourceStop hook are now all inside this single `if`,
--- evaluated once at this file's own load time (config.lua is a
--- shared_scripts file, loaded in full before any client_scripts file runs,
--- so Config.Features.PropAttachments already holds its real value here —
+-- REGISTRATION-TIME FEATURE GATE — the command below, all three
+-- RegisterNetEvent handlers, the own-death auto-detach thread, and the
+-- onResourceStop hook are now all inside this single `if`, evaluated once
+-- at this file's own load time (config.lua is a shared_scripts file,
+-- loaded in full before any client_scripts file runs, so
+-- Config.Features.PropAttachments already holds its real value here —
 -- not a load-order gamble). AttachPropToOwnPed/DetachAndDeleteProp/
 -- GetPropAttachmentModelHashes/RequestToggleK9PropAttachment above stay
 -- OUTSIDE this gate on purpose — see this file's own FILE-TO-FILE CONTRACT
@@ -260,13 +257,13 @@ end, false)
 --- Server-issued instruction: create+attach the configured prop to your OWN
 --- ped, then report its netId back (or cancel if it never loads).
 RegisterNetEvent('qbx_k9unit:client:attachK9Prop', function()
-    -- SOURCE-ORIGIN GUARD (coder-security precedent — see
-    -- client/combat.lua's "SOURCE-ORIGIN GUARD" header block and
-    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup, not
-    -- re-derived here). 65535 is FiveM's documented client-side sentinel
-    -- for "this event genuinely came from the server" (citizenfx/fivem-docs,
-    -- "Secure your events"). Confidence: MEDIUM-HIGH, the official
-    -- documented pattern, not independently verified in-engine this pass.
+    -- SOURCE-ORIGIN GUARD — see client/combat.lua's "SOURCE-ORIGIN GUARD"
+    -- header block and DEVELOPER_REFERENCE.md#trust-boundary for the full
+    -- writeup, not re-derived here. 65535 is FiveM's documented
+    -- client-side sentinel for "this event genuinely came from the
+    -- server" (citizenfx/fivem-docs, "Secure your events"). Confidence:
+    -- MEDIUM-HIGH, the official documented pattern, not independently
+    -- verified in-engine.
     if source ~= 65535 then return end
 
     -- FEATURE GATE — this handler must never fire real effects while the
@@ -275,37 +272,20 @@ RegisterNetEvent('qbx_k9unit:client:attachK9Prop', function()
     -- deployKennelAt/removeKennel are the closest precedent).
     if not Config.Features.PropAttachments then return end
 
-    -- STALE-VEST GUARD. CORRECTED 2026-08-25: this comment used to describe
-    -- a LIVE cross-file gap -- that several of confirmPropAttached's failure
-    -- branches returned without ever sending
-    -- 'qbx_k9unit:client:rejectK9PropAttach'. That was true when written and
-    -- is no longer: server/propattachment.lua's confirmPropAttached now
-    -- sends the reject on EVERY failure branch after the TTL check (config
-    -- check, HasK9Access, already-active, ped == 0, entity-resolve failure,
-    -- model check, position check, ownership check, netid-uniqueness check),
-    -- fixed under its own ORPHANED-PROP / DISCONNECT-MID-FLIGHT headings.
-    -- Verified by reading that handler in full, not inferred from its
-    -- comments.
-    --
-    -- The guard below STAYS. It is belt-and-braces against a second vest on
-    -- retry, costs nothing, and would be the only thing standing between a
-    -- future regression and a duplicated prop. What changed is only the
-    -- claim above it: do not read this as evidence of a live gap, because a
-    -- stale "there is a bug over there" comment sends the next reader
-    -- hunting something already fixed —
-    -- so myVestEntity from a first, silently-rejected attempt can survive
+    -- STALE-VEST GUARD: belt-and-braces against a second vest on retry.
+    -- myVestEntity from a first, silently-rejected attempt can survive
     -- untouched into a second 'attachK9Prop' dispatch (e.g. the player
     -- simply retries '/k9propattach' after the first attempt visibly did
-    -- nothing). Without this guard that second dispatch would create and
+    -- nothing). Without this guard, that second dispatch would create and
     -- track a SECOND vest object while overwriting the only handle this
     -- file had to the first one, permanently orphaning it (two visible
     -- vests, only one ever cleanable again). This does not by itself close
-    -- every way that first vest could go untracked (a single failed attempt
-    -- the player never retries still has no client-observable failure
-    -- signal at all — that gap can only be closed by adding the missing
-    -- rejectK9PropAttach call to those branches server-side) but it does
-    -- guarantee THIS file never simultaneously tracks, or silently drops the
-    -- only handle to, more than one vest of its own creation.
+    -- every way that first vest could go untracked (a single failed
+    -- attempt the player never retries still has no client-observable
+    -- failure signal at all — that gap can only be closed by adding a
+    -- rejectK9PropAttach call on every server-side failure branch) but it
+    -- does guarantee THIS file never simultaneously tracks, or silently
+    -- drops the only handle to, more than one vest of its own creation.
     if myVestEntity and DoesEntityExist(myVestEntity) then
         DetachAndDeleteProp(myVestEntity)
     end
@@ -369,13 +349,13 @@ RegisterNetEvent('qbx_k9unit:client:removeK9PropAttachment', function(netId)
     if not Config.Features.PropAttachments then return end
     if type(netId) ~= 'number' then return end
 
-    -- DEVELOPER_REFERENCE.md near-term item 2 migration: this was previously a
-    -- hand-rolled "NetworkDoesEntityExistWithNetworkId -> NetworkGetEntityFromNetworkId
-    -- -> DoesEntityExist" sequence, the exact pattern this resource already
-    -- centralised into client/main.lua's ResolveNetworkEntity (a NEW,
-    -- unmigrated 7th copy caught by a refactor audit — see that function's
-    -- own doc comment for the 6 prior copies it already replaced). Do not
-    -- re-introduce a hand-rolled copy of this sequence anywhere in this file.
+    -- DEVELOPER_REFERENCE.md near-term item 2: this was previously a
+    -- hand-rolled "NetworkDoesEntityExistWithNetworkId ->
+    -- NetworkGetEntityFromNetworkId -> DoesEntityExist" sequence, the exact
+    -- pattern this resource already centralised into client/main.lua's
+    -- ResolveNetworkEntity (see that function's own doc comment for the
+    -- prior copies it already replaced). Do not re-introduce a hand-rolled
+    -- copy of this sequence anywhere in this file.
     local entity = ResolveNetworkEntity(netId)
     if not entity then return end
 
@@ -386,10 +366,10 @@ RegisterNetEvent('qbx_k9unit:client:removeK9PropAttachment', function(netId)
     -- delete to an entity whose CURRENT model actually matches one of the
     -- two configured prop models turns "arbitrary entity deletion" into, at
     -- worst, "delete some other player's legitimately attached vest prop" —
-    -- should the origin guard above ever be defeated by something this pass
-    -- could not evaluate (see that guard's own confidence note). A nil
-    -- return from GetPropAttachmentModelHashes() (malformed/missing config)
-    -- fails closed — never deletes anything.
+    -- should the origin guard above ever be defeated by something that
+    -- could not be evaluated here (see that guard's own confidence note). A
+    -- nil return from GetPropAttachmentModelHashes() (malformed/missing
+    -- config) fails closed — never deletes anything.
     local modelHashes = GetPropAttachmentModelHashes()
     if not modelHashes or not modelHashes[GetEntityModel(entity)] then return end
 
@@ -400,16 +380,16 @@ RegisterNetEvent('qbx_k9unit:client:removeK9PropAttachment', function(netId)
     DetachAndDeleteProp(entity)
 end)
 
--- OWN-DEATH AUTO-DETACH (task requirement: an attached prop must be cleaned
--- up on K9 death). Lightweight poll, only running at all while this client
--- actually has a vest attached — mirrors client/vision.lua's/
--- client/screenfx.lua's own existing IsEntityDead(PlayerPedId()) polling
--- pattern for the same class of "is my own ped currently dead" check.
--- Self-reported to the server (see server/propattachment.lua's header event
--- 4 for the trust-category reasoning) rather than assumed handled purely
--- client-side, so the SERVER's own PropAttachmentState (and therefore the
--- broadcast backstop to every other client) is cleared too, not just this
--- client's local view.
+-- OWN-DEATH AUTO-DETACH: an attached prop must be cleaned up on K9 death.
+-- Lightweight poll, only running at all while this client actually has a
+-- vest attached — mirrors client/vision.lua's/client/screenfx.lua's own
+-- existing IsEntityDead(PlayerPedId()) polling pattern for the same class
+-- of "is my own ped currently dead" check. Self-reported to the server
+-- (see server/propattachment.lua's header event 4 for the trust-category
+-- reasoning) rather than assumed handled purely client-side, so the
+-- SERVER's own PropAttachmentState (and therefore the broadcast backstop
+-- to every other client) is cleared too, not just this client's local
+-- view.
 CreateThread(function()
     while true do
         Wait(1000)
@@ -422,13 +402,13 @@ CreateThread(function()
 end)
 
 -- Resource-restart safety net (same class of fix as client/kennel.lua's own
--- onResourceStop handler, flagged there as a "ship-blocking QA finding" for
--- a different piece of entity state): if THIS client attached a vest and
--- the resource stops while it's still connected, delete it locally rather
--- than leaving a frozen, ownerless object behind. Covers the common "still
--- connected at resource restart" case; server/propattachment.lua's own
--- onResourceStop loop covers attachments whose creating client already
--- disconnected earlier in the session.
+-- onResourceStop handler, for a different piece of entity state): if THIS
+-- client attached a vest and the resource stops while it's still
+-- connected, delete it locally rather than leaving a frozen, ownerless
+-- object behind. Covers the common "still connected at resource restart"
+-- case; server/propattachment.lua's own onResourceStop loop covers
+-- attachments whose creating client already disconnected earlier in the
+-- session.
 AddEventHandler('onResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     if not myVestEntity then return end

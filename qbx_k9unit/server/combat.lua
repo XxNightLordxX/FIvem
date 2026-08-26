@@ -77,6 +77,22 @@
       ActiveHolds/live server-side health (GetEntityHealth, see
       PED_DEAD_HEALTH_THRESHOLD below) before acting, never trusted alone.
     - 'qbx_k9unit:server:requestTakedown' (targetNetId: number)
+    - 'qbx_k9unit:server:releaseTakedown' ()
+      CANCEL-PATH FIX (this pass, coder-frontend — audit-flagged gap):
+      NonLethalTakedown used to be the only one of the three combat
+      mechanics with no way to end it early — bite-hold has releaseBiteHold,
+      drag has releaseDrag, takedown had neither, so an auto-picked wrong
+      target (FindNearestCombatTarget, client/combat.lua) stayed ragdolled/
+      damage-immune for the full ragdollDurationMs with no way back. Mirrors
+      releaseBiteHold's shape EXACTLY, including its authorization posture
+      — see that handler's own doc comment (below) for why a release/cancel
+      path must never re-check HasK9Access/Config.Features.NonLethalTakedown/
+      any cooldown on the way out: this is a TERMINATION path, DEVELOPER_REFERENCE.md
+      §12.0 item 4's "no unbounded trap" guarantee, restated for takedown
+      specifically. Only verifies `source` is CURRENTLY the holder of an
+      active 'takedown' via K9ActiveEffect[src] — the same O(1) lookup
+      releaseBiteHold/releaseDrag already use — never a client-claimed
+      targetNetId.
     - 'qbx_k9unit:server:reportHolderDied' ()
       LIFECYCLE QA FIX (this pass — see this event's own handler doc comment,
       near EndActiveEffectForHolder, for the full trust-boundary/
@@ -108,6 +124,23 @@
       problem), unrelated to item 8's Category B concern.
     - 'qbx_k9unit:client:biteHoldEnded' (targetNetId: number, reason: string)
       Sent ONLY to the holding K9's own client.
+    - 'qbx_k9unit:client:takedownStarted' (targetNetId: number, expiresAt: number)
+      CANCEL-PATH FIX (this pass) — Sent ONLY to the HOLDING K9's own
+      client, unconditionally, mirroring biteHoldStarted immediately above
+      exactly (same call shape, same "sent regardless of isPlayerTarget"
+      posture). Before this pass, a takedown's holder received NO event of
+      this kind at all — this is what lets client/combat.lua track "am I
+      currently the holder of an active takedown" so IsTakedownEngaged()/
+      ReleaseTakedown() have real state to work from, the same way
+      MyEngagedTargetNetId/IsBiteHoldEngaged() already do for bite-hold.
+    - 'qbx_k9unit:client:takedownEnded' (targetNetId: number, reason: string)
+      CANCEL-PATH FIX (this pass) — Sent ONLY to the holding K9's own
+      client, unconditionally (every EndHold reason, mirroring
+      biteHoldEnded/dragEnded's own "always sent regardless of reason"
+      posture) — this is what actually clears the holder's own
+      client-side "engaged" state, for EVERY end reason (timeout,
+      released_by_holder, target_died, holder_died, disconnect), not just
+      a manual release.
     - 'qbx_k9unit:client:forceRagdoll' (expiresAt: number)
       Sent ONLY to the target's own client — Category B relay for
       NonLethalTakedown, same posture as applyBiteHold above.
@@ -284,7 +317,7 @@
     ======================================================================
 
     No anim-dictionary/TASK_PLAY_ANIM asset is used for BiteAndHold in this
-    pass — phase2_notes/DEVELOPER_REFERENCE.md#phase-3-combat's own §1 write-up flags
+    pass — DEVELOPER_REFERENCE.md#phase-3-combat's own §1 write-up flags
     the one candidate clip (`creatures@rottweiler@melee@streamed_core@` /
     `takedown_from_back`) as MEDIUM confidence, one-shot (not a sustained
     hold loop), model-specific to the Rottweiler only, and explicitly
@@ -373,7 +406,7 @@
     currently-connected player?"), for the SAME reason that file's own
     header gives: `IsPedAPlayer`/`NetworkGetPlayerIndexFromPed` combos were
     never independently confirmed reliable SERVER-side in this codebase's
-    own native-verification passes (phase2_notes/DEVELOPER_REFERENCE.md#phase-3-combat
+    own native-verification passes (DEVELOPER_REFERENCE.md#phase-3-combat
     does not list `IS_PED_A_PLAYER` in its confirmed-natives table for
     either feature at all), whereas the `GetPlayers()`/`GetPlayerPed(id)`
     scan is already proven reliable server-side elsewhere in this exact
@@ -1774,12 +1807,24 @@ local function EndHold(targetNetId, reason)
             TriggerClientEvent('qbx_k9unit:client:endNpcTakedown', hold.holderSrc, targetNetId, reason)
         end
 
-        if reason ~= 'timeout' then
-            -- Takedown has no manual "release" action (DEVELOPER_REFERENCE.md
-            -- §12.5.2 lists no release event) — only notify the K9 for a
-            -- non-timeout reason (e.g. the target disconnecting mid-ragdoll);
-            -- a plain timeout is the expected, silent end of a successful
-            -- takedown.
+        -- CANCEL-PATH FIX (this pass) — sent unconditionally, every reason,
+        -- mirroring biteHoldEnded/dragEnded immediately above/below: this is
+        -- what clears the holder's own client-side "am I engaged" state
+        -- (MyEngagedTakedownTargetNetId/IsTakedownEngaged(), client/combat.lua)
+        -- for EVERY end reason, not only a manual release.
+        TriggerClientEvent('qbx_k9unit:client:takedownEnded', hold.holderSrc, targetNetId, reason)
+
+        -- CANCEL-PATH FIX (this pass): takedown NOW has a manual "release"
+        -- action too (releaseTakedown below, mirroring releaseBiteHold) —
+        -- 'released_by_holder' is EXCLUDED from this notify for the exact
+        -- same reason drag_ended already excludes its own two manual-release
+        -- reasons (see the 'drag' branch below): a manual release is
+        -- self-evident to the actor who just pressed the button/keybind —
+        -- announcing it back to them would be a redundant, not a new, signal.
+        -- Every OTHER non-timeout reason (target disconnecting mid-ragdoll,
+        -- holder_died via EndActiveEffectForHolder's own 'recalled' path,
+        -- etc.) still gets the existing "ended early" notify, unchanged.
+        if reason ~= 'timeout' and reason ~= 'released_by_holder' then
             NotifyPlayer(hold.holderSrc, locale('combat.takedown_ended_early'), 'inform')
         end
     else -- 'drag' (DEVELOPER_REFERENCE.md §12.5.4, this pass)
@@ -2863,17 +2908,43 @@ local function HandleTakedownRequest(src, targetNetId)
         TriggerClientEvent('qbx_k9unit:client:applyNpcTakedown', src, targetNetId, expiresAt)
     end
 
+    -- CANCEL-PATH FIX (this pass) — sent unconditionally, regardless of
+    -- isPlayerTarget2, mirroring biteHoldStarted's own "sent to the HOLDING
+    -- K9's own client either way" placement exactly (requestBiteHold, above
+    -- in this file). Gives client/combat.lua real per-takedown state to
+    -- drive IsTakedownEngaged()/ReleaseTakedown() from, the same way
+    -- biteHoldStarted already does for MyEngagedTargetNetId/
+    -- IsBiteHoldEngaged().
+    TriggerClientEvent('qbx_k9unit:client:takedownStarted', src, targetNetId, expiresAt)
+
     -- Config.XP.awards.takedownSuccess (config.lua) — QA-flagged as dead
-    -- code (configured, never granted) until this pass. Unlike BiteAndHold,
-    -- no anti-farm floor is needed here: reaching this line already means
-    -- the server-computed speed gate (genuinely fleeing, never a
-    -- client-claimed flag), both cooldowns (per-K9 AND per-target), and the
-    -- full ValidateCombatRequest re-check all passed — there is no
-    -- "immediate release" farm vector to guard against since takedown has
-    -- no manual release action at all (single atomic action, not a
-    -- hold-then-release lifecycle). Runtime existence guard, same
-    -- convention as server/tracking.lua's own trackSourceResolved call
-    -- site — no load-order assumption on server/progression.lua.
+    -- code (configured, never granted) until this pass.
+    --
+    -- STALE-COMMENT FIX (this pass, cancel-path addition — re-verified
+    -- against the actual current code before rewriting, not left
+    -- contradicting it): this comment used to say "there is no 'immediate
+    -- release' farm vector to guard against since takedown has no manual
+    -- release action at all" — that premise no longer holds, releaseTakedown
+    -- (below) now exists. The CONCLUSION still holds regardless, for a
+    -- different, still-valid reason: AwardXP is called HERE, at GRANT time
+    -- (a few lines below), strictly BEFORE ActiveHolds/K9ActiveEffect are
+    -- ever written for THIS request, and both TakedownCooldown/
+    -- TakedownTargetCooldown.Consume have ALREADY run above this point —
+    -- releaseTakedown only ever reaches EndHold (which never calls AwardXP,
+    -- never touches either cooldown, for its 'takedown' branch), so a
+    -- manual release can end the ragdoll early but cannot re-trigger this
+    -- AwardXP call a second time, and cannot free either cooldown sooner
+    -- than it would have expired anyway. No anti-farm change needed here as
+    -- a result — flagged explicitly rather than left as a comment that no
+    -- longer matches the code around it.
+    --
+    -- Unlike BiteAndHold, no anti-farm floor is needed here: reaching this
+    -- line already means the server-computed speed gate (genuinely fleeing,
+    -- never a client-claimed flag), both cooldowns (per-K9 AND per-target),
+    -- and the full ValidateCombatRequest re-check all passed. Runtime
+    -- existence guard, same convention as server/tracking.lua's own
+    -- trackSourceResolved call site — no load-order assumption on
+    -- server/progression.lua.
     -- SEVENTH XP-FARM FIX (this pass) -- see TakedownXpMintCooldown's own
     -- declaration comment (near BiteHoldXpMintCooldown, above) for the full
     -- writeup. Gates ONLY this AwardXP call, checked LAST -- reaching this
@@ -2931,6 +3002,60 @@ RegisterNetEvent('qbx_k9unit:server:requestTakedown', function(targetNetId)
     if not ok then
         print(('[qbx_k9unit] requestTakedown error for source %s: %s'):format(src, tostring(err)))
     end
+end)
+
+--- CANCEL-PATH FIX (this pass, coder-frontend — audit-flagged gap: bite-hold
+--- has releaseBiteHold, drag has releaseDrag, takedown had neither, so an
+--- auto-picked wrong target — FindNearestCombatTarget, client/combat.lua,
+--- picks the NEAREST eligible ped, not necessarily the intended one — had no
+--- way back short of waiting out the full Config.Combat.NonLethalTakedown.
+--- ragdollDurationMs). MIRRORS releaseBiteHold's shape EXACTLY (see that
+--- handler above), NOT reinvented:
+---   - Same O(1) K9ActiveEffect[src] lookup to resolve `src`'s own current
+---     target, never a client-supplied targetNetId.
+---   - Same two-part shape check (`hold` exists, `hold.effectType` matches
+---     the mechanic this handler owns, `hold.holderSrc == src`) before ever
+---     calling EndHold — an impostor `releaseTakedown` from a source that is
+---     not genuinely the holder of THIS takedown is a silent no-op, exactly
+---     like releaseBiteHold's own impostor case.
+---   - Same authorization posture: DELIBERATELY NEVER re-checks
+---     HasK9Access(src)/Config.Features.NonLethalTakedown/any cooldown on the
+---     way out. THIS IS A TERMINATION PATH — DEVELOPER_REFERENCE.md §12.0 item 4's
+---     "no unbounded trap" guarantee (already binding for takedown's own hard
+---     expiresAt cap, see the shared maintenance thread) requires that a K9
+---     whose certification is revoked, or whose feature flag is toggled off,
+---     mid-takedown can still call it off — gating this on either would
+---     reintroduce exactly the trap that guarantee forbids, the same
+---     reasoning EndActiveEffectForHolder's own doc comment (above) already
+---     establishes for Recall.
+--- Reason 'released_by_holder' — deliberately the SAME string releaseDrag's
+--- own holder-side release already uses (not BiteAndHold's 'released'): both
+--- mean the identical thing, "the holder manually let go," and EndHold
+--- branches on `hold.effectType` FIRST, before ever looking at `reason`, so
+--- reusing the string across the 'drag' and 'takedown' branches creates no
+--- ambiguity — it is simply the same semantic reason, consistently spelled,
+--- for the same kind of event on two different mechanics. Takedown has no
+--- target-side release counterpart (unlike releaseDrag, which legitimately
+--- accepts a target-initiated release too — DEVELOPER_REFERENCE.md §12.5.2 lists no
+--- such capability for NonLethalTakedown, and this handler does not add
+--- one), so only the one reason string is needed here.
+--- AWARD-FARM CHECK (explicitly verified, not assumed — see
+--- HandleTakedownRequest's own updated comment on this above): AwardXP for
+--- takedownSuccess already ran at GRANT time, strictly before this handler
+--- can ever run for this hold — EndHold's own 'takedown' branch never calls
+--- AwardXP and never touches TakedownCooldown/TakedownTargetCooldown, so
+--- this termination path cannot mint XP a second time and cannot free
+--- either cooldown any sooner than it would have expired on its own.
+RegisterNetEvent('qbx_k9unit:server:releaseTakedown', function()
+    local src = source
+
+    local targetNetId = K9ActiveEffect[src]
+    if not targetNetId then return end -- src is not currently the holder of anything -- ignore
+
+    local hold = ActiveHolds[targetNetId]
+    if not hold or hold.effectType ~= 'takedown' or hold.holderSrc ~= src then return end
+
+    EndHold(targetNetId, 'released_by_holder')
 end)
 
 --[[ ================= PROP DRAGGING ================= ]]

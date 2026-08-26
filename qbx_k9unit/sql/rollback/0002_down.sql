@@ -27,7 +27,7 @@
 --     Leave the table alone. It costs nothing to keep and it is your only
 --     copy of everyone's XP.
 --   * Genuinely want it gone? Run sql/rollback/backup_k9_tables.sh FIRST
---     (OPERATOR_RUNBOOK.md §7 step 1), then arm and run
+--     (README.md §7 step 1), then arm and run
 --     sql/rollback/uninstall_all.sql.
 --
 -- Running this file is always harmless. It only READS -- it reports what

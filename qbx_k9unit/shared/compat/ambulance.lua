@@ -46,22 +46,21 @@
     WINNING, UNCONDITIONALLY. THIS FILE DOES NOT TOUCH THAT.
 
     server/combat.lua's `IsTargetDowned` and server/defense.lua's
-    `IsHandlerDown` were this session's own DO-NOT-EDIT list at the time
-    THIS file was first written (per the task that produced it) -- and
-    even without that restriction, this file would not have touched them
-    directly: `Config.Compat`'s own comment (config.lua, directly above
-    the `ambulance` candidates block) makes an explicit promise to an
-    operator who already wrote an `IsPlayerDownedOverride`: "That hook was
-    the original answer to this problem and is not being retired -- if you
-    already wrote one, it keeps working exactly as before."
+    `IsHandlerDown` were on a DO-NOT-EDIT list at the time THIS file was
+    first written -- and even without that restriction, this file would not
+    have touched them directly: `Config.Compat`'s own comment (config.lua,
+    directly above the `ambulance` candidates block) makes an explicit
+    promise to an operator who already wrote an `IsPlayerDownedOverride`:
+    "That hook was the original answer to this problem and is not being
+    retired -- if you already wrote one, it keeps working exactly as
+    before."
 
-    STALE CLAIM CORRECTED (compat-layer audit pass, 2026-08-26): this
-    section used to say "neither `server/combat.lua` nor `server/
-    defense.lua` calls anything in `K9Compat` today, at all" and described
-    the resolution order below as a FOLLOW-UP THIS FILE ENABLES BUT DOES
-    NOT PERFORM. That stopped being true once a later pass actually wired
-    both callers up -- confirmed by reading both files directly, this
-    pass, not assumed from a prior note: server/combat.lua's
+    CORRECTED (2026-08-26): this section used to say "neither `server/
+    combat.lua` nor `server/defense.lua` calls anything in `K9Compat`
+    today, at all" and described the resolution order below as a
+    FOLLOW-UP THIS FILE ENABLES BUT DOES NOT PERFORM. That changed once
+    both callers were actually wired up -- confirmed by reading both files
+    directly, not assumed from a prior note: server/combat.lua's
     `IsTargetDowned` (its own doc comment, "COMPAT-LAYER (this pass)") and
     server/defense.lua's `IsHandlerDown` (its own doc comment, "COMPAT-
     LAYER (this pass): when no override is configured...") each now call
@@ -184,14 +183,15 @@
       every query tried this session, which is itself the finding worth
       recording: unlike every other candidate in either adapter file (each
       of which returned at least some forum discussion, even the ones this
-      pass could not find source for), this exact resource name produced
-      no corroborating evidence of being a real, in-use FiveM resource at
-      all in the sources this session could reach -- not merely "closed
-      source," but genuinely unconfirmed to exist as commonly understood.
-      Registered as UNCONFIRMED rather than omitted regardless, in case a
-      real, low-visibility resource by this exact name does exist on some
-      server this pack runs on -- `/k9compat` will still show a specific,
-      honest reason if it's ever detected as started.
+      research could not find source for), this exact resource name
+      produced no corroborating evidence of being a real, in-use FiveM
+      resource at all in the sources this session could reach -- not
+      merely "closed source," but genuinely unconfirmed to exist as
+      commonly understood. Registered as UNCONFIRMED rather than omitted
+      regardless, in case a real, low-visibility resource by this exact
+      name does exist on some server this pack runs on -- `/k9compat` will
+      still show a specific, honest reason if it's ever detected as
+      started.
 
       wasabi_ambulance (UNCONFIRMED). The publisher's GitHub organisation
       IS real and reachable (`WasabiRobby`, confirmed via
@@ -226,10 +226,10 @@
       own network policy ("GitHub access to this repository is not enabled
       for this session"), which is a DIFFERENT failure mode than a genuine
       absent/renamed repository would produce and could not be resolved
-      within this pass. Left UNCONFIRMED rather than trusting four
-      forum citations of a path this session could not itself fetch even
-      once -- this file's own standard is a primary source THIS SESSION
-      READ, not secondhand agreement, however consistent.
+      this session. Left UNCONFIRMED rather than trusting four forum
+      citations of a path this session could not itself fetch even once --
+      this file's own standard is a primary source THIS SESSION READ, not
+      secondhand agreement, however consistent.
     ======================================================================
 
     RACE WINDOW / TWO-STEP EXPORT SHAPE: identical reasoning to

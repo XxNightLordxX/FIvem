@@ -36,7 +36,7 @@
 -- reversible with no schema change at all.
 --
 -- So: run this file to get UNSTUCK from a bad index (see
--- OPERATOR_RUNBOOK.md §7's own general workflow), fix the underlying
+-- README.md §7's own general workflow), fix the underlying
 -- problem, then run sql/migrations/0009_... again to put it back. Do not
 -- leave a production server with `/k9stats` enabled and this rollback
 -- applied for any length of time.

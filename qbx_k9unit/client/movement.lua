@@ -182,7 +182,7 @@
     DOOR INTERACTION — Phase 2, SCRATCH-TO-ALERT + NUDGE-OPEN. DEVELOPER_REFERENCE.md
     §11.1 sub-phase 2a/2b, §11.3's file/module plan (this file's row), §11.4
     items 5/6, §11.5's door-interaction acceptance criteria;
-    phase2_notes/DEVELOPER_REFERENCE.md#door-interaction (the design note,
+    DEVELOPER_REFERENCE.md#door-interaction (the design note,
     native verification, and security review that used to be three separate
     files are now merged into this one section; all three were read in full
     before this section was written — the security review in particular was
@@ -197,7 +197,7 @@
     design-note-flagged implementation paths was actually taken (the
     zero-gating cosmetic-only fallback, since a real "already passable"
     detection method was never confirmed to exist anywhere in
-    phase2_notes/DEVELOPER_REFERENCE.md#door-interaction).
+    DEVELOPER_REFERENCE.md#door-interaction).
 
     Nudge-open has NO server event of its own — it is 100% client-local
     (ZERO TriggerServerEvent, ZERO callback, nothing server-authoritative
@@ -1049,7 +1049,7 @@ end
 -- this codebase's own convention (see client/hud.lua's "STAMINA NATIVE --
 -- CONFIDENCE NOTE" for the standard this follows): the native's
 -- NAME/existence as a real, callable FiveM ped native is HIGH confidence
--- (linked from phase2_notes/DEVELOPER_REFERENCE.md#phase-3-combat's own
+-- (linked from DEVELOPER_REFERENCE.md#phase-3-combat's own
 -- natives-to-verify list, and independently named by both
 -- DEVELOPER_REFERENCE.md §12.5.4 and DEVELOPER_REFERENCE.md §13.0 as the intended
 -- mechanism for exactly this class of effect -- multiple independent
@@ -1692,8 +1692,8 @@ end)
 -- NUDGE-OPEN — DESIGN PATH TAKEN (read this before touching NudgeDoor()):
 --
 -- The hard, non-negotiable constraint (DEVELOPER_REFERENCE.md §11.5/§11.6,
--- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §0.5/§4,
--- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction Finding 3): nudge-open
+-- DEVELOPER_REFERENCE.md#door-interaction §0.5/§4,
+-- DEVELOPER_REFERENCE.md#door-interaction Finding 3): nudge-open
 -- must NEVER consult GTA's native door-lock/CDoor system
 -- (DoorSystemGetDoorState / IsDoorClosed / GetStateOfClosestDoorOfType /
 -- etc.) as a safety check. An unregistered door — the common case, since
@@ -1716,7 +1716,7 @@ end)
 --
 -- WHICH FALLBACK WAS ACTUALLY TAKEN — flagged explicitly per this task's
 -- own instruction, for exploit-tester to verify against: nothing in
--- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction ever settled on a
+-- DEVELOPER_REFERENCE.md#door-interaction ever settled on a
 -- confirmed "is this door already passable" detection method beyond
 -- distance.
 --   - The design note (§7/§8 in its original form) explicitly leaves "the exact model-hash
@@ -1772,13 +1772,13 @@ end)
 --- applies to IsEntityModelK9() for the leash/certify options above.
 ---
 --- No generic "is this entity a door" native/predicate exists (confirmed by
---- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction — GTA's native door SYSTEM only
+--- DEVELOPER_REFERENCE.md#door-interaction — GTA's native door SYSTEM only
 --- covers doors explicitly registered via AddDoorToSystem/IPL data, a small
 --- fraction of visible door props on a typical interior-heavy server, and
 --- is unsuitable here anyway since Scratch-to-alert must work "on any door
 --- ... regardless of lock state" per DEVELOPER_REFERENCE.md §11.5, i.e. registered or not).
 --- Rather than hand-maintain a model-hash allow-list of specific door prop
---- names (phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §3.1's "Option 1" — flagged
+--- names (DEVELOPER_REFERENCE.md#door-interaction §3.1's "Option 1" — flagged
 --- there as LOW-MEDIUM confidence and something that would need updating
 --- for every interior/MLO a server adds), this checks the entity's own
 --- model name STRING for the substring "door", via GetEntityArchetypeName —
@@ -1790,7 +1790,7 @@ end)
 --- string) — not independently re-confirmed against a live client this
 --- session; LOW-MEDIUM that the substring check covers "most doors a player
 --- would expect this to work on" for the same reason
---- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §3.1 grades its own model-list approach
+--- DEVELOPER_REFERENCE.md#door-interaction §3.1 grades its own model-list approach
 --- LOW-MEDIUM (door prop naming isn't fully standardized across the base
 --- map). If this predicate turns out to under/over-match badly in
 --- real-world testing, that's the first place to revisit — ideally with
@@ -1808,7 +1808,7 @@ end
 --- action's local visual cue on the K9 itself, built the exact same way
 --- K9_SIT_SCENARIO_BY_MODEL_HASH is above. No "dog scratches at a door"
 --- scenario has been confirmed to exist anywhere this session —
---- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2/§7 flags this explicitly ("no ...
+--- DEVELOPER_REFERENCE.md#door-interaction §4.2/§7 flags this explicitly ("no ...
 --- scenario/clipset name ... has been confirmed to exist at all this
 --- session — treat as unconfirmed, not assumed absent, same caveat
 --- movement.lua's Sit-action header already applies to its own scenario
@@ -1905,7 +1905,7 @@ local function ScratchAtDoor(entity)
     local doorNetId = NetworkGetNetworkIdFromEntity(entity)
 
     -- Local visual/audio feedback cue on the ACTING player's own K9,
-    -- per phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2 ("Play a scratch/paw
+    -- per DEVELOPER_REFERENCE.md#door-interaction §4.2 ("Play a scratch/paw
     -- animation + sound cue locally on the K9 ... TriggerServerEvent(...)").
     -- This plays immediately and unconditionally (unlike client/radial.lua's
     -- Bark item, which plays no local cue at all and relies entirely on the
@@ -1939,7 +1939,7 @@ end
 local DOOR_NUDGE_SOUND_NAME = 'DoorNudge'
 
 -- Feel/tuning knob for the cosmetic push impulse below — NOT a structural
--- decision (phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §8 explicitly lists "the exact
+-- decision (DEVELOPER_REFERENCE.md#door-interaction §8 explicitly lists "the exact
 -- push-force magnitude/direction tuning for a convincing nudge animation"
 -- as a tuning knob, not a design-level choice) and has zero bearing on this
 -- function's safety properties either way, since it only ever scales a
@@ -1975,7 +1975,7 @@ local NUDGE_IMPULSE_FORCE = 2.0
 ---   CanShowK9UI() — no reachability/"already passable" check of any kind.
 ---   This is the explicit fallback this file's header comment names: none
 ---   of what used to be three separate phase2_notes documents (now merged
----   into phase2_notes/DEVELOPER_REFERENCE.md#door-interaction) ever settled on
+---   into DEVELOPER_REFERENCE.md#door-interaction) ever settled on
 ---   a confirmed method for
 ---   detecting "is this specific door object already passable" beyond the
 ---   conceptual framing itself, so there is nothing concrete to gate on
@@ -1991,7 +1991,7 @@ local NUDGE_IMPULSE_FORCE = 2.0
 --- (a very commonly used FiveM native with a well-established call shape in
 --- community scripts, but not independently re-verified against
 --- raw.githubusercontent.com/citizenfx/natives this session the way
---- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction verified the door-system
+--- DEVELOPER_REFERENCE.md#door-interaction verified the door-system
 --- natives) — worth a native-api-assistant pass before shipping if the feel
 --- is off in testing, same standard this file's own K9Sit()/ScratchAtDoor()
 --- scenario-name comments already apply to themselves. This has NO bearing
@@ -2079,7 +2079,7 @@ end
 local function RegisterDoorInteractionOxTargetOptions()
     if Config.Features.DoorInteraction then
         -- Config.DoorInteraction.nudgeRequiresUnlocked "applied as a config
-        -- gate" (Finding 3, phase2_notes/DEVELOPER_REFERENCE.md#door-interaction):
+        -- gate" (Finding 3, DEVELOPER_REFERENCE.md#door-interaction):
         -- per this file's "NUDGE-OPEN — DESIGN PATH TAKEN" header comment
         -- above, NudgeDoor() has no real lock-state read anywhere to build a
         -- runtime branch off this flag with — doing so would require exactly
@@ -2099,7 +2099,7 @@ local function RegisterDoorInteractionOxTargetOptions()
             'system, see this file\'s "NUDGE-OPEN" header comment) -- this ' ..
             'assertion exists solely to fail loudly if this field is ever ' ..
             'repurposed as a real gate without a reviewed code change. See ' ..
-            'phase2_notes/DEVELOPER_REFERENCE.md#door-interaction Finding 3.')
+            'DEVELOPER_REFERENCE.md#door-interaction Finding 3.')
 
         -- THIRD-EYE CLARITY PASS (this pass, owner-directed): both icons
         -- below now use fas fa-dog, the resource-wide K9-role icon (same

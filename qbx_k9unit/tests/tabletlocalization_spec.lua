@@ -69,6 +69,12 @@ local function newFixture()
     local sendNuiMessageCalls = {}
     local function SendNUIMessage(payload) sendNuiMessageCalls[#sendNuiMessageCalls + 1] = payload end
     local function SetNuiFocus(_hasFocus, _hasCursor) end
+    -- CROSS-RESOURCE FOCUS INTEROP (client/tablet.lua, this pass) --
+    -- OpenTablet() now calls IsNuiFocused() once per open to decide what
+    -- CloseTablet() later restores -- this spec only cares about the
+    -- string payload, so a plain always-false stub is enough;
+    -- tests/clienttablet_spec.lua owns the focus-interop behavior itself.
+    local function IsNuiFocused() return false end
 
     local runner = Sandbox.newThreadRunner()
     local function CreateThread(fn) runner.CreateThread(fn) end
@@ -91,6 +97,7 @@ local function newFixture()
 
     local overrides = {
         SendNUIMessage = SendNUIMessage, SetNuiFocus = SetNuiFocus,
+        IsNuiFocused = IsNuiFocused,
         CreateThread = CreateThread, Wait = Wait,
         RegisterCommand = RegisterCommand, RegisterNUICallback = RegisterNUICallback,
         AddEventHandler = AddEventHandler, GetCurrentResourceName = GetCurrentResourceName,

@@ -16,9 +16,9 @@
             AddSphereZone, Remove, AddLocalEntity, RemoveLocalEntity
         Required server methods: {} (none)
 
-    ADDLOCALENTITY/REMOVELOCALENTITY -- ADDED THIS PASS, THE CONTRACT GAP
-    THIS TASK EXISTS TO CLOSE. client/equipmentshop.lua's shop-attendant ped
-    feature (added AFTER this adapter contract was first written) called
+    ADDLOCALENTITY/REMOVELOCALENTITY -- ADDED, THE CONTRACT GAP THIS TASK
+    EXISTS TO CLOSE. client/equipmentshop.lua's shop-attendant ped feature
+    (added AFTER this adapter contract was first written) called
     `exports.ox_target:addLocalEntity`/`removeLocalEntity` directly, bypassing
     this whole compat layer, because those two methods were never added to
     `K9Compat.RequiredMethods.target.client` in the first place -- a feature
@@ -34,23 +34,21 @@
     no real call site in this resource needs one, so none is exposed).
 
     REMOVE()'S ARGUMENT SHAPE IS NOT PART OF THE CONTRACT AS GIVEN -- only
-    the method NAME is specified. This file assumes, and documents here so
-    core.lua's author can confirm or correct it, the following minimal-
-    surface-area design: every AddGlobalPlayer/AddGlobalVehicle/
-    AddGlobalObject/AddModel/AddSphereZone call below returns an opaque
-    per-adapter "handle" value (its shape is private to each adapter and
-    varies -- a list of names for ox_target, a zone id for a sphere zone,
-    etc.), and Remove(handle) accepts EXACTLY what the corresponding Add*
-    call returned, nothing else. This means core.lua's own wrapper (if any)
-    must pass the Add* return value through to the caller UNTOUCHED, and
-    forward it to Remove() UNTOUCHED -- never inspect or reshape it. This
-    keeps the underlying target script's real removal primitive (which
-    differs wildly: ox_target has five separate typed remove* exports,
-    qb-target keys removal by label, sleepless_interact by name, qtarget
-    likely by name) entirely encapsulated in the adapter that produced the
-    handle. Flagged to the core-authoring agent via SendMessage; change this
-    file's Remove() implementations together with core.lua if a different
-    contract is agreed.
+    the method NAME is specified. This file documents, and relies on, the
+    following minimal-surface-area design: every AddGlobalPlayer/
+    AddGlobalVehicle/AddGlobalObject/AddModel/AddSphereZone call below
+    returns an opaque per-adapter "handle" value (its shape is private to
+    each adapter and varies -- a list of names for ox_target, a zone id for
+    a sphere zone, etc.), and Remove(handle) accepts EXACTLY what the
+    corresponding Add* call returned, nothing else. This means core.lua's
+    own wrapper (if any) must pass the Add* return value through to the
+    caller UNTOUCHED, and forward it to Remove() UNTOUCHED -- never inspect
+    or reshape it. This keeps the underlying target script's real removal
+    primitive (which differs wildly: ox_target has five separate typed
+    remove* exports, qb-target keys removal by label, sleepless_interact by
+    name, qtarget likely by name) entirely encapsulated in the adapter that
+    produced the handle. If a different contract is ever needed, core.lua
+    and this file's Remove() implementations must change together.
 
     SECURITY, restated because it is non-negotiable and this file is exactly
     the kind of code that could get it wrong: nothing here grants
@@ -354,23 +352,22 @@ end
 --     `AddCircleZone(name, center, radius, options, targetoptions)`
 --     (CONFIRMED, `registration.lua`), where `targetoptions.distance`
 --     acts as a fallback/ceiling for any option missing its own
---     `.distance`. STALE CLAIM CORRECTED (compat-layer audit pass,
---     2026-08-26): an earlier revision of this comment named
---     client/equipmentshop.lua as "this resource's one sphere-zone call
---     site" with no per-option distance set. That stopped being true when
---     that file's shop-attendant ped feature was rebuilt around a real,
---     visible ped and `AddLocalEntity` instead of a bare zone -- see this
---     file's own header, "A REAL PED, NOT A BARE SPHERE," and
---     client/equipmentshop.lua's own header for the history. `AddSphereZone`/
---     `Remove` remain full, required, tested contract methods (core.lua's
---     RequiredMethods.target.client, exercised by tests/compattarget_spec.lua)
---     and this factory still implements them faithfully -- but as of this
---     pass NEITHER has a real call site anywhere in this resource's own
---     client code. `MaxDistance` falling back to the zone's own radius
---     (rather than a smaller per-option default) is this factory's own
---     general-purpose translation behaviour for whatever future caller
---     needs a real zone on this backend, not something a current call
---     site's own zero-distance options exercises.
+--     `.distance`. CORRECTED (2026-08-26): an earlier revision of this
+--     comment named client/equipmentshop.lua as "this resource's one
+--     sphere-zone call site" with no per-option distance set. That stopped
+--     being true when that file's shop-attendant ped feature was rebuilt
+--     around a real, visible ped and `AddLocalEntity` instead of a bare
+--     zone -- see this file's own header, "A REAL PED, NOT A BARE SPHERE,"
+--     and client/equipmentshop.lua's own header for the history.
+--     `AddSphereZone`/`Remove` remain full, required, tested contract
+--     methods (core.lua's RequiredMethods.target.client, exercised by
+--     tests/compattarget_spec.lua) and this factory still implements them
+--     faithfully -- but NEITHER currently has a real call site anywhere in
+--     this resource's own client code. `MaxDistance` falling back to the
+--     zone's own radius (rather than a smaller per-option default) is this
+--     factory's own general-purpose translation behaviour for whatever
+--     future caller needs a real zone on this backend, not something a
+--     current call site's own zero-distance options exercises.
 --   * Removal is by label (`RemoveGlobalPlayer`/`RemoveGlobalVehicle`/
 --     `RemoveGlobalObject`/`RemoveTargetModel` all take a label or label
 --     array) and by the generated zone name (`RemoveZone`), both CONFIRMED
@@ -564,7 +561,7 @@ end
 -- argument, the entity handle), `groups` -> `job` (same shape as
 -- qb-target's `.job` above).
 --
--- THE BUG THE SHIM COULD NOT HAVE CAUGHT, FOUND AND FIXED THIS PASS:
+-- THE BUG THE SHIM COULD NOT HAVE CAUGHT, FOUND AND FIXED HERE:
 -- `canInteract` is invoked by real qtarget as `data.canInteract(entity,
 -- distance, data)` -- THREE arguments, `data` being the OPTION TABLE
 -- ITSELF, the SAME convention as qb-target and NOT ox_target's own
@@ -734,8 +731,8 @@ end
 
 -- ======================================================================
 -- interact -- UNCONFIRMED AS A TARGET SYSTEM, AND CONFIRMED NOT TO BE
--- sleepless_interact UNDER ANOTHER NAME. Re-verified this pass (2026-08-25):
--- the resource actually published under the bare export namespace `interact`
+-- sleepless_interact UNDER ANOTHER NAME. Re-verified (2026-08-25): the
+-- resource actually published under the bare export namespace `interact`
 -- is a small, unrelated project with a completely different API surface
 -- (its own `addNewTarget()`-shaped exports, nothing resembling
 -- addGlobalPlayer/addLocalEntity/etc) -- it is NOT a rename or fork of
@@ -744,16 +741,15 @@ end
 -- confirmed as a genuine targeting-system match worth building an adapter
 -- against.
 --
--- Per this task's explicit instruction, a candidate that cannot be
--- confirmed against a primary source returns nil unconditionally here --
--- present in Config.Compat's candidate list (so an operator who DOES run a
--- resource genuinely named `interact` sees it attempted and skipped, not
--- silently ignored), but never treated as usable on a guessed export
--- surface. If a real target for this candidate name is identified later,
--- replace this factory's body with a real implementation following the
--- same pattern as the adapters above -- do not fill in exports.interact:...
--- calls without independently confirming them the same way qb-target/
--- sleepless_interact were confirmed above.
+-- A candidate that cannot be confirmed against a primary source returns
+-- nil unconditionally here -- present in Config.Compat's candidate list (so
+-- an operator who DOES run a resource genuinely named `interact` sees it
+-- attempted and skipped, not silently ignored), but never treated as
+-- usable on a guessed export surface. If a real target for this candidate
+-- name is identified later, replace this factory's body with a real
+-- implementation following the same pattern as the adapters above -- do
+-- not fill in exports.interact:... calls without independently confirming
+-- them the same way qb-target/sleepless_interact were confirmed above.
 -- @param _realm 'client' | 'server'
 -- ======================================================================
 local function InteractFactory(_realm)
@@ -821,18 +817,17 @@ end
 -- 2m if unset) -- there is no separate "zone radius" distinct from the
 -- per-option distance the way ox_target's addSphereZone has. Bridged by
 -- injecting `data.radius` as each translated option's `.distance` when
--- the option does not already specify its own. STALE CLAIM CORRECTED
--- (compat-layer audit pass, 2026-08-26): an earlier revision of this
--- comment named client/equipmentshop.lua as "this resource's one
--- sphere-zone call site," with a fixed 1.5m radius and no per-option
--- distance, as the reason this bridging matters in practice. That stopped
--- being true when that file's shop-attendant ped feature was rebuilt
--- around a real, visible ped and `AddLocalEntity` instead of a bare zone
--- (see this file's own header, "A REAL PED, NOT A BARE SPHERE") --
--- `AddSphereZone` currently has no real caller anywhere in this resource;
--- this bridging behaviour is exercised only by tests/compattarget_spec.lua
--- today, kept correct and faithful for whichever future caller needs a
--- real sphere zone on this backend.
+-- the option does not already specify its own. CORRECTED (2026-08-26): an
+-- earlier revision of this comment named client/equipmentshop.lua as "this
+-- resource's one sphere-zone call site," with a fixed 1.5m radius and no
+-- per-option distance, as the reason this bridging matters in practice.
+-- That stopped being true when that file's shop-attendant ped feature was
+-- rebuilt around a real, visible ped and `AddLocalEntity` instead of a
+-- bare zone (see this file's own header, "A REAL PED, NOT A BARE SPHERE")
+-- -- `AddSphereZone` currently has no real caller anywhere in this
+-- resource; this bridging behaviour is exercised only by
+-- tests/compattarget_spec.lua today, kept correct and faithful for
+-- whichever future caller needs a real sphere zone on this backend.
 -- ======================================================================
 local function SleeplessInteractFactory(realm)
     local RESOURCE = 'sleepless_interact'
@@ -935,10 +930,9 @@ end
 
 -- ======================================================================
 -- Registration. Guarded rather than assumed: this file has no control over
--- fxmanifest.lua's shared_scripts ordering (see the SendMessage to
--- main/the core-authoring agent flagging that shared/compat/core.lua, which
--- defines the `K9Compat` global this file only ever READS, must load
--- before this file). A missing K9Compat is a loud console warning and a
+-- fxmanifest.lua's shared_scripts ordering, and shared/compat/core.lua,
+-- which defines the `K9Compat` global this file only ever READS, must load
+-- before this file. A missing K9Compat is a loud console warning and a
 -- no-op registration pass, never a hard resource-start error -- FAIL
 -- CLOSED, matching this file's own "never let a third-party throw into
 -- this resource" posture applied to a load-order mistake instead.

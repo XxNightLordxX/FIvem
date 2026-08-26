@@ -62,7 +62,7 @@
     PlaySoundOnNetworkEntity / playBark's source-origin guard -- WHAT THIS
     SPEC DOES AND DOES NOT PROVE: client/main.lua's playBark handler carries
     a `if source ~= 65535 then return end` guard (see that file's own
-    "SOURCE-ORIGIN GUARD" comment and phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary).
+    "SOURCE-ORIGIN GUARD" comment and DEVELOPER_REFERENCE.md#trust-boundary).
     This spec's sandbox models `source` as an ordinary Lua global the
     handler reads via `_ENV` -- exactly like every other stubbed native
     here -- and every test below sets it explicitly before invoking the
@@ -72,7 +72,7 @@
     settle whether FiveM's real client runtime always/reliably repopulates
     `source` this way on every dispatch, or whether it can fail open via a
     stale carry-over from a prior genuine server-sent event landing on a
-    since-forged local trigger -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary
+    since-forged local trigger -- DEVELOPER_REFERENCE.md#trust-boundary
     §1.2 already grades that engine-level question MEDIUM-HIGH, not
     certain, and flags it as unresolved after three independent passes.
     Every test in the playBark section below repeats this in its own
@@ -698,7 +698,7 @@ end)
 -- time. None of them settle, and none should be read as settling, FiveM's
 -- own real-engine question of whether `source` is reliably repopulated
 -- on every dispatch or can fail open via a stale carry-over from an
--- earlier genuine server event -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary
+-- earlier genuine server event -- DEVELOPER_REFERENCE.md#trust-boundary
 -- §1.2 already grades that MEDIUM-HIGH/unresolved after three prior
 -- passes, and nothing in a Lua-level sandbox test can raise or lower that
 -- grade. This section is worth having regardless: it proves the guard as

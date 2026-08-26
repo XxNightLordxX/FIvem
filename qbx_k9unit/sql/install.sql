@@ -77,7 +77,7 @@
 -- TO CHARACTER SET`), not a free metadata change, so it is deliberately an
 -- OPT-IN migration rather than part of the default upgrade path -- see
 -- `sql/migrations/0012_convert_charset_collation.sql` and that file's own
--- header for the full cost/benefit disclosure, and OPERATOR_RUNBOOK.md §7
+-- header for the full cost/benefit disclosure, and README.md §7
 -- for the plain-language version of "do I need to run this."
 -- =====================================================================
 

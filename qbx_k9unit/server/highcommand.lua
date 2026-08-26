@@ -1,10 +1,10 @@
 --[[
     qbx_k9unit/server/highcommand.lua
 
-    Config.Features.HighCommand. Owner's own words for this feature request:
-    "Allow High command in pd to give xp via a command to a k9 or handler,
-    allow high command in pd to be able to run any command and make it
-    super op." Two parts, both gated on the SAME per-department threshold
+    Config.Features.HighCommand. Project owner's own words for this feature
+    request: "Allow High command in pd to give xp via a command to a k9 or
+    handler, allow high command in pd to be able to run any command and make
+    it super op." Two parts, both gated on the SAME per-department threshold
     (Config.Departments[job.name].highCommandGrade, config.lua):
 
     PART 1 -- IsHighCommand(source): a single senior-rank predicate, exposed
@@ -38,25 +38,22 @@
 
     CONSULTED FROM (every OTHER rank/grade gate in this resource, found by
     grepping every `job.isboss` / `job.grade.level` / `IsPlayerAceAllowed`
-    call site in server/*.lua, not merely the four named in this feature's
-    own brief -- a grep count is a hypothesis, not a result, so each one
-    below was independently re-read before being touched or reported):
-      - server/certifications.lua's IsEligibleCertifier (certifierGrade) --
-        EDITED this pass. High command can certify/revoke/decertify-offline
-        for any configured department, same as a boss.
+    call site in server/*.lua and independently re-reading each one before
+    relying on it):
+      - server/certifications.lua's IsEligibleCertifier (certifierGrade).
+        High command can certify/revoke/decertify-offline for any
+        configured department, same as a boss.
       - server/certifications.lua's HasK9Access (the certification
-        requirement itself) -- EDITED this pass. High command gets K9
-        feature access (bark relay, leash, search, tracking, medkit,
-        inventory, combat, fetch, kennel, propattachment -- every one of
-        those files gates on THIS single function, per its own "SINGLE
-        SOURCE OF TRUTH" doc comment, so bypassing it here is sufficient;
-        none of those downstream files needed their own edit) WITHOUT
-        holding an active certification.
-      - server/admin.lua's IsAuthorizedAdmin (auditGrade) -- EDITED this
-        pass. High command can run every /k9audit* command against any
-        department.
-      - server/bonetool.lua's IsAuthorizedBoneSweepDevTool (isboss-only) --
-        EDITED this pass. NOTE: this is LAYER 2 only -- LAYER 1 (the
+        requirement itself). High command gets K9 feature access (bark
+        relay, leash, search, tracking, medkit, inventory, combat, fetch,
+        kennel, propattachment -- every one of those files gates on THIS
+        single function, per its own "SINGLE SOURCE OF TRUTH" doc comment,
+        so bypassing it here is sufficient; none of those downstream files
+        needed their own edit) WITHOUT holding an active certification.
+      - server/admin.lua's IsAuthorizedAdmin (auditGrade). High command can
+        run every /k9audit* command against any department.
+      - server/bonetool.lua's IsAuthorizedBoneSweepDevTool (isboss-only).
+        NOTE: this is LAYER 2 only -- LAYER 1 (the
         `Config.Features.BoneSweepDevTool` flag AND the
         `qbx_k9unit_enable_bone_dev_tool` convar, both required before
         '/k9bonetool' is even RegisterCommand'd at all) is a
@@ -66,16 +63,13 @@
         process level. High command bypasses the RANK check only, exactly
         like it bypasses auditGrade/certifierGrade and no more.
       - server/combat.lua's IsAuthorizedForNonComplianceAlert
-        (nonComplianceAlertGrade) -- FOUND this pass by the same grep, NOT
-        edited: server/combat.lua has a live owner this pass (COORDINATION.md
-        lists it under "XP economy" / XP agent, and it is not in this task's
-        own "you may edit surgically" list of admin.lua/certifications.lua/
-        bonetool.lua). Reported instead, in full, in this pass's own
-        hand-off note -- see that note for the exact one-line edit needed
-        (`if type(IsHighCommand) == 'function' and IsHighCommand(playerId)
-        then return true end`, inserted the same place every other bypass
-        in this list was, immediately after the `job.isboss` check and
-        before the `dept.<threshold>` type guard).
+        (nonComplianceAlertGrade) does NOT currently include a High Command
+        bypass, unlike every other gate in this list -- this is a known gap
+        in the rollout, not an intentional exclusion. The needed edit is a
+        one-liner (`if type(IsHighCommand) == 'function' and
+        IsHighCommand(playerId) then return true end`), inserted the same
+        place every other bypass in this list was, immediately after the
+        `job.isboss` check and before the `dept.<threshold>` type guard.
       - Every `RegisterCommand` in this resource was independently
         enumerated (server/admin.lua x5, server/bonetool.lua x1,
         server/certifications.lua x3) and cross-checked against the four
@@ -118,29 +112,28 @@
     command needs a genuinely different, explicitly-labelled entry point --
     see AwardXPDirect below.
 
-    AwardXPDirect(citizenid, amount, reason) -- REQUESTED, NOT YET ADDED,
-    TO server/progression.lua (a live-owned file this pass may not edit;
-    see this pass's own hand-off note for the exact function body proposed).
-    Called here through the SAME `type(...) == 'function'` soft-dependency
-    guard every other cross-file call in this resource already uses for a
-    forward/optional reference -- if progression.lua's owner has not yet
-    landed it, '/k9givexp' fails CLOSED with a clear, player-facing
-    "XP system currently unavailable" message and an audited 'xp_unavailable'
-    outcome, rather than either (a) silently no-opping (indistinguishable
-    from a bug) or (b) reaching around progression.lua's own private K9XP
-    cache/UPSERT logic with a parallel, hand-rolled SQL write here, which
-    would correctly update `k9_progression` but leave the in-memory K9XP
-    cache (and therefore GetXPTier's live speedMultiplier/scentRangeMultiplier
-    effect, and the xpTierChanged client push) stale until that citizenid's
-    next PlayerLoaded/resource-restart backfill -- a real, silent-until-
-    reported correctness gap this file refuses to introduce.
+    AwardXPDirect(citizenid, amount, reason) is REQUESTED but not yet added
+    to server/progression.lua. Called here through the SAME `type(...) ==
+    'function'` soft-dependency guard every other cross-file call in this
+    resource already uses for a forward/optional reference -- if
+    progression.lua has not yet landed it, '/k9givexp' fails CLOSED with a
+    clear, player-facing "XP system currently unavailable" message and an
+    audited 'xp_unavailable' outcome, rather than either (a) silently
+    no-opping (indistinguishable from a bug) or (b) reaching around
+    progression.lua's own private K9XP cache/UPSERT logic with a parallel,
+    hand-rolled SQL write here, which would correctly update
+    `k9_progression` but leave the in-memory K9XP cache (and therefore
+    GetXPTier's live speedMultiplier/scentRangeMultiplier effect, and the
+    xpTierChanged client push) stale until that citizenid's next
+    PlayerLoaded/resource-restart backfill -- a real, silent-until-reported
+    correctness gap this file refuses to introduce.
 
-    TARGET RESOLUTION -- K9 vs. handler, THE GENUINE DESIGN QUESTION this
-    task's own brief calls out by name: '/k9givexp [server id] [amount]'
-    takes a CONNECTED PLAYER's server id (per DEVELOPER_REFERENCE.md, a K9 is a player's
-    own persistent character, not an NPC -- so both "the K9" and "the
-    handler" are real, separately-controlled connected players, each with
-    their own citizenid). Given that server id resolves to `directCitizenid`:
+    TARGET RESOLUTION -- K9 vs. handler, the genuine design question here:
+    '/k9givexp [server id] [amount]' takes a CONNECTED PLAYER's server id
+    (per DEVELOPER_REFERENCE.md, a K9 is a player's own persistent
+    character, not an NPC -- so both "the K9" and "the handler" are real,
+    separately-controlled connected players, each with their own
+    citizenid). Given that server id resolves to `directCitizenid`:
       1. If `directCitizenid` has NO active partnership (server/
          partnership.lua's GetActivePartnerCitizenId returns nil, including
          when Config.Features.HandlerPartnership is off entirely, or that
@@ -229,31 +222,31 @@
     "%s ran %s(%s) -> %s" audit-line shape exactly. The 'ok' line names the
     granter citizenid (via the shared whoLabel), the RECIPIENT citizenid
     (post-redirection), the amount, and the resulting total in one line --
-    "this mints economy value; it must be traceable" (this task's own
-    framing), matching or exceeding the traceability server/admin.lua's
-    purely READ-ONLY audit surface already provides for a WRITE path.
+    this mints economy value, so it must be traceable, matching or
+    exceeding the traceability server/admin.lua's purely READ-ONLY audit
+    surface already provides for a WRITE path.
 
     ======================================================================
     FILE-TO-FILE CONTRACT:
     - THIS FILE exposes ONE resource-global (no `local`) function:
         IsHighCommand(source) -> boolean
       Consulted by server/certifications.lua, server/admin.lua,
-      server/bonetool.lua (all three EDITED this pass, each behind a
-      `type(IsHighCommand) == 'function'` guard -- this resource's
-      established soft-dependency convention -- so each of those three
-      files still works exactly as before if this file is ever removed or
-      Config.Features.HighCommand is false) and, per this pass's hand-off
-      note, server/combat.lua (NOT yet edited -- live-owned).
+      server/bonetool.lua, each behind a `type(IsHighCommand) == 'function'`
+      guard -- this resource's established soft-dependency convention -- so
+      each of those three files still works exactly as before if this file
+      is ever removed or Config.Features.HighCommand is false. Should
+      eventually also be consulted by server/combat.lua (see the known gap
+      noted above), which does not yet check it.
     - THIS FILE calls `NewCooldown()` (server/cooldowns.lua) at this file's
       own file-load time -- MUST load after server/cooldowns.lua.
     - THIS FILE calls `NotifyPlayer` (server/notify.lua) at command-handler
       RUN time only (never at file-load time) -- placed after
       server/notify.lua in fxmanifest.lua purely so this call site needs no
-      `type(...) == 'function'` guard of its own (server/notify.lua's own
-      header: "every consumer loaded after it needs no runtime existence
-      guard"), not because run-time placement is actually load-bearing.
+      `type(...) == 'function'` guard of its own (every consumer loaded
+      after server/notify.lua needs no runtime existence guard), not
+      because run-time placement is actually load-bearing.
     - THIS FILE calls `GetActivePartnerCitizenId` (server/partnership.lua)
-      and `AwardXPDirect` (server/progression.lua, REQUESTED, not yet
+      and `AwardXPDirect` (server/progression.lua, requested, not yet
       present) at command-handler RUN time, both behind a
       `type(...) == 'function'` guard -- genuine soft/forward dependencies,
       no load-order requirement either way (both files may load before or
@@ -271,19 +264,17 @@
       contract -- this file must never write K9XP directly, see PART 2's
       own "genuinely different entry point" reasoning above for why).
 
-    CONFIG THIS FILE ASSUMES EXISTS (already added by the config owner this
-    pass -- documented here for completeness, not requested):
+    CONFIG THIS FILE ASSUMES EXISTS (documented here for completeness):
       Config.Features.HighCommand         : boolean
       Config.Departments[job].highCommandGrade : number | nil (per department)
       Config.HighCommand.maxXpPerGrant    : number (validated at registration; see VALIDATION above)
       Config.HighCommand.grantCooldownMs  : number (passed straight to NewCooldown's per-call threshold; see COOLDOWN above)
       Config.HighCommand.allowSelfGrant   : boolean (default false)
 
-    LOCALE KEYS THIS FILE NEEDS (requested from the locales/en.json owner
-    this pass -- NOT invented inline; every locale() call below uses one of
-    these eight NEW keys or one of two EXISTING `common.*` keys reused
-    as-is, matching this resource's own "no duplicate near-identical string"
-    convention):
+    LOCALE KEYS THIS FILE NEEDS (not invented inline; every locale() call
+    below uses one of these eight NEW keys or one of two EXISTING `common.*`
+    keys reused as-is, matching this resource's own "no duplicate
+    near-identical string" convention):
       highcommand.not_authorized             = "You are not authorized to use High Command commands."
       highcommand.usage_givexp               = "Usage: /k9givexp [server id] [amount]"
       highcommand.invalid_amount             = "Amount must be a whole number from 1 to %d."
@@ -295,21 +286,15 @@
       (reused, already present) common.unable_to_resolve_citizenid
       (reused, already present) common.target_no_longer_online
 
-    FXMANIFEST.LUA PLACEMENT REQUESTED (server_scripts, not edited here --
-    the config owner owns this file): insert `'server/highcommand.lua',`
-    immediately after `'server/notify.lua',` and before `'server/main.lua',`
-    -- i.e. right where server/main.lua currently sits, pushing it down one
-    line. This satisfies the one HARD load-order requirement (after
-    server/cooldowns.lua, for NewCooldown at this file's own file-load
-    time) and the one soft-but-tidy one (after server/notify.lua, so this
-    file's own NotifyPlayer calls need no existence guard either), and
-    places this file before EVERY ONE of its three edited consumers
-    (server/certifications.lua, server/admin.lua, server/bonetool.lua) even
-    though, per the FILE-TO-FILE CONTRACT above, none of those three
-    actually depend on that ordering (each guards its own call with
-    `type(IsHighCommand) == 'function'`) -- this is a defensive placement
-    while this file is still being wired into fxmanifest.lua by hand, not a
-    load-bearing one.
+    FXMANIFEST.LUA PLACEMENT: 'server/highcommand.lua' is loaded in
+    server_scripts after server/cooldowns.lua (the one HARD load-order
+    requirement, for NewCooldown at this file's own file-load time) and
+    after server/notify.lua (a soft-but-tidy placement, so this file's own
+    NotifyPlayer calls need no existence guard either), and before every
+    one of its consumers (server/certifications.lua, server/admin.lua,
+    server/bonetool.lua) -- though per the FILE-TO-FILE CONTRACT above,
+    none of those three actually depend on that ordering, since each guards
+    its own call with `type(IsHighCommand) == 'function'`.
 ]]
 
 -- ======================================================================
@@ -414,34 +399,31 @@ end
 -- cooldown, audit).
 -- ======================================================================
 
--- DEVELOPER_REFERENCE.md item 1 convention: shared constructor, not a
--- hand-rolled table. One instance, keyed by the GRANTER's own source,
--- mirroring server/admin.lua's AuditCooldown / server/certifications.lua's
--- CertifyActionCooldown shape (no constructor default -- the threshold is
--- supplied explicitly at every .Consume() call from
--- Config.HighCommand.grantCooldownMs, per that constructor's own
+-- Shared constructor, not a hand-rolled table. One instance, keyed by the
+-- GRANTER's own source, mirroring server/admin.lua's AuditCooldown /
+-- server/certifications.lua's CertifyActionCooldown shape (no constructor
+-- default -- the threshold is supplied explicitly at every .Consume() call
+-- from Config.HighCommand.grantCooldownMs, per that constructor's own
 -- "several call sites read a Config value that could differ per
 -- invocation" convention).
 local HighCommandGrantCooldown = NewCooldown()
 HighCommandGrantCooldown.RegisterPlayerDropped()
 
---- Console log line for EVERY invocation of '/k9givexp' (and, this pass,
---- the K9 Command Tablet's own tabletGiveXp callback, which is a genuinely
+--- Console log line for EVERY invocation of '/k9givexp' (and the K9
+--- Command Tablet's own tabletGiveXp callback, which is a genuinely
 --- different entry point to the SAME underlying grant -- see
 --- GrantHighCommandXp below) -- denied, rate-limited, invalid args, target
 --- unresolvable, self-grant blocked, XP system unavailable, or ok. Mirrors
 --- server/admin.lua's own LogAuditInvocation "%s ran %s(%s) -> %s" shape
 --- exactly -- this command mints economy value, so it gets at least the
---- same traceability as that file's purely read-only audit surface (this
---- task's own "this mints economy value; it must be traceable" framing).
+--- same traceability as that file's purely read-only audit surface.
 --- The 'ok' outcome's own `detail` string is built by the caller to already
 --- contain the target citizenid, amount, and resulting total in one place,
 --- so a single line captures granter (via `whoLabel`), target, amount, and
---- total together -- exactly the four facts this task's brief requires be
---- named. The literal `k9givexp(...)` action-name text is kept UNCHANGED
---- even for a tablet-originated grant -- from the audit trail's own
---- perspective this is the exact same mechanism a typed command would hit
---- (mirrors client/tablet.lua's own "a tablet-triggered command is,
+--- total together. The literal `k9givexp(...)` action-name text is kept
+--- UNCHANGED even for a tablet-originated grant -- from the audit trail's
+--- own perspective this is the exact same mechanism a typed command would
+--- hit (mirrors client/tablet.lua's own "a tablet-triggered command is,
 --- from the server's perspective, LITERALLY THE SAME EVENT" framing for
 --- its command bridge), not a second, differently-named grant path.
 --- @param source number
@@ -455,10 +437,9 @@ local function LogAuditInvocation(source, detail, outcome)
 end
 
 --- Shared authorization PREDICATE for both '/k9givexp' and the tablet's own
---- tabletGiveXp callback -- factored out (this task's own explicit
---- instruction: "do NOT duplicate that logic") so a future change to how
---- this resolves (a third grant path, a new bypass) is made once, not
---- twice. Two independent routes, matching the resolution order config.lua's
+--- tabletGiveXp callback -- factored out so a future change to how this
+--- resolves (a third grant path, a new bypass) is made once, not twice.
+--- Two independent routes, matching the resolution order config.lua's
 --- Config.Permissions block documents: an explicit 'k9.givexp' grant, OR
 --- high command rank. Both guarded with `type(fn) == 'function'` so this
 --- still works with either feature disabled -- with both off, nobody
@@ -486,8 +467,7 @@ end
 --- everything from "who actually receives the XP" onward, once
 --- authorization/cooldown/amount have ALREADY been independently checked by
 --- the caller (each caller's own arg-shape/online-target requirements
---- differ too much to fold in here -- see each call site). Extracted
---- verbatim from the pre-existing RegisterCommand body except for taking
+--- differ too much to fold in here -- see each call site). Takes
 --- `directCitizenid` directly (a citizenid the CALLER has already
 --- resolved) instead of re-resolving it from a server id -- this is what
 --- lets tabletGiveXp reuse it for a citizenid that may be OFFLINE (XP is a
@@ -507,7 +487,7 @@ end
 --- @return boolean? redirectedToPartner -- meaningful only when ok == true
 local function GrantHighCommandXp(granterSrc, granterCitizenid, directCitizenid, amount)
     -- TARGET RESOLUTION -- K9 vs. handler. See header PART 2 for the
-    -- full "genuine design question" writeup. Soft-guarded: a nil
+    -- full writeup. Soft-guarded: a nil
     -- GetActivePartnerCitizenId result (no partnership.lua loaded, the
     -- feature is off, or genuinely no active partnership) leaves
     -- `recipientCitizenid` as `directCitizenid` -- the unambiguous

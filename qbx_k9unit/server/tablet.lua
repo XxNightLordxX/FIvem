@@ -1394,6 +1394,28 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
         xp = xp,
         tierLabel = tierLabel,
         myFeatures = BuildMyFeaturesArray(hasK9Access, activePermSet),
+        -- `partnership` (this pass, at the Partnership-tab agent's own
+        -- request) -- CLOSES A REAL GAP: tabletRequestPersonSummary (the
+        -- high-command-only lookup path, CALLBACK 3) has called
+        -- ResolvePartnershipInfo(targetCitizenId) since that callback
+        -- shipped, but this record -- the one every ordinary handler/K9
+        -- actually opens for THEMSELVES -- never called the same function
+        -- for the CALLER's own citizenid, so an ordinary K9 or handler had
+        -- no way to see their own partnership on their own record. SAME
+        -- function, SAME shape ({ partnerCitizenid, partnerName, role } |
+        -- nil), called here with `citizenid` -- the value this callback
+        -- already resolved from `source` above, never anything the client
+        -- sent -- so this is exactly as self-scoped as every other field
+        -- in this response. DB-authoritative (not the online-only
+        -- Partnerships cache `isPartnered` above already reads), matching
+        -- ResolvePartnershipInfo's own doc comment; harmless duplication
+        -- of one extra read for a caller who is, by construction, online
+        -- right now. NOT a replacement for `isPartnered` above (that field
+        -- stays exactly as before, for html/tablet.js's own role-driven
+        -- LAYOUT decision) -- this is the actual partner identity/name/role
+        -- payload the Partnership tab needs to render, which `isPartnered`
+        -- alone never carried.
+        partnership = ResolvePartnershipInfo(citizenid),
     }
 end)
 
@@ -1558,7 +1580,16 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonSummary', function(s
 
     return {
         ok = true,
-        target = { citizenid = targetCitizenId, name = ResolveDisplayName(targetCitizenId) },
+        -- `exists` (this pass, at coder-ui's own request -- see
+        -- ResolvePlayerExists's own doc comment above for the full
+        -- writeup): a REAL existence check, true only when qbx_core
+        -- actually found a player row (online or offline) for this
+        -- citizenid -- never guessed from every OTHER field happening to
+        -- be empty. This is the field html/tablet.js's own
+        -- personSummaryLooksLikeNoRecord() stopgap heuristic was written
+        -- to be replaced by; that function's own doc comment names this
+        -- exact shape (`target.exists`).
+        target = { citizenid = targetCitizenId, name = ResolveDisplayName(targetCitizenId), exists = ResolvePlayerExists(targetCitizenId) },
         certifications = EnrichCertificationsWithGrantedByName(BuildCertificationsArray(targetCitizenId)),
         xp = xp,
         tierLabel = tierLabel,
@@ -1929,10 +1960,17 @@ lib.callback.register('qbx_k9unit:server:tabletForceEndPartnership', function(so
         return { ok = false, error = 'not_available' }
     end
 
-    if type(GetActivePartnerCitizenId) == 'function' and select(1, GetActivePartnerCitizenId(targetCitizenId)) == nil then
-        return { ok = false, error = 'not_partnered' }
-    end
-
+    -- NO PRE-CHECK VIA GetActivePartnerCitizenId HERE, DELIBERATELY: that
+    -- accessor reads server/partnership.lua's ONLINE-ONLY in-memory cache
+    -- (see that file's own doc comment) and would wrongly report
+    -- "not_partnered" for an offline target who actually has an active row
+    -- -- exactly the trap this file's own ResolvePartnershipInfo above
+    -- already avoids by using the DB-authoritative K9Store.Partner_GetActiveRowByParty
+    -- instead. ForceBreakPartnershipForCitizenId already performs that
+    -- exact DB-authoritative lookup internally (DoBreakPartnership's own
+    -- SELECT) and returns `false` cleanly when there is truly no active
+    -- row -- this callback trusts that single, already-correct answer
+    -- rather than re-deriving a second, offline-unsafe one.
     local ended = ForceBreakPartnershipForCitizenId(targetCitizenId, 'admin_forced_from_tablet')
     if not ended then
         return { ok = false, error = 'not_partnered' }

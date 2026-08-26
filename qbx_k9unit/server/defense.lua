@@ -37,7 +37,7 @@
        §12.1's 3e row, §12.2's `hostileLookbackSeconds` comment) is WRONG
        about what that log actually contains. Read server/tracking.lua in
        full before writing this file: `relayDamageEvent` is payload-less BY
-       DESIGN (that file's own header, quoting phase2_notes/
+       DESIGN (that file's own header, quoting 
        DEVELOPER_REFERENCE.md#tracking's explicit warning against ever
        adding a payload) -- it logs ONLY the victim's own coordinates, for
        blood-trail purposes, with NO attacker/source-of-damage field

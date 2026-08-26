@@ -1584,15 +1584,15 @@ end
 t.test('GAP CLOSURE: an individual medkitCooldownMultiplier override reaches server/medkit.lua\'s own MedkitCooldown gate through the REAL server/progression.lua + server/k9profiles.lua chain -- not a stub', function()
     local f = newMedkitOverrideChainFixture()
 
-    local HC_SRC, USING_SRC, TARGET_SRC = 100, 10, 20
+    local HC_SRC, CHAIN_USING_SRC, CHAIN_TARGET_SRC = 100, 10, 20
     local USING_PED, TARGET_PED = 9001, 9002
 
     f.setPlayer(HC_SRC, 'HC-CIT', { name = 'police', grade = { level = 4 } })
-    f.setPlayer(USING_SRC, 'USER-CIT', { name = 'ambulance' }) -- Config.K9Medkit.emsJobs
-    f.setPlayer(TARGET_SRC, 'K9-CIT', { name = 'police' })
+    f.setPlayer(CHAIN_USING_SRC, 'USER-CIT', { name = 'ambulance' }) -- Config.K9Medkit.emsJobs
+    f.setPlayer(CHAIN_TARGET_SRC, 'K9-CIT', { name = 'police' })
 
-    f.setPed(USING_SRC, USING_PED)
-    f.setPed(TARGET_SRC, TARGET_PED)
+    f.setPed(CHAIN_USING_SRC, USING_PED)
+    f.setPed(CHAIN_TARGET_SRC, TARGET_PED)
     f.setCoords(USING_PED, 0, 0, 0)
     f.setCoords(TARGET_PED, 0, 0, 0) -- within Config.K9Medkit.range (2.0)
     f.setModel(TARGET_PED, K9_MODEL_HASH)
@@ -1605,8 +1605,8 @@ t.test('GAP CLOSURE: an individual medkitCooldownMultiplier override reaches ser
     -- -- GetXPTierMedkitCooldownMs must therefore return the plain,
     -- unmodified Config.K9Medkit.cooldownMs (60000ms), stamping
     -- MedkitCooldown for 'K9-CIT' at t=0.
-    f.setItemCount(USING_SRC, 'k9_medkit', 1)
-    local first = f.useMedkit(USING_SRC, TARGET_SRC)
+    f.setItemCount(CHAIN_USING_SRC, 'k9_medkit', 1)
+    local first = f.useMedkit(CHAIN_USING_SRC, CHAIN_TARGET_SRC)
     t.isTrue(first.ok, 'the first treat must succeed with no override or tier bonus in play')
 
     -- CONTROL, t=6001: well short of the base 60000ms cooldown -- must still
@@ -1615,8 +1615,8 @@ t.test('GAP CLOSURE: an individual medkitCooldownMultiplier override reaches ser
     -- for some unrelated reason" as an alternative explanation for whatever
     -- happens after the override is set below.
     f.advance(6001)
-    f.setItemCount(USING_SRC, 'k9_medkit', 1)
-    local control = f.useMedkit(USING_SRC, TARGET_SRC)
+    f.setItemCount(CHAIN_USING_SRC, 'k9_medkit', 1)
+    local control = f.useMedkit(CHAIN_USING_SRC, CHAIN_TARGET_SRC)
     t.isFalse(control.ok, 'well short of the base 60000ms cooldown, with no override yet, this must still be on_cooldown')
     t.equals(control.reason, 'on_cooldown')
 
@@ -1634,21 +1634,21 @@ t.test('GAP CLOSURE: an individual medkitCooldownMultiplier override reaches ser
     -- MedkitCooldown.IsOnCooldown call through the real, unmodified
     -- GetXPTierMedkitCooldownMs -> GetK9EffectiveMultipliers chain -- not
     -- merely stored, audited, and displayed back inertly.
-    f.setItemCount(USING_SRC, 'k9_medkit', 1)
-    local afterOverride = f.useMedkit(USING_SRC, TARGET_SRC)
+    f.setItemCount(CHAIN_USING_SRC, 'k9_medkit', 1)
+    local afterOverride = f.useMedkit(CHAIN_USING_SRC, CHAIN_TARGET_SRC)
     t.isTrue(afterOverride.ok, 'after a 0.1 medkitCooldownMultiplier override, the SAME 6001ms elapsed that was still on_cooldown a moment ago must now be enough -- this is the exact "reaches a visible effect" property this pass exists to prove')
 end)
 
 t.test('GAP CLOSURE control: WITHOUT the individual override (a different target citizenid, same elapsed time), the plain tier cooldown still applies -- the effect above is caused by the override, not a fixture quirk', function()
     local f = newMedkitOverrideChainFixture()
 
-    local USING_SRC, TARGET_SRC = 10, 21
+    local CHAIN_USING_SRC, CHAIN_TARGET_SRC = 10, 21
     local USING_PED, TARGET_PED = 9001, 9003
 
-    f.setPlayer(USING_SRC, 'USER-CIT-2', { name = 'ambulance' })
-    f.setPlayer(TARGET_SRC, 'K9-CIT-NO-OVERRIDE', { name = 'police' })
-    f.setPed(USING_SRC, USING_PED)
-    f.setPed(TARGET_SRC, TARGET_PED)
+    f.setPlayer(CHAIN_USING_SRC, 'USER-CIT-2', { name = 'ambulance' })
+    f.setPlayer(CHAIN_TARGET_SRC, 'K9-CIT-NO-OVERRIDE', { name = 'police' })
+    f.setPed(CHAIN_USING_SRC, USING_PED)
+    f.setPed(CHAIN_TARGET_SRC, TARGET_PED)
     f.setCoords(USING_PED, 0, 0, 0)
     f.setCoords(TARGET_PED, 0, 0, 0)
     f.setModel(TARGET_PED, K9_MODEL_HASH)
@@ -1656,12 +1656,12 @@ t.test('GAP CLOSURE control: WITHOUT the individual override (a different target
     f.setHealth(TARGET_PED, 150)
     f.setMaxHealth(TARGET_PED, 200)
 
-    f.setItemCount(USING_SRC, 'k9_medkit', 1)
-    t.isTrue(f.useMedkit(USING_SRC, TARGET_SRC).ok)
+    f.setItemCount(CHAIN_USING_SRC, 'k9_medkit', 1)
+    t.isTrue(f.useMedkit(CHAIN_USING_SRC, CHAIN_TARGET_SRC).ok)
 
     f.advance(6001)
-    f.setItemCount(USING_SRC, 'k9_medkit', 1)
-    local result = f.useMedkit(USING_SRC, TARGET_SRC)
+    f.setItemCount(CHAIN_USING_SRC, 'k9_medkit', 1)
+    local result = f.useMedkit(CHAIN_USING_SRC, CHAIN_TARGET_SRC)
     t.isFalse(result.ok, 'no override was ever set for this citizenid -- the full base cooldown must still apply')
     t.equals(result.reason, 'on_cooldown')
 end)

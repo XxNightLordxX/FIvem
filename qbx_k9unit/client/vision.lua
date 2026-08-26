@@ -19,11 +19,11 @@
 
     Supplementary implementation detail cited in the TODOs below
     (non-authoritative — DEVELOPER_REFERENCE.md §11 is the source of truth if anything
-    here drifts from it): phase2_notes/DEVELOPER_REFERENCE.md#vision (the
+    here drifts from it): DEVELOPER_REFERENCE.md#vision (the
     revised, §11-reconciled pass — read its own header before trusting
     anything in it that contradicts DEVELOPER_REFERENCE.md §11.5/§11.6 directly) and
-    phase2_notes/DEVELOPER_REFERENCE.md#vision /
-    phase2_notes/DEVELOPER_REFERENCE.md#tracking §3 (two independent native
+    DEVELOPER_REFERENCE.md#vision /
+    DEVELOPER_REFERENCE.md#tracking §3 (two independent native
     confirmation passes, both agreeing on the same hashes).
 
     ======================================================================
@@ -41,7 +41,7 @@
     FILE-TO-FILE CONTRACT (client side):
     - THIS FILE will expose four resource-global (no `local`) functions.
       These names are already settled — DEVELOPER_REFERENCE.md §11 left this an open
-      naming slot, phase2_notes/DEVELOPER_REFERENCE.md#vision §7 filled it, and
+      naming slot, DEVELOPER_REFERENCE.md#vision §7 filled it, and
       README.md's "Public API (exports)" section's "Batch 2" validation pass
       confirmed no other design note proposed a competing name for the
       same slot:
@@ -50,7 +50,7 @@
         IsThermalVisionActive()
         IsNightVisionActive()
       No other Phase 2 file currently needs to call into these (§1 of
-      phase2_notes/DEVELOPER_REFERENCE.md#vision: "no radial item; no other
+      DEVELOPER_REFERENCE.md#vision: "no radial item; no other
       Phase 2 file's design references vision toggling") — exposed as
       resource-globals anyway, per this codebase's established convention
       that every toggle/action function is a resource-global (see
@@ -74,7 +74,7 @@
 
     HISTORY WORTH KNOWING (not a live disagreement — recorded so nobody
     re-opens this by reading stale material out of order): the FIRST
-    draft of phase2_notes/DEVELOPER_REFERENCE.md#vision picked the OPPOSITE
+    draft of DEVELOPER_REFERENCE.md#vision picked the OPPOSITE
     answer (CanShowK9UI()), reasoning by analogy to ScentTracking/
     BloodTracking being certified-K9 capabilities. That note's OWN
     revised pass (§3) explicitly corrects itself once DEVELOPER_REFERENCE.md §11.5
@@ -221,11 +221,11 @@
 --- Thin wrapper over the native's OWN getter — the native is the source
 --- of truth for "is thermal vision currently on," not a separately
 --- tracked local boolean that could desync from it (per DEVELOPER_REFERENCE.md §11.6 /
---- phase2_notes/DEVELOPER_REFERENCE.md#vision §7: "the native's own getter is
+--- DEVELOPER_REFERENCE.md#vision §7: "the native's own getter is
 --- the source of truth, not a separately-tracked local boolean"). Real
 --- IsSeethroughActive() native, confirmed to exist alongside its setter
 --- by native-api-assistant (DEVELOPER_REFERENCE.md §11.6) and independently by
---- phase2_notes/DEVELOPER_REFERENCE.md#tracking §3.
+--- DEVELOPER_REFERENCE.md#tracking §3.
 --- @return boolean
 function IsThermalVisionActive()
     return IsSeethroughActive() == true
@@ -244,7 +244,7 @@ end
 --- given both are full-screen post-effects that would otherwise visually
 --- conflict." One small shared helper here rather than duplicating the
 --- check-and-turn-off logic once per toggle function below, per
---- phase2_notes/DEVELOPER_REFERENCE.md#vision §4's explicit implementation-shape
+--- DEVELOPER_REFERENCE.md#vision §4's explicit implementation-shape
 --- recommendation.
 --- @param keepingActive 'thermal'|'night'  -- the effect about to be turned ON; turn OFF whichever of the two this is NOT
 local function EnsureOnlyOneVisionEffectActive(keepingActive)
@@ -379,7 +379,7 @@ function ToggleThermalVision()
     end
 
     -- Mutual exclusion happens BEFORE flipping this effect on, per
-    -- phase2_notes/DEVELOPER_REFERENCE.md#vision §4's ordering.
+    -- DEVELOPER_REFERENCE.md#vision §4's ordering.
     if turningOn then
         EnsureOnlyOneVisionEffectActive('thermal')
     end
@@ -770,7 +770,7 @@ end
 
 -- Config-gated command + keybind registration for BOTH toggles — DEVELOPER_REFERENCE.md
 -- §11.2's Config.Vision schema,
--- phase2_notes/DEVELOPER_REFERENCE.md#vision §1's "Config-gated registration,
+-- DEVELOPER_REFERENCE.md#vision §1's "Config-gated registration,
 -- not just config-gated behavior" requirement. THIS IS THE ONE PLACE
 -- this file DELIBERATELY diverges from ToggleK9Camera()'s exact
 -- precedent, not just mirrors it: client/movement.lua's
@@ -813,7 +813,7 @@ end
 -- regardless of which (if either) was actually on this session: both
 -- natives are idempotent boolean toggles, not stacking counters, so
 -- calling SetSeethrough(false)/SetNightvision(false) when an effect was
--- never on this session is a harmless no-op (phase2_notes/DEVELOPER_REFERENCE.md#vision
+-- never on this session is a harmless no-op (DEVELOPER_REFERENCE.md#vision
 -- §6 item 2). Also covers disconnect per that note's §6 item 3 (FiveM
 -- stops every currently-loaded resource, firing this same handler, as
 -- part of a player disconnecting) — high confidence per that note's own

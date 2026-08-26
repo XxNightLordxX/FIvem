@@ -37,7 +37,7 @@
 --                               -> 20 simultaneously-active certifications,
 --                                  no error, no log line, nothing to notice.
 --
--- So: run this file to get UNSTUCK (see OPERATOR_RUNBOOK.md §7 step 5 --
+-- So: run this file to get UNSTUCK (see README.md §7 step 5 --
 -- the duplicate-active-certs case), fix the underlying problem, then run
 -- sql/migrations/0004_... again to put the constraint back. Do not leave a
 -- production server sitting in this rolled-back state.

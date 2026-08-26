@@ -63,7 +63,7 @@
       the requester's confirmation — no mechanic may trap someone leashed
       with no self-service exit).
     - 'qbx_k9unit:server:relayDoorScratch' (doorNetId: number)
-      Phase 2 (DEVELOPER_REFERENCE.md §11.4 item 5, phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2).
+      Phase 2 (DEVELOPER_REFERENCE.md §11.4 item 5, DEVELOPER_REFERENCE.md#door-interaction §4.2).
       Structurally mirrors relayBark above, EXCEPT `doorNetId` names a
       DIFFERENT entity than the sender's own ped, so (unlike relayBark) this
       handler also resolves it (NetworkGetEntityFromNetworkId), confirms it
@@ -176,6 +176,19 @@
        still exceeding the max distance despite the pull-back) is a
        fallback, not the primary behavior — and reuses the SAME detach
        path (client calls DetachLeash() itself), not a separate code path.
+    5. DEATH-DETECTION FIX (this pass, coder-frontend — audit-flagged gap):
+       either party dying while remaining connected (no disconnect at all)
+       is now its OWN independent termination path, server-side, via a
+       dedicated poll thread (see `IsLeashPartyDead`/the death-detection
+       thread, below `ForceDetachOfficerLeashForSource`) — this was
+       previously the one termination-shaped condition this file completely
+       missed (confirmed by a full read during the visible-leash work; see
+       client/leashvisual.lua's own header for that finding). Reuses
+       doDetachLeash exactly like every other path above; does not depend
+       on item 4's distance safety-valve to eventually notice (a dead K9
+       lying next to its still-standing handler never exceeds
+       Config.LeashMaxDistance at all, so item 4 alone would never have
+       caught this case).
 
     Role assignment: server determines which party is "the K9" (and
     therefore gets `isConstrained = true`) via the SAME live,
@@ -502,7 +515,7 @@ end)
 -- ever resolves and broadcasts the SENDER's own already-access-checked ped),
 -- relayDoorScratch's `doorNetId` names a DIFFERENT entity the caller merely
 -- claims to be near — neither the original §11.4 item 5 contract nor
--- phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2's handler sketch called for
+-- DEVELOPER_REFERENCE.md#door-interaction §4.2's handler sketch called for
 -- resolving/existence-checking/proximity-checking that id before
 -- broadcasting. Left unchecked, a modified client could pass any entity's
 -- netId (any vehicle, any other player's ped, even 0) and have the server
@@ -516,7 +529,7 @@ local DOOR_SCRATCH_DISTANCE_TOLERANCE = 1.0 -- meters of slack over Config.DoorI
 
 -- Sibling, INDEPENDENT per-source cooldown table — deliberately not shared
 -- with lastBarkAt above. Bark and door-scratch are two independently
--- cooldowned actions per §11.4/phase2_notes/DEVELOPER_REFERENCE.md#door-interaction §4.2; a
+-- cooldowned actions per §11.4/DEVELOPER_REFERENCE.md#door-interaction §4.2; a
 -- player who just barked should not have that consumed against their
 -- separate door-scratch allowance, or vice versa.
 --

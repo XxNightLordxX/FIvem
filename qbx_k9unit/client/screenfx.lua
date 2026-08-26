@@ -66,7 +66,7 @@
        outside a real, already-validated search result. DEVELOPER_REFERENCE.md
        §13.4.5's own event contract text is explicit on this point).
 
-    TRUST BOUNDARY -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary (written
+    TRUST BOUNDARY -- DEVELOPER_REFERENCE.md#trust-boundary (written
     this session, read in full before writing this file): a client-side
     RegisterNetEvent handler cannot otherwise distinguish a genuine
     server-sent TriggerClientEvent from a local, zero-server-contact
@@ -320,7 +320,7 @@ end
 -- registration" this file's header commits to, not a redundant inner check
 -- duplicated here.
 RegisterNetEvent('qbx_k9unit:client:applyContrabandScreenFx', function(durationMs)
-    -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary's origin check -- see
+    -- DEVELOPER_REFERENCE.md#trust-boundary's origin check -- see
     -- this file's header TRUST BOUNDARY section for the full citation and
     -- confidence grading. First statement in the handler body, per that
     -- note's own recommended shape.

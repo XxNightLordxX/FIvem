@@ -40,6 +40,13 @@ local function newFixture()
     local sendNuiMessageCalls = {}
     local function SendNUIMessage(payload) sendNuiMessageCalls[#sendNuiMessageCalls + 1] = payload end
     local function SetNuiFocus() end
+    -- CROSS-RESOURCE FOCUS INTEROP (client/tablet.lua, this pass) --
+    -- OpenTablet() now calls IsNuiFocused() once per open to decide what
+    -- CloseTablet() later restores -- this file never exercises the open/
+    -- close focus lifecycle itself (tests/clienttablet_spec.lua owns that
+    -- coverage), so a plain always-false stub is all that is needed to
+    -- keep the whole production file loadable here.
+    local function IsNuiFocused() return false end
 
     local runner = Sandbox.newThreadRunner()
     local function CreateThread(fn) runner.CreateThread(fn) end
@@ -82,6 +89,7 @@ local function newFixture()
         lib = { notify = function() end, callback = { await = lib_callback_await } },
         print = function() end,
         SetNuiFocus = SetNuiFocus, SendNUIMessage = SendNUIMessage,
+        IsNuiFocused = IsNuiFocused,
         DisableControlAction = DisableControlAction,
         IsDisabledControlJustPressed = IsDisabledControlJustPressed,
         IsEntityDead = IsEntityDead, PlayerPedId = PlayerPedId,

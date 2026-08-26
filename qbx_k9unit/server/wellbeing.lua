@@ -207,7 +207,7 @@
     8. 'qbx_k9unit:client:wellbeingUpdate' (stats: table) [server->client,
        requester only, client/wellbeing.lua] — one combined push per tick
        carrying all five wellbeing values together (mirrors
-       phase2_notes/DEVELOPER_REFERENCE.md#hud-bridge's own "one combined message
+       DEVELOPER_REFERENCE.md#hud-bridge's own "one combined message
        beats a split one" reasoning, DEVELOPER_REFERENCE.md §13.4.3.1).
        UPDATED (LIVE FEATURE FLAG PUSH, this pass): `stats.featureFlags` is
        now also included (see `SnapshotOf`'s own header comment above for

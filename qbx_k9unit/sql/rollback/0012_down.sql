@@ -46,7 +46,7 @@
 --     on purpose, using one concrete name instead of a hand-wave," not
 --     as "restore my exact original setup." If you need your database's
 --     LITERAL original per-table collation back, restore from the backup
---     you took (per OPERATOR_RUNBOOK.md §7 STEP 1) before you ever ran
+--     you took (per README.md §7 STEP 1) before you ever ran
 --     migration 0012 -- that backup is the only place your original,
 --     specific values genuinely still exist.
 --

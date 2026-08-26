@@ -659,14 +659,19 @@ local TARGET_SRC = 20
 -- Sanity: the file loaded and registered what its own header documents.
 -- ========================================================================
 
-t.test('server/combat.lua registers exactly its 7 documented server net events', function()
+t.test('server/combat.lua registers exactly its 8 documented server net events', function()
     local f = newCombatFixture()
     local names, count = {}, 0
     for name in pairs(f.netEventNames) do names[name] = true; count = count + 1 end
-    t.equals(count, 7)
+    t.equals(count, 8)
     for _, name in ipairs({
         'qbx_k9unit:server:requestBiteHold', 'qbx_k9unit:server:releaseBiteHold',
         'qbx_k9unit:server:reportBiteHoldTargetDied', 'qbx_k9unit:server:requestTakedown',
+        -- CANCEL-PATH FIX (this pass): releaseTakedown mirrors
+        -- releaseBiteHold/releaseDrag's own existence in this list -- see
+        -- the dedicated section near the bottom of this file for its own
+        -- coverage.
+        'qbx_k9unit:server:releaseTakedown',
         'qbx_k9unit:server:reportHolderDied', 'qbx_k9unit:server:requestDrag',
         'qbx_k9unit:server:releaseDrag',
     }) do
@@ -713,7 +718,7 @@ t.test('REGRESSION: Config.Combat.BiteAndHold.cooldownMs = 0 (exact QA repro) no
 
     local count = 0
     for _ in pairs(f.netEventNames) do count = count + 1 end
-    t.equals(count, 7, 'every net event this file documents must still register, not just the ones textually above the bad value')
+    t.equals(count, 8, 'every net event this file documents must still register, not just the ones textually above the bad value')
     t.equals(f.eventHandlerCount('onResourceStart'), 1)
     t.equals(f.eventHandlerCount('playerDropped'), 6)
 
@@ -737,7 +742,7 @@ t.test('REGRESSION: all four of this file\'s Config-sourced cooldowns invalid at
     t.equals(type(f.env.EndActiveEffectForHolder), 'function')
     local count = 0
     for _ in pairs(f.netEventNames) do count = count + 1 end
-    t.equals(count, 7)
+    t.equals(count, 8)
 end)
 
 t.test('REGRESSION: with a valid Config.Combat.BiteAndHold.cooldownMs, BiteHoldCooldown genuinely uses the CONFIGURED value, not silently always the fallback -- ResolveConfiguredThresholdMs must be pass-through for valid input', function()
@@ -1874,6 +1879,141 @@ t.test('TakedownMutex rejects a second, overlapping requestTakedown from the SAM
 
     while not h1.isDead() do h1.resume() end
     t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcTakedown'), 1, 'the ORIGINAL call must still complete successfully once resumed to completion')
+end)
+
+-- ========================================================================
+-- CANCEL-PATH FIX (this pass, coder-frontend -- audit-flagged gap):
+-- releaseTakedown. Before this pass, NonLethalTakedown was the only one of
+-- the three combat mechanics with no way to end it early -- bite-hold has
+-- releaseBiteHold, drag has releaseDrag, takedown had neither. Mirrors the
+-- existing "MUST-MATTER #5: termination paths" bite-hold section above --
+-- same coverage shape, same authorization posture under test.
+-- ========================================================================
+
+t.test('takedownStarted is sent to the HOLDER when an NPC-target takedown begins', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+    local ev = lastClientEvent(f, 'qbx_k9unit:client:takedownStarted')
+    t.isNotNil(ev, 'the holder must learn its own takedown started, the same way biteHoldStarted already does for bite-hold')
+    t.equals(ev.target, K9_SRC)
+    t.equals(ev.args[1], 500, 'targetNetId must be carried so the holder can later resolve which engagement releaseTakedown ends')
+end)
+
+t.test('takedownStarted is sent to the HOLDER when a PLAYER-target takedown begins (never to the target)', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wirePlayerTarget(f, 501, TARGET_SRC, { wanted = true, x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 501 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+    local ev = lastClientEvent(f, 'qbx_k9unit:client:takedownStarted')
+    t.isNotNil(ev)
+    t.equals(ev.target, K9_SRC, 'takedownStarted always goes to the HOLDER, regardless of target kind')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:takedownStarted'), 1)
+end)
+
+t.test('releaseTakedown from the HOLDER ends an NPC-target takedown, relaying endNpcTakedown and takedownEnded, with NO redundant "ended early" notify', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+    local notifyCountBeforeRelease = #f.notifyCalls
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseTakedown', K9_SRC)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:endNpcTakedown'), 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:takedownEnded'), 1)
+    t.equals(#f.notifyCalls, notifyCountBeforeRelease,
+        'a manual release is self-evident to the actor who just pressed the button -- mirrors releaseBiteHold/releaseDrag\'s own silent-on-manual-release posture, no NEW NotifyPlayer call')
+end)
+
+t.test('releaseTakedown from the HOLDER ends a PLAYER-target takedown, relaying endForceRagdoll to the TARGET', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wirePlayerTarget(f, 501, TARGET_SRC, { wanted = true, x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 501 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseTakedown', K9_SRC)
+
+    local ev = lastClientEvent(f, 'qbx_k9unit:client:endForceRagdoll')
+    t.isNotNil(ev)
+    t.equals(ev.target, TARGET_SRC)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:takedownEnded'), 1)
+end)
+
+t.test('reportHolderDied (a genuine NON-manual reason) still fires the "ended early" notify for a takedown -- proves the new released_by_holder exclusion is scoped precisely, not a blanket removal', function()
+    local f = newCombatFixture()
+    local k9Ped = wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+    local notifyCountBeforeDeath = #f.notifyCalls
+
+    f.setHealth(k9Ped, 100)
+    f.dispatchNetEvent('qbx_k9unit:server:reportHolderDied', K9_SRC)
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:endNpcTakedown'), 1)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:takedownEnded'), 1)
+    t.isTrue(#f.notifyCalls > notifyCountBeforeDeath, 'holder_died is NOT released_by_holder or timeout -- the existing "ended early" notify must still fire for every OTHER non-manual reason')
+end)
+
+t.test('releaseTakedown still works even after HasK9Access is revoked AND the feature flag is toggled off mid-takedown', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcTakedown'), 1)
+
+    f.setAccess(K9_SRC, false) -- decertified mid-takedown
+    f.config.Features.NonLethalTakedown = false -- feature toggled off mid-takedown
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseTakedown', K9_SRC)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:endNpcTakedown'), 1, 'a way out must never be blockable by a revoked access grant or a disabled feature flag -- this is a TERMINATION path')
+end)
+
+t.test('releaseTakedown from a source that is NOT the genuine holder is a silent no-op, and the real takedown survives it untouched', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    wireK9(f, K9_SRC_B, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:releaseTakedown', K9_SRC_B)
+    t.isTrue(ok)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:endNpcTakedown'), 0, 'an impostor release must never end the real holder\'s takedown')
+
+    -- the real holder can still release it themselves afterward
+    f.dispatchNetEvent('qbx_k9unit:server:releaseTakedown', K9_SRC)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:endNpcTakedown'), 1)
+end)
+
+t.test('a second releaseTakedown after the takedown already ended is a silent no-op, never a duplicate endNpcTakedown/takedownEnded', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local ped = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchStepped('qbx_k9unit:server:requestTakedown', K9_SRC, { 500 }, function()
+        f.setCoords(ped, 1, 1.2, 0)
+    end)
+
+    f.dispatchNetEvent('qbx_k9unit:server:releaseTakedown', K9_SRC)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:endNpcTakedown'), 1)
+
+    local ok = pcall(f.dispatchNetEvent, 'qbx_k9unit:server:releaseTakedown', K9_SRC)
+    t.isTrue(ok)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:endNpcTakedown'), 1, 'K9ActiveEffect[src] is already nil after the first release -- a second call must be a true no-op, not a duplicate teardown')
 end)
 
 -- ========================================================================

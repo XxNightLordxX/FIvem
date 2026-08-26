@@ -390,7 +390,7 @@ end
 RegisterNetEvent('qbx_k9unit:client:partnerUpRequest', function(fromServerId)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
+    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
     -- not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:partnerUpRequest', <any server id>)`
     -- would pop this client's real accept/decline prompt with zero server
@@ -442,7 +442,7 @@ end)
 RegisterNetEvent('qbx_k9unit:client:partnershipEstablished', function(partnerServerId, isK9)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
+    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
     -- not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:partnershipEstablished', <any
     -- server id>, true)` would make this client BELIEVE it is partnered
@@ -476,7 +476,7 @@ end)
 RegisterNetEvent('qbx_k9unit:client:partnershipEnded', function(reason)
     -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
     -- "SOURCE-ORIGIN GUARD" header block and
-    -- phase2_notes/DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
+    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
     -- not re-derived here). Without this, a forged local
     -- `TriggerEvent('qbx_k9unit:client:partnershipEnded', 'anything')`
     -- would desync this client's PartnershipState from the server's real

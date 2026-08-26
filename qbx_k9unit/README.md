@@ -58,12 +58,14 @@ one place this document is deliberately blunt rather than reassuring:**
 that is a detection statement, not a compatibility promise. This
 resource's entire authorization model — certifications, permissions,
 the tablet, XP, combat, effectively everything — reads Qbox's own job/
-rank data directly, in well over 150 places in the code (182, the last
-time this was actually counted against the code rather than assumed).
-`qbx_core` is a hard dependency and stays one. If you run QBCore or ESX,
-detection will identify it correctly and this resource will still not
-work on it. There is no config setting that changes this — it would
-mean rewriting a large fraction of the resource, not flipping a switch.
+rank data directly, in well over 150 places in the code — 182, the one
+time this was actually counted against the code rather than assumed;
+treat that as a measurement taken on one date, not a fixed fact, since
+it moves as the code grows. `qbx_core` is a hard dependency and stays
+one. If you run QBCore or ESX, detection will identify it correctly and
+this resource will still not work on it. There is no config setting
+that changes this — it would mean rewriting a large fraction of the
+resource, not flipping a switch.
 
 ---
 
@@ -306,11 +308,14 @@ a stopgap only.
   already-earned milestone bonus a second time. It cannot be farmed
   repeatedly, and it takes a restart landing at exactly the wrong
   moment — but it is a real, narrow gap, not a fully closed one.
-- **The K9's fear/stress system can be used to needle someone else's
-  dog**, and this can only be made harder, not eliminated — the whole
-  point of the mechanic is that the dog reacts to what happens around
-  it. This is a policy question about your players, covered below, not
-  a bug.
+- **A player can repeatedly frighten someone else's K9** by faking a
+  "gunfire nearby" signal, forcing that K9 to refuse Bite & Hold/
+  Takedown for about a minute at a time (`FearStressSystem`, on by
+  default) — at no cost to the player doing it, and repeatably. This
+  has been narrowed (a single episode can't last forever, and resets
+  after roughly 64 seconds), but the repeatable part can't be closed in
+  code — there is no way to verify who actually fired a gun. It's a
+  policy call about the kind of server you want, not a bug.
 
 ---
 
@@ -320,19 +325,31 @@ Three things on this server today are switched on and working as
 designed, but genuinely need a decision from you rather than further
 development:
 
-1. **Is the combat trust boundary good enough for your server?** See
-   "Before you trust the combat features in production" above. Nobody
-   has ever actually tried to break it on a running server. Run that
-   test yourself, accept the risk as-is, or turn `BiteAndHold`/
-   `NonLethalTakedown`/`PropDragging` off until it's been done.
+1. **Is the combat trust boundary good enough for your server?** Bite &
+   Hold, Non-Lethal Takedown, and Dragging are protected from a
+   modified game client by a guard that checks where the instruction
+   came from. The guard is written and reviewed, but nobody has ever
+   actually attacked it on a running server, which is the only way to
+   really know it holds — see "Before you trust the combat features in
+   production" above. Run that test yourself, accept the risk as-is, or
+   turn `BiteAndHold`/`NonLethalTakedown`/`PropDragging` off until it's
+   been done.
 2. **Is the fear/stress griefing tradeoff acceptable for your
-   players?** Leave `FearStressSystem` on for the emergent chaos, turn
-   it off, or ask for its cooldowns to be tightened (it can't be made
-   airtight — see above).
-3. **Do you actually need QBCore or ESX support?** As covered above,
-   this resource does not work on either today despite detecting them.
-   Converting the ~180 places that talk to Qbox directly is a large
-   project, not a quick fix. Worth doing only if you genuinely need it.
+   players?** See the repeatable-frightening limitation just above.
+   Leave `FearStressSystem` on for the emergent chaos, turn it off, or
+   ask for its cooldowns to be tightened — it can't be made airtight,
+   only slower to repeat.
+3. **Do you actually need QBCore or ESX support?** Auto-detection
+   genuinely works for inventory and targeting. It does not work for
+   your core framework: adapters for qb-core/ESX exist in the code, but
+   only one file in the whole resource actually uses them — everything
+   else (well over 150 places, the exact count depends on how you
+   count and shifts as the code grows) calls Qbox directly, and
+   `qbx_core` is a hard dependency regardless of what's detected. If
+   you run qb-core or ESX, `/k9compat` will correctly identify it and
+   this resource will still not work. Say so plainly to your players
+   (cheap), or commit to converting those call sites yourself — a large
+   project, not a quick fix, and only worth it if you genuinely need it.
 
 ---
 
@@ -363,14 +380,26 @@ proceed unless you see `BACKUP OK`.
 
 If you want another one of your resources to react to this one — a
 dispatch alert on a K9 going down, a scoreboard reading someone's XP —
-this resource exposes a small, deliberately **read-only** set of
-exports on both the client and server side (`server/exports.lua`,
-`client/exports.lua`; each carries its own `GetAPIVersion()`), plus
-fourteen outbound events fired under real gameplay conditions
-(certification changes, partnership changes, search results, XP tier
-changes, and a few more — see `server/exports.lua`'s own header for
-the exact payload shape of each). No export grants, revokes, or mints
-anything; every self-initiated action keeps its own consent/proximity/
-cooldown logic that a direct export call would otherwise bypass.
-Whoever is building the integration should read those two files
-directly — they document every export and event in full.
+this resource exposes a small, deliberately **read-only** API: 9
+exports server-side, 19 client-side (each side carries its own
+`GetAPIVersion()`), plus fourteen outbound events fired under real
+gameplay conditions (certification changes, partnership changes,
+search results, XP tier changes, and a few more). No export grants,
+revokes, or mints anything; every self-initiated action keeps its own
+consent/proximity/cooldown logic that a direct export call would
+otherwise bypass. Full signatures, exact payload shapes, and firing
+points are in `DEVELOPER_REFERENCE.md` — that's where whoever is
+building the integration should look next, not here.
+
+## Other documentation
+
+This file is the one to read for installing, configuring, and
+operating this resource. Three other files exist for a different
+reader, and none of them are needed to get this resource running:
+
+- **`DEVELOPER_REFERENCE.md`** — for anyone modifying this resource's
+  code: full exports/events contracts, internal design, and file-by-
+  file behavior.
+- **`KNOWN_ISSUES.md`** — bugs and disclosed limitations, for whoever
+  maintains the code next.
+- **`PROJECT_HISTORY.md`** — what shipped and when.

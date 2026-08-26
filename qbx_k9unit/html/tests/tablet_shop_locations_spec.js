@@ -2,9 +2,14 @@
     html/tests/tablet_shop_locations_spec.js
 
     Covers the K9 Supply Shop location management screen (its own tab, high
-    command only) -- server/equipmentshop.lua. Owner's own words: "make the
-    shop a dog ped and i can change the locations in the config or add more
-    locations remove locations etc along with in the high command tablet."
+    command OR a delegated 'k9.equipmentshoplocations' grant --
+    server/equipmentshop.lua's own CanManageShopLocations(source):
+    IsHighCommand(source) OR HasPermission(citizenid,
+    'k9.equipmentshoplocations') == true, tests/equipmentshop_spec.lua:839.
+    Client-side gate: html/tablet.js's canManageShopLocations()). Owner's
+    own words: "make the shop a dog ped and i can change the locations in
+    the config or add more locations remove locations etc along with in
+    the high command tablet."
 
     Server contract verified against server/equipmentshop.lua directly (not
     assumed): GetLocations returns `{ok, locations: table<string,
@@ -42,6 +47,12 @@ function routeFetch(handlers) {
 
 const HIGH_COMMAND_VIEWER = { citizenid: 'HC1', name: 'Chief', isHighCommand: true, effectivePermissions: ['k9.access', 'k9.certify', 'k9.audit', 'k9.givexp'], allowSelfGrant: false };
 const CONSOLE_ONLY_VIEWER = { citizenid: 'OFFICER1', name: 'Officer', isHighCommand: false, effectivePermissions: ['k9.certify'], allowSelfGrant: false };
+// Holds the delegated capability but is NOT high command -- server/
+// equipmentshop.lua's own CanManageShopLocations admits this exact
+// citizenid (see this file's header). ResolveEffectivePermissions unions a
+// held custom key into effectivePermissions today, no server change
+// needed -- see canManageShopLocations()'s own doc comment.
+const DELEGATED_SHOP_LOCATIONS_VIEWER = { citizenid: 'DELEGATE1', name: 'Delegate', isHighCommand: false, effectivePermissions: ['k9.certify', 'k9.equipmentshoplocations'], allowSelfGrant: false };
 
 async function settle(times) {
     for (let i = 0; i < (times || 3); i++) await new Promise((r) => setImmediate(r));

@@ -1,10 +1,10 @@
 --[[
     qbx_k9unit/client/inventory.lua
 
-    Phase 4 implementation (coder-backend), DEVELOPER_REFERENCE.md §13.4.2 ("K9
-    Inventory", `Config.Features.K9Inventory`) — see server/inventory.lua's
-    header for the full design writeup this file is the client half of
-    (RESOLVED accessScope decision, CONFIDENCE NOTEs on every ox_inventory
+    DEVELOPER_REFERENCE.md §13.4.2 ("K9 Inventory",
+    `Config.Features.K9Inventory`) — see server/inventory.lua's header for
+    the full design writeup this file is the client half of (RESOLVED
+    accessScope decision, CONFIDENCE NOTEs on every ox_inventory
     export/shape this file's body depends on, the whole validation-order
     discipline). `Config.Features.K9Inventory` stays `false` shipped.
 
@@ -13,18 +13,15 @@
     'qbx_k9unit:server:openK9Inventory' callback contract (THIS FILE is its
     only client-side caller).
 
-    RESOLVED (was a KNOWN GAP flagged here; closed this pass, not left
-    stale): DEVELOPER_REFERENCE.md §13.4.2 describes the ox_target option appearing
+    DEVELOPER_REFERENCE.md §13.4.2 describes the ox_target option appearing
     "on the K9 player's own ped," which server/inventory.lua's contract
     supports for BOTH a nearby department officer AND the K9 player
     accessing their own stash (see IsAuthorizedForK9Inventory's `isSelf`
     branch there — confirmed self-access still requires the acting
     player's own HasK9Access, same as every other path into this
-    callback). This file previously only wired the ox_target entry point
-    below, with self-targeting via ox_target being awkward/unusual UX and
-    no global exposed for a radial item to call instead. Now closed:
-    RequestOpenOwnK9Inventory() below is that self-service entry point —
-    see its own doc comment for the full contract. A future
+    callback). Self-targeting via ox_target is awkward/unusual UX, so
+    RequestOpenOwnK9Inventory() below is a dedicated self-service entry
+    point — see its own doc comment for the full contract. A future
     client/radial.lua "Open My Gear" item can call it directly without
     reaching into ox_inventory itself, per this file's own established
     "radial calls a global, never the export directly" split.
@@ -66,31 +63,28 @@
     Still the exact call `K9Compat.Get('inventory').OpenStash` performs for
     an ox_inventory backend -- see shared/compat/inventory.lua's own
     OpenStash doc comment, which independently re-confirms this shape
-    against client/inventory.lua's own pre-existing call (this file, before
-    this pass).
+    against client/inventory.lua's own pre-existing call.
 
-    COMPAT LAYER (this pass): OpenK9InventoryForNetId's call to open the
-    stash UI, and its own runtime existence guard, now go through
-    `K9Compat.Get('inventory')`/`K9Compat.Which('inventory')`
-    (shared/compat/core.lua) instead of `exports.ox_inventory:openInventory`
-    directly -- this file's own target-side option (RegisterK9InventoryOption
-    below) was ALREADY routed through K9Compat.Get('target') from an earlier
-    pass; this closes the matching gap on the inventory side, found the same
-    way client/tablet.lua's useItem gap was found: by grepping for
-    `exports.ox_target:`/`exports.ox_inventory:` outside shared/compat/ and
-    checking every hit, rather than trusting that "the compat layer is
-    already wired everywhere" was actually true (see DEVELOPER_REFERENCE.md
-    §21's account of that exact false assumption recurring). `IsInventoryOpenCapable()`
-    immediately above OpenK9InventoryForNetId asks the compat layer's own
-    detection result (`K9Compat.Which('inventory') ~= nil`) rather than
-    probing `exports.ox_inventory` directly, so this guard -- and its
-    warning -- are correct for WHATEVER inventory Config.Compat resolved,
-    not only ox_inventory. `K9Compat.Get('inventory').OpenStash` is already
+    COMPAT LAYER: OpenK9InventoryForNetId's call to open the stash UI, and
+    its own runtime existence guard, go through `K9Compat.Get('inventory')`/
+    `K9Compat.Which('inventory')` (shared/compat/core.lua) instead of
+    `exports.ox_inventory:openInventory` directly -- matching this file's
+    own target-side option (RegisterK9InventoryOption below), which is
+    routed through K9Compat.Get('target') the same way. Never assume "the
+    compat layer is already wired everywhere" without checking -- grep for
+    `exports.ox_target:`/`exports.ox_inventory:` outside shared/compat/ to
+    verify (see DEVELOPER_REFERENCE.md §21's account of that exact false
+    assumption recurring). `IsInventoryOpenCapable()` immediately above
+    OpenK9InventoryForNetId asks the compat layer's own detection result
+    (`K9Compat.Which('inventory') ~= nil`) rather than probing
+    `exports.ox_inventory` directly, so this guard -- and its warning --
+    are correct for WHATEVER inventory Config.Compat resolved, not only
+    ox_inventory. `K9Compat.Get('inventory').OpenStash` is already
     pcall-safe (see that method's own doc comment in
-    shared/compat/inventory.lua), so the separate `pcall` this file used to
-    wrap the raw export call in is no longer needed here -- the safety is
-    already built into what `K9Compat.Get` hands back, same as every other
-    consumer in this resource.
+    shared/compat/inventory.lua), so no separate `pcall` is needed here
+    wrapping the raw export call -- the safety is already built into what
+    `K9Compat.Get` hands back, same as every other consumer in this
+    resource.
 ]]
 
 --- Human-readable rejection messages for the openK9Inventory callback's
@@ -124,9 +118,8 @@ local K9_INVENTORY_REASON_MESSAGES = {
 --- method, called below to actually present the stash UI once the server
 --- has granted access. Routed through `K9Compat.Get('inventory')`
 --- (shared/compat/core.lua) rather than `exports.ox_inventory:openInventory`
---- directly this pass -- the same gap this resource's own contract-review
---- pass found in client/tablet.lua's useItem call (see
---- DEVELOPER_REFERENCE.md §21), fixed identically here: `K9Compat.Which`
+--- directly (see DEVELOPER_REFERENCE.md §21 for the same gap found and
+--- fixed identically in client/tablet.lua's useItem call): `K9Compat.Which`
 --- returns a non-nil resourceName only when a real, verified adapter is
 --- currently active for THIS realm, so this guard -- and its warning below
 --- -- are correct for WHATEVER inventory Config.Compat resolved, not only
@@ -151,14 +144,13 @@ end
 --- "radial calls a global, never the export directly" contract).
 --- @param netId number
 local function OpenK9InventoryForNetId(netId)
-    -- FAIL-CLOSED GUARD (dependency-verification finding, this pass):
-    -- `lib.callback.await` throws rather than returning nil on a timeout
-    -- or unregistered-callback rejection (see client/main.lua's
-    -- HasK9Access() doc comment for the full ox_lib/FiveM source
-    -- citation). pcall it; the `not result` branch immediately below
-    -- already covers a pcall-caught nil `result` byte-for-byte the same
-    -- as any other falsy response (reason stays nil, so this degrades to
-    -- the existing silent-return path rather than aborting uncaught).
+    -- FAIL-CLOSED GUARD: `lib.callback.await` throws rather than returning
+    -- nil on a timeout or unregistered-callback rejection (see
+    -- client/main.lua's HasK9Access() doc comment for the full ox_lib/
+    -- FiveM source citation). pcall it; the `not result` branch immediately
+    -- below already covers a pcall-caught nil `result` byte-for-byte the
+    -- same as any other falsy response (reason stays nil, so this degrades
+    -- to the existing silent-return path rather than aborting uncaught).
     local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:openK9Inventory', false, netId)
     if not ok then result = nil end
 
@@ -229,20 +221,20 @@ end
 --- operator running a different supported target script gets this option
 --- translated automatically instead of losing it outright.
 ---
---- LIFECYCLE FIX (this pass): extracted into a named function, sole call
---- site the `AddEventHandler('onResourceStart', ...)` below, so this
---- option comes back after a bare restart of whatever resource actually
---- backs the 'target' system and not just after this resource's own
---- restart — see that handler's own doc comment (mirrors
---- server/tracking.lua's RegisterScentInventoryHook /
---- server/inventory.lua's RegisterK9InventoryItemFilterHook fixes for the
---- identical bug class: every supported target script keeps its own
---- registry in a plain file-local Lua table inside its own client chunk,
---- reloaded empty on THAT resource's own restart with nothing else
---- prompting a re-add). DUPLICATE-VS-REPLACE: the option below always sets
---- `name`, and every adapter's own registration primitive dedups/replaces
---- by that same name (or label, per shared/compat/target.lua's own
---- per-adapter notes), so re-running this never duplicates the entry.
+--- LIFECYCLE: extracted into a named function, sole call site the
+--- `AddEventHandler('onResourceStart', ...)` below, so this option comes
+--- back after a bare restart of whatever resource actually backs the
+--- 'target' system and not just after this resource's own restart — see
+--- that handler's own doc comment (mirrors server/tracking.lua's
+--- RegisterScentInventoryHook / server/inventory.lua's
+--- RegisterK9InventoryItemFilterHook fixes for the identical bug class:
+--- every supported target script keeps its own registry in a plain
+--- file-local Lua table inside its own client chunk, reloaded empty on
+--- THAT resource's own restart with nothing else prompting a re-add).
+--- DUPLICATE-VS-REPLACE: the option below always sets `name`, and every
+--- adapter's own registration primitive dedups/replaces by that same name
+--- (or label, per shared/compat/target.lua's own per-adapter notes), so
+--- re-running this never duplicates the entry.
 local function RegisterK9InventoryOxTargetOption()
     K9Compat.Get('target').AddGlobalPlayer({
         {
@@ -266,14 +258,14 @@ local function RegisterK9InventoryOxTargetOption()
                 -- show the option to a player whose own job is a configured
                 -- department. `accessScope ~= 'department'` is UNREACHABLE
                 -- today — server/inventory.lua's onResourceStart assert
-                -- hard-enforces accessScope == 'department' (coder-security
-                -- finding: any other value, including 'ownerOnly', provided no
-                -- real ox_inventory access control at all) — kept as
-                -- defense-in-depth so this UI never shows a stale/misleading
-                -- option if that invariant is ever loosened. QBX.PlayerData is
-                -- the live-updated client-side job cache this resource's
-                -- fxmanifest.lua already documents as the standard source for
-                -- this, per '@qbx_core/modules/playerdata.lua'.
+                -- hard-enforces accessScope == 'department' (any other value,
+                -- including 'ownerOnly', provided no real ox_inventory access
+                -- control at all) — kept as defense-in-depth so this UI never
+                -- shows a stale/misleading option if that invariant is ever
+                -- loosened. QBX.PlayerData is the live-updated client-side job
+                -- cache this resource's fxmanifest.lua already documents as
+                -- the standard source for this, per
+                -- '@qbx_core/modules/playerdata.lua'.
                 if Config.K9Inventory.accessScope ~= 'department' then
                     return false
                 end
@@ -314,7 +306,7 @@ AddEventHandler('onResourceStart', function(resourceName)
 end)
 
 --- Resource-global — radial self-service entry point (see FILE-TO-FILE
---- CONTRACT above and this file's own now-RESOLVED header note). Mirrors
+--- CONTRACT above and this file's own header note). Mirrors
 --- client/movement.lua's RequestLeashAttach() / client/medkit.lua's
 --- RequestTreatNearestK9() shape: re-checks CanShowK9UI() itself rather
 --- than trusting that a caller (a future client/radial.lua item) already

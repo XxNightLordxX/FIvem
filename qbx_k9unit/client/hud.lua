@@ -8,7 +8,7 @@
     the active K9... only if Config.Features.HealthStaminaHUD is true."
 
     Authoritative contract for everything in this file:
-    phase2_notes/DEVELOPER_REFERENCE.md#hud-bridge (read that in full before
+    DEVELOPER_REFERENCE.md#hud-bridge (read that in full before
     touching the callback/message names, payload shape, focus policy, or
     push-cadence constants below — this file is a direct implementation of
     that note's §2/§3/§4/§5/§6, not an independent design pass). The NUI

@@ -523,6 +523,12 @@ t.test('with every combat feature flag off, the file is genuinely inert: no glob
     t.isNil(f.env.RequestDrag)
     t.isNil(f.env.IsBiteHoldEngaged)
     t.isNil(f.env.IsDragEngaged)
+    -- CANCEL-PATH FIX (this pass): ReleaseTakedown/IsTakedownEngaged live in
+    -- the exact same file-level "at least one flag on" gate as every other
+    -- global above -- genuinely inert (undefined, not merely a no-op) with
+    -- every flag off, same as their siblings.
+    t.isNil(f.env.ReleaseTakedown)
+    t.isNil(f.env.IsTakedownEngaged)
     local netEventCount = 0
     for _ in pairs(f.netEventNames) do netEventCount = netEventCount + 1 end
     t.equals(netEventCount, 0)
@@ -683,6 +689,26 @@ t.test('RequestTakedown: same CanShowK9UI/no-target shape as RequestBiteHold', f
     t.equals(#f.serverEvents, 0)
 end)
 
+-- CANCEL-PATH FIX (this pass, coder-frontend -- audit-flagged gap):
+-- ReleaseTakedown() had ZERO test coverage before this pass -- it did not
+-- exist at all. Same two guarantees ReleaseBiteHold/ReleaseDrag already pin
+-- above, pinned here for the first time for takedown: a K9 stuck unable to
+-- call off a wrongly-targeted takedown is exactly the "no way back" gap
+-- this pass exists to close.
+t.test('ReleaseTakedown: always sends, unconditionally, no CanShowK9UI gate -- including when CanShowK9UI is entirely UNDEFINED, not merely false', function()
+    local f = newCombatFixture({ canShowK9UI = false })
+    f.env.ReleaseTakedown()
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseTakedown')
+
+    local f2 = newCombatFixture()
+    f2.env.CanShowK9UI = nil
+    local ok, err = pcall(f2.env.ReleaseTakedown)
+    t.isTrue(ok, 'ReleaseTakedown must not error when CanShowK9UI is undefined: ' .. tostring(err))
+    t.equals(#f2.serverEvents, 1)
+    t.equals(f2.lastServerEvent().event, 'qbx_k9unit:server:releaseTakedown')
+end)
+
 t.test('RequestDrag: candidate search does NOT exclude a dead ped (PropDragging\'s whole premise is a downed target)', function()
     local f = newCombatFixture()
     f.addPoolPed(60, { x = 1, dead = true })
@@ -692,10 +718,11 @@ t.test('RequestDrag: candidate search does NOT exclude a dead ped (PropDragging\
     t.equals(f.lastServerEvent().args[1], 900060)
 end)
 
-t.test('IsBiteHoldEngaged / IsDragEngaged: both false before any grant', function()
+t.test('IsBiteHoldEngaged / IsDragEngaged / IsTakedownEngaged: all false before any grant', function()
     local f = newCombatFixture()
     t.isFalse(f.env.IsBiteHoldEngaged())
     t.isFalse(f.env.IsDragEngaged())
+    t.isFalse(f.env.IsTakedownEngaged())
 end)
 
 -- ========================================================================

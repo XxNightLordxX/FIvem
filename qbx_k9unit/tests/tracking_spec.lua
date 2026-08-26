@@ -517,4 +517,232 @@ t.test('a citizenid who was ALREADY blocked before ever resolving a source never
     t.equals(#f.awardXpCalls, 0, 'nothing was ever minted for this citizenid to redeem')
 end)
 
+-- ========================================================================
+-- GAP CLOSURE (this pass, coder-backend): server/k9profiles.lua's own
+-- header names THIS FILE's scent-range consumer as one of three left
+-- unwired -- `findTrackableSource`'s maxRange bonus used to read
+-- `GetXPTier(trackerCitizenid).scentRangeMultiplier` RAW, so a per-K9
+-- individual override on `scentRangeMultiplier` was stored, audited, and
+-- shown back to the operator, but had ZERO effect on the actual detection
+-- range this callback computes. Fixed by routing through
+-- GetK9EffectiveMultipliers (see server/tracking.lua's own maxRange
+-- calculation for the full writeup) -- this section proves that fix reaches
+-- a REAL, VISIBLE effect (found = true vs. found = false), through the
+-- REAL, unmodified server/progression.lua + server/k9profiles.lua chain,
+-- not a stubbed GetXPTier/GetK9EffectiveMultipliers.
+--
+-- Deliberately a SEPARATE fixture from newTrackingFixture above (never
+-- modifies it): this section additionally loads server/datastore.lua (for
+-- K9Store, server/k9profiles.lua's own persistence layer) and
+-- server/progression.lua/server/k9profiles.lua themselves, in
+-- fxmanifest.lua's real server_scripts order (datastore -> cooldowns ->
+-- tracking -> progression -> k9profiles). `onResourceStart` is
+-- DELIBERATELY NEVER FIRED here: server/k9profiles.lua's own
+-- RefreshOverrideCache() already runs unconditionally, synchronously, right
+-- inside k9ProfileUpsert itself after every successful write (see that
+-- function's own body) -- it does not depend on the boot-time cache warm --
+-- and firing onResourceStart in this fixture would ALSO invoke
+-- server/tracking.lua's own scent-inventory-hook registration
+-- (RegisterScentInventoryHook, which calls K9Compat.Get('inventory')), an
+-- entirely unrelated surface this section has no need to drag in. Every
+-- other existing test in this file already establishes the same
+-- "onResourceStart is never fired" convention for server/tracking.lua on
+-- its own (grep this file: zero prior references to onResourceStart or
+-- K9Compat) -- this section does not change that.
+-- ========================================================================
+
+--- @return table fixture
+local function newTrackingOverrideChainFixture()
+    local state = { now = 0 }
+    local function GetGameTimer() return state.now end
+
+    -- server/progression.lua starts a recurring mint-budget sweep thread
+    -- UNCONDITIONALLY at its own file-load time -- this fixture never needs
+    -- to step it, so a one-shot resume that parks it at its first Wait() is
+    -- sufficient, matching tests/progression_spec.lua's own GAP 1 fixture
+    -- and tests/medkit_spec.lua's own GAP CLOSURE fixture.
+    local function CreateThread(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('newTrackingOverrideChainFixture: a captured CreateThread body errored: %s'):format(tostring(err)))
+        end
+    end
+    local function Wait(_ms) coroutine.yield() end
+
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
+
+    local playersBySource, pedBySource = {}, {}
+    local function registerPlayer(src, citizenid, pedHandle)
+        playersBySource[src] = { PlayerData = { citizenid = citizenid, source = src } }
+        pedBySource[src] = pedHandle
+    end
+
+    local exportsTable = {
+        qbx_core = {
+            GetPlayer = function(_self, src) return playersBySource[src] end,
+            GetPlayerByCitizenId = function(_self, citizenid)
+                for _, p in pairs(playersBySource) do
+                    if p.PlayerData.citizenid == citizenid then return p end
+                end
+                return nil
+            end,
+        },
+    }
+
+    local function GetPlayerPed(src) return pedBySource[src] or 0 end
+
+    local pedCoords = {}
+    local function GetEntityCoords(entity) return pedCoords[entity] or vec3(0, 0, 0) end
+
+    local function HasK9Access(_src) return true end
+
+    local isHighCommand = true
+
+    local registeredCallbacks = {}
+    local libStub = { callback = { register = function(name, fn) registeredCallbacks[name] = fn end } }
+
+    local capturedEvents = {}
+    local function RegisterNetEvent(name, fn) capturedEvents[name] = fn end
+
+    local eventHandlers = {}
+    local function AddEventHandler(name, fn)
+        eventHandlers[name] = eventHandlers[name] or {}
+        eventHandlers[name][#eventHandlers[name] + 1] = fn
+    end
+
+    local function GetCurrentResourceName() return 'qbx_k9unit' end
+
+    local Config = {
+        Features = {
+            ScentTracking = true, BloodTracking = true, GunpowderSniffing = true,
+            XPProgression = true,
+        },
+        Tracking = {
+            -- A deliberately SMALL maxRange -- see the tests below for
+            -- exactly why: it must be small enough that a source PAST it is
+            -- reachable only once a genuine override multiplies it.
+            Scent     = { maxAgeSeconds = 300, maxRange = 10.0, searchCooldownMs = 5000, relayCooldownMs = 500 },
+            Blood     = { maxAgeSeconds = 300, maxRange = 10.0, searchCooldownMs = 5000, relayCooldownMs = 500 },
+            Gunpowder = { maxAgeSeconds = 120, maxRange = 10.0, searchCooldownMs = 5000, relayCooldownMs = 300 },
+        },
+        WaterTrackingDecay = { breaksTrail = false },
+        FeatureControl = { RequireGrant = {} },
+        XP = {
+            trackArrivalRadius = 3.0, trackArrivalTTLMs = 60000,
+            scopePerCitizenidOrJob = 'citizenid', awards = {},
+        },
+        -- A single-rank ladder -- this section is about the INDIVIDUAL
+        -- override layered on top, not the XP-tier ladder itself. See
+        -- tests/medkit_spec.lua's own identical GAP CLOSURE fixture comment
+        -- for why a single rank is a valid, if minimal, Config.XPTiers.
+        XPTiers = { { xp = 0, label = 'Recruit', speedMultiplier = 1.00, scentRangeMultiplier = 1.00 } },
+        Database = { enabled = false },
+    }
+
+    local env = Sandbox.newEnv({
+        Config = Config,
+        GetGameTimer = GetGameTimer,
+        CreateThread = CreateThread,
+        Wait = Wait,
+        print = printStub,
+        exports = exportsTable,
+        GetPlayerPed = GetPlayerPed,
+        GetEntityCoords = GetEntityCoords,
+        HasK9Access = HasK9Access,
+        IsHighCommand = function(_src) return isHighCommand end,
+        lib = libStub,
+        RegisterNetEvent = RegisterNetEvent,
+        AddEventHandler = AddEventHandler,
+        GetCurrentResourceName = GetCurrentResourceName,
+    })
+
+    Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/tracking.lua', env)
+    Sandbox.loadInto('../server/progression.lua', env)
+    Sandbox.loadInto('../server/k9profiles.lua', env)
+
+    return {
+        Config = Config,
+        printLog = printLog,
+        advance = function(ms) state.now = state.now + ms end,
+        registerPlayer = registerPlayer,
+        setPedCoords = function(entity, x, y, z) pedCoords[entity] = vec3(x, y, z) end,
+        findTrackableSource = function(src, trackType)
+            local handler = assert(registeredCallbacks['qbx_k9unit:server:findTrackableSource'])
+            return handler(src, trackType)
+        end,
+        relayDamageEvent = function(src)
+            env.source = src
+            local handler = assert(capturedEvents['qbx_k9unit:server:relayDamageEvent'])
+            handler()
+        end,
+        upsertProfile = function(hcSrc, payload)
+            local handler = assert(registeredCallbacks['qbx_k9unit:server:k9ProfileUpsert'])
+            return handler(hcSrc, payload)
+        end,
+    }
+end
+
+t.test('GAP CLOSURE: an individual scentRangeMultiplier override reaches findTrackableSource\'s own maxRange calculation through the REAL server/progression.lua + server/k9profiles.lua chain -- not a stub', function()
+    local f = newTrackingOverrideChainFixture()
+    local HC_SRC = 999
+
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(100, 0, 0, 0) -- the K9
+
+    -- Log a blood source 15m away -- PAST Config.Tracking.Blood.maxRange
+    -- (10.0) with no override, but well WITHIN it once a 2.0x override
+    -- doubles it to 20.0.
+    f.setPedCoords(200, 15, 0, 0)
+    f.relayDamageEvent(2)
+
+    -- CONTROL: no override exists yet -- the base tier (Recruit,
+    -- scentRangeMultiplier = 1.00) never raises maxRange past its
+    -- configured 10.0, so a source 15m away must NOT be found.
+    local before = f.findTrackableSource(1, 'blood')
+    t.isFalse(before.found, 'a source past the plain configured maxRange, with no override, must not be found')
+
+    -- THE OVERRIDE ITSELF: a genuine high-command tablet edit, through
+    -- server/k9profiles.lua's own REAL callback.
+    local upsert = f.upsertProfile(HC_SRC, { citizenid = 'K9-CID', scentRangeMultiplier = 2.0 })
+    t.isTrue(upsert.ok, 'the override write itself must succeed')
+    t.equals(upsert.effective.scentRangeMultiplier, 2.0)
+
+    -- Clear TrackQueryCooldown's own per-(source, trackType) searchCooldownMs
+    -- (5000ms) floor -- the CONTROL call above already consumed it for
+    -- (1, 'blood') at t=0; without this advance, the call below would be
+    -- rejected as on_cooldown (found = false) before ever reaching the
+    -- maxRange calculation this test actually exists to exercise.
+    f.advance(5001)
+
+    -- SAME source, SAME distance, SAME K9 -- the ONLY thing that changed is
+    -- the override just written. If this now finds it, the override
+    -- demonstrably reached findTrackableSource's own live maxRange
+    -- calculation through the real, unmodified GetK9EffectiveMultipliers
+    -- chain -- not merely stored, audited, and displayed back inertly.
+    local after = f.findTrackableSource(1, 'blood')
+    t.isTrue(after.found, 'after a 2.0 scentRangeMultiplier override, the SAME 15m-away source that was unreachable a moment ago must now be found -- this is the exact "reaches a visible effect" property this pass exists to prove')
+end)
+
+t.test('GAP CLOSURE control: WITHOUT the individual override (a different K9 citizenid, same distance), the plain configured maxRange still applies -- the effect above is caused by the override, not a fixture quirk', function()
+    local f = newTrackingOverrideChainFixture()
+
+    f.registerPlayer(1, 'K9-CID-NO-OVERRIDE', 100)
+    f.registerPlayer(2, 'VICTIM-CID-2', 200)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setPedCoords(200, 15, 0, 0)
+    f.relayDamageEvent(2)
+
+    local result = f.findTrackableSource(1, 'blood')
+    t.isFalse(result.found, 'no override was ever set for this citizenid -- the plain configured maxRange (10.0) must still apply to a source 15m away')
+end)
+
 os.exit(t.summary())

@@ -83,7 +83,7 @@
     client/audio.lua's own header already carries the correct, honest
     confidence grading for that underlying falloff curve itself: "new,
     unverified-in-the-wild plumbing, not a copy of a proven pattern" --
-    phase2_notes/DEVELOPER_REFERENCE.md#phase-5-research §1 found that even
+    DEVELOPER_REFERENCE.md#phase-5-research §1 found that even
     the ecosystem's most-used NUI audio library (plunkettscott/
     interact-sound) still has an OPEN, unresolved TODO for the SIMPLE,
     single-factor version of this. Nothing about this file changes that

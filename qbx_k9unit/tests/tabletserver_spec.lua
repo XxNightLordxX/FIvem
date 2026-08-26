@@ -742,6 +742,87 @@ t.test('tabletRequestMyRecord: xp/tierLabel are populated when XPProgression is 
     t.equals(result.tierLabel, 'Trained K9')
 end)
 
+-- ============================================================================
+-- tabletRequestMyRecord: partnership (this pass, coder-backend -- closing
+-- the gap an ordinary K9/handler had no way to see their OWN partnership on
+-- their OWN record: tabletRequestPersonSummary already called
+-- ResolvePartnershipInfo for a high-command-only TARGET lookup, but nothing
+-- put the caller's own equivalent into the record every certified
+-- handler/K9 actually opens). SAME function, SAME shape, and the SAME
+-- `Config.Database = { enabled = false }` / K9Store.Partner_Insert seeding
+-- pattern as the tabletRequestPersonSummary partnership tests above.
+-- ============================================================================
+
+t.test('tabletRequestMyRecord: partnership -- nil when Config.Features.HandlerPartnership is off', function()
+    local f = newFixture()
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isNil(result.partnership)
+end)
+
+t.test('tabletRequestMyRecord: partnership -- nil when the feature is on but the caller has no active partnership', function()
+    local f = newFixture({
+        config = {
+            Features = { CommandTablet = true, HandlerPartnership = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+            Database = { enabled = false },
+        },
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.isNil(result.partnership)
+end)
+
+t.test('tabletRequestMyRecord: partnership -- resolves the CALLER\'s own active partner + role from the real k9_partnerships store, for BOTH roles', function()
+    local f = newFixture({
+        config = {
+            Features = { CommandTablet = true, HandlerPartnership = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+            Database = { enabled = false }, -- real K9Store in-memory mode, no MySQL stub needed
+        },
+    })
+    local k9Src = f.registerPlayer(1, 'K9-SELF', { name = 'police', grade = { level = 1 } })
+    f.registerPlayer(2, 'HANDLER-SELF', { name = 'police', grade = { level = 1 } })
+    f.env.K9Store.Partner_Insert('K9-SELF', 'HANDLER-SELF', 'HANDLER-SELF')
+
+    local k9Result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(k9Src)
+    t.isNotNil(k9Result.partnership)
+    t.equals(k9Result.partnership.partnerCitizenid, 'HANDLER-SELF')
+    t.equals(k9Result.partnership.role, 'k9')
+
+    f.fakeNow.value = f.fakeNow.value + 1000 -- past TabletReadCooldown -- two separate reads from two different sources, not a batch
+    local handlerResult = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(2)
+    t.isNotNil(handlerResult.partnership)
+    t.equals(handlerResult.partnership.partnerCitizenid, 'K9-SELF')
+    t.equals(handlerResult.partnership.role, 'handler')
+end)
+
+t.test('tabletRequestMyRecord: partnership -- SECURITY: never reads any other citizenid\'s partnership, even if one is active', function()
+    local f = newFixture({
+        config = {
+            Features = { CommandTablet = true, HandlerPartnership = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+            Database = { enabled = false },
+        },
+    })
+    f.registerPlayer(1, 'K9-OTHER', { name = 'police', grade = { level = 1 } })
+    f.registerPlayer(2, 'HANDLER-OTHER', { name = 'police', grade = { level = 1 } })
+    f.env.K9Store.Partner_Insert('K9-OTHER', 'HANDLER-OTHER', 'HANDLER-OTHER')
+
+    -- A THIRD, unrelated, unpartnered caller -- this callback takes no
+    -- targetCitizenId argument at all, so there is no client-suppliable
+    -- input that could ever point it at the other pair's row above.
+    local bystanderSrc = f.registerPlayer(3, 'BYSTANDER', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(bystanderSrc)
+    t.isNil(result.partnership)
+end)
+
 -- ----------------------------------------------------------------------
 -- myFeatures STATE RESOLUTION -- LOAD-BEARING: exact precedence order.
 -- ----------------------------------------------------------------------
@@ -1266,6 +1347,57 @@ t.test('tabletRequestPersonSummary: job -- nil (never guessed) when neither an o
     local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'NEVER-SEEN')
     t.isTrue(result.ok)
     t.isNil(result.job)
+end)
+
+-- ============================================================================
+-- tabletRequestPersonSummary: target.exists (this pass, coder-backend, at
+-- coder-ui's own request -- see server/tablet.lua's ResolvePlayerExists own
+-- doc comment). THE REAL FIX for the "no way to tell a real person from a
+-- typo" gap: previously this callback returned `ok = true` for ANY
+-- syntactically valid citizenid, with nothing distinguishing a genuine
+-- handler who holds zero certs/XP/partnership from a typo'd or
+-- deleted-character id. `exists` is a REAL qbx_core player-row lookup
+-- (online OR offline), never inferred from any other field being empty.
+-- ============================================================================
+
+t.test('tabletRequestPersonSummary: target.exists -- true for an ONLINE target', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'ONLINE-TARGET', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'ONLINE-TARGET')
+    t.isTrue(result.ok)
+    t.isNotNil(result.target)
+    t.isTrue(result.target.exists)
+end)
+
+t.test('tabletRequestPersonSummary: target.exists -- true for a genuinely OFFLINE target with a real qbx_core row', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerOfflinePlayer('OFFLINE-TARGET', { firstname = 'Rex', lastname = 'Handler' })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'OFFLINE-TARGET')
+    t.isTrue(result.ok)
+    t.isTrue(result.target.exists)
+end)
+
+t.test('tabletRequestPersonSummary: target.exists -- FALSE for a citizenid with no player row at all, online or offline (the typo/ghost case)', function()
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'TYPO-OR-DELETED')
+    t.isTrue(result.ok)
+    t.isFalse(result.target.exists, 'a citizenid qbx_core has never heard of must resolve exists = false, never true, and never merely absent')
+end)
+
+t.test('tabletRequestPersonSummary: target.exists -- true for a REAL person who genuinely holds zero certs/XP/partnership (the case the frontend heuristic used to misclassify)', function()
+    -- This is the exact scenario the old, client-only "everything is empty"
+    -- heuristic could not distinguish from a typo: a real, existing handler
+    -- with a resolvable job but nothing else on record yet.
+    local f = newFixture({ isHighCommand = function() return true end })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'BRAND-NEW-HANDLER', { name = 'police', grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonSummary')(src, 'BRAND-NEW-HANDLER')
+    t.isTrue(result.ok)
+    t.isTrue(result.target.exists)
+    t.equals(#result.certifications > 0, true, 'sanity: still one row per configured department, but every one inactive')
 end)
 
 t.test('tabletRequestPersonSummary: partnership -- nil when Config.Features.HandlerPartnership is off', function()

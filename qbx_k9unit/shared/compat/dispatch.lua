@@ -33,8 +33,7 @@
     today -- that is the definition of "purely additive."
 
     WHO ACTUALLY CALLS `K9Compat.Get('dispatch').Alert(...)`: server/
-    integrations.lua's PollK9Health, wired in a later pass once that file's
-    own concurrent edit window closed -- placed immediately AFTER (never
+    integrations.lua's PollK9Health -- placed immediately AFTER (never
     instead of) the existing `FireOutboundEvent('qbx_k9unit:events:k9Down',
     ...)` call, guarded the same `type(K9Compat) == 'table' and
     type(K9Compat.Get) == 'function'` way server/scentlineup.lua guards its
@@ -129,11 +128,11 @@
     where that translation is not a straight pass-through).
 
     ======================================================================
-    RESEARCH METHODOLOGY AND HONEST CONFIDENCE GRADING (the actual bulk of
-    this file's own effort, per the task's explicit instruction that this
-    is "most of the job" and that a guessed signature that detects as
-    working and then silently does nothing is this project's most
-    expensive recurring bug class).
+    RESEARCH METHODOLOGY AND HONEST CONFIDENCE GRADING. A guessed signature
+    that detects as working and then silently does nothing is this
+    project's most expensive recurring bug class, so every adapter below is
+    graded CONFIRMED or UNCONFIRMED against a real primary source, never
+    assumed from memory.
 
     Every CONFIRMED adapter below cites the exact primary source read this
     session (a resource's own README.md, fxmanifest.lua, or real .lua
