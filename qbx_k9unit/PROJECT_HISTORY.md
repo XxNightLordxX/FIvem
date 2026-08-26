@@ -325,6 +325,51 @@ an animal" games, and the specific natives involved) cited a number of
 external sources; they're preserved in this project's git history if
 anyone wants to revisit them, rather than reproduced here.
 
+## The NPC dog, considered and rejected
+
+2026-08-26. A competitive research pass established, with citations, that
+every high-adoption K9 script on the FiveM market is NPC-based: the dog is
+AI, and one officer commands it. Mato-K9, ND-K9, EVO K9, Big Daddy, Quasar
+and the long-running free release thread are all that shape. This resource
+is the other kind — a real player becomes the dog — and a genuine but
+smaller player-controlled niche exists alongside it (v-k9, UN K9 System,
+Reborn's "Police K9 Player", IIS K9 Policer, and mana_policedogs, which is
+the closest direct competitor by design).
+
+The obvious commercial argument was put plainly: requiring a second human
+to log in as the dog is a hard ceiling. A server that cannot staff that
+gets nothing from any of the 58 features, however deep they are. The
+research recommended adding an NPC fallback mode alongside the player one,
+so a server could run either.
+
+**The owner's decision was no.** Player-controlled only. Recorded here so
+nobody re-opens it as though it were an oversight.
+
+The reasoning that supports the decision, for whoever reads this next:
+
+- Nearly every system here exists BECAUSE there is a real person on the
+  other end. Handler partnership and its tenure bonus, the mood, fear and
+  distraction systems, the partner camera feed — an NPC has no relationship
+  to form, no nerve to lose, and no viewpoint to switch to. Those are not
+  features that would degrade in an NPC mode; they are features that would
+  become meaningless.
+- The dominant complaint history for NPC K9 scripts is pathing and AI
+  failure: the dog freezing near other players, following the wrong person,
+  stopping halfway through a chase, going unresponsive after its handler
+  dies. A player-controlled dog cannot have that class of bug at all,
+  because there is no navmesh AI to break. That is a real engineering
+  advantage, not a marketing line.
+- An NPC mode is not a toggle. It is a second implementation of search,
+  tracking, apprehension and agility running in parallel to the existing
+  ones, and it would inherit exactly the bug class above. Built badly it
+  would cost more in support than the two-player ceiling costs in sales.
+
+What was NOT decided, and remains open: the ceiling is real. If it is ever
+felt, the answer is more autonomous content for a dog whose handler is
+busy — Scent Trail Hunt, Scent Lineup and SAR Calls already exist for
+precisely that reason and should be protected as such rather than treated
+as filler.
+
 ## Watchdog passes
 
 A scheduled check runs over this resource periodically, looking for
