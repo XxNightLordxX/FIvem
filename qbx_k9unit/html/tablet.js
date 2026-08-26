@@ -1033,6 +1033,14 @@
         runtime_tunable_error_out_of_range: 'That value must be between {min} and {max}.',
         runtime_tunable_error_not_integer: 'This value must be a whole number.',
         runtime_tunable_error_not_a_number: 'Enter a valid number.',
+        // Column header for the Settings table's first column, now that a
+        // row shows a plain-English description first and the raw Config
+        // path only as secondary detail (buildRuntimeTunableRow) -- see
+        // server/runtimecontrol.lua's own GetTunableDescription for where
+        // that description text actually comes from (a SEPARATE, dynamic
+        // per-tunable locale lookup, not a DEFAULT_STRINGS entry -- only
+        // this fixed column header is one).
+        runtime_tunable_column_setting: 'Setting',
 
         // ---- K9 Audit Trail viewer (its own tab) -- server/admin.lua's
         // five tabletAudit* callbacks. Shown to any viewer whose
@@ -1809,6 +1817,26 @@
         help_task_treat_1: "1. This is not limited to handlers -- anyone whose job is set up for it (usually EMS) can do this, as long as they are carrying a K9 medkit item.",
         help_task_treat_2: "2. Walk up to the injured K9 and open your interact menu on them. Choose \"Treat This K9's Injuries (Uses a K9 Medkit)\".",
         help_task_treat_3: "3. The medkit item is used up. If the option is not there at all, either this feature is turned off on this server, or you do not have a K9 medkit.",
+        // ADDED (this pass): Deploy a Kennel / Use Scent Vision -- both are
+        // recent headline features already documented in the Commands tab
+        // (COMMAND_REFERENCE), but had no step-by-step walkthrough here,
+        // unlike every other common task on this screen -- reported as a
+        // gap in this same pass's own report and closed here to match this
+        // section's existing shape. Quoted button/menu/keybind labels below
+        // ("Deploy Kennel", "Rest in Kennel", "Pick Up Kennel", "K9: Toggle
+        // Scent Vision") are each drift-guarded against their real
+        // radial/target/keybind locale values by
+        // tests/helpquotedlabels_spec.lua, same posture as every other
+        // quoted label already on this screen.
+        help_task_kennel_heading: "Deploy a Kennel",
+        help_task_kennel_1: "1. As the K9, open your K9 Unit radial menu and choose \"Deploy Kennel\". It is placed on the ground just in front of you.",
+        help_task_kennel_2: "2. You can only have one active kennel at a time -- pick it back up (open the radial menu again, or use the \"Pick Up Kennel\" option on it) before deploying another.",
+        help_task_kennel_3: "3. Any K9 can use a deployed kennel to rest: walk up to it and choose \"Rest in Kennel\". Choose \"Exit Kennel\" (or use its own keybind) to get back out.",
+        help_task_kennel_4: "4. If \"Deploy Kennel\" is not in the radial menu at all, this feature is turned off on this server -- ask High Command.",
+        help_task_scent_vision_heading: "Use Scent Vision",
+        help_task_scent_vision_1: "1. As the K9, press the \"K9: Toggle Scent Vision\" key (Z by default, rebindable in Settings > Key Bindings > FiveM) to show coloured dots marking where nearby people have recently walked. Press it again to turn it off.",
+        help_task_scent_vision_2: "2. Only a handful of the closest people's trails are shown at once, each its own colour, and the dots fade out and disappear as they get older.",
+        help_task_scent_vision_3: "3. If pressing the key does nothing, either this feature is turned off on this server, or this server has set it to run for everyone automatically instead of needing the key -- ask High Command.",
         help_task_hc_certify_someone_heading: "Certify Someone",
         help_task_hc_certify_someone_1: "1. Go to the Console tab and find them by name or citizen ID. Most certification actions require the target to be online.",
         help_task_hc_certify_someone_2_template: "2. Open their record and press {certifyLabel} under their department. Pick a tier and any specializations if your server uses them.",
@@ -4851,6 +4879,28 @@
             S('help_task_treat_1'),
             S('help_task_treat_2'),
             S('help_task_treat_3'),
+        ]));
+
+        // ADDED (this pass): Deploy a Kennel / Use Scent Vision -- see
+        // these two keys' own DEFAULT_STRINGS comment for why. UNGATED,
+        // same posture as every walkthrough above (Get Certified/Partner
+        // Up/Vehicle/Search/Treat): none of those check the underlying
+        // feature's own Config.Features flag before rendering either --
+        // help_trouble_feature_off_body already covers "the option is not
+        // there because a High Command officer turned it off" generically,
+        // so these two do not need a special case that no other task
+        // walkthrough on this screen has.
+        wrap.appendChild(buildHelpTaskBlock(S('help_task_kennel_heading'), [
+            S('help_task_kennel_1'),
+            S('help_task_kennel_2'),
+            S('help_task_kennel_3'),
+            S('help_task_kennel_4'),
+        ]));
+
+        wrap.appendChild(buildHelpTaskBlock(S('help_task_scent_vision_heading'), [
+            S('help_task_scent_vision_1'),
+            S('help_task_scent_vision_2'),
+            S('help_task_scent_vision_3'),
         ]));
 
         // ADDITIVE ONLY, same posture as buildHelpCommandsSection() above --
@@ -7987,7 +8037,7 @@
         var table = mk('table', { class: 'k9tablet-table' });
         var thead = mk('thead');
         var headRow = mk('tr');
-        [S('column_key'), S('column_current_value'), S('column_range'), S('column_type'), S('column_actions')].forEach(function (h) {
+        [S('runtime_tunable_column_setting'), S('column_current_value'), S('column_range'), S('column_type'), S('column_actions')].forEach(function (h) {
             headRow.appendChild(mk('th', { text: h }));
         });
         thead.appendChild(headRow);
@@ -8000,11 +8050,37 @@
     }
 
     /**
-     * @param {{key:string,currentValue:number,min:number,max:number,integer:boolean,overridden:boolean,overriddenBy?:string,overriddenAt?:string}} tunable
+     * @param {{key:string,currentValue:number,min:number,max:number,integer:boolean,overridden:boolean,overriddenBy?:string,overriddenAt?:string,description?:string}} tunable
      */
     function buildRuntimeTunableRow(tunable) {
         var tr = mk('tr');
-        tr.appendChild(mk('td', { text: tunable.key }));
+        // PLAIN-ENGLISH DESCRIPTION FIRST, RAW KEY SECOND -- the fix for
+        // this exact row USED to show ONLY tunable.key (e.g.
+        // "Wellbeing.Fatigue.sprintDecayPerTick"), which told a
+        // non-technical server owner nothing about what the setting
+        // actually does, or how to tell two similarly-named settings
+        // apart (this resource's own custom Fatigue stat vs. the game's
+        // built-in Stamina bar, to name the pair that started this fix).
+        // `tunable.description` is server-authored (see
+        // server/runtimecontrol.lua's GetTunableDescription) and OPTIONAL
+        // by design: a tunable with no description yet must still render,
+        // still be editable, and never throw -- it just falls back to
+        // showing the raw key alone, exactly as every row used to.
+        //
+        // The raw key is kept as its OWN text node (never concatenated
+        // into the description's own node) in BOTH branches below, so a
+        // lookup by that exact key's textContent (html/tests/
+        // tablet_runtime_control_spec.js's own `findByText(root,
+        // 'LeashMaxDistance')`, e.g.) keeps working unchanged whether or
+        // not a description exists for that row.
+        var keyTd = mk('td');
+        if (typeof tunable.description === 'string' && tunable.description.length > 0) {
+            keyTd.appendChild(mk('p', { text: tunable.description }));
+            keyTd.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: tunable.key }));
+        } else {
+            keyTd.appendChild(mk('span', { text: tunable.key }));
+        }
+        tr.appendChild(keyTd);
 
         var isEditing = state.runtimeTunableDraft && state.runtimeTunableDraft.key === tunable.key;
 

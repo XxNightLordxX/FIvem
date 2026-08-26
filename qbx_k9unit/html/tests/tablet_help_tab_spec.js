@@ -122,6 +122,31 @@ t.test('the Help tab renders for a brand-new, uncertified viewer -- the exact re
     t.isTrue(findByTextContaining(h.getRoot(), 'Getting Started version of this guide').length >= 1);
 });
 
+// ======================================================================
+// DEPLOY A KENNEL / USE SCENT VISION -- two recent headline features that
+// (per this pass's own report) were documented in the Commands tab but had
+// no step-by-step walkthrough here, unlike every other common task on this
+// screen. UNGATED, same as Get Certified/Partner Up/Vehicle/Search/Treat
+// above them -- shown to any viewer, not just High Command.
+// ======================================================================
+
+t.test('"How to Do the Common Things" now includes walkthroughs for Deploy a Kennel and Use Scent Vision, shown to an ordinary (non-High-Command) viewer', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch({
+            'tablet:requestMyRecord': myRecordHandler(HANDLER_VIEWER, { certifications: [{ active: true }] }),
+        }),
+    });
+    await openHelpScreen(h);
+
+    t.equals(findByText(h.getRoot(), 'Deploy a Kennel').length, 1);
+    t.isTrue(findByTextContaining(h.getRoot(), 'Deploy Kennel').length >= 1, 'quotes the real radial menu label');
+    t.isTrue(findByTextContaining(h.getRoot(), 'Rest in Kennel').length >= 1, 'quotes the real ox_target label for resting');
+    t.isTrue(findByTextContaining(h.getRoot(), 'Pick Up Kennel').length >= 1, 'quotes the real ox_target label for reclaiming it');
+
+    t.equals(findByText(h.getRoot(), 'Use Scent Vision').length, 1);
+    t.isTrue(findByTextContaining(h.getRoot(), 'K9: Toggle Scent Vision').length >= 1, 'quotes the real keybind label');
+});
+
 t.test('role-based Start Here: a K9-model viewer sees the K9 track, never the Handler track', async () => {
     const h = createHarness({
         fetchImpl: routeFetch({

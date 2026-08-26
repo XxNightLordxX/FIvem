@@ -65,6 +65,13 @@ local QUOTED_LABEL_CHECKS = {
     { helpKeys = { 'help_task_search_2' }, namespace = 'search', key = 'vehicle_target_label' },
     { helpKeys = { 'help_task_treat_2' }, namespace = 'medkit', key = 'treat_target_label' },
     { helpKeys = { 'help_trouble_no_k9_access_title' }, namespace = 'common', key = 'no_k9_access' },
+    -- ADDED (this pass): Deploy a Kennel / Use Scent Vision walkthroughs --
+    -- see html/tablet.js's own DEFAULT_STRINGS comment at these same keys.
+    { helpKeys = { 'help_task_kennel_1' }, namespace = 'radial', key = 'deploy_kennel_label' },
+    { helpKeys = { 'help_task_kennel_2' }, namespace = 'kennel', key = 'pickup_target_label' },
+    { helpKeys = { 'help_task_kennel_3' }, namespace = 'kennel', key = 'enter_target_label' },
+    { helpKeys = { 'help_task_kennel_3' }, namespace = 'kennel', key = 'exit_target_label' },
+    { helpKeys = { 'help_task_scent_vision_1' }, namespace = 'tracking', key = 'scent_vision_keybind_label' },
 }
 
 t.test('every Help-screen quoted button/menu label still contains the REAL, live text from the namespace it quotes', function()

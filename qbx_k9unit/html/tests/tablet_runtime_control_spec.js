@@ -428,6 +428,137 @@ t.test('an integer tunable shows "Whole number"', async () => {
     t.isTrue(findByText(h.getRoot(), 'Whole number').length >= 1);
 });
 
+// ======================================================================
+// PLAIN-ENGLISH TUNABLE DESCRIPTIONS -- the fix for the exact confusion
+// this resource's own commit history predicted and shipped anyway: this
+// row used to show ONLY the raw Config path (tunable.key) with nothing
+// explaining what the setting actually does. server/runtimecontrol.lua's
+// GetTunableDescription now supplies an OPTIONAL `description` field per
+// row; buildRuntimeTunableRow must show it as the row's PRIMARY text,
+// the raw key only as secondary detail -- and must never break, hide, or
+// otherwise change a row that has no description yet (most rows, in a
+// fixture that never sets `description` at all, exactly like every OTHER
+// test in this file).
+// ======================================================================
+
+t.test('a tunable WITH a server-supplied description shows the description as the primary text and the raw key as secondary detail, not instead of it', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{
+                    key: 'Wellbeing.Fatigue.sprintDecayPerTick',
+                    currentValue: 2.0, min: 0, max: 20.0, integer: false, overridden: false,
+                    description: "How fast a K9's own Fatigue meter (this resource's custom tiredness stat -- NOT the game's Stamina bar) drains while sprinting.",
+                }],
+            }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), "How fast a K9's own Fatigue meter (this resource's custom tiredness stat -- NOT the game's Stamina bar) drains while sprinting.").length >= 1, 'the plain-English description is rendered');
+    t.isTrue(findByText(h.getRoot(), 'Wellbeing.Fatigue.sprintDecayPerTick').length >= 1, 'the raw key is STILL shown, as secondary detail, never removed entirely');
+});
+
+t.test('two similarly-named tunables with different descriptions are told apart at a glance (the exact confusion this fix exists for)', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [
+                    {
+                        key: 'Wellbeing.Fatigue.sprintDecayPerTick',
+                        currentValue: 2.0, min: 0, max: 20.0, integer: false, overridden: false,
+                        description: "How fast a K9's own Fatigue meter drains while sprinting -- this resource's custom tiredness stat, not the game's Stamina bar.",
+                    },
+                    {
+                        key: 'Wellbeing.Fatigue.nativeStaminaRestorePercent',
+                        currentValue: 0.0, min: 0.0, max: 1.0, integer: false, overridden: false,
+                        description: "How much of the game engine's own built-in Stamina bar (the HUD meter, a different stat from Fatigue above) is topped up every second.",
+                    },
+                ],
+            }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    const root = h.getRoot();
+    t.isTrue(findByText(root, "How fast a K9's own Fatigue meter drains while sprinting -- this resource's custom tiredness stat, not the game's Stamina bar.").length >= 1);
+    t.isTrue(findByText(root, "How much of the game engine's own built-in Stamina bar (the HUD meter, a different stat from Fatigue above) is topped up every second.").length >= 1);
+    t.isTrue(findByText(root, 'Wellbeing.Fatigue.sprintDecayPerTick').length >= 1);
+    t.isTrue(findByText(root, 'Wellbeing.Fatigue.nativeStaminaRestorePercent').length >= 1);
+});
+
+t.test('DO NOT LET A MISSING DESCRIPTION BREAK THE ROW: a tunable with no `description` field at all still renders, still shows its key, and is still editable', async () => {
+    let setBody = null;
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'LeashMaxDistance', currentValue: 8.5, min: 3.0, max: 20.0, integer: false, overridden: false }],
+            }),
+            'tablet:runtimeSetTunable': (body) => { setBody = body; return { ok: true, appliedLive: true, restartRequired: false, value: 12 }; },
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+
+    t.isTrue(findByText(h.getRoot(), 'LeashMaxDistance').length >= 1, 'the raw key alone is shown -- the exact pre-fix behaviour -- never a blank or broken cell');
+
+    // Still fully editable, exactly like every tunable before this
+    // description mechanism existed -- a missing description is cosmetic
+    // only, never a functional regression.
+    findByText(h.getRoot(), 'Edit')[0].click();
+    await settle();
+    const input = findInput(h.getRoot(), (n) => n.getAttribute('type') === 'number');
+    t.isDefined(input);
+    input.typeValue('12');
+    findByText(h.getRoot(), 'Save Value')[0].click();
+    await new Promise((r) => setTimeout(r, 30));
+    t.equals(setBody.key, 'LeashMaxDistance');
+    t.equals(setBody.value, 12);
+});
+
+t.test('an empty-string `description` (server sent "" rather than omitting the field) is treated the same as no description -- never rendered as a blank line', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'LeashMaxDistance', currentValue: 8.5, min: 3.0, max: 20.0, integer: false, overridden: false, description: '' }],
+            }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'LeashMaxDistance').length >= 1);
+});
+
+t.test('the Settings table header reads "Setting", not the raw "Key" label, now that this column shows a plain-English description first', async () => {
+    const h = createHarness({
+        fetchImpl: routeFetch(baseHandlers({
+            'tablet:runtimeListFeatures': () => ({ ok: true, features: [] }),
+            'tablet:runtimeListTunables': () => ({
+                ok: true,
+                tunables: [{ key: 'LeashMaxDistance', currentValue: 8.5, min: 3.0, max: 20.0, integer: false, overridden: false }],
+            }),
+        })),
+    });
+    await openTablet(h);
+    openRuntimeControlTab(h);
+    await settle();
+    t.isTrue(findByText(h.getRoot(), 'Setting').length >= 1);
+});
+
 function findInput(root, predicate) {
     return findAll(root, (n) => n.tagName === 'input' && predicate(n))[0];
 }

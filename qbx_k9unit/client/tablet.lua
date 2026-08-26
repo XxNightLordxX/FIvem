@@ -961,6 +961,17 @@ local TABLET_STRING_KEYS = {
     'runtime_tunable_type_integer', 'runtime_tunable_type_decimal',
     'runtime_tunable_error_invalid_key', 'runtime_tunable_error_out_of_range',
     'runtime_tunable_error_not_integer', 'runtime_tunable_error_not_a_number',
+    -- RUNTIME TUNABLE ROW READABILITY (this pass): the Runtime Control ->
+    -- Settings table used to show ONLY a tunable's raw Config path as its
+    -- one and only label -- see server/runtimecontrol.lua's own
+    -- GetTunableDescription for the per-tunable plain-English text this
+    -- fixes it with (a separate, DYNAMIC locale lookup, NOT a
+    -- TABLET_STRING_KEYS entry -- there are 100+ of those, one per
+    -- tunable, fetched the same way runtime_lockout_warning_*/
+    -- runtime_active_usage_warning_* already are). This ONE key is
+    -- different: a fixed column header, same static-string shape as every
+    -- other TABLET_STRING_KEYS entry, so it belongs here.
+    'runtime_tunable_column_setting',
     -- K9 Audit Trail viewer (its own tab -- see this file's own NUI
     -- CONTRACT section on tablet:auditCert/Partner/Search/Xp/Dept). NOT
     -- YET present in locales/en.json's `tablet` group as of this pass --
@@ -1292,6 +1303,10 @@ local TABLET_STRING_KEYS = {
     'help_task_vehicle_heading', 'help_task_vehicle_1', 'help_task_vehicle_2', 'help_task_vehicle_3',
     'help_task_search_heading', 'help_task_search_1', 'help_task_search_2', 'help_task_search_3',
     'help_task_treat_heading', 'help_task_treat_1', 'help_task_treat_2', 'help_task_treat_3',
+    -- ADDED (this pass): Deploy a Kennel / Use Scent Vision walkthroughs --
+    -- see html/tablet.js's own DEFAULT_STRINGS comment at these same keys.
+    'help_task_kennel_heading', 'help_task_kennel_1', 'help_task_kennel_2', 'help_task_kennel_3', 'help_task_kennel_4',
+    'help_task_scent_vision_heading', 'help_task_scent_vision_1', 'help_task_scent_vision_2', 'help_task_scent_vision_3',
     'help_task_hc_certify_someone_heading', 'help_task_hc_certify_someone_1', 'help_task_hc_certify_someone_2_template', 'help_task_hc_certify_someone_3',
     'help_task_hc_flow_steps_template', 'help_task_hc_toggle_feature_heading', 'help_task_hc_toggle_feature_1', 'help_task_hc_toggle_feature_2',
     'help_task_hc_toggle_feature_3', 'help_task_hc_assign_k9_heading', 'help_task_hc_assign_k9_1', 'help_task_hc_assign_k9_2_template',

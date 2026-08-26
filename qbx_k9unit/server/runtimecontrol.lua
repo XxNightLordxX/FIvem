@@ -431,12 +431,26 @@
     entities.lua/notify.lua, so their relative order versus this file does
     not matter.
 
-    LOCALE KEYS THIS FILE NEEDS: none. Every callback below returns a
-    structured `{ ok, reason, ... }` table -- outcome tags, never
-    player-facing prose -- matching server/permissions.lua's own
-    established "no granter-facing toast, the tablet renders its own
-    inline feedback from `reason`" precedent (see that file's header). No
-    RegisterCommand exists here for a usage string to need translating
+    LOCALE KEYS THIS FILE NEEDS: THIS COMMENT IS STALE AND WAS LEFT WRONG BY
+    A PRIOR PASS -- corrected here rather than re-asserted, because the pass
+    editing this file right now was about to make it more wrong, not less.
+    Every callback below STILL returns a structured `{ ok, reason, ... }`
+    table -- outcome tags, never player-facing prose, matching
+    server/permissions.lua's own established "no granter-facing toast, the
+    tablet renders its own inline feedback from `reason`" precedent (see
+    that file's header) -- that part of this claim remains true. What is
+    NOT true any more: GetFeatureLockoutWarning (below) already reads
+    locales/en.json's `tablet.runtime_lockout_warning_*_template` keys via
+    `pcall(locale, ...)`, and GetTunableDescription (below, added this
+    pass) reads `tablet.runtime_tunable_desc_*` the identical way -- both
+    ARE player-facing prose, deliberately, and both go through the locale
+    system for exactly the reason every other player(operator)-facing
+    string in this resource does. Every pcall(locale, ...) call site in
+    this file is written to degrade gracefully (a missing key never throws
+    past the pcall, never blanks a required field) specifically because
+    this file cannot assume every locale this resource ships has caught up
+    with every key added here. No RegisterCommand exists here for a usage
+    string to need translating
     either -- this surface is tablet-only, per the owner's own framing.
 ]]
 
@@ -1806,6 +1820,78 @@ local TUNABLE_REGISTRY = {
     ['Tracking.ScentVision.queryCooldownMs']         = { path = { 'Tracking', 'ScentVision', 'queryCooldownMs' },         min = 250,  max = 10000,  integer = true },
 }
 
+-- ======================================================================
+-- TUNABLE DESCRIPTIONS -- the fix for the exact confusion this resource's
+-- own commit history predicted and then shipped anyway: the tablet's
+-- Runtime Control -> Settings table used to show ONLY a tunable's raw
+-- Config path (e.g. "Wellbeing.Fatigue.sprintDecayPerTick") as its one and
+-- only label. A non-technical server owner reading that has no way to
+-- tell it apart from "Wellbeing.Fatigue.nativeStaminaRestorePercent" --
+-- two settings that control GENUINELY DIFFERENT things (this resource's
+-- own custom tiredness stat vs. the game engine's own built-in sprint
+-- stamina bar) -- without reading this file's source. See this section's
+-- own two entries below for the fix written for exactly that pair.
+--
+-- MIRRORS FEATURE_TIERS' OWN `note`/`lockoutWarningKey` SHAPE ON PURPOSE:
+-- same posture as GetFeatureNote/GetFeatureLockoutWarning above -- the
+-- authoritative statement of what a setting IS belongs here, next to the
+-- setting's own registry entry, not duplicated into html/tablet.js where
+-- it could silently drift out of sync with this file's own comments (the
+-- ones every description below was written FROM). Routed through the
+-- SAME locale mechanism GetFeatureLockoutWarning already uses
+-- (`pcall(locale, ...)` + FormatLocaleTemplate), for the same reason: this
+-- is player(operator)-facing prose, and every other one of those already
+-- lives in locales/en.json, not hardcoded into this file.
+--
+-- DELIBERATELY NOT a hand-maintained field on every TUNABLE_REGISTRY
+-- entry (unlike lockoutWarningKey, which a single-digit handful of
+-- FEATURE_TIERS entries need): with 100+ tunables, a second, independently
+-- spelled slug per entry is itself a drift risk this mechanism exists to
+-- avoid. The registry's own key (already unique, already stable) is
+-- deterministically turned into a locale key instead -- one fewer thing to
+-- keep in sync by hand, not a shortcut around the "mirror FEATURE_TIERS"
+-- instruction, just a stricter reading of ITS OWN "next to the setting's
+-- own definition, so it cannot drift" reasoning.
+--
+-- NEVER BREAKS THE ROW: a tunable with no description yet (locales/en.json
+-- has no matching `tablet.runtime_tunable_desc_*` key) returns nil here,
+-- exactly like a feature with no `note`. html/tablet.js's own
+-- buildRuntimeTunableRow falls back to showing the raw key alone in that
+-- case -- the ORIGINAL (if incomplete) behaviour, never a thrown error and
+-- never a hidden row. Some tunables genuinely have no sensible
+-- plain-English description shorter than this file's own multi-paragraph
+-- comment explaining them (a few of the most deeply footnoted
+-- entries above, e.g. the XP mint-budget-capped `XP.awards.*` block) --
+-- left undescribed deliberately rather than filled with filler text; see
+-- this pass's own hand-off report for the specific list.
+-- ======================================================================
+
+--- Deterministically derives the locale key suffix for a TUNABLE_REGISTRY
+--- key's own description, e.g. 'Wellbeing.Fatigue.sprintDecayPerTick' ->
+--- 'tablet.runtime_tunable_desc_wellbeing_fatigue_sprintdecaypertick'.
+--- Collision-free because TUNABLE_REGISTRY's own keys already are (this
+--- registry's `pairs` iteration would itself be broken by a duplicate Lua
+--- table key long before this function ever ran).
+--- @param key string -- TUNABLE_REGISTRY key
+--- @return string localeKey
+local function TunableDescriptionLocaleKey(key)
+    return 'tablet.runtime_tunable_desc_' .. tostring(key):gsub('%.', '_'):lower()
+end
+
+--- @param key string -- TUNABLE_REGISTRY key
+--- @return string? description -- nil (never a thrown error, never an
+--- empty string) if this tunable has no plain-English description yet in
+--- locales/en.json -- see this section's own header for why a missing
+--- description must never break, hide, or otherwise change how its row
+--- renders.
+local function GetTunableDescription(key)
+    local ok, text = pcall(locale, TunableDescriptionLocaleKey(key))
+    if ok and type(text) == 'string' and text ~= '' then
+        return text
+    end
+    return nil
+end
+
 --- Navigates a dotted registry `path` against the live `Config` table.
 --- @param path table -- array of string keys
 --- @return any value, boolean resolvable -- resolvable is false if some intermediate node is missing/not a table
@@ -2577,6 +2663,13 @@ lib.callback.register('qbx_k9unit:server:runtimeListTunables', function(source)
             overridden = override ~= nil,
             overriddenBy = override and override.updatedBy or nil,
             overriddenAt = override and override.updatedAt or nil,
+            -- PLAIN-ENGLISH DESCRIPTION (see this file's own "TUNABLE
+            -- DESCRIPTIONS" header above GetTunableDescription): nil, never
+            -- an empty string or a thrown error, for any key this pass has
+            -- not written a locales/en.json entry for yet -- html/tablet.js
+            -- falls back to showing `key` alone in that case, exactly like
+            -- before this field existed.
+            description = GetTunableDescription(key),
         }
     end
     return { ok = true, tunables = rows }

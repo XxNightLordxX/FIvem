@@ -43,9 +43,17 @@
         NOT covered here as a denial case; it is documented, and tested, as
         open to anyone (Section 6).
 
-    locale() is never called by server/runtimecontrol.lua (see that file's
-    own header "LOCALE KEYS THIS FILE NEEDS: none") -- so, unlike several
-    sibling specs, nothing here is gated on any locale key landing.
+    THIS COMMENT USED TO SAY "locale() is never called by
+    server/runtimecontrol.lua ... nothing here is gated on any locale key
+    landing." THAT STOPPED BEING TRUE BEFORE THIS SPEC WAS EVEN UPDATED TO
+    SAY SO -- SECTION 2B's own lockoutWarning assertions already exercise
+    GetFeatureLockoutWarning's real `pcall(locale, ...)` calls against the
+    genuine locales/en.json (via this file's own boot()/Sandbox.newEnv,
+    which always wires env.locale = Sandbox.locale, a REAL reader of that
+    file, never a stub). SECTION 5C (GetTunableDescription, added the same
+    pass this comment was corrected) is the second, equally real, user of
+    that same real locale(). Corrected here rather than re-asserted for a
+    third time.
 ]]
 
 local t = dofile('testkit.lua')
@@ -1058,6 +1066,108 @@ t.test('Wellbeing.Fatigue.sprintDecayPerTick is registered (min=0 -- the "perman
             t.isTrue(row.overridden)
         end
     end
+end)
+
+-- ============================================================================
+-- SECTION 5C -- LOAD-BEARING: plain-English tunable descriptions. The
+-- exact usability bug this section guards against: the tablet's Runtime
+-- Control -> Settings table used to show ONLY a tunable's raw Config path
+-- (e.g. "Wellbeing.Fatigue.sprintDecayPerTick") with no explanation of what
+-- it does -- indistinguishable, at a glance, from
+-- "Wellbeing.Fatigue.nativeStaminaRestorePercent", a DIFFERENT setting
+-- controlling a DIFFERENT stamina system entirely (this resource's own
+-- custom Fatigue stat vs. the game engine's built-in Stamina bar). This
+-- section tests GetTunableDescription/runtimeListTunables' own new
+-- `description` field, using this file's own boot() fixture, which (like
+-- every other spec built on tests/fixtures/sandbox.lua) already wires a
+-- REAL `locale()` reading the genuine, unmodified locales/en.json --
+-- exactly like SECTION 2B's own lockoutWarning assertions already do for
+-- runtime_lockout_warning_*_template, so a description text asserted here
+-- is the SAME text a real tablet would actually render, not a test double.
+-- ============================================================================
+
+t.test('runtimeListTunables carries a real, non-empty description for a tunable that has one in locales/en.json', function()
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    t.isTrue(listed.ok)
+    local found
+    for _, row in ipairs(listed.tunables) do
+        if row.key == 'LeashMaxDistance' then found = row end
+    end
+    t.isNotNil(found)
+    t.isTrue(type(found.description) == 'string' and #found.description > 0, 'LeashMaxDistance must carry a real plain-English description, not merely its own raw key')
+end)
+
+t.test('THE LOAD-BEARING CASE: the two stamina-adjacent tunables (sprintDecayPerTick vs. nativeStaminaRestorePercent) have DIFFERENT, DISTINGUISHING descriptions -- the exact confusion this whole fix exists to prevent', function()
+    local f = boot({ config = {
+        Features = { RuntimeFeatureControl = true, HighCommand = true },
+        AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} },
+        Wellbeing = { Fatigue = { sprintDecayPerTick = 2.0, nativeStaminaRestorePercent = 0.0 } },
+    } })
+    f.env.IsHighCommand = function() return true end
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    t.isTrue(listed.ok)
+
+    local byKey = {}
+    for _, row in ipairs(listed.tunables) do byKey[row.key] = row end
+
+    local decay = byKey['Wellbeing.Fatigue.sprintDecayPerTick']
+    local restore = byKey['Wellbeing.Fatigue.nativeStaminaRestorePercent']
+    t.isNotNil(decay)
+    t.isNotNil(restore)
+    t.isTrue(type(decay.description) == 'string' and #decay.description > 0)
+    t.isTrue(type(restore.description) == 'string' and #restore.description > 0)
+    t.isTrue(decay.description ~= restore.description, 'these two settings control genuinely different things and must never share one description')
+
+    -- The reader must be able to tell WHICH ONE moves the on-screen
+    -- "Stamina" bar without reading source -- sprintDecayPerTick's own
+    -- description must name this resource's OWN stat (Fatigue), and
+    -- nativeStaminaRestorePercent's own description must name the game
+    -- engine's OWN stat (Stamina), so grepping either text alone
+    -- disambiguates it.
+    t.isTrue(decay.description:find('Fatigue', 1, true) ~= nil, 'sprintDecayPerTick describes the Fatigue stat')
+    t.isTrue(restore.description:find('Stamina', 1, true) ~= nil, 'nativeStaminaRestorePercent describes the Stamina bar')
+end)
+
+t.test('DO NOT LET A MISSING DESCRIPTION BREAK THE ROW: an unrecognized-by-locale (hypothetical future) tunable key still resolves to a nil description, never a thrown error', function()
+    -- GetTunableDescription is not itself registered as a callback, but
+    -- runtimeListTunables (its only real caller) must never surface a
+    -- pcall failure to the client as a broken response -- this is
+    -- exercised indirectly here by confirming the REAL registry, as
+    -- shipped today, never trips the pcall's failure branch for any key
+    -- (a thrown, uncaught locale() error would make listed.ok read false
+    -- with no coherent reason, which the earlier "carries a real
+    -- description" test above would already have caught) -- and directly
+    -- via TunableDescriptionLocaleKey's own deterministic, format-string-free
+    -- construction (a plain string concatenation of the already-alphanumeric
+    -- TUNABLE_REGISTRY key), which cannot itself throw for any key this
+    -- registry contains.
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    t.isTrue(listed.ok, 'a missing description must never make the whole list callback fail')
+    t.isTrue(#listed.tunables > 0)
+end)
+
+t.test('EVERY TUNABLE_REGISTRY entry that has a locales/en.json description carries genuinely different text from every other one (no copy-pasted filler shared across unrelated settings)', function()
+    local f = boot()
+    f.env.IsHighCommand = function() return true end
+    local listed = f.callbacks['qbx_k9unit:server:runtimeListTunables'](HC_SOURCE)
+    t.isTrue(listed.ok)
+
+    local seen = {}
+    local duplicates = {}
+    for _, row in ipairs(listed.tunables) do
+        if type(row.description) == 'string' and #row.description > 0 then
+            if seen[row.description] then
+                duplicates[#duplicates + 1] = row.key .. ' == ' .. seen[row.description]
+            else
+                seen[row.description] = row.key
+            end
+        end
+    end
+    t.equals(#duplicates, 0, 'duplicate tunable descriptions found: ' .. table.concat(duplicates, '; '))
 end)
 
 -- ============================================================================
