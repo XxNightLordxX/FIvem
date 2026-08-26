@@ -293,11 +293,12 @@ t.test('stopScentHunt: unconditional -- clears an active hunt with no Config/Has
     fireStopScentHunt(999)
 end)
 
-t.test('pollScentHunt: fires qbx_k9unit:client:scentHuntFound to THIS caller only, exactly once, the first time distance drops to/under arrivalRadius', function()
+t.test('pollScentHunt: fires qbx_k9unit:client:scentHuntFound to THIS caller only, exactly once, the first time distance drops to/under arrivalRadius, carrying this hunt\'s own huntId', function()
     pedCoordsBySource[6] = { x = 0.0, y = 0.0, z = 0.0 }
     fakeNow = fakeNow + 20000
     queueRandom(0.0, 0.0) -- target lands at (10, 0) -- exactly minRadius away
-    startScentHunt(6)
+    local started = startScentHunt(6)
+    t.isNotNil(started.huntId, 'a successful start must always return a huntId -- see this file\'s header "STALE-SESSION RACE"')
 
     fakeNow = fakeNow + 1000
     local farPoll = pollScentHunt(6)
@@ -312,12 +313,29 @@ t.test('pollScentHunt: fires qbx_k9unit:client:scentHuntFound to THIS caller onl
     t.equals(#triggerClientEventCalls, 1)
     t.equals(triggerClientEventCalls[1].event, 'qbx_k9unit:client:scentHuntFound')
     t.equals(triggerClientEventCalls[1].target, 6, 'must be sent to the finder alone, never broadcast')
-    t.equals(#triggerClientEventCalls[1].args, 0, 'a trigger only -- never a claimed distance/coordinate')
+    t.equals(#triggerClientEventCalls[1].args, 1, 'a trigger plus this hunt\'s own huntId -- never a claimed distance/coordinate')
+    t.equals(triggerClientEventCalls[1].args[1], started.huntId, 'the pushed id must be the SAME id this hunt was granted at start -- see "STALE-SESSION RACE"')
 
     -- Still within radius on a later poll -- must NOT refire.
     fakeNow = fakeNow + 1000
     pollScentHunt(6)
     t.equals(#triggerClientEventCalls, 1)
+end)
+
+t.test('startScentHunt: each successful start mints a strictly increasing, never-reused huntId', function()
+    pedCoordsBySource[40] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local first = startScentHunt(40)
+
+    fireStopScentHunt(40)
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    local second = startScentHunt(41)
+
+    t.isNotNil(first.huntId)
+    t.isNotNil(second.huntId)
+    t.isTrue(second.huntId > first.huntId, 'huntId must strictly increase across hunts, never repeat')
 end)
 
 t.test('pollScentHunt: rate-limited by the local POLL_RATE_FLOOR_MS regardless of Config.ScentTrailHunt.pollIntervalMs -- returns the last snapshot instead of recomputing', function()

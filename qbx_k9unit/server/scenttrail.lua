@@ -90,7 +90,9 @@
     server's point of view:
 
     1. 'qbx_k9unit:server:startScentHunt' (source) -> { started: boolean,
-       reason: ('already_active'|'cooldown'|'denied')? } [lib.callback]
+       reason: ('already_active'|'cooldown'|'denied')?, huntId: number?
+       [present iff started == true -- see "STALE-SESSION RACE" below] }
+       [lib.callback]
        Re-validates Config.Features.ScentTrailHunt and HasK9Access(source)
        regardless of client UI state (reason = 'denied' collapses both, per
        this resource's "don't invent a distinction the server doesn't give
@@ -123,15 +125,15 @@
        See this resource's standing "no unbounded trap" requirement,
        already applied identically to e.g. server/recall.lua's
        requestRecall and server/main.lua's detachLeash handlers.
-    4. 'qbx_k9unit:client:scentHuntFound' (source's own client only, never
-       broadcast) [TriggerClientEvent, THIS FILE only ever SENDS this] --
-       fired the first time a given hunt's distance is observed to be
-       at/under Config.ScentTrailHunt.arrivalRadius (guarded by
-       `hunt.alertSent`, fired exactly once per hunt). A low-latency nudge
+    4. 'qbx_k9unit:client:scentHuntFound' (huntId: number) (source's own
+       client only, never broadcast) [TriggerClientEvent, THIS FILE only
+       ever SENDS this] -- fired the first time a given hunt's distance is
+       observed to be at/under Config.ScentTrailHunt.arrivalRadius (guarded
+       by `hunt.alertSent`, fired exactly once per hunt). A low-latency nudge
        only -- client/scenttrail.lua's own poll loop independently observes
        `result.found` from THIS SAME callback's return value regardless, so
        a dropped push is not a stuck-forever failure mode for the caller
-       that triggered it.
+       that triggered it. `huntId` added -- see "STALE-SESSION RACE" below.
 
     Automatic path: none. Every code path in this file runs in direct
     response to one of the three named calls above, or to a
@@ -181,6 +183,57 @@
     the trap that rule exists to forbid).
     ======================================================================
 
+    STALE-SESSION RACE -- ADDED A LATER PASS (found by a client-side sweep;
+    not present when this file was first written). See client/scenttrail.lua's
+    own header for the full client-side writeup, and server/sarcalls.lua's
+    own identically-shaped section for the sibling feature this fix mirrors
+    (both share the same underlying gap and the same fix shape, deliberately
+    -- one pattern, not two). Restated here from this file's point of view
+    because minting the id is this file's own job:
+
+    THE BUG: client/scenttrail.lua's `qbx_k9unit:client:scentHuntFound`
+    handler used to check only `if not huntActive then return end`, with no
+    way to tell WHICH hunt a given push belonged to. A stale, delayed
+    'found' push for a hunt the player already stopped or completed could
+    arrive after a brand-new hunt had already started (huntActive true
+    again, for the new hunt) and would be accepted as if it belonged to
+    that new hunt, ending it early -- the dog sits and barks on a hunt that
+    was never actually solved.
+
+    THE FIX: this file now mints a small, monotonically increasing,
+    SERVER-ISSUED hunt id (NewHuntId below) once per hunt, the moment
+    ActiveHunts[source] is created -- never client-generated, for the same
+    "could be spoofed or duplicated" reason server/sarcalls.lua's own
+    NewSarCallId gives. It rides along on startScentHunt's own `huntId`
+    return field and on the scentHuntFound push below.
+    client/scenttrail.lua stores the id from its own successful start and
+    drops any scentHuntFound push whose id does not match its own currently
+    tracked one -- see that file's own IsForCurrentHunt for the exact
+    matching rule, including the deliberate "a push with no id at all is
+    always accepted, never silently dropped" decision.
+
+    pollScentHunt's OWN return value deliberately does NOT gain a huntId --
+    unlike the pushed scentHuntFound event, a poll response is not
+    unsolicited: client/scenttrail.lua's own poll loop already re-checks its
+    own `huntGeneration` immediately after every lib.callback.await returns,
+    before ever looking at `result.found`, which already closes the
+    identical staleness window for that one specific channel without
+    needing an id at all (see that file's own EnsureHuntPollThreadRunning
+    comment). Adding an unused field there would be surface with no
+    corresponding gap to close.
+
+    NOT A TERMINATION-PATH CHANGE: stopScentHunt below remains exactly as
+    unconditional as it already was (see "NO UNBOUNDED TRAP" in its own
+    EVENT/CALLBACK CONTRACT entry above) -- it takes no huntId, checks none,
+    and this fix adds nothing it needs. A client holding a stale, wrong, or
+    nil hunt id, for any reason, can always still call stopScentHunt and
+    have this file's own ActiveHunts[source] entry cleared -- the id
+    mechanism only ever decides whether the CLIENT acts on an incoming
+    scentHuntFound push, never whether this file accepts a termination
+    request.
+
+    ======================================================================
+
     FILE-TO-FILE CONTRACT:
     - Calls `HasK9Access(source)` (server/certifications.lua), reused, never
       re-derived -- that file's own "single source of truth" rule.
@@ -218,9 +271,24 @@
 
 local ScentHuntConfig = Config.ScentTrailHunt or {}
 
+-- SERVER-ISSUED, monotonically increasing session id -- see this file's
+-- header "STALE-SESSION RACE" section. Minted once per hunt, at the moment
+-- ActiveHunts[source] is created below, and never reused -- a plain
+-- incrementing counter is sufficient (no need for per-source scoping) since
+-- every push this file sends already targets a single `src`, so this id
+-- only ever has to disambiguate THAT source's own hunts from each other
+-- over time, never one source's id from another's. Mirrors
+-- server/sarcalls.lua's own NewSarCallId exactly, deliberately.
+local NextHuntId = 0
+local function NewHuntId()
+    NextHuntId = NextHuntId + 1
+    return NextHuntId
+end
+
 -- ActiveHunts[source] = { targetX: number, targetY: number, startedAt:
 -- number (GetGameTimer() ms), lastDistance: number?, found: boolean,
--- alertSent: boolean }. Ephemeral, in-memory only, single-slot per source --
+-- alertSent: boolean, huntId: number }. Ephemeral, in-memory only,
+-- single-slot per source --
 -- mirrors server/main.lua's PendingLeashRequests/server/tracking.lua's
 -- PendingTrackArrival shape (a short-lived claim/session record, not a
 -- rate limiter), same "plain table + manual playerDropped cleanup, not a
@@ -364,9 +432,12 @@ lib.callback.register('qbx_k9unit:server:startScentHunt', function(source)
         startedAt = GetGameTimer(),
         found = false,
         alertSent = false,
+        -- SERVER-ISSUED session id -- see this file's header "STALE-SESSION
+        -- RACE" and NewHuntId's own declaration comment above.
+        huntId = NewHuntId(),
     }
 
-    return { started = true }
+    return { started = true, huntId = ActiveHunts[source].huntId }
 end)
 
 --- UNCONDITIONAL -- see this file's header EVENT/CALLBACK CONTRACT item 3
@@ -415,7 +486,7 @@ lib.callback.register('qbx_k9unit:server:pollScentHunt', function(source)
 
     if found and not hunt.alertSent then
         hunt.alertSent = true
-        TriggerClientEvent('qbx_k9unit:client:scentHuntFound', source)
+        TriggerClientEvent('qbx_k9unit:client:scentHuntFound', source, hunt.huntId)
     end
 
     return { active = true, distance = distance, found = found }
