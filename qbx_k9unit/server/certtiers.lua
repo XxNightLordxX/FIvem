@@ -536,13 +536,13 @@ local LEGACY_TIER_DEFAULTS = {
 -- mechanic anywhere in this codebase to gate at all yet.
 local CAPABILITY_CATALOG = {
     specializations_eligible = {
-        label = 'Eligible to hold K9 specializations (narcotics/explosives/patrol) -- NOT YET ENFORCED: a one-line consumer change for server/certifications.lua\'s GrantSpecialization has been proposed to main, not applied',
+        label = 'Eligible to hold K9 specializations (narcotics/explosives/patrol) -- ENFORCED. Grant this to a tier and only that tier can be given specializations. Someone who already holds one keeps it.',
     },
     advanced_tracking = {
         label = 'Advanced tracking (reserved -- no such mechanic exists anywhere in this codebase yet to gate)',
     },
     bite_hold_and_takedown = {
-        label = 'Bite & Hold / Non-Lethal Takedown -- NOT YET ENFORCED: a one-line consumer change for server/combat.lua\'s ValidateCombatRequest has been proposed to main, not applied',
+        label = 'Bite & Hold / Non-Lethal Takedown -- ENFORCED. Grant this to a tier and ONLY that tier can bite or take down. Dragging is not covered. Anyone mid-hold can still be released.',
     },
     mentor_trainees = {
         label = 'May mentor/supervise trainee-tier handlers (reserved -- no such mechanic exists anywhere in this codebase yet to gate)',

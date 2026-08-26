@@ -471,10 +471,16 @@ Config.Features = {
 -- your database holds one of these three words. Changing them here would
 -- orphan those records. Add new tiers freely; leave these three alone.
 --
--- `capabilities` is empty on purpose. Nothing in this resource currently
--- gates a mechanic on a tier capability, so filling these in by default
--- would invent behaviour nobody asked for. An operator who never opens the
--- tablet sees no change at all.
+-- `capabilities` is empty on purpose, and as of 2026-08-26 that emptiness is
+-- load-bearing rather than cosmetic. TWO capabilities now gate real mechanics:
+-- ticking `bite_hold_and_takedown` on a tier means ONLY handlers in that tier
+-- can bite or take down, and `specializations_eligible` means only that tier
+-- can be given specializations. The other three gate nothing and say so.
+--
+-- Nothing is enforced until you tick the first box for a given capability. So
+-- leaving these empty keeps every existing handler exactly as they are today
+-- — and ticking one is a real restriction on everyone NOT in that tier, not a
+-- preference. An operator who never opens the tablet sees no change at all.
 -- ======================================================================
 Config.CertificationTiers = {
     { key = 'trainee',   label = 'Trainee',   ordinal = 1, capabilities = {} },
