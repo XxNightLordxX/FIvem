@@ -1255,35 +1255,136 @@ end
 -- documented in html/tablet.js's own header, both sent as a bare `nil`
 -- until this pass) are populated from this table below.
 --
--- Only scent-family and vehicle-family features get a tag today -- every
--- other Config.Features key resolves to `nil` here (rendered as "no
--- domain", i.e. the ordinary generic feature-list styling, exactly as
--- every feature already renders before this pass). This is deliberately
--- narrow: html/tablet.js's own colour-vs-text treatment (this pass) only
--- exists for these two domains, so tagging anything else would be a label
--- with no reader.
+-- owner-directed, 2026-08-26, verbatim: "same with features and sub
+-- features" -- Config.Features' 60 flat flags are grouped the same way
+-- commands were, so the tablet's feature list reads as a handful of
+-- labelled sections instead of one long undifferentiated wall. EVERY
+-- Config.Features key must resolve to EXACTLY ONE of the eleven domains
+-- below -- see tests/tabletfeaturedomains_spec.lua's own "no key left
+-- behind" test, which loads the REAL config.lua (never a hand-typed
+-- duplicate of its key list, which could silently drift the moment a new
+-- Config.Features key is added without a matching entry here) and fails
+-- loudly if even one key resolves to `nil`. This table itself is still
+-- hand-authored, deliberately: which domain a feature belongs in is a
+-- judgment call no script can make, but the SET OF KEYS being judged is
+-- always the live, real Config.Features, not a copy that can go stale.
+--
+-- PREVIOUSLY (before this pass): only the 'scent' and 'vehicle' families
+-- (7 of the then-59 keys) had a domain at all; every other key rendered
+-- with no grouping whatsoever. html/tablet.js's own buildPersonFeaturesSection()/
+-- buildMyFeaturesSection() now render whatever domain set this file sends,
+-- in a fixed declared order, with an UNRECOGNIZED domain string (or nil)
+-- falling back to its own generic "Other" bucket rather than vanishing --
+-- see that file's own FEATURE_DOMAIN_ORDER for the client-side half of
+-- this contract.
 local FEATURE_DOMAINS = {
-    -- 'scent' -- Config.Tracking.ScentVision.palette (config.lua) is the
-    -- ONE person-to-colour scheme this domain's tablet content must agree
-    -- with; see html/tablet.js's own scent-section comment for why that
-    -- palette is deliberately NOT reused here for feature-row colouring
-    -- (it is reserved for representing a SPECIFIC TRACKED PERSON, which no
-    -- row in this generic feature list is).
-    ScentTracking     = 'scent',
-    ScentVision       = 'scent',
-    ScentLineup       = 'scent',
-    ScentTrailHunt    = 'scent',
-    BloodTracking     = 'scent',
-    GunpowderSniffing = 'scent',
-    -- 'vehicle' -- effectively the only vehicle-specific Config.Features
-    -- key today (vehicle *search* shares the generic SearchZones/
-    -- ContrabandAlerts mechanic with person search -- see
-    -- help_task_search_2's own copy -- so it is not tagged here).
-    VehicleEntryExit  = 'vehicle',
+    -- 'scent' -- detection & scent. Config.Tracking.ScentVision.palette
+    -- (config.lua) is the ONE person-to-colour scheme this domain's
+    -- tablet content must agree with; see html/tablet.js's own
+    -- scent-section comment for why that palette is deliberately NOT
+    -- reused here for feature-row colouring (it is reserved for
+    -- representing a SPECIFIC TRACKED PERSON, which no row in this
+    -- generic feature list is).
+    ScentTracking      = 'scent',
+    ScentVision        = 'scent',
+    BloodTracking      = 'scent',
+    GunpowderSniffing  = 'scent',
+    WaterTrackingDecay = 'scent',
+
+    -- 'search' -- search & contraband/rescue operations (the OUTCOME/
+    -- alerting layer over a search, not the scent detection that feeds
+    -- it -- see 'scent' above for that half).
+    SearchZones        = 'search',
+    ContrabandAlerts   = 'search',
+    ContrabandScreenFX = 'search',
+    FindAlerts         = 'search',
+    SARCalls           = 'search',
+
+    -- 'vision' -- vision & sensory augmentation (sight AND the one
+    -- proximity-audio cue that plays the same role for hearing).
+    NightVision        = 'vision',
+    ThermalVision      = 'vision',
+    CameraFeedPiP      = 'vision',
+    ProximityAudioFX   = 'vision',
+
+    -- 'combat' -- combat & restraint, plus the tactical-awareness/alert
+    -- abilities that exist specifically for a dangerous encounter.
+    BiteAndHold        = 'combat',
+    NonLethalTakedown  = 'combat',
+    HandlerDownDefense = 'combat',
+    PursuitSprint      = 'combat',
+    PropDragging       = 'combat',
+    DangerWarn         = 'combat',
+
+    -- 'movement' -- core K9 control and mobility: the basic actions of
+    -- having and directing a dog (leash, recall, barking, agility,
+    -- getting in/out of vehicles and through doors).
+    LeashMechanics     = 'movement',
+    Recall             = 'movement',
+    BasicBarkSounds    = 'movement',
+    AdvancedBarkRadial = 'movement',
+    AgilityBasicJump   = 'movement',
+    AgilityAdvanced    = 'movement',
+    VehicleEntryExit   = 'movement',
+    DoorInteraction    = 'movement',
+
+    -- 'wellbeing' -- the K9's own physical/mental state and the systems
+    -- that surface or respond to it.
+    DistractionSystem  = 'wellbeing',
+    FatigueSystem      = 'wellbeing',
+    FearStressSystem   = 'wellbeing',
+    MoodSystem         = 'wellbeing',
+    InjuryLimping      = 'wellbeing',
+    HealthStaminaHUD   = 'wellbeing',
+    K9DownDispatch     = 'wellbeing',
+
+    -- 'progression' -- XP, certification, and the handler/K9 partnership
+    -- record that progression is tracked against.
+    XPProgression         = 'progression',
+    HandlerXPProgression  = 'progression',
+    CertificationExpiry   = 'progression',
+    K9Leaderboard         = 'progression',
+    HandlerPartnership    = 'progression',
+    PartnershipTenureBonus = 'progression',
+
+    -- 'gear' -- physical/inventory items and equipment.
+    K9Inventory        = 'gear',
+    K9Medkit           = 'gear',
+    K9EquipmentShop    = 'gear',
+    DeployableKennel   = 'gear',
+    PropAttachments    = 'gear',
+
+    -- 'training' -- the playful/practice mechanics (a lineup drill, a
+    -- hide-and-seek hunt, fetch, and the training-mode switch that wraps
+    -- all of them) -- distinct from 'scent'/'search' above, which are the
+    -- real operational abilities these mechanics practice for.
+    TrainingMode       = 'training',
+    FetchMechanic      = 'training',
+    ScentLineup        = 'training',
+    ScentTrailHunt     = 'training',
+
+    -- 'admin' -- administrative/infrastructure switches with no
+    -- per-citizenid ability behind them at all (the tablet itself, high
+    -- command, permission grants, runtime control, theming, audit
+    -- commands, and the one dev-only sweep tool).
+    CommandTablet          = 'admin',
+    HighCommand            = 'admin',
+    PermissionGrants       = 'admin',
+    RuntimeFeatureControl  = 'admin',
+    TabletTheming          = 'admin',
+    AdminAuditCommands     = 'admin',
+    BoneSweepDevTool       = 'admin',
+
+    -- 'integration' -- plumbing that talks to something outside this
+    -- resource's own gameplay (Discord, resource detection, the radial
+    -- menu's own UI mechanism).
+    DiscordWebhook     = 'integration',
+    ResourceAutoDetect = 'integration',
+    RadialMenu         = 'integration',
 }
 
 --- @param key string -- a Config.Features key
---- @return string? -- 'scent' | 'vehicle' | nil (no domain)
+--- @return string? -- one of FEATURE_DOMAIN_ORDER's keys (html/tablet.js), or nil if genuinely uncategorised (should never happen for a real Config.Features key -- see this table's own header)
 local function ResolveFeatureDomain(key)
     return FEATURE_DOMAINS[key]
 end
