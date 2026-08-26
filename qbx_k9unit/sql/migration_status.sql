@@ -84,16 +84,21 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_capabilities')
     UNION ALL SELECT 'k9_certification_tier_audit',
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit')
+    UNION ALL SELECT 'k9_equipment_shop_locations',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations')
+    UNION ALL SELECT 'k9_equipment_shop_locations_audit',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations_audit')
 ) t
 ORDER BY t.table_name;
--- NOTE: install.sql now converges with sql/migrations/0001-0010 (14 tables
--- total, including k9_progression's idx_xp and migration 0010's three
--- certification-tier tables) -- db-schema foolproofing pass. If this
--- comment and install.sql's real table count ever disagree again,
--- install.sql is out of date; report it rather than trust this file. (This
--- comment previously said "0001-0009 / 11 tables" and did not mention
--- migration 0010 at all -- the exact class of silent omission this note
--- exists to flag, now fixed in this same change alongside PART 2 below.)
+-- NOTE: install.sql now converges with sql/migrations/0001-0011 (16 tables
+-- total, including k9_progression's idx_xp, migration 0010's three
+-- certification-tier tables, and migration 0011's two equipment-shop-
+-- location tables) -- db-schema foolproofing pass. If this comment and
+-- install.sql's real table count ever disagree again, install.sql is out
+-- of date; report it rather than trust this file. (This comment previously
+-- said "0001-0010 / 14 tables" and did not mention migration 0011 at all --
+-- the exact class of silent omission this note exists to flag, now fixed
+-- in this same change alongside PART 2 below.)
 
 
 -- ---------------------------------------------------------------------
@@ -303,6 +308,27 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_certification_tier_audit')
 ) t;
 
+-- 0011: CREATE TABLE x2 (k9_equipment_shop_locations /
+-- k9_equipment_shop_locations_audit) -- db-schema convergence pass, 2026-08-26:
+-- this migration was previously completely absent from this report, the
+-- same class of omission migration 0010 already had fixed here once
+-- before (see the PART 1 note above). Independent of every other table
+-- (see that migration's own header "ORDERING" section -- no FK, no
+-- dependency on any other table), so there is no "BLOCKED" case to report
+-- here, same as 0010 above.
+SELECT
+    t.table_name AS `0011_create_k9_equipment_shop_locations.sql would...`,
+    CASE WHEN t.tbl_exists = 0
+         THEN CONCAT('CREATE TABLE `', t.table_name, '` (currently absent)')
+         ELSE CONCAT('no-op -- `', t.table_name, '` already exists')
+    END AS plan
+FROM (
+    SELECT 'k9_equipment_shop_locations' AS table_name,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations') AS tbl_exists
+    UNION ALL SELECT 'k9_equipment_shop_locations_audit',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_equipment_shop_locations_audit')
+) t;
+
 
 -- ---------------------------------------------------------------------
 -- PART 3: blast-radius summary -- row counts for every table that
@@ -316,7 +342,8 @@ WHERE TABLE_SCHEMA = DATABASE()
                       'k9_permissions','k9_certification_specializations',
                       'k9_runtime_feature_overrides','k9_runtime_override_audit',
                       'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments',
-                      'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit')
+                      'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit',
+                      'k9_equipment_shop_locations','k9_equipment_shop_locations_audit')
 ORDER BY TABLE_NAME;
 
 -- DRIFT CHECK -- same posture and same reasoning as preflight_check.sql's
@@ -340,6 +367,7 @@ WHERE TABLE_SCHEMA = DATABASE()
                           'k9_permissions','k9_certification_specializations',
                           'k9_runtime_feature_overrides','k9_runtime_override_audit',
                           'k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments',
-                          'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit');
+                          'k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit',
+                          'k9_equipment_shop_locations','k9_equipment_shop_locations_audit');
 
 SELECT 'DRY RUN COMPLETE -- nothing was changed by this report. Run sql/k9_setup.sh (without --dry-run) to actually apply the plan above; it backs up your whole database first, automatically, and refuses to write anything if that backup fails.' AS final_note;

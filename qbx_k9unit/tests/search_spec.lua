@@ -697,4 +697,213 @@ t.test('EIGHTH XP-FARM FIX (cross-file integration): once the shared budget has 
     t.equals(f.GetXP(citizenid), 50, 'a real search find must pay normally again once the shared budget has genuinely refilled -- this gate is a temporary throttle, never a permanent lockout')
 end)
 
+-- ============================================================================
+-- QB-INVENTORY VEHICLE SEARCH FIX (coder-backend, this pass) -- ISSUES.md's
+-- "vehicle search always returns empty on qb-inventory" gap.
+--
+-- ROOT CAUSE, CONFIRMED against qbcore-framework/qb-inventory's real `main`
+-- branch source this pass (client/vehicles.lua's own
+-- `qb-inventory:client:vehicleCheck` callback): qb-inventory's real
+-- vehicle-trunk inventory identifier is `'trunk-' .. plate` (HYPHENATED) --
+-- a plain SCALAR key (server/functions.lua's `GetInventory(identifier)` is
+-- a direct `Inventories[identifier]` lookup, confirmed to have no
+-- table-shaped-argument concept at all). server/search.lua used to
+-- unconditionally build the ox_inventory-only `'trunk' .. plate` id (no
+-- separator) AND wrap it in the ox_inventory-only `{ id, netid }` table
+-- shape needed for THAT backend's own uncached-trunk lazy-load mechanism --
+-- which qb-inventory's own GetInventoryItems deliberately fails closed to
+-- nil for (see tests/compatinventory_spec.lua's own coverage of that
+-- still-correct behavior for every OTHER caller). Fixed by deriving the
+-- correct, backend-real SCALAR identifier and passing it as a plain scalar
+-- when the resolved inventory backend is qb-inventory.
+--
+-- A FRESH, independent sandbox (own Config, own exports, `Config.Compat`
+-- pinned to qb-inventory via `override`) -- mirrors
+-- newSearchPlusProgressionFixture's own reasoning for why this cannot
+-- reuse this file's shared top-level `env` (already permanently detected
+-- as ox_inventory the moment this file's own onResourceStart loop ran).
+-- ============================================================================
+
+local function newSearchQbInventoryFixture()
+    local fakeNow3 = 0
+    local function GetGameTimer3() return fakeNow3 end
+
+    local eventHandlers3 = {}
+    local function AddEventHandler3(eventName, handler)
+        eventHandlers3[eventName] = eventHandlers3[eventName] or {}
+        eventHandlers3[eventName][#eventHandlers3[eventName] + 1] = handler
+    end
+
+    local function GetCurrentResourceName3() return 'qbx_k9unit' end
+    local threadRunner3 = Sandbox.newThreadRunner()
+
+    local function CreateThread3(fn)
+        local co = coroutine.create(fn)
+        local ok, err = coroutine.resume(co)
+        if not ok then
+            error(('search_spec.lua (qb-inventory fixture): a CreateThread body errored: %s'):format(tostring(err)))
+        end
+    end
+
+    local registeredCallbacks3 = {}
+    local libStub3 = { callback = { register = function(name, handler) registeredCallbacks3[name] = handler end } }
+
+    -- Records every identifier `GetInventory` was actually called with, so
+    -- the tests below can assert the EXACT scalar shape/spelling reaching
+    -- qb-inventory's own real export -- not just the end-to-end result.
+    local getInventoryCalls = {}
+    local itemsByInvId3 = {}
+    local exportsStub3 = {
+        ['qb-inventory'] = {
+            GetInventory = function(_self, id)
+                getInventoryCalls[#getInventoryCalls + 1] = id
+                if type(id) ~= 'string' and type(id) ~= 'number' then return nil end
+                local items = itemsByInvId3[id]
+                if not items then return nil end
+                return { items = items }
+            end,
+            GetItemCount = function() return 0 end,
+            RemoveItem = function() return true end,
+            CreateInventory = function() return true end,
+            CreateShop = function() return true end,
+            AddHook = function() return 1 end,
+        },
+        qbx_core = {
+            GetPlayer = function(_self, _source) return nil end,
+            GetPlayerByCitizenId = function(_self, _citizenid) return nil end,
+        },
+    }
+
+    local MySQLStub3 = {
+        scalar = { await = function(_sql, _params) return nil end },
+        insert = { await = function(_sql, _params) return 1 end },
+    }
+
+    local Config3 = {
+        Features = { SearchZones = true, XPProgression = false, ContrabandAlerts = false },
+        SearchZones = {
+            alertBroadcastRadius = 50.0, searchCooldownMs = 10, sniffAnimDurationMs = 10,
+            vehicleSearchDistance = 100.0, personSearchDistance = 100.0,
+        },
+        SearchContrabandItems = { 'weed_baggy' },
+        ContrabandAlertTiers = {
+            { minWeight = 0, alert = 'clean' },
+            { minWeight = 1, alert = 'whine' },
+        },
+        -- Pins the 'inventory' system straight to qb-inventory (TIER 1,
+        -- `override` -- skips the candidate-scanning walk entirely, same
+        -- mechanism this file's shared `env` section above already uses to
+        -- pin ox_inventory).
+        Compat = {
+            diagnosticCommand = false,
+            Systems = {
+                inventory = { override = 'qb-inventory' },
+                target = {}, framework = {}, dispatch = {}, ambulance = {},
+            },
+        },
+    }
+
+    local env3 = Sandbox.newEnv({
+        GetGameTimer = GetGameTimer3,
+        AddEventHandler = AddEventHandler3,
+        GetCurrentResourceName = GetCurrentResourceName3,
+        CreateThread = CreateThread3,
+        Wait = threadRunner3.Wait,
+        lib = libStub3,
+        exports = exportsStub3,
+        MySQL = MySQLStub3,
+        TriggerEvent = function(_eventName, ...) end,
+        TriggerClientEvent = function(_eventName, _target, ...) end,
+        HasK9Access = function() return true end,
+        NetworkGetEntityFromNetworkId = function(netId) return netId end,
+        DoesEntityExist = function(entity) return entity ~= 0 end,
+        GetEntityType = function(_entity) return 2 end, -- vehicle, same convention as this file's shared section above
+        GetVehicleNumberPlateText = function(entity) return 'PLATE' .. tostring(entity) end,
+        GetPlayerPed = function(_source) return 42 end,
+        GetEntityCoords = function(_entity) return ZERO_VEC end,
+        Config = Config3,
+        IsDuplicityVersion = function() return true end,
+        -- qb-inventory always reports 'started'; ox_inventory is absent
+        -- entirely from this fixture, so a regression that fell back to the
+        -- ox_inventory-shaped table form would surface as a hard
+        -- capability-check failure, not a silent pass.
+        GetResourceState = function(name) return name == 'qb-inventory' and 'started' or 'missing' end,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env3)
+    Sandbox.loadInto('../server/entities.lua', env3)
+    Sandbox.loadInto('../server/datastore.lua', env3)
+    Sandbox.loadInto('../server/events.lua', env3)
+    Sandbox.loadInto('../shared/compat/core.lua', env3)
+    Sandbox.loadInto('../shared/compat/inventory.lua', env3)
+    Sandbox.loadInto('../server/search.lua', env3)
+    for _, handler in ipairs(eventHandlers3['onResourceStart'] or {}) do
+        handler('qbx_k9unit')
+    end
+
+    local searchCallback3 = registeredCallbacks3['qbx_k9unit:server:searchTarget']
+
+    return {
+        getInventoryCalls = getInventoryCalls,
+        --- Drives one full REAL 'vehicle' searchTarget call against a
+        --- qb-inventory-resolved backend. Stores the contraband under
+        --- qb-inventory's own REAL, hyphenated identifier convention
+        --- (`'trunk-' .. plate`) -- exactly what a real qb-inventory server
+        --- would have persisted/lazily created it under, per
+        --- client/vehicles.lua's own confirmed `vehicleCheck` callback.
+        --- @param source number
+        --- @param netId number
+        --- @param weight number
+        searchVehicle = function(source, netId, weight)
+            local plate = 'PLATE' .. tostring(netId)
+            local invId = 'trunk-' .. plate
+            itemsByInvId3[invId] = weight and weight > 0 and { { name = 'weed_baggy', weight = weight, slot = 1 } } or {}
+            return searchCallback3(source, 'vehicle', netId)
+        end,
+        --- Drives the same REAL callback WITHOUT ever seeding
+        --- `itemsByInvId3` for this target's identifier first -- the stubbed
+        --- `GetInventory` above then genuinely returns `nil` (no entry at
+        --- all), exactly matching real qb-inventory's own
+        --- `Inventories[identifier]` for a trunk nobody has ever opened this
+        --- server's lifetime.
+        --- @param source number
+        --- @param netId number
+        searchVehicleNeverSeeded = function(source, netId)
+            return searchCallback3(source, 'vehicle', netId)
+        end,
+    }
+end
+
+t.test('qb-inventory VEHICLE SEARCH FIX: a real trunk search finds contraband stored under qb-inventory\'s own real, hyphenated identifier -- never empty by default', function()
+    local f = newSearchQbInventoryFixture()
+    local result = f.searchVehicle(501, 5001, 15)
+    t.isTrue(result.ok, 'a valid, in-range, first-ever qb-inventory vehicle search must succeed')
+    t.isTrue(result.contrabandFound, 'this used to always be false/empty on qb-inventory -- the entire point of this fix')
+    t.equals(result.totalWeight, 15)
+end)
+
+t.test('qb-inventory VEHICLE SEARCH FIX: GetInventory is called with the correct SCALAR, hyphenated identifier -- never the ox_inventory-only {id,netid} table shape', function()
+    local f = newSearchQbInventoryFixture()
+    f.searchVehicle(502, 5002, 0)
+    t.equals(#f.getInventoryCalls, 1, 'exactly one GetInventory call must reach the real export')
+    local calledWith = f.getInventoryCalls[1]
+    t.equals(type(calledWith), 'string', 'a TABLE-shaped inv (the ox_inventory-only form) would fail closed to nil on qb-inventory -- this call site must never pass one to this backend')
+    t.equals(calledWith, 'trunk-PLATE5002', 'qb-inventory\'s own real convention is hyphenated (client/vehicles.lua\'s confirmed vehicleCheck callback) -- ox_inventory\'s own \'trunk\' .. plate (no separator) is a DIFFERENT, wrong string on this backend')
+end)
+
+t.test('qb-inventory VEHICLE SEARCH FIX: an already-initialized but empty trunk correctly reports clean, not search_failed', function()
+    local f = newSearchQbInventoryFixture()
+    local result = f.searchVehicle(503, 5003, 0) -- weight=0 still pre-populates an EMPTY {} items table under the real id, simulating a trunk this session already opened/created with nothing in it
+    t.isTrue(result.ok)
+    t.isFalse(result.contrabandFound)
+    t.equals(result.totalWeight, 0)
+end)
+
+t.test('qb-inventory VEHICLE SEARCH FIX: a trunk NOBODY has ever opened this server\'s lifetime (no persisted row at all -- GetInventory genuinely returns nil, confirmed real qb-inventory behavior for an uninitialized identifier) reports search_failed -- never a false clean bill, never a crash', function()
+    local f = newSearchQbInventoryFixture()
+    local result = f.searchVehicleNeverSeeded(504, 5004)
+    t.isTrue(result.ok == false, 'no persisted/lazily-created row at all is a genuine "the search could not be performed" outcome')
+    t.equals(result.reason, 'search_failed')
+end)
+
 os.exit(t.summary())

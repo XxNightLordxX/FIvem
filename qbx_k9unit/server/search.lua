@@ -1251,7 +1251,11 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- resolution to the exact entity already vetted, closing off its own
     -- ambiguous scan rather than opening a new one. A person target's
     -- `inventoryId` (their own live numeric server id) has no equivalent
-    -- ambiguity, so the table form is applied ONLY for targetType == 'vehicle'.
+    -- ambiguity, so the table form is applied ONLY for targetType == 'vehicle'
+    -- AND only for the ox_inventory-shaped backend branch below (see
+    -- `inventoryBackendName` above) -- qb-inventory's own real vehicle
+    -- lookup is a plain scalar, no netid-pinning mechanism exists or is
+    -- needed for it (see `inventoryId`'s own derivation comment above).
     -- ROUTED THROUGH K9Compat.Get('inventory') (this pass, coder-backend) --
     -- shared/compat/core.lua's
     -- RequiredMethods.inventory.server.GetInventoryItems -- never a direct
@@ -1261,30 +1265,34 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     --
     -- STUB-DEGRADE ANALYSIS (this task's own explicit question): on the
     -- no-op stub (nothing detected), `GetInventoryItems` returns `nil` for
-    -- both branches -- `items == nil` below already reports `search_failed`
+    -- every branch -- `items == nil` below already reports `search_failed`
     -- (a genuine "the search could not be performed" outcome, correctly
     -- never collapsed into `contrabandFound = false`/'clean', per this
     -- function's own established discipline) rather than crashing or
-    -- silently reporting a false clean bill. On qb-inventory specifically
-    -- (the other CONFIRMED backend): the PERSON branch (`inventoryId` is a
-    -- plain numeric server id) is REAL -- shared/compat/inventory.lua's
-    -- qb-inventory GetInventoryItems is composed onto its own confirmed
-    -- `GetInventory` export for a scalar id -- so person search keeps
-    -- working. The VEHICLE branch is NOT: that adapter's own header
-    -- discloses table-shaped `inv` (the `{ id, netid }` form this file
-    -- passes for an uncached vehicle trunk) has "NO confirmed qb-inventory
-    -- equivalent... fails closed to nil" -- meaning vehicle search always,
-    -- deterministically resolves to `search_failed` on a qb-inventory
-    -- server, never a false clean bill and never a crash, but also never a
-    -- working vehicle search. This is a REAL functional gap this task's own
-    -- question is meant to surface, not a security hole (the fail direction
-    -- is "search did not happen," never "search happened and found
-    -- nothing") -- reported to main; no code change made here to paper over
-    -- it, since inventing a qb-inventory container-lookup shape this
-    -- session never confirmed would be exactly the guessing this codebase's
-    -- own compat layer explicitly forbids.
+    -- silently reporting a false clean bill.
+    --
+    -- qb-inventory specifically (the other CONFIRMED backend) -- UPDATED
+    -- this pass, previously a real functional gap: the PERSON branch
+    -- (`inventoryId` is a plain numeric server id) was already real --
+    -- shared/compat/inventory.lua's qb-inventory GetInventoryItems is
+    -- composed onto its own confirmed `GetInventory` export for a scalar id
+    -- -- so person search already worked. The VEHICLE branch used to always
+    -- fail: this file used to unconditionally build the ox_inventory-only
+    -- `'trunk' .. plate` id AND wrap it in the ox_inventory-only
+    -- `{ id, netid }` table shape, which qb-inventory's own GetInventoryItems
+    -- deliberately fails closed to nil for (no confirmed table-shaped `inv`
+    -- existed on that backend -- see that adapter's own doc comment, still
+    -- accurate for every OTHER caller). FIXED here, not by teaching the
+    -- adapter to guess a table shape, but by giving qb-inventory the SAME
+    -- treatment the person branch already got: its own real, CONFIRMED,
+    -- scalar identifier (`'trunk-' .. plate`, see `inventoryId`'s own
+    -- derivation comment above for the citation), passed as a plain scalar,
+    -- exactly the shape that adapter's GetInventoryItems already knows how
+    -- to resolve via `GetInventory`. Vehicle search on qb-inventory now
+    -- works for real, for the same reason person search always did: a
+    -- correct scalar id into a real, confirmed export -- never a guess.
     local queryOk, items = pcall(function()
-        if targetType == 'vehicle' then
+        if targetType == 'vehicle' and inventoryBackendName ~= 'qb-inventory' then
             return K9Compat.Get('inventory').GetInventoryItems({ id = inventoryId, netid = targetNetId })
         end
         return K9Compat.Get('inventory').GetInventoryItems(inventoryId)

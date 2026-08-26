@@ -40,11 +40,12 @@
 
     Server events (RegisterNetEvent, client->server): NONE for awarding XP.
     Every award is server-triggered internally, from inside the existing
-    server-side success paths of server/search.lua and server/tracking.lua
-    (this pass), and eventually server/combat.lua once Phase 3 lands (see
-    Config.XP.awards' own comments in config.lua) — never from a
-    client-fired "I earned XP" event. There is no legitimate reason for a
-    client to ever claim this, and none is exposed.
+    server-side success paths of server/search.lua, server/tracking.lua,
+    and server/combat.lua (Phase 3 landed after this pass and now calls
+    AwardXP directly from both requestBiteHold's and requestTakedown's own
+    success paths — see Config.XP.awards' own comments in config.lua) —
+    never from a client-fired "I earned XP" event. There is no legitimate
+    reason for a client to ever claim this, and none is exposed.
 
     Client events (RegisterNetEvent, server->client):
     1. 'qbx_k9unit:client:xpTierChanged' (newTier: table — a full entry

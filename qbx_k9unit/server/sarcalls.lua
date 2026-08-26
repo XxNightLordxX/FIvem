@@ -358,7 +358,12 @@ assert(type(tuning.maxCallDurationMs) == 'number' and tuning.maxCallDurationMs >
 -- resource start naming this exact call site, rather than silently
 -- becoming a permanent lockout (the exact footgun that file's own header
 -- documents finding in server/fetch.lua's releaseFetchBall).
-local StartSarCallCooldown = NewCooldown(tuning.startCooldownMs)
+-- Clamp-and-warn rather than a raw Config read. This file's own config-safety
+-- guard above deliberately covers only the fields it validates by name, and
+-- startCooldownMs was not one of them -- so a `startCooldownMs = 0` reached
+-- NewCooldown(0) and errored at file-load time, taking the feature with it.
+local StartSarCallCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    tuning.startCooldownMs, 600000, 'Config.SARCalls.startCooldownMs'))
 -- Deliberately NOT .RegisterPlayerDropped() -- this cooldown is keyed by
 -- citizenid, which OUTLIVES a disconnect/reconnect within the same server
 -- uptime. Clearing it on disconnect would let a citizenid bypass the

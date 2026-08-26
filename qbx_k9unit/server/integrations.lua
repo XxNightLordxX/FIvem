@@ -272,7 +272,16 @@ end)
 -- tuning.reFireCooldownMs is not a valid positive number -- see the CONFIG-
 -- SAFETY GUARD comment above for why that is deliberately relied on here
 -- rather than re-checked.
-local K9DownFireCooldown = NewCooldown(tuning.reFireCooldownMs)
+-- reFireCooldownMs is resolved through ResolveConfiguredThresholdMs, NOT read
+-- raw. The assert block above names this field in its message but never
+-- actually validated it, so a plain `reFireCooldownMs = 0` -- the most
+-- natural thing an operator types for "no cooldown" -- reached NewCooldown(0),
+-- which errors at file-load time and takes PollK9Health and its CreateThread
+-- loop down with it. K9-down dispatch would then be silently dead for the
+-- rest of that server's uptime behind one console line. Clamp and warn, the
+-- same as the other eleven configured-threshold sites.
+local K9DownFireCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    tuning.reFireCooldownMs, 30000, 'Config.K9DownDispatch.reFireCooldownMs'))
 K9DownFireCooldown.RegisterPlayerDropped()
 
 --- One poll pass over every currently-connected player -- see this file's

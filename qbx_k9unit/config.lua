@@ -844,6 +844,46 @@ Config.CommandTablet = {
     -- non-positive or non-number value falls back to the default rather
     -- than meaning "unlimited".
     maxRosterRows = 100,
+
+    -- Which features get a one-click "use" button in the tablet.
+    --
+    -- Everything in your Config.Features list is SHOWN in the tablet with
+    -- its current state. This much smaller list is the subset that can also
+    -- be TRIGGERED from there -- the ones where a single button press has an
+    -- obvious meaning ("bark", "toggle night vision"). A feature not listed
+    -- here still appears and still works; it just has no button, because
+    -- there is nothing sensible for one press to do.
+    --
+    -- These 20 are exactly the features the tablet actually knows how to
+    -- fire today. Setting one to false removes its button. Adding a key
+    -- that has no wiring behind it gives you a button that does nothing,
+    -- so only add one alongside the code that makes it work.
+    --
+    -- This table did not exist until 2026-08-26, and the tablet read it
+    -- anyway -- which meant NO feature got a button, on any server. If you
+    -- delete this table, that is the behaviour you go back to.
+    ActionableFeatures = {
+        LeashMechanics    = true,
+        VehicleEntryExit  = true,
+        BasicBarkSounds   = true,
+        ScentTracking     = true,
+        BloodTracking     = true,
+        GunpowderSniffing = true,
+        ThermalVision     = true,
+        NightVision       = true,
+        BiteAndHold       = true,
+        NonLethalTakedown = true,
+        PropDragging      = true,
+        HandlerPartnership = true,
+        Recall            = true,
+        HandlerDownDefense = true,
+        FetchMechanic     = true,
+        PropAttachments   = true,
+        DeployableKennel  = true,
+        K9Inventory       = true,
+        K9Medkit          = true,
+        FearStressSystem  = true,
+    },
     -- ==================================================================
     -- YOUR SERVER'S BRANDING ON THE TABLET.
     --
@@ -943,8 +983,13 @@ Config.K9DownDispatch = {
     -- Minimum gap between two alerts for the SAME K9, in ms. Stops a
     -- handler bleeding out from generating a stream of alerts. Must be
     -- positive -- a non-positive value here is caught by cooldowns.lua's
-    -- own guard, which treats it as permanently on rather than "no
-    -- cooldown". A suppressed episode is DEFERRED, not dropped.
+    -- own guard. Setting this to 0 or a negative number does NOT mean "no
+    -- cooldown" and never did -- but as of 2026-08-26 it no longer breaks
+    -- anything either. It used to abort server/integrations.lua at startup,
+    -- silently killing K9-down dispatch for the rest of that server's
+    -- uptime. Now a bad value is clamped back to the 30000 below and warned
+    -- about loudly in your console, naming this exact key. A suppressed
+    -- episode is DEFERRED, not dropped.
     reFireCooldownMs = 30000,
 }
 
@@ -1532,6 +1577,8 @@ Config.Combat = {
         minTargetSpeed      = 4.0,   -- m/s, SERVER-COMPUTED from a short position-sample window at request time (see server/combat.lua's own note on why this is a bounded two-sample measurement, not a continuously-running per-ped tracker) — never a client-claimed "I am sprinting" flag. Applies identically whether the target is an NPC or a player.
         speedSampleWindowMs = 250,   -- how long the server waits between its two position samples to compute the target's speed for the check above — UNTUNED, and itself re-validates everything (existence, proximity, already-held, eligibility) again after the wait, same TOCTOU discipline as this resource's other yielding server calls.
         ragdollDurationMs   = 4000,  -- hard cap on BOTH the forced-ragdoll hold and the SetEntityCanBeDamaged(false) bracket — THIS IS the "no unbounded trap" guarantee for this mechanic, DEVELOPER_REFERENCE.md §12.0 item 4 (named there explicitly as "the ragdoll/damage-suppression window in NonLethalTakedown"). UNTUNED.
+        ragdollFallTimeMs   = 1000,  -- how long the suspect is driven into the fall animation, in ms. Source-confirmed as the duration parameter of the underlying game call. Keep it below ragdollDurationMs above -- the fall should finish inside the damage-immunity window, not outlive it. UNTUNED: dimensionally sane, but how it FEELS needs a live test.
+        ragdollFallTimeP2   = 1500,  -- a second timing value the same game call takes. Honest warning: the game's own documentation says testers could not work out what it does ("didn't seem to affect anything"), so changing this may do literally nothing. Exposed anyway because it costs nothing and a live test on your build might disagree. If tuning it changes nothing, that is the expected result, not a bug.
         cooldownMs          = 25000, -- per-K9 cooldown
         targetCooldownMs    = 30000, -- per-target cooldown -- stops repeat takedowns of the same already-downed target by multiple K9s in quick succession
         healthFloor         = 100,   -- backstop only, NOT the primary non-lethal mechanism -- primary mechanism is the SetEntityCanBeDamaged bracket above

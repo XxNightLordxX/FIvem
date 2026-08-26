@@ -195,7 +195,11 @@ end)
 -- resource start (naming this exact call site) rather than silently
 -- becoming a permanent lockout, closing the exact footgun that file's
 -- header documents finding in server/fetch.lua's releaseFetchBall.
-local StartHuntCooldown = NewCooldown(ScentHuntConfig.startCooldownMs)
+-- Clamp-and-warn rather than a raw Config read: NewCooldown() errors on a
+-- non-positive threshold, and an error here at file-load time would take the
+-- whole hunt feature down silently. See server/cooldowns.lua's ADDENDUM.
+local StartHuntCooldown = NewCooldown(ResolveConfiguredThresholdMs(
+    ScentHuntConfig.startCooldownMs, 8000, 'Config.ScentTrailHunt.startCooldownMs'))
 StartHuntCooldown.RegisterPlayerDropped()
 
 -- Local implementation constant, NOT Config-owned -- same "internal

@@ -46,14 +46,45 @@
                                      `main`, fxmanifest.lua version '2.1.0' --
                                      fetched and read directly this session:
                                      server/main.lua, server/functions.lua,
-                                     server/hooks.lua, client/main.lua; ALL
-                                     FOUR of that project's declared
-                                     server_scripts, so absence claims below
-                                     ("no container concept", "ItemDropped
-                                     hook type is declared but never fired")
-                                     are a completeness claim over its real,
-                                     whole server-side source, not a
-                                     sampling guess)
+                                     server/commands.lua, server/hooks.lua --
+                                     ALL FOUR of that project's declared
+                                     server_scripts (fxmanifest.lua's own
+                                     `server_scripts` block confirmed to list
+                                     exactly these four; an EARLIER revision
+                                     of this ledger entry miscounted this as
+                                     "server/main.lua, server/functions.lua,
+                                     server/hooks.lua, client/main.lua" --
+                                     THREE server files plus one client file
+                                     passed off as "all four server_scripts",
+                                     which silently skipped the real fourth
+                                     one, server/commands.lua, and never
+                                     actually re-derived from the manifest --
+                                     corrected here after re-fetching and
+                                     reading fxmanifest.lua directly; a
+                                     re-read of the now-actually-complete set
+                                     found nothing in server/commands.lua
+                                     bearing on any claim already made below).
+                                     client/main.lua, client/drops.lua, and
+                                     client/vehicles.lua (all three of that
+                                     project's declared client_scripts) were
+                                     also fetched and read this session --
+                                     client/vehicles.lua's own
+                                     `qb-inventory:client:vehicleCheck`
+                                     callback is what CONFIRMS the real
+                                     vehicle-trunk/glovebox inventory id
+                                     format used below (`'trunk-' .. plate`,
+                                     `'glovebox-' .. plate`), and
+                                     server/main.lua's own startup
+                                     `SELECT * FROM inventories` plus
+                                     server/functions.lua's `GetInventory`/
+                                     `InitializeInventory` confirm those ids
+                                     are plain scalar keys with no netid-based
+                                     lazy-vivify mechanism. So absence claims
+                                     below ("no container concept",
+                                     "ItemDropped hook type is declared but
+                                     never fired") are a completeness claim
+                                     over its real, whole server-side source,
+                                     not a sampling guess.)
       ps-inventory      FOUND, BUT SKIPPED -- see its own section below.
                                      (Project-Sloth/ps-inventory, branch
                                      `main` -- fetched and read
@@ -105,19 +136,27 @@
     guessing one is exactly what this task's research discipline forbids.
 
     For 'swapItems' specifically, on qb-inventory (the one other CONFIRMED
-    adapter): only the "an item is being committed INTO a named
-    inventory, reject with the literal false to veto" half of
-    ox_inventory's real 'swapItems' semantics is reproduced, via the real,
-    confirmed `AddHook('ItemAdded', ...)` veto point -- covers
-    Config.K9Inventory.allowedItems for real. The "item dropped to the
-    ground" half (`payload.toType == 'drop'`, ScentTracking's actual usage)
-    is a CONFIRMED, DISCLOSED NO-OP on qb-inventory (see its own section):
-    `Events.ItemDropped` is declared in its own hook-type enum but no
-    confirmed call site in its complete server-side source ever fires it,
-    and there is no equivalent signal inside `ItemAdded`/`ItemRemoved`
-    either. A caller registering for 'swapItems' on a qb-inventory backend
-    gets the veto behavior for real and will simply never see a
-    `payload.toType == 'drop'` event -- disclosed, never faked.
+    adapter): BOTH halves of ox_inventory's real 'swapItems' semantics are
+    now reproduced, each via its own separate real qb-inventory hook. The
+    "an item is being committed INTO a named inventory, reject with the
+    literal false to veto" half is the real, confirmed `AddHook('ItemAdded',
+    ...)` veto point -- covers Config.K9Inventory.allowedItems for real. The
+    "item dropped to the ground" half (`payload.toType == 'drop'`,
+    ScentTracking's actual usage) is ALSO now a CONFIRMED, real translation
+    (corrected this pass -- an EARLIER revision of this paragraph recorded it
+    as a permanent no-op, based on a claim that no call site ever fires
+    `Events.ItemDropped`; re-fetching and re-reading qb-inventory's `main`
+    branch directly this session found the real, current call site the
+    earlier pass missed: server/main.lua's own
+    `qb-inventory:server:createDrop` callback runs
+    `TriggerHook('ItemDropped', hookData.item.type, hookData)` on every
+    ground drop, with a payload -- `{ source, sourceInventory, coords, item,
+    amount }`, `server/hooks.lua`'s `buildItemDroppedData` -- that supplies
+    exactly what ScentTracking needs. See BuildQbInventoryServer's own
+    RegisterHook doc comment, below, for the full citation and the exact
+    translation). A caller registering for 'swapItems' on a qb-inventory
+    backend now gets a real veto AND a real `payload.toType == 'drop'` event
+    -- never faked, and no longer a silent gap either.
 
     ======================================================================
     SECURITY NOTE -- READ BEFORE WIRING RegisterStash's `groups` ARGUMENT
@@ -246,6 +285,16 @@ end
 -- an unrelated resource restart; re-printing the same paragraph every time
 -- would bury the one-line summary this whole layer promises the owner).
 local WarnedUnconfirmed = {}
+
+-- Prints, at most once per server session (never per RegisterHook call --
+-- this could otherwise fire once per caller, e.g. once for
+-- server/inventory.lua's allowedItems veto and once for
+-- server/tracking.lua's ScentTracking hook), the qb-inventory-specific
+-- warning for the rare case where the 'ItemAdded' half of 'swapItems'
+-- registered successfully but the separate 'ItemDropped' half did not --
+-- see BuildQbInventoryServer's own RegisterHook doc comment for the full
+-- writeup of why these are two independent registrations on this backend.
+local QbInventoryDropHookWarned = false
 
 --- @param resourceName string
 --- @param reasonNote string
@@ -525,8 +574,11 @@ end)
 -- qb-inventory -- CONFIRMED for a real subset of both realms; several
 -- methods are DELIBERATE, DISCLOSED NO-OPS for a capability this backend's
 -- own, complete server-side source (server/main.lua, server/functions.lua,
--- server/hooks.lua -- ALL THREE of its declared server_scripts) confirms it
--- genuinely does not have, never a guess standing in for one.
+-- server/commands.lua, server/hooks.lua -- ALL FOUR of its declared
+-- server_scripts, per fxmanifest.lua -- see this file's own CONFIRMATION
+-- LEDGER at the top of the file for the correction to an earlier
+-- three-server-plus-one-client miscount) confirms it genuinely does not
+-- have, never a guess standing in for one.
 --
 -- CLIENT REALM: returns nil. qb-inventory's own architecture is
 -- fundamentally SERVER-INITIATED, not client-callable, for every one of
@@ -577,13 +629,23 @@ local function BuildQbInventoryServer()
         --- table: `{name, amount, info, label, weight, slot, ...}` -- see
         --- this file's header on why this is never normalized to
         --- ox_inventory's `{name, count, weight, slot}` shape here).
-        --- Table-shaped `inv` (the vehicle-trunk form server/search.lua
-        --- passes for ox_inventory) has NO confirmed qb-inventory
-        --- equivalent -- every real lookup path traced this session
-        --- (`Inventories[identifier]`, `player.PlayerData.items`,
-        --- `Drops[identifier].items`) takes a plain string/number key
-        --- only, so a table `inv` fails closed to `nil` rather than
-        --- guessing what qb-inventory would do with it.
+        --- Table-shaped `inv` (the `{ id, netid }` vehicle-trunk form
+        --- server/search.lua builds for ox_inventory's own uncached-trunk
+        --- lazy-load mechanism) has NO confirmed qb-inventory equivalent --
+        --- every real lookup path traced this session (`Inventories[identifier]`,
+        --- `player.PlayerData.items`, `Drops[identifier].items`) takes a
+        --- plain string/number key only, so a table `inv` fails closed to
+        --- `nil` here rather than guessing what qb-inventory would do with
+        --- one. This is NOT the same thing as "vehicle search does not work
+        --- on qb-inventory": qb-inventory's own real vehicle-trunk inventory
+        --- IS a plain scalar identifier (CONFIRMED, client/vehicles.lua's
+        --- `qb-inventory:client:vehicleCheck` callback: `'trunk-' .. plate`,
+        --- HYPHENATED -- a different string than ox_inventory's own
+        --- `'trunk' .. plate`) -- server/search.lua now derives and passes
+        --- THAT scalar form for this backend instead of the ox_inventory-only
+        --- table shape (see its own `inventoryId` derivation comment), so
+        --- vehicle search reaches this function's ordinary, working,
+        --- scalar `GetInventory(inv)` path below, same as any stash id.
         --- @param inv string|number
         --- @return table|nil items
         GetInventoryItems = function(inv, _owner)
@@ -754,20 +816,67 @@ local function BuildQbInventoryServer()
         --- payload alone -- no `fromInventory` exists to compare against);
         --- flagged for whoever next verifies qb-inventory live.
         ---
-        --- 'swapItems' with `payload.toType == 'drop'` (ScentTracking's
-        --- real usage) is a CONFIRMED, DISCLOSED NO-OP for this backend:
-        --- `Events.ItemDropped = { hooks = {}, listeners = {} }` is
-        --- declared in server/main.lua's own hook-type enum, but this
-        --- session's complete read of qb-inventory's server-side source
-        --- (server/main.lua, server/functions.lua, server/commands.lua,
-        --- server/hooks.lua -- every server_scripts entry its own
-        --- fxmanifest.lua declares) found no call site anywhere that ever
-        --- fires `TriggerHook('ItemDropped', ...)`, and `ItemAdded` is
-        --- never fired for a ground-drop either (dropping is its own
-        --- `Drops[...]` table construction with no hook call beside it at
-        --- all). A caller registering for 'swapItems' on this backend gets
-        --- the veto behavior for real and will simply never observe a drop
-        --- -- disclosed here, never faked as a silent registration success.
+        --- 'swapItems' with `payload.toType == 'drop'` (ScentTracking's real
+        --- usage) is now a SECOND, SEPARATE CONFIRMED TRANSLATION, not the
+        --- permanent no-op an earlier revision of this comment recorded.
+        --- CORRECTION (this pass, coder-backend, re-fetched and re-read
+        --- qbcore-framework/qb-inventory's `main` branch directly this
+        --- session, fxmanifest.lua still version '2.1.0'): the earlier claim
+        --- that "no call site anywhere ever fires `TriggerHook('ItemDropped',
+        --- ...)`" was WRONG -- server/main.lua's own
+        --- `QBCore.Functions.CreateCallback('qb-inventory:server:createDrop',
+        --- ...)` (the server side of the client's `DropItem` NUI callback,
+        --- client/drops.lua -- the ONLY place a ground `Drops[...]` entry is
+        --- ever constructed in this backend's complete source, confirmed by
+        --- grepping every `Drops[` write site) contains, verbatim:
+        ---   `local hookData = buildHookData('ItemDropped', src, Player, playerCoords, item.fromSlot, item.amount)`
+        ---   `if TriggerHook('ItemDropped', hookData.item.type, hookData) == false then cb(false) return end`
+        --- -- run BEFORE the drop is created, so it can genuinely veto it
+        --- (matches ox_inventory's own real 'swapItems' semantics: returning
+        --- `false` for a drop cancels it). `buildItemDroppedData`
+        --- (server/hooks.lua) confirms the exact payload shape handed to
+        --- every `AddHook('ItemDropped', ...)` callback: `{ source,
+        --- sourceInventory, coords, item, amount }` -- `source` (the
+        --- dropping player's server id) and `item`/`amount` are exactly what
+        --- this translation, and ScentTracking's own real usage
+        --- (server/tracking.lua's `RegisterScentInventoryHook`, which reads
+        --- only `payload.toType` and `payload.source`), need. `dropId`/
+        --- `netId` are NOT present at this point (confirmed: `hookData.dropId`/
+        --- `hookData.netId` are assigned in server/main.lua only AFTER this
+        --- `TriggerHook` call already returned, and only inside the
+        --- `RemoveItem(...)`-succeeded branch) -- never fabricated here.
+        --- Translated onto ox_inventory's own 'swapItems'-with-`toType ==
+        --- 'drop'` shape: `toType` is hardcoded to the literal string
+        --- `'drop'` (not read from any qb-inventory field -- there is no
+        --- `toType` field on this event at all; the LITERAL VALUE is what is
+        --- confirmed, because `AddHook('ItemDropped', ...)` firing at all
+        --- IS, unambiguously, ox_inventory's 'drop' semantic -- an item
+        --- leaving a player's inventory onto the ground -- never a guess
+        --- about a payload field, a translation of a whole confirmed event
+        --- TYPE into this vocabulary's one matching value). `toInventory`/
+        --- `fromInventory` are confirmed absent (a ground drop has no
+        --- destination inventory identifier at this point) and stay `nil` --
+        --- safe for server/inventory.lua's own K9Inventory allowedItems veto
+        --- callback too, which already treats a non-string `toInventory` as
+        --- "not a K9 stash, never filter" (see that file's own
+        --- RegisterK9InventoryItemFilterHook). Registered as a SEPARATE
+        --- `AddHook('ItemDropped', ...)` call, independent of the
+        --- `AddHook('ItemAdded', ...)` one above -- ox_inventory models both
+        --- halves as one native event; qb-inventory genuinely does not, so
+        --- one abstract 'swapItems' registration here faithfully becomes TWO
+        --- real qb-inventory hook registrations, exactly the
+        --- "translate its own real hook mechanism into that same
+        --- vocabulary" job this file's header assigns every non-ox_inventory
+        --- adapter. The two registrations are independent for capability
+        --- purposes too: if `ItemAdded` registers but `ItemDropped` somehow
+        --- does not (both go through the identical `AddHook` export, so this
+        --- is not expected to ever actually diverge, but is not assumed
+        --- impossible either), this method still returns `true` (the veto
+        --- capability this backend has always genuinely provided keeps
+        --- working) and prints ONE distinct, dedicated warning naming the
+        --- drop-specific gap, rather than either silently losing the
+        --- ScentTracking capability or rolling it into the unrelated
+        --- ItemAdded failure message.
         --- @param eventName string -- only 'swapItems' has a confirmed translation on this backend
         --- @param callback fun(payload: table): boolean|nil
         --- @return boolean success
@@ -795,6 +904,38 @@ local function BuildQbInventoryServer()
                     'AddHook did not return a hook index. The allowedItems-style veto this backs is NOT enforced this session.')
                 return false
             end
+
+            -- SEPARATE, CONFIRMED translation for the ground-drop half --
+            -- see this method's own doc comment above for the full citation
+            -- (server/main.lua's `qb-inventory:server:createDrop` callback,
+            -- `buildItemDroppedData`, server/hooks.lua).
+            local dropCallOk, dropHookIdx = SafeExportCall('qb-inventory', 'AddHook', 'ItemDropped', function(_itemType, hookData)
+                if type(hookData) ~= 'table' then return end
+                if type(hookData.source) ~= 'number' then return end
+
+                local item = hookData.item
+                local vetoOk, veto = pcall(callback, {
+                    toInventory = nil, -- confirmed absent -- see doc comment above
+                    fromInventory = nil, -- confirmed absent -- see doc comment above
+                    fromSlot = (type(item) == 'table' and type(item.name) == 'string')
+                        and { name = item.name, count = hookData.amount } or nil,
+                    toType = 'drop', -- SYNTHESIZED literal, not a guessed field -- see doc comment above for why this is confirmed, not guessed
+                    source = hookData.source,
+                })
+                if vetoOk and veto == false then return false end
+            end)
+            if not dropCallOk or dropHookIdx == nil then
+                if not QbInventoryDropHookWarned then
+                    QbInventoryDropHookWarned = true
+                    print("[qbx_k9unit] shared/compat/inventory.lua: WARNING: qb-inventory RegisterHook('swapItems') " ..
+                        "registered the ItemAdded veto point successfully, but the separate AddHook('ItemDropped', ...) " ..
+                        'registration this backend needs for the ground-drop half of \'swapItems\' (payload.toType == ' ..
+                        "'drop', ScentTracking's own usage) FAILED. Everything else this hook backs (e.g. the K9 gear " ..
+                        'stash item whitelist) keeps working normally; only a caller that specifically needs to observe ' ..
+                        'a ground drop on this backend (scent tracking) will never see one this session.')
+                end
+            end
+
             return true
         end,
     }

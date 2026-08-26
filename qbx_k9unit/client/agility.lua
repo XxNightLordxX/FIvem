@@ -298,6 +298,45 @@ if Config.Features.AgilityAdvanced then
         -- kind of "in-engine tuning against real map geometry" work
         -- DEVELOPER_REFERENCE.md §12.5.5 already flags as open. Revisit after an
         -- in-engine pass, same as the sweep tuning constants above.
+        --
+        -- REVIEWED THIS PASS (still not fixable without a live client --
+        -- both findings below require eyes on an actual vault against real
+        -- map geometry, not more reading):
+        --   1. Dimensionally sane, by rough projectile-motion arithmetic
+        --      (peak height h = v^2/(2g), using GTA's approximate default
+        --      gravity of ~9.8 units/s^2 at gravity level 0 -- an
+        --      approximation, not a native-confirmed constant, since
+        --      gravity is an engine-level physics value, not something a
+        --      script native documents): at the smallest detectable
+        --      obstacle (obstacleHeight just above 0), verticalSpeed=4.0
+        --      gives a ~0.8m apex -- comfortably clears it. At
+        --      Config.Combat.AgilityAdvanced.maxVaultHeight (1.2m, itself
+        --      UNTUNED per config.lua's own comment), verticalSpeed=6.4
+        --      gives a ~2.1m apex and, at forwardSpeed=3.5, roughly 4.5m of
+        --      forward travel over the full arc -- clears a 1.2m obstacle
+        --      with a lot of room to spare, which reads more like a
+        --      superhero leap than a fence vault. This is the first thing
+        --      to look at in an in-engine pass: forwardSpeed likely needs
+        --      to scale down (or verticalSpeed's multiplier scale down)
+        --      for the taller end of the configured height range, not stay
+        --      flat across the whole band.
+        --   2. NEW FINDING: SetEntityVelocity SETS the ped's velocity
+        --      outright (it does not add to whatever velocity the ped
+        --      already had -- this is the established, widely-relied-upon
+        --      behavior of this native across the FiveM ecosystem, not
+        --      something this file invents). A K9 already sprinting faster
+        --      than forwardSpeed (3.5 units/s) the instant it vaults will
+        --      have its actual forward momentum REPLACED by this flat
+        --      constant, which can read as a visible snap/deceleration
+        --      exactly at takeoff rather than a smooth leap that carries
+        --      the sprint through. NOT fixed here: the natural fix
+        --      (incorporate the ped's own current speed, e.g. via
+        --      GetEntitySpeed(ped), so the impulse never goes SLOWER than
+        --      the K9 was already moving) needs a new native added to the
+        --      repo-root .luacheckrc's read_globals before it can land
+        --      cleanly, and confirming it's worth doing at all needs a live
+        --      sprint-then-vault check first -- flagged for whoever runs
+        --      the in-engine pass, not applied speculatively here.
         local forward = GetEntityForwardVector(ped)
         local verticalSpeed = 4.0 + obstacleHeight * 2.0 -- taller obstacle -> slightly higher arc
         local forwardSpeed = 3.5

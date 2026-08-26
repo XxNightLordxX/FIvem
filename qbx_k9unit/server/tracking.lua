@@ -946,27 +946,38 @@ end)
 -- "feature switched off" degrade, never a crash.
 --
 -- STUB-DEGRADE, qb-inventory specifically (the other CONFIRMED backend) --
--- WORTH FLAGGING LOUDLY, a DIFFERENT failure shape from the one above:
--- `RegisterHook('swapItems', ...)` SUCCEEDS on qb-inventory (returns
--- `true` -- no warning ever prints) via that adapter's real
--- `AddHook('ItemAdded', ...)` veto point, BUT shared/compat/inventory.lua's
--- own qb-inventory section discloses, from a complete read of that
--- backend's server-side source, that a ground-drop NEVER fires `ItemAdded`
--- at all on that backend (dropping is its own `Drops[...]` table
--- construction with no hook call beside it) -- so this callback's own
--- `if payload.toType ~= 'drop' then return end` guard is simply never
--- reached with `toType == 'drop'` on qb-inventory: registration reports
--- success, but scent-from-drop detection is a confirmed, permanent no-op
--- for this feature on that backend, with NOTHING here able to detect or
--- warn about it (there is no failure to observe -- the hook is genuinely,
--- successfully registered, it is just never invoked the way this feature
--- needs). This is disclosed at the adapter layer already (see that file's
--- qb-inventory RegisterHook doc comment) and is an architectural fact about
--- qb-inventory, not something this call site can work around -- flagged
--- here, loudly, exactly because "registered successfully but silently does
--- nothing" is a materially worse failure mode for an operator to discover
--- than "warned once at startup," and is exactly the risk class this task's
--- own stub-degrade question exists to surface.
+-- CORRECTED this pass (coder-backend): an EARLIER revision of this comment
+-- recorded a "registers successfully but silently does nothing" failure
+-- shape here -- the worst one in the codebase, per this task's own framing
+-- -- based on a claim that qb-inventory never fires any real event for a
+-- ground drop. That claim was WRONG: re-fetching and re-reading
+-- qbcore-framework/qb-inventory's `main` branch directly this session found
+-- the real, current call site the earlier pass missed (server/main.lua's
+-- own `qb-inventory:server:createDrop` callback: `TriggerHook('ItemDropped',
+-- hookData.item.type, hookData)`, firing on every real ground drop with a
+-- payload containing the dropping player's own `source`). See
+-- shared/compat/inventory.lua's own qb-inventory RegisterHook doc comment
+-- for the full citation and the translation this file's `RegisterHook`
+-- call below now benefits from with NO code change needed at this call
+-- site: `RegisterHook('swapItems', ...)` now also registers a second, real
+-- `AddHook('ItemDropped', ...)` internally, and translates it onto this
+-- same `'swapItems'`-with-`toType == 'drop'` vocabulary this callback
+-- already expects -- `payload.toType` and `payload.source` (the only two
+-- fields this callback body reads) are both genuinely populated for a real
+-- qb-inventory ground drop now, so the `if payload.toType ~= 'drop' then
+-- return end` guard below is reached for real, and scent tracking is a
+-- real, working feature on qb-inventory, not merely a disclosed gap.
+--
+-- The one residual degrade left to disclose: if qb-inventory's own
+-- `AddHook('ItemDropped', ...)` registration specifically fails while the
+-- unrelated `AddHook('ItemAdded', ...)` veto registration succeeds (both go
+-- through the identical `AddHook` export, so this is not expected to ever
+-- actually diverge, but is not assumed impossible either), `RegisterHook`
+-- still returns `true` here (the capability this feature does NOT depend on
+-- keeps working) -- shared/compat/inventory.lua's own adapter prints a
+-- dedicated, one-time warning for exactly that narrower case, so it is
+-- still never a silent gap even in that edge case; this call site needs no
+-- separate handling for it.
 local function RegisterScentInventoryHook()
     if not Config.Features.ScentTracking then return end -- nothing to gate for; do not probe/warn about a disabled-by-default feature
 

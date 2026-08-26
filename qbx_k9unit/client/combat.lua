@@ -854,7 +854,65 @@ local function AssertDragAsHolderTick(dragState)
         -- #3726), so a hostile target's own client can call it on itself at
         -- any moment. Re-asserting the attach EVERY TICK (never one-shot)
         -- is the ONLY thing that puts it back — binding guardrail 2.
-        -- Offset/bone index are an UNREVIEWED placeholder, see header.
+        --
+        -- BONE INDEX 0 — REVIEWED THIS PASS, NOT A GUESS: bone index 0 is
+        -- the universal root-of-skeleton index for every ped model this
+        -- engine has (root is always the top of the bone hierarchy, so it
+        -- is conventionally assigned index 0 by the exporter regardless of
+        -- whether the skeleton is a human or a quadruped rig) — this is the
+        -- same convention client/vehicle.lua's own K9-into-vehicle attach
+        -- ("Attaching at a rear/boot offset is a reasonable Phase 1
+        -- approximation... exact bone precision doesn't matter here") and
+        -- client/propattachment.lua's attach (which explicitly reuses this
+        -- exact call's argument shape, see that file's own comment at its
+        -- one AttachEntityToEntity call site) already rely on. All three
+        -- call sites in this codebase pass 0 here; keeping it. bonetool.lua
+        -- was checked and does NOT record a bone-index finding specific to
+        -- this call (its own sweep work targets Config.Features.
+        -- PropAttachments/FetchMechanic's vest/mouth-item attach, a
+        -- different feature) — there is nothing to cross-reference from it
+        -- for this one beyond the general index-vs-ID reasoning already
+        -- applied above.
+        --
+        -- OFFSET (0.0, -0.6, 0.0) — STILL GENUINELY UNTUNED, AND LIKELY
+        -- WRONG IN ONE SPECIFIC, DIAGNOSABLE WAY (found this pass without a
+        -- live client, from AttachEntityToEntity's own documented
+        -- semantics, not a blind guess): xPos/yPos/zPos are an offset from
+        -- bone 0 IN THAT BONE'S OWN LOCAL FRAME, and zPos here is 0.0 —
+        -- meaning the attach point sits at bone 0's own height, not at
+        -- ground level. Bone 0 (root/pelvis) on a standing quadruped sits
+        -- well above the ground (roughly torso height, not feet height),
+        -- while `targetPed`'s own origin — the point this call actually
+        -- positions — sits at ITS feet, the same "entity origin = feet on
+        -- ground" convention every ped in this engine uses. A 0.0 zPos
+        -- therefore most likely leaves the dragged target's feet floating
+        -- at roughly the K9's mid-body height instead of trailing along the
+        -- ground, which is the opposite of what "being dragged" should look
+        -- like. rotX/rotY/rotZ are also 0.0 with syncRot=true, which locks
+        -- the target upright in the bone's own orientation rather than
+        -- prone — note isPed (arg 13, false here, matching every other
+        -- AttachEntityToEntity call site in this codebase) makes pitch a
+        -- no-op per ATTACH_ENTITY_TO_ENTITY's own primary-source doc
+        -- ("Pitch doesn't work when false... only peds"), so a future pass
+        -- that tries adding a prone pitch here must also flip isPed to true
+        -- or the new rotation will silently do nothing — not changed here
+        -- since no rotation is requested yet and every sibling call site
+        -- shares the current false value deliberately.
+        -- LIVE-TEST RECIPE (does not require touching the drag feature
+        -- itself): connect to a dev server with Config.Features.
+        -- BoneSweepDevTool + the `qbx_k9unit_enable_bone_dev_tool` convar
+        -- both on (see server/bonetool.lua's own header), spawn each K9
+        -- breed in Config.Peds, run `/k9bonetool goto 0`, and read the
+        -- debug marker's height above the ground the K9 is standing on —
+        -- that height IS the zPos correction this offset needs (set zPos to
+        -- roughly the negative of that reading so the attach point lands
+        -- near ground level instead of at bone-0 height). Then, with the
+        -- corrected zPos, run an actual PropDragging drag and confirm the
+        -- target's feet trail near the ground rather than floating or
+        -- clipping through it, and that -0.6 on yPos still reads as "just
+        -- behind the K9" rather than overlapping its body, adjusting both
+        -- numbers together if not. Not performed as part of this review —
+        -- genuinely requires a running client to read the marker.
         AttachEntityToEntity(targetPed, PlayerPedId(), 0, 0.0, -0.6, 0.0, 0.0, 0.0, 0.0, true, false, false, false, 2, true)
 
         if not dragState.isPlayerTarget then
@@ -1161,6 +1219,58 @@ if Config.Features.BiteAndHold then
 end
 
 if Config.Features.NonLethalTakedown then
+    -- RAGDOLL-TASK TIMING CONSTANTS — reviewed this pass against the
+    -- primary-source native description (runtime.fivem.net/doc/natives.json,
+    -- PED namespace, hash 0xD76632D99E4966C8): SET_PED_TO_RAGDOLL_WITH_FALL's
+    -- real params are (ped, time, p2, ragdollType, x, y, z, p7..p13), NOT a
+    -- confirmed "(ped, minTime, maxTime, ...)" pair as this file previously
+    -- implied — only the first int (`time` below) is a source-confirmed
+    -- ragdoll-duration parameter. The second int (`p2` below, this file's
+    -- own prior name for it was `maxTime`) has an EXPLICITLY documented
+    -- open question on that same primary source ("Not sure what p2 does...
+    -- didn't seem to affect anything in testing"), so treat `p2` as
+    -- plausibly a no-op, not a confirmed second duration knob, until a live
+    -- test shows otherwise (see LIVE-TEST note below). Both values ARE
+    -- dimensionally sane regardless (milliseconds, sub-2-second, well
+    -- inside the outer Config.Combat.NonLethalTakedown.ragdollDurationMs
+    -- damage-immunity bracket below — see that field's own comment) — the
+    -- part still genuinely untuned is the FEEL (does 1.0-1.5s of ragdoll
+    -- read as a believable non-lethal takedown, or does the target visibly
+    -- stand back up while still bullet-immune for the remaining ~2.5s of
+    -- ragdollDurationMs and look broken rather than dazed).
+    --
+    -- Pulled out to ONE shared pair of constants (previously the same two
+    -- literals were duplicated verbatim at both call sites below, a real
+    -- "someone tunes one and forgets the other" risk this removes) — both
+    -- forceRagdoll (player target) and applyNpcTakedown (NPC target) below
+    -- read these, so parity between the two paths is now structural, not
+    -- just a comment promising it.
+    --
+    -- LIVE-TEST: on a real client, trigger a takedown and (a) confirm the
+    -- target visibly ragdolls for roughly RAGDOLL_FALL_TIME_MS before
+    -- attempting to recover, (b) try changing RAGDOLL_FALL_TIME_P2 and see
+    -- whether anything observable changes at all — if not, that confirms
+    -- the primary source's own "didn't seem to affect anything" finding for
+    -- this engine build too, and p2 could be dropped/documented as inert
+    -- rather than tuned. Not performed as part of this review — genuinely
+    -- requires a running client.
+    -- Operator-tunable as of 2026-08-26 (Config.Combat.NonLethalTakedown
+    -- .ragdollFallTimeMs / .ragdollFallTimeP2). Read defensively with the
+    -- previous hardcoded literals as fallbacks: a missing, non-numeric or
+    -- non-positive config value falls back rather than reaching the native
+    -- with nonsense. Deliberately NOT an assert -- this is a cosmetic feel
+    -- value, and this resource's rule is that a bad config value gets a safe
+    -- default, never an abort. The P2 fallback is kept for parity with the
+    -- pre-existing value, not because its role is understood.
+    local takedownTuning = (type(Config) == 'table' and type(Config.Combat) == 'table'
+        and type(Config.Combat.NonLethalTakedown) == 'table') and Config.Combat.NonLethalTakedown or {}
+    local function ResolveFallTime(value, fallbackMs)
+        if type(value) == 'number' and value == value and value > 0 then return value end
+        return fallbackMs
+    end
+    local RAGDOLL_FALL_TIME_MS = ResolveFallTime(takedownTuning.ragdollFallTimeMs, 1000)
+    local RAGDOLL_FALL_TIME_P2 = ResolveFallTime(takedownTuning.ragdollFallTimeP2, 1500)
+
     -- TARGET-SIDE CATEGORY B RELAY HANDLER — see BiteAndHold's own group
     -- above for the full trust-boundary/per-mechanic-gating reasoning,
     -- identical here.
@@ -1180,13 +1290,15 @@ if Config.Features.NonLethalTakedown then
         SetEntityCanBeDamaged(ped, false)
 
         local forward = GetEntityForwardVector(ped)
-        -- SET_PED_TO_RAGDOLL_WITH_FALL(ped, minTime, maxTime, nFallType, dirX,
-        -- dirY, dirZ, fGroundHeight, grab1[xyz], grab2[xyz]) — grab params
-        -- documented unused, per DEVELOPER_REFERENCE.md#phase-3-combat §2.
-        -- minTime/maxTime (1000, 1500) match applyNpcTakedown below exactly,
-        -- for parity between the two paths — both are UNTUNED placeholders,
-        -- not previously specified anywhere in this codebase's own config/spec.
-        SetPedToRagdollWithFall(ped, 1000, 1500, 0, forward.x, forward.y, forward.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        -- SET_PED_TO_RAGDOLL_WITH_FALL(ped, time, p2, ragdollType, x, y, z,
+        -- p7..p13) — grab params (p8..p13) documented unused, per
+        -- DEVELOPER_REFERENCE.md#phase-3-combat §2. RAGDOLL_FALL_TIME_MS/
+        -- RAGDOLL_FALL_TIME_P2 (see this block's own top-of-file comment)
+        -- match applyNpcTakedown below exactly, by construction now (one
+        -- shared pair of constants, not two independently-editable
+        -- literals) — still UNTUNED for feel, see that comment for exactly
+        -- what a live test needs to check.
+        SetPedToRagdollWithFall(ped, RAGDOLL_FALL_TIME_MS, RAGDOLL_FALL_TIME_P2, 0, forward.x, forward.y, forward.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         ActiveForcedRagdoll = {
             localDeadline = GetGameTimer() + Config.Combat.NonLethalTakedown.ragdollDurationMs,
@@ -1280,7 +1392,11 @@ if Config.Features.NonLethalTakedown then
         -- strictly better fidelity than the player-target path, not a
         -- fallback.
         local forward = GetEntityForwardVector(PlayerPedId())
-        SetPedToRagdollWithFall(npcPed, 1000, 1500, 0, forward.x, forward.y, forward.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        -- RAGDOLL_FALL_TIME_MS/RAGDOLL_FALL_TIME_P2 — see the shared
+        -- constants' own comment at the top of this `if
+        -- Config.Features.NonLethalTakedown` block for what is and isn't
+        -- confirmed about these two values.
+        SetPedToRagdollWithFall(npcPed, RAGDOLL_FALL_TIME_MS, RAGDOLL_FALL_TIME_P2, 0, forward.x, forward.y, forward.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         ActiveNpcEffects[npcNetId] = {
             kind = 'takedown',

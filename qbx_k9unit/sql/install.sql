@@ -3,17 +3,18 @@
 --
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
--- This is a hard requirement, not a recommendation. Four of the fourteen
+-- This is a hard requirement, not a recommendation. Four of the sixteen
 -- tables below (k9_certifications, k9_certification_specializations,
 -- k9_partnerships, k9_permissions) declare an INDEXED VIRTUAL GENERATED
 -- COLUMN backing a UNIQUE KEY (`k9_certifications.active_cert_key`,
 -- `k9_certification_specializations.active_spec_key`,
 -- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
--- `k9_permissions.active_permission_key`) -- the other ten
+-- `k9_permissions.active_permission_key`) -- the other twelve
 -- (k9_search_log, k9_progression, k9_runtime_feature_overrides,
 -- k9_runtime_override_audit, k9_tablet_theme, k9_tablet_theme_audit,
 -- k9_ped_assignments, k9_certification_tiers,
--- k9_certification_tier_capabilities, k9_certification_tier_audit) need
+-- k9_certification_tier_capabilities, k9_certification_tier_audit,
+-- k9_equipment_shop_locations, k9_equipment_shop_locations_audit) need
 -- nothing from this floor and would run on an older server on their own,
 -- but this resource has one stated minimum for the schema as a whole,
 -- not a per-table one.
@@ -1160,4 +1161,59 @@ CREATE TABLE IF NOT EXISTS `k9_certification_tier_audit` (
 
   PRIMARY KEY (`id`),
   KEY `idx_tier_key_changed_at` (`tier_key`, `changed_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_equipment_shop_locations / k9_equipment_shop_locations_audit
+--
+-- CONVERGENCE FIX (db-schema pass, 2026-08-26): created via
+-- `sql/migrations/0011_create_k9_equipment_shop_locations.sql` but never
+-- added here -- the same class of gap this file's own header already
+-- documents having happened (and been fixed) for the runtime-control/
+-- theme tables, k9_ped_assignments, and the certification-tier tables
+-- above. Added now, byte-for-byte the same shape as migration 0011 -- see
+-- that file's own header for the full design rationale (why this is
+-- scoped to ONLY tablet-added locations, never a config.lua entry; why
+-- `model`/`scenario`/`label` are nullable; why `location_id` in the audit
+-- table is not a real FK) -- not repeated a second time here.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates these two tables, run
+-- `sql/migrations/0011_create_k9_equipment_shop_locations.sql` instead (a
+-- guaranteed no-op if this file already created them).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_equipment_shop_locations` (
+  `id`         INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `x`          DOUBLE       NOT NULL,
+  `y`          DOUBLE       NOT NULL,
+  `z`          DOUBLE       NOT NULL,
+  `heading`    DOUBLE       NOT NULL DEFAULT 0,
+  `model`      VARCHAR(64)  DEFAULT NULL,   -- NULL = use Config.K9EquipmentShop.pedModel
+  `scenario`   VARCHAR(64)  DEFAULT NULL,   -- NULL = use Config.K9EquipmentShop.pedScenario; '' = explicitly no scenario for this ped
+  `label`      VARCHAR(100) DEFAULT NULL,   -- NULL = use Config.K9EquipmentShop.label
+  `created_by` VARCHAR(50)  NOT NULL,       -- citizenid of the high-command officer who added this location
+  `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_by` VARCHAR(50)  DEFAULT NULL,   -- citizenid of whoever last moved/edited it, NULL if never edited since creation
+  `updated_at` DATETIME     DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `k9_equipment_shop_locations_audit` (
+  `id`          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `location_id` INT UNSIGNED DEFAULT NULL,  -- informational reference only, not a real FK -- see migration 0011's own header
+  `action`      VARCHAR(20)  NOT NULL,      -- 'add' | 'move' | 'remove'
+  `x`           DOUBLE       DEFAULT NULL,
+  `y`           DOUBLE       DEFAULT NULL,
+  `z`           DOUBLE       DEFAULT NULL,
+  `heading`     DOUBLE       DEFAULT NULL,
+  `model`       VARCHAR(64)  DEFAULT NULL,
+  `scenario`    VARCHAR(64)  DEFAULT NULL,
+  `label`       VARCHAR(100) DEFAULT NULL,
+  `changed_by`  VARCHAR(50)  NOT NULL,
+  `changed_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  KEY `idx_location_id_changed_at` (`location_id`, `changed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

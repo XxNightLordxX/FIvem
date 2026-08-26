@@ -641,28 +641,39 @@ end)
 -- translation on this backend (per DEVELOPER_REFERENCE.md §21's "match the
 -- reference resource's calling convention" rule); the payload is translated
 -- onto ox_inventory's OWN real field names (fromInventory/fromSlot/
--- toInventory/toType/source), never this backend's own hookData names. ----
+-- toInventory/toType/source), never this backend's own hookData names.
+--
+-- UPDATED this pass (coder-backend): a single RegisterHook('swapItems', ...)
+-- call now registers TWO real qb-inventory hooks, not one --
+-- AddHook('ItemAdded', ...) (the veto point, unchanged) AND
+-- AddHook('ItemDropped', ...) (NEWLY confirmed -- see
+-- shared/compat/inventory.lua's own doc comment for the citation: qb-inventory
+-- genuinely fires this on every real ground drop, which an earlier revision
+-- of this file incorrectly recorded as never firing at all). `qbFullExports`'s
+-- `AddHook` stub below is captured PER-hookType (a table), not a single
+-- overwritten variable, specifically so these tests can distinguish the two
+-- independent registrations. ----
 
-t.test("qb-inventory SERVER RegisterHook('swapItems'): registers against the real AddHook('ItemAdded', ...) veto point", function()
-    local capturedHookType, capturedCallback
-    local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedHookType = hookType capturedCallback = callback return 1 end })
+t.test("qb-inventory SERVER RegisterHook('swapItems'): registers against BOTH the real AddHook('ItemAdded', ...) veto point AND the real AddHook('ItemDropped', ...) ground-drop hook", function()
+    local capturedCallbacks = {}
+    local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedCallbacks[hookType] = callback return 1 end })
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')
     local ok = server.RegisterHook('swapItems', function() end)
     t.isTrue(ok)
-    t.equals(capturedHookType, 'ItemAdded')
-    t.equals(type(capturedCallback), 'function')
+    t.equals(type(capturedCallbacks.ItemAdded), 'function')
+    t.equals(type(capturedCallbacks.ItemDropped), 'function')
 end)
 
-t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper: a disallowed item is a real veto (the literal false); the normalized payload uses ox_inventory's OWN field names, translated from qb-inventory's real hookData", function()
-    local capturedCallback
-    local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedCallback = callback return 1 end })
+t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper (ItemAdded): a disallowed item is a real veto (the literal false); the normalized payload uses ox_inventory's OWN field names, translated from qb-inventory's real hookData", function()
+    local capturedCallbacks = {}
+    local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedCallbacks[hookType] = callback return 1 end })
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')
     local seenPayload
     server.RegisterHook('swapItems', function(payload) seenPayload = payload return false end)
 
-    local result = capturedCallback('weapon', { toId = 'k9inv-REX', toType = 'stash', item = { name = 'weapon_pistol' }, amount = 1 })
+    local result = capturedCallbacks.ItemAdded('weapon', { toId = 'k9inv-REX', toType = 'stash', item = { name = 'weapon_pistol' }, amount = 1 })
     t.equals(result, false)
     t.equals(seenPayload.toInventory, 'k9inv-REX', 'ox_inventory\'s own toInventory is an ID STRING -- qb-inventory\'s hookData.toId is the field that matches that semantic, never hookData.toInventory (a resolved data table)')
     t.equals(seenPayload.fromSlot.name, 'weapon_pistol')
@@ -672,27 +683,79 @@ t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper: a disallowed item
     t.isNil(seenPayload.source, 'confirmed absent from qb-inventory\'s ItemAdded payload -- never guessed')
 end)
 
-t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper: allowing an item never rejects, and a malformed hookData fails open", function()
-    local capturedCallback
-    local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedCallback = callback return 1 end })
+t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper (ItemAdded): allowing an item never rejects, and a malformed hookData fails open", function()
+    local capturedCallbacks = {}
+    local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedCallbacks[hookType] = callback return 1 end })
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')
     local called = false
     server.RegisterHook('swapItems', function() called = true return true end)
 
-    local allowed = capturedCallback('item', { toId = 'k9inv-REX', item = { name = 'k9_treat' }, amount = 1 })
+    local allowed = capturedCallbacks.ItemAdded('item', { toId = 'k9inv-REX', item = { name = 'k9_treat' }, amount = 1 })
     t.isNil(allowed)
     t.isTrue(called, 'a well-formed payload must reach the caller\'s callback')
 
     called = false
-    local r1 = capturedCallback('item', { toId = 'k9inv-REX', item = 'not-a-table' })
-    local r2 = capturedCallback('item', 'not-a-table')
+    local r1 = capturedCallbacks.ItemAdded('item', { toId = 'k9inv-REX', item = 'not-a-table' })
+    local r2 = capturedCallbacks.ItemAdded('item', 'not-a-table')
     t.isNil(r1)
     t.isNil(r2)
     t.isFalse(called)
 end)
 
-t.test("qb-inventory SERVER RegisterHook('swapItems'): AddHook returning nil (its own documented 'registration failed' signal) is reported as a failed registration, not a silent success", function()
+-- ---- qb-inventory SERVER RegisterHook wrapper (ItemDropped) -- THE FIX FOR
+-- "scent tracking never fires on qb-inventory" (ISSUES.md). CONFIRMED this
+-- pass against qbcore-framework/qb-inventory's real `main` branch source:
+-- server/main.lua's `qb-inventory:server:createDrop` callback runs
+-- `TriggerHook('ItemDropped', hookData.item.type, hookData)` on every real
+-- ground drop, and server/hooks.lua's `buildItemDroppedData` confirms the
+-- payload shape: `{ source, sourceInventory, coords, item, amount }`. ----
+
+t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper (ItemDropped): a real ground drop reaches the caller's callback as toType == 'drop' with the real source, never vetoed by default", function()
+    local capturedCallbacks = {}
+    local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedCallbacks[hookType] = callback return 1 end })
+    local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
+    local server = f.getFactory('inventory', 'qb-inventory')('server')
+    local seenPayload
+    local ok = server.RegisterHook('swapItems', function(payload) seenPayload = payload end)
+    t.isTrue(ok)
+
+    local result = capturedCallbacks.ItemDropped('weed_baggy', { source = 42, sourceInventory = { slots = 50, maxweight = 120000, items = {} }, coords = { x = 1, y = 2, z = 3 }, item = { name = 'weed_baggy' }, amount = 1 })
+    t.isNil(result, 'ScentTracking\'s own callback never vetoes -- a real drop must never be cancelled by this translation')
+    t.equals(seenPayload.toType, 'drop', 'SYNTHESIZED literal -- confirmed by the event TYPE firing at all, not read from any qb-inventory field')
+    t.equals(seenPayload.source, 42, 'the real dropping player\'s server id, confirmed present on qb-inventory\'s own ItemDropped payload (unlike ItemAdded, which never carries one)')
+    t.equals(seenPayload.fromSlot.name, 'weed_baggy')
+    t.isNil(seenPayload.toInventory, 'a ground drop has no destination inventory identifier at this point -- confirmed absent, never guessed')
+    t.isNil(seenPayload.fromInventory, 'confirmed absent from qb-inventory\'s ItemDropped payload')
+end)
+
+t.test("qb-inventory SERVER RegisterHook('swapItems') wrapper (ItemDropped): the caller explicitly returning false is forwarded as a real veto, and a malformed hookData fails open", function()
+    local capturedCallbacks = {}
+    local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback) capturedCallbacks[hookType] = callback return 1 end })
+    local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
+    local server = f.getFactory('inventory', 'qb-inventory')('server')
+    server.RegisterHook('swapItems', function(payload) if payload.toType == 'drop' then return false end end)
+
+    local vetoed = capturedCallbacks.ItemDropped('weed_baggy', { source = 42, item = { name = 'weed_baggy' }, amount = 1 })
+    t.equals(vetoed, false)
+
+    local r1 = capturedCallbacks.ItemDropped('weed_baggy', 'not-a-table')
+    local r2 = capturedCallbacks.ItemDropped('weed_baggy', { item = { name = 'weed_baggy' }, amount = 1 }) -- missing/non-numeric source
+    t.isNil(r1)
+    t.isNil(r2)
+end)
+
+t.test("qb-inventory SERVER RegisterHook('swapItems'): AddHook('ItemDropped', ...) failing while AddHook('ItemAdded', ...) succeeds still returns true overall -- the veto capability this backend has always had keeps working", function()
+    local exportsTbl = qbFullExports({ AddHook = function(_self, hookType, callback)
+        if hookType == 'ItemDropped' then return nil end
+        return 1
+    end })
+    local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
+    local server = f.getFactory('inventory', 'qb-inventory')('server')
+    t.isTrue(server.RegisterHook('swapItems', function() end))
+end)
+
+t.test("qb-inventory SERVER RegisterHook('swapItems'): AddHook returning nil (its own documented 'registration failed' signal) for ItemAdded is reported as a failed registration, not a silent success", function()
     local exportsTbl = qbFullExports({ AddHook = function() return nil end })
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = exportsTbl } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')

@@ -501,6 +501,31 @@ local function loadWithBadConfig(badTuning)
     return tostring(err)
 end
 
+--- Same as loadWithBadConfig, but for the values that are meant to SURVIVE
+--- rather than abort -- returns the lines the file printed while loading, so
+--- a clamp-and-warn can be asserted on rather than just "it didn't crash".
+--- @return string[] printedLines, boolean loaded
+local function loadCapturingPrints(tuning)
+    local printedLines = {}
+    local freshEnv = Sandbox.newEnv({
+        GetGameTimer = function() return 0 end,
+        CreateThread = function() end,
+        AddEventHandler = function() end,
+        RegisterNetEvent = function() end,
+        math = FakeMath,
+        lib = { callback = { register = function() end } },
+        print = function(...)
+            local parts = {}
+            for i = 1, select('#', ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+            printedLines[#printedLines + 1] = table.concat(parts, '\t')
+        end,
+        Config = { Features = { SARCalls = true }, SARCalls = tuning, XP = { awards = { sarCallCompleted = 30 } } },
+    })
+    Sandbox.loadInto('../server/cooldowns.lua', freshEnv)
+    local ok = pcall(Sandbox.loadInto, '../server/sarcalls.lua', freshEnv)
+    return printedLines, ok
+end
+
 t.test('CONFIG-SAFETY GUARD: Config.SARCalls missing entirely errors, naming Config.SARCalls', function()
     local err = loadWithBadConfig(nil)
     t.isNotNil(err)
@@ -552,13 +577,55 @@ t.test('CONFIG-SAFETY GUARD: a non-positive pollIntervalMs errors, naming pollIn
     t.contains(err, 'pollIntervalMs')
 end)
 
-t.test('CONFIG-SAFETY GUARD: a non-positive startCooldownMs is caught by NewCooldown\'s OWN constructor guard, naming NewCooldown', function()
-    local err = loadWithBadConfig({
+-- ------------------------------------------------------------------
+-- REGRESSION (2026-08-26): this test used to assert the OPPOSITE -- that
+-- startCooldownMs = 0 aborts this file's load via NewCooldown's own
+-- constructor guard. It was pinning the bug.
+--
+-- The CONFIG-SAFETY GUARD block above deliberately validates only the
+-- fields it names, and startCooldownMs was never one of them, so the raw
+-- value reached NewCooldown(0), which errors at file-load time and takes
+-- the whole SAR-calls feature down with it. 0 is the single most natural
+-- thing an operator types for "no cooldown".
+--
+-- Now routed through ResolveConfiguredThresholdMs like every other
+-- configured-threshold site: clamp, warn loudly, stay alive.
+-- ------------------------------------------------------------------
+
+t.test('REGRESSION: startCooldownMs = 0 no longer aborts this file\'s load -- clamps to the shipped 600000ms fallback and warns loudly, naming the exact key', function()
+    local printedLines, loaded = loadCapturingPrints({
         minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
         warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 0,
     })
-    t.isNotNil(err)
-    t.contains(err, 'NewCooldown')
+    t.isTrue(loaded, 'the file must still load -- an abort here kills the whole SAR-calls feature')
+
+    local warned = false
+    for _, line in ipairs(printedLines) do
+        if line:find('Config.SARCalls.startCooldownMs', 1, true) and line:find('600000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key and the fallback substituted -- the operator still has to find out')
+end)
+
+t.test('REGRESSION: startCooldownMs = NaN also no longer aborts this file\'s load', function()
+    local _, loaded = loadCapturingPrints({
+        minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
+        warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 0 / 0,
+    })
+    t.isTrue(loaded)
+end)
+
+t.test('REGRESSION: a VALID startCooldownMs is still used, not silently replaced by the fallback', function()
+    local printedLines, loaded = loadCapturingPrints({
+        minRadius = 10, maxRadius = 30, arrivalRadius = 3, burningDistance = 5, hotDistance = 15,
+        warmDistance = 25, pollIntervalMs = 2000, maxCallDurationMs = 300000, startCooldownMs = 777,
+    })
+    t.isTrue(loaded)
+    for _, line in ipairs(printedLines) do
+        t.isNil(line:find('startCooldownMs', 1, true),
+            'a valid configured value must pass through silently -- warning on a good value trains operators to ignore the warning')
+    end
 end)
 
 -- ========================================================================

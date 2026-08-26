@@ -89,8 +89,8 @@
         IsLeashed() -> boolean
     - THIS FILE exposes the resource-global move-rate composer consumed by
       client/wellbeing.lua and client/progression.lua (DEVELOPER_REFERENCE.md §13.0
-      Decision 2), and reserves a slot for Phase 3's PropDragging
-      (client/combat.lua) to use once that lands:
+      Decision 2). Phase 3 has since landed and client/combat.lua's own
+      PropDragging now writes the `dragging` key below directly:
         K9MoveRateModifiers (table)  -- named multiplier contributions, one
             key per contributing system (`fatigue`, `injury`, `mood`,
             `xpTier`, `dragging`, `breed`), each defaulting to 1.0 (no effect).

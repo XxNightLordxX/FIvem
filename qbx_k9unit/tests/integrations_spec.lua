@@ -303,15 +303,56 @@ t.test('pollIntervalMs <= 0 fails loudly, naming the field', function()
     t.contains(err, 'pollIntervalMs must be a positive number')
 end)
 
-t.test('reFireCooldownMs <= 0 fails loudly via server/cooldowns.lua\'s OWN NewCooldown guard, not a reimplementation here', function()
-    local ok, err = pcall(newIntegrationsFixture, {
+-- ------------------------------------------------------------------
+-- REGRESSION (2026-08-26): this test used to assert the OPPOSITE --
+-- that reFireCooldownMs = 0 aborts this file's load via NewCooldown's
+-- own constructor guard. It was pinning the bug.
+--
+-- The assert block above names reFireCooldownMs in its message but
+-- never actually validated it, so the raw value reached NewCooldown(0),
+-- which errors at file-load time and takes PollK9Health and its
+-- CreateThread poll loop down with it -- K9-down dispatch silently dead
+-- for the rest of that server's uptime behind one console line. And 0
+-- is the single most natural thing an operator types for "no cooldown".
+--
+-- Now routed through ResolveConfiguredThresholdMs like the other
+-- configured-threshold sites: clamp to the shipped fallback, warn
+-- loudly naming the key, keep the file alive. Same shape as
+-- kennel_spec.lua's and fetch_spec.lua's own regression tests.
+-- ------------------------------------------------------------------
+
+t.test('REGRESSION: reFireCooldownMs = 0 no longer aborts this file\'s load -- clamps to the shipped 30000ms fallback and warns loudly, naming the exact key', function()
+    local ok, f = pcall(newIntegrationsFixture, {
         tuning = { healthThreshold = 100, minDurationMs = 0, pollIntervalMs = 1000, reFireCooldownMs = 0 },
     })
-    t.isFalse(ok)
-    -- Exact message belongs to server/cooldowns.lua's AssertValidDefaultThreshold
-    -- (see this file's own header for why that is deliberate) -- assert on
-    -- its distinguishing substring, not integrations.lua's own wording.
-    t.contains(err, 'NewCooldown called with a non-positive/invalid defaultThresholdMs')
+    t.isTrue(ok, 'the file must still load -- an abort here kills the whole K9-down dispatch feature')
+
+    local warned = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.K9DownDispatch.reFireCooldownMs', 1, true)
+            and line:find('30000', 1, true) then
+            warned = true
+        end
+    end
+    t.isTrue(warned, 'must name the exact key and the fallback substituted -- the operator still has to find out')
+end)
+
+t.test('REGRESSION: reFireCooldownMs = NaN also no longer aborts this file\'s load', function()
+    local ok = pcall(newIntegrationsFixture, {
+        tuning = { healthThreshold = 100, minDurationMs = 0, pollIntervalMs = 1000, reFireCooldownMs = 0 / 0 },
+    })
+    t.isTrue(ok)
+end)
+
+t.test('REGRESSION: a VALID reFireCooldownMs is still used, not silently replaced by the fallback', function()
+    local ok, f = pcall(newIntegrationsFixture, {
+        tuning = { healthThreshold = 100, minDurationMs = 0, pollIntervalMs = 1000, reFireCooldownMs = 777 },
+    })
+    t.isTrue(ok)
+    for _, line in ipairs(f.printedLines) do
+        t.isNil(line:find('reFireCooldownMs', 1, true),
+            'a valid configured value must pass through silently -- warning on a good value trains operators to ignore the warning')
+    end
 end)
 
 -- ----------------------------------------------------------------------
