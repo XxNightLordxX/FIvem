@@ -82,6 +82,12 @@
               allowSelfGrant: boolean, // mirrors Config.HighCommand.allowSelfGrant, UX hint only
             },
             certifications: [ { departmentKey, departmentLabel, active, grantedBy: string|null,
+              // grantedByName: coder-backend's additive display-name sibling
+              // for grantedBy (resolved, offline-safe, same ResolveDisplayName
+              // this file's own `name`/`target.name` fields already use) --
+              // buildCertificationRow() prefers this for display, but
+              // grantedBy itself remains the raw value, never replaced.
+              grantedByName: string|null,
               // ^ tier/expiresAtUnix/expired/specializations are only ever populated
               // for an ACTIVE row (server/tablet.lua's BuildCertificationsArray) --
               // never guess a value for a department this citizenid has never held.
@@ -174,6 +180,12 @@
             ok: true,
             target: { citizenid, name },
             certifications: [ { departmentKey, departmentLabel, active, grantedBy: string|null,
+              // grantedByName: coder-backend's additive display-name sibling
+              // for grantedBy (resolved, offline-safe, same ResolveDisplayName
+              // this file's own `name`/`target.name` fields already use) --
+              // buildCertificationRow() prefers this for display, but
+              // grantedBy itself remains the raw value, never replaced.
+              grantedByName: string|null,
               // ^ tier/expiresAtUnix/expired/specializations are only ever populated
               // for an ACTIVE row (server/tablet.lua's BuildCertificationsArray) --
               // never guess a value for a department this citizenid has never held.
@@ -3997,7 +4009,14 @@
         row.appendChild(mk('span', { class: 'k9tablet-cert-dept', text: entry.departmentLabel }));
         row.appendChild(mk('span', { class: 'k9tablet-cert-status k9tablet-cert-status--' + (entry.active ? 'yes' : 'no'), text: entry.active ? S('certified_yes') : S('certified_no') }));
         if (entry.active && typeof entry.grantedBy === 'string' && entry.grantedBy.length > 0) {
-            row.appendChild(mk('span', { class: 'k9tablet-cert-granter', text: entry.grantedBy }));
+            // Prefers the resolved display name (coder-backend's additive
+            // `grantedByName` sibling, server/tablet.lua's
+            // BuildCertificationsArray) over the raw citizenid -- readability
+            // pass, never a second source of truth: grantedBy itself is
+            // still the value every mutation keys off, this only changes
+            // what TEXT is shown for it.
+            var granterText = (typeof entry.grantedByName === 'string' && entry.grantedByName.length > 0) ? entry.grantedByName : entry.grantedBy;
+            row.appendChild(mk('span', { class: 'k9tablet-cert-granter', text: granterText }));
         }
 
         // TIER / EXPIRY / SPECIALIZATIONS -- only meaningful for an ACTIVE
