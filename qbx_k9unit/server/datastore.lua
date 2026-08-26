@@ -3208,7 +3208,7 @@ local function VerifyTableShapesAgainstKnownSchema()
     for _, c in ipairs(collided) do
         print(('[qbx_k9unit] datastore: !!   `%s` already exists in this database, but only %d of its %d expected columns match. This is almost certainly a DIFFERENT resource\'s table that happens to share this name, not an older qbx_k9unit install. qbx_k9unit will NOT write to it.'):format(c.name, c.matched, c.expected))
     end
-    print('[qbx_k9unit] datastore: !! Every qbx_k9unit feature is now running IN MEMORY ONLY for this session (identical to Config.Database.enabled = false -- see that setting\'s own comment in config.lua) so nothing gets written into a table this resource does not own. Nothing is lost that was not already lost: none of the table(s) named above ever belonged to qbx_k9unit in this database. TO FIX: rename or remove the conflicting table(s) named above (or ask whoever owns them to), then restart this resource. See sql/preflight_check.sql CHECK 1 for the full explanation and OPERATOR_RUNBOOK.md for the plain-language install story.')
+    print('[qbx_k9unit] datastore: !! Every qbx_k9unit feature is now running IN MEMORY ONLY for this session (identical to Config.Database.enabled = false -- see that setting\'s own comment in config.lua) so nothing gets written into a table this resource does not own. Nothing is lost that was not already lost: none of the table(s) named above ever belonged to qbx_k9unit in this database. TO FIX: rename or remove the conflicting table(s) named above (or ask whoever owns them to), then restart this resource. See sql/preflight_check.sql CHECK 1 for the full explanation and README.md for the plain-language install story.')
 end
 
 if type(AddEventHandler) == 'function' then
