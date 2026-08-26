@@ -1434,6 +1434,19 @@ Config.Vision = {
 -- above is picked up later, rather than assuming this copy stays in sync.
 -- ======================================================================
 Config.Combat = {
+    -- Can a K9 bite, take down or drag someone who is SITTING IN A
+    -- VEHICLE? Default false -- a dog physically biting a person through
+    -- a car door is almost certainly not what you want, and nothing was
+    -- stopping it before this setting existed.
+    --
+    -- This is a game-design call as much as a safety one, so it is a
+    -- switch rather than a decision made for you. The case for turning it
+    -- ON is dragging: pulling a downed driver out of a car is a plausible
+    -- thing to want, and this one setting currently covers all three
+    -- actions together. If you want dragging allowed but biting not, say
+    -- so and it can be split per action.
+    ExcludeVehicleSeatedTargets = true,
+
     -- Applies to BiteAndHold and NonLethalTakedown's player-target paths
     -- below (and would apply to PropDragging's, if/when that's built).
     -- DEVELOPER_REFERENCE.md §12.0 item 5 — RESOLVED, secure-by-default.

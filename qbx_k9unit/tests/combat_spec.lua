@@ -265,6 +265,16 @@ local function newCombatFixture(opts)
     local ragdollByPed = {}
     local function IsPedRagdoll(ped) return ragdollByPed[ped] == true end
 
+    -- RED-TEAM FINDING 3 FIX (this pass, coder-security) -- server/combat.lua's
+    -- ValidateCombatRequest now calls IsPedInAnyVehicle(targetPed, false).
+    -- Defaults to `false` (not in a vehicle) for every ped never explicitly
+    -- opted in via setInVehicle below -- every one of this file's ~90 OTHER
+    -- tests (none of which call setInVehicle) therefore exercises the
+    -- "target not in a vehicle" path unchanged, exactly as before this
+    -- check existed.
+    local inVehicleByPed = {}
+    local function IsPedInAnyVehicle(ped, _atGetIn) return inVehicleByPed[ped] == true end
+
     local onlineSet = {}
     local function GetPlayers()
         local out = {}
@@ -326,6 +336,13 @@ local function newCombatFixture(opts)
             PropDragging = opts.propDraggingCfg or baselinePropDraggingConfig(opts.downedOverride),
             BiteAndHold = opts.biteAndHoldCfg or baselineBiteAndHoldConfig(),
             NonLethalTakedown = opts.takedownCfg or baselineTakedownConfig(),
+            -- RED-TEAM FINDING 3 FIX (this pass) -- nil by default (matching
+            -- this field not yet existing in the real, shipped config.lua),
+            -- which server/combat.lua's own `~= false` read treats as the
+            -- recommended default (EXCLUDE a vehicle-seated target). Only
+            -- ever set to an explicit boolean via opts.excludeVehicleSeatedTargets
+            -- for the handful of tests that specifically flip it.
+            ExcludeVehicleSeatedTargets = opts.excludeVehicleSeatedTargets,
         },
         -- Only read by IsAuthorizedForNonComplianceAlert's job-rank check
         -- (ACE->job-rank rewrite, this pass) -- every other check in this
@@ -367,6 +384,7 @@ local function newCombatFixture(opts)
         DoesEntityExist = DoesEntityExist,
         GetEntityType = GetEntityType,
         IsPedRagdoll = IsPedRagdoll,
+        IsPedInAnyVehicle = IsPedInAnyVehicle,
         K9Compat = fakeK9Compat,
         GetPlayers = GetPlayers,
         Config = config,
@@ -466,6 +484,7 @@ local function newCombatFixture(opts)
         setHealth = function(ped, hp) healthByPed[ped] = hp end,
         setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
         setRagdoll = function(ped, isRagdoll) ragdollByPed[ped] = isRagdoll end,
+        setInVehicle = function(ped, isInVehicle) inVehicleByPed[ped] = isInVehicle end,
         registerEntity = function(netId, handle, entityType)
             networkEntities[netId] = handle
             existingEntities[handle] = true
@@ -911,6 +930,176 @@ t.test('requestBiteHold: beyond range is too_far', function()
     wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
     wireNpcTarget(f, 500, { x = 100, y = 0, z = 0 })
     f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+end)
+
+-- ========================================================================
+-- RED-TEAM FINDING 1 (this pass, coder-security): "teleport-bite" --
+-- K9PositionHistory's own declaration comment in server/combat.lua (near
+-- ActiveHolds/K9ActiveEffect) has the full writeup. The dedicated
+-- background sampling thread only ever records a sample for a source that
+-- is BOTH online (f.addOnline) AND has a resolvable ped (f.setPed, already
+-- done by wireK9) at the moment f.runOneTick() drives one full pass over
+-- every captured thread -- every test below calls both explicitly, exactly
+-- mirroring how the real thread only ever samples GetPlayers().
+-- ========================================================================
+
+t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- with no background sample ever taken yet, a request succeeds regardless of position (fails OPEN on missing data, never closed)', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    -- Deliberately never calls f.addOnline/f.runOneTick -- K9PositionHistory[K9_SRC]
+    -- does not exist yet, the same state a freshly-connected K9's very
+    -- first-ever request is always in.
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+end)
+
+t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- an implausible jump since the last background sample is refused (implausible_movement)', function()
+    local f = newCombatFixture()
+    local k9Ped = wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    f.addOnline(K9_SRC)
+    f.runOneTick() -- samples K9PositionHistory[K9_SRC] = { pos = (0,0,0), time = 0 }
+
+    -- Teleport 1000m in the next second -- 1000 m/s, far past
+    -- MAX_PLAUSIBLE_K9_SPEED_MPS (60 m/s, ~216 km/h) -- and register a
+    -- target right at the NEW position so a rejection can only be this
+    -- check, never plain proximity.
+    f.setCoords(k9Ped, 1000, 0, 0)
+    wireNpcTarget(f, 500, { x = 1000, y = 0, z = 0 })
+    f.advance(1000)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0, 'the implausible jump must refuse the request before ever reaching target resolution/proximity')
+end)
+
+t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- a fast but plausible approach (at, not over, the speed ceiling) is never refused -- the legitimate case still works', function()
+    local f = newCombatFixture()
+    local k9Ped = wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    f.addOnline(K9_SRC)
+    f.runOneTick()
+
+    -- 50 m/s over the next second -- comfortably under the 60 m/s ceiling
+    -- (a fast pursuit vehicle screeching to a halt right at trigger range).
+    f.setCoords(k9Ped, 50, 0, 0)
+    wireNpcTarget(f, 500, { x = 50, y = 0, z = 0 })
+    f.advance(1000)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+end)
+
+t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- less than MIN_TELEPORT_CHECK_ELAPSED_MS since the last sample is inconclusive, never itself a rejection', function()
+    local f = newCombatFixture()
+    local k9Ped = wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    f.addOnline(K9_SRC)
+    f.runOneTick() -- samples at t = 0
+
+    f.setCoords(k9Ped, 1000, 0, 0)
+    wireNpcTarget(f, 500, { x = 1000, y = 0, z = 0 })
+    f.advance(100) -- under the 200ms floor -- too little elapsed time to evaluate
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'too little elapsed time since the last sample must never itself cause a rejection')
+end)
+
+t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- playerDropped clears K9PositionHistory so a reused source id never inherits a stranger\'s stale sample', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    f.addOnline(K9_SRC)
+    f.runOneTick() -- K9PositionHistory[K9_SRC] = { pos = (0,0,0), time = 0 }
+    f.firePlayerDropped(K9_SRC)
+    f.removeOnline(K9_SRC)
+
+    -- A brand-new connection reuses the SAME numeric src, far from the old
+    -- sample -- if the stale entry survived, this would misread as an
+    -- implausible jump for a player who never actually moved at all.
+    wireK9(f, K9_SRC, { x = 5000, y = 0, z = 0 })
+    wireNpcTarget(f, 500, { x = 5000, y = 0, z = 0 })
+    f.advance(1000)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'the stale history must have been cleared on disconnect')
+end)
+
+t.test('requestBiteHold: TELEPORT-PLAUSIBILITY CHECK -- an ACTIVE hold remains releasable even once the check would now refuse a fresh request from the same K9', function()
+    local f = newCombatFixture()
+    local k9Ped = wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+
+    -- Record a baseline sample, then move the K9 far away WHILE the hold is
+    -- still active (an admin teleport, a vehicle-crash physics launch,
+    -- etc.) -- a FRESH request from this K9 would now be implausible.
+    f.addOnline(K9_SRC)
+    f.runOneTick()
+    f.setCoords(k9Ped, 100000, 0, 0)
+    f.advance(1000)
+
+    -- releaseBiteHold never calls ValidateCombatRequest at all (it only
+    -- resolves K9ActiveEffect[src] and checks hold.holderSrc == src) -- an
+    -- active hold must remain releasable regardless of this check's state.
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldEnded'), 1, 'an active hold must remain releasable even once the teleport-plausibility check would now refuse a NEW request')
+
+    -- Prove the check really would now bind a fresh request (i.e. the
+    -- release above succeeded because release bypasses this check, not
+    -- because the check was toothless) -- advance past BOTH the per-K9 and
+    -- per-target cooldowns first so neither masks the result.
+    f.advance(baselineBiteAndHoldConfig().targetCooldownMs + 1)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1, 'a genuinely fresh request from the same still-teleported, stale-history K9 must still be refused')
+end)
+
+-- ========================================================================
+-- RED-TEAM FINDING 3 (this pass, coder-security): no vehicle-occupancy
+-- exclusion. Shared ValidateCombatRequest gate -- exercised once each for
+-- BiteAndHold/NonLethalTakedown/PropDragging below, plus the config
+-- opt-out and the "release must never be gated on this" audit.
+-- ========================================================================
+
+t.test('requestBiteHold: RED-TEAM FINDING 3 -- a target seated in a vehicle is refused by default (Config.Combat.ExcludeVehicleSeatedTargets unset)', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.setInVehicle(targetPed, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('requestBiteHold: RED-TEAM FINDING 3 -- Config.Combat.ExcludeVehicleSeatedTargets = false lets an operator opt back into the pre-fix behavior', function()
+    local f = newCombatFixture({ excludeVehicleSeatedTargets = false })
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.setInVehicle(targetPed, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+end)
+
+t.test('requestBiteHold: RED-TEAM FINDING 3 -- an ACTIVE hold remains releasable even if the target later enters a vehicle mid-hold', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+
+    f.setInVehicle(targetPed, true) -- the target enters a vehicle WHILE already held
+    f.dispatchNetEvent('qbx_k9unit:server:releaseBiteHold', K9_SRC)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldEnded'), 1, 'a mid-hold vehicle entry must never strand an already-active hold -- release never re-checks vehicle status')
+end)
+
+t.test('requestTakedown: RED-TEAM FINDING 3 -- a target seated in a vehicle is refused (checked at the PRE-yield ValidateCombatRequest call, before the speed-sample Wait())', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.setInVehicle(targetPed, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestTakedown', K9_SRC, 500)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('requestDrag: RED-TEAM FINDING 3 -- a downed target seated in a vehicle is refused (shared ValidateCombatRequest gate)', function()
+    local f = newCombatFixture({ propDragging = true })
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0, health = 50 }) -- <= PED_DEAD_HEALTH_THRESHOLD -- IsTargetDowned's NPC branch reads this as downed
+    f.setInVehicle(targetPed, true)
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
     t.equals(#f.clientEvents, 0)
 end)
 

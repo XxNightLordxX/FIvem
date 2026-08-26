@@ -449,6 +449,34 @@
     NEVER auto-kick/auto-ban, never any effect on this resource's own
     server-authoritative state (guardrail 3 above) — detection only.
     ======================================================================
+
+    RED-TEAM TRUST-BOUNDARY PASS (this pass, coder-security) — three gaps
+    traced against ValidateCombatRequest and its four callers
+    (requestBiteHold, requestTakedown/HandleTakedownRequest, requestDrag):
+    1. "Teleport-bite/teleport-takedown" — the only proximity gate was a
+       single live-distance read at request time, with no check that the
+       K9's OWN position was plausible in the preceding ticks. FIXED: see
+       K9PositionHistory's own declaration comment (near ActiveHolds/
+       K9ActiveEffect below) and the dedicated background sampling thread
+       (near this file's other maintenance threads) for the full writeup —
+       adapted from, not copied from, server/tracking.lua's own
+       PendingTrackArrival/minElapsedMs anti-"teleport-and-report" design.
+    2. "Bite/takedown through walls" — no line-of-sight check exists
+       anywhere server-side, confirmed both by an exhaustive grep of every
+       server/*.lua in this resource and by tracing citizen-server-impl's
+       own native-registration source directly. NOT FIXED — genuinely not
+       fixable server-side (FXServer loads no collision/physics world at
+       all) without a materially larger witness-corroboration design out of
+       this pass's scope. See the dedicated comment at ValidateCombatRequest's
+       own live-proximity check (below) for the full verification trail and
+       the honest disclosed residual risk.
+    3. "No vehicle-occupancy exclusion" — neither ValidateCombatRequest nor
+       HandleTakedownRequest checked whether the TARGET was seated in a
+       vehicle. FIXED: see the IsPedInAnyVehicle check inside
+       ValidateCombatRequest (below) — gated behind
+       Config.Combat.ExcludeVehicleSeatedTargets (not yet landed in
+       config.lua; reads `~= false`, defaulting to EXCLUDE until it lands).
+    ======================================================================
 ]]
 
 -- Ephemeral, in-memory only (mirrors server/main.lua's LeashPairs and
@@ -476,6 +504,71 @@ local ActiveHolds = {}
 -- at a time, not one slot per effect type) -- also lets releaseBiteHold
 -- resolve its own target without a linear scan of ActiveHolds.
 local K9ActiveEffect = {}
+
+-- RED-TEAM FINDING 1 FIX (this pass, coder-security): "teleport-bite" /
+-- "teleport-takedown". ValidateCombatRequest's own live-proximity check
+-- below (`#(k9Pos - GetEntityCoords(targetPed))`) only ever reads a SINGLE
+-- instantaneous position at the moment the event is processed -- it has no
+-- opinion on whether the K9 got there plausibly. A modded client can
+-- SetEntityCoords the K9 ped to within range, fire requestBiteHold/
+-- requestTakedown/requestDrag, then teleport back out, and for takedown
+-- specifically (whose own ValidateCombatRequest re-check happens a second
+-- time, post-Wait, at :2310 below) simply hold position for the short
+-- speedSampleWindowMs and teleport away immediately after.
+--
+-- MIRRORS server/tracking.lua's OWN already-shipped anti-"teleport-and-
+-- report" design (that file's PendingTrackArrival/`minElapsedMs`/
+-- MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS, see its own declaration comments for the
+-- full ECONOMY-AUDIT FIX HOLE 2 writeup) as directed, but adapted rather than
+-- copied verbatim: tracking.lua's mechanic is a two-PHASE "resolve now,
+-- arrive later" flow with a natural gap to measure real elapsed time across
+-- -- BiteAndHold/PropDragging's own requestBiteHold/requestDrag are
+-- SINGLE-SHOT (one client->server event, no second phase), and even
+-- NonLethalTakedown's own two ValidateCombatRequest samples are only
+-- speedSampleWindowMs (250ms shipped) apart, an interval a fast teleport
+-- can straddle entirely. Measuring "distance travelled BETWEEN two
+-- ValidateCombatRequest calls from the SAME request" therefore cannot work
+-- here the way it does for tracking.lua's resolve/arrive pair -- worse,
+-- this resource's own 20-35s combat cooldowns (BiteHoldCooldown/
+-- TakedownCooldown/etc.) mean the gap between two SEPARATE requests from the
+-- same K9 is already so large that almost any teleport distance would read
+-- as "plausible" travel if measured that way, making the check a no-op in
+-- practice.
+--
+-- FIX ACTUALLY BUILT: an INDEPENDENT background sampling thread (see
+-- K9_POSITION_SAMPLE_INTERVAL_MS's own thread near the bottom of this
+-- file's maintenance-thread section) records every online player's own live
+-- GetEntityCoords position on a fixed cadence, completely decoupled from
+-- request timing -- exactly the property tracking.lua's own createdAt/
+-- minElapsedMs pair achieves via its two-phase flow, achieved here instead
+-- via continuous, request-independent sampling since no second phase
+-- exists to piggyback on. ValidateCombatRequest below then compares the
+-- K9's CURRENT position against this independently-sampled history and
+-- rejects the request if the IMPLIED SPEED between the two exceeds
+-- MAX_PLAUSIBLE_K9_SPEED_MPS -- the same "server-measured distance /
+-- server-measured elapsed time, never a client-supplied value" discipline
+-- tracking.lua's own fix already established.
+--
+-- FAILS OPEN ONLY ON MISSING DATA, never on a detected violation: a K9 with
+-- no history entry yet (freshly connected, within the first
+-- K9_POSITION_SAMPLE_INTERVAL_MS of joining, before the sampling thread's
+-- own first tick has run for them) is ALLOWED through with no plausibility
+-- opinion at all -- there is no baseline to compare against, and rejecting
+-- on "insufficient data" would false-positive every legitimate K9's very
+-- first request after a resource restart or reconnect. This is a disclosed,
+-- BOUNDED residual gap (see this file's own final report to the team for
+-- the honest writeup), not a silent one: it narrows the exploit from
+-- "any time, repeatedly" to "at most once per fresh connection, and only
+-- within roughly one sampling interval of connecting" -- reconnecting to a
+-- FiveM server is far slower than the cooldowns this mechanic already
+-- imposes, so this is not a practically repeatable bypass.
+--
+-- K9PositionHistory[src] = { pos = vector3, time = number } -- GetGameTimer()
+-- of the LAST independent background sample, never updated by
+-- ValidateCombatRequest itself (see the sampling thread's own comment for
+-- why a request-time update would defeat this check against this file's own
+-- cooldowns) and never keyed by anything client-supplied.
+local K9PositionHistory = {}
 
 -- ALL FOUR ResolveConfiguredThresholdMs CALLS BELOW (this pass, coder-backend
 -- -- QA sandbox repro): these four constructors used to hand a raw
@@ -620,6 +713,48 @@ local MIN_BITE_HOLD_XP_DURATION_MS = 3000
 --- also reject a merely-downed/laststand one, which is exactly the failure
 --- mode flagged for a naive `<= 0` (or worse, `== 0`) substitution.
 local PED_DEAD_HEALTH_THRESHOLD = 100
+
+-- RED-TEAM FINDING 1 FIX (this pass, coder-security) -- see K9PositionHistory's
+-- own declaration comment above for the full writeup this trio of constants
+-- backs. FILE-LOCAL CONSTANTS, NOT Config.* FIELDS -- deliberately, same
+-- reasoning BiteHoldXpMintCooldown's own declaration comment and
+-- server/tracking.lua's MIN_TRACK_XP_DISTANCE/MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS
+-- already establish for this exact class of anti-abuse floor: this is a
+-- security backstop, not an operator-facing balance knob, and there is no
+-- validation this file could add that would catch "an operator set this to
+-- a technically-valid but useless value" the way NewCooldown's own
+-- AssertValidDefaultThreshold already catches non-positive cooldowns.
+-- Keeping it a local means the only way to weaken it is a reviewed source
+-- edit, not a config change.
+--
+-- K9_POSITION_SAMPLE_INTERVAL_MS: cadence of the independent background
+-- sampling thread (near this file's other maintenance threads, below). 1s
+-- is coarse enough to be cheap (one GetPlayerPed+GetEntityCoords pair per
+-- online player per second, the same order of cost as the existing
+-- notify_staff fan-out's own per-tick GetPlayers() scan) while still being
+-- far finer than this mechanic's own 20-35s cooldowns.
+local K9_POSITION_SAMPLE_INTERVAL_MS = 1000
+
+-- MIN_TELEPORT_CHECK_ELAPSED_MS: the plausibility check in
+-- ValidateCombatRequest below is SKIPPED (never rejects) when less than
+-- this much time has elapsed since the K9's own last background sample --
+-- guards against dividing by a near-zero elapsed time (which would make
+-- even ordinary, non-teleport movement read as an absurd implied speed) in
+-- the narrow window right after the sampling thread's own most recent tick.
+local MIN_TELEPORT_CHECK_ELAPSED_MS = 200
+
+-- MAX_PLAUSIBLE_K9_SPEED_MPS: deliberately generous -- ~216 km/h, well above
+-- any in-game vehicle's realistic top speed -- specifically so a K9 handler
+-- who legitimately arrives fast BY VEHICLE (a patrol car, or even a fast
+-- pursuit vehicle screeching to a halt right at the trigger range) is never
+-- false-flagged; this exists to catch a teleport (which shows up as
+-- hundreds-to-thousands of m/s over a ~1s sampling gap), not to second-guess
+-- fast-but-real driving. Per this file's own "Anti-cheat false-positive
+-- risk" mandate: this is a narrow, disclosed, request-denial-only check --
+-- it never teleports, freezes, or otherwise touches the K9's own ped, and a
+-- false positive costs the K9 nothing but having to re-issue the same
+-- request a moment later once a fresh, closer sample lands.
+local MAX_PLAUSIBLE_K9_SPEED_MPS = 60.0
 
 local TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS = 60000
 TakedownTargetCooldown.StartSweep(TARGET_SEARCH_COOLDOWN_PRUNE_INTERVAL_MS, function(now, loggedAt)
@@ -991,6 +1126,25 @@ local COMBAT_REJECT_MESSAGES = {
     -- every spec that loads this file, not just the ones exercising this
     -- reason. If you add another reason here, land its key first.
     tier_capability_denied = locale('combat.tier_capability_denied'),
+    -- RED-TEAM FINDINGS 1 & 3 (this pass, coder-security) -- two NEW reject
+    -- reasons ('implausible_movement', 'target_in_vehicle', see
+    -- ValidateCombatRequest's own call sites below for each) DELIBERATELY
+    -- NOT mapped here yet, same reason/same fix as tier_capability_denied's
+    -- own comment immediately above: this table is a top-level literal
+    -- evaluated at file-load time and the test sandbox's locale() hard-
+    -- asserts on a missing key, so naming combat.implausible_movement/
+    -- combat.target_in_vehicle before they exist in locales/en.json would
+    -- break every spec that loads this file. Until those two keys land,
+    -- CombatRejectMessage(...) falls through to its own existing generic
+    -- fallback (locale('combat.reject_fallback')) automatically for both --
+    -- not factually wrong, just less specific than intended. Proposed
+    -- wording, for whoever lands locales/en.json next:
+    --   combat.implausible_movement = "Your K9's movement could not be
+    --     verified. Try again."
+    --   combat.target_in_vehicle    = "That target is currently inside a
+    --     vehicle."
+    -- Land the keys, then swap this comment's mapping into the table above,
+    -- exactly as tier_capability_denied's own history already did.
 }
 
 --- @param reason string?
@@ -1280,6 +1434,45 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         return false, nil, nil, nil, nil, 'offline' -- defensive: src disconnected between the event firing and this line
     end
 
+    -- Read once, reused below both for the teleport-plausibility check
+    -- immediately following AND for the live-proximity check further down
+    -- -- a single source of truth for "where is the K9 right now" within
+    -- this one call, and one fewer native call than reading it twice.
+    local k9Pos = GetEntityCoords(k9Ped)
+
+    -- RED-TEAM FINDING 1 FIX (this pass, coder-security) -- see
+    -- K9PositionHistory's own declaration comment (near ActiveHolds/
+    -- K9ActiveEffect above) for the full writeup this implements, and the
+    -- three constants immediately below PED_DEAD_HEALTH_THRESHOLD for the
+    -- specific numbers used here. Placed BEFORE target resolution -- this
+    -- check is entirely about the REQUESTING K9's own recent movement, it
+    -- needs no target at all, so there is no reason to pay for
+    -- ResolveNetworkEntity/player-vs-NPC resolution first.
+    --
+    -- FAILS OPEN on missing history (no baseline yet -- see the declaration
+    -- comment's own disclosed, bounded residual-risk writeup), FAILS CLOSED
+    -- (rejects the request) the moment a baseline exists and the implied
+    -- speed between it and the K9's CURRENT position exceeds
+    -- MAX_PLAUSIBLE_K9_SPEED_MPS. This is a REQUEST-TIME-ONLY gate, exactly
+    -- like every other check in this function (see this function's own doc
+    -- comment) -- it can never strand an already-open hold/takedown/drag,
+    -- because ValidateCombatRequest itself is only ever called to OPEN one,
+    -- never to end/maintain one (EndHold, EndActiveEffectForHolder, the
+    -- maintenance expiry sweep, releaseBiteHold/releaseDrag all bypass this
+    -- function entirely).
+    do
+        local history = K9PositionHistory[src]
+        if history then
+            local elapsedMs = GetGameTimer() - history.time
+            if elapsedMs >= MIN_TELEPORT_CHECK_ELAPSED_MS then
+                local impliedSpeed = #(k9Pos - history.pos) / (elapsedMs / 1000.0)
+                if impliedSpeed > MAX_PLAUSIBLE_K9_SPEED_MPS then
+                    return false, nil, nil, nil, nil, 'implausible_movement'
+                end
+            end
+        end
+    end
+
     -- expectedEntityType = 1 (ped) -- see server/entities.lua's
     -- ResolveNetworkEntity doc comment for the GetEntityType numbering.
     local targetPed = ResolveNetworkEntity(targetNetId, 1)
@@ -1300,8 +1493,101 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
         return false, nil, nil, nil, nil, 'target_dead'
     end
 
+    -- RED-TEAM FINDING 3 FIX (this pass, coder-security): neither this
+    -- function nor HandleTakedownRequest previously checked whether the
+    -- TARGET was seated in a vehicle at all -- a bite/takedown/drag could be
+    -- initiated against someone sitting in a car (tests/vehiclecombatguard_spec.lua
+    -- only ever guarded the K9's OWN vehicle-loaded conflict, client-side,
+    -- never a seated TARGET). `IsPedInAnyVehicle` is confirmed
+    -- server-registered (citizen-server-impl's own
+    -- ServerGameState_Scripting.cpp, the same authoritative source this
+    -- file's own PED_DEAD_HEALTH_THRESHOLD/HolderPedIsDead findings already
+    -- cite -- reads `pedGameState->curVehicleSeat ~= -1` directly off the
+    -- entity's own synced state, never a client claim), so this is a real,
+    -- server-authoritative check, not a client-attested one.
+    --
+    -- Config.Combat.ExcludeVehicleSeatedTargets (NOT YET LANDED in
+    -- config.lua -- this file may not edit config.lua this pass; see this
+    -- pass's own report to whoever owns that file). `~= false` means a
+    -- missing/nil field (today's reality until it lands) reads as the
+    -- RECOMMENDED default (EXCLUDE a vehicle-seated target) -- an operator
+    -- who wants the pre-fix behavior back (e.g. a server that deliberately
+    -- wants K9 units to be able to drag a downed driver out of a car -- see
+    -- this check's own placement relative to PropDragging's requireAlive =
+    -- false path immediately above) can opt back in with an explicit
+    -- `false`. Applied uniformly to BiteAndHold/NonLethalTakedown/
+    -- PropDragging alike (same shared validator, same target-physical-state
+    -- question for all three) -- flagged in this pass's own report as a
+    -- product/design question for PropDragging specifically, since pulling
+    -- an unconscious driver out of their seat is a plausible legitimate use
+    -- case the shared default now blocks unless the operator opts out.
+    local excludeVehicleSeatedTargets = Config.Combat.ExcludeVehicleSeatedTargets ~= false
+    if excludeVehicleSeatedTargets and IsPedInAnyVehicle(targetPed, false) then
+        return false, nil, nil, nil, nil, 'target_in_vehicle'
+    end
+
+    -- RED-TEAM FINDING 2, DELIBERATELY NOT FIXED (this pass, coder-security):
+    -- the distance check immediately below is Euclidean-only -- there is no
+    -- line-of-sight check anywhere in this file (confirmed: zero references
+    -- to any raycast/shape-test native across every server/*.lua in this
+    -- resource), so a K9 within `rangeMeters` on the far side of a thin
+    -- wall or door can initiate a bite/takedown/drag exactly as if standing
+    -- in the open.
+    --
+    -- VERIFIED, NOT ASSUMED, that no server-side fix is possible: checked
+    -- citizen-server-impl's own ServerGameState_Scripting.cpp/
+    -- ServerGameState.cpp (the same authoritative source this file's own
+    -- PED_DEAD_HEALTH_THRESHOLD/IsPedInAnyVehicle findings already cite) --
+    -- zero RegisterNativeHandler calls for any SHAPETEST/raycast/
+    -- HAS_ENTITY_CLEAR_LOS_TO_ENTITY native anywhere in either file, or
+    -- anywhere else this session's search reached. This is architectural,
+    -- not a mere registration gap: FXServer does not load or simulate world
+    -- collision geometry at all (no physics/rendering world exists
+    -- server-side), so a raycast against level geometry is not merely
+    -- unimplemented, it has nothing to query even if it were. (The
+    -- `natives.json` `apiset` field this session was directed to fall back
+    -- on turned out UNRELIABLE for this determination -- independently
+    -- verified absent/None for the overwhelming majority of natives in that
+    -- file regardless of real client/server status, INCLUDING
+    -- GetEntityHealth/IsPedRagdoll/GetEntityCoords, all three already
+    -- confirmed server-callable elsewhere in this exact file by the C++
+    -- source directly; a 404 on `docs.fivem.net`'s natives reference is
+    -- likewise uninformative on its own, matching this file's own existing
+    -- SetEntityCanBeDamaged/SetEntityHealth findings above that the primary
+    -- C++ registration list is the only conclusive source.)
+    --
+    -- DELIBERATELY NOT ADDING A CLIENT-ATTESTED LOS RESULT INSTEAD: a
+    -- client-reported "I have LOS" boolean would be worthless against
+    -- exactly the modified client this whole file defends against (it could
+    -- simply always claim true) -- adding one and calling this fixed would
+    -- be strictly worse than the honest gap, since it would look resolved
+    -- in a future review while adding zero real protection. Not done.
+    --
+    -- FAILURE DIRECTION, CHOSEN DELIBERATELY: since no real check exists to
+    -- run, there is nothing to fail open OR closed on here -- this is a
+    -- disclosed absence, not a check that defaults permissively. The
+    -- request proceeds on distance/access/wanted-status/etc. alone, exactly
+    -- as before this pass.
+    --
+    -- WHAT A REAL FIX WOULD REQUIRE: the raycast must run on a client that
+    -- actually has the world loaded. The only trustworthy shape is a
+    -- SERVER-INITIATED, SERVER-INTERPRETED check that does not simply take
+    -- the requesting K9's own word for it -- e.g. the server asks a THIRD
+    -- PARTY (not the K9, not the target) client already near both
+    -- positions to run the shape test and report the result, corroborated
+    -- across multiple nearby witnesses before being trusted, the same
+    -- "never trust the one client with an incentive to lie" posture
+    -- RequireWantedStatus/IsPlayerWantedEligible already apply elsewhere in
+    -- this file -- genuinely more work than this pass's scope, and only
+    -- viable at all when a third witness happens to be nearby.
+    --
+    -- HONEST RESIDUAL RISK: a K9 can still initiate a bite/takedown/drag
+    -- through a thin wall/door within `rangeMeters` (2.5-3.0m shipped). This
+    -- is a real, unresolved gap in this pass, reported as such rather than
+    -- silently accepted or papered over.
+    --
     -- Live server-side proximity — NEVER a client-claimed distance.
-    local dist = #(GetEntityCoords(k9Ped) - GetEntityCoords(targetPed))
+    local dist = #(k9Pos - GetEntityCoords(targetPed))
     if dist > rangeMeters then
         return false, nil, nil, nil, nil, 'too_far'
     end
@@ -2042,6 +2328,53 @@ if Config.Combat.NonComplianceDetection.enabled then
     end)
 end
 
+-- Shared K9 POSITION-HISTORY sampling thread -- RED-TEAM FINDING 1 FIX (this
+-- pass, coder-security). See K9PositionHistory's own declaration comment
+-- (near ActiveHolds/K9ActiveEffect above) for the full writeup; this is the
+-- independent, request-timing-decoupled sampling half of that fix.
+-- Deliberately its OWN thread rather than folded into either thread above:
+-- job (a) (expiry) iterates ActiveHolds and must never be delayed; job (b)
+-- (compliance sampling) also iterates ActiveHolds and is gated behind
+-- NonComplianceDetection.enabled; THIS job iterates every ONLINE PLAYER
+-- (GetPlayers(), same source this file's own notify_staff fan-out already
+-- scans) regardless of whether any hold is currently active at all -- a K9
+-- position history must already exist BEFORE that K9's first request, not
+-- start only once ActiveHolds has an entry, or the very race this fix
+-- exists to close would simply move to "the very first request after a
+-- hold ends."
+--
+-- Gated on the same three feature flags that are the only real writers into
+-- ActiveHolds via ValidateCombatRequest (see the PERFORMANCE FIX comment
+-- above the expiry thread's own gate for the full "provably always empty
+-- otherwise" reasoning) -- MINUS HandlerDownDefense, which never calls
+-- ValidateCombatRequest at all (it only relays a pre-selected-target
+-- NOTIFICATION, see this file's header), so sampling positions for that
+-- flag alone would populate a table nothing ever reads.
+if Config.Features.BiteAndHold or Config.Features.NonLethalTakedown or Config.Features.PropDragging then
+    CreateThread(function()
+        while true do
+            Wait(K9_POSITION_SAMPLE_INTERVAL_MS)
+            local now = GetGameTimer()
+
+            -- No pcall needed per-iteration (unlike the two threads above):
+            -- GetPlayerPed/GetEntityCoords are simple, non-throwing native
+            -- reads with no user-supplied override/hook involved anywhere
+            -- in this loop, the same posture the notify_staff fan-out this
+            -- loop mirrors already takes for its own identical GetPlayers()
+            -- scan.
+            for _, playerIdStr in ipairs(GetPlayers()) do
+                local playerId = tonumber(playerIdStr)
+                if playerId then
+                    local ped = GetPlayerPed(playerId)
+                    if ped ~= 0 then
+                        K9PositionHistory[playerId] = { pos = GetEntityCoords(ped), time = now }
+                    end
+                end
+            end
+        end
+    end)
+end
+
 --[[ ================= BITE-AND-HOLD ================= ]]
 
 --- @param targetNetId any
@@ -2677,4 +3010,20 @@ AddEventHandler('playerDropped', function()
             EndHold(netId, 'target_disconnected')
         end
     end
+
+    -- RED-TEAM FINDING 1 FIX, cleanup half (this pass, coder-security): a
+    -- stale K9PositionHistory[src] entry left behind after disconnect would
+    -- be keyed to a `src` number FiveM WILL eventually reuse for a
+    -- completely unrelated new connection -- without this, that brand-new
+    -- player's very first combat request could be compared against a
+    -- position that belonged to a different person entirely (either
+    -- wrongly rejecting them for "implausible movement" relative to a
+    -- stranger's old location, or, if the stale entry happened to sit right
+    -- next to wherever they spawned, wrongly granting a free pass). This is
+    -- a pure cleanup, never a gate -- removing this line would only
+    -- reintroduce that stale-reuse edge case, it could never strand a hold
+    -- (K9PositionHistory is read only by ValidateCombatRequest, a
+    -- REQUEST-TIME-ONLY function per its own doc comment, never by any
+    -- termination path).
+    K9PositionHistory[src] = nil
 end)

@@ -157,7 +157,9 @@
         "takedown_ended_early": "The takedown ended early.",
         "target_dead": "That target is down.",
         "target_not_downed": "That target does not appear to be downed.",
-        "too_far": "You are too far from the target."
+        "too_far": "You are too far from the target.",
+        "implausible_movement": "Your K9's movement could not be verified. Try again.",
+        "target_in_vehicle": "That target is currently inside a vehicle."
     },
     "common": {
         "handler_not_in_department": "The handler must be employed by an eligible department.",
