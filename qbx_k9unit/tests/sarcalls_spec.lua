@@ -126,6 +126,24 @@ local function GetEntityCoords(ped) return pedCoordsBySource[ped] or { x = 0, y 
 local hasAccess = true
 local function HasK9Access(_source) return hasAccess end
 
+-- PER-PERSON FEATURE CONTROL (IsSarCallsPermittedForCitizenId, added
+-- alongside this file's own CONFIG-SAFETY GUARD rewrite) -- mirrors
+-- tests/findalert_spec.lua's own permissionGrants/defaultHasPermission
+-- shape, adapted to this section's SHARED-fixture convention (one
+-- module-level serverEnv/ServerConfig reused and toggled across every test
+-- in this section, rather than a per-test factory): `serverEnv.HasPermission`
+-- is a live table field that can be set to this function or to nil between
+-- tests to simulate "server/permissions.lua present" vs. "entirely absent",
+-- exactly like `hasAccess` above already toggles HasK9Access's return value.
+local permissionGrants = {} -- [citizenid][key] = true/false
+local function HasPermission(citizenid, key)
+    return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+end
+local function grantPermission(citizenid, key, value)
+    permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+    permissionGrants[citizenid][key] = value
+end
+
 local playersBySource = {} -- src -> { citizenid = string, job = string }
 local function qbxGetPlayer(_self, src)
     local rec = playersBySource[src]
@@ -167,7 +185,17 @@ local function ServerConfigWith(overrides)
         startCooldownMs = 8000,
     }
     for k, v in pairs(overrides or {}) do base[k] = v end
-    return { Features = { SARCalls = true }, SARCalls = base, XP = { awards = { sarCallCompleted = 30 } } }
+    return {
+        Features = { SARCalls = true },
+        SARCalls = base,
+        XP = { awards = { sarCallCompleted = 30 } },
+        -- Defaults OFF so every pre-existing test above keeps testing
+        -- exactly what it was written to test (the config-abort/clamp
+        -- behavior, the tick loop, cooldowns, ...) without also having to
+        -- thread a grant through each one -- see the dedicated "PER-PERSON
+        -- FEATURE CONTROL" section below for where this gets flipped true.
+        FeatureControl = { RequireGrant = { SARCalls = false } },
+    }
 end
 
 local ServerConfig = ServerConfigWith()
@@ -182,6 +210,7 @@ serverEnv = Sandbox.newEnv({
     GetPlayerPed = GetPlayerPed,
     GetEntityCoords = GetEntityCoords,
     HasK9Access = HasK9Access,
+    HasPermission = HasPermission,
     exports = { qbx_core = { GetPlayer = qbxGetPlayer } },
     TriggerClientEvent = TriggerClientEvent,
     TriggerEvent = TriggerEvent,
@@ -449,6 +478,150 @@ t.test('playerDropped clears a source\'s ActiveSarCalls entry (a fresh request f
     queueRandom(0.0, 0.0)
     local fresh = requestSarCall(24)
     t.isTrue(fresh.started, 'a dropped connection must not leave a stale already_active entry behind')
+end)
+
+-- ------------------------------------------------------------------------
+-- PER-PERSON FEATURE CONTROL (IsSarCallsPermittedForCitizenId) --
+-- config.lua's own Config.FeatureControl.RequireGrant.SARCalls entry,
+-- previously dead (see server/sarcalls.lua's own header "PER-PERSON FEATURE
+-- CONTROL" section for the gap this closes). Every test above this comment
+-- ran (and every test below it that doesn't touch these two knobs still
+-- runs) with ServerConfig.FeatureControl.RequireGrant.SARCalls defaulted to
+-- false and no grants held -- see ServerConfigWith's own comment -- so this
+-- is the only section that turns RequireGrant on and exercises the gate
+-- explicitly. Mirrors tests/pursuitsprint_spec.lua's/tests/findalert_spec.lua's
+-- own equivalent sections for the identical steps 2-4.
+-- ------------------------------------------------------------------------
+
+t.test('grant_required: RequireGrant.SARCalls = true + no grant held -- denied even though HasK9Access is true, before the cooldown is ever consumed', function()
+    playersBySource[30] = { citizenid = 'CIT_GRANTREQ', job = 'police' }
+    pedCoordsBySource[30] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = true
+    local result = requestSarCall(30)
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = false
+    t.isFalse(result.started)
+    t.equals(result.reason, 'denied')
+
+    -- Cooldown must NOT have been consumed by the denied attempt -- an
+    -- immediately-following request (still under startCooldownMs) for the
+    -- SAME citizenid, now granted, must still succeed.
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = true
+    grantPermission('CIT_GRANTREQ', 'feature.SARCalls', true)
+    queueRandom(0.0, 0.0)
+    local retried = requestSarCall(30)
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = false
+    t.isTrue(retried.started, 'the earlier denial must not have burned the cooldown budget')
+end)
+
+t.test('RequireGrant.SARCalls = true + an active feature.SARCalls grant -- allowed', function()
+    playersBySource[31] = { citizenid = 'CIT_GRANTED', job = 'police' }
+    pedCoordsBySource[31] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    grantPermission('CIT_GRANTED', 'feature.SARCalls', true)
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = true
+    queueRandom(0.0, 0.0)
+    local result = requestSarCall(31)
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = false
+    t.isTrue(result.started)
+end)
+
+t.test('BLOCK ALWAYS WINS: an explicit block.SARCalls denies even a citizenid who ALSO holds an active feature.SARCalls grant', function()
+    playersBySource[32] = { citizenid = 'CIT_BLOCKED', job = 'police' }
+    pedCoordsBySource[32] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    grantPermission('CIT_BLOCKED', 'feature.SARCalls', true)
+    grantPermission('CIT_BLOCKED', 'block.SARCalls', true)
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = true
+    local result = requestSarCall(32)
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = false
+    t.isFalse(result.started)
+    t.equals(result.reason, 'denied')
+end)
+
+t.test('BLOCK STILL APPLIES even when NOT listed in RequireGrant (step 2 fires independently of step 3)', function()
+    playersBySource[33] = { citizenid = 'CIT_BLOCKED_NOGRANT', job = 'police' }
+    pedCoordsBySource[33] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    grantPermission('CIT_BLOCKED_NOGRANT', 'block.SARCalls', true)
+    -- RequireGrant.SARCalls is false (the shared fixture's own default) here.
+    local result = requestSarCall(33)
+    t.isFalse(result.started)
+    t.equals(result.reason, 'denied')
+end)
+
+t.test('RequireGrant.SARCalls = false (not listed) -- default ALLOW, no grant needed, matching config.lua\'s own documented step 4', function()
+    playersBySource[34] = { citizenid = 'CIT_DEFAULTALLOW', job = 'police' }
+    pedCoordsBySource[34] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    -- No grant, no block, RequireGrant.SARCalls false (default) -- must
+    -- still be allowed to start.
+    local result = requestSarCall(34)
+    t.isTrue(result.started)
+end)
+
+t.test('server/permissions.lua entirely absent (HasPermission not even defined): RequireGrant-listed feature fails CLOSED (deny), never open', function()
+    playersBySource[35] = { citizenid = 'CIT_NOPERMS', job = 'police' }
+    pedCoordsBySource[35] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = true
+    serverEnv.HasPermission = nil -- simulate server/permissions.lua not being loaded at all
+    local result = requestSarCall(35)
+    serverEnv.HasPermission = HasPermission
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = false
+    t.isFalse(result.started, 'a missing HasPermission must never fail open')
+    t.equals(result.reason, 'denied')
+end)
+
+t.test('server/permissions.lua entirely absent + feature NOT listed in RequireGrant -- still allowed (step 2/3 both structurally unreachable, falls through to step 4)', function()
+    playersBySource[36] = { citizenid = 'CIT_NOPERMS_ALLOW', job = 'police' }
+    pedCoordsBySource[36] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    serverEnv.HasPermission = nil
+    queueRandom(0.0, 0.0)
+    local result = requestSarCall(36)
+    serverEnv.HasPermission = HasPermission
+    t.isTrue(result.started)
+end)
+
+t.test('an unresolvable citizenid is STILL denied before the permission gate is ever reached, even with RequireGrant on and access true', function()
+    -- source 37 has no playersBySource entry at all -- same "transient
+    -- exports.qbx_core:GetPlayer resolution miss" shape as the earlier,
+    -- pre-existing unresolvable-citizenid test above, re-proven here with
+    -- the permission gate active to confirm the gate did not move ahead of
+    -- (or replace) the citizenid-resolution check.
+    pedCoordsBySource[37] = { x = 0.0, y = 0.0, z = 0.0 }
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = true
+    local result = requestSarCall(37)
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = false
+    t.isFalse(result.started)
+    t.equals(result.reason, 'denied')
+end)
+
+t.test('NO UNBOUNDED TRAP: abandonSarCall still works UNCONDITIONALLY for a caller who is currently BLOCKED -- the gate exists on the call-START path only', function()
+    playersBySource[38] = { citizenid = 'CIT_BLOCKED_ABANDON', job = 'police' }
+    pedCoordsBySource[38] = { x = 0.0, y = 0.0, z = 0.0 }
+    fakeNow = fakeNow + 20000
+    queueRandom(0.0, 0.0)
+    -- Start the call while still allowed...
+    local started = requestSarCall(38)
+    t.isTrue(started.started)
+
+    -- ...then get blocked mid-call...
+    grantPermission('CIT_BLOCKED_ABANDON', 'block.SARCalls', true)
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = true
+
+    -- ...abandon must STILL succeed, exactly like the pre-existing
+    -- feature-off/access-revoked abandon test above.
+    local awardCountBefore = #awardCalls
+    fireAbandonSarCall(38)
+    ServerConfig.FeatureControl.RequireGrant.SARCalls = false
+
+    t.equals(#awardCalls, awardCountBefore, 'abandoning must never mint XP')
+    local endPush = triggerClientEventCalls[#triggerClientEventCalls]
+    t.equals(endPush.event, 'qbx_k9unit:client:sarCallEnded')
+    t.equals(endPush.args[1], 'abandoned')
 end)
 
 t.test('FEATURE GATE: Config.Features.SARCalls = false is a genuine no-op at load time -- no assert, no NewCooldown, no thread, no registration -- even with a garbage/absent Config.SARCalls', function()

@@ -395,9 +395,13 @@
     resource-global on the SERVER side, this file's own API_VERSION stays
     at 1.0.0 — there is nothing additive to bump for. See VERSIONING above
     and client/exports.lua's own header for why that file's version DID
-    move to 1.1.0 this same pass (it gained two genuinely new reads:
-    `IsFetchCarryEngaged`, `HasFreshDefensePrompt` +
-    `GetDefenseSuggestedTargetNetId`) — the two files' API_VERSION numbers
+    move — to 1.1.0 in that pass, for two genuinely new reads
+    (`IsFetchCarryEngaged`, `HasFreshDefensePrompt` +
+    `GetDefenseSuggestedTargetNetId`), and again to 1.2.0 on 2026-08-26 for
+    a third, `IsPropAttachmentEngaged`. Do not read a count off this
+    paragraph: client/exports.lua's own API_VERSION line is the authority,
+    and this cross-reference has already gone stale once by trying to
+    restate it. The two files' API_VERSION numbers
     are independent contracts, tracked separately, and are not expected to
     stay numerically identical going forward; see client/exports.lua's own
     corrected VERSIONING note for the full reasoning on why "kept in sync"

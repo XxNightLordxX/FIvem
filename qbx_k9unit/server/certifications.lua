@@ -130,15 +130,18 @@
       header for the full rationale (DEVELOPER_REFERENCE.md §1/§4.4 "immediately").
     - THIS FILE also calls `ForceBreakPartnershipForCitizenId(citizenid,
       reason)`, exposed by server/partnership.lua (Phase 3, DEVELOPER_REFERENCE.md
-      §12.0 item 7), alongside all FOUR existing leash-teardown call sites
+      §12.0 item 7), alongside all FIVE existing leash-teardown call sites
       in this file: RevokeCertification's online branch
       (ForceDetachLeashForSource), RevokeCertificationOffline
       (ForceDetachLeashIfOnline), and the QBCore:Server:OnJobUpdate
-      handler's TWO branches — department-loss
-      (ForceDetachOfficerLeashForSource) and cert-revoke-due-to-job-change
-      (ForceDetachLeashForSource) — a K9 partnership must not outlive
-      either party's cert revocation or department loss any more than a
-      leash pairing may. Guarded at each call site by a
+      handler's THREE branches — department-loss
+      (ForceDetachOfficerLeashForSource), the same-department
+      autoAccessGrade-loss branch added this pass (ForceDetachLeashForSource,
+      reason 'k9_access_lost' — see that branch's own doc comment), and
+      cert-revoke-due-to-job-change (ForceDetachLeashForSource) — a K9
+      partnership must not outlive either party's cert revocation,
+      department loss, or non-cert K9-access loss any more than a leash
+      pairing may. Guarded at each call site by a
       `type(...) == 'function'` runtime existence check (this resource's
       established "runtime existence guard, not a load-order assumption"
       convention — see fxmanifest.lua's own comment on server/medkit.lua's
