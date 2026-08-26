@@ -35,6 +35,63 @@
       independent copy of the same defensive-resolve sequence).
 ]]
 
+-- ======================================================================
+-- FILE-TOP FEATURE GATE (coder-frontend, this pass) -- this file previously
+-- had NO such gate at all: EnterNearestK9Vehicle()/ExitK9Vehicle()/
+-- IsInK9Vehicle() each self-checked Config.Features.VehicleEntryExit
+-- internally, but the onResourceStart handler that registers the "Load/
+-- Release" ox_target options and the vehicle-despawn/own-death watchdog
+-- thread below both ran unconditionally regardless of the flag -- breaking
+-- this resource's "flag off means genuinely inert" invariant (client/
+-- fetch.lua / client/audio.lua / client/hud.lua precedent for this exact
+-- shape of top-level gate).
+--
+-- WHY A PLAIN TOP-LEVEL RETURN IS SAFE HERE, NOT AN UNBOUNDED TRAP --
+-- worked out deliberately, not assumed, because this file's own watchdog
+-- thread exists specifically to prevent a player being stranded frozen/
+-- invisible/attached mid-ride:
+--   1. VehicleEntryExit is `tier = 'clientonly'` in server/runtimecontrol.lua's
+--      own FEATURE_TIERS audit -- there is NO server-side registration point
+--      for this feature at all (confirmed by that file's own grep-before-
+--      writing claim), and Config.Features itself is a plain static table
+--      in config.lua (no metatable, no live-reload proxy -- confirmed by
+--      reading config.lua directly). There is therefore no code path,
+--      anywhere in this resource, that changes what THIS CLIENT's own
+--      Config.Features.VehicleEntryExit evaluates to for the lifetime of
+--      this file's current load -- an operator "disabling it" can only mean
+--      editing config.lua's source and restarting this resource. A
+--      same-session, no-restart toggle simply cannot happen for this flag,
+--      by construction, so this gate cannot fire out from under a rider
+--      whose current script instance already loaded with the flag true.
+--   2. The one real path that DOES change the flag's value for this client
+--      -- editing config.lua and restarting this resource -- necessarily
+--      stops the OLD script instance first (FXServer fires `onResourceStop`
+--      for every client running this resource's client scripts as part of
+--      that restart, before the new instance with the new config value ever
+--      loads). This file's own `onResourceStop` handler below is registered
+--      by that OLD instance while the flag was still true, and is NOT
+--      affected by what the NEW instance's top-level gate above will decide
+--      -- it already runs today, unconditionally, on every stop of this
+--      resource, and releases a mid-ride player exactly as it always has.
+--      The watchdog thread below needs no equivalent carve-out: it is a
+--      loop inside that same OLD, still-running instance, not something the
+--      new instance's gate could reach into and stop early.
+--   3. Net effect: a rider mid-ride when the flag flips off (via the only
+--      real mechanism above) is released by the existing onResourceStop
+--      handler at the moment of restart, same as today; a fresh session
+--      that boots with the flag already off never lets a player into a
+--      vehicle through this file in the first place (EnterNearestK9Vehicle's
+--      own internal check already prevented that before this gate existed),
+--      so vehicleState can never be non-nil for that session and the
+--      watchdog never has anything to guard. Gating registration here adds
+--      no new way to get stuck; it only stops the watchdog/ox_target
+--      registration from running at all in a session that could never have
+--      produced a mid-ride player to begin with.
+-- If a future change ever gives this feature a live, no-restart toggle
+-- path, this reasoning must be re-verified before relying on it again.
+-- ======================================================================
+if not Config.Features.VehicleEntryExit then return end
+
 -- Local-only "am I currently tucked into a vehicle" state. Not exposed
 -- directly — always go through IsInK9Vehicle()/EnterNearestK9Vehicle()/
 -- ExitK9Vehicle(). Stores the vehicle's NETWORK id, not a raw entity

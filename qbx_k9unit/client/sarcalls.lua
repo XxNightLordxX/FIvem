@@ -219,6 +219,44 @@
     rule, which this fix does not touch.
 
     ======================================================================
+    RESOURCE-STOP HYGIENE -- FIXED THIS PASS (found by a client-side sweep;
+    not present when this file was first written). client/pursuitsprint.lua
+    already resets its own state on `onResourceStop`; this file's own
+    `onResourceStop` handler used to call ONLY ClearReveal() -- purely
+    cosmetic cleanup of the local, never-networked reveal entity -- and
+    never told server/sarcalls.lua to release ActiveSarCalls[source]. A
+    client-side stop (this resource's own copy being independently
+    restarted, or the FXServer client runtime unilaterally stopping just
+    THIS client's copy after repeated script errors -- a real,
+    server-independent event) left that record behind, blocking a fresh
+    '/k9sarcall' with reason = 'already_active' until it cleared on its own.
+
+    LOWER SEVERITY THAN client/scenttrail.lua's OWN IDENTICAL GAP (see that
+    file's own header "RESOURCE-STOP HYGIENE" for the contrast): unlike
+    server/scenttrail.lua's lazy, poll-driven expiry,
+    server/sarcalls.lua runs an unconditional periodic tick loop (see that
+    file's own "ACTIVE TICK LOOP" header) that keeps re-checking every
+    active call on its own schedule regardless of whether this client is
+    still talking to it -- so an orphaned ActiveSarCalls[source] entry
+    already self-cleared within Config.SARCalls.maxCallDurationMs (eight
+    minutes) even before this fix. That is still a real, disclosed,
+    player-facing lockout window, not merely cosmetic -- eight minutes
+    unable to take a new call is a genuine bug, just a bounded one -- and
+    this fix makes the cleanup immediate instead of waiting on that timer.
+
+    THE FIX: the `onResourceStop` handler below now also calls
+    RequestAbandonSarCall() -- the exact same unconditional abandon path
+    '/k9sarcall stop' already uses, so this is not a new code path, just a
+    new caller of an existing, already-safe-to-call-anytime one. NEVER
+    gated on CanShowK9UI()/access of any kind, per this file's own standing
+    "no unbounded trap" rule (see RequestAbandonSarCall()'s own doc
+    comment). Moved to the bottom of this file, after both
+    RequestAbandonSarCall() and ClearReveal() are defined, purely for
+    readability -- Lua's own closure semantics mean the handler could have
+    referenced either from its original position just as safely, since
+    neither is called until the event actually fires.
+
+    ======================================================================
     FILE-TO-FILE CONTRACT: this file exposes exactly two resource-global
     (no `local`) functions, the established "global helper, private
     per-file state" convention (client/recall.lua's RequestRecall,
@@ -453,11 +491,6 @@ local function ShowReveal(callType)
     end)
 end
 
-AddEventHandler('onResourceStop', function(resourceName)
-    if GetCurrentResourceName() ~= resourceName then return end
-    ClearReveal()
-end)
-
 --- Plays one one-shot sound against THIS client's own ped's own netId --
 --- see this file's header "HOW THE FEEDBACK WORKS" for why gain is always
 --- 1.0 here and that is intentional. Silently no-ops (never errors) if
@@ -612,3 +645,18 @@ RegisterCommand('k9sarcall', function(_, args)
 
     RequestStartSarCall()
 end, false)
+
+-- Resource-stop hygiene -- see this file's header "RESOURCE-STOP HYGIENE"
+-- for the full writeup. Mirrors client/pursuitsprint.lua's own
+-- onResourceStop handler in shape, and client/scenttrail.lua's own
+-- identical fix for the sibling gap. RequestAbandonSarCall() is NEVER
+-- gated on CanShowK9UI()/access of any kind -- it is the same unconditional
+-- abandon path '/k9sarcall stop' already uses, and is always safe to call
+-- (including when nothing is active). ClearReveal() runs alongside it,
+-- exactly as it always did -- this handler now does both cleanup jobs
+-- instead of only the cosmetic one.
+AddEventHandler('onResourceStop', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    RequestAbandonSarCall()
+    ClearReveal()
+end)

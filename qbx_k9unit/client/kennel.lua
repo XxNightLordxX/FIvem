@@ -149,6 +149,41 @@ function RequestDeployKennel()
     TriggerServerEvent('qbx_k9unit:server:requestDeployKennel')
 end
 
+-- ======================================================================
+-- REGISTRATION-TIME FEATURE GATE (coder-frontend, this pass) -- mirrors
+-- client/propattachment.lua's own identically-shaped fix; read that file's
+-- own "REGISTRATION-TIME FEATURE GATE" header before changing this one --
+-- this block follows it, not a second independent design. The command
+-- below, both RegisterNetEvent handlers, the "Pick Up Kennel" ox_target
+-- registration function and its two AddEventHandler call sites, and the
+-- onResourceStop cleanup hook are now all inside this single `if`,
+-- evaluated once at this file's own load time (config.lua is a
+-- shared_scripts file, loaded in full before any client_scripts file runs,
+-- so Config.Features.DeployableKennel already holds its real value here --
+-- not a load-order gamble). RequestDeployKennel() above stays OUTSIDE this
+-- gate on purpose -- it already gates itself internally and must stay
+-- reachable-but-inert for client/radial.lua's and client/tablet.lua's own
+-- `type(RequestDeployKennel) == 'function'` call sites, exactly as
+-- client/propattachment.lua's own header already documents for
+-- RequestToggleK9PropAttachment ("same as client/kennel.lua's
+-- RequestDeployKennel").
+-- WHY THIS MATTERS BEYOND THE EXISTING PER-HANDLER `if not
+-- Config.Features.DeployableKennel then return end` CHECKS ALREADY INSIDE
+-- deployKennelAt/removeKennel below (kept, deliberately, as
+-- defense-in-depth, same "layered checks" posture as the SOURCE-ORIGIN
+-- GUARD remaining even though the feature gate also exists): a
+-- per-handler check still means '/k9deploykennel' and both
+-- 'qbx_k9unit:client:*' events ARE registered and reachable on a client
+-- with the feature left off, and the "Pick Up Kennel" ox_target option
+-- still gets (re-)registered at load and on every target-resource
+-- restart. Wrapping the registration itself means a server that has never
+-- opted into DeployableKennel ships clients where this command/these
+-- events do not exist AT ALL and that ox_target option is never
+-- registered -- genuinely inert, not merely hidden behind an early
+-- return, matching this resource's own server/bonetool.lua precedent.
+-- ======================================================================
+if Config.Features.DeployableKennel then
+
 RegisterCommand('k9deploykennel', function()
     RequestDeployKennel()
 end, false)
@@ -182,6 +217,29 @@ RegisterNetEvent('qbx_k9unit:client:deployKennelAt', function(x, y, z)
     if not Config.Features.DeployableKennel then return end
 
     if type(x) ~= 'number' or type(y) ~= 'number' or type(z) ~= 'number' then return end
+
+    -- STALE-KENNEL GUARD (client/propattachment.lua's own "STALE-VEST
+    -- GUARD" on attachK9Prop is the precedent this follows, not a second
+    -- independent design -- read that one first). A second
+    -- 'deployKennelAt' dispatch arriving before this client's own
+    -- confirmKennelPlaced round trip for the FIRST kennel ever clears
+    -- myKennelNetId would otherwise create a SECOND kennel object while
+    -- overwriting the only handle this file had to the first one --
+    -- permanently orphaning it: no netId was ever reported for it, so
+    -- nothing (not the removeKennel backstop below, not this file's own
+    -- onResourceStop, not server/kennel.lua's own disconnect sweep) will
+    -- EVER delete it. server/kennel.lua's one-kennel-per-citizenid limit
+    -- and DeployCooldown make this hard to reach in the ordinary flow, but
+    -- neither is a hard guarantee this handler can rely on never seeing
+    -- two dispatches in a row -- this file must not assume its own local
+    -- myKennelNetId is still nil just because it normally would be.
+    if myKennelNetId then
+        local staleEntity = ResolveNetworkEntity(myKennelNetId)
+        if staleEntity then
+            DeleteEntity(staleEntity)
+        end
+        myKennelNetId = nil
+    end
 
     local modelHash = LoadModelWithTimeout(Config.DeployableKennel.propModel)
     local usedFallback = false
@@ -400,3 +458,5 @@ AddEventHandler('onResourceStart', function(resourceName)
         RegisterKennelOxTargetOption()
     end
 end)
+
+end -- if Config.Features.DeployableKennel -- REGISTRATION-TIME FEATURE GATE, see this block's own opening comment

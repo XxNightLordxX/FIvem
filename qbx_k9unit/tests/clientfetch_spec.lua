@@ -41,25 +41,30 @@
     that helper's own documented "first step primes, each call after runs
     one pass" semantics.
 
-    ONE REAL DEFECT FOUND WHILE WRITING THIS SPEC, DISCLOSED HERE AND
-    REPORTED TO MAIN RATHER THAN WORKED AROUND (per this task's own
-    instruction) -- NOT FIXED BY THIS SPEC, PINNED as CURRENT, actual
-    behavior so this file stays green against the real, unmodified
-    production code:
+    ONE REAL DEFECT FOUND WHILE WRITING THIS SPEC, NOW FIXED (client/
+    fetch.lua's own "STALE-CARRY GUARD" comment on `carryFetchBall` is the
+    fix itself) -- the dedicated test below pins the FIXED behavior, not the
+    original bug. Left here as a record of what was wrong and what changed:
 
-    NO STALE-CARRY GUARD ON `carryFetchBall`'S 'attach' BRANCH -- an
+    NO STALE-CARRY GUARD ON `carryFetchBall`'S 'attach' BRANCH (FIXED) -- an
     asymmetry with client/propattachment.lua's own `attachK9Prop`, which
     DOES guard against exactly this shape (see that file's "STALE-VEST
-    GUARD" comment), and the SAME bug class as this pass's other disclosed
+    GUARD" comment), and the SAME bug class as this pass's other fixed
     finding in client/kennel.lua's `deployKennelAt` (see
     tests/clientkennel_spec.lua's header). If
-    'qbx_k9unit:client:carryFetchBall' is ever dispatched to the same
+    'qbx_k9unit:client:carryFetchBall' was ever dispatched to the same
     client TWICE in 'attach' mode before the FIRST resulting
-    `ActiveFetchCarry.netId` is ever cleared, the second dispatch calls
-    `AttachPropToOwnPed` again and overwrites `ActiveFetchCarry` with the
-    NEW netId -- the FIRST attached entity is never detached or deleted,
-    and nothing in this file can ever reach it again. See the dedicated
-    test below for the exact repro.
+    `ActiveFetchCarry.netId` was ever cleared, the second dispatch called
+    `AttachPropToOwnPed` again and overwrote `ActiveFetchCarry` with the NEW
+    netId -- the FIRST attached entity was never detached or deleted, and
+    nothing in this file could ever reach it again. Fixed with a
+    STALE-CARRY GUARD at the top of the carryFetchBall handler, mirroring
+    client/propattachment.lua's STALE-VEST GUARD / client/kennel.lua's
+    STALE-KENNEL GUARD: a still-set `ActiveFetchCarry` in 'attach' mode is
+    resolved and torn down via DetachAndDeleteProp BEFORE this dispatch's
+    own `mode` is even branched on (a second dispatch's own mode says
+    nothing about what the PREVIOUS carry was). See the dedicated test below
+    for the exact repro, now pinning the fixed, leak-free behavior.
 ]]
 
 local t = dofile('testkit.lua')
@@ -790,11 +795,11 @@ t.test('onResourceStop: no-op when nothing is tracked at all', function()
 end)
 
 -- ========================================================================
--- DISCLOSED FINDING -- no stale-carry guard on carryFetchBall's 'attach'
--- branch. See this file's own header for the full writeup.
+-- FIXED: STALE-CARRY GUARD on carryFetchBall's 'attach' branch. See this
+-- file's own header for the full writeup.
 -- ========================================================================
 
-t.test('DISCLOSED FINDING: a second carryFetchBall("attach") dispatch before the first carry is ever cleared silently orphans the FIRST attached entity', function()
+t.test('FIXED: a second carryFetchBall("attach") dispatch before the first carry is ever cleared now tears down the FIRST attached entity instead of orphaning it', function()
     local f = newFetchFixture()
     f.dispatchNetEvent('qbx_k9unit:client:carryFetchBall', 65535, 999999, 'attach')
     t.equals(#f.detachAndDeleteCalls, 0)
@@ -805,14 +810,14 @@ t.test('DISCLOSED FINDING: a second carryFetchBall("attach") dispatch before the
     f.dispatchNetEvent('qbx_k9unit:client:carryFetchBall', 65535, 999998, 'attach')
 
     t.equals(#f.attachPropCalls, 2, 'a second, independent attach happens')
-    t.equals(#f.detachAndDeleteCalls, 0, 'THE BUG: the first attached entity is never detached or deleted -- ActiveFetchCarry now points only at the SECOND one')
-    t.equals(#f.detachEntityCalls, 0)
+    t.equals(#f.detachAndDeleteCalls, 1, 'FIXED: the STALE-CARRY GUARD tears down the first attached entity before the second attach is even created')
+    t.equals(#f.detachEntityCalls, 0, 'teardown goes through DetachAndDeleteProp, never a bare DetachEntity, for the stale entity')
 
-    -- Proves the first entity really is orphaned: onResourceStop only ever
-    -- knows about the CURRENT ActiveFetchCarry, so it can clean up at most
-    -- the second attach.
+    -- The SECOND (now-current) carry is still tracked correctly:
+    -- onResourceStop cleans it up too, and never double-tears-down the
+    -- already-cleaned-up first one.
     f.fireResourceStop(RESOURCE_NAME)
-    t.equals(#f.detachAndDeleteCalls, 1, 'onResourceStop cleans up only the second, most-recent attach')
+    t.equals(#f.detachAndDeleteCalls, 2, 'onResourceStop cleans up the second, now-current attach on top of the guard\'s own first-attach cleanup -- no orphan left behind either way')
 end)
 
 os.exit(t.summary())

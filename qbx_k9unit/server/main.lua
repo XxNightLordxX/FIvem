@@ -748,24 +748,15 @@ local LEASH_REJECT_MESSAGES = {
     -- sees the reason was deliberately handled, not merely unmapped."
     permission_denied         = locale('leash.reject_fallback'),
     -- 'both_k9' (see CheckLeashEligibility's own "BOTH-ARE-K9 CASE" comment,
-    -- and IsGenuinelyK9Party's doc comment, above) is NOT given its own
-    -- entry here, for now, purely because locales/en.json is off-limits to
-    -- this file and no shipped key for it exists yet -- same situation,
-    -- same reasoning, as server/partnership.lua's identical PARTNERSHIP_REJECT_
-    -- MESSAGES omission for the exact same reason string. Deliberately NOT
-    -- reusing 'no_k9_party's message for it: "neither of you is a K9" and
-    -- "you are both K9s" are different problems with different remedies. A
-    -- new locale key has been requested from this file's owner
-    -- (common.both_k9, proposed English text: "Both of you are playing K9s
-    -- -- one of you needs to be the handler instead.") -- the SAME key
-    -- server/partnership.lua requested, so leash and partnership share one
-    -- message for this reason exactly like they already share
+    -- and IsGenuinelyK9Party's doc comment, above) DOES get its own entry,
+    -- deliberately NOT reusing 'no_k9_party's message: "neither of you is a
+    -- K9" and "you are both K9s" are different problems with different
+    -- remedies, and telling the wrong one sends someone looking in the
+    -- wrong place. common.both_k9 (shared with server/partnership.lua's
+    -- identical PARTNERSHIP_REJECT_MESSAGES entry, same as
     -- common.no_k9_party/common.k9_not_certified/common.handler_not_in_department
-    -- above. Until that key ships, this reason falls through to
-    -- LeashRejectReasonMessage's `or locale('leash.reject_fallback')`
-    -- fallback ("Unable to attach leash.") rather than being silently
-    -- misreported as 'no_k9_party'. Add `both_k9 = locale('common.both_k9')`
-    -- to this table once the key exists.
+    -- above) shipped to locales/en.json for exactly this reason.
+    both_k9                   = locale('common.both_k9'),
 }
 
 --- @param reason string?

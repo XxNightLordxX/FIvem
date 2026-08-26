@@ -582,20 +582,22 @@ t.test('onResourceStop: a mismatched resourceName never fires, even with a live 
 end)
 
 -- ========================================================================
--- ANY PED -- this file's header CLAIMS it calls IsOwnModelK9() ("THIS FILE
--- calls client/main.lua's CanShowK9UI()/DenyK9UIAccess() and
--- IsOwnModelK9()"), but reading the actual code shows neither
--- RequestToggleK9PropAttachment nor the attachK9Prop handler ever calls it
+-- ANY PED -- this file's header USED TO CLAIM it calls IsOwnModelK9()
+-- ("THIS FILE calls client/main.lua's CanShowK9UI()/DenyK9UIAccess() and
+-- IsOwnModelK9()"), but reading the actual code showed neither
+-- RequestToggleK9PropAttachment nor the attachK9Prop handler ever called it
 -- -- a small, disclosed documentation staleness (the same bug CLASS
 -- server/partnership.lua's own header flags twice for itself: "this
 -- project has twice shipped a header describing a control that did not
--- actually exist"), not a functional defect. Proven below by OMITTING
--- IsOwnModelK9 from the sandbox entirely: if a regression ever added the
--- call the header claims already exists, this test would fail loudly with
--- "attempt to call a nil value" instead of silently passing.
+-- actually exist"), not a functional defect. FIXED 2026-08-26: the header
+-- comment now says CanShowK9UI() alone, matching the real code -- no
+-- behavior change. Proven below by OMITTING IsOwnModelK9 from the sandbox
+-- entirely: if a regression ever added an IsOwnModelK9() call, this test
+-- would fail loudly with "attempt to call a nil value" instead of silently
+-- passing.
 -- ========================================================================
 
-t.test('ANY PED: RequestToggleK9PropAttachment works via CanShowK9UI() alone, with IsOwnModelK9 entirely undefined (contradicts this file\'s own header claim -- see this file\'s "documentation staleness" note above)', function()
+t.test('ANY PED: RequestToggleK9PropAttachment works via CanShowK9UI() alone, with IsOwnModelK9 entirely undefined (the file\'s header now correctly documents this -- see this file\'s "documentation staleness" note above for the FIXED claim)', function()
     local f = newPropAttachmentFixture()
     t.isNil(f.env.IsOwnModelK9, 'sanity: this fixture genuinely never defines IsOwnModelK9')
     local ok, err = pcall(f.env.RequestToggleK9PropAttachment)

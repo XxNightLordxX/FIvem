@@ -616,12 +616,11 @@ t.test('requestPartnerUp: both parties genuinely holding the K9 role (HasK9Role)
     f.setAccess(1, true)
     f.setAccess(2, true)
     f.dispatchNetEvent('qbx_k9unit:server:requestPartnerUp', 1, 2)
-    -- No dedicated locale key ships yet for this reason (see
-    -- PARTNERSHIP_REJECT_MESSAGES's own comment on 'both_k9') -- falls
-    -- through to the generic partnership fallback message, but this MUST
-    -- NOT be reported as no_k9_party (the wrong diagnosis for this
-    -- problem) and MUST NOT silently succeed (the bug itself).
-    t.isTrue(notifiedExactly(f, 1, locale('partnership.reject_fallback'), 'error'))
+    -- Dedicated locale key (see PARTNERSHIP_REJECT_MESSAGES's own comment
+    -- on 'both_k9') -- this MUST NOT be reported as no_k9_party (the wrong
+    -- diagnosis for this problem) and MUST NOT silently succeed (the bug
+    -- itself).
+    t.isTrue(notifiedExactly(f, 1, locale('common.both_k9'), 'error'))
     t.equals(countClientEvents(f, 'qbx_k9unit:client:partnerUpRequest'), 0, 'no consent prompt may ever be sent when both parties are genuinely K9s')
 end)
 

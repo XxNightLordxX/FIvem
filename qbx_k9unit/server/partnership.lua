@@ -611,20 +611,14 @@ end
 -- at runtime).
 --
 -- 'both_k9' (see CheckPartnershipEligibility's own "BOTH-ARE-K9 CASE"
--- comment, and IsGenuinelyK9Party's doc comment, above) is the SAME
--- situation, for the SAME reason -- it is NOT given its own entry here
--- either, for now, purely because locales/en.json is off-limits to this
--- file and no shipped key for it exists yet. Deliberately NOT reusing
--- 'no_k9_party's message for it either, unlike a plain fallback would
--- suggest: "neither of you is a K9" and "you are both K9s" are different
--- problems with different remedies, so a NEW locale key has been
--- requested from the file's owner (common.both_k9, proposed English text:
--- "Both of you are playing K9s -- one of you needs to be the handler
--- instead.") -- until that key ships, this reason falls through to
--- PartnershipRejectReasonMessage's `or locale('partnership.reject_fallback')`
--- fallback ("Unable to set up partnership.") rather than being silently
--- misreported as 'no_k9_party'. Add `both_k9 = locale('common.both_k9')`
--- to this table once the key exists.
+-- comment, and IsGenuinelyK9Party's doc comment, above) DOES get its own
+-- entry, deliberately NOT reusing 'no_k9_party's message: "neither of you
+-- is a K9" and "you are both K9s" are different problems with different
+-- remedies, and telling the wrong one sends someone looking in the wrong
+-- place. common.both_k9 (shared with server/main.lua's identical
+-- LEASH_REJECT_MESSAGES entry, same as common.no_k9_party/
+-- common.k9_not_certified/common.handler_not_in_department above) shipped
+-- to locales/en.json for exactly this reason.
 local PARTNERSHIP_REJECT_MESSAGES = {
     feature_disabled          = locale('partnership.feature_disabled'),
     invalid_target            = locale('partnership.invalid_target'),
@@ -632,6 +626,7 @@ local PARTNERSHIP_REJECT_MESSAGES = {
     offline                   = locale('common.target_no_longer_online'),
     too_far                   = locale('partnership.too_far'),
     no_k9_party               = locale('common.no_k9_party'),
+    both_k9                   = locale('common.both_k9'),
     not_certified             = locale('common.k9_not_certified'),
     officer_not_in_department = locale('common.handler_not_in_department'),
 }

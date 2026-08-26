@@ -160,7 +160,8 @@
     "notify_title": "K9 Unit",
     "target_no_longer_online": "That player is no longer online.",
     "too_far_from_k9": "Get closer to the K9 first.",
-    "unable_to_resolve_citizenid": "Unable to resolve your own citizen ID."
+    "unable_to_resolve_citizenid": "Unable to resolve your own citizen ID.",
+    "both_k9": "Both of you are playing K9s -- one of you needs to be the handler instead."
   },
   "defense": {
     "handler_under_attack": "Your handler is under attack! Press %s to respond, or use the radial menu.",

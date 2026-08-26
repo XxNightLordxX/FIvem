@@ -30,50 +30,50 @@
     helper works uniformly whether or not a given test's model-load
     behavior ever actually yields.
 
-    TWO REAL DEFECTS FOUND WHILE WRITING THIS SPEC, DISCLOSED HERE AND
-    REPORTED TO MAIN RATHER THAN WORKED AROUND (per this task's own
-    instruction) -- NEITHER IS FIXED BY THIS SPEC, both are PINNED as
-    CURRENT, actual behavior so this file stays green against the real,
-    unmodified production code:
+    TWO REAL DEFECTS FOUND WHILE WRITING THIS SPEC, BOTH NOW FIXED (client/
+    kennel.lua's own "REGISTRATION-TIME FEATURE GATE" and "STALE-KENNEL
+    GUARD" comments are the fixes themselves) -- the tests below pin the
+    FIXED behavior, not the original bugs. Left here as a record of what was
+    wrong and what changed, per this project's own "do not leave a stale
+    finding claiming a fixed bug is still current" rule:
 
-    1. NOT GENUINELY INERT WITH THE FEATURE OFF. Unlike
+    1. NOT GENUINELY INERT WITH THE FEATURE OFF (FIXED). Unlike
        client/partnership.lua, client/propattachment.lua and
-       client/fetch.lua (each of which has a real top-of-file
-       `if not Config.Features.X then return end` gate -- confirmed by
-       reading all three), client/kennel.lua has NO such gate. With
-       Config.Features.DeployableKennel = false, this file still calls
-       RegisterCommand('k9deploykennel', ...), RegisterNetEvent(...) for
-       both 'qbx_k9unit:client:deployKennelAt' and
-       'qbx_k9unit:client:removeKennel', and AddEventHandler(...) for both
+       client/fetch.lua (each of which has a real top-of-file or
+       registration-time `if Config.Features.X then ... end` gate --
+       confirmed by reading all three), client/kennel.lua had NO such gate.
+       With Config.Features.DeployableKennel = false, this file used to
+       still call RegisterCommand('k9deploykennel', ...), RegisterNetEvent
+       for both 'qbx_k9unit:client:deployKennelAt' and
+       'qbx_k9unit:client:removeKennel', and AddEventHandler for both
        'onResourceStart' and 'onResourceStop' -- every one of those
-       registrations happens UNCONDITIONALLY at file-load time; only the
-       WORK each one does is internally gated. client/partnership.lua's own
-       header calls this exact shape (unconditional registration regardless
-       of a file's own feature flags) "the exact gap a red-team pass just
-       found in client/combat.lua" and documents client/kennel.lua's
-       PER-HANDLER gating as the thing that gate was contrasted against --
-       but per-handler gating alone does not make the file genuinely inert
-       at the REGISTRATION level the way this task's own brief asks for
-       ("no threads started, no events registered"). The "feature off"
-       tests below pin the file's CURRENT, real behavior (registration
-       happens regardless; only the internal WORK no-ops) rather than
-       asserting the stronger claim and going red against real production
-       code.
-    2. NO STALE-KENNEL GUARD ON deployKennelAt (an asymmetry with
+       registrations happened UNCONDITIONALLY at file-load time; only the
+       WORK each one did was internally gated. Fixed by wrapping every one
+       of those registrations in a single `if Config.Features.DeployableKennel
+       then ... end` (client/kennel.lua's own REGISTRATION-TIME FEATURE GATE
+       comment, mirroring client/propattachment.lua's identically-shaped
+       fix) -- RequestDeployKennel() itself stays defined and
+       reachable-but-inert OUTSIDE that gate, unchanged, since
+       client/radial.lua/client/tablet.lua both call it through their own
+       `type(...) == 'function'` guard either way.
+    2. NO STALE-KENNEL GUARD ON deployKennelAt (FIXED) -- an asymmetry with
        client/propattachment.lua's own attachK9Prop, which DOES have one --
-       see that file's "STALE-VEST GUARD" comment). If
+       see that file's "STALE-VEST GUARD" comment. If
        'qbx_k9unit:client:deployKennelAt' is ever dispatched to the same
        client TWICE before the first kennel's netId is cleared (a
        server-side TOCTOU on the one-kennel-per-citizenid check, a retried/
        duplicated event, or -- the residual D3 risk every SOURCE-ORIGIN
        GUARD in this codebase carries -- a forged local trigger), the
-       second invocation creates an entirely new kennel object and
-       overwrites `myKennelNetId` with the new netId, with no
-       DeleteEntity() call against the FIRST kennel first. The first
-       kennel's local handle is gone the instant the assignment happens --
-       nothing in this file can ever clean it up again (not
-       onResourceStop, which only ever knows about the CURRENT
-       myKennelNetId). See the dedicated test below for the exact repro.
+       second invocation used to create an entirely new kennel object and
+       overwrite `myKennelNetId` with the new netId, with no DeleteEntity()
+       call against the FIRST kennel first -- permanently orphaning it (no
+       code path left that ever again referenced the first kennel's handle).
+       Fixed with a STALE-KENNEL GUARD at the top of deployKennelAt
+       (client/kennel.lua's own comment of that name), mirroring
+       client/propattachment.lua's STALE-VEST GUARD: a still-set
+       myKennelNetId is resolved and deleted before any new object is ever
+       created. See the dedicated test below for the exact repro, now
+       pinning the fixed, leak-free behavior.
     ]]
 
 local t = dofile('testkit.lua')
@@ -327,34 +327,31 @@ local function newKennelFixture(opts)
 end
 
 -- ========================================================================
--- FEATURE OFF -- pins CURRENT, real behavior (registration still happens;
--- see this file's header, disclosed defect #1). Deliberately NOT asserting
--- the stronger "genuinely inert" claim, which would be red against the real
--- production file.
+-- FEATURE OFF -- pins the FIXED behavior: genuinely inert at the
+-- REGISTRATION level (see this file's header, fixed defect #1), not merely
+-- internally no-op.
 -- ========================================================================
 
-t.test('DISCLOSED FINDING: feature off still registers the command, both net events, and both onResourceStart/onResourceStop handlers (no CreateThread either way -- this file never calls it)', function()
+t.test('FIXED: feature off registers NOTHING at all -- no command, no net events, no onResourceStart/onResourceStop handlers, no threads', function()
     local f = newKennelFixture({ deployableKennel = false })
-    t.equals(#f.commands, 1, 'k9deploykennel is still registered with the feature off')
-    t.equals(f.netEventCount(), 2, 'both deployKennelAt/removeKennel handlers are still registered with the feature off')
-    t.equals(f.onResourceStartHandlerCount(), 1)
-    t.equals(f.onResourceStopHandlerCount(), 1)
+    t.equals(#f.commands, 0, 'k9deploykennel is not registered with the feature off')
+    t.equals(f.netEventCount(), 0, 'neither deployKennelAt nor removeKennel is registered with the feature off')
+    t.equals(f.onResourceStartHandlerCount(), 0)
+    t.equals(f.onResourceStopHandlerCount(), 0)
     t.equals(f.threadCount(), 0)
 end)
 
-t.test('feature off: the WORK is still correctly gated internally -- RequestDeployKennel() itself no-ops (the per-handler check inside the function)', function()
+t.test('feature off: RequestDeployKennel() itself stays defined and reachable-but-inert (the per-handler check inside the function), for client/radial.lua/client/tablet.lua\'s own call sites', function()
     local f = newKennelFixture({ deployableKennel = false })
     f.env.RequestDeployKennel()
     t.equals(#f.serverEvents, 0)
     t.equals(f.canShowK9UICallCount(), 0, 'the feature-flag check short-circuits before ever consulting CanShowK9UI()')
 end)
 
-t.test('feature off: deployKennelAt/removeKennel handlers both no-op internally even though they are registered', function()
+t.test('FIXED: feature off -- neither deployKennelAt nor removeKennel exists to dispatch at all (previously registered but internally no-op; now not registered)', function()
     local f = newKennelFixture({ deployableKennel = false })
-    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 1.0, 2.0, 3.0)
-    t.equals(#f.createObjectCalls, 0)
-    f.dispatchNetEvent('qbx_k9unit:client:removeKennel', 65535, 999)
-    t.equals(#f.deleteEntityCalls, 0)
+    t.isNil(f.netEventNames['qbx_k9unit:client:deployKennelAt'])
+    t.isNil(f.netEventNames['qbx_k9unit:client:removeKennel'])
 end)
 
 -- ========================================================================
@@ -556,24 +553,12 @@ t.test('removeKennel: happy path -- resolves the real kennel entity (matching th
     t.equals(#f.deleteEntityCalls, 1, 'onResourceStop must not attempt a SECOND delete of the already-removed kennel')
 end)
 
-t.test('removeKennel: feature gate off -- no-op even with a valid, resolvable netId', function()
-    local f = newKennelFixture()
-    f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 1.0, 2.0, 3.0)
-    local netId = f.lastServerEvent().args[1]
-    -- Simulate the feature having been disabled between deploy and this
-    -- broadcast (an operator hot-reloading config, or the more realistic
-    -- "another client's kennel, this client never had the feature on"
-    -- case) by rebuilding with the flag off is not meaningful mid-session
-    -- for THIS client's own object (it already deployed one), so this
-    -- instead confirms the per-handler check exists as documented: with
-    -- the feature off from file-load, the handler must never delete
-    -- anything even given a syntactically valid netId.
+t.test('FIXED: removeKennel -- feature off from file-load means the handler is not even registered, so there is nothing left to dispatch to', function()
     local g = newKennelFixture({ deployableKennel = false })
-    g.dispatchNetEvent('qbx_k9unit:client:removeKennel', 65535, netId)
-    t.equals(#g.deleteEntityCalls, 0)
+    t.isNil(g.netEventNames['qbx_k9unit:client:removeKennel'], 'removeKennel is not registered at all with the feature off (REGISTRATION-TIME FEATURE GATE)')
 end)
 
-t.test('DISCLOSED FINDING: deployKennelAt has NO stale-kennel guard -- a second dispatch before the first is ever removed silently orphans the first kennel (asymmetric with client/propattachment.lua\'s own attachK9Prop STALE-VEST GUARD)', function()
+t.test('FIXED: STALE-KENNEL GUARD -- a second dispatch before the first is ever removed now deletes the first kennel instead of orphaning it (was asymmetric with client/propattachment.lua\'s own attachK9Prop STALE-VEST GUARD; now mirrors it)', function()
     local f = newKennelFixture()
     f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 1.0, 2.0, 3.0)
     local firstEntity = f.createObjectCalls[1].entity
@@ -583,19 +568,17 @@ t.test('DISCLOSED FINDING: deployKennelAt has NO stale-kennel guard -- a second 
     -- kennel's netId is ever cleared (removeKennel/onResourceStop) -- see
     -- this file's own header for the concrete scenarios this models.
     f.dispatchNetEvent('qbx_k9unit:client:deployKennelAt', 65535, 10.0, 20.0, 3.0)
+    local secondEntity = f.createObjectCalls[2].entity
 
     t.equals(#f.createObjectCalls, 2, 'a second, independent kennel object is created')
-    t.equals(#f.deleteEntityCalls, 0, 'THE BUG: the first kennel is never deleted -- myKennelNetId now points only at the SECOND kennel')
+    t.equals(#f.deleteEntityCalls, 1, 'FIXED: the STALE-KENNEL GUARD deletes the first kennel before the second is even created')
+    t.equals(f.deleteEntityCalls[1], firstEntity, 'the entity actually deleted by the guard is the FIRST kennel, not the second')
 
-    -- Proves the first kennel's handle really is gone, not just untested:
-    -- onResourceStop only ever knows about the CURRENT myKennelNetId, so it
-    -- can delete at most the SECOND kennel -- the first is permanently
-    -- orphaned from this client's own perspective.
+    -- The SECOND (now-current) kennel is still tracked correctly: onResourceStop
+    -- cleans it up exactly once, and never re-touches the already-deleted first.
     f.fireResourceStop(RESOURCE_NAME)
-    t.equals(#f.deleteEntityCalls, 1, 'onResourceStop cleans up only the second kennel; the first (entity #1) is never referenced again')
-    local deletedEntities = {}
-    for _, e in ipairs(f.deleteEntityCalls) do deletedEntities[e] = true end
-    t.isNil(deletedEntities[firstEntity], 'the FIRST kennel entity is never the one onResourceStop deletes -- it is orphaned')
+    t.equals(#f.deleteEntityCalls, 2, 'onResourceStop cleans up the second (now-current) kennel too')
+    t.equals(f.deleteEntityCalls[2], secondEntity, 'the second delete call targets the SECOND kennel, confirming myKennelNetId correctly tracks the current one, not the orphaned first')
 end)
 
 -- ========================================================================

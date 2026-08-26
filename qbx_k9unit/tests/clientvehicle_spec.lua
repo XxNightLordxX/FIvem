@@ -22,37 +22,51 @@
     re-test the drag/bite-hold mutual guard, which stays owned by that
     file.
 
-    ONE REAL DEFECT FOUND WHILE WRITING THIS SPEC, DISCLOSED HERE AND
-    REPORTED TO MAIN RATHER THAN WORKED AROUND (per this task's own
-    instruction) -- NOT FIXED BY THIS SPEC, PINNED as CURRENT, actual
-    behavior so this file stays green against the real, unmodified
-    production code:
+    ONE REAL DEFECT FOUND WHILE WRITING THIS SPEC, NOW FIXED (client/
+    vehicle.lua's own "FILE-TOP FEATURE GATE" comment is the fix itself) --
+    the "feature off" tests below pin the FIXED behavior. Left here as a
+    record of what was wrong, what changed, and why the fix is safe:
 
-    NOT GENUINELY INERT WITH THE FEATURE OFF -- the SAME bug class as this
-    pass's disclosed finding in client/kennel.lua (see
+    NOT GENUINELY INERT WITH THE FEATURE OFF (FIXED) -- the SAME bug class
+    as this pass's fixed finding in client/kennel.lua (see
     tests/clientkennel_spec.lua's own header). Unlike
     client/partnership.lua/client/propattachment.lua/client/fetch.lua
     (each of which has a real top-of-file
     `if not Config.Features.X then return end` gate), client/vehicle.lua
-    has NO such gate. With Config.Features.VehicleEntryExit = false, this
-    file still calls CreateThread(...) for the vehicle-despawn/own-death
-    watchdog thread, and AddEventHandler(...) for both 'onResourceStart'
-    and 'onResourceStop' -- every one of those registrations happens
-    UNCONDITIONALLY at file-load time; only the WORK each one does is
-    internally gated (EnterNearestK9Vehicle()'s own
-    `if not Config.Features.VehicleEntryExit then return end`, and both
-    ox_target canInteract predicates' own identical check). The
-    "feature off" tests below pin the file's CURRENT, real behavior
-    (registration happens regardless) rather than asserting the stronger
-    claim and going red against real production code. Practical impact is
-    lower than client/kennel.lua's own version of this finding (the
-    watchdog thread's own `if vehicleState then` guard means it can never
-    actually observe or release anything with the feature off, since
-    vehicleState can never be set without EnterNearestK9Vehicle() ever
-    running) -- but the thread still exists and wakes up every 2 seconds
-    for the resource's whole lifetime for a feature the operator turned
-    off, which is not "genuinely inert" as this task's own brief defines
-    it.
+    used to have NO such gate. With Config.Features.VehicleEntryExit =
+    false, this file used to still call CreateThread(...) for the
+    vehicle-despawn/own-death watchdog thread, and AddEventHandler(...) for
+    both 'onResourceStart' and 'onResourceStop' -- every one of those
+    registrations happened UNCONDITIONALLY at file-load time; only the WORK
+    each one did was internally gated. Practical impact was lower than
+    client/kennel.lua's own version of this finding (the watchdog thread's
+    own `if vehicleState then` guard meant it could never actually observe
+    or release anything with the feature off, since vehicleState could
+    never be set without EnterNearestK9Vehicle() ever running) -- but the
+    thread still existed and woke up every 2 seconds for the resource's
+    whole lifetime for a feature the operator turned off, which is not
+    "genuinely inert" as this task's own brief defines it.
+
+    FIXED with a plain top-of-file `if not Config.Features.VehicleEntryExit
+    then return end`, same shape as client/fetch.lua's own gate -- NOT an
+    unbounded trap, because (see client/vehicle.lua's own comment for the
+    full reasoning): VehicleEntryExit is `tier = 'clientonly'` in
+    server/runtimecontrol.lua's own FEATURE_TIERS audit (no server-side
+    enforcement point at all), and Config.Features is a plain static table
+    with no live-reload mechanism -- so the ONLY way this flag's value ever
+    changes for an already-loaded client is editing config.lua and
+    restarting this resource, which necessarily stops the OLD (still
+    feature-true) script instance FIRST, firing its already-registered
+    onResourceStop handler and releasing a mid-ride player exactly as
+    before. A fresh session that boots with the flag already off could
+    never have let a player into a vehicle through this file to begin with
+    (EnterNearestK9Vehicle's own internal check already prevented that), so
+    there is no session in which this gate could ever fire out from under a
+    genuinely mid-ride player. The globals this file exposes
+    (EnterNearestK9Vehicle/ExitK9Vehicle/IsInK9Vehicle) are now undefined
+    entirely with the feature off, same as client/fetch.lua's four globals
+    -- client/radial.lua/client/tablet.lua already guard every call site
+    with `type(fn) == 'function'`, confirmed by reading both files.
 
     THE ONE PERSISTENT CreateThread (the vehicle-despawn/own-death
     watchdog) does NOT fit Sandbox.newThreadRunner()'s own documented
@@ -271,25 +285,24 @@ local function newVehicleFixture(opts)
 end
 
 -- ========================================================================
--- DISCLOSED FINDING -- feature off still registers the watchdog thread and
--- both onResourceStart/onResourceStop handlers. See this file's own header.
+-- FIXED: feature off now registers NOTHING at all -- no watchdog thread,
+-- no onResourceStart/onResourceStop handlers, no globals. See this file's
+-- own header.
 -- ========================================================================
 
-t.test('DISCLOSED FINDING: feature off still creates the watchdog thread and registers both onResourceStart/onResourceStop handlers', function()
+t.test('FIXED: feature off creates no watchdog thread and registers neither onResourceStart nor onResourceStop', function()
     local f = newVehicleFixture({ vehicleEntryExit = false })
-    t.equals(f.threadCount(), 1)
-    t.equals(f.onResourceStartHandlerCount(), 1)
-    t.equals(f.onResourceStopHandlerCount(), 1)
+    t.equals(f.threadCount(), 0)
+    t.equals(f.onResourceStartHandlerCount(), 0)
+    t.equals(f.onResourceStopHandlerCount(), 0)
 end)
 
-t.test('feature off: the WORK is still correctly gated internally -- EnterNearestK9Vehicle() no-ops, the watchdog never observes anything (vehicleState can never be set)', function()
+t.test('FIXED: feature off -- none of EnterNearestK9Vehicle/ExitK9Vehicle/IsInK9Vehicle exist at all (previously defined but internally no-op; now genuinely absent, mirroring client/fetch.lua)', function()
     local f = newVehicleFixture({ vehicleEntryExit = false })
-    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
-    f.env.EnterNearestK9Vehicle()
-    t.equals(#f.attachCalls, 0)
-    t.isFalse(f.env.IsInK9Vehicle())
-
-    f.step() -- the watchdog thread runs, but vehicleState is permanently nil here
+    t.isNil(f.env.EnterNearestK9Vehicle)
+    t.isNil(f.env.ExitK9Vehicle)
+    t.isNil(f.env.IsInK9Vehicle)
+    f.step() -- no threads were ever created -- a harmless no-op
     t.equals(#f.notifyCalls, 0)
 end)
 

@@ -10,27 +10,19 @@
     handler directly, never reimplementing its dialog logic.
 
     ======================================================================
-    A REAL, DISCLOSED DEFECT THIS SPEC PINS RATHER THAN HIDES (reported to
-    main -- see this pass's own report): unlike EVERY sibling file in this
-    same batch (client/scenttrail.lua, client/sarcalls.lua,
-    client/pursuitsprint.lua, client/defense.lua all open with
-    `if not Config.Features.<Name> then return end`), client/scentlineup.lua
-    has NO SUCH GATE. It never reads `Config` at all (confirmed by reading
-    the whole file). This means the 'qbx_k9unit:client:scentLineupInvite'
-    handler is registered UNCONDITIONALLY, even when
-    Config.Features.ScentLineup is explicitly false server-side. In
-    practice the blast radius is small (server/scentlineup.lua's own
-    /k9lineup command independently gates on the same flag before ever
-    sending this event, and the handler's own source-origin guard still
-    applies), but it is a genuine inconsistency with this resource's
-    otherwise-universal "gate at the top of the file" convention, and it
-    means a modified client could still pop this dialog to themselves (and
-    round-trip a response to the server) even on a server that has the
-    feature fully disabled. Section A below pins the file's ACTUAL,
-    current behavior (registers regardless of the flag) rather than the
-    behavior a reader would expect by analogy with its four siblings --
-    this is a spec documenting reality, not a claim that the reality is
-    correct. See this suite's own final report for the full write-up.
+    FEATURE GATE -- FIXED THIS PASS: client/scentlineup.lua used to have NO
+    `if not Config.Features.<Name> then return end` gate at all, unlike
+    EVERY sibling file in this same batch (client/scenttrail.lua,
+    client/sarcalls.lua, client/pursuitsprint.lua, client/defense.lua all
+    open with that exact line). It never read `Config` at all, so the
+    'qbx_k9unit:client:scentLineupInvite' handler registered
+    UNCONDITIONALLY, even when Config.Features.ScentLineup was explicitly
+    false server-side. See client/scentlineup.lua's own header, "FEATURE
+    GATE -- FIXED THIS PASS", for the full write-up. Section A below pins
+    the FIXED behavior (Config.Features.ScentLineup = false registers
+    NOTHING at all, matching every sibling file's own "flag off means
+    inert, not merely unreachable" convention) -- this spec pins current,
+    correct reality, not a bug.
     ======================================================================
 
     STUBBING EFFORT: minimal, proportionate to a genuinely tiny file. Only
@@ -39,7 +31,11 @@
     -- this file's own header states it calls "no other client file's
     global, at load time or call time" and that claim is exercised
     literally below (no CanShowK9UI/HasK9Access/model natives of any kind
-    are provided anywhere in this fixture).
+    are provided anywhere in this fixture). `Config.Features.ScentLineup`
+    is the one config value this file now reads (see "FEATURE GATE" above)
+    -- every fixture below provides it, defaulting to `true` so the
+    existing happy-path/edge-case sections keep exercising a live handler
+    exactly as before.
 ]]
 
 local t = dofile('testkit.lua')
@@ -50,7 +46,7 @@ local locale = Sandbox.locale
 -- Sandbox setup
 -- ----------------------------------------------------------------------
 
---- @param opts { config: table?|false }?
+--- @param opts { scentLineup: boolean?, config: table? }?
 local function newScentLineupFixture(opts)
     opts = opts or {}
 
@@ -97,11 +93,12 @@ local function newScentLineupFixture(opts)
     }
 
     local env = Sandbox.newEnv(overrides)
-    if opts.config ~= false then
-        -- Deliberately provided (even set to a hostile `false`) to prove
-        -- section A's finding: this file never even LOOKS at it.
-        env.Config = opts.config or { Features = { ScentLineup = false } }
-    end
+    -- See this file's header "FEATURE GATE -- FIXED THIS PASS": this file
+    -- now reads Config.Features.ScentLineup before registering anything, so
+    -- every fixture provides it -- defaulting to `true` (the feature is on)
+    -- so every section below except section A keeps exercising a live
+    -- handler exactly as before the fix.
+    env.Config = opts.config or { Features = { ScentLineup = opts.scentLineup ~= false } }
 
     Sandbox.loadInto('../client/scentlineup.lua', env)
 
@@ -116,6 +113,11 @@ local function newScentLineupFixture(opts)
             playerNameByIndex[playerIndex] = name
         end,
         onResourceStopHandlerCount = function() return #(eventHandlers['onResourceStop'] or {}) end,
+        netEventCount = function()
+            local n = 0
+            for _ in pairs(netEventHandlers) do n = n + 1 end
+            return n
+        end,
         fireInvite = function(forged, fromServerId, inviteWindowMs)
             env.source = forged and 999 or 65535
             local handler = assert(netEventHandlers['qbx_k9unit:client:scentLineupInvite'],
@@ -126,22 +128,22 @@ local function newScentLineupFixture(opts)
 end
 
 -- ----------------------------------------------------------------------
--- SECTION A -- THE DISCLOSED DEFECT: no Config.Features gate at all.
+-- SECTION A -- THE FEATURE GATE, FIXED THIS PASS. See this file's header
+-- "FEATURE GATE -- FIXED THIS PASS" for the full write-up this section
+-- pins.
 -- ----------------------------------------------------------------------
 
-t.test('DEFECT, PINNED NOT HIDDEN: the invite handler registers even with Config.Features.ScentLineup explicitly false -- unlike every sibling file in this batch', function()
-    local f = newScentLineupFixture({ config = { Features = { ScentLineup = false } } })
-    f.registerPlayer(5, 0, 'K9 Officer')
-    f.fireInvite(false, 5, 30000)
-    t.equals(#f.alertDialogCalls, 1, 'the handler ran fully despite the feature flag being false -- this file never reads Config at all')
+t.test('FIXED: Config.Features.ScentLineup = false registers NO net event at all -- the handler itself never comes into being, matching every sibling file', function()
+    local f = newScentLineupFixture({ scentLineup = false })
+    t.equals(f.netEventCount(), 0, 'a disabled feature must be inert, not merely unreachable -- no handler should exist to try to reach')
 end)
 
-t.test('DEFECT, PINNED NOT HIDDEN: the invite handler registers even with Config entirely ABSENT from the sandbox -- this file has no load-order dependency on Config whatsoever', function()
-    local f = newScentLineupFixture({ config = false })
-    t.isNil(f.env.Config)
+t.test('FIXED: Config.Features.ScentLineup = true registers exactly the scentLineupInvite net event', function()
+    local f = newScentLineupFixture()
+    t.equals(f.netEventCount(), 1)
     f.registerPlayer(5, 0, 'K9 Officer')
     f.fireInvite(false, 5, 30000)
-    t.equals(#f.alertDialogCalls, 1)
+    t.equals(#f.alertDialogCalls, 1, 'a live, gated-on handler still works exactly as before the fix')
 end)
 
 t.test('lifecycle: no thread, and no onResourceStop handler, is ever registered by this file -- matches its own "WHY THIS FILE IS SO SMALL" header claim', function()

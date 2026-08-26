@@ -952,12 +952,11 @@ t.test('requestLeashAttach: both parties genuinely holding the K9 role (HasK9Rol
     f.setK9Role(2, true)
     f.setAccess(2, true)
     f.dispatchNetEvent('qbx_k9unit:server:requestLeashAttach', 1, 2)
-    -- No dedicated locale key ships yet for this reason (see
-    -- LEASH_REJECT_MESSAGES's own comment on 'both_k9') -- falls through
-    -- to the generic leash fallback message, but this MUST NOT be
-    -- reported as no_k9_party (the wrong diagnosis) and MUST NOT silently
-    -- succeed (the bug itself).
-    t.equals(lastNotifyTo(f, 1).description, locale('leash.reject_fallback'))
+    -- The dedicated key landed 2026-08-26, so this now reports its own
+    -- message rather than the generic fallback. What matters either way:
+    -- it MUST NOT be reported as no_k9_party (the wrong diagnosis) and
+    -- MUST NOT silently succeed (the bug itself).
+    t.equals(lastNotifyTo(f, 1).description, locale('common.both_k9'))
     t.equals(countClientEvents(f, 'qbx_k9unit:client:leashAttachRequest'), 0, 'no consent prompt may ever be sent when both parties are genuinely K9s')
 end)
 

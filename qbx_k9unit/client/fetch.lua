@@ -272,6 +272,28 @@ RegisterNetEvent('qbx_k9unit:client:carryFetchBall', function(netId, mode)
     if source ~= 65535 then return end -- SOURCE-ORIGIN GUARD — see throwFetchBallAt's own comment above
     if type(netId) ~= 'number' or (mode ~= 'attach' and mode ~= 'fake') then return end
 
+    -- STALE-CARRY GUARD (client/propattachment.lua's own "STALE-VEST GUARD"
+    -- on attachK9Prop / client/kennel.lua's own "STALE-KENNEL GUARD" on
+    -- deployKennelAt are the precedent this follows, not a second
+    -- independent design -- read either one first). A second
+    -- 'carryFetchBall' dispatch arriving before THIS client's own prior
+    -- 'attach'-mode carry is ever cleared (endFetchCarry / removeFetchBall)
+    -- would otherwise overwrite ActiveFetchCarry below while the OLD
+    -- carry's mouth-attached entity stays attached to this ped, untracked
+    -- -- nothing left holds its netId, so nothing (not endFetchCarry, not
+    -- removeFetchBall, not this file's own onResourceStop) will ever
+    -- detach or delete it. Only 'attach' mode has a real attached entity to
+    -- leak this way ('fake' mode's ActiveFetchCarry.netId is always nil) --
+    -- checked here, unconditionally, before branching on THIS dispatch's
+    -- own `mode`, because that says nothing about what the PREVIOUS carry
+    -- was.
+    if ActiveFetchCarry and ActiveFetchCarry.mode == 'attach' and ActiveFetchCarry.netId then
+        local staleEntity = ResolveNetworkEntity(ActiveFetchCarry.netId)
+        if staleEntity then
+            DetachAndDeleteProp(staleEntity)
+        end
+    end
+
     local oldEntity = ResolveNetworkEntity(netId)
     if oldEntity and not FetchBallModelHashes[GetEntityModel(oldEntity)] then
         -- DEFENSE-IN-DEPTH MODEL CHECK (client/kennel.lua's removeKennel
