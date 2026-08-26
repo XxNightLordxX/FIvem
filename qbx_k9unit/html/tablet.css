@@ -890,6 +890,20 @@ body {
     padding: 4px;
 }
 
+/* K9 individual override stamina field's own "permanent" toggle
+   (html/tablet.js's buildK9ProfileStaminaField()) -- a plain inline
+   checkbox+label pair, not a themed input, so it just needs to sit on
+   its own line without the checkbox and its label text stacking
+   vertically. */
+.k9tablet-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+    font-size: 13px;
+    color: #b7bcc6;
+}
+
 .k9tablet-theme-color-input {
     width: 48px;
     height: 32px;

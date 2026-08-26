@@ -1292,7 +1292,7 @@
         // "compose on top of the XP ladder, per-citizenid" domain.
         tab_k9_profiles: 'K9 Overrides',
         k9_profiles_heading: 'K9 Individual Overrides',
-        k9_profiles_intro: "Hand-tune one dog's sprint speed, scent range, and medkit cooldown beyond what its handler's XP rank already gives it, without moving the whole rank.",
+        k9_profiles_intro: "Hand-tune one dog's sprint speed, scent range, medkit cooldown, and stamina drain rate beyond what its handler's XP rank already gives it, without moving the whole rank.",
         k9_profiles_list_heading: 'Currently Overridden K9s',
         k9_profiles_empty: 'No K9 currently has a hand-tuned override.',
         column_note: 'Note',
@@ -1304,13 +1304,18 @@
         k9_profile_effective_speed_prefix: 'Speed right now: ',
         k9_profile_effective_scent_prefix: 'Scent range right now: ',
         k9_profile_effective_medkit_prefix: 'Medkit cooldown multiplier right now: ',
+        k9_profile_effective_stamina_prefix: 'Stamina drain rate right now: ',
         k9_profile_overridden_suffix: ' (hand-tuned override)',
         k9_profile_from_tier_suffix: " (from this K9's rank, no override)",
         k9_profile_not_yet_live_hint: "Changes here take effect the next time this K9's rank is recalculated -- earning XP, the handler reconnecting, or a server restart -- not necessarily this instant if the K9 is already active right now.",
         k9_profile_speed_multiplier_label: 'Sprint Speed Multiplier',
-        k9_profile_speed_multiplier_hint: "Multiplies this K9's movement and sprint speed. Range: above 0 up to 3.0 (3x speed). Default: 1.0, meaning no change from its rank.",
+        // NO FIXED NUMBER CLAIMED (owner-directed, this pass) -- the real
+        // ceiling is now an owner-editable server setting, so this page
+        // never states a specific figure it cannot promise is still true.
+        k9_profile_speed_multiplier_hint: "Multiplies this K9's movement and sprint speed. Must be greater than 0 -- there is no fixed upper limit here; an extremely high value may still be refused if it exceeds what your server allows. Default: 1.0, meaning no change from its rank.",
+        k9_profile_speed_clamp_note: "Note: this server's own movement code currently caps the FINAL, fully-combined speed effect at 2x, regardless of this value -- an override above roughly 2 is saved and real, but you will not see the dog get any faster past that point.",
         k9_profile_scent_range_multiplier_label: 'Scent Range Multiplier',
-        k9_profile_scent_range_multiplier_hint: "Multiplies how far this K9 can pick up a scent trail or search target. Range: above 0 up to 3.0. Default: 1.0, meaning no change from its rank.",
+        k9_profile_scent_range_multiplier_hint: "Multiplies how far this K9 can pick up a scent trail or search target. Must be greater than 0 -- there is no fixed upper limit here; an extremely high value may still be refused if it exceeds what your server allows. Default: 1.0, meaning no change from its rank.",
         k9_profile_medkit_cooldown_multiplier_label: 'Medkit Cooldown Multiplier',
         k9_profile_medkit_cooldown_multiplier_hint: 'Multiplies the wait time between medkit uses on this K9 -- a SMALLER number means a SHORTER wait. Range: above 0 up to 1.0 (1.0 = no change; this can only shorten the cooldown, never lengthen it). Default: whatever its rank already gives it.',
         k9_profile_note_label: 'Note (optional)',
@@ -1326,12 +1331,24 @@
         k9_profile_error_invalid_citizenid: 'Enter a valid citizen ID.',
         k9_profile_error_invalid_payload: 'That request was malformed. Try again.',
         k9_profile_error_no_fields_to_set: 'Enter at least one value to save.',
-        k9_profile_error_invalid_speed_multiplier: 'Sprint speed multiplier must be greater than 0 and no more than 3, or left blank.',
-        k9_profile_error_invalid_scent_range_multiplier: 'Scent range multiplier must be greater than 0 and no more than 3, or left blank.',
+        k9_profile_error_invalid_speed_multiplier: 'Sprint speed multiplier must be a number greater than 0, or left blank.',
+        k9_profile_error_invalid_scent_range_multiplier: 'Scent range multiplier must be a number greater than 0, or left blank.',
         k9_profile_error_invalid_medkit_cooldown_multiplier: 'Medkit cooldown multiplier must be greater than 0 and no more than 1, or left blank.',
+        k9_profile_error_invalid_stamina: 'Stamina drain rate must be 0 (permanent) or a positive number, or left blank.',
         k9_profile_error_invalid_note: 'Enter a valid note (1-120 characters, no special symbols) or leave it blank.',
         k9_profile_error_too_many_overrides: 'Too many K9s already have a hand-tuned override -- remove one before adding another.',
         k9_profile_error_db_error: 'The override could not be saved due to a database error. Try again.',
+        // STAMINA (owner-directed, this pass: "be able to make the
+        // stamina as high as i want and be able to make the stamina...
+        // permanant") -- see buildK9ProfileStaminaField()'s own header.
+        column_stamina_drain: 'Stamina Drain Rate',
+        k9_profile_stamina_label: 'Stamina Drain Rate',
+        k9_profile_stamina_hint: "How fast this K9's stamina drains while sprinting. HIGHER means it runs out of stamina FASTER, not slower -- this is a drain rate, not a stamina amount. Must be 0 or greater; there is no fixed upper limit here. Default: whatever the server's own base setting already gives it.",
+        k9_profile_stamina_session_only_note: 'This one field is SESSION-ONLY: it is not saved to the database, and will reset to the server default the next time this resource restarts.',
+        k9_profile_stamina_permanent_checkbox_label: 'Never runs out (permanent stamina)',
+        k9_profile_stamina_permanent_label: 'Never runs out (permanent)',
+        k9_profile_stamina_drain_rate_template: '{rate} per tick',
+        k9_profile_session_only_badge: 'session only',
         // K9 SUPPLY SHOP ITEM CATALOG (this pass, coder-ui,
         // server/equipmentshop.lua's own "EQUIPMENT SHOP ITEM CATALOG"
         // section) -- sits alongside the shop_location_*/tab_shop_locations
@@ -9492,20 +9509,44 @@
     // stronger, more-instant effect than that.
     // ------------------------------------------------------------------
 
-    /** Mirrors server/k9profiles.lua's own MAX_SPEED_SCENT_MULTIPLIER
-     * exactly -- a UX convenience only (THE SECURITY RULE): kept in exact
-     * lockstep with that file's own constant so this page's own pre-check
-     * can never be looser OR tighter than what the server will actually
-     * accept, but the server's own re-check is what actually matters
-     * regardless of what this page allows through. */
-    var K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER = 3.0;
+    /** NO CLIENT-SIDE CEILING FOR SPEED/SCENT (owner-directed, this pass:
+     * "keep the speed... editing where i can edit it to as high as i
+     * want"). server/k9profiles.lua's own MAX_SPEED_SCENT_MULTIPLIER is
+     * now OWNER-EDITABLE (Config.MaxSpeedScentMultiplier, 10.0 default,
+     * replacing the previous hardcoded 3.0) -- this page has no reliable
+     * way to know that live configured value (no callback exposes it),
+     * and even if it did, mirroring a number that can change server-side
+     * without a matching client update is exactly the "quietly
+     * re-imposes a limit he just asked removed" trap this pass exists to
+     * close. THE SERVER REFUSES an out-of-range value -- see
+     * saveK9ProfileDraft()'s own comment: this page's own pre-check for
+     * speed/scent is now ONLY "is this a positive, finite number", never
+     * an upper bound. A PREVIOUS PASS had this hardcoded to 3.0 (both
+     * here and as the speed/scent inputs' own HTML `max` attribute) --
+     * REMOVED, deliberately, do not reintroduce either form. */
 
     /** Mirrors server/k9profiles.lua's own MAX_MEDKIT_COOLDOWN_MULTIPLIER
-     * exactly -- same posture as K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER
-     * above. Deliberately capped at 1.0, NOT the same range as
-     * speed/scent: this multiplier can only SHORTEN the medkit cooldown
-     * below its tier default, never lengthen it past 1.0. */
+     * exactly -- UNRELATED to the speed/scent ceiling removal above: this
+     * multiplier can only SHORTEN the medkit cooldown below its tier
+     * default, never lengthen it past 1.0 -- a real, permanent business
+     * rule (a cooldown reduction "as high as i want" would mean an
+     * INSTANT medkit, not a faster one), never a placeholder the owner
+     * asked to have raised. Kept as a UX convenience pre-check only (THE
+     * SECURITY RULE): the server's own unchanged 1.0 ceiling is what
+     * actually matters. */
     var K9_PROFILE_MAX_MEDKIT_COOLDOWN_MULTIPLIER = 1.0;
+
+    /** Mirrors server/k9profiles.lua's own MAX_STAMINA_DRAIN_PER_TICK
+     * exactly (20.0) -- same "UX convenience only" posture. UNLIKE speed/
+     * scent above, this ceiling was NOT the one the owner asked removed
+     * (his ask was "as high as i want OR permanent" -- permanent is 0,
+     * the FLOOR, not an unbounded top -- server/k9profiles.lua's own
+     * header confirms this literal value is shared verbatim with
+     * server/runtimecontrol.lua's own already-shipped, already-owner-
+     * editable Wellbeing.Fatigue.sprintDecayPerTick tunable, not a new
+     * hardcoded limit invented here). Kept as a pre-check floor/ceiling
+     * convenience; the server is still the real gate. */
+    var K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK = 20.0;
 
     /** Mirrors server/k9profiles.lua's own MAX_NOTE_LENGTH exactly. */
     var K9_PROFILE_MAX_NOTE_LENGTH = 120;
@@ -9519,6 +9560,7 @@
         state.k9ProfileFieldError = null;
         state.k9ProfileActionError = null;
         state.k9ProfileWarning = null;
+        state.k9ProfileStaminaWarning = null;
         render();
         loadK9ProfilesList();
     }
@@ -9553,6 +9595,7 @@
             case 'invalid_speed_multiplier': return S('k9_profile_error_invalid_speed_multiplier');
             case 'invalid_scent_range_multiplier': return S('k9_profile_error_invalid_scent_range_multiplier');
             case 'invalid_medkit_cooldown_multiplier': return S('k9_profile_error_invalid_medkit_cooldown_multiplier');
+            case 'invalid_sprint_decay_per_tick': return S('k9_profile_error_invalid_stamina');
             case 'invalid_note': return S('k9_profile_error_invalid_note');
             case 'too_many_overrides': return S('k9_profile_error_too_many_overrides');
             case 'db_error': return S('k9_profile_error_db_error');
@@ -9622,10 +9665,23 @@
             speedMultiplier: (typeof override.speedMultiplier === 'number') ? String(override.speedMultiplier) : '',
             scentRangeMultiplier: (typeof override.scentRangeMultiplier === 'number') ? String(override.scentRangeMultiplier) : '',
             medkitCooldownMultiplier: (typeof override.medkitCooldownMultiplier === 'number') ? String(override.medkitCooldownMultiplier) : '',
+            // STAMINA -- pre-filled from the citizenid's OWN STORED
+            // session-only override ONLY, same "blank means no override"
+            // contract as every field above -- '0' here is a REAL,
+            // meaningful value (permanent), never confused with blank.
+            sprintDecayPerTick: (typeof override.sprintDecayPerTick === 'number') ? String(override.sprintDecayPerTick) : '',
             note: (typeof override.note === 'string') ? override.note : '',
         };
         state.k9ProfileFieldError = null;
         state.k9ProfileActionError = null;
+        // DISCLOSED, NOT HIDDEN (owner-directed: the SESSION-ONLY nature of
+        // a stamina override must be surfaced "at the point of setting" --
+        // this covers the point of OPENING an existing one too, via
+        // tablet:k9ProfileGet's own staminaPersistenceWarning field, which
+        // server/k9profiles.lua sends whenever a live stamina override
+        // exists, whether or not THIS session is the one that set it).
+        state.k9ProfileStaminaWarning = (typeof profile.staminaPersistenceWarning === 'string' && profile.staminaPersistenceWarning.length > 0)
+            ? profile.staminaPersistenceWarning : null;
     }
 
     function clearK9ProfileSelection() {
@@ -9634,6 +9690,7 @@
         state.k9ProfileDraft = null;
         state.k9ProfileFieldError = null;
         state.k9ProfileActionError = null;
+        state.k9ProfileStaminaWarning = null;
         render();
     }
 
@@ -9682,10 +9739,15 @@
         var payload = { citizenid: draft.citizenid };
         var hasAnyField = false;
 
+        // NO UPPER BOUND HERE -- see K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK's
+        // own sibling comment above (K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER):
+        // only "is this a positive, finite number" is checked; the server
+        // enforces its own owner-configured ceiling and refuses anything
+        // past it with 'invalid_speed_multiplier'/'invalid_scent_range_multiplier'.
         var speedRaw = (typeof draft.speedMultiplier === 'string') ? draft.speedMultiplier.trim() : '';
         if (speedRaw.length > 0) {
             var speedNum = Number(speedRaw);
-            if (!isFinite(speedNum) || speedNum <= 0 || speedNum > K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER) {
+            if (!isFinite(speedNum) || speedNum <= 0) {
                 failK9ProfileDraft('speedMultiplier', S('k9_profile_error_invalid_speed_multiplier'));
                 return;
             }
@@ -9696,7 +9758,7 @@
         var scentRaw = (typeof draft.scentRangeMultiplier === 'string') ? draft.scentRangeMultiplier.trim() : '';
         if (scentRaw.length > 0) {
             var scentNum = Number(scentRaw);
-            if (!isFinite(scentNum) || scentNum <= 0 || scentNum > K9_PROFILE_MAX_SPEED_SCENT_MULTIPLIER) {
+            if (!isFinite(scentNum) || scentNum <= 0) {
                 failK9ProfileDraft('scentRangeMultiplier', S('k9_profile_error_invalid_scent_range_multiplier'));
                 return;
             }
@@ -9712,6 +9774,26 @@
                 return;
             }
             payload.medkitCooldownMultiplier = medkitNum;
+            hasAnyField = true;
+        }
+
+        // STAMINA (owner-directed, this pass: "be able to make the
+        // stamina as high as i want and be able to make the stamina...
+        // permanant") -- `sprintDecayPerTick`, DELIBERATELY `>= 0`, NOT
+        // `> 0`: ZERO IS THE VALID "NEVER RUNS OUT" SENTINEL
+        // (buildK9ProfileStaminaField()'s own permanent checkbox writes
+        // '0' into this exact field -- there is no separate boolean sent
+        // to the server, this IS how "permanent" is expressed on the
+        // wire, matching server/k9profiles.lua's own IsValidStaminaDrain
+        // contract exactly).
+        var staminaRaw = (typeof draft.sprintDecayPerTick === 'string') ? draft.sprintDecayPerTick.trim() : '';
+        if (staminaRaw.length > 0) {
+            var staminaNum = Number(staminaRaw);
+            if (!isFinite(staminaNum) || staminaNum < 0 || staminaNum > K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK) {
+                failK9ProfileDraft('sprintDecayPerTick', S('k9_profile_error_invalid_stamina'));
+                return;
+            }
+            payload.sprintDecayPerTick = staminaNum;
             hasAnyField = true;
         }
 
@@ -9751,6 +9833,7 @@
                     case 'invalid_speed_multiplier': field = 'speedMultiplier'; break;
                     case 'invalid_scent_range_multiplier': field = 'scentRangeMultiplier'; break;
                     case 'invalid_medkit_cooldown_multiplier': field = 'medkitCooldownMultiplier'; break;
+                    case 'invalid_sprint_decay_per_tick': field = 'sprintDecayPerTick'; break;
                     case 'invalid_note': field = 'note'; break;
                 }
                 state.k9ProfileFieldError = field;
@@ -9850,7 +9933,7 @@
         var thead = mk('thead');
         var headRow = mk('tr');
         [S('column_citizenid'), S('column_speed_multiplier'), S('column_scent_range_multiplier'),
-            S('column_medkit_cooldown_multiplier'), S('column_note'), S('column_actions')].forEach(function (h) {
+            S('column_medkit_cooldown_multiplier'), S('column_stamina_drain'), S('column_note'), S('column_actions')].forEach(function (h) {
             headRow.appendChild(mk('th', { text: h }));
         });
         thead.appendChild(headRow);
@@ -9864,13 +9947,44 @@
         return table;
     }
 
-    /** @param {{citizenid:string,speedMultiplier?:number,scentRangeMultiplier?:number,medkitCooldownMultiplier?:number,note?:string}} row */
+    /**
+     * STAMINA IS A DRAIN RATE, NOT A RAW NUMBER A VIEWER SHOULD HAVE TO
+     * INTERPRET (owner-directed honesty requirement: a bigger number
+     * drains stamina FASTER, the opposite of what "stamina: 8" would
+     * suggest to anyone reading it as a stat). This is the ONE place that
+     * turns `sprintDecayPerTick` into plain language, reused by both the
+     * list table and the detail panel so the two can never disagree.
+     * `undefined`/`null` means "no override" (defers to the K9's tier/
+     * global default) -- distinct from `0`, the real, valid "never runs
+     * out" sentinel.
+     * @param {number|null|undefined} value
+     * @returns {string}
+     */
+    function k9ProfileStaminaDisplayText(value) {
+        if (typeof value !== 'number') return S('k9_profile_field_not_overridden');
+        if (value === 0) return S('k9_profile_stamina_permanent_label');
+        return formatTemplate(S('k9_profile_stamina_drain_rate_template'), { rate: String(value) });
+    }
+
+    /** @param {{citizenid:string,speedMultiplier?:number,scentRangeMultiplier?:number,medkitCooldownMultiplier?:number,sprintDecayPerTick?:number,note?:string}} row */
     function buildK9ProfileRow(row) {
         var tr = mk('tr');
         tr.appendChild(mk('td', { text: row.citizenid }));
         tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.speedMultiplier === 'number') ? String(row.speedMultiplier) : S('k9_profile_field_not_overridden') }));
         tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.scentRangeMultiplier === 'number') ? String(row.scentRangeMultiplier) : S('k9_profile_field_not_overridden') }));
         tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.medkitCooldownMultiplier === 'number') ? String(row.medkitCooldownMultiplier) : S('k9_profile_field_not_overridden') }));
+        // SESSION-ONLY, ALWAYS -- server/k9profiles.lua's own
+        // ListK9IndividualOverrides has no separate boolean for this: a
+        // `sprintDecayPerTick` value is ONLY ever present here because it
+        // lives in StaminaOverrideByCitizenId, a table that is BY
+        // DEFINITION never persisted (see that table's own declaration
+        // comment) -- so "this field is set at all" already means
+        // "session-only", with no separate flag needed to say so.
+        var staminaTd = mk('td', { class: 'k9tablet-muted', text: k9ProfileStaminaDisplayText(row.sprintDecayPerTick) });
+        if (typeof row.sprintDecayPerTick === 'number') {
+            staminaTd.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('k9_profile_session_only_badge') + ')' }));
+        }
+        tr.appendChild(staminaTd);
         tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (typeof row.note === 'string' && row.note.length > 0) ? row.note : '' }));
         var actionsTd = mk('td');
         actionsTd.appendChild(mkButton(S('k9_profile_manage_label'), 'k9tablet-btn', function () {
@@ -9887,12 +10001,82 @@
      * requirement: a plain-English name, one sentence on what it actually
      * changes in the game, its allowed range, and its default -- never a
      * bare key with a number box. */
-    function buildK9ProfileDetail() {
+    /**
+     * STAMINA (`sprintDecayPerTick`) -- owner-directed, this pass: "be
+     * able to make the stamina as high as i want and be able to make the
+     * stamina as high as i want or permanant". A REAL AFFORDANCE for
+     * "permanent", not a magic number the owner has to remember: a
+     * checkbox that writes/clears '0' in `draft.sprintDecayPerTick`
+     * itself -- there is no separate boolean sent to the server (0 IS the
+     * wire value for "never runs out", matching
+     * server/k9profiles.lua's own IsValidStaminaDrain contract exactly),
+     * so checking/unchecking this box can never drift out of sync with
+     * what actually gets saved. The numeric input is disabled (not
+     * hidden) while checked, so the '0' it represents stays visible
+     * rather than disappearing into an unlabelled toggle.
+     * HONESTY REQUIREMENT: labelled "Stamina Drain Rate", never bare
+     * "Stamina" -- a bigger number here drains stamina FASTER, the
+     * opposite of what an ordinary stat reads as.
+     * @param {object} draft
+     * @returns {HTMLElement}
+     */
+    function buildK9ProfileStaminaField(draft) {
+        var row = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'sprintDecayPerTick' ? ' k9tablet-theme-field--invalid' : '') });
+        row.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('k9_profile_stamina_label') }));
+        row.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_stamina_hint') }));
+        row.appendChild(mk('p', { class: 'k9tablet-warning-note', text: S('k9_profile_stamina_session_only_note') }));
+
+        var isPermanent = draft.sprintDecayPerTick === '0';
+
+        var permanentRow = mk('label', { class: 'k9tablet-checkbox-row' });
+        var permanentCheckbox = mk('input', { attrs: { type: 'checkbox' } });
+        permanentCheckbox.checked = isPermanent;
+        permanentCheckbox.addEventListener('change', function (e) {
+            draft.sprintDecayPerTick = e.target.checked ? '0' : '';
+            render();
+        });
+        permanentRow.appendChild(permanentCheckbox);
+        permanentRow.appendChild(mk('span', { text: ' ' + S('k9_profile_stamina_permanent_checkbox_label') }));
+        row.appendChild(permanentRow);
+
+        // NO `max` ATTRIBUTE beyond mirroring the server's own real,
+        // current ceiling (K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK, itself
+        // NOT config-driven server-side as of this pass -- see that
+        // constant's own comment) -- a UX convenience only, never the
+        // real gate.
+        var staminaInput = mk('input', {
+            class: 'k9tablet-cert-tier-label-input',
+            attrs: {
+                type: 'number', step: 'any', min: '0', max: String(K9_PROFILE_MAX_STAMINA_DRAIN_PER_TICK),
+                placeholder: S('k9_profile_blank_means_no_override_placeholder'),
+            },
+        });
+        staminaInput.value = isPermanent ? '0' : draft.sprintDecayPerTick;
+        staminaInput.disabled = isPermanent;
+        staminaInput.addEventListener('input', function (e) { draft.sprintDecayPerTick = e.target.value; });
+        row.appendChild(staminaInput);
+
+        return row;
+    }
+
+    /**
+     * @param {boolean} [embedded] -- true when rendered INSIDE
+     * buildPersonScreen() (buildPersonK9ProfileSection() below) rather
+     * than the standalone K9 Overrides tab: suppresses the citizenid
+     * heading (the Person screen already shows name+citizenid at the top
+     * of the page) and the "Close" button (there is nothing to close
+     * back to in this context -- see buildPersonK9ProfileSection()'s own
+     * header for why a bare `clearK9ProfileSelection()` there would leave
+     * the section stuck rather than genuinely closed).
+     */
+    function buildK9ProfileDetail(embedded) {
         var profile = state.k9ProfileSelected;
         var draft = state.k9ProfileDraft;
         var wrap = mk('div', { class: 'k9tablet-cert-tier-form' });
 
-        wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: profile.citizenid }));
+        if (!embedded) {
+            wrap.appendChild(mk('h3', { class: 'k9tablet-section-heading', text: profile.citizenid }));
+        }
         if (typeof profile.tierLabel === 'string' && profile.tierLabel.length > 0) {
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_tier_label_prefix') + profile.tierLabel }));
         }
@@ -9902,30 +10086,48 @@
         wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_effective_speed_prefix') + String(effective.speedMultiplier) + (overridden.speedMultiplier ? S('k9_profile_overridden_suffix') : S('k9_profile_from_tier_suffix')) }));
         wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_effective_scent_prefix') + String(effective.scentRangeMultiplier) + (overridden.scentRangeMultiplier ? S('k9_profile_overridden_suffix') : S('k9_profile_from_tier_suffix')) }));
         wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_effective_medkit_prefix') + ((typeof effective.medkitCooldownMultiplier === 'number') ? String(effective.medkitCooldownMultiplier) : S('k9_profile_field_not_overridden')) + (overridden.medkitCooldownMultiplier ? S('k9_profile_overridden_suffix') : S('k9_profile_from_tier_suffix')) }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('k9_profile_effective_stamina_prefix') + k9ProfileStaminaDisplayText(effective.sprintDecayPerTick) + (overridden.sprintDecayPerTick ? S('k9_profile_overridden_suffix') : S('k9_profile_from_tier_suffix')) }));
 
         wrap.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_not_yet_live_hint') }));
 
-        // Speed
+        if (state.k9ProfileStaminaWarning) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-warning-note', text: state.k9ProfileStaminaWarning }));
+        }
+
+        // Speed. NO `max` ATTRIBUTE (owner-directed, this pass -- "as high
+        // as i want"): server/k9profiles.lua's own MAX_SPEED_SCENT_MULTIPLIER
+        // is now owner-editable server-side; a hardcoded HTML ceiling here
+        // would silently reintroduce the exact 3.0 cap he asked removed.
         var speedRow = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'speedMultiplier' ? ' k9tablet-theme-field--invalid' : '') });
         speedRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('k9_profile_speed_multiplier_label') }));
         speedRow.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_speed_multiplier_hint') }));
-        var speedInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0', max: '3', placeholder: S('k9_profile_blank_means_no_override_placeholder') } });
+        // HONESTY REQUIREMENT (owner-directed): a real finding against
+        // client/movement.lua -- the FINAL composed move rate is clamped to
+        // [0.1, 2.0] there regardless of what this override says, so an
+        // override above ~2x is genuinely accepted and saved but produces
+        // no VISIBLE further speed increase in-game. Never silently
+        // capped here (the value is still real, still saved, and may
+        // matter again if that clamp is ever changed) -- just disclosed.
+        speedRow.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_speed_clamp_note') }));
+        var speedInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0', placeholder: S('k9_profile_blank_means_no_override_placeholder') } });
         speedInput.value = draft.speedMultiplier;
         speedInput.addEventListener('input', function (e) { draft.speedMultiplier = e.target.value; });
         speedRow.appendChild(speedInput);
         wrap.appendChild(speedRow);
 
-        // Scent
+        // Scent. Same "no max attribute" reasoning as Speed above.
         var scentRow = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'scentRangeMultiplier' ? ' k9tablet-theme-field--invalid' : '') });
         scentRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('k9_profile_scent_range_multiplier_label') }));
         scentRow.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_scent_range_multiplier_hint') }));
-        var scentInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0', max: '3', placeholder: S('k9_profile_blank_means_no_override_placeholder') } });
+        var scentInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', step: 'any', min: '0', placeholder: S('k9_profile_blank_means_no_override_placeholder') } });
         scentInput.value = draft.scentRangeMultiplier;
         scentInput.addEventListener('input', function (e) { draft.scentRangeMultiplier = e.target.value; });
         scentRow.appendChild(scentInput);
         wrap.appendChild(scentRow);
 
-        // Medkit cooldown
+        // Medkit cooldown -- UNRELATED to the speed/scent ceiling removal
+        // above, see K9_PROFILE_MAX_MEDKIT_COOLDOWN_MULTIPLIER's own
+        // comment for why this one keeps its real 1.0 ceiling.
         var medkitRow = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'medkitCooldownMultiplier' ? ' k9tablet-theme-field--invalid' : '') });
         medkitRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('k9_profile_medkit_cooldown_multiplier_label') }));
         medkitRow.appendChild(mk('p', { class: 'k9tablet-hint', text: S('k9_profile_medkit_cooldown_multiplier_hint') }));
@@ -9934,6 +10136,8 @@
         medkitInput.addEventListener('input', function (e) { draft.medkitCooldownMultiplier = e.target.value; });
         medkitRow.appendChild(medkitInput);
         wrap.appendChild(medkitRow);
+
+        wrap.appendChild(buildK9ProfileStaminaField(draft));
 
         // Note
         var noteRow = mk('div', { class: 'k9tablet-theme-field' + (state.k9ProfileFieldError === 'note' ? ' k9tablet-theme-field--invalid' : '') });
@@ -9953,11 +10157,13 @@
 
         var actions = mk('div', { class: 'k9tablet-theme-actions' });
         actions.appendChild(mkButton(S('k9_profile_save_label'), 'k9tablet-btn', saveK9ProfileDraft, { disabled: state.pendingAction }));
-        var hasLiveOverride = !!(profile.override && (typeof profile.override.speedMultiplier === 'number' || typeof profile.override.scentRangeMultiplier === 'number' || typeof profile.override.medkitCooldownMultiplier === 'number' || (typeof profile.override.note === 'string' && profile.override.note.length > 0)));
+        var hasLiveOverride = !!(profile.override && (typeof profile.override.speedMultiplier === 'number' || typeof profile.override.scentRangeMultiplier === 'number' || typeof profile.override.medkitCooldownMultiplier === 'number' || typeof profile.override.sprintDecayPerTick === 'number' || (typeof profile.override.note === 'string' && profile.override.note.length > 0)));
         if (hasLiveOverride) {
             actions.appendChild(mkConfirmButton(S('k9_profile_reset_label'), 'k9tablet-btn k9tablet-btn--danger', resetK9Profile, { disabled: state.pendingAction }));
         }
-        actions.appendChild(mkButton(S('k9_profile_close_label'), 'k9tablet-link-btn', clearK9ProfileSelection));
+        if (!embedded) {
+            actions.appendChild(mkButton(S('k9_profile_close_label'), 'k9tablet-link-btn', clearK9ProfileSelection));
+        }
         wrap.appendChild(actions);
 
         return wrap;

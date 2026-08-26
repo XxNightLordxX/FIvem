@@ -1145,6 +1145,15 @@ local TABLET_STRING_KEYS = {
     'k9_profile_error_busy', 'k9_profile_error_invalid_citizenid', 'k9_profile_error_invalid_payload', 'k9_profile_error_no_fields_to_set',
     'k9_profile_error_invalid_speed_multiplier', 'k9_profile_error_invalid_scent_range_multiplier', 'k9_profile_error_invalid_medkit_cooldown_multiplier', 'k9_profile_error_invalid_note',
     'k9_profile_error_too_many_overrides', 'k9_profile_error_db_error',
+    -- STAMINA (owner-directed, this pass: "be able to make the stamina as
+    -- high as i want and be able to make the stamina as high as i want or
+    -- permanant") -- see html/tablet.js's buildK9ProfileStaminaField() for
+    -- the full "0 means permanent, session-only, drain-rate-not-a-stat"
+    -- contract these support.
+    'column_stamina_drain', 'k9_profile_effective_stamina_prefix', 'k9_profile_speed_clamp_note',
+    'k9_profile_stamina_label', 'k9_profile_stamina_hint', 'k9_profile_stamina_session_only_note',
+    'k9_profile_stamina_permanent_checkbox_label', 'k9_profile_stamina_permanent_label',
+    'k9_profile_stamina_drain_rate_template', 'k9_profile_session_only_badge', 'k9_profile_error_invalid_stamina',
     -- K9 SUPPLY SHOP ITEM CATALOG (owner-directed "give high command real
     -- control over the equipment shop" pass, server/equipmentshop.lua's
     -- own "EQUIPMENT SHOP ITEM CATALOG" section) -- sits alongside the
