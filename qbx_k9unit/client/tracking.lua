@@ -12,6 +12,13 @@
     the source of truth if anything here drifts from it):
     DEVELOPER_REFERENCE.md#tracking, DEVELOPER_REFERENCE.md#tracking,
     DEVELOPER_REFERENCE.md#tracking, DEVELOPER_REFERENCE.md#tracking.
+    NOTE ON THE "§N" SUFFIXES cited below (e.g. "#tracking §1.2", "#tracking
+    §0"): those are leftover pinpoints from the pre-2026-08-25 research
+    archive's own internal numbering, which did not survive that file's
+    consolidation into DEVELOPER_REFERENCE.md's §15 prose — see that
+    section's own header note for the full explanation. Read the anchor
+    (#tracking) as the real target; the number after it will not resolve to
+    a matching subsection.
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — Phase 2, per DEVELOPER_REFERENCE.md §11.4 items 1, 3, 4 and

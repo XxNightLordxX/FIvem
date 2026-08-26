@@ -210,6 +210,17 @@
     relayDoorScratch handler, so this file is built to that handler's exact,
     fixed contract rather than re-deriving it).
 
+    NOTE ON THE "§N"/"Finding N" SUFFIXES cited after #door-interaction
+    below (e.g. "§3.1", "§4.2/§7", "Finding 3"): those are leftover
+    pinpoints from the pre-2026-08-25 research archive's own internal
+    numbering, which did not survive that file's consolidation into
+    DEVELOPER_REFERENCE.md's §15 prose (the current #door-interaction
+    section is unnumbered prose) — see that section's own header note for
+    the full explanation. Read the anchor (#door-interaction) as the real
+    target; the suffix after it will not resolve to a matching subsection.
+    Citations already hedged as "(§N in its original form)" below already
+    say this explicitly; the unhedged ones mean the same thing.
+
     "Nudge-open" is now implemented — see the "NUDGE-OPEN" comment further
     down, immediately above the door-interaction code itself, for the full
     reasoning, the hard safety constraint it follows (never consults GTA's

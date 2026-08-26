@@ -2027,6 +2027,19 @@ authoritative, current version of anything that shipped. Anchor names
 (`#vision`, `#tracking`, etc.) are unchanged from the old
 `phase2_notes/RESEARCH_ARCHIVE.md` — only the filename changed.
 
+**A finer-grained pinpoint (e.g. `#tracking §2.4`, `#door-interaction
+Finding 3`) cited in a code comment will NOT resolve to anything below.**
+The pre-condensation research archive numbered its findings within each of
+its 12 topic anchors; that internal numbering was not preserved when this
+section was flattened to prose during the 2026-08-25 consolidation — only
+the anchor names themselves survived, per the paragraph above. If a comment
+cites one of these old pinpoints, treat the anchor name alone as the real
+target and read that whole subsection; the appended number is a leftover
+address into a document that no longer exists in that shape, not a sign
+that this section is missing content. Not corrected comment-by-comment
+across the codebase given the volume (100+ sites) — flagged here once,
+centrally, instead.
+
 <a id="vision"></a>
 ### Vision — thermal and night
 

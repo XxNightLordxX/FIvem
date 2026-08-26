@@ -308,6 +308,35 @@ with real players:
   If you can run the setup script above, do — your handlers keep what
   they earned.
 
+### If you forgot to import the SQL, or only ran part of it
+
+This is different from deliberately setting `Config.Database.enabled =
+false` above — this is what happens if you skip, or only partly finish,
+step 2 of "Installing" by accident.
+
+The resource checks its own tables against the database on startup. If
+**every** expected table is missing (the SQL was never imported at all),
+or if **some but not all** of them exist (`sql/install.sql` ran but a
+later file in `sql/migrations/` didn't, or a table was dropped since),
+it does **not** error, crash, or half-work — it refuses to use the
+database for that entire session and runs in the same memory-only mode
+described above instead, and says so plainly in the server console,
+including which tables it's missing. A part-installed database is
+treated the same as no database at all on purpose: saving some data and
+silently losing the rest would be worse than everyone knowing nothing is
+being saved this session.
+
+The fix is the same either way: run through step 2 of "Installing" above
+(`k9_setup.sh`, or `sql/install.sql` plus everything in
+`sql/migrations/` in order) and restart the resource — check
+`sql/migration_status.sql` if you want to see exactly what's applied
+before you do.
+
+*(A more detailed, owner-facing walkthrough of the install/uninstall
+story — including the rollback scripts under `sql/rollback/` — is being
+finalized separately and will expand this section; the behavior above is
+verified against the current code, not a guess.)*
+
 ---
 
 ## The command tablet, high command, and things worth knowing before you rely on them

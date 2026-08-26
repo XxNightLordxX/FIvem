@@ -260,22 +260,26 @@
     no longer on the list.
 
     RUNTIME CAPABILITY GUARD: same posture server/tracking.lua's
-    `IsOxInventoryHookCapable`/ScentTracking `onResourceStart` block already
-    established for this exact same `registerHook` export (that file's own
-    header has the full "why a runtime check, not a `dependencies` version
-    pin" writeup — not re-derived here). A small LOCAL copy of that
-    capability check lives in this file (`IsOxInventoryHookCapable` below) —
-    NOT extracted to a shared resource-global, so a second independent copy
-    now exists; flagged as a REFACTOR_ROADMAP candidate for a future
-    consolidation pass touching both files. If the capability check fails
-    while `Config.Features.K9Inventory` AND a non-nil `Config.K9Inventory.
-    allowedItems` are both configured, this file prints ONE warning and
-    leaves the whitelist genuinely unenforced (the stash itself keeps
-    working, unfiltered) — never a fake/silent pass. This was NOT the path
-    taken here: the mechanism above WAS independently verified against
-    real, current ox_inventory source, so the hook is registered for real
-    whenever the capability check passes (expected to be the normal case on
-    any current ox_inventory install).
+    `IsOxInventoryHookCapable`/ScentTracking `onResourceStart` block
+    originally established for this exact same `registerHook` export (that
+    file's own header has the full "why a runtime check, not a
+    `dependencies` version pin" writeup — not re-derived here). UPDATE: the
+    small LOCAL copy of that capability check this file used to keep
+    (`IsOxInventoryHookCapable`) has since been deleted outright — see
+    `RegisterK9InventoryItemFilterHook`'s own doc comment below for the
+    compat-layer migration — closing the former REFACTOR_ROADMAP duplicate
+    this header used to flag here; the check is now performed once, per
+    whatever backend `Config.Compat` resolves, inside
+    `K9Compat.Get('inventory').RegisterHook` (shared/compat/inventory.lua),
+    the same fix server/tracking.lua's identical duplicate already got. If
+    that routed check fails while `Config.Features.K9Inventory` AND a
+    non-nil `Config.K9Inventory.allowedItems` are both configured, this file
+    prints ONE warning and leaves the whitelist genuinely unenforced (the
+    stash itself keeps working, unfiltered) — never a fake/silent pass.
+    This was NOT the path taken here: the mechanism above WAS independently
+    verified against real, current ox_inventory source, so the hook is
+    registered for real whenever the capability check passes (expected to
+    be the normal case on any current ox_inventory install).
 
     ======================================================================
     EVENT/CALLBACK CONTRACT.
