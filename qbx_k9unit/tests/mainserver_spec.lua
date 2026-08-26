@@ -76,6 +76,13 @@
     Resource-globals (no `local`) exposed by this file: ForceDetachLeashForSource,
     ForceDetachOfficerLeashForSource (both role-aware detach hooks for
     server/certifications.lua; Section 9).
+
+    CreateThread(...): ONE, added this pass (DEATH-DETECTION FIX,
+    coder-frontend) -- the leash death-detection poll, gated behind
+    Config.Features.LeashMechanics, pinned by Section 13. Before this pass
+    this file created ZERO threads of its own (DoorScratchByDoorCooldown's
+    own sweep thread is server/cooldowns.lua's CreateThread call, not this
+    file's).
     ======================================================================
 
     WHAT THIS FILE DOES NOT COVER, AND WHY:
@@ -1928,8 +1935,144 @@ t.test('onResourceStart config-safety assert: ignores a DIFFERENT resource start
     t.isTrue(ok, 'a different resource\'s own onResourceStart must never run this resource\'s own startup assert')
 end)
 
+-- ========================================================================
+-- SECTION 13: DEATH-DETECTION FIX (this pass, coder-frontend -- audit-
+-- flagged gap). LeashPairs previously had NO death handler touching it at
+-- all -- confirmed by a full read of this file during the visible-leash
+-- work (client/leashvisual.lua's own header). A K9 or handler who died
+-- mid-leash stayed leashed indefinitely; this section pins the new
+-- background poll thread that closes that gap, mirroring
+-- server/defense.lua's own already-tested `IsHandlerDown` precedence
+-- (override -> K9Compat ambulance adapter -> metadata -> raw health) rather
+-- than re-deriving or re-proving that whole precedence chain a second time
+-- here (defense_spec.lua already owns exhaustive coverage of the identical
+-- logic shape) -- this section instead proves THIS file's own new
+-- responsibility: the thread exists exactly when it should, calls
+-- doDetachLeash (the ONE place that mutates LeashPairs on detach) when a
+-- participant is detected dead, leaves a genuinely-alive pairing alone, and
+-- is safe to run against a small, actively-mutating LeashPairs table.
+-- ========================================================================
+
+t.test('DEATH-DETECTION: with Config.Features.LeashMechanics off, no death-detection thread is created at all', function()
+    local fOff = newMainFixture({ features = { LeashMechanics = false } })
+    local fOn = newMainFixture({ features = { LeashMechanics = true } })
+    t.equals(fOn.threadCreateCount(), fOff.threadCreateCount() + 1,
+        'LeashMechanics=true must create exactly one MORE thread than LeashMechanics=false -- the door-scratch sweep thread exists either way, unconditionally, so the difference isolates the new death-detection thread specifically')
+end)
+
+t.test('DEATH-DETECTION: the K9-role party\'s health crossing the death threshold (<=100) ends the pairing as partner_died, broadcast to BOTH parties', function()
+    local f = newMainFixture()
+    setupEligiblePair(f, 1, 2)
+    formLeashPair(f, 1, 2, 1) -- clears captures by default
+
+    f.setHealth(10, 100) -- k9Src(1) * 10 == ped handle 10, per setupEligiblePair -- 100 is the documented boundary, PED_DEAD_HEALTH_THRESHOLD-equivalent
+    f.runOneTick() -- primes every captured thread (door-scratch sweep AND the new death poll) -- no real pass yet
+    f.runOneTick() -- one real pass over both
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 2, 'both parties must be told the pairing ended')
+    t.isFalse(f.ForceDetachLeashForSource(2), 'LeashPairs must already be fully cleared (both directions) -- a second detach attempt against the OTHER party is a no-op')
+end)
+
+t.test('DEATH-DETECTION: the OFFICER-role party dying ALSO ends the pairing (not just the K9-role party)', function()
+    local f = newMainFixture()
+    setupEligiblePair(f, 1, 2)
+    formLeashPair(f, 1, 2, 1)
+
+    f.setHealth(20, 50) -- officerSrc(2) * 10 == ped handle 20, well below the threshold
+    f.runOneTick()
+    f.runOneTick()
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 2)
+end)
+
+t.test('DEATH-DETECTION: a genuinely alive pairing (health 101, one point above the threshold) is left completely alone', function()
+    local f = newMainFixture()
+    setupEligiblePair(f, 1, 2)
+    formLeashPair(f, 1, 2, 1)
+
+    f.setHealth(10, 101)
+    f.runOneTick()
+    f.runOneTick()
+
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 0)
+    t.isTrue(f.ForceDetachLeashForSource(1), 'the pairing must still genuinely exist, untouched')
+end)
+
+t.test('DEATH-DETECTION: with no active pairing at all, the thread is a true no-op every tick -- never throws against an empty LeashPairs', function()
+    local f = newMainFixture()
+    f.setHealth(999, 0) -- an unrelated ped, not party to anything
+    local ok = pcall(function()
+        f.runOneTick()
+        f.runOneTick()
+        f.runOneTick()
+    end)
+    t.isTrue(ok)
+    t.equals(#f.clientEvents, 0)
+end)
+
+t.test('DEATH-DETECTION: `Config.Combat.PropDragging.IsPlayerDownedOverride`, when configured, is consulted and its TRUE answer ends the pairing even at full (200) raw health', function()
+    local f = newMainFixture({ downedOverride = function(_src) return true end })
+    setupEligiblePair(f, 1, 2)
+    formLeashPair(f, 1, 2, 1)
+    -- health is left at the default (200, healthy) -- the override alone must be sufficient
+    f.runOneTick()
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 2, 'a configured override wins even when every fallback signal says alive')
+end)
+
+t.test('DEATH-DETECTION: an `IsPlayerDownedOverride` that ERRORS fails CLOSED (treated as NOT down this tick) -- same posture as server/defense.lua\'s IsHandlerDown, safe here because this is a REPEATING poll, never a one-shot', function()
+    local f = newMainFixture({ downedOverride = function(_src) error('boom') end })
+    setupEligiblePair(f, 1, 2)
+    formLeashPair(f, 1, 2, 1)
+    f.setHealth(10, 100) -- would otherwise be caught by the raw-health floor, but the override -- once configured -- wins UNCONDITIONALLY (see IsLeashPartyDead's own doc comment), even on error
+    local ok = pcall(function()
+        f.runOneTick()
+        f.runOneTick()
+    end)
+    t.isTrue(ok, 'an override error must never crash the death-detection thread itself')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 0, 'a fail-closed "not down" verdict this tick must leave the pairing alone -- it is retried next tick, never a permanent trap')
+end)
+
+t.test('DEATH-DETECTION: the K9Compat ambulance adapter is genuinely consulted (not merely configured) when no override is set, and a confirmed TRUE ends the pairing', function()
+    local f = newMainFixture({ ambulanceIsDowned = function(_src) return true end })
+    setupEligiblePair(f, 1, 2)
+    formLeashPair(f, 1, 2, 1)
+    -- health left healthy (200) -- the adapter alone must be sufficient, same as the override test above
+    f.runOneTick()
+    f.runOneTick()
+    t.isTrue(#f.ambulanceIsDownedCalls > 0, 'the adapter must actually be called, not just registered')
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 2)
+end)
+
+t.test('DEATH-DETECTION: doDetachLeash is the ONLY mutation path -- proven by re-forming a fresh pairing immediately after a death-triggered detach, with no leftover state from the old one', function()
+    local f = newMainFixture()
+    setupEligiblePair(f, 1, 2)
+    formLeashPair(f, 1, 2, 1)
+    f.setHealth(10, 50)
+    f.runOneTick()
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashDetached'), 2)
+
+    -- The K9 "revives" (health restored) and a BRAND NEW pairing forms with
+    -- a different officer -- must succeed cleanly, with no stale
+    -- already-leashed state surviving the death-triggered detach.
+    -- Clock advanced past LeashRequestCooldown (1000ms, per-INITIATOR,
+    -- src=1 initiated the first request above too) -- otherwise this
+    -- second request would be refused by that unrelated rate limit, not by
+    -- anything this test actually cares about.
+    f.advance(1001)
+    f.setHealth(10, 200)
+    f.clearCaptures()
+    setupEligiblePair(f, 1, 3)
+    formLeashPair(f, 1, 3, 1, true) -- keepCaptures: this test wants to see the fresh leashAttached broadcast
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:leashAttached'), 2, 'a fresh pairing must form normally -- no orphaned LeashPairs entry blocked it')
+end)
+
 print('')
-print('mainserver_spec.lua coverage summary (98 cases -- run this file, do not')
+print('mainserver_spec.lua coverage summary (111 cases as of the DEATH-DETECTION')
+print('FIX pass, coder-frontend -- this count was already stale (98 claimed, 102')
+print('actually ran) before that pass touched it, a pre-existing drift left uncorrected')
+print('beyond the +9 this pass\'s own Section 13 adds -- run this file, do not')
 print('grep it, per DEVELOPER_REFERENCE.md §20\'s own "count you must run" note): relayBark')
 print('(8) + its own PER-PERSON FEATURE CONTROL section (4: block/no-cooldown-burn,')
 print('default-allow, RequireGrant-denied, RequireGrant-granted), relayDoorScratch (11)')
@@ -1951,7 +2094,12 @@ print('+ onResourceStop FINDING (2), file-load inventory (4), the two onResource
 print('handlers -- cache backfill + config-safety assert, previously registered but')
 print('never fired by any spec in this suite (10). See this file\'s own header for')
 print('what is deliberately NOT covered and why, Section 7 for the one real,')
-print('disclosed production finding this pass caught, and Section 12 for the')
-print('dangling-TODO-header fix this backfill coverage accompanies.')
+print('disclosed production finding this pass caught, Section 12 for the')
+print('dangling-TODO-header fix that backfill coverage accompanies, and Section 13')
+print('(9 cases) for the DEATH-DETECTION FIX: no death handler had ever touched')
+print('LeashPairs before -- either party dying mid-leash now ends the pairing via a')
+print('new background poll thread, gated on Config.Features.LeashMechanics, reusing')
+print('server/defense.lua\'s own IsHandlerDown precedence (override -> K9Compat')
+print('ambulance adapter -> metadata -> raw health) rather than re-deriving it.')
 
 os.exit(t.summary())

@@ -1171,20 +1171,33 @@ local COMBAT_REJECT_MESSAGES = {
     -- CONTRACT entry for IsHesitating/IsDistracted).
     hesitating         = locale('combat.hesitating'),
     distracted         = locale('combat.distracted'),
-    -- PER-PERSON FEATURE CONTROL denial (config.lua's Config.FeatureControl
-    -- -- an explicit 'block.<Name>' row OR 'RequireGrant' listed without an
-    -- active 'feature.<Name>' grant; see IsCombatFeaturePermittedForCitizenId
-    -- below). Collapsed into the SAME generic copy either way, deliberately
-    -- -- matches server/pursuitsprint.lua's own IsPursuitSprintPermittedForCitizenId
-    -- call site: "the player-facing message is deliberately the same...
-    -- a blocked handler does not need a message that reads differently from
-    -- a never-granted one." Reuses the EXISTING combat.reject_fallback
-    -- locale key rather than adding a new one -- this file may not edit
-    -- locales/en.json this pass; an explicit mapping is kept here (rather
-    -- than left to CombatRejectMessage's own fallback-on-miss) so a reader
-    -- of this table sees the reason was deliberately handled, not merely
-    -- unmapped.
+    -- MESSAGE-ROUTING FIX (coder-backend handoff, this pass): 'permission_denied'
+    -- used to be the ONE reason both an explicit block.<Name> AND a missing
+    -- feature.<Name> grant collapsed into, mapped to the same generic
+    -- locale('combat.reject_fallback') = "Unable to complete that action." --
+    -- indistinguishable from any other unmapped failure, telling the player
+    -- nothing about a personal grant/block even existing as a concept. Kept
+    -- here, UNCHANGED, for the one case that still genuinely has no more
+    -- specific story to tell (ValidateCombatRequest could not resolve a
+    -- citizenid for the requester AT ALL -- see that call site's own updated
+    -- comment) -- the two REAL per-person-feature-control outcomes now get
+    -- their own distinct reasons/messages immediately below instead of
+    -- sharing this one.
     permission_denied  = locale('combat.reject_fallback'),
+    -- 'combat_blocked' / 'combat_not_granted' (this pass, coder-backend
+    -- handoff -- see ValidateCombatRequest's own updated PER-PERSON FEATURE
+    -- CONTROL comment for the full writeup): the two outcomes
+    -- 'permission_denied' used to flatten together. Each now names the
+    -- specific mechanic (CombatRejectMessage's own second `featureKey`
+    -- argument, resolved through COMBAT_FEATURE_DISPLAY_LABEL below) and the
+    -- real, distinct remedy for each -- "ask High Command why" for an
+    -- explicit block (a deliberate decision, not a missing step) vs. "ask
+    -- High Command to grant it" for a simply-never-granted capability.
+    -- Deliberately NOT mapped as plain strings in this table the way every
+    -- OTHER reason above is -- both need the featureKey substituted in via
+    -- locale()'s own %s formatting, which this table's flat
+    -- reason->already-resolved-string shape cannot express -- CombatRejectMessage
+    -- below special-cases these two BEFORE ever consulting this table.
     -- CERTIFICATION TIER CAPABILITY denial (server/certtiers.lua's
     -- TierCapabilityPermits, wired into ValidateCombatRequest's
     -- BiteAndHold/NonLethalTakedown branch this pass -- see that call
@@ -1198,30 +1211,46 @@ local COMBAT_REJECT_MESSAGES = {
     -- every spec that loads this file, not just the ones exercising this
     -- reason. If you add another reason here, land its key first.
     tier_capability_denied = locale('combat.tier_capability_denied'),
-    -- RED-TEAM FINDINGS 1 & 3 (this pass, coder-security) -- two NEW reject
-    -- reasons ('implausible_movement', 'target_in_vehicle', see
-    -- ValidateCombatRequest's own call sites below for each) DELIBERATELY
-    -- NOT mapped here yet, same reason/same fix as tier_capability_denied's
-    -- own comment immediately above: this table is a top-level literal
-    -- evaluated at file-load time and the test sandbox's locale() hard-
-    -- asserts on a missing key, so naming combat.implausible_movement/
-    -- combat.target_in_vehicle before they exist in locales/en.json would
-    -- break every spec that loads this file. Until those two keys land,
-    -- CombatRejectMessage(...) falls through to its own existing generic
-    -- fallback (locale('combat.reject_fallback')) automatically for both --
-    -- not factually wrong, just less specific than intended. Proposed
-    -- wording, for whoever lands locales/en.json next:
-    --   combat.implausible_movement = "Your K9's movement could not be
-    --     verified. Try again."
-    --   combat.target_in_vehicle    = "That target is currently inside a
-    --     vehicle."
-    -- Land the keys, then swap this comment's mapping into the table above,
-    -- exactly as tier_capability_denied's own history already did.
+    -- STALE-COMMENT FIX (this pass -- re-verified against the actual current
+    -- locales/en.json before rewriting this paragraph, not left
+    -- contradicting it): this comment used to say the RED-TEAM FINDINGS 1 &
+    -- 3 keys immediately below ('implausible_movement', 'target_in_vehicle')
+    -- were "DELIBERATELY NOT mapped here yet" pending the real locale keys
+    -- landing -- that already happened (both exist in locales/en.json), just
+    -- without ever swapping this table's own mapping in to match, exactly
+    -- the "land the keys, then swap the mapping in" step tier_capability_denied's
+    -- own history above already modeled. Fixed the same way, now that both
+    -- ValidateCombatRequest's own call sites below (RED-TEAM FINDINGS 1 & 3)
+    -- have had this fallen through to the generic reject_fallback message
+    -- for longer than intended.
+    implausible_movement = locale('combat.implausible_movement'),
+    target_in_vehicle    = locale('combat.target_in_vehicle'),
+}
+
+--- COMBAT_FEATURE_DISPLAY_LABEL (this pass, coder-backend handoff): the
+--- three literal featureKey strings ValidateCombatRequest's own call sites
+--- already pass ('BiteAndHold' | 'NonLethalTakedown' | 'PropDragging'),
+--- resolved to a human-readable label for the two per-person-feature-control
+--- messages below. A featureKey missing from this table (should never
+--- happen -- these three are this file's own complete, literal set) falls
+--- back to the raw key string itself, never an error.
+local COMBAT_FEATURE_DISPLAY_LABEL = {
+    BiteAndHold = 'Bite and Hold',
+    NonLethalTakedown = 'Non-Lethal Takedown',
+    PropDragging = 'Prop Dragging',
 }
 
 --- @param reason string?
+--- @param featureKey string? -- ONLY consulted for 'combat_blocked'/'combat_not_granted' below -- every other reason ignores it, so passing it unconditionally at every call site (this file's own convention now) is always safe.
 --- @return string
-local function CombatRejectMessage(reason)
+local function CombatRejectMessage(reason, featureKey)
+    local label = COMBAT_FEATURE_DISPLAY_LABEL[featureKey] or featureKey or '?'
+    if reason == 'combat_blocked' then
+        return locale('combat.denied_blocked', label)
+    end
+    if reason == 'combat_not_granted' then
+        return locale('combat.denied_not_granted', label)
+    end
     return COMBAT_REJECT_MESSAGES[reason] or locale('combat.reject_fallback')
 end
 
@@ -1258,6 +1287,7 @@ end
 --- @param citizenid string
 --- @param featureKey string -- 'BiteAndHold' | 'NonLethalTakedown' | 'PropDragging' -- always a literal passed by this file's own call sites, never derived from anything client-supplied
 --- @return boolean allowed
+--- @return string? denyReason -- MESSAGE-ROUTING FIX (coder-backend handoff, this pass): nil when allowed==true, otherwise 'blocked' (step 2, an explicit block.<Name>) or 'not_granted' (step 3, RequireGrant-listed with no active feature.<Name> grant) -- see ValidateCombatRequest's own call site below for why this distinction matters. Purely an ADDITIVE second return value: every pre-existing call site that only reads the first return value (there were none outside this file before this pass; ValidateCombatRequest is the sole caller) is unaffected, and the authorization OUTCOME itself (the boolean) is byte-for-byte unchanged -- this is message-routing only, never a widened or narrowed check.
 local function IsCombatFeaturePermittedForCitizenId(citizenid, featureKey)
     -- Soft dependency, this resource's established convention
     -- (`type(...) == 'function'`) -- server/permissions.lua may be absent
@@ -1269,7 +1299,7 @@ local function IsCombatFeaturePermittedForCitizenId(citizenid, featureKey)
     local hasPermissionAvailable = type(HasPermission) == 'function'
 
     if hasPermissionAvailable and HasPermission(citizenid, 'block.' .. featureKey) == true then
-        return false -- step 2: an explicit block always wins, even over an active grant
+        return false, 'blocked' -- step 2: an explicit block always wins, even over an active grant
     end
 
     local featureControl = Config.FeatureControl
@@ -1279,7 +1309,10 @@ local function IsCombatFeaturePermittedForCitizenId(citizenid, featureKey)
 
     if requiresGrant then
         -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
-        return hasPermissionAvailable and HasPermission(citizenid, 'feature.' .. featureKey) == true
+        if hasPermissionAvailable and HasPermission(citizenid, 'feature.' .. featureKey) == true then
+            return true
+        end
+        return false, 'not_granted'
     end
 
     return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
@@ -1352,8 +1385,30 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     do
         local k9Player = exports.qbx_core:GetPlayer(src)
         local k9Citizenid = k9Player and k9Player.PlayerData and k9Player.PlayerData.citizenid
-        if not k9Citizenid or not IsCombatFeaturePermittedForCitizenId(k9Citizenid, featureKey) then
+        if not k9Citizenid then
+            -- No Player/citizenid resolved at all -- a different, far rarer
+            -- edge case than an actual per-person feature-control denial
+            -- (see IsCombatFeaturePermittedForCitizenId's own new second
+            -- return value immediately below for that case) -- kept as the
+            -- pre-existing generic 'permission_denied' reason, unchanged.
             return false, nil, nil, nil, nil, 'permission_denied'
+        end
+        -- MESSAGE-ROUTING FIX (coder-backend handoff, this pass -- see that
+        -- message's own writeup): 'permission_denied' used to collapse BOTH
+        -- an explicit block.<Name> AND a missing feature.<Name> grant into
+        -- the SAME generic reason, which CombatRejectMessage mapped to
+        -- locale('combat.reject_fallback') = "Unable to complete that
+        -- action." -- telling the player nothing actionable: not that a
+        -- personal grant exists as a concept, not which of the three
+        -- abilities needs it, not who can fix it. `denyReason` now
+        -- distinguishes the two so CombatRejectMessage (below) can build a
+        -- specific, actionable message naming the feature and the real
+        -- remedy for each. Never widens/narrows the underlying check --
+        -- `citizenPermitted` alone is byte-for-byte the same boolean the old
+        -- single-return call already produced.
+        local citizenPermitted, denyReason = IsCombatFeaturePermittedForCitizenId(k9Citizenid, featureKey)
+        if not citizenPermitted then
+            return false, nil, nil, nil, nil, (denyReason == 'blocked') and 'combat_blocked' or 'combat_not_granted'
         end
     end
 
@@ -2531,7 +2586,7 @@ RegisterNetEvent('qbx_k9unit:server:requestBiteHold', function(targetNetId)
     local ok, k9Ped, targetPed, isPlayerTarget, targetSrc, reason =
         ValidateCombatRequest(src, targetNetId, Config.Features.BiteAndHold, Config.Combat.BiteAndHold.range, 'BiteAndHold')
     if not ok then
-        NotifyPlayer(src, CombatRejectMessage(reason), 'error')
+        NotifyPlayer(src, CombatRejectMessage(reason, 'BiteAndHold'), 'error')
         return
     end
 
@@ -2736,7 +2791,7 @@ local function HandleTakedownRequest(src, targetNetId)
     local ok, _, targetPed, _, _, reason =
         ValidateCombatRequest(src, targetNetId, Config.Features.NonLethalTakedown, Config.Combat.NonLethalTakedown.range, 'NonLethalTakedown')
     if not ok then
-        NotifyPlayer(src, CombatRejectMessage(reason), 'error')
+        NotifyPlayer(src, CombatRejectMessage(reason, 'NonLethalTakedown'), 'error')
         return
     end
 
@@ -2790,7 +2845,7 @@ local function HandleTakedownRequest(src, targetNetId)
     local ok2, _, targetPed2, isPlayerTarget2, targetSrc2, reason2 =
         ValidateCombatRequest(src, targetNetId, Config.Features.NonLethalTakedown, Config.Combat.NonLethalTakedown.range, 'NonLethalTakedown')
     if not ok2 then
-        NotifyPlayer(src, CombatRejectMessage(reason2), 'error')
+        NotifyPlayer(src, CombatRejectMessage(reason2, 'NonLethalTakedown'), 'error')
         return
     end
 
@@ -3124,7 +3179,7 @@ RegisterNetEvent('qbx_k9unit:server:requestDrag', function(targetNetId)
     local ok, _, targetPed, isPlayerTarget, targetSrc, reason =
         ValidateCombatRequest(src, targetNetId, Config.Features.PropDragging, Config.Combat.PropDragging.range, 'PropDragging', { requireAlive = false })
     if not ok then
-        NotifyPlayer(src, CombatRejectMessage(reason), 'error')
+        NotifyPlayer(src, CombatRejectMessage(reason, 'PropDragging'), 'error')
         return
     end
 

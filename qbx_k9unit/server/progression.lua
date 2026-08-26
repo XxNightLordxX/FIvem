@@ -110,25 +110,41 @@
             Config.Features.XPProgression themselves (this accessor does
             not gate internally, so it stays a plain, always-correct cache
             read regardless of caller).
-            DELIBERATELY STILL RAW, NOT OVERRIDE-AWARE (GAP 1 closure, this
-            pass — stated explicitly so this does not read as an oversight):
-            this function's own return value is UNCHANGED by this pass —
-            still the plain XP-tier lookup, never composed with
-            server/k9profiles.lua's per-INDIVIDUAL-K9 override. Widening this
-            accessor itself would silently change what every one of its
+            DELIBERATELY STILL RAW, NOT OVERRIDE-AWARE BY DESIGN (GAP 1
+            closure, original pass — stated explicitly so this does not
+            read as an oversight): this function's own return value is
+            UNCHANGED — still the plain XP-tier lookup, never composed with
+            server/k9profiles.lua's per-INDIVIDUAL-K9 override internally.
+            Widening THIS accessor itself to compose the override was
+            rejected: doing so would silently change what every one of its
             existing callers (server/tracking.lua, server/search.lua,
-            server/tablet.lua, server/highcommand.lua, server/exports.lua —
-            none owned by this pass) receives, for a benefit only one of them
-            (server/tracking.lua's own scent-range calculation) could
-            actually use — too wide a blast radius for this pass to take on
-            for those files' own owners. The two places an override actually
-            needs to reach a real effect (GetXPTierMedkitCooldownMs, and the
-            client-facing tier-snapshot push) call
-            GetK9EffectiveMultipliers(citizenid) directly instead — see each
-            one's own doc comment. server/tracking.lua's own scent-range
-            consumer is DISCLOSED, NOT YET WIRED — see
-            server/k9profiles.lua's own header "INTEGRATION HANDOFF" section
-            for the exact one-line patch reported to that file's owner.
+            server/tablet.lua, server/highcommand.lua, server/exports.lua)
+            receives, several of which have no documented need for the
+            override at all — too wide a blast radius for one accessor to
+            take on for those files' own owners. Instead, each caller that
+            genuinely needs the composed answer calls
+            GetK9EffectiveMultipliers(citizenid) directly, as its own
+            separate, explicit step — see that function's own doc comment
+            (server/k9profiles.lua).
+            CORRECTED (this pass, coder-backend): this paragraph used to say
+            "server/tracking.lua's own scent-range consumer is DISCLOSED,
+            NOT YET WIRED" and that only one caller "could actually use" the
+            override — both re-verified false by direct read before writing
+            this correction. server/tracking.lua's own scent-range consumer
+            IS WIRED (its own findTrackableSource now calls
+            GetK9EffectiveMultipliers(trackerCitizenid) directly, with a
+            documented fallback to the raw GetXPTier read when that global
+            is unavailable — see that file's own "INDIVIDUAL-OVERRIDE FIX"
+            comment). server/exports.lua's own public GetXPTier export is
+            ALSO now wired the same way (composes GetK9EffectiveMultipliers
+            onto its own tier copy before handing it to a third-party
+            resource, with the identical raw-tier fallback) — so this is no
+            longer "only one" consumer. server/search.lua and
+            server/tablet.lua remain on the plain GetXPTier value; that is
+            not a disclosed gap, since neither has a documented need to
+            reflect an individual override today — a genuine future need
+            there should follow the same GetK9EffectiveMultipliers(citizenid)
+            call pattern, never a widening of this accessor.
         GetXP(citizenid) -> number
             Raw accumulated total (0 if uncached). Not currently consumed
             anywhere in this resource — exposed for a future HUD/display
@@ -779,10 +795,14 @@ end
 --
 -- THREE UNLOCKS DEFINED, ONE PER NON-BASE TIER. WIRED STATUS BELOW IS THE
 -- CURRENT GROUND TRUTH, RE-VERIFIED AGAINST THE REAL FILES BEFORE WRITING
--- THIS -- not a status this comment is allowed to go stale on. If you wire
--- one of the two UNWIRED items below, flip its own line to WIRED and say
--- where, in the same edit; do not leave a dangling "not wired yet" note
--- once it is no longer true.
+-- THIS -- not a status this comment is allowed to go stale on. CORRECTED
+-- (this pass, coder-backend): this used to say "the two UNWIRED items
+-- below" -- Veteran's own bullet below was one of those two, and is now
+-- WIRED (re-verified this pass; see its own bullet for what changed), so
+-- only Elite's HUD-display half remains genuinely unwired below. If you
+-- wire that one too, flip its own line to WIRED and say where, in the same
+-- edit; do not leave a dangling "not wired yet" note once it is no longer
+-- true.
 --   Trained (1,250 XP) -- WIRED. Eligibility for the cooperative search
 --     bonus (server/search.lua, Part B §10): BOTH the searcher and their
 --     currently active partner must be Trained+ (`GetXPTier(citizenid).xp >
@@ -922,19 +942,28 @@ end
 --- operator-edited config missing it on some future row still gets a
 --- clean `baseCooldownMs` no-op, never an error).
 ---
---- CALLER CONTRACT (server/medkit.lua — this accessor is complete and
---- tested; the call site that should consume it is a separate, currently
---- UNAPPLIED change to a file this pass does not own — see this pass's own
---- report for the ready-to-apply patch). The intended one-line integration,
---- replacing the raw `Config.K9Medkit.cooldownMs` currently passed straight
---- into `MedkitCooldown.IsOnCooldown` at that file's own
---- RunUseK9MedkitMutation:
----   local effectiveCooldownMs = Config.K9Medkit.cooldownMs
+--- CALLER CONTRACT (server/medkit.lua). CORRECTED (this pass, coder-backend):
+--- this paragraph used to describe the call site below as a "currently
+--- UNAPPLIED change... see this pass's own report for the ready-to-apply
+--- patch," with a hypothetical snippet reading `Config.K9Medkit.cooldownMs`
+--- raw — false today, re-verified false by direct read of the real
+--- server/medkit.lua before writing this correction, not assumed. The real,
+--- APPLIED call site (RunUseK9MedkitMutation) does not match that
+--- hypothetical snippet either: it never reads `Config.K9Medkit.cooldownMs`
+--- directly at all, even as a fallback — it resolves the base cooldown via
+--- that file's own `ResolveMedkitBaseCooldownMs()` (the validated-every-call
+--- config read, never the raw value) and passes THAT into this function:
+---   local baseCooldownMs = ResolveMedkitBaseCooldownMs()
+---   local effectiveCooldownMs = baseCooldownMs
 ---   if type(GetXPTierMedkitCooldownMs) == 'function' then
----       effectiveCooldownMs = GetXPTierMedkitCooldownMs(targetCitizenid, Config.K9Medkit.cooldownMs)
+---       effectiveCooldownMs = GetXPTierMedkitCooldownMs(targetCitizenid, baseCooldownMs)
 ---   end
 ---   if MedkitCooldown.IsOnCooldown(targetCitizenid, effectiveCooldownMs, requestedAt) then
---- `targetCitizenid` (not the using player's own citizenid) is deliberate:
+--- (quoted verbatim from that file's own RunUseK9MedkitMutation — see its
+--- FILE-TO-FILE CONTRACT entry for GetXPTierMedkitCooldownMs for the same
+--- story from that file's side, and tests/medkit_spec.lua's own "GAP
+--- CLOSURE" section for the end-to-end proof). `targetCitizenid` (not the
+--- using player's own citizenid) is deliberate:
 --- `MedkitCooldown` is already keyed on the TARGET K9's citizenid (that
 --- file's own header — the cooldown limits how often a given K9 can be
 --- re-healed), so the tier that should shorten it is the K9 BEING healed's

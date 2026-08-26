@@ -1,13 +1,8 @@
 --[[
     qbx_k9unit/server/defense.lua
 
-    Phase 3 implementation (coder-backend), DEVELOPER_REFERENCE.md §12.5.3
-    (Handler-Down Defense) / §12.3's file-plan row for this exact file.
-    Was blocked all session on `server/partnership.lua` (DEVELOPER_REFERENCE.md
-    §12.0 item 7) not existing -- that blocker is gone as of commit 52a58a1
-    (`server/partnership.lua`/`client/partnership.lua` landed) and commit
-    94fbc4e (`server/certifications.lua` wired to tear partnerships down on
-    cert revoke / department change). This file is a PURE CONSUMER of both
+    DEVELOPER_REFERENCE.md §12.5.3 (Handler-Down Defense) / §12.3's
+    file-plan row for this exact file. This file is a PURE CONSUMER of both
     `server/partnership.lua` (read-only accessors, never re-derives
     partnership state) and `server/combat.lua`'s existing
     `requestBiteHold`/`requestTakedown` event contract (never duplicates
@@ -37,7 +32,7 @@
        §12.1's 3e row, §12.2's `hostileLookbackSeconds` comment) is WRONG
        about what that log actually contains. Read server/tracking.lua in
        full before writing this file: `relayDamageEvent` is payload-less BY
-       DESIGN (that file's own header, quoting 
+       DESIGN (that file's own header, quoting
        DEVELOPER_REFERENCE.md#tracking's explicit warning against ever
        adding a payload) -- it logs ONLY the victim's own coordinates, for
        blood-trail purposes, with NO attacker/source-of-damage field
@@ -49,11 +44,10 @@
        simulation at all" finding, already relied on by server/tracking.lua
        itself) -- there is no server-side native or event that answers "who
        last hit this player" independent of a client relay.
-       RESOLUTION: this file does NOT touch server/tracking.lua (off-limits,
-       owned by another agent, and repurposing `relayDamageEvent`'s payload
-       shape would violate that file's own explicit "do not add a
-       coordinate/payload later" contract). Instead it owns a NEW,
-       self-contained, low-trust hint channel
+       RESOLUTION: this file does NOT touch server/tracking.lua (repurposing
+       `relayDamageEvent`'s payload shape would violate that file's own
+       explicit "do not add a coordinate/payload later" contract). Instead
+       it owns a NEW, self-contained, low-trust hint channel
        (`qbx_k9unit:server:reportHandlerAttacker`, below) fed by a NEW
        client-side `gameEventTriggered` hook in client/defense.lua --
        structurally the same PATTERN tracking.lua's own relayDamageEvent
@@ -112,9 +106,9 @@
     top-level `Config.Combat.IsPlayerDownedOverride` instead of nested under
     `PropDragging`, that is a clean, non-blocking rename this file's own
     single call site below would not need to change in shape, only in
-    lookup path -- flagged as a coder-architect judgment call, not decided
-    here. When no override is configured, the fallback below mirrors
-    server/combat.lua's own `IsTargetDowned` default (a
+    lookup path -- flagged as a judgment call for a future maintainer, not
+    decided here. When no override is configured, the fallback below
+    mirrors server/combat.lua's own `IsTargetDowned` default (a
     `metadata.isdead`/`.inlaststand` guess) OR'd with the literal
     `handlerHealthThreshold` the original spec sketch named -- see
     `IsHandlerDown`'s own comment for why OR (not the override-or-guess
@@ -124,18 +118,17 @@
     (never a granted capability -- see item 2 restatement above), which
     makes being slightly more eager to fire an acceptable, disclosed
     trade-off that would NOT be acceptable for PropDragging's own gate.
-    COMPAT-LAYER ADDENDUM (this pass): when no override is configured,
-    `IsHandlerDown` now also consults the detected K9Compat ambulance
-    adapter (shared/compat/ambulance.lua) between the override check and
-    this metadata/health fallback -- see that function's own doc comment
-    for the full three-valued precedence and for why a confirmed adapter
-    `false` deliberately does NOT short-circuit the health half of the OR
-    below (only the now-redundant metadata half), unlike server/combat.lua's
-    own IsTargetDowned. Also gated, in the same pass, on
-    `Config.Departments[job.name]` membership -- see IsHandlerDown's own
-    PERFORMANCE doc comment for why this changes no real notification
-    outcome and matches server/integrations.lua's own poll-ordering
-    convention.
+    COMPAT-LAYER ADDENDUM: when no override is configured, `IsHandlerDown`
+    now also consults the detected K9Compat ambulance adapter
+    (shared/compat/ambulance.lua) between the override check and this
+    metadata/health fallback -- see that function's own doc comment for the
+    full three-valued precedence and for why a confirmed adapter `false`
+    deliberately does NOT short-circuit the health half of the OR below
+    (only the now-redundant metadata half), unlike server/combat.lua's own
+    IsTargetDowned. Also gated on `Config.Departments[job.name]` membership
+    -- see IsHandlerDown's own PERFORMANCE doc comment for why this changes
+    no real notification outcome and matches server/integrations.lua's own
+    poll-ordering convention.
     ======================================================================
 
     ======================================================================
@@ -198,8 +191,8 @@
     on the first not-down -> down transition (see `TryNotifyPartnerK9`'s own
     RETRY-WHILE-DOWN doc comment for why an edge-only design was drafted
     and rejected) -- looks up that citizenid's active partnership, subject
-    to its own cheapest-first anti-spam cooldown check. QA follow-up
-    refinement, NARROWING not reverting the above: a handler confirmed dead
+    to its own cheapest-first anti-spam cooldown check. Refinement,
+    narrowing not reverting the above: a handler confirmed dead
     (metadata.isdead == true, not merely laststand/a health dip) gets at
     most ONE notification per down-episode -- see `DeadHandlerAlreadyNotified`'s
     own declaration-site comment for the full ruling on why a corpse
@@ -236,14 +229,14 @@
       server/partnership.lua's own documented AUTHORIZATION MODEL) is
       gated on department membership only, never K9 certification. This
       file relies on server/certifications.lua's `ForceBreakPartnershipForCitizenId`
-      wiring (commit 94fbc4e) to keep an active partnership consistent
-      with the K9-role party's certification status -- it does not
-      independently re-verify certification here.
+      wiring to keep an active partnership consistent with the K9-role
+      party's certification status -- it does not independently
+      re-verify certification here.
     - Does NOT call anything in server/combat.lua -- this file only fires
       the exact same event NAMES that file's own client-side callers use
       (see REALITY-CHECK item 2 above); there is no Lua-level dependency in
       either direction, only a shared network-protocol contract.
-    - Calls `K9Compat.Get('ambulance').IsDowned(handlerSrc)` (this pass) --
+    - Calls `K9Compat.Get('ambulance').IsDowned(handlerSrc)` --
       `K9Compat` (shared/compat/core.lua) is a shared_script, loaded before
       EVERY server_script in fxmanifest.lua, including this file, so no
       runtime existence guard is needed here (unlike GetActivePartnerCitizenId
@@ -267,10 +260,9 @@
     `attackerReportCooldownMs`), since DEVELOPER_REFERENCE.md's own sketch
     did not work out the polling/hint-relay mechanics this file had to
     design to make the feature buildable at all. `Config.Features.HandlerDownDefense`
-    was `false` at go-live-review time (this file must never flip it
-    itself, only ever read it) and has SINCE been flipped to `true` by the
-    config owner (confirmed by direct read of the live config.lua) -- this
-    feature is live, not gated off, as of the current config.
+    defaults to `false` (this file must never flip it itself, only ever
+    read it) but is confirmed `true` in the live config.lua -- this feature
+    is live, not gated off, as of the current config.
 ]]
 
 if not Config.Features.HandlerDownDefense then return end
@@ -285,11 +277,10 @@ if not Config.Features.HandlerDownDefense then return end
 -- since this is read-many, never mutated-on-read).
 local LastHostile = {}
 
--- CORPSE-RETRIGGER RULING (QA follow-up product judgment -- see
--- TryNotifyPartnerK9's own RETRY-WHILE-DOWN doc comment below before
--- reading this; this table exists to narrow that design, not undo it).
--- DeadHandlerAlreadyNotified[handlerSrc] = true once a
--- handlerDownDefenseTrigger has been sent for this handler while
+-- CORPSE-RETRIGGER RULING (see TryNotifyPartnerK9's own RETRY-WHILE-DOWN
+-- doc comment below before reading this; this table exists to narrow that
+-- design, not undo it). DeadHandlerAlreadyNotified[handlerSrc] = true once
+-- a handlerDownDefenseTrigger has been sent for this handler while
 -- metadata.isdead read true (a CONFIRMED corpse, not merely laststand/a
 -- health-threshold dip) -- cleared the moment that handler next reads as
 -- NOT down at all (see the maintenance thread below), i.e. on respawn.
@@ -321,14 +312,14 @@ local DeadHandlerAlreadyNotified = {}
 -- can call TriggerServerEvent directly, bypassing any local debounce in
 -- client/defense.lua's own gameEventTriggered hook).
 --
--- ResolveConfiguredThresholdMs (server/cooldowns.lua, this pass, QA sandbox
--- repro) wraps both raw Config reads below rather than handing them
--- straight to NewCooldown -- an uncaught error thrown from inside
--- NewCooldown's own constructor guard would abort THIS FILE's load from
--- that line onward (see cooldowns.lua's header ADDENDUM for the mechanism),
--- silently un-registering every AddEventHandler/RegisterNetEvent below it
--- in this file over a single non-positive Config number. Fallbacks below
--- match config.lua's own shipped defaults for each field.
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua) wraps both raw
+-- Config reads below rather than handing them straight to NewCooldown --
+-- an uncaught error thrown from inside NewCooldown's own constructor guard
+-- would abort THIS FILE's load from that line onward (see cooldowns.lua's
+-- header ADDENDUM for the mechanism), silently un-registering every
+-- AddEventHandler/RegisterNetEvent below it in this file over a single
+-- non-positive Config number. Fallbacks below match config.lua's own
+-- shipped defaults for each field.
 local AttackerReportCooldown = NewCooldown(ResolveConfiguredThresholdMs(
     Config.Combat.HandlerDownDefense.attackerReportCooldownMs, 500, 'Config.Combat.HandlerDownDefense.attackerReportCooldownMs'))
 AttackerReportCooldown.RegisterPlayerDropped()
@@ -345,32 +336,31 @@ local DefenseTriggerCooldown = NewCooldown(ResolveConfiguredThresholdMs(
     Config.Combat.HandlerDownDefense.retriggerCooldownMs, 30000, 'Config.Combat.HandlerDownDefense.retriggerCooldownMs'))
 DefenseTriggerCooldown.RegisterPlayerDropped()
 
--- POLL-INTERVAL VALIDATION (QA follow-up, an earlier pass; UPDATED this pass
--- -- QA sandbox repro, see server/cooldowns.lua's header ADDENDUM): this used
--- to be its own hard `assert` here, reasoning (correctly) that pollIntervalMs
--- is the one Config number in this file validated by neither
--- AssertValidDefaultThreshold nor ResolveConfiguredThresholdMs (it feeds a
--- bare `Wait()` directly in the maintenance thread below, never NewCooldown),
--- and that an uncaught throw from inside that Wait() would silently kill the
--- thread itself. The DIAGNOSIS was right; the REMEDY was the same mistake
--- cooldowns.lua's header ADDENDUM documents finding in server/combat.lua:
--- `error()` thrown from THIS FILE's own top-level chunk aborts server/
--- defense.lua's load from this line onward -- taking the spoofable-override
+-- POLL-INTERVAL VALIDATION: this used to be its own hard `assert` here,
+-- reasoning (correctly) that pollIntervalMs is the one Config number in
+-- this file validated by neither AssertValidDefaultThreshold nor
+-- ResolveConfiguredThresholdMs (it feeds a bare `Wait()` directly in the
+-- maintenance thread below, never NewCooldown), and that an uncaught throw
+-- from inside that Wait() would silently kill the thread itself. The
+-- DIAGNOSIS was right; the REMEDY was the same mistake cooldowns.lua's
+-- header ADDENDUM documents finding in server/combat.lua: `error()`
+-- thrown from THIS FILE's own top-level chunk aborts server/defense.lua's
+-- load from this line onward -- taking the spoofable-override
 -- onResourceStart warning below, IsHandlerDown, TryNotifyPartnerK9, the
 -- maintenance CreateThread itself, the reportHandlerAttacker
 -- RegisterNetEvent, and this file's own playerDropped cleanup down with it,
 -- over one operator typo. Its two sibling cooldowns just above
--- (AttackerReportCooldown/DefenseTriggerCooldown) were ALREADY migrated to
--- ResolveConfiguredThresholdMs in that earlier pass -- pollIntervalMs was
--- missed only because it feeds Wait() instead of NewCooldown, not because
--- the risk was any different. Same fallback (1000ms) as config.lua's own
--- shipped default for this field; still captured once into a local (not
--- re-read from Config every loop iteration) so the thread below always uses
--- exactly the validated value.
+-- (AttackerReportCooldown/DefenseTriggerCooldown) were already migrated to
+-- ResolveConfiguredThresholdMs -- pollIntervalMs was missed only because
+-- it feeds Wait() instead of NewCooldown, not because the risk was any
+-- different. Same fallback (1000ms) as config.lua's own shipped default
+-- for this field; still captured once into a local (not re-read from
+-- Config every loop iteration) so the thread below always uses exactly
+-- the validated value.
 local PollIntervalMs = ResolveConfiguredThresholdMs(
     Config.Combat.HandlerDownDefense.pollIntervalMs, 1000, 'Config.Combat.HandlerDownDefense.pollIntervalMs')
 
--- RED-TEAM FINDING PARITY (QA follow-up): server/combat.lua's own
+-- SPOOFABLE-OVERRIDE WARNING PARITY: server/combat.lua's own
 -- `onResourceStart` prints a loud warning when `Config.Features.PropDragging`
 -- is on and `Config.Combat.PropDragging.IsPlayerDownedOverride` is nil,
 -- because the default fallback (`metadata.isdead`/`.inlaststand`) is
@@ -382,9 +372,9 @@ local PollIntervalMs = ResolveConfiguredThresholdMs(
 -- `Config.Features.PropDragging`, so an operator who enables
 -- HandlerDownDefense WITHOUT also enabling PropDragging never sees any
 -- warning at all despite carrying the identical risk. server/combat.lua is
--- owned elsewhere and off-limits for this pass, so this file prints its own
--- copy rather than relying on that one to cover it. WARNING, NOT ASSERT --
--- same proportionality reasoning as server/combat.lua's own copy: this is
+-- a file this one does not edit, so this file prints its own copy rather
+-- than relying on that one to cover it. WARNING, NOT ASSERT -- same
+-- proportionality reasoning as server/combat.lua's own copy: this is
 -- a disclosed best-effort default, it still functions in the intended
 -- direction for the ordinary non-adversarial case, and
 -- `Config.Features.HandlerDownDefense` itself defaults to `false`, so a
@@ -458,10 +448,10 @@ end
 --- (this file's false-closed case merely skips a helpful notification,
 --- never denies or grants a real capability).
 ---
---- COMPAT-LAYER (this pass): when no override is configured, the detected
---- K9Compat ambulance adapter (shared/compat/ambulance.lua) is consulted as
---- a FALLBACK -- never a replacement -- for the metadata/health guess
---- below, in the exact resolution order that file's own header PRECEDENCE
+--- COMPAT-LAYER: when no override is configured, the detected K9Compat
+--- ambulance adapter (shared/compat/ambulance.lua) is consulted as a
+--- FALLBACK -- never a replacement -- for the metadata/health guess below,
+--- in the exact resolution order that file's own header PRECEDENCE
 --- section requires (override, already handled above, wins unconditionally;
 --- only if absent, the adapter's `true`/`false` are trusted; its `nil`
 --- (UNKNOWN) falls through to this file's own pre-existing guess,
@@ -493,19 +483,19 @@ end
 --- this fallback below) already exists to cover. Treating a confirmed
 --- `false` as reason to skip the health check too would silently reopen
 --- that exact gap for the one specific case (a real, verified ambulance
---- adapter) this pass was supposed to make MORE trustworthy, not less --
---- for a trigger whose own header already establishes a false positive
---- costs nothing but an extra notification (§12.0 item 2), while a false
+--- adapter) this is supposed to make MORE trustworthy, not less -- for a
+--- trigger whose own header already establishes a false positive costs
+--- nothing but an extra notification (§12.0 item 2), while a false
 --- negative costs a partner K9 a warning they were never sent. This is a
 --- deliberate divergence from the literal "short-circuit both" reading of
 --- shared/compat/ambulance.lua's contract, made here rather than in that
 --- file, precisely because that file's own header explicitly hands this
---- exact resolution-order judgment call to whichever pass next touches
+--- exact resolution-order judgment call to whichever file next touches
 --- server/defense.lua -- see that file's "THE FOLLOW-UP THIS FILE ENABLES
 --- BUT DOES NOT PERFORM" section.
 ---
---- PERFORMANCE (this pass, matching server/integrations.lua's PollK9Health
---- -- see that file's own "cheapest check first" comment for the identical
+--- PERFORMANCE (matching server/integrations.lua's PollK9Health -- see
+--- that file's own "cheapest check first" comment for the identical
 --- reasoning applied to a different poll): the maintenance thread below
 --- calls this for EVERY connected player, every `PollIntervalMs` tick, and
 --- the overwhelming majority of connected players on a real server are
@@ -634,15 +624,15 @@ local function TryNotifyPartnerK9(handlerSrc, handlerPed)
     local isConfirmedDead = type(metadata) == 'table' and metadata.isdead == true
     if isConfirmedDead and DeadHandlerAlreadyNotified[handlerSrc] then return end
 
-    -- NAMING FIX (QA follow-up): server/partnership.lua's own
-    -- `GetActivePartnerCitizenId(citizenid)` returns `(partnerCitizenid,
-    -- isK9)` where `isK9` describes whether the QUERIED citizenid (the
-    -- argument passed in -- `handlerCitizenid` here) is the K9-role party,
-    -- NOT whether the resolved `partnerCitizenid` is. The logic below was
-    -- always correct (verified, not a functional bug) -- `queriedIsK9Role`
-    -- replaces the old `partnerIsK9` name, which read as "is the PARTNER a
-    -- K9" (the opposite of what the value actually means) and could mislead
-    -- a future reader into "fixing" a correct check.
+    -- NAMING: server/partnership.lua's own `GetActivePartnerCitizenId(citizenid)`
+    -- returns `(partnerCitizenid, isK9)` where `isK9` describes whether the
+    -- QUERIED citizenid (the argument passed in -- `handlerCitizenid` here)
+    -- is the K9-role party, NOT whether the resolved `partnerCitizenid` is.
+    -- The logic below was always correct (verified, not a functional bug)
+    -- -- `queriedIsK9Role` replaces the old `partnerIsK9` name, which read
+    -- as "is the PARTNER a K9" (the opposite of what the value actually
+    -- means) and could mislead a future reader into "fixing" a correct
+    -- check.
     local partnerCitizenid, queriedIsK9Role = GetActivePartnerCitizenId(handlerCitizenid)
     -- Silent no-op: never partnered / partnership broken (DEVELOPER_REFERENCE.md
     -- §12.0 item 7), OR the citizenid whose health crossed the threshold
@@ -726,12 +716,12 @@ CreateThread(function()
                 -- but no live ped resolves yet, e.g. mid-connect) -- nothing
                 -- to sample this tick.
                 if ped ~= 0 then
-                    -- PERFORMANCE (this pass): IsHandlerDown itself now
-                    -- orders its own Config.Departments membership check
-                    -- BEFORE the ambulance-adapter/raw-health cost below --
-                    -- see that function's own PERFORMANCE doc comment for
-                    -- why that ordering, not a change here, is where this
-                    -- poll's per-player cost is actually avoided (mirrors
+                    -- PERFORMANCE: IsHandlerDown itself now orders its own
+                    -- Config.Departments membership check BEFORE the
+                    -- ambulance-adapter/raw-health cost below -- see that
+                    -- function's own PERFORMANCE doc comment for why that
+                    -- ordering, not a change here, is where this poll's
+                    -- per-player cost is actually avoided (mirrors
                     -- server/integrations.lua's PollK9Health "cheapest
                     -- check first" comment for the identical reasoning).
                     if IsHandlerDown(src, ped) then

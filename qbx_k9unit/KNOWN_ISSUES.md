@@ -102,17 +102,19 @@ designed but have an edge worth knowing about before you rely on them.
   bug already fixed elsewhere in the certification code (`SetCertificationTier`)
   — this one hasn't been fixed yet.
 
-- **High command's self-service is narrower than it may become.** Today,
-  high command can grant themselves a feature-control permission (like the
-  one needed for the Audit tab — see "Fixed," below) but cannot grant
-  themselves an XP award or one of the four named capabilities
-  (`k9.access`/`k9.certify`/`k9.audit`/`k9.givexp`) — those always require
-  a second high-command officer, by design, so a self-grant always leaves
-  a second name in the audit trail. The owner has asked for this to be
-  loosened so high command can self-serve more broadly; if and when that
-  ships, check `config.lua`'s `Config.HighCommand.allowSelfGrant` and
-  `Config.FeatureControl.allowHighCommandSelfGrant` for the actual current
-  behavior rather than trusting this paragraph, since it may change.
+- **High command can now grant almost anything to themselves, by owner
+  decision, not a bug.** A high-command officer can self-grant a
+  feature-control permission, a `block.<Name>` entry, one of the four
+  named capabilities (`k9.access`/`k9.certify`/`k9.audit`/`k9.givexp`), or
+  an XP award — all governed by two config switches
+  (`Config.FeatureControl.allowHighCommandSelfGrant` and
+  `Config.HighCommand.allowSelfGrant`), both defaulting `true`. This
+  intentionally removes the "someone else has to witness this" property a
+  self-grant used to lack. Every self-grant is still fully audited and
+  explicitly marked as a self-grant (the log line names the same citizenid
+  as both granter and recipient, not disguised as an ordinary grant) — set
+  either switch to `false` if you'd rather require a second high-command
+  officer's action, including for a lone owner's own account.
 
 - **A K9/handler partnership's status can lag after a reconnect.** If a
   player reconnects, or the resource restarts, while they're genuinely
@@ -224,8 +226,8 @@ because each one taught a rule worth not re-learning.
   common server setup: exactly one high-command officer, day one.** The
   permission it needs could only be granted by high command, and
   self-granting was blocked outright — so a lone owner had no path to it
-  at all. High command can now grant themselves that specific permission
-  (a feature-control grant, not one of the four named capabilities — see
-  "Open bugs," above), which is on by default. If you deliberately want a
-  second officer's sign-off before anyone gets that access, there's a
-  config switch to turn this back off.
+  at all. High command can now grant themselves that specific permission,
+  which is on by default (see "High command can now grant almost anything
+  to themselves," above, for how far that now extends). If you
+  deliberately want a second officer's sign-off before anyone gets that
+  access, there's a config switch to turn this back off.

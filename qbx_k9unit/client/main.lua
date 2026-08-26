@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/main.lua
 
-    Phase 1 scaffold only (coder-architect). REWRITTEN after DEVELOPER_REFERENCE.md's
+    Phase 1 scaffold only. REWRITTEN after DEVELOPER_REFERENCE.md's
     post-draft correction. Owns the two building-block checks every other
     client file gates on — "is my own character a K9 model" (display-only,
     client-side) and "does the server say I have K9 access" (the real
@@ -67,31 +67,30 @@
             (which can run many times a second while hovering) doesn't
             flood the server.
         CanShowK9UI() -> boolean
-            ROLE/MODEL DECOUPLING (coder-architect, this pass —
-            client/appearance.lua): with Config.K9Appearance
-            .requireK9ModelForRole at its false default, this is
-            IsK9Role() and HasK9Access() — IsK9Role() (client/appearance.lua)
-            is the server-authoritative "do I hold the K9 role right now"
-            check (active certification for my job, OR an active
-            'k9.access' permission grant — see server/appearance.lua's
-            header for why that's the right definition), deliberately
-            NOT a model check, so a K9-role player on an unlisted or even
-            human model still sees every K9 UI element. With
-            requireK9ModelForRole = true (or if client/appearance.lua
-            somehow isn't loaded), this is IsOwnModelK9() and HasK9Access(),
-            exactly as before this pass. THIS is the
-            function radial.lua/vehicle.lua/movement.lua should actually
-            call for their gating decisions — don't call the other two
-            directly from other files, so the "how do we combine these"
-            policy lives in exactly one place.
+            ROLE/MODEL DECOUPLING (client/appearance.lua): with
+            Config.K9Appearance.requireK9ModelForRole at its false default,
+            this is IsK9Role() and HasK9Access() — IsK9Role()
+            (client/appearance.lua) is the server-authoritative "do I hold
+            the K9 role right now" check (active certification for my job,
+            OR an active 'k9.access' permission grant — see
+            server/appearance.lua's header for why that's the right
+            definition), deliberately NOT a model check, so a K9-role
+            player on an unlisted or even human model still sees every K9
+            UI element. With requireK9ModelForRole = true (or if
+            client/appearance.lua somehow isn't loaded), this is
+            IsOwnModelK9() and HasK9Access(). THIS is the function
+            radial.lua/vehicle.lua/movement.lua should actually call for
+            their gating decisions — don't call the other two directly
+            from other files, so the "how do we combine these" policy
+            lives in exactly one place.
       NOTE: server/certifications.lua also exposes a function named
       `HasK9Access(source)`, on the SERVER side. These are different Lua
       VMs (client vs. server) so there's no actual name collision — the
       shared name is intentional, for readability (same concept, mirrored
       API), not a shared symbol.
 
-    OPEN QUESTION flagged for coder-frontend (not decided here): does the
-    first/third-person eye-height camera toggle (DEVELOPER_REFERENCE.md §6.1 bullet 2)
+    OPEN QUESTION (not decided here): does the first/third-person
+    eye-height camera toggle (DEVELOPER_REFERENCE.md §6.1 bullet 2)
     and native run/jump/crouch (bullet 3) need to be gated by CanShowK9UI()
     at all, or are they baseline behavior available to anyone playing a
     K9-model character regardless of job/cert (the game already gives any
@@ -123,18 +122,17 @@ end
 --- `IsEntityModelK9`/`k9ModelHashesForTargeting` pair (which already had
 --- this exact signature) to a resource-global here, reusing THIS file's
 --- own `K9ModelHashes` table above rather than building a second,
---- identical one — the Revision 5 audit found this same boolean
---- model-recognition table independently hand-copied 6 times across this
---- resource (client/main.lua, client/movement.lua, client/wellbeing.lua,
+--- identical one — this same boolean model-recognition table was
+--- previously independently hand-copied 6 times across this resource
+--- (client/main.lua, client/movement.lua, client/wellbeing.lua,
 --- client/medkit.lua, client/inventory.lua, and client/partnership.lua —
 --- this last one a previously untracked 6th instance found only while
---- consolidating the other five). This is now fully done, landed across
---- two passes: the first deleted the client/movement.lua/client/wellbeing.lua/
---- client/medkit.lua copies; a later pass deleted the remaining
---- client/inventory.lua and client/partnership.lua copies too, once each
---- was re-read and confirmed byte-identical in behavior (same
---- Config.Peds-driven model set, no extra guard/nil-check divergence) —
---- see those two files' own call sites for the direct
+--- consolidating the other five). This is now fully done: the
+--- client/movement.lua/client/wellbeing.lua/client/medkit.lua copies were
+--- deleted, and the client/inventory.lua and client/partnership.lua copies
+--- were deleted too, once each was re-read and confirmed byte-identical in
+--- behavior (same Config.Peds-driven model set, no extra guard/nil-check
+--- divergence) — see those two files' own call sites for the direct
 --- `IsEntityModelK9(entity)` calls that replaced them. Zero duplicate
 --- copies of this check remain anywhere in `client/` as of this comment;
 --- if a new one appears, update this count rather than letting it go
@@ -153,21 +151,21 @@ end
 --- DEVELOPER_REFERENCE.md §4.5 ("Convenience (client)" bullet) and this doc comment's own
 --- audit note below.
 ---
---- ROLE/MODEL DECOUPLING (coder-architect, this pass, owner directive
+--- ROLE/MODEL DECOUPLING (client/appearance.lua; the driving requirement:
 --- "I also want everything to work with any ped" / "[an unlisted ped]...
---- can still be assigned a k9 role even if its human" — client/appearance.lua):
---- true if EITHER the local player's live ped model is a recognized K9
---- model (the original, unchanged check — IsEntityModelK9(PlayerPedId())),
---- OR (when Config.K9Appearance.requireK9ModelForRole is at its false
---- default) the server says this player holds the K9 role right now
---- (IsK9Role(), client/appearance.lua — active certification for their
---- job, or an active 'k9.access' permission grant; model-independent by
+--- can still be assigned a k9 role even if its human"): true if EITHER the
+--- local player's live ped model is a recognized K9 model (the original,
+--- unchanged check — IsEntityModelK9(PlayerPedId())), OR (when
+--- Config.K9Appearance.requireK9ModelForRole is at its false default) the
+--- server says this player holds the K9 role right now (IsK9Role(),
+--- client/appearance.lua — active certification for their job, or an
+--- active 'k9.access' permission grant; model-independent by
 --- construction). This is a deliberate OR, not a replacement: a player who
 --- is genuinely dog-modeled but holds no role at all (an uncertified K9
 --- model, or a department outsider who somehow ended up on a K9 skin)
---- still passes via the model half exactly as before this pass — nothing
---- that used to work stops working. `type(IsK9Role) == 'function'` is a
---- genuine soft dependency (client/appearance.lua may not be loaded, or
+--- still passes via the model half exactly as before — nothing that used
+--- to work stops working. `type(IsK9Role) == 'function'` is a genuine soft
+--- dependency (client/appearance.lua may not be loaded, or
 --- requireK9ModelForRole may be true), not a load-order assumption, this
 --- resource's established convention.
 ---
@@ -177,20 +175,17 @@ end
 --- client/movement.lua's "Attach Leash" option) — this client has no cheap,
 --- local way to know a DIFFERENT player's server-side role without a
 --- per-target network round trip, so IsEntityModelK9(entity) for anyone but
---- the local player is intentionally left a PURE model guess, same as
---- before this pass ("cheap client-side plausibility only... the server
---- independently re-validates everything for real", per those call sites'
---- own comments) — see this pass's hand-off report for the one disclosed,
---- residual gap that leaves open (a human-shaped role-holder is not
---- targetable via that specific ox_target predicate by someone else).
---- IsOwnModelK9() is different: "own" always means the LOCAL player, whose
---- role this client CAN cheaply and safely ask about via the same
---- server-backed, TTL-cached callback HasK9Access() already established
---- the pattern for.
+--- the local player is intentionally left a PURE model guess ("cheap
+--- client-side plausibility only... the server independently re-validates
+--- everything for real", per those call sites' own comments) — there is
+--- one disclosed, residual gap this leaves open (a human-shaped
+--- role-holder is not targetable via that specific ox_target predicate by
+--- someone else). IsOwnModelK9() is different: "own" always means the
+--- LOCAL player, whose role this client CAN cheaply and safely ask about
+--- via the same server-backed, TTL-cached callback HasK9Access() already
+--- established the pattern for.
 ---
---- SECURITY AUDIT NOTE (this pass, per explicit instruction to confirm or
---- refute the existing "never a security boundary" claim rather than
---- assume it still holds): grepped and read every real call site in this
+--- SECURITY AUDIT NOTE: grepped and read every real call site in this
 --- resource (client/combat.lua, client/vision.lua, client/movement.lua,
 --- client/wellbeing.lua, client/partnership.lua, client/exports.lua, plus
 --- this file's own CanShowK9UI() below) — every one of them uses this
@@ -230,19 +225,19 @@ local hasK9AccessCache = { value = false, checkedAt = -HAS_K9_ACCESS_CACHE_TTL_M
 
 --- Awaits the server's authoritative access check for the LOCAL player.
 ---
---- FAIL-CLOSED GUARD (dependency-verification finding, this pass, confirmed
---- by reading the real upstream source directly): `lib.callback.await` does
---- NOT return nil on a timeout or an unregistered-callback response —
---- ox_lib's `imports/callback/client.lua` `triggerServerCallback` calls
---- `promise:reject(...)` for both the `SetTimeout(callbackTimeout, ...)`
---- timeout path and the `cb_invalid` (callback not registered server-side
---- yet) path, and FiveM's own `scheduler.lua` `Citizen.Await` THROWS
---- (`error(promise.value, 2)`) whenever `promise.state == 2 or
---- promise.state == 4` (a rejected promise) rather than returning its
---- value. An uncaught throw here would previously abort the calling
---- thread entirely with no access decision at all — this is a hot call
---- site (ox_target canInteract predicates, client/movement.lua's leash
---- option), so pcall it and fail closed (deny) on any throw.
+--- FAIL-CLOSED GUARD (confirmed by reading the real upstream source
+--- directly): `lib.callback.await` does NOT return nil on a timeout or an
+--- unregistered-callback response — ox_lib's `imports/callback/client.lua`
+--- `triggerServerCallback` calls `promise:reject(...)` for both the
+--- `SetTimeout(callbackTimeout, ...)` timeout path and the `cb_invalid`
+--- (callback not registered server-side yet) path, and FiveM's own
+--- `scheduler.lua` `Citizen.Await` THROWS (`error(promise.value, 2)`)
+--- whenever `promise.state == 2 or promise.state == 4` (a rejected
+--- promise) rather than returning its value. An uncaught throw here would
+--- previously abort the calling thread entirely with no access decision at
+--- all — this is a hot call site (ox_target canInteract predicates,
+--- client/movement.lua's leash option), so pcall it and fail closed (deny)
+--- on any throw.
 --- @return boolean
 function HasK9Access()
     local now = GetGameTimer()
@@ -293,17 +288,14 @@ function CanShowK9UI()
 end
 
 --- Shared denial notification for the "you cannot use K9 features right
---- now" case. Refactor pass (dedup): this exact lib.notify() call was
---- previously duplicated verbatim across client/radial.lua, client/search.lua,
---- client/vehicle.lua, client/movement.lua, and client/tracking.lua. All five
---- have since been migrated to call this shared function directly.
---- RE-VERIFIED (this pass, by grepping for the raw `common.no_k9_access`
---- locale key across all of client/): zero raw copies remain anywhere —
---- the four call sites an earlier revision of this comment flagged as
---- still-unmigrated (client/agility.lua, three in client/movement.lua) now
---- all call DenyK9UIAccess() directly. If a new raw copy is ever
---- reintroduced, re-flag it here rather than assuming this stays true
---- forever. Declared as a bare global here per this file's own
+--- now" case. This exact lib.notify() call was previously duplicated
+--- verbatim across client/radial.lua, client/search.lua,
+--- client/vehicle.lua, client/movement.lua, and client/tracking.lua. All
+--- five have since been migrated to call this shared function directly.
+--- RE-VERIFIED (by grepping for the raw `common.no_k9_access` locale key
+--- across all of client/): zero raw copies remain anywhere. If a new raw
+--- copy is ever reintroduced, re-flag it here rather than assuming this
+--- stays true forever. Declared as a bare global here per this file's own
 --- established "declare once, reuse everywhere" convention (see
 --- CanShowK9UI/IsOwnModelK9 above).
 function DenyK9UIAccess()
@@ -319,8 +311,9 @@ end
 -- later is a one-line constant change, not new plumbing; until a real
 -- asset/soundset exists, PlaySoundFromEntity with an unrecognized sound
 -- name/set is a harmless no-op (it does not error), so this is safe to
--- ship as-is rather than gating the whole handler out. Coordinate with
--- asset-pipeline-agent on where real audio files should live.
+-- ship as-is rather than gating the whole handler out. Real audio files,
+-- once available, ship under html/sounds/ (see html/sounds/CREDITS.md for
+-- the provenance/licensing convention already established there).
 local BARK_SOUND_NAME = 'Bark'
 
 --- Shared placeholder sound-bank name for every bark/alert-style sound
@@ -333,7 +326,7 @@ local K9_SOUND_SET = 'qbx_k9unit_sounds'
 --- specific `barkType` string (config.lua's Config.AdvancedBarkRadial —
 --- DEVELOPER_REFERENCE.md §6.7's "aggressive/alert/calm") to its own placeholder sound
 --- name, built once at file load. Still all placeholder audio, same
---- K9_SOUND_SET convention as BARK_SOUND_NAME above — 
+--- K9_SOUND_SET convention as BARK_SOUND_NAME above —
 --- DEVELOPER_REFERENCE.md#phase-5-research confirms a real per-variant soundset
 --- needs authored `.awc`/REL audio-bank assets, not just a different string
 --- here; this table only carries the plumbing. Built defensively against
@@ -351,8 +344,8 @@ end
 --- entity handle on THIS client, or nil if it doesn't currently resolve to
 --- anything real (not streamed in, deleted/recycled, or a bogus id).
 ---
---- Extracted from what were, before this pass, 3 independent client-side
---- copies of the exact same "NetworkDoesEntityExistWithNetworkId guard ->
+--- Extracted from what were 3 independent client-side copies of the exact
+--- same "NetworkDoesEntityExistWithNetworkId guard ->
 --- NetworkGetEntityFromNetworkId -> DoesEntityExist guard" sequence:
 --- PlaySoundOnNetworkEntity below (itself already the product of an
 --- earlier dedup pass covering this file's playBark handler and
@@ -404,11 +397,10 @@ end
 
 --- Resolves netId to a live, currently-streamed-in entity and plays
 --- soundName from it via this resource's shared placeholder sound set.
---- Refactor pass (dedup): this exact "resolve netId -> guard
---- DoesEntityExist -> PlaySoundFromEntity" sequence was previously
---- duplicated between this file's playBark handler and
---- client/search.lua's contraband-alert handler; the resolve half is now
---- ResolveNetworkEntity() above (DEVELOPER_REFERENCE.md near-term item 2).
+--- This exact "resolve netId -> guard DoesEntityExist -> PlaySoundFromEntity"
+--- sequence was previously duplicated between this file's playBark handler
+--- and client/search.lua's contraband-alert handler; the resolve half is
+--- now ResolveNetworkEntity() above (DEVELOPER_REFERENCE.md near-term item 2).
 ---
 --- Two playback paths run back-to-back, not either/or: the original
 --- PlaySoundFromEntity native call stays exactly as it was (a harmless
@@ -454,17 +446,16 @@ end
 --- @param netId number
 --- @param barkType string
 RegisterNetEvent('qbx_k9unit:client:playBark', function(netId, barkType)
-    -- SOURCE-ORIGIN GUARD (coder-security -- see client/combat.lua's
-    -- "SOURCE-ORIGIN GUARD" header block and
-    -- DEVELOPER_REFERENCE.md#trust-boundary for the full writeup;
-    -- not re-derived here). Confidence: MEDIUM-HIGH, the official
+    -- SOURCE-ORIGIN GUARD (see client/combat.lua's "SOURCE-ORIGIN GUARD"
+    -- header block and DEVELOPER_REFERENCE.md#trust-boundary for the full
+    -- writeup; not re-derived here). Confidence: MEDIUM-HIGH, the official
     -- documented pattern for distinguishing a genuine server-sent event
-    -- from a local self-trigger, not independently verified in-engine
-    -- this pass. Note this is NOT a feature-flag gate (this file's own
-    -- header already establishes BasicBarkSounds/AdvancedBarkRadial are
-    -- not the "ships false, must be inert" class this resource's other
-    -- gates protect -- forging this just plays a placeholder sound on
-    -- whatever entity the supplied netId resolves to, via the same
+    -- from a local self-trigger, not independently verified in-engine.
+    -- Note this is NOT a feature-flag gate (this file's own header
+    -- already establishes BasicBarkSounds/AdvancedBarkRadial are not the
+    -- "ships false, must be inert" class this resource's other gates
+    -- protect -- forging this just plays a placeholder sound on whatever
+    -- entity the supplied netId resolves to, via the same
     -- ResolveNetworkEntity() guard every caller of PlaySoundOnNetworkEntity
     -- already goes through).
     if source ~= 65535 then return end

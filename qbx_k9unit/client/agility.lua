@@ -1,13 +1,13 @@
 --[[
     qbx_k9unit/client/agility.lua
 
-    EXTRACTED FROM client/movement.lua (this pass): the ADVANCED AGILITY
-    block below (Config.Features.AgilityAdvanced's fence/window vault
-    approximation) used to live at the bottom of client/movement.lua. It
-    was pulled out into its own file because, unlike every other concern
-    that file owns (camera toggle, Sit self-emote, the two-player leash
-    mechanic, the shared K9 move-rate composer, AgilityBasicJump's
-    suppression thread, door interaction), this block:
+    EXTRACTED FROM client/movement.lua: the ADVANCED AGILITY block below
+    (Config.Features.AgilityAdvanced's fence/window vault approximation)
+    used to live at the bottom of client/movement.lua. It was pulled out
+    into its own file because, unlike every other concern that file owns
+    (camera toggle, Sit self-emote, the two-player leash mechanic, the
+    shared K9 move-rate composer, AgilityBasicJump's suppression thread,
+    door interaction), this block:
       - shares NO local state with anything else in client/movement.lua
         (confirmed by reading the whole file before moving this — no local
         variable/function defined here is read outside this block, and
@@ -61,23 +61,22 @@
 -- ADVANCED AGILITY -- fence/window vault approximation
 -- (Config.Features.AgilityAdvanced). DEVELOPER_REFERENCE.md §12.5.5, §12.0 item 3
 -- (DECIDED: capsule-sweep raycast, detectionMethod = 'raycast', as the
--- Phase 3 default -- unaffected by Revision 3's PvP scope reversal), §12.1
--- sub-phase 3a ("independent, start immediately -- pure client-local
--- own-body movement, does not touch target/combat logic at all"), §12.3's
--- file/module plan (originally assigned to client/movement.lua's row:
--- "Extends... AgilityAdvanced's vault trigger and multi-height
--- capsule-sweep detection" -- now this separate file, see this file's own
--- header above for why it was pulled out).
+-- Phase 3 default), §12.1 sub-phase 3a ("independent, start immediately --
+-- pure client-local own-body movement, does not touch target/combat logic
+-- at all"), §12.3's file/module plan (originally assigned to
+-- client/movement.lua's row: "Extends... AgilityAdvanced's vault trigger
+-- and multi-height capsule-sweep detection" -- now this separate file, see
+-- this file's own header above for why it was pulled out).
 --
 -- SCOPE NOTE, checked explicitly before writing this block: this feature
 -- NEVER resolves, targets, or applies any effect to another ped/player --
 -- it only reads world geometry (via a capsule shape-test sweep) and
 -- repositions the K9's OWN ped. It is therefore entirely UNAFFECTED by
--- DEVELOPER_REFERENCE.md §12.0 item 8 (the still-open, coder-security-owned
--- client-relay/non-cooperating-target-client question), which only
--- concerns effects a K9 applies to a DIFFERENT entity (BiteAndHold /
--- NonLethalTakedown / PropDragging). Do not conflate this feature with
--- those three just because they share the same Phase 3 config table.
+-- DEVELOPER_REFERENCE.md §12.0 item 8 (the still-open client-relay/
+-- non-cooperating-target-client question), which only concerns effects a
+-- K9 applies to a DIFFERENT entity (BiteAndHold / NonLethalTakedown /
+-- PropDragging). Do not conflate this feature with those three just
+-- because they share the same Phase 3 config table.
 --
 -- EVENT/CALLBACK CONTRACT: NONE. No TriggerServerEvent, no callback,
 -- nothing server-authoritative touched anywhere in this block -- matches
@@ -94,11 +93,11 @@
 -- carve-out client/main.lua's own OPEN QUESTION note documents.
 -- ======================================================================
 if Config.Features.AgilityAdvanced then
-    -- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
-    -- header ADDENDUM: "does an operator's config.lua edit alone... reach
-    -- this value? If yes it must be clamped and warned about, never
-    -- asserted and aborted"). detectionMethod/maxVaultHeight/vaultCooldownMs
-    -- below USED TO be one hard `assert` on detectionMethod alone (mirroring
+    -- CLAMP AND WARN, NOT ASSERT (see server/cooldowns.lua's header
+    -- ADDENDUM: "does an operator's config.lua edit alone... reach this
+    -- value? If yes it must be clamped and warned about, never asserted
+    -- and aborted"). detectionMethod/maxVaultHeight/vaultCooldownMs below
+    -- USED TO be one hard `assert` on detectionMethod alone (mirroring
     -- client/movement.lua's own Config.DoorInteraction.nudgeRequiresUnlocked
     -- precedent -- correct for THAT field, since a locked-door bypass has no
     -- safe substitute value, but wrong here) -- an uncaught error thrown from
@@ -195,20 +194,20 @@ if Config.Features.AgilityAdvanced then
     -- this is the first value to have native-api-assistant re-confirm.
     local SHAPE_TEST_FLAG_INTERSECT_MAP = 1
 
-    -- Bug fix (this pass): the polling loop below used to have no upper
-    -- bound at all -- if GET_SHAPE_TEST_RESULT ever kept returning 1
-    -- ("still processing") forever for a given handle (a stuck/leaked
-    -- handle, or any other engine-side edge case that never resolves),
-    -- TryVault() would hang in that coroutine permanently, once per
-    -- height band, since nothing else in this function can make progress
-    -- until the `repeat` loop below exits. A real capsule sweep against
-    -- static world geometry is expected to resolve within a frame or two
-    -- (see the loop's own comment), so a generous-but-bounded cap catches
-    -- only the genuinely-stuck case, not a normal-but-slightly-slow one.
-    -- Treated as "no hit" for that band on timeout, the same silent
-    -- fallback this function already uses for a band that legitimately
-    -- reports no hit -- consistent with this file's "cooldown/no-obstacle
-    -- branches are silent, not notification spam" posture elsewhere.
+    -- Bug fix: the polling loop below used to have no upper bound at all --
+    -- if GET_SHAPE_TEST_RESULT ever kept returning 1 ("still processing")
+    -- forever for a given handle (a stuck/leaked handle, or any other
+    -- engine-side edge case that never resolves), TryVault() would hang in
+    -- that coroutine permanently, once per height band, since nothing else
+    -- in this function can make progress until the `repeat` loop below
+    -- exits. A real capsule sweep against static world geometry is expected
+    -- to resolve within a frame or two (see the loop's own comment), so a
+    -- generous-but-bounded cap catches only the genuinely-stuck case, not a
+    -- normal-but-slightly-slow one. Treated as "no hit" for that band on
+    -- timeout, the same silent fallback this function already uses for a
+    -- band that legitimately reports no hit -- consistent with this file's
+    -- "cooldown/no-obstacle branches are silent, not notification spam"
+    -- posture elsewhere.
     local SHAPE_TEST_MAX_POLLS = 60
 
     --- Multi-height capsule sweep: fires one shape test per configured
@@ -292,22 +291,23 @@ if Config.Features.AgilityAdvanced then
 
     local lastVaultAt = -math.huge -- GetGameTimer()-scale; never on cooldown for the very first attempt
 
-    -- Bug fix (this pass, qa-tester finding): TryVault() had no re-entrancy
-    -- guard around its own async obstacle-detection sweep. DetectVaultableObstacleHeight
-    -- below can yield at Wait(0) one or more times (whenever GET_SHAPE_TEST_RESULT
-    -- reports "still processing" -- see that function's own comment: this is not
-    -- guaranteed synchronous even for a short capsule sweep). `lastVaultAt` was
-    -- only ever updated AFTER that async sweep returned, so a SECOND TryVault()
-    -- invocation reaching this function while the FIRST one's sweep was still
-    -- in flight (a keybind double-press/auto-repeat, or two inputs landing in
-    -- the same or adjacent frame) passed the cooldown check against the
-    -- STILL-STALE `lastVaultAt` and ran its own independent, fully overlapping
-    -- detection sweep. If both calls detected the same obstacle, both called
-    -- SetEntityVelocity, stacking a second re-launch impulse on top of the
-    -- first from what the player experienced as a single vault attempt (and
-    -- doubling the shape-test native call volume for that press). This flag
-    -- closes that window: a second call arriving while a sweep is already in
-    -- flight is rejected outright, silently, same posture as the cooldown/
+    -- Bug fix: TryVault() had no re-entrancy guard around its own async
+    -- obstacle-detection sweep. DetectVaultableObstacleHeight below can
+    -- yield at Wait(0) one or more times (whenever GET_SHAPE_TEST_RESULT
+    -- reports "still processing" -- see that function's own comment: this
+    -- is not guaranteed synchronous even for a short capsule sweep).
+    -- `lastVaultAt` was only ever updated AFTER that async sweep returned,
+    -- so a SECOND TryVault() invocation reaching this function while the
+    -- FIRST one's sweep was still in flight (a keybind double-press/
+    -- auto-repeat, or two inputs landing in the same or adjacent frame)
+    -- passed the cooldown check against the STILL-STALE `lastVaultAt` and
+    -- ran its own independent, fully overlapping detection sweep. If both
+    -- calls detected the same obstacle, both called SetEntityVelocity,
+    -- stacking a second re-launch impulse on top of the first from what the
+    -- player experienced as a single vault attempt (and doubling the
+    -- shape-test native call volume for that press). This flag closes that
+    -- window: a second call arriving while a sweep is already in flight is
+    -- rejected outright, silently, same posture as the cooldown/
     -- no-obstacle branches above and below.
     local vaultInProgress = false
 
@@ -322,12 +322,12 @@ if Config.Features.AgilityAdvanced then
             return
         end
 
-        -- Per-person block (client/featureblocks.lua, REQUESTED -- see
-        -- that file's header for the full contract). A vault is a single
-        -- one-shot action with no held/persistent state (unlike Leash/
-        -- Bite & Hold/Drag above it in this file's sibling files) -- there
-        -- is no release/termination branch here for this check to ever
-        -- risk gating. `type(...) == 'function'` guard: fails open (never
+        -- Per-person block (client/featureblocks.lua -- see that file's
+        -- header for the full contract). A vault is a single one-shot
+        -- action with no held/persistent state (unlike Leash/Bite & Hold/
+        -- Drag above it in this file's sibling files) -- there is no
+        -- release/termination branch here for this check to ever risk
+        -- gating. `type(...) == 'function'` guard: fails open (never
         -- blocked) if client/featureblocks.lua has not loaded.
         if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('AgilityAdvanced') then
             if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
@@ -373,9 +373,9 @@ if Config.Features.AgilityAdvanced then
         -- DEVELOPER_REFERENCE.md §12.5.5 already flags as open. Revisit after an
         -- in-engine pass, same as the sweep tuning constants above.
         --
-        -- REVIEWED THIS PASS (still not fixable without a live client --
-        -- both findings below require eyes on an actual vault against real
-        -- map geometry, not more reading):
+        -- REVIEWED (still not fixable without a live client -- both
+        -- findings below require eyes on an actual vault against real map
+        -- geometry, not more reading):
         --   1. Dimensionally sane, by rough projectile-motion arithmetic
         --      (peak height h = v^2/(2g), using GTA's approximate default
         --      gravity of ~9.8 units/s^2 at gravity level 0 -- an
@@ -394,38 +394,38 @@ if Config.Features.AgilityAdvanced then
         --      to scale down (or verticalSpeed's multiplier scale down)
         --      for the taller end of the configured height range, not stay
         --      flat across the whole band.
-        --   2. FIXED THIS PASS (fluidity pass, coder-frontend): SetEntityVelocity
-        --      SETS the ped's velocity outright (it does not add to whatever
-        --      velocity the ped already had -- this is the established,
-        --      widely-relied-upon behavior of this native across the FiveM
-        --      ecosystem, not something this file invents). A K9 already
-        --      sprinting faster than the flat 3.5 units/s constant this used
-        --      to hardcode would have its actual forward momentum REPLACED by
-        --      that constant the instant it vaulted -- a visible snap/
-        --      deceleration exactly at takeoff, the single most common way a
-        --      player would ever brush against this feature (sprint at a
-        --      fence, vault it), rather than a smooth leap that carries the
-        --      sprint through. GetEntitySpeed(ped) (GET_ENTITY_SPEED,
-        --      0xB2D8994DBB3E68C1 -- PED/ENTITY-namespace native returning the
-        --      entity's current speed magnitude in m/s; requested for
-        --      allowlisting in the repo-root .luacheckrc read_globals, not
-        --      editable by this pass) is read once, right here, and floored
-        --      into the forward-impulse magnitude below so a vault can only
-        --      ever match-or-exceed the K9's own current speed, never go
-        --      slower than it was already moving. Reads the ped's TOTAL 3D
-        --      speed (would include a vertical component if the K9 were
-        --      already airborne/falling) rather than a horizontal-only
-        --      projection -- an acceptable approximation for this call site
-        --      specifically, since TryVault() above already refuses to reach
-        --      this point while seated/tucked in a vehicle, and a grounded
-        --      sprinting K9's vertical velocity component is negligible. The
-        --      vertical arc height (verticalSpeed below) is UNCHANGED by this
-        --      fix -- still scaled only from the detected obstacle's height,
-        --      per finding 1 above, which this does not touch. Still
-        --      UNTUNED/first-pass on the absolute numbers (both findings share
-        --      that same open, in-engine-pass caveat) -- this only fixes the
-        --      "goes SLOWER than the K9 already was" direction of the
-        --      problem, not the overall arc feel.
+        --   2. FIXED: SetEntityVelocity SETS the ped's velocity outright
+        --      (it does not add to whatever velocity the ped already had --
+        --      this is the established, widely-relied-upon behavior of
+        --      this native across the FiveM ecosystem, not something this
+        --      file invents). A K9 already sprinting faster than the flat
+        --      3.5 units/s constant this used to hardcode would have its
+        --      actual forward momentum REPLACED by that constant the
+        --      instant it vaulted -- a visible snap/deceleration exactly at
+        --      takeoff, the single most common way a player would ever
+        --      brush against this feature (sprint at a fence, vault it),
+        --      rather than a smooth leap that carries the sprint through.
+        --      GetEntitySpeed(ped) (GET_ENTITY_SPEED, 0xB2D8994DBB3E68C1 --
+        --      PED/ENTITY-namespace native returning the entity's current
+        --      speed magnitude in m/s; added to the repo-root
+        --      .luacheckrc read_globals for this) is read once, right
+        --      here, and floored into the forward-impulse magnitude below
+        --      so a vault can only ever match-or-exceed the K9's own
+        --      current speed, never go slower than it was already moving.
+        --      Reads the ped's TOTAL 3D speed (would include a vertical
+        --      component if the K9 were already airborne/falling) rather
+        --      than a horizontal-only projection -- an acceptable
+        --      approximation for this call site specifically, since
+        --      TryVault() above already refuses to reach this point while
+        --      seated/tucked in a vehicle, and a grounded sprinting K9's
+        --      vertical velocity component is negligible. The vertical arc
+        --      height (verticalSpeed below) is UNCHANGED by this fix --
+        --      still scaled only from the detected obstacle's height, per
+        --      finding 1 above, which this does not touch. Still
+        --      UNTUNED/first-pass on the absolute numbers (both findings
+        --      share that same open, in-engine-pass caveat) -- this only
+        --      fixes the "goes SLOWER than the K9 already was" direction of
+        --      the problem, not the overall arc feel.
         local forward = GetEntityForwardVector(ped)
         local verticalSpeed = 4.0 + obstacleHeight * 2.0 -- taller obstacle -> slightly higher arc
         local forwardSpeed = math.max(3.5, GetEntitySpeed(ped))

@@ -663,6 +663,14 @@ globals = {
     -- client/tracking.lua
     "GetActiveTrackType", "StartScentTrack", "StartBloodTrack",
     "StartGunpowderTrack", "StopTracking", "IsTracking",
+    -- client/tracking.lua -- SCENT VISION (owner-directed pass: a keybound
+    -- coloured-dot "who walked through here" overlay, separate from the
+    -- Track Scent/Blood/Gunpowder trio above). ToggleScentVision is the
+    -- keybind entry point client/keybinds.lua's own new k9scentvision
+    -- command calls; IsScentVisionActive is a read-only accessor exposed
+    -- for the same reason IsSarCallActive/IsTrainingModeActive are (a
+    -- future presentation surface, not a gate).
+    "ToggleScentVision", "IsScentVisionActive",
     -- client/vehicle.lua
     "EnterNearestK9Vehicle", "ExitK9Vehicle", "IsInK9Vehicle",
     -- client/vision.lua

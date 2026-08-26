@@ -177,7 +177,9 @@
         "target_not_downed": "That target does not appear to be downed.",
         "too_far": "You are too far from the target.",
         "implausible_movement": "Your K9's movement could not be verified. Try again.",
-        "target_in_vehicle": "That target is currently inside a vehicle."
+        "target_in_vehicle": "That target is currently inside a vehicle.",
+        "denied_blocked": "High Command has individually blocked you from using %s. This is not a missing grant -- ask them why.",
+        "denied_not_granted": "%s has not been granted to you individually. Ask a high command officer to grant you access."
     },
     "common": {
         "handler_not_in_department": "The handler must be employed by an eligible department.",
@@ -1413,7 +1415,9 @@
         "already_tracking": "Already tracking something — stop first.",
         "starting_in_progress": "Already starting a track — please wait.",
         "nothing_to_track": "Nothing to track right now.",
-        "trail_lost_water": "The trail is lost at the water's edge."
+        "trail_lost_water": "The trail is lost at the water's edge.",
+        "scent_vision_keybind_label": "K9: Toggle Scent Vision",
+        "scent_vision_lost_death": "You went down — the scent trails fade from view."
     },
     "training": {
         "usage": "Usage: /k9training — stand inside a training area and run it again to toggle Training Mode.",

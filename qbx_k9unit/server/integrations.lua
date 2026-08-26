@@ -22,7 +22,7 @@
     OUTBOUND vs. INBOUND -- the two, and only two, integration shapes this
     resource uses, and why a third shape (a per-hook `{ event = '...',
     export = '...', enabled = bool }` config table) was considered and
-    rejected for this pass:
+    rejected:
 
     OUTBOUND (a fact THIS resource announces -- "a K9 went down", "a search
     found contraband", "a cert was granted") -- a plain `TriggerEvent` on the
@@ -40,7 +40,7 @@
     operator "rename" the event we fire (a new place to typo, and a reason a
     listener written straight from this file's docs would silently stop
     matching), and an `export` variant would mean calling into exactly ONE
-    named resource -- the single-integration assumption this whole task
+    named resource -- the single-integration assumption this whole file
     exists to forbid. `TriggerEvent` already IS the any-number-of-listeners,
     zero-coupling primitive; wrapping it in config changes nothing for the
     better and adds a real footgun.
@@ -77,29 +77,28 @@
     - Part B §5's ambulance/laststand half -- already covered by
       `Config.Combat.PropDragging.IsPlayerDownedOverride`, per that config
       field's own comment ("Reuses ... rather than adding its own").
-    None of the above needed a single line changed for this pass -- listed
-    here so a reader of THIS file (the one place someone will look for "the
+    None of the above needed a single line changed here -- listed here so a
+    reader of THIS file (the one place someone will look for "the
     integration surface") does not go hunting for something that already
     shipped under a different file's byline.
 
     ======================================================================
-    RECOMMENDED, NOT APPLIED HERE -- server/search.lua's ownership this
-    session belongs to the XP-economy agent (see the coordination map), so
-    this is reported rather than edited: 'qbx_k9unit:events:searchCompleted'
-    's payload (searcherCitizenid, searcherJob, targetType, result,
-    totalWeight?, alertTier?) carries no identifier for WHAT was searched --
-    an MDT wanting to attach a `found` result to a real case/evidence record
-    (Part B §3's actual stated goal, "turns 'the K9 found drugs' into an
-    actual case artifact") cannot do that from this payload alone. Both
-    missing values (`plateOrNil`, `targetCitizenidOrNil`) are ALREADY local
-    variables in scope at server/search.lua's own
+    RECOMMENDED, NOT APPLIED HERE (server/search.lua is not edited by this
+    file): 'qbx_k9unit:events:searchCompleted''s payload (searcherCitizenid,
+    searcherJob, targetType, result, totalWeight?, alertTier?) carries no
+    identifier for WHAT was searched -- an MDT wanting to attach a `found`
+    result to a real case/evidence record (Part B §3's actual stated goal,
+    "turns 'the K9 found drugs' into an actual case artifact") cannot do
+    that from this payload alone. Both missing values (`plateOrNil`,
+    `targetCitizenidOrNil`) are ALREADY local variables in scope at
+    server/search.lua's own
     `FireOutboundEvent('qbx_k9unit:events:searchCompleted', ...)` call site
     inside LogSearchAttempt -- this would be a strictly additive two-argument
     change (MINOR per server/exports.lua's own versioning posture; never
-    reordering or removing an existing argument), not a redesign. Left for
-    that file's actual owner to apply; noted here so the gap stays visible
-    to whoever next has authority over it, rather than being silently
-    reopened as "new" by a future audit.
+    reordering or removing an existing argument), not a redesign. Left
+    unapplied here since it requires editing server/search.lua; noted here
+    so the gap stays visible rather than being silently reopened as "new"
+    by a future audit.
 
     ======================================================================
     K9-DOWN DISPATCH HOOK (DEVELOPER_REFERENCE.md Part A §7, THIS FILE's actual
@@ -109,13 +108,12 @@
     EXISTING TickWellbeing LOOP: that loop already iterates every online K9
     once per Config.Wellbeing.tickIntervalMs and already reads
     GetEntityHealth(ped) under Config.Features.InjuryLimping -- a textbook
-    "add one call at an existing success path." server/wellbeing.lua is
-    owned by the injury agent this session (see the coordination map), so
-    this file does not edit it. Part A §7's own text explicitly names the
+    "add one call at an existing success path." server/wellbeing.lua is not
+    edited by this file. Part A §7's own text explicitly names the
     alternative used here ("doable even earlier off raw GetEntityHealth
     polling if wanted sooner") -- this is that alternative, not a shortcut
     taken without grounds. Flagged as a genuine, disclosed future
-    consolidation opportunity: whoever next owns server/wellbeing.lua could
+    consolidation opportunity: a future edit to server/wellbeing.lua could
     fold this file's detection into that shared tick loop and delete this
     file's own thread, with no change to the event contract itself.
 
@@ -125,13 +123,12 @@
     edge-triggered (fires at most once per continuous at/below-threshold
     episode, never once per poll tick), with a minimum qualifying duration
     so an ordinary combat graze healed a moment later never fires a dispatch
-    alert. See Config.K9DownDispatch below (reported to the config owner,
-    not edited here) for the exact tuning values.
+    alert. See Config.K9DownDispatch below for the exact tuning values.
 
     WHO COUNTS: a currently-connected player whose live ped model is a
     configured K9 model (IsConfiguredK9Model, server/certifications.lua) OR
     who holds the decoupled K9 ROLE (HasK9Role, server/appearance.lua --
-    K9 role/model decoupling pass) on a model neither of those recognizes
+    K9 role/model decoupling) on a model neither of those recognizes
     (a human, a custom streamed ped), AND who currently has K9 access
     (HasK9Access, server/certifications.lua) -- i.e. a real, on-duty,
     certified handler's K9, not merely anyone who happens to be wearing a
@@ -146,9 +143,9 @@
     permission-system root and is always present, loaded well before this
     file (fxmanifest.lua's own server_scripts order), matching every other
     same-resource, same-load-time caller of these two. HasK9Role IS guarded
-    with `type(...) == 'function'`, matching every other widened site this
-    pass (server/main.lua's CheckLeashEligibility has the fullest writeup
-    on why).
+    with `type(...) == 'function'`, matching every other site widened the
+    same way (server/main.lua's CheckLeashEligibility has the fullest
+    writeup on why).
 
     PAYLOAD: 'qbx_k9unit:events:k9Down' (source: number, citizenid: string,
     jobName: string, coords: vector3, health: number). `source` is the
@@ -179,12 +176,10 @@
        FireOutboundEvent (server/events.lua, shared across every file that
        fires a `qbx_k9unit:events:*` event) pcall-wraps the TriggerEvent
        call -- a misbehaving listener's own AddEventHandler throwing can
-       never unwind back into this file's own poll thread. UPDATED
-       2026-08-25: this used to be this file's own fifth independent copy
-       of that six-line helper, with this exact paragraph noting the
-       cross-file extraction as "a legitimate future cleanup, not done
-       here" -- that cleanup has now happened; see server/events.lua's
-       header for the full writeup.
+       never unwind back into this file's own poll thread. This used to be
+       this file's own fifth independent copy of that six-line helper --
+       that has since been consolidated; see server/events.lua's header for
+       the full extraction writeup.
     3. ABSENCE IS A CLEAN NO-OP. With Config.Features.K9DownDispatch false
        (or absent), this file starts no thread, allocates no table, and
        calls TriggerEvent zero times -- a server with no dispatch resource
@@ -206,17 +201,17 @@ if not Config.Features.K9DownDispatch then return end
 -- file (this one included) starts executing, so Config already holds its
 -- real, final values by the time this line runs -- not a load-order gamble.
 if type(Config.K9DownDispatch) ~= 'table' then
-    -- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
-    -- header ADDENDUM and this block's own comment below for the full
-    -- reasoning). USED TO be a hard `assert` here on the theory that there
-    -- was "nothing sensible to clamp/substitute for the whole table
-    -- missing" -- that theory doesn't hold up: substituting an empty table
-    -- lets every one of the per-field resolvers immediately below fall back
-    -- to its own already-established default, exactly as if an operator had
-    -- left each field individually blank, instead of aborting this file's
-    -- load (K9DownFireCooldown's construction, PollK9Health, the
-    -- maintenance thread, and this file's own playerDropped cleanup) over
-    -- a missing table.
+    -- CLAMP AND WARN, NOT ASSERT (see server/cooldowns.lua's header
+    -- ADDENDUM and this block's own comment below for the full reasoning).
+    -- USED TO be a hard `assert` here on the theory that there was "nothing
+    -- sensible to clamp/substitute for the whole table missing" -- that
+    -- theory doesn't hold up: substituting an empty table lets every one of
+    -- the per-field resolvers immediately below fall back to its own
+    -- already-established default, exactly as if an operator had left each
+    -- field individually blank, instead of aborting this file's load
+    -- (K9DownFireCooldown's construction, PollK9Health, the maintenance
+    -- thread, and this file's own playerDropped cleanup) over a missing
+    -- table.
     --
     -- Assigned back onto the GLOBAL Config.K9DownDispatch (not just a local
     -- variable) so this stays a genuine TABLE REFERENCE, matching
@@ -235,9 +230,9 @@ if type(Config.K9DownDispatch) ~= 'table' then
 end
 local tuning = Config.K9DownDispatch
 
--- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's header
--- ADDENDUM: "does an operator's config.lua edit alone... reach this value?
--- If yes it must be clamped and warned about, never asserted and aborted").
+-- CLAMP AND WARN, NOT ASSERT (see server/cooldowns.lua's header ADDENDUM:
+-- "does an operator's config.lua edit alone... reach this value? If yes it
+-- must be clamped and warned about, never asserted and aborted").
 -- healthThreshold/minDurationMs/pollIntervalMs below USED TO be three
 -- separate hard `assert`s here -- each one correctly diagnosing a real risk
 -- (a bad number would make every online K9 read as permanently
@@ -248,8 +243,8 @@ local tuning = Config.K9DownDispatch
 -- maintenance CreateThread, and this file's own playerDropped cleanup down
 -- with it, over one operator typo. reFireCooldownMs two lines below this
 -- comment (K9DownFireCooldown's own construction) was already migrated to
--- ResolveConfiguredThresholdMs in an earlier pass -- these three siblings
--- were missed only because they never reach NewCooldown at all (healthThreshold/
+-- ResolveConfiguredThresholdMs -- these three siblings were missed only
+-- because they never reach NewCooldown at all (healthThreshold/
 -- minDurationMs are pure comparison values, pollIntervalMs feeds Wait()
 -- directly), not because the risk was any different.
 --
@@ -333,15 +328,13 @@ tuning.pollIntervalMs = ResolveConfiguredThresholdMs(
 -- enforces on its own (see K9DownFireCooldown's own declaration a few lines
 -- down) -- duplicating that check here would only race it.
 
---- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
---- file's header's own DESIGN PRINCIPLE 2 deferred this exact
---- consolidation to "whoever next does a genuine cross-file cleanup pass";
---- that pass has now happened. This file's own copy, byte-for-byte
---- identical to the five others that existed alongside it, is now the
---- single shared resource-global implementation in that file. See
---- server/events.lua's header for the full extraction writeup. The one
---- call site below is unchanged: same event name, arguments, and firing
---- condition.
+--- MOVED to server/events.lua: this file's header's own DESIGN PRINCIPLE 2
+--- deferred this exact consolidation to a future cross-file cleanup; that
+--- cleanup has now happened. This file's own copy, byte-for-byte identical
+--- to the five others that existed alongside it, is now the single shared
+--- resource-global implementation in that file. See server/events.lua's
+--- header for the full extraction writeup. The one call site below is
+--- unchanged: same event name, arguments, and firing condition.
 
 -- Per-source candidate-episode state -- see this file's header "DETECTION
 -- SHAPE" for the episode/edge-trigger design this backs.
@@ -499,13 +492,13 @@ local function PollK9Health()
                                     -- CONVENIENCE LAYER, PURELY ADDITIVE -- see
                                     -- shared/compat/dispatch.lua's own header
                                     -- for the full contract; this is the exact
-                                    -- copy-paste call that file's author left
-                                    -- for whoever wired this in, placed
-                                    -- immediately AFTER (never instead of) the
-                                    -- FireOutboundEvent call above so BOTH fire
-                                    -- from the SAME detection episode. This
-                                    -- resource's own custom/off-the-shelf
-                                    -- dispatch that listens ONLY for the plain
+                                    -- call that file documents for wiring this
+                                    -- in, placed immediately AFTER (never
+                                    -- instead of) the FireOutboundEvent call
+                                    -- above so BOTH fire from the SAME
+                                    -- detection episode. This resource's own
+                                    -- custom/off-the-shelf dispatch that
+                                    -- listens ONLY for the plain
                                     -- 'qbx_k9unit:events:k9Down' event above
                                     -- keeps working with ZERO setup either way
                                     -- -- K9Compat.Get('dispatch').Alert(...) is
@@ -518,9 +511,8 @@ local function PollK9Health()
                                     -- would change nothing about the line
                                     -- above it. `title` is a plain string, not
                                     -- a locale() call, per dispatch.lua's own
-                                    -- header LOCALE NOTE (this file is not the
-                                    -- locale-file owner this pass). Guarded the
-                                    -- same way scentlineup.lua guards its own
+                                    -- header LOCALE NOTE. Guarded the same way
+                                    -- scentlineup.lua guards its own
                                     -- K9Compat.Get('framework') call -- a
                                     -- missing K9Compat (e.g. shared/compat/
                                     -- core.lua not yet loaded/registered for any

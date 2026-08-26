@@ -353,17 +353,23 @@ setup — a server with exactly **one** high-command officer, the owner,
 before anyone else is promoted: only high command can grant one of
 these, and a self-grant was blocked outright, so that one officer had
 no way to ever grant *themselves* access to the Audit tab. **This is
-fixed.** `Config.FeatureControl.allowHighCommandSelfGrant` (default
-`true`) specifically allows a high-command officer to grant themselves
-one of these feature-level permissions — it does not weaken anything
-else: self-granting one of the four *named* capabilities
-(`k9.access`/`k9.certify`/`k9.audit`/`k9.givexp`) is still blocked
-outright with no override, because high command already bypasses those
-checks directly and there's no deadlock to fix there. Set
-`allowHighCommandSelfGrant = false` only if you specifically want a
-second officer's sign-off on every officer's own feature access — and
-know that doing so brings the solo-owner deadlock back until a second
-high-command officer exists.
+fixed, and by owner request now goes further than just fixing that one
+deadlock:** `Config.FeatureControl.allowHighCommandSelfGrant` (default
+`true`) lets a high-command officer grant *any* permission this catalog
+covers to their own citizenid — the `feature.<Name>`/`block.<Name>`
+grants above, **and now also the four named capabilities**
+(`k9.access`/`k9.certify`/`k9.audit`/`k9.givexp`). Separately,
+`Config.HighCommand.allowSelfGrant` (also default `true`) covers
+granting **XP** to yourself via `/k9givexp`. Both are the owner's own
+explicit decision ("high command can grant anything they want to
+themselves") rather than just a deadlock fix, and neither is hidden:
+every self-grant is still fully logged, tagged explicitly as a
+self-grant in the audit trail rather than just showing the same
+citizenid twice. Set either flag back to `false` on your own server if
+you'd rather require a second high-command officer's sign-off before
+someone can grant themselves a permission or XP — know that doing so
+also brings back the original solo-owner deadlock for the Audit tab
+specifically, until a second high-command officer exists.
 
 ### Before you trust the combat features in production
 

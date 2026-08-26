@@ -27,13 +27,12 @@
       1. CanShowK9UI() can itself be model-gated (client/main.lua's own
          doc comment: with Config.K9Appearance.requireK9ModelForRole = true,
          or if client/appearance.lua is not loaded, CanShowK9UI() reduces to
-         `IsOwnModelK9() and HasK9Access()`), and this task requires this
-         feature to work identically on ANY ped -- a custom streamed ped,
-         one not listed in Config.Peds, or a human model -- gated on
-         role/certification ALONE. Depending on a check that CAN
-         (depending on an operator's own separate appearance setting)
-         narrow to a ped-model condition is the wrong foundation for a
-         feature required to never do that.
+         `IsOwnModelK9() and HasK9Access()`), and this feature must work
+         identically on ANY ped -- a custom streamed ped, one not listed in
+         Config.Peds, or a human model -- gated on role/certification
+         ALONE. Depending on a check that CAN (depending on an operator's
+         own separate appearance setting) narrow to a ped-model condition
+         is the wrong foundation for a feature required to never do that.
       2. The real, binding authorization gate for this feature is
          server-side anyway (server/pursuitsprint.lua's own
          HasK9Access(src) -- itself a pure role/certification check with
@@ -50,22 +49,22 @@
     client/movement.lua's own "Attach Leash"/"Certify Handler" ox_target
     options already document and accept.
 
-    REAL BUG FOUND AND FIXED (client/movement.lua, this pass, two
-    independent agents): the "ANY PED... NEVER ON PED MODEL" promise above
-    was FALSE in practice until now. This file itself never checked the
-    model -- but the ONE place it hands off to, RecomputeK9MoveRate()
-    (client/movement.lua), used to hard-gate on IsOwnModelK9() alone before
-    composing anything, silently discarding K9MoveRateModifiers.pursuitSprint
-    (and every other modifier) for a role-holder on a non-K9 body. A granted
-    request still showed the "activated" toast (this file's own doing) with
-    zero actual speed change (that gate's doing) -- exactly the two real
-    configurations named in client/movement.lua's own "SCOPE, CORRECTED"
-    header comment (requireK9ModelForRole = true, and the default-config
-    HasK9Access() autoAccessGrade/High-Command-bypass case). Fixed there,
-    not here: RecomputeK9MoveRate()'s gate is now
-    `IsOwnModelK9() or HasK9Access()`, so this file needed no code change of
-    its own -- it was always calling the right function with the right
-    value, the composer just wasn't listening.
+    A REAL BUG, FOUND AND FIXED (client/movement.lua): the "ANY PED...
+    NEVER ON PED MODEL" promise above was FALSE in practice until this was
+    fixed. This file itself never checked the model -- but the ONE place it
+    hands off to, RecomputeK9MoveRate() (client/movement.lua), used to
+    hard-gate on IsOwnModelK9() alone before composing anything, silently
+    discarding K9MoveRateModifiers.pursuitSprint (and every other modifier)
+    for a role-holder on a non-K9 body. A granted request still showed the
+    "activated" toast (this file's own doing) with zero actual speed change
+    (that gate's doing) -- exactly the two real configurations named in
+    client/movement.lua's own "SCOPE, CORRECTED" header comment
+    (requireK9ModelForRole = true, and the default-config HasK9Access()
+    autoAccessGrade/High-Command-bypass case). Fixed there, not here:
+    RecomputeK9MoveRate()'s gate is now `IsOwnModelK9() or HasK9Access()`,
+    so this file needed no code change of its own -- it was always calling
+    the right function with the right value, the composer just wasn't
+    listening.
 
     ======================================================================
     THE BALANCE PROBLEM -- see server/pursuitsprint.lua's own header for
@@ -112,31 +111,31 @@
         this file does not rely on that margin alone.
 
     ======================================================================
-    EVENT CONTRACT (agreed with coder-backend -- see server/pursuitsprint.lua's
-    own header for the full writeup):
+    EVENT CONTRACT (see server/pursuitsprint.lua's own header for the full
+    writeup):
       Client -> Server: 'qbx_k9unit:server:requestPursuitSprint' (targetNetId: number)
       Server -> Client: 'qbx_k9unit:client:pursuitSprintGranted' (speedMultiplier: number, durationMs: number)
-        CARRIES A PAYLOAD NOW -- CHANGED THIS PASS (closing a real
-        tablet-tunable sync gap; see server/pursuitsprint.lua's own header
-        "EVENT CONTRACT" for the full writeup). This USED TO be
-        payload-less on the theory that "Config.PursuitSprint.speedMultiplier/
-        durationMs are shared_scripts config, already identical on both
-        sides" -- true only as long as neither side's copy could ever change
-        independently, which stopped being true the moment
-        server/runtimecontrol.lua's tablet gained the ability to mutate the
-        SERVER's own in-memory Config.PursuitSprint live, with nothing that
-        ever reaches an already-connected client's own separate config.lua
-        copy. This file now applies WHATEVER THE SERVER SENT for this one
-        grant, never re-reading `Config.PursuitSprint.speedMultiplier`/
-        `.durationMs` for that purpose again below -- those two fields are
-        used ONLY as the fallback for a malformed/missing payload (see the
-        grant handler's own "PAYLOAD VALIDATION" comment), never as the
-        primary source once a real grant has arrived. Applying a value this
-        client was actually SENT, rather than one it looked up itself, is
-        what makes a live tablet edit genuinely reach an already-connected
-        K9 on its next grant -- see server/pursuitsprint.lua's own "LIVE
-        EDIT MID-SPRINT" note for why a burst ALREADY GRANTED keeps its own
-        captured value for its full duration rather than updating mid-flight.
+        CARRIES A PAYLOAD (closing a real tablet-tunable sync gap; see
+        server/pursuitsprint.lua's own header "EVENT CONTRACT" for the full
+        writeup). This USED TO be payload-less on the theory that
+        "Config.PursuitSprint.speedMultiplier/durationMs are shared_scripts
+        config, already identical on both sides" -- true only as long as
+        neither side's copy could ever change independently, which stopped
+        being true the moment server/runtimecontrol.lua's tablet gained the
+        ability to mutate the SERVER's own in-memory Config.PursuitSprint
+        live, with nothing that ever reaches an already-connected client's
+        own separate config.lua copy. This file now applies WHATEVER THE
+        SERVER SENT for this one grant, never re-reading
+        `Config.PursuitSprint.speedMultiplier`/`.durationMs` for that
+        purpose again below -- those two fields are used ONLY as the
+        fallback for a malformed/missing payload (see the grant handler's
+        own "PAYLOAD VALIDATION" comment), never as the primary source once
+        a real grant has arrived. Applying a value this client was actually
+        SENT, rather than one it looked up itself, is what makes a live
+        tablet edit genuinely reach an already-connected K9 on its next
+        grant -- see server/pursuitsprint.lua's own "LIVE EDIT MID-SPRINT"
+        note for why a burst ALREADY GRANTED keeps its own captured value
+        for its full duration rather than updating mid-flight.
         NOT A NEW TRUST BOUNDARY: this event's origin is still restricted to
         the genuine server by the SOURCE-ORIGIN GUARD below, exactly as
         before -- a forged local trigger was already the only way to feed
@@ -157,21 +156,20 @@
     own "SOURCE-ORIGIN GUARD" header block exactly; read that file's header
     for the full reasoning and the same honestly-graded MEDIUM-HIGH
     confidence note (official documented pattern, not independently
-    re-verified against a live client this session) rather than
-    re-deriving it here. What forging this locally would gain an attacker:
-    a self-only speed buff on their OWN ped with zero cooldown enforcement
-    (the server-side cooldown is bypassed entirely by construction, since a
-    forged local TriggerEvent never reaches server/pursuitsprint.lua at
-    all) -- this closes that gap for the same "any qbx_k9unit:client:*
-    handler must require genuine server origin" resource-wide convention
-    every other file already follows, not because this one instance was
-    independently assessed as higher/lower risk than the others.
+    re-verified against a live client) rather than re-deriving it here.
+    What forging this locally would gain an attacker: a self-only speed
+    buff on their OWN ped with zero cooldown enforcement (the server-side
+    cooldown is bypassed entirely by construction, since a forged local
+    TriggerEvent never reaches server/pursuitsprint.lua at all) -- this
+    closes that gap for the same "any qbx_k9unit:client:* handler must
+    require genuine server origin" resource-wide convention every other
+    file already follows, not because this one instance was independently
+    assessed as higher/lower risk than the others.
 
     ======================================================================
     NATIVES USED, AND HOW EACH IS ALREADY ESTABLISHED IN THIS EXACT
-    CODEBASE (per this task's own verification requirement -- every native
-    below already has a real, relied-upon call site elsewhere in this
-    resource; none is newly introduced by this file):
+    CODEBASE (every native below already has a real, relied-upon call site
+    elsewhere in this resource; none is newly introduced by this file):
       - GetGamePool('CPed'), IsEntityDead, DoesEntityExist, GetEntityCoords,
         PlayerPedId, IsPedInAnyVehicle: client/combat.lua's own
         FindNearestCombatTarget (GetGamePool/IsEntityDead/DoesEntityExist/
@@ -197,16 +195,16 @@
 if not Config.Features.PursuitSprint then return end
 
 -- ======================================================================
--- CONFIG SHAPE -- CLAMP AND WARN, NOT ASSERT (this pass -- see
--- server/cooldowns.lua's header ADDENDUM: "does an operator's config.lua
--- edit alone... reach this value? If yes it must be clamped and warned
--- about, never asserted and aborted"). This used to be four hard `assert`s
--- here, deliberately mirroring server/pursuitsprint.lua's own -- but that
--- file has SINCE moved to clamp-and-warn for the exact same reason this
--- one now does: an uncaught error thrown from THIS FILE's own top-level
--- chunk (this guard sits directly after the feature-flag early-return
--- above, no deferring onResourceStart/RegisterNetEvent wrapper around it)
--- aborts client/pursuitsprint.lua's load from that line onward, silently
+-- CONFIG SHAPE -- CLAMP AND WARN, NOT ASSERT (see server/cooldowns.lua's
+-- header ADDENDUM: "does an operator's config.lua edit alone... reach
+-- this value? If yes it must be clamped and warned about, never asserted
+-- and aborted"). This used to be four hard `assert`s here, deliberately
+-- mirroring server/pursuitsprint.lua's own -- but that file has SINCE
+-- moved to clamp-and-warn for the exact same reason this one now does: an
+-- uncaught error thrown from THIS FILE's own top-level chunk (this guard
+-- sits directly after the feature-flag early-return above, no deferring
+-- onResourceStart/RegisterNetEvent wrapper around it) aborts
+-- client/pursuitsprint.lua's load from that line onward, silently
 -- un-registering 'qbx_k9unit:vault'-equivalent PursuitSprint keybind/net
 -- handlers below, over one operator typo. Mirrors server/pursuitsprint.lua's
 -- own ResolveConfiguredPositiveNumber shape (that file's server-only
@@ -287,9 +285,10 @@ local function FindNearestPursuitTarget(rangeMeters)
 end
 
 --- Self-initiated trigger -- bound to a keybind below (this resource has
---- no radial-menu entry for this feature yet; client/radial.lua is not a
---- file this pass owns -- see this pass's own report for the exact,
---- ready-to-apply follow-up for whoever owns that file next).
+--- no radial-menu entry for this feature yet; a future client/radial.lua
+--- item can call RequestPursuitSprint() directly, the same "radial calls a
+--- resource-global" convention every other action in this resource
+--- follows).
 function RequestPursuitSprint()
     local myPed = PlayerPedId()
 
@@ -355,15 +354,16 @@ end
 --- future version mismatch between the two files -- degrades to this
 --- client's OWN last-resolved Config.PursuitSprint default rather than ever
 --- reaching RecomputeK9MoveRate()/SetPedMoveRateOverride with an unchecked
---- number. Neither inversion this task warns against is reachable here: a
---- non-positive/NaN speedMultiplier can never silently mean "no boost" or
---- "infinite boost" (rejected outright, falls back to a known-good default),
---- and a non-positive/NaN durationMs can never mean "forever" (the end-timer
---- loop below is a plain `while elapsed < durationMs`, so a non-positive
---- value would otherwise end the burst on its very first 100ms tick --
---- harmless in this specific direction, but rejected anyway for
---- consistency, so this file never has to reason about which direction is
---- "safe" for a value that should never be reachable in the first place).
+--- number. Neither inversion this resource warns against elsewhere is
+--- reachable here: a non-positive/NaN speedMultiplier can never silently
+--- mean "no boost" or "infinite boost" (rejected outright, falls back to a
+--- known-good default), and a non-positive/NaN durationMs can never mean
+--- "forever" (the end-timer loop below is a plain `while elapsed <
+--- durationMs`, so a non-positive value would otherwise end the burst on
+--- its very first 100ms tick -- harmless in this specific direction, but
+--- rejected anyway for consistency, so this file never has to reason about
+--- which direction is "safe" for a value that should never be reachable in
+--- the first place).
 --- @param value any
 --- @param fallback number
 --- @return number
@@ -437,7 +437,7 @@ RegisterNetEvent('qbx_k9unit:client:pursuitSprintGranted', function(speedMultipl
     end)
 end)
 
--- qa-tester-class hygiene, same reasoning as client/movement.lua's own
+-- Same reasoning as client/movement.lua's own
 -- lastAppliedMoveRate/isFirstPersonK9View onResourceStop handlers: a
 -- resource restart mid-burst must not leave K9MoveRateModifiers.pursuitSprint
 -- (and therefore the applied native move-rate override) stuck above
