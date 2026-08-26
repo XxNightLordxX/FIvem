@@ -38,8 +38,8 @@
 --     initiative) -- this table simply stops being written to or read from
 --     going forward. No SQL needed at all.
 --   * Genuinely want the table gone? Run sql/rollback/backup_k9_tables.sh
---     FIRST (README.md §7 step 1), then arm and run
---     sql/rollback/uninstall_all.sql.
+--     FIRST (README.md's "Uninstalling / rolling back" section), then arm
+--     and run sql/rollback/uninstall_all.sql.
 --
 -- Running this file is always harmless. It only READS -- it reports what
 -- the table currently holds so you can make an informed decision, and it

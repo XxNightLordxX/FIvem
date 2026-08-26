@@ -30,7 +30,8 @@
 --
 -- ==> RUN THE BACKUP FIRST. sql/rollback/backup_k9_tables.sh captures this
 --     column's values; nothing else does, and they are not reconstructible
---     from any other table. See README.md §7 step 1.
+--     from any other table. See README.md's "Uninstalling / rolling back"
+--     section.
 -- ///////////////////////////////////////////////////////////////////////
 --
 -- SAFE TO RE-RUN. The INFORMATION_SCHEMA-guarded stored procedure below

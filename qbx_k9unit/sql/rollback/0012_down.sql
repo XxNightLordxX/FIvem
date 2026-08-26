@@ -46,9 +46,11 @@
 --     on purpose, using one concrete name instead of a hand-wave," not
 --     as "restore my exact original setup." If you need your database's
 --     LITERAL original per-table collation back, restore from the backup
---     you took (per README.md §7 STEP 1) before you ever ran
---     migration 0012 -- that backup is the only place your original,
---     specific values genuinely still exist.
+--     taken before you ever ran migration 0012 (sql/k9_setup.sh's own
+--     mandatory full-database backup step if you used that script, or
+--     sql/rollback/backup_full_database.sh if you ran this migration by
+--     hand) -- that backup is the only place your original, specific values
+--     genuinely still exist.
 --
 -- WHY YOU WOULD EVER WANT THIS AT ALL: migration 0012 is optional in the
 -- first place (see its own header -- most installs never need it). If you

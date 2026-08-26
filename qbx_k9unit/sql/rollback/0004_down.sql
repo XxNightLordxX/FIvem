@@ -37,8 +37,10 @@
 --                               -> 20 simultaneously-active certifications,
 --                                  no error, no log line, nothing to notice.
 --
--- So: run this file to get UNSTUCK (see README.md §7 step 5 --
--- the duplicate-active-certs case), fix the underlying problem, then run
+-- So: run this file to get UNSTUCK (see
+-- sql/migrations/0004_add_k9_certifications_active_cert_key.sql's own
+-- OPERATOR NOTE -- the duplicate-active-certs case), fix the underlying
+-- problem, then run
 -- sql/migrations/0004_... again to put the constraint back. Do not leave a
 -- production server sitting in this rolled-back state.
 -- ///////////////////////////////////////////////////////////////////////

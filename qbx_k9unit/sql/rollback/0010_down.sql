@@ -64,8 +64,8 @@
 --     own header for why). This is much narrower and safer than dropping
 --     a whole table.
 --   * Genuinely want one or more of these three tables gone? Run
---     sql/rollback/backup_k9_tables.sh FIRST (README.md §7 step
---     1 -- report to the sql/** owner that these three table names need
+--     sql/rollback/backup_k9_tables.sh FIRST (README.md's "Uninstalling /
+--     rolling back" section -- report to the sql/** owner that these three table names need
 --     adding to that script's own table list and to
 --     sql/rollback/uninstall_all.sql, neither of which this file edits),
 --     then arm and run sql/rollback/uninstall_all.sql.

@@ -32,8 +32,8 @@
 --     turning the feature off costs nothing and every existing grant row
 --     stays intact for whenever it's turned back on.
 --   * Genuinely want the table gone? Run sql/rollback/backup_k9_tables.sh
---     FIRST (README.md §7 step 1), then arm and run
---     sql/rollback/uninstall_all.sql.
+--     FIRST (README.md's "Uninstalling / rolling back" section), then arm
+--     and run sql/rollback/uninstall_all.sql.
 --
 -- Running this file is always harmless. It only READS, and changes
 -- nothing. Re-run it as often as you like.

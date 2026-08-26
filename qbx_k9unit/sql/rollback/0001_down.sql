@@ -27,7 +27,7 @@
 --   * Just want the resource to stop using the table? Stop the resource
 --     and leave the table alone.
 --   * Genuinely want it gone? Run sql/rollback/backup_k9_tables.sh FIRST
---     (README.md §7 step 1), then arm and run
+--     (README.md's "Uninstalling / rolling back" section), then arm and run
 --     sql/rollback/uninstall_all.sql.
 --
 -- Running this file is always harmless. It only READS, and changes

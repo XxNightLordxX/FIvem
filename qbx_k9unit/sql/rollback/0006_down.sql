@@ -45,8 +45,8 @@
 --
 -- ==> RUN THE BACKUP FIRST. sql/rollback/backup_k9_tables.sh captures
 --     these columns' values; nothing else does, and they are not
---     reconstructible from any other table or column. See
---     README.md §7 step 1.
+--     reconstructible from any other table or column. See README.md's
+--     "Uninstalling / rolling back" section.
 -- ///////////////////////////////////////////////////////////////////////
 --
 -- TABLE NOT DROPPED: `k9_certification_specializations` is an independent

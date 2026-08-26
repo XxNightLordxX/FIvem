@@ -168,7 +168,7 @@ can genuinely happen — some other K9-themed resource, for example), this
 file recognizes that it is not one of its own and refuses to touch it,
 loudly, by name, instead of guessing. It never uses a broad "delete
 anything starting with k9\_" rule — it only ever acts on an exact,
-pre-written list of this resource's own 24 table names, and only after
+pre-written list of this resource's own 25 table names, and only after
 confirming each one is really this resource's own table.
 
 Running the uninstall file twice in a row is safe — the second time it
@@ -194,6 +194,17 @@ installing for the first time), after replacing the resource's files:
   `DELIMITER` line). It is always safe to import a migration file again
   even if you already have — each one checks first and does nothing if
   there is nothing left for it to do.
+
+  One number in that sequence is deliberately missing from the plain
+  `sql/migrations/` listing: there is no top-level `0012_...sql` file.
+  That migration lives one folder deeper, at
+  `sql/migrations/optional/0012_convert_charset_collation.sql`, and is
+  **not** part of the normal upgrade sequence — do not go looking for it
+  or import it "to be safe." It only matters if you write your own SQL
+  reports that `JOIN` this resource's tables to `players` and hit a
+  "mixed collations" database error; if that has never happened to you,
+  skip it. Its own header explains exactly who needs it (and who does
+  not) in full — read that before running it, not this page.
 
 ### A word about giving your database a "spring clean"
 

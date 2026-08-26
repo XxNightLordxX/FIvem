@@ -70,9 +70,13 @@
 -- structurally impossible for the default install/upgrade path to run this
 -- file by accident. You run it only by naming it directly:
 --     mysql -u YOUR_USER -p YOUR_DATABASE < sql/migrations/optional/0012_convert_charset_collation.sql
--- See README.md §7 for the plain-language version of this
--- whole file, and this repository's operator runbook for where this sits
--- in the overall install story.
+-- CORRECTED: this used to point to "README.md §7" for a plain-language
+-- version of this file; that section does not exist in README.md (verified
+-- by reading it), and no separate plain-language walkthrough of this
+-- specific migration exists elsewhere either. The "WHO ACTUALLY NEEDS THIS"
+-- block above IS this file's own plain-language version -- read that
+-- instead. See the "WHY THIS FILE LIVES IN sql/migrations/optional/" section
+-- immediately below for where this sits in the overall install story.
 --
 -- COST -- READ THIS BEFORE RUNNING ON A LIVE SERVER, THE SAME HONEST
 -- DISCLOSURE MIGRATIONS 0004 AND 0006 ALREADY GIVE FOR THEIR OWN COSTS:
