@@ -326,6 +326,19 @@ RegisterNetEvent('qbx_k9unit:client:applyContrabandScreenFx', function(durationM
     -- note's own recommended shape.
     if source ~= 65535 then return end
 
+    -- Per-person block (client/featureblocks.lua, REQUESTED -- see that
+    -- file's header for the full contract). This event is the ONLY
+    -- acting point this feature has (see this file's own header: no
+    -- ox_target option, no command, no keybind) -- checked here, before
+    -- the effect is ever applied, rather than at registration. There is
+    -- no "already active, force it off early" concern to add on top: this
+    -- effect is a short, self-expiring one-shot (SCREENFX_MAX_DURATION_MS
+    -- above), not a toggle the player holds, so there is no persistent
+    -- state a live block could strand someone in.
+    if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('ContrabandScreenFX') then
+        return
+    end
+
     local cfg = Config.ContrabandScreenFX
     local modifierName = FALLBACK_MODIFIER_NAME
     if type(cfg) == 'table' and type(cfg.modifierName) == 'string' and cfg.modifierName ~= '' then

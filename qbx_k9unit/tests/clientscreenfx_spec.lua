@@ -53,6 +53,15 @@ local function newScreenFxFixture(opts)
     local isDead = false
     local function IsEntityDead(_ped) return isDead end
 
+    -- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- stubbed,
+    -- same "controllable stand-in" convention as every other cross-file
+    -- global in this fixture. Soft dependency: only added to `env` when
+    -- `opts.featureBlocksAvailable` is not explicitly false.
+    local featureBlocksAvailable = opts.featureBlocksAvailable
+    if featureBlocksAvailable == nil then featureBlocksAvailable = true end
+    local blockedFeatures = opts.blockedFeatures or {}
+    local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
+
     local setModifierCalls = {}
     local function SetTimecycleModifier(name) setModifierCalls[#setModifierCalls + 1] = name end
     local clearModifierCallCount = 0
@@ -86,6 +95,9 @@ local function newScreenFxFixture(opts)
         RegisterNetEvent = RegisterNetEvent,
         AddEventHandler = AddEventHandler,
     })
+    if featureBlocksAvailable then
+        env.IsK9FeatureBlocked = IsK9FeatureBlocked
+    end
 
     Sandbox.loadInto('../config.lua', env)
 
@@ -127,6 +139,7 @@ local function newScreenFxFixture(opts)
             end
         end,
         onResourceStopHandlerCount = function() return #(eventHandlers['onResourceStop'] or {}) end,
+        setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
     }
 end
 
@@ -369,6 +382,37 @@ t.test('onResourceStop: a harmless no-op when the effect was never triggered at 
     local ok = pcall(f.fireResourceStop, f.resourceName)
     t.isTrue(ok)
     t.equals(f.clearModifierCallCount(), 1, 'ClearTimecycleModifier is called unconditionally on stop regardless of whether the effect was ever actually active -- an idempotent, harmless no-op per this file\'s own comment')
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- checked as
+-- this file's own header states: at the ONE acting point this feature has
+-- (the event handler itself), before the effect is ever applied. No
+-- "already active, force off early" concern -- this is a short,
+-- self-expiring one-shot, never a toggle the player holds (see this
+-- file's own production-code comment on that call site).
+-- ----------------------------------------------------------------------
+
+t.test('per-person block: ContrabandScreenFX blocked -- the effect is never applied, no thread starts', function()
+    local f = newScreenFxFixture()
+    f.setBlocked('ContrabandScreenFX', true)
+    f.fireApplyScreenFx(65535, 3000)
+    t.equals(#f.setModifierCalls, 0)
+    t.equals(f.threadCreateCount(), 0)
+end)
+
+t.test('per-person block: a block on a DIFFERENT feature name never affects ContrabandScreenFX', function()
+    local f = newScreenFxFixture()
+    f.setBlocked('NightVision', true)
+    f.fireApplyScreenFx(65535, 3000)
+    t.equals(#f.setModifierCalls, 1)
+end)
+
+t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked undefined) -- the effect applies exactly as before this pass', function()
+    local f = newScreenFxFixture({ featureBlocksAvailable = false })
+    t.isNil(f.env.IsK9FeatureBlocked)
+    f.fireApplyScreenFx(65535, 3000)
+    t.equals(#f.setModifierCalls, 1, 'an unknown block state must never suppress this feature -- it must fail OPEN')
 end)
 
 os.exit(t.summary())

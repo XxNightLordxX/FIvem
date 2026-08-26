@@ -69,6 +69,15 @@ local function newHudFixture(opts)
     if canShowK9UI == nil then canShowK9UI = true end
     local function CanShowK9UI() return canShowK9UI end
 
+    -- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- stubbed,
+    -- same "controllable stand-in, not the real cross-file dependency"
+    -- convention as CanShowK9UI above. Soft dependency: only added to
+    -- `env` when `opts.featureBlocksAvailable` is not explicitly false.
+    local featureBlocksAvailable = opts.featureBlocksAvailable
+    if featureBlocksAvailable == nil then featureBlocksAvailable = true end
+    local blockedFeatures = opts.blockedFeatures or {}
+    local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
+
     local fakeNow = 0
     local function GetGameTimer() return fakeNow end
 
@@ -113,6 +122,9 @@ local function newHudFixture(opts)
         Wait = Wait,
         RegisterNetEvent = RegisterNetEvent,
     })
+    if featureBlocksAvailable then
+        env.IsK9FeatureBlocked = IsK9FeatureBlocked
+    end
 
     Sandbox.loadInto('../config.lua', env)
 
@@ -133,6 +145,7 @@ local function newHudFixture(opts)
         step = function() runner.step() end,
         advance = function(ms) fakeNow = fakeNow + ms end,
         setCanShowK9UI = function(v) canShowK9UI = v end,
+        setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
         setHealth = function(current, max) entityHealth = current; entityMaxHealth = max end,
         setStaminaRemaining = function(v) staminaRemaining = v end,
         setMetadata = function(field, v) qbx.PlayerData.metadata[field] = v end,
@@ -476,6 +489,45 @@ t.test('poll thread: HUD_HEARTBEAT_MS (1000ms) forces a re-push even with ZERO r
     f.advance(250)
     f.step() -- 1000ms elapsed -- heartbeat due, even though nothing changed
     t.equals(#f.sendNUIMessageCalls, countAfterFirst + 1, 'the heartbeat ceiling must force a re-push even with zero real change')
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- folded
+-- directly into the poll thread's own `canShow` derivation, so hiding an
+-- already-visible HUD on block is just the existing true->false transition
+-- path, already proven above -- these tests only confirm the block itself
+-- actually participates in that derivation, and that it fails open.
+-- ----------------------------------------------------------------------
+
+t.test('poll thread: HealthStaminaHUD blocked -- canShow is false even though CanShowK9UI is true, so the HUD never shows at all', function()
+    local f = newHudFixture()
+    f.setBlocked('HealthStaminaHUD', true)
+    f.step()
+    t.equals(#f.sendNUIMessageCalls, 0, 'never having been visible, a blocked pass pushes nothing -- there is no prior visible state to transition away from')
+end)
+
+t.test('poll thread: a block applied AFTER the HUD is already visible hides it on the very next pass (the existing true->false transition push)', function()
+    local f = newHudFixture()
+    f.step() -- becomes visible, pushes visible=true
+    t.isTrue(f.lastMessage().data.visible)
+
+    f.setBlocked('HealthStaminaHUD', true)
+    f.step()
+    t.isFalse(f.lastMessage().data.visible, 'a live block must hide an already-showing HUD, not merely refuse the next show')
+end)
+
+t.test('poll thread: a block on a DIFFERENT feature name never affects HealthStaminaHUD', function()
+    local f = newHudFixture()
+    f.setBlocked('NightVision', true)
+    f.step()
+    t.isTrue(f.lastMessage().data.visible)
+end)
+
+t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked undefined) -- the HUD shows exactly as before this pass', function()
+    local f = newHudFixture({ featureBlocksAvailable = false })
+    t.isNil(f.env.IsK9FeatureBlocked)
+    f.step()
+    t.isTrue(f.lastMessage().data.visible, 'an unknown block state must never freeze/hide the HUD -- it must fail OPEN')
 end)
 
 os.exit(t.summary())

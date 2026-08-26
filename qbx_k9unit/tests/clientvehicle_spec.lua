@@ -115,6 +115,17 @@ local function newVehicleFixture(opts)
     local denyCalls = 0
     local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
 
+    -- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- stubbed,
+    -- same "controllable stand-in" convention as CanShowK9UI/DenyK9UIAccess
+    -- above. Soft dependency: only added to `env` when
+    -- `opts.featureBlocksAvailable` is not explicitly false.
+    local featureBlocksAvailable = opts.featureBlocksAvailable
+    if featureBlocksAvailable == nil then featureBlocksAvailable = true end
+    local blockedFeatures = opts.blockedFeatures or {}
+    local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
+    local denyK9FeatureBlockedCallCount = 0
+    local function DenyK9FeatureBlocked() denyK9FeatureBlockedCallCount = denyK9FeatureBlockedCallCount + 1 end
+
     local notifyCalls = {}
     local lib = { notify = function(payload) notifyCalls[#notifyCalls + 1] = payload end }
 
@@ -218,7 +229,7 @@ local function newVehicleFixture(opts)
         VehicleInteractMeters = 3.0,
     }
 
-    local env = Sandbox.newEnv({
+    local envOverrides = {
         Config = config,
         GetHashKey = GetHashKey,
         CanShowK9UI = CanShowK9UI,
@@ -247,7 +258,12 @@ local function newVehicleFixture(opts)
         Wait = threadRunner.Wait,
         K9Compat = K9Compat,
         GetCurrentResourceName = function() return RESOURCE_NAME end,
-    })
+    }
+    if featureBlocksAvailable then
+        envOverrides.IsK9FeatureBlocked = IsK9FeatureBlocked
+        envOverrides.DenyK9FeatureBlocked = DenyK9FeatureBlocked
+    end
+    local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../client/vehicle.lua', env)
 
@@ -281,6 +297,8 @@ local function newVehicleFixture(opts)
         addVehicle = addVehicle,
         setVehicleResolvable = function(v) vehicleResolvable = v end,
         deleteVehicleEntity = function(entity) existingEntities[entity] = nil end,
+        setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
+        denyK9FeatureBlockedCallCount = function() return denyK9FeatureBlockedCallCount end,
     }
 end
 
@@ -632,6 +650,53 @@ t.test('onResourceStart: a mismatched, non-target resourceName does not register
     f.env.exports = nil -- not used, just documenting this branch is exercised elsewhere already
     f.fireResourceStart('ox_target') -- K9Compat.Which('target') in this fixture's stub always returns 'ox_target'
     t.equals(#f.addGlobalVehicleCalls, 1, 'the SECOND branch (resourceName == K9Compat.Which(target)) must also register the options')
+end)
+
+-- ========================================================================
+-- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- checked inside
+-- EnterNearestK9Vehicle() itself, the single resource-global every entry
+-- point (radial, keybind/command, tablet trigger) already routes through.
+-- ExitK9Vehicle() stays completely untouched -- see this file's own
+-- "deliberately NEVER gated" section above, unchanged by this pass.
+-- ========================================================================
+
+t.test('EnterNearestK9Vehicle: VehicleEntryExit blocked -- denies via DenyK9FeatureBlocked, never attaches', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.setBlocked('VehicleEntryExit', true)
+
+    f.env.EnterNearestK9Vehicle()
+
+    t.equals(#f.attachCalls, 0)
+    t.equals(f.denyK9FeatureBlockedCallCount(), 1)
+    t.isFalse(f.env.IsInK9Vehicle())
+end)
+
+t.test('EnterNearestK9Vehicle: a block on a DIFFERENT feature name never affects VehicleEntryExit', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.setBlocked('NightVision', true)
+    f.env.EnterNearestK9Vehicle()
+    t.equals(#f.attachCalls, 1)
+end)
+
+t.test('ExitK9Vehicle: a block on VehicleEntryExit never refuses exiting -- termination must never be gated', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle() -- in, while unblocked
+    t.isTrue(f.env.IsInK9Vehicle())
+
+    f.setBlocked('VehicleEntryExit', true) -- blocked while already inside
+    f.env.ExitK9Vehicle()
+    t.isFalse(f.env.IsInK9Vehicle(), 'a block must never prevent exiting an already-entered vehicle')
+end)
+
+t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked undefined) -- entry works exactly as before this pass', function()
+    local f = newVehicleFixture({ featureBlocksAvailable = false })
+    t.isNil(f.env.IsK9FeatureBlocked)
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    t.equals(#f.attachCalls, 1, 'an unknown block state must never freeze this ability -- it must fail OPEN')
 end)
 
 os.exit(t.summary())

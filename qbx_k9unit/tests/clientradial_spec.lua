@@ -173,6 +173,21 @@ local function newRadialFixture(opts)
     local function DenyK9UIAccess() denyCalls = denyCalls + 1 end
     local function HasK9Access() hasK9AccessCalls = hasK9AccessCalls + 1; return hasK9Access end
 
+    -- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- stubbed,
+    -- same "controllable stand-in" convention as CanShowK9UI/DenyK9UIAccess
+    -- above. Soft dependency: only added to `env` when
+    -- `opts.featureBlocksAvailable` is not explicitly false. Only
+    -- RadialMenu/AdvancedBarkRadial are meaningful here -- see
+    -- client/radial.lua's own "K9 UNIT RADIAL -- PER-PERSON BLOCK" header
+    -- for why this file checks those two at REGISTRATION time, unlike
+    -- every other feature this pass touches.
+    local featureBlocksAvailable = opts.featureBlocksAvailable
+    if featureBlocksAvailable == nil then featureBlocksAvailable = true end
+    local blockedFeatures = opts.blockedFeatures or {}
+    local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
+    local denyK9FeatureBlockedCallCount = 0
+    local function DenyK9FeatureBlocked() denyK9FeatureBlockedCallCount = denyK9FeatureBlockedCallCount + 1 end
+
     -- Generic call log: calls[name] is a list of arg-tuples, one per
     -- invocation, for every plain "do a thing" cross-file global below.
     local calls = {}
@@ -268,6 +283,18 @@ local function newRadialFixture(opts)
             handler(resourceName)
         end
     end
+    --- Fires client/featureblocks.lua's own local
+    --- `qbx_k9unit:client:featureBlocksApplied` re-broadcast (REQUESTED --
+    --- this spec drives it directly rather than loading that file for
+    --- real, same "stub the cross-file dependency" convention as
+    --- everything else in this fixture) -- proves RegisterK9RadialMenu()
+    --- genuinely re-runs (and re-evaluates the two block checks) on this
+    --- event, not just on a resource/ox_lib restart.
+    local function fireFeatureBlocksApplied()
+        for _, handler in ipairs(eventHandlers['qbx_k9unit:client:featureBlocksApplied'] or {}) do
+            handler()
+        end
+    end
 
     -- FindNearestLeashCandidate/FindNearestPartnerCandidate's natives.
     local myPed = 1
@@ -335,6 +362,10 @@ local function newRadialFixture(opts)
     }
     for name, fn in pairs(allStubs) do
         if not omitSet[name] then overrides[name] = fn end
+    end
+    if featureBlocksAvailable then
+        overrides.IsK9FeatureBlocked = IsK9FeatureBlocked
+        overrides.DenyK9FeatureBlocked = DenyK9FeatureBlocked
     end
 
     local env = Sandbox.newEnv(overrides)
@@ -469,6 +500,10 @@ local function newRadialFixture(opts)
         setActivePlayers = function(list) activePlayers = list end,
         setPlayerPed = function(playerId, ped) playerPeds[playerId] = ped end,
         setPlayerServerId = function(playerId, serverId) playerServerIds[playerId] = serverId end,
+        setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
+        denyK9FeatureBlockedCallCount = function() return denyK9FeatureBlockedCallCount end,
+        fireFeatureBlocksApplied = fireFeatureBlocksApplied,
+        featureBlocksAppliedHandlerCount = function() return #(eventHandlers['qbx_k9unit:client:featureBlocksApplied'] or {}) end,
     }
 end
 
@@ -1312,6 +1347,120 @@ t.test('Re-registering (via a simulated ox_lib restart) rebuilds fresh onSelect 
 
     f.findInMenu('k9unit', 'k9_takedown').onSelect()
     t.equals(#f.calls.RequestTakedown, 1, 'a freshly re-registered item\'s onSelect must still genuinely call through once access is granted')
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- RadialMenu and
+-- AdvancedBarkRadial. See client/radial.lua's own "K9 UNIT RADIAL --
+-- PER-PERSON BLOCK" header for the full design: both are checked at
+-- REGISTRATION time (unlike every other feature this pass touches, which
+-- check at the point an ability acts) because both features ARE this
+-- file's own registration structure. This relies on the SAME
+-- REPLACE-in-place ox_lib semantics the "no wipe in between" test above
+-- already verifies -- re-registering after a block change is safe, not a
+-- new risk.
+-- ----------------------------------------------------------------------
+
+t.test('RadialMenu blocked for this specific client: the opener STAYS present (REPLACED, not removed -- see production code\'s own "DUPLICATE-VS-REPLACE" note) but no longer navigates anywhere, and denies via DenyK9FeatureBlocked (a distinct, honest reason from DenyK9UIAccess) instead', function()
+    local f = newRadialFixture({ features = { RadialMenu = true } })
+    t.equals(f.findRootItem('k9unit_open').menu, 'k9unit', 'sanity: unblocked, the opener navigates into k9unit')
+
+    f.setBlocked('RadialMenu', true)
+    f.fireFeatureBlocksApplied()
+
+    local opener = f.findRootItem('k9unit_open')
+    t.isNotNil(opener, 'the opener stays visible rather than silently vanishing (no verified ox_lib removal call exists for this codebase to rely on)')
+    t.isNil(opener.menu, 'it must no longer navigate into k9unit -- there is nothing useful behind it while blocked')
+    t.isNotNil(opener.onSelect)
+
+    opener.onSelect()
+    t.equals(f.denyK9FeatureBlockedCallCount(), 1, 'must deny via the distinct, honest DenyK9FeatureBlocked reason')
+    t.equals(f.denyCallCount(), 0, 'never the generic "not certified" DenyK9UIAccess -- this is a block, not an access denial')
+end)
+
+t.test('RadialMenu block is LIVE: registered at load, blocked afterward via the featureBlocksApplied event, unblocked again -- the opener re-links to k9unit without a resource restart', function()
+    local f = newRadialFixture({ features = { RadialMenu = true } })
+
+    f.setBlocked('RadialMenu', true)
+    f.fireFeatureBlocksApplied()
+    t.isNil(f.findRootItem('k9unit_open').menu)
+
+    f.setBlocked('RadialMenu', false)
+    f.fireFeatureBlocksApplied()
+    t.equals(f.findRootItem('k9unit_open').menu, 'k9unit', 'unblocking must restore real navigation on the very next rebuild, no restart required')
+    t.isNotNil(f.findMenu('k9unit'), 'and the submenu itself must be registered again too')
+end)
+
+t.test('RadialMenu block never touches OTHER abilities\' own resource-global functions -- K9Sit() itself keeps working when called directly (a block only removes ONE entry point\'s usefulness, never an ability)', function()
+    local f = newRadialFixture({ features = { RadialMenu = true } })
+
+    f.setBlocked('RadialMenu', true)
+    f.fireFeatureBlocksApplied()
+    t.isNil(f.findRootItem('k9unit_open').menu, 'sanity: the radial entry point no longer navigates anywhere')
+
+    -- The resource-global K9Sit() itself (the SAME function every other
+    -- surface -- keybind, command, tablet trigger, export -- would call)
+    -- is completely untouched by this file's own registration logic --
+    -- proving a RadialMenu block only ever removes the ONE entry point
+    -- this file owns, never the ability.
+    f.env.K9Sit()
+    t.equals(#f.calls.K9Sit, 1, 'the underlying ability keeps working via any OTHER surface regardless of a RadialMenu block')
+end)
+
+t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked undefined) -- RadialMenu registers exactly as before this pass', function()
+    local f = newRadialFixture({ features = { RadialMenu = true }, featureBlocksAvailable = false })
+    t.isNil(f.env.IsK9FeatureBlocked)
+    t.equals(f.findRootItem('k9unit_open').menu, 'k9unit', 'an unknown block state must never disable the whole radial surface -- it must fail OPEN')
+end)
+
+t.test('AdvancedBarkRadial blocked for this specific client: Bark degrades to the SAME single, flat, generic item this file ships when the GLOBAL flag is false -- basic barking is unaffected', function()
+    local f = newRadialFixture({ features = { AdvancedBarkRadial = true } })
+    t.isNotNil(f.findMenu('k9unit_bark'), 'sanity: unblocked, the variant submenu IS registered')
+    t.equals(f.findInMenu('k9unit', 'k9_bark').menu, 'k9unit_bark')
+
+    f.setBlocked('AdvancedBarkRadial', true)
+    f.fireFeatureBlocksApplied()
+
+    local bark = f.findInMenu('k9unit', 'k9_bark')
+    t.isNotNil(bark, 'Bark itself must still be offered -- only the ADVANCED variant submenu is withheld')
+    t.isNil(bark.menu, 'must be a terminal action again, not a navigation link into the (now unreachable) variant submenu')
+    t.isNotNil(bark.onSelect)
+
+    bark.onSelect()
+    t.equals(f.triggerServerEventCalls[#f.triggerServerEventCalls].args[1], 'bark', 'a blocked AdvancedBarkRadial must still send the plain generic bark type -- BasicBarkSounds has its own, separate, server-enforced block key this pass does not touch')
+end)
+
+t.test('AdvancedBarkRadial block is LIVE and reversible via the featureBlocksApplied event, same as RadialMenu', function()
+    local f = newRadialFixture({ features = { AdvancedBarkRadial = true } })
+
+    f.setBlocked('AdvancedBarkRadial', true)
+    f.fireFeatureBlocksApplied()
+    -- NOTE: k9unit_bark itself may still exist as an ORPHAN in ox_lib's own
+    -- registry while blocked -- same disclosed, accepted nuance as the
+    -- GLOBAL RadialMenu=false path above ("orphaned, but genuinely still
+    -- registered"); this file only ever ADDS/REPLACES a menu id, it never
+    -- calls an unverified removal API (see production code's own comment).
+    -- What actually matters -- and what this test checks -- is that
+    -- NOTHING REACHABLE from 'k9unit' still links to it.
+    t.isNil(f.findInMenu('k9unit', 'k9_bark').menu, 'k9_bark must not navigate into the (possibly orphaned) k9unit_bark while blocked')
+
+    f.setBlocked('AdvancedBarkRadial', false)
+    f.fireFeatureBlocksApplied()
+    t.isNotNil(f.findMenu('k9unit_bark'), 'unblocking must restore the variant submenu on the next rebuild')
+    t.equals(f.findInMenu('k9unit', 'k9_bark').menu, 'k9unit_bark')
+end)
+
+t.test('a block on a DIFFERENT feature name never affects RadialMenu or AdvancedBarkRadial', function()
+    local f = newRadialFixture({ features = { RadialMenu = true, AdvancedBarkRadial = true } })
+    f.setBlocked('NightVision', true)
+    f.fireFeatureBlocksApplied()
+    t.isNotNil(f.findRootItem('k9unit_open'))
+    t.isNotNil(f.findMenu('k9unit_bark'))
+end)
+
+t.test('the qbx_k9unit:client:featureBlocksApplied listener is registered exactly once per fixture, alongside the existing onResourceStart dispatcher', function()
+    local f = newRadialFixture()
+    t.equals(f.featureBlocksAppliedHandlerCount(), 1)
 end)
 
 os.exit(t.summary())

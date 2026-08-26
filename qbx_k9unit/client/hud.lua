@@ -578,7 +578,20 @@ CreateThread(function()
         -- CanShowK9UI()/HasK9Access() call site in this codebase already
         -- relies on for exactly this reason (every radial item's
         -- onSelect, client/vehicle.lua's canInteract).
+        -- Per-person block (client/featureblocks.lua, REQUESTED -- see
+        -- that file's header for the full contract). Folded directly into
+        -- `canShow` -- this poll thread already re-derives `canShow` fresh
+        -- every tick (see this thread's own header comment), so a block
+        -- applied while the HUD is currently showing hides it on the very
+        -- next tick (<= HUD_POLL_TICK_MS), the same "already-active effect
+        -- reacts live" property this resource's other continuous-display
+        -- features get from their own already-existing poll loops. Hiding
+        -- a passive, read-only display is never a "trap" (there is no
+        -- exit path to strand anyone from) -- unlike every gated ability
+        -- elsewhere in this pass, this one needs no separate
+        -- initiation-vs-termination split.
         local canShow = CanShowK9UI()
+            and not (type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('HealthStaminaHUD'))
 
         if not canShow then
             if hudState.visible then

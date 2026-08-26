@@ -95,6 +95,15 @@ local function newProximityAudioFixture(opts)
     local soundActiveMap = {}
     local function IsK9SoundActive(soundId) if soundActiveMap[soundId] == nil then return true end; return soundActiveMap[soundId] end
 
+    -- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- stubbed,
+    -- same "controllable stand-in" convention as this fixture's other
+    -- cross-file globals. Soft dependency: only added to `env` when
+    -- `opts.featureBlocksAvailable` is not explicitly false.
+    local featureBlocksAvailable = opts.featureBlocksAvailable
+    if featureBlocksAvailable == nil then featureBlocksAvailable = true end
+    local blockedFeatures = opts.blockedFeatures or {}
+    local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
+
     local runner = Sandbox.newThreadRunner()
     local threadCreateCount = 0
     local function CreateThread(fn) threadCreateCount = threadCreateCount + 1; runner.CreateThread(fn) end
@@ -134,6 +143,9 @@ local function newProximityAudioFixture(opts)
     end
     if opts.audioMaxDistance ~= false then
         overrides.GetK9AudioMaxDistance = function() return opts.audioMaxDistance or 30.0 end
+    end
+    if featureBlocksAvailable then
+        overrides.IsK9FeatureBlocked = IsK9FeatureBlocked
     end
 
     local env = Sandbox.newEnv(overrides)
@@ -183,6 +195,7 @@ local function newProximityAudioFixture(opts)
             end
         end,
         onResourceStopHandlerCount = function() return #(eventHandlers['onResourceStop'] or {}) end,
+        setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
     }
 end
 
@@ -440,6 +453,65 @@ t.test('onResourceStop: a harmless no-op when nothing was ever tracked', functio
     local ok = pcall(f.fireResourceStop, 'qbx_k9unit')
     t.isTrue(ok)
     t.equals(#f.stopK9SoundCalls, 0)
+end)
+
+-- ----------------------------------------------------------------------
+-- PER-PERSON BLOCK (client/featureblocks.lua, REQUESTED) -- this is the
+-- LISTENER's own ability to hear ambient K9 audio, so a block silences an
+-- already-playing loop outright (never merely refuses a new one) -- see
+-- this file's own production-code comment on this exact scan-thread check.
+-- ----------------------------------------------------------------------
+
+t.test('per-person block: ProximityAudioFX blocked -- discovery is skipped entirely, no new loop ever starts', function()
+    local f = newProximityAudioFixture()
+    f.step() -- prime
+    f.setBlocked('ProximityAudioFX', true)
+    f.addK9(1, 5.0)
+    f.step()
+    t.equals(#f.playK9SoundCalls, 0)
+end)
+
+t.test('per-person block: a block applied AFTER a loop is already playing stops it on the very next scan pass', function()
+    local f = newProximityAudioFixture()
+    f.step() -- prime
+    f.addK9(1, 5.0)
+    f.step() -- starts the loop
+    t.equals(#f.playK9SoundCalls, 1)
+
+    f.setBlocked('ProximityAudioFX', true)
+    f.step() -- must stop it, not merely refuse a NEW one
+    t.equals(#f.stopK9SoundCalls, 1)
+end)
+
+t.test('per-person block: unblocking lets discovery resume on the next scan pass', function()
+    local f = newProximityAudioFixture()
+    f.step() -- prime
+    f.setBlocked('ProximityAudioFX', true)
+    f.addK9(1, 5.0)
+    f.step() -- blocked -- no loop starts
+    t.equals(#f.playK9SoundCalls, 0)
+
+    f.setBlocked('ProximityAudioFX', false)
+    f.step() -- unblocked -- discovery resumes
+    t.equals(#f.playK9SoundCalls, 1)
+end)
+
+t.test('per-person block: a block on a DIFFERENT feature name never affects ProximityAudioFX', function()
+    local f = newProximityAudioFixture()
+    f.step() -- prime
+    f.setBlocked('NightVision', true)
+    f.addK9(1, 5.0)
+    f.step()
+    t.equals(#f.playK9SoundCalls, 1)
+end)
+
+t.test('fails OPEN: client/featureblocks.lua not loaded (IsK9FeatureBlocked undefined) -- discovery works exactly as before this pass', function()
+    local f = newProximityAudioFixture({ featureBlocksAvailable = false })
+    t.isNil(f.env.IsK9FeatureBlocked)
+    f.step() -- prime
+    f.addK9(1, 5.0)
+    f.step()
+    t.equals(#f.playK9SoundCalls, 1, 'an unknown block state must never silence this feature -- it must fail OPEN')
 end)
 
 os.exit(t.summary())

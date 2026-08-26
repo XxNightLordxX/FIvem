@@ -12,7 +12,11 @@
 
     ======================================================================
     EVENT/CALLBACK CONTRACT — this file does not register or trigger any
-    network event/callback directly. It calls:
+    NETWORK event/callback directly (the one local-only exception, added
+    this pass, is noted separately below this list: an AddEventHandler for
+    client/featureblocks.lua's purely client-side
+    `qbx_k9unit:client:featureBlocksApplied` re-broadcast, which crosses no
+    network boundary and needs no trust-boundary check). It calls:
       - client/main.lua's CanShowK9UI() to decide whether to show/allow
         the "K9 Unit" submenu at all.
       - client/movement.lua's ToggleK9Camera(), K9Sit(),
@@ -350,6 +354,85 @@ end
 --- to this function, never module-level state that could go stale) and the
 --- one-shot `locale()`/`lib.notify` calls each onSelect closure makes at
 --- CLICK time, which need no persistent handle to ox_lib at all.
+--- ======================================================================
+--- K9 UNIT RADIAL -- PER-PERSON BLOCK (client/featureblocks.lua,
+--- REQUESTED -- see that file's own header for the full contract).
+--- RadialMenu and AdvancedBarkRadial are the only two of the twelve
+--- purely-client-side features this pass makes blockable that live in
+--- THIS file, and both are handled the SAME way, deliberately DIFFERENT
+--- from every other feature this pass touches: at REGISTRATION time
+--- inside RegisterK9RadialMenu() below, not inside an onSelect closure.
+--- WHY THIS ONE FILE IS THE EXCEPTION (see client/featureblocks.lua's own
+--- header "WHERE THE CHECK GOES" for the short version): both features
+--- are themselves about what this file's OWN registration STRUCTURE looks
+--- like (does the K9 Unit wheel exist for this client at all; does its
+--- Bark entry expand into a variant submenu) -- not about a single
+--- ability's own point-of-use the way ThermalVision/VehicleEntryExit/etc.
+--- are. Gating ~17 individual onSelect closures instead (adding a second,
+--- independent block check to EVERY item's own already-carefully-tuned
+--- initiation-vs-termination gate) would have meant re-auditing every one
+--- of Detach Leash/Release Bite & Hold/Release Drag/Break Partnership/
+--- Recall/Fetch's Release+Recall/every Stop Tracking branch by hand to
+--- make sure a NEW check could never land on one of them by mistake -- a
+--- real risk on a file this size, for no honesty benefit over the simpler
+--- alternative below (this file's header "DUPLICATE-VS-REPLACE" note
+--- already proves the alternative is safe to lean on).
+---
+--- RadialMenu BLOCKED: the 'k9unit' submenu contents stop being registered
+--- (harmless -- nothing links to it, same disclosed nuance the GLOBAL
+--- Config.Features.RadialMenu=false path already has). The single root
+--- OPENER item, unlike the submenu, STAYS VISIBLE -- it is REPLACED
+--- in-place (never removed) with a version carrying no `menu` field and an
+--- onSelect that explains the block, rather than one that silently
+--- vanishes. THIS IS A DELIBERATE, DISCLOSED COMPROMISE, not the ideal:
+--- the fully-honest "icon disappears entirely" behavior would need a
+--- REMOVAL call this codebase has never verified as real against ox_lib's
+--- own source (a prior draft of this file's header floated
+--- `lib.removeRadialItem` as a hypothetical, unconfirmed option) --
+--- `lib.registerRadial`/`lib.addRadialItem`'s own REGISTER/REPLACE
+--- semantics ARE independently verified (see "DUPLICATE-VS-REPLACE"
+--- above), so this design stays entirely within what is actually proven,
+--- rather than assuming an unverified native/API call the way this
+--- resource's own established discipline forbids elsewhere. Every OTHER
+--- ability normally reached through the wheel stays fully reachable via
+--- every OTHER surface (keybind, command, tablet trigger, export) -- a
+--- RadialMenu block closes only this one entry point's USEFULNESS, never
+--- an ability itself, and is still strictly more honest than gating every
+--- individual onSelect would have been (nobody sees SOME items work and
+--- others silently refuse inside the same open wheel -- the ONE entry
+--- point itself says plainly why it does nothing).
+---
+--- AdvancedBarkRadial BLOCKED (while BasicBarkSounds/RadialMenu are NOT):
+--- the Bark entry degrades to the SAME single, flat, generic-'bark'-type
+--- item this file already ships when Config.Features.AdvancedBarkRadial
+--- is globally false -- barking itself keeps working (BasicBarkSounds has
+--- its OWN, separate, server-enforced block key; this pass does not touch
+--- it), only the variant SUBMENU is withheld.
+---
+--- LIVE, NOT JUST AT NEXT RESTART: client/featureblocks.lua fires a local
+--- `qbx_k9unit:client:featureBlocksApplied` event every time it processes
+--- a server sync -- this file's own listener (see the bottom of this
+--- file, alongside the existing onResourceStart/ox_lib dispatcher) simply
+--- calls RegisterK9RadialMenu() again, which re-evaluates both conditions
+--- below fresh and REPLACES the previous registration in place (never
+--- duplicates -- see "DUPLICATE-VS-REPLACE" above). One disclosed, minor
+--- edge case: a player with the radial UI already open, mid-navigation,
+--- at the exact instant a rebuild lands could have that one click resolve
+--- against whichever registration (old or new) ox_lib's `menus` table
+--- holds at that exact frame (navigation is resolved live, at click time,
+--- per "ORDERING PRESERVED" above) -- not a crash, not a security concern,
+--- just a possible one-frame staleness on an already-rare coincidence.
+---
+--- `type(IsK9FeatureBlocked) == 'function'` guard throughout, per this
+--- resource's soft-dependency convention -- fails OPEN (never blocked) if
+--- client/featureblocks.lua has not loaded, matching every other call
+--- site this pass adds.
+--- @param featureName string -- 'RadialMenu' | 'AdvancedBarkRadial'
+--- @return boolean
+local function IsRadialFeatureBlockedForMe(featureName)
+    return type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked(featureName)
+end
+
 local function RegisterK9RadialMenu()
     -- Contents of the "K9 Unit" SUBMENU (registered via lib.registerRadial
     -- below) — none of these carry their own `menu` field. On an item, `menu`
@@ -407,7 +490,11 @@ local function RegisterK9RadialMenu()
     --- this feature existed: a single 'k9_bark' action sending the literal
     --- 'bark' string.
     if Config.Features.BasicBarkSounds then
-        if Config.Features.AdvancedBarkRadial then
+        -- Per-person block on the ADVANCED VARIANT SUBMENU specifically --
+        -- see this function's own "K9 UNIT RADIAL -- PER-PERSON BLOCK"
+        -- header above. Basic barking (the `else` branch below) is
+        -- unaffected either way.
+        if Config.Features.AdvancedBarkRadial and not IsRadialFeatureBlockedForMe('AdvancedBarkRadial') then
             -- Build the nested submenu's terminal action items from
             -- config.lua's Config.AdvancedBarkRadial list. Each `variant` here
             -- is a FRESH local per loop iteration (Lua's generic `for` rebinds
@@ -1372,38 +1459,73 @@ local function RegisterK9RadialMenu()
         }
     end
 
+    -- Per-person block on the WHOLE radial surface -- see this function's
+    -- own "K9 UNIT RADIAL -- PER-PERSON BLOCK" header above.
     if Config.Features.RadialMenu then
-        -- Register the actual submenu contents FIRST (lib.registerRadial),
-        -- keyed by id 'k9unit' — this is the id the opener item below points
-        -- to via its own `menu` field.
-        lib.registerRadial({
-            id = 'k9unit',
-            items = k9SubmenuItems,
-        })
+        local radialMenuBlocked = IsRadialFeatureBlockedForMe('RadialMenu')
 
-        -- Then add ONE opener item to the GLOBAL root radial wheel. This is
-        -- the only k9unit-related item that belongs in the flat top-level
-        -- menuItems list; selecting it navigates into the 'k9unit' submenu
-        -- just registered above. Do not add k9SubmenuItems' contents here too
-        -- — that was the original bug (see this file's header).
-        lib.addRadialItem({
-            {
-                id = 'k9unit_open',
-                -- '${common.notify_title}' — ox_lib's own cross-reference
-                -- syntax (resolved once at lib.locale() load time), not a
-                -- coincidence: this opener's label and every lib.notify title
-                -- in this resource are the same "K9 Unit" string, so this
-                -- embeds that existing key rather than minting a byte-identical
-                -- duplicate under a different name (see DEVELOPER_REFERENCE.md).
-                label = locale('radial.menu_open_label'),
-                icon = 'dog',
-                menu = 'k9unit',
-            },
-        })
+        -- The 'k9unit' submenu contents are only worth registering when
+        -- reachable at all -- an orphaned-but-populated submenu while
+        -- blocked is harmless (same disclosed nuance the GLOBAL
+        -- RadialMenu=false path already has -- nothing links to it), but
+        -- there is no reason to pay for it either.
+        if not radialMenuBlocked then
+            lib.registerRadial({
+                id = 'k9unit',
+                items = k9SubmenuItems,
+            })
+        end
+
+        -- The ROOT OPENER, unlike the submenu above, is ALWAYS
+        -- (re-)registered, every single time -- REPLACED in place, never
+        -- removed. THIS IS DELIBERATE, not the "icon simply disappears"
+        -- ideal this header's own design writeup would otherwise prefer:
+        -- ox_lib's real, VERIFIED (see "DUPLICATE-VS-REPLACE" above)
+        -- capability is REGISTER/REPLACE-by-id for `lib.addRadialItem` --
+        -- there is no correspondingly VERIFIED removal call this codebase
+        -- has confirmed against ox_lib's own source (a prior draft of this
+        -- file's header floated `lib.removeRadialItem` as a hypothetical
+        -- OPTION, never confirmed real -- see that history), and this
+        -- resource's own established discipline is to never call an
+        -- unverified native/API function on an assumption. So: BLOCKED
+        -- swaps the SAME id's `onSelect`/`menu` fields (still a REPLACE,
+        -- still fully within the verified contract) to a stub that
+        -- explains why, rather than navigating anywhere -- the icon stays
+        -- visible, but is honest and inert, never silently doing nothing.
+        -- If `lib.removeRadialItem` is ever confirmed real (ask
+        -- native-api-assistant), this is the one spot to revisit for the
+        -- fully-honest "icon vanishes" behavior this design would prefer.
+        if radialMenuBlocked then
+            lib.addRadialItem({
+                {
+                    id = 'k9unit_open',
+                    label = locale('radial.menu_open_label'),
+                    icon = 'dog',
+                    onSelect = function()
+                        if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
+                    end,
+                },
+            })
+        else
+            lib.addRadialItem({
+                {
+                    id = 'k9unit_open',
+                    -- '${common.notify_title}' — ox_lib's own cross-reference
+                    -- syntax (resolved once at lib.locale() load time), not a
+                    -- coincidence: this opener's label and every lib.notify title
+                    -- in this resource are the same "K9 Unit" string, so this
+                    -- embeds that existing key rather than minting a byte-identical
+                    -- duplicate under a different name (see DEVELOPER_REFERENCE.md).
+                    label = locale('radial.menu_open_label'),
+                    icon = 'dog',
+                    menu = 'k9unit',
+                },
+            })
+        end
     end
 end
 
--- Sole call site for RegisterK9RadialMenu() -- this resource's own start,
+-- First call site for RegisterK9RadialMenu() -- this resource's own start,
 -- or ox_lib's, same two-branch `onResourceStart` idiom as
 -- client/movement.lua's RegisterLeashOxTargetOption() /
 -- RegisterCertifyOxTargetOptions() / RegisterDoorInteractionOxTargetOptions(),
@@ -1419,4 +1541,20 @@ AddEventHandler('onResourceStart', function(resourceName)
     if resourceName == GetCurrentResourceName() or resourceName == 'ox_lib' then
         RegisterK9RadialMenu()
     end
+end)
+
+-- SECOND call site (client/featureblocks.lua, REQUESTED -- see this
+-- function's own "K9 UNIT RADIAL -- PER-PERSON BLOCK" header above for the
+-- full contract). A purely LOCAL event (client/featureblocks.lua's own
+-- TriggerEvent, never a server round trip from here) fired every time this
+-- client processes a fresh block-state sync -- re-running
+-- RegisterK9RadialMenu() here is what makes a live RadialMenu/
+-- AdvancedBarkRadial block/unblock take effect without waiting for either
+-- this resource or ox_lib to restart. Safe to call this often (a rare
+-- event in practice -- join, reconnect, or a high-command block action)
+-- because every registration inside RegisterK9RadialMenu() REPLACES the
+-- previous one in place rather than duplicating it -- see that function's
+-- own "DUPLICATE-VS-REPLACE" note.
+AddEventHandler('qbx_k9unit:client:featureBlocksApplied', function()
+    RegisterK9RadialMenu()
 end)

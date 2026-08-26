@@ -291,6 +291,24 @@ CreateThread(function()
     while true do
         Wait(PROXIMITY_SCAN_INTERVAL_MS)
 
+        -- Per-person block (client/featureblocks.lua, REQUESTED -- see
+        -- that file's header for the full contract). This is the
+        -- LISTENER's own ability to hear ambient K9 audio -- blocking it
+        -- stops every currently-tracked loop outright and skips discovery
+        -- entirely for this scan, rather than merely refusing new loops,
+        -- so a block applied while a loop is already playing is silenced
+        -- within one PROXIMITY_SCAN_INTERVAL_MS of arriving (this thread's
+        -- own established "polling detection, not instant, but real"
+        -- posture -- see client/vision.lua's maintenance thread for the
+        -- identical precedent). Muting a passive listening effect is never
+        -- a "trap" -- there is no exit path to strand anyone from.
+        if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('ProximityAudioFX') then
+            for ped in pairs(activeLoops) do
+                StopProximityLoop(ped)
+            end
+            goto continueProximityScan
+        end
+
         local myPed = PlayerPedId()
         local myCoords = GetEntityCoords(myPed)
 
@@ -332,6 +350,8 @@ CreateThread(function()
                 StopProximityLoop(ped)
             end
         end
+
+        ::continueProximityScan::
     end
 end)
 

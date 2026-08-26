@@ -143,6 +143,16 @@ client_scripts {
     '@qbx_core/modules/playerdata.lua',
     'client/main.lua',
     'client/appearance.lua', -- K9 role client half (IsK9Role/IsK9RoleForPlayer). Loaded after client/main.lua because CanShowK9UI() consults IsK9Role() -- resolution is at CALL time, so this is convention rather than a hard requirement, but keep the order.
+    -- Per-person feature blocks for the twelve CLIENT-ONLY features
+    -- (server/runtimecontrol.lua tiers them 'clientonly'): they live
+    -- entirely on the player's own game, so there is no server-side
+    -- point of use to gate and this is their ONLY per-person block path.
+    -- Defines IsK9FeatureBlocked/DenyK9FeatureBlocked, consumed by
+    -- agility, hud, proximityaudio, radial, screenfx, vehicle and vision.
+    -- Listed before all of them: Lua resolves globals at CALL time so this
+    -- is convention rather than a hard requirement, same as the
+    -- client/appearance.lua note above -- but keep the order.
+    'client/featureblocks.lua',
     'client/movement.lua',
     'client/agility.lua', -- AgilityAdvanced (fence/window vault), extracted from client/movement.lua. Self-contained: no shared local state with its old home, and nothing else in the resource read its locals. No load-order dependency -- calls CanShowK9UI()/IsOwnModelK9() at call time only.
     'client/radial.lua',
@@ -274,6 +284,28 @@ server_scripts {
     -- soft dependency, but there is no reason to make the guard do that job.
     'server/appearance.lua',
     'server/permissions.lua',
+    -- Owner-directed extension of the SAME "add or remove" ask
+    -- server/certtiers.lua already answers for certification tiers, this
+    -- time for the PERMISSION KEYS themselves (k9.access/k9.certify/
+    -- k9.audit/k9.givexp, plus anything added since): high command can now
+    -- add, relabel, or tombstone a permission key from the tablet at
+    -- runtime, layered over Config.Permissions the same way
+    -- k9_certification_tiers layers over Config.CertificationTiers.
+    -- Persists via migration 0013. EXTENDS server/permissions.lua's own
+    -- IsValidPermissionKey/PermissionLabelFor seam (that file's own updated
+    -- doc comments) rather than replacing them, and additionally shares a
+    -- cross-file mutex with that file's GrantPermission the same way
+    -- server/certtiers.lua's TierEditMutex is shared with
+    -- server/certifications.lua's SetCertificationTier. Placed immediately
+    -- after server/permissions.lua for the same "group with the file it
+    -- most directly extends" reason server/certtiers.lua sits immediately
+    -- after server/certifications.lua below -- not a hard requirement,
+    -- since every cross-file call in either direction is guarded by
+    -- `type(...) == 'function'`/`type(...) == 'table'` and reached only at
+    -- runtime, by which point every server_scripts file has already
+    -- loaded. HARD load-order requirement on server/cooldowns.lua only:
+    -- NewCooldown/NewMutex are called at this file's own file-load time.
+    'server/permissionkeycatalog.lua',
     'server/main.lua',
     'server/certifications.lua',
     -- Owner-directed reversal of an earlier design decision. Certification
@@ -342,6 +374,22 @@ server_scripts {
     -- tracking.lua/search.lua, which call AwardXP/GetXPTier through runtime
     -- existence guards rather than a load-order assumption.
     'server/progression.lua',
+    -- Owner-directed "set experience level for each rank up" pass. A DB-
+    -- backed overlay over Config.XPTiers, high-command-editable from the
+    -- tablet at runtime -- see this file's own header for the full design,
+    -- including why it mutates Config.XPTiers[ordinal] IN PLACE rather
+    -- than adding a second merged-catalog structure (zero footprint on
+    -- server/progression.lua itself, verified by this file's own header:
+    -- that file is not edited by this pass at all). Loaded after
+    -- server/cooldowns.lua (NewCooldown/NewMutex at file-load time),
+    -- server/highcommand.lua (IsHighCommand, called at runtime through a
+    -- soft-dependency guard, not a load-order assumption), and
+    -- server/datastore.lua (K9Store.XPTier_*). Loaded after
+    -- server/progression.lua for readability only (both files' own
+    -- onResourceStart handlers are independent and do not depend on each
+    -- other's relative firing order -- see this file's own header,
+    -- "WHY IN-PLACE MUTATION").
+    'server/xptiers.lua',
     -- Phase 3 (BiteAndHold/NonLethalTakedown, DEVELOPER_REFERENCE.md §12.5.1/
     -- §12.5.2/§12.0 item 8) -- loaded after cooldowns.lua (NewCooldown/
     -- NewMutex at file-load time, per this file's own header) and

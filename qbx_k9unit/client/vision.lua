@@ -322,6 +322,24 @@ local function EnsureVisionMaintenanceThreadRunning()
                 end
                 hadK9Access = hasK9Access
             end
+
+            -- Per-person block, applied LIVE to an ALREADY-ACTIVE effect --
+            -- see client/featureblocks.lua's own header: "a block applied
+            -- while someone is already using night vision should take
+            -- effect". Independent per-effect (blocking one must not force
+            -- the other off) and independent of the death/access-loss
+            -- branches above -- this poll already runs every 1000ms
+            -- regardless, so no new thread is needed for this to become
+            -- live within that same ~1s latency this thread's own comment
+            -- above already discloses for its other exit paths.
+            if type(IsK9FeatureBlocked) == 'function' then
+                if IsThermalVisionActive() and IsK9FeatureBlocked('ThermalVision') then
+                    SetSeethrough(false)
+                end
+                if IsNightVisionActive() and IsK9FeatureBlocked('NightVision') then
+                    SetNightvision(false)
+                end
+            end
         end
 
         -- Once both effects are off (checked at the top of the loop above,
@@ -347,6 +365,19 @@ function ToggleThermalVision()
     end
 
     local turningOn = not IsThermalVisionActive()
+
+    -- Per-person block (client/featureblocks.lua, REQUESTED -- see that
+    -- file's header for the full contract). Checked ONLY on the
+    -- turning-ON branch, never on turning off -- this must never be able
+    -- to trap someone with thermal vision stuck active. `type(...) ==
+    -- 'function'` guard per this resource's soft-dependency convention:
+    -- if client/featureblocks.lua is not yet loaded, this degrades to
+    -- "never blocked", the correct fail-open direction.
+    if turningOn and type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('ThermalVision') then
+        if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
+        return
+    end
+
     -- Mutual exclusion happens BEFORE flipping this effect on, per
     -- phase2_notes/DEVELOPER_REFERENCE.md#vision §4's ordering.
     if turningOn then
@@ -377,6 +408,15 @@ function ToggleNightVision()
     end
 
     local turningOn = not IsNightVisionActive()
+
+    -- Per-person block -- see ToggleThermalVision()'s identical block
+    -- immediately above for the full contract/reasoning; checked ONLY on
+    -- the turning-ON branch, never on turning off.
+    if turningOn and type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('NightVision') then
+        if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
+        return
+    end
+
     if turningOn then
         EnsureOnlyOneVisionEffectActive('night')
     end
@@ -521,6 +561,19 @@ local function EnsureCameraFeedThreadRunning()
                 break
             end
 
+            -- Per-person block, applied LIVE to an already-active feed --
+            -- see client/featureblocks.lua's own header. This thread
+            -- already runs every frame (Wait(0), see this function's own
+            -- header comment) while a feed is active, so a block applied
+            -- mid-feed ends it on the very next frame, not merely on the
+            -- next ToggleCameraFeed() attempt. `type(...) == 'function'`
+            -- guard: fails open if client/featureblocks.lua has not
+            -- loaded.
+            if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('CameraFeedPiP') then
+                StopCameraFeed('cameraFeed.feed_ended_blocked')
+                break
+            end
+
             -- Cheap, local, synchronous read (see client/partnership.lua's
             -- own doc comment on IsPartnered()) — no round trip every
             -- frame. Only reachable here with `type(...) == 'function'`
@@ -577,6 +630,17 @@ function ToggleCameraFeed()
 
     if not CanShowK9UI() then
         DenyK9UIAccess()
+        return
+    end
+
+    -- Per-person block -- checked here (the STARTING branch only; the
+    -- `cameraFeedState.active` early-return above already lets an
+    -- already-active feed be stopped unconditionally, per this resource's
+    -- "termination must never be gated" posture this function's own doc
+    -- comment already states). `type(...) == 'function'` guard: fails
+    -- open (never blocked) if client/featureblocks.lua has not loaded.
+    if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('CameraFeedPiP') then
+        if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
         return
     end
 

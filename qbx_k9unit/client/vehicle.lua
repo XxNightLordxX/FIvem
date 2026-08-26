@@ -192,6 +192,21 @@ function EnterNearestK9Vehicle()
         return
     end
 
+    -- Per-person block (client/featureblocks.lua, REQUESTED -- see that
+    -- file's header for the full contract). Checked here, in
+    -- EnterNearestK9Vehicle() itself -- the single resource-global every
+    -- entry point (radial, keybind/command, tablet trigger) already
+    -- routes through, per this file's own header precedent -- so no
+    -- second copy of this check is needed anywhere else. ExitK9Vehicle()
+    -- below is, and stays, completely unaffected: that function's own doc
+    -- comment already states it is deliberately never gated on
+    -- CanShowK9UI() at all, for the same "never leave a player stuck"
+    -- reasoning this block check must not violate either.
+    if type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('VehicleEntryExit') then
+        if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
+        return
+    end
+
     if IsInK9Vehicle() then return end -- already in one
 
     -- MUTUAL GUARD vs. client/combat.lua's PropDragging/BiteAndHold
