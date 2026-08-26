@@ -80,6 +80,7 @@
     "specialization_grant_success_target": "You have been granted the %s specialization.",
     "specialization_not_granted": "That person does not hold this specialization.",
     "specialization_requires_active_cert": "That person must hold an active certification for this department before a specialization can be granted.",
+    "specialization_requires_tier_capability": "That person's certification tier does not permit specializations for this department.",
     "specialization_revoke_error": "Something went wrong revoking that specialization.",
     "specialization_revoke_success_granter": "Revoked the %s specialization from the target.",
     "specialization_revoke_success_target": "Your %s specialization has been revoked.",

@@ -2081,6 +2081,78 @@ t.test('GrantSpecialization: a duplicate-key error thrown by the INSERT is treat
     t.isTrue(notifiedExactly(f, 10, Sandbox.locale('certifications.specialization_already_granted'), 'inform'))
 end)
 
+-- ======================================================================
+-- TIER CAPABILITIES (coordinator-assigned, this pass): server/certtiers.lua's
+-- TierCapabilityPermits(citizenid, jobName, capabilityKey) had zero real
+-- consumers anywhere in this resource before this pass -- GrantSpecialization
+-- is now one of the two. Fail-PERMISSIVE by design (see that function's
+-- own doc comment, server/certtiers.lua): allow unless the capability is
+-- ACTIVELY granted by at least one tier AND this citizenid's own resolved
+-- tier is not among them. THE ONE CASE THIS SPEC CANNOT PIN YET: "capability
+-- active and the target's tier lacks it -> grant refused" reaches a BRAND
+-- NEW locale key, `certifications.specialization_requires_tier_capability`,
+-- proposed to and not yet added by whoever owns locales/en.json (this file
+-- never stubs `locale`, so that branch would raise "locale key missing"
+-- until it lands -- see this file's own header for why locale is never
+-- faked here). The two cases below that do NOT reach that key are pinned
+-- now; the refusal case is reported, not silently skipped.
+-- ======================================================================
+
+t.test('GrantSpecialization: TIER CAPABILITY -- consulted with (targetCitizenid, jobName, \'specializations_eligible\') AFTER the active-cert check passes, and a tier that HOLDS the capability still grants normally', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end -- active base cert
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    local capturedArgs
+    f.env.TierCapabilityPermits = function(citizenid, jobName, capabilityKey)
+        capturedArgs = { citizenid, jobName, capabilityKey }
+        return true -- this tier HOLDS the capability
+    end
+
+    f.mysql.scalar.await = function() return nil end -- pre-check: no existing active specialization row
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
+    f.mysql.query.await = function() return { { specialization = 'narcotics' } } end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+
+    t.equals(capturedArgs[1], 'TARGET')
+    t.equals(capturedArgs[2], 'police')
+    t.equals(capturedArgs[3], 'specializations_eligible')
+    t.equals(insertParams[1], 'TARGET', 'a tier that holds the capability must not block the grant')
+    t.isTrue(f.env.HasSpecialization('TARGET', 'police', 'narcotics'))
+end)
+
+t.test('GrantSpecialization: TIER CAPABILITY -- the runtime existence guard genuinely tolerates TierCapabilityPermits being entirely absent (server/certtiers.lua not loaded), failing OPEN to the ordinary grant path', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('TARGET', 'police')
+
+    -- TierCapabilityPermits deliberately left undefined -- f.env never sets
+    -- it (this spec never loads server/certtiers.lua at all), mirroring a
+    -- server that never shipped/loaded that file.
+    t.isNil(f.env.TierCapabilityPermits)
+
+    f.mysql.scalar.await = function() return nil end
+    local insertParams
+    f.mysql.insert.await = function(_sql, params) insertParams = params; return 1 end
+    f.mysql.query.await = function() return { { specialization = 'narcotics' } } end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:grantSpecialization'](20, 'narcotics')
+
+    t.equals(insertParams[1], 'TARGET', 'a missing TierCapabilityPermits must fail OPEN, never block every grant on every server that predates tier capabilities')
+end)
+
 t.test('/k9specialize command: a non-numeric args[1] is rejected with the usage message', function()
     local f = newFixture()
     f.registerPlayer(1, 'G1', { name = 'police', isboss = true })
