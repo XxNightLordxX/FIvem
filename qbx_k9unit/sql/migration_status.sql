@@ -443,6 +443,28 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit')
 ) t;
 
+-- 0017: ALTER k9_progression, ADD COLUMN handler_xp -- owner-directed
+-- "partners and levels" tablet tab, handler half (config.lua's
+-- Config.Features.HandlerXPProgression / Config.HandlerXPTiers).
+-- Depends on k9_progression existing first (see the order-protection
+-- guard added to 0017 itself, mirroring 0009's). Plain column with a
+-- constant DEFAULT, no data written beyond the backfill DEFAULT itself,
+-- so no duplicate-row failure mode like 0004's.
+SELECT
+    '0017_add_k9_progression_handler_xp.sql' AS `migration`,
+    CASE
+        WHEN base.tbl_exists = 0
+            THEN 'BLOCKED -- k9_progression does not exist yet. Run install.sql or migration 0002 first.'
+        WHEN base.col_exists > 0
+            THEN 'no-op -- handler_xp already present'
+        ELSE 'ADD COLUMN handler_xp INT UNSIGNED NOT NULL DEFAULT 0 to k9_progression (backfills every existing row to 0, no operator action needed)'
+    END AS plan
+FROM (
+    SELECT
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression') AS tbl_exists,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression' AND COLUMN_NAME='handler_xp') AS col_exists
+) base;
+
 
 -- ---------------------------------------------------------------------
 -- PART 3: blast-radius summary -- row counts for every table that

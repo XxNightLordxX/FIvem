@@ -858,6 +858,28 @@ CREATE TABLE IF NOT EXISTS `k9_progression` (
   KEY `idx_xp` (`xp`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- `handler_xp` DELIBERATELY NOT ADDED to sql/preflight_check.sql's CHECK 1
+-- `cols_expected`/column list, or to server/datastore.lua's
+-- EXPECTED_TABLE_COLUMNS['k9_progression'] entry, for this table -- a
+-- decision, not an oversight, stated here so a future pass does not "fix"
+-- it. Both of those lists exist to answer "is this really OUR
+-- k9_progression table, or did a different resource's table squat this
+-- name" using a STABLE, FOUNDING column signature -- `citizenid`/`xp`/
+-- `created_at`/`updated_at` have been true of every k9_progression row
+-- since migration 0002, before migration 0017 ever added `handler_xp`.
+-- Including `handler_xp` in either check would make it FAIL against every
+-- real, legitimately-ours installation that has not yet applied migration
+-- 0017 -- preflight_check.sql's CHECK 1 would misreport a real upgrade-
+-- pending database as "!! CONFLICT - a DIFFERENT table already uses this
+-- name," and server/datastore.lua's own live collision probe
+-- (VerifyTableShapesAgainstKnownSchema) would actually DISABLE MySQL for
+-- the ENTIRE resource, for the whole session, the exact false-positive
+-- both mechanisms exist to avoid (see server/datastore.lua's own
+-- EXPECTED_TABLE_COLUMNS['k9_xp_tiers'] entry -- 7 of that table's 9 real
+-- columns -- for the identical established precedent of a subset,
+-- founding-columns-only signature that does not grow every time a later
+-- migration adds one more column).
+--
 -- =====================================================================
 -- qbx_k9unit :: k9_permissions
 --

@@ -157,6 +157,13 @@ local function newFixture(opts)
             return affected
         end },
         query = { await = function(sql, params)
+            -- Answer server/datastore.lua's boot schema probe as a fully
+            -- installed database. Without this the probe sees no tables,
+            -- concludes the SQL was never imported, and forces memory-only
+            -- mode -- which would quietly turn every database-backed
+            -- assertion below into a memory-mode assertion. See
+            -- tests/datastore_spec.lua's SETTLEMENT tests.
+            if Sandbox.isSchemaProbe(sql) then return Sandbox.installedSchemaRows() end
             local out = {}
             if sql:find('SELECT permission FROM k9_permissions', 1, true) then
                 for _, row in ipairs(rows) do
@@ -487,6 +494,13 @@ local function newIntegrationFixture()
             return 0 -- k9_certifications update: pretend nothing was active -- these tests only exercise the authorization gate, not a real cert flip
         end },
         query = { await = function(sql, params)
+            -- Answer server/datastore.lua's boot schema probe as a fully
+            -- installed database. Without this the probe sees no tables,
+            -- concludes the SQL was never imported, and forces memory-only
+            -- mode -- which would quietly turn every database-backed
+            -- assertion below into a memory-mode assertion. See
+            -- tests/datastore_spec.lua's SETTLEMENT tests.
+            if Sandbox.isSchemaProbe(sql) then return Sandbox.installedSchemaRows() end
             if sql:find('k9_permissions', 1, true) then
                 local out = {}
                 if sql:find('SELECT permission FROM k9_permissions', 1, true) then

@@ -586,7 +586,39 @@ local function RegisterK9RadialMenu()
     --- does) — this item is one of two entry points into that same system
     --- (the other being the ox_target option client/movement.lua registers
     --- directly on nearby players).
-    if Config.Features.LeashMechanics then
+    ---
+    --- BUG FIX -- ITEM PRESENCE MUST NOT DEPEND ON THE FLAG ALONE ANYMORE:
+    --- this used to be `if Config.Features.LeashMechanics then`, full stop
+    --- — gating the item's very EXISTENCE in the menu on THIS CLIENT's own
+    --- local copy of the flag, captured once at this client's own resource
+    --- start (or the last featureBlocksApplied/ox_lib-restart rebuild) and
+    --- never updated again for an already-connected client, even though
+    --- server/runtimecontrol.lua's runtimeSetFeature can flip the
+    --- server-side flag live at any time. A server that booted with
+    --- LeashMechanics off, was flipped on live, formed a real pairing
+    --- (server/main.lua's CheckLeashEligibility re-checks the flag LIVE,
+    --- server-side — nothing client-side stopped the pairing from forming)
+    --- left an actually-leashed player with no "Detach" item anywhere in
+    --- their own radial menu: the button to press did not exist, and their
+    --- only way out was client/movement.lua's elastic pull-back safety
+    --- valve (walk far enough away) or a death/disconnect/resource
+    --- restart — never an acceptable substitute for a deliberate manual
+    --- detach. FIXED by widening this gate to `Config.Features.LeashMechanics
+    --- OR IsLeashed()`: the item now also appears whenever this client is
+    --- ACTUALLY leashed right now, regardless of what its own local flag
+    --- copy says — a detach button should exist because you are on a
+    --- leash, not because a setting says leashes exist. The ADD path
+    --- inside onSelect below is UNCHANGED and still funnels through
+    --- RequestLeashAttach()'s own CanShowK9UI()/IsOwnModelK9() checks and
+    --- CheckLeashEligibility's own live, authoritative, server-side flag
+    --- re-check either way, so widening this gate creates no new way to
+    --- start a leash the flag/eligibility rules would otherwise refuse.
+    --- See client/movement.lua's own 'qbx_k9unit:client:leashStateChanged'
+    --- local re-broadcast (fired from its leashAttached/leashDetached
+    --- handlers) and this file's own listener near the bottom for how this
+    --- item's presence is actually kept live, tick to tick, rather than
+    --- only at the rare moments RegisterK9RadialMenu() would otherwise run.
+    if Config.Features.LeashMechanics or (type(IsLeashed) == 'function' and IsLeashed()) then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
             id = 'k9_leash',
             label = locale('radial.leash_toggle_label'),

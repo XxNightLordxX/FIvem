@@ -15,7 +15,7 @@
     below is gated on its OWN Config.Features flag, not just declared —
     disabling e.g. FatigueSystem while MoodSystem stays on means fatigue is
     never ticked, never read, and never pushed to a meaningful value; it
-    simply idles at its default. RESOLVED (this pass, coder-backend — see
+    simply idles at its default. RESOLVED (see
     the CreateThread call near the bottom, and its own resolution comment,
     for the full writeup): the shared tick thread now ALWAYS starts at this
     file's own load time regardless of whether any of the five flags is on
@@ -35,7 +35,7 @@
 
     1. Event relay reuse (Mood/Injury damage decay, FearStress gunfire rise)
        — HIGH confidence on the EVENT NAMES/TRIGGER SEMANTICS themselves:
-       server/tracking.lua's own header (read directly this session, not
+       server/tracking.lua's own header (read directly, not
        assumed) documents 'qbx_k9unit:server:relayDamageEvent' and
        'qbx_k9unit:server:relayWeaponFire' as already-shipped, real,
        client-triggered events fired only when the reporting client is
@@ -47,7 +47,7 @@
        server/tracking.lua having run first) rather than reaching into
        server/tracking.lua's `TrackableLog` (a `local`, file-scoped table —
        genuinely inaccessible from here without editing that file, which is
-       out of this pass's scope). This is a deliberate, disclosed design
+       out of scope here). This is a deliberate, disclosed design
        choice: MOOD/INJURY read the `source` of their own independent
        handler invocation directly (no log needed — a flat decrement per
        qualifying event is enough), while FEARSTRESS keeps its OWN small
@@ -59,7 +59,7 @@
        MEDIUM-HIGH confidence overall: the relay mechanism is proven; the
        "two independent consumers of one client-triggered event, one small
        duplicate log" shape is this file's own new pattern, not something
-       independently verified working end-to-end this session (no live
+       independently verified working end-to-end (no live
        server available to test against).
     2. Fatigue's "sprinting" detection (a server-side rolling
        position-sample: distance travelled between ticks / tickIntervalMs)

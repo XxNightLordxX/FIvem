@@ -314,7 +314,21 @@ Config.Features = {
     -- doc comment have actually landed in those two files -- same
     -- "landed as a foundation, reviewed before go-live" posture
     -- Config.Features.HandlerPartnership itself went through above.
-    HandlerXPProgression = false,
+    -- NOT A SWITCH YET, ON PURPOSE. `HandlerXPProgression` is deliberately
+    -- absent from this table until the code above describes actually
+    -- exists. Everything else for it is here and ready -- the ladder
+    -- (Config.HandlerXPTiers), the award amounts (Config.HandlerXP.awards),
+    -- and the database column (sql/migrations/0017_add_k9_progression_
+    -- handler_xp.sql) -- but server/progression.lua has no AwardHandlerXP
+    -- or GetHandlerXPTier yet, so a switch here would be a setting an owner
+    -- could turn on that did absolutely nothing. This resource has a rule
+    -- against that, enforced by two tests that will fail the moment anyone
+    -- adds the key back without the code: tests/runtimefeaturetiers_spec.lua
+    -- (every switch must be classified in server/runtimecontrol.lua's
+    -- FEATURE_TIERS) and tests/customizationregistry_spec.lua (every switch
+    -- must have a per-person block path). Add the key back in the same
+    -- change that adds the code, its FEATURE_TIERS entry, and its
+    -- `block.HandlerXPProgression` check -- not before.
 
     HealthStaminaHUD     = true,
     FatigueSystem        = true,

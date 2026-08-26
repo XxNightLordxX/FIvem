@@ -928,17 +928,15 @@ t.test('BOOT-ORDER RACE control: once the probe settles with NO collision, this 
     f.fireResourceStart()
     t.equals(f.xpTierQueryCallCount(), 0)
 
-    -- A schema response naming every column k9_xp_tiers is checked against
-    -- -- a clean, non-colliding table.
-    t.isTrue(f.resumeNext({
-        { tbl = 'k9_xp_tiers', col = 'ordinal' },
-        { tbl = 'k9_xp_tiers', col = 'xp_threshold' },
-        { tbl = 'k9_xp_tiers', col = 'label' },
-        { tbl = 'k9_xp_tiers', col = 'speed_multiplier' },
-        { tbl = 'k9_xp_tiers', col = 'scent_range_multiplier' },
-        { tbl = 'k9_xp_tiers', col = 'updated_by' },
-        { tbl = 'k9_xp_tiers', col = 'updated_at' },
-    }))
+    -- A schema response describing a FULLY INSTALLED database. Derived from
+    -- server/datastore.lua's own expected-column list rather than typed out
+    -- here, so this stays correct as tables are added. It used to name only
+    -- this file's own table, which was enough back when the boot probe only
+    -- looked for name collisions -- it now ALSO refuses to use a database
+    -- that is missing tables at all ("the SQL was never imported", or a
+    -- part-finished install), and one table out of twenty-four reads as
+    -- exactly that. See tests/datastore_spec.lua's own SETTLEMENT tests.
+    t.isTrue(f.resumeNext(Sandbox.installedSchemaRows()))
     t.isTrue(f.env.K9Store.IsDatabaseEnabled(), 'no collision -- the real database stays live')
 
     t.isTrue(f.resumeNext(), 'this file\'s handler wakes on its next poll')

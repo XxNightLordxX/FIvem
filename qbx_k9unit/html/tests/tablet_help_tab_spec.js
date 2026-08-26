@@ -165,7 +165,7 @@ t.test('ADDITIVE, NOT REPLACEMENT: High Command sees every non-admin command PLU
     // The derived Guided Flows step line -- proves this is rendered from
     // the SAME live flowOnboardStepLabels()/flowTuningStepLabels() this
     // pass's own header promises, not a separate hand-typed copy.
-    t.isTrue(findByTextContaining(h.getRoot(), 'Select Person → Certify → Tier & Specializations → Feature Access → Summary').length >= 1, 'the onboarding flow\'s real step sequence is quoted live');
+    t.isTrue(findByTextContaining(h.getRoot(), 'Select Person → Certify → K9 Role → Tier & Specializations → Feature Access → Summary').length >= 1, 'the onboarding flow\'s real step sequence is quoted live');
 });
 
 t.test('a plain handler (not High Command) sees the non-admin commands only -- no admin row, no admin heading, no admin tasks', async () => {

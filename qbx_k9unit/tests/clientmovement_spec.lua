@@ -181,6 +181,18 @@ local function newMovementFixture(opts)
         serverEvents[#serverEvents + 1] = { event = eventName, args = { ... } }
     end
 
+    -- LOCAL (same-client) events, as distinct from serverEvents above.
+    -- client/movement.lua re-broadcasts 'qbx_k9unit:client:leashStateChanged'
+    -- locally whenever leashState flips, so client/radial.lua rebuilds its
+    -- menu and re-evaluates IsLeashed() right then -- otherwise the Detach
+    -- item's availability would only refresh at resource start or an ox_lib
+    -- restart, which is the bug that fix exists for. This stub has to be
+    -- present or every leash test dies at the TriggerEvent call itself.
+    local localEvents = {}
+    local function TriggerEvent(eventName, ...)
+        localEvents[#localEvents + 1] = { event = eventName, args = { ... } }
+    end
+
     local notifyCalls = {}
     local alertDialogResponse = 'confirm'
     local alertDialogCalls = {}
@@ -302,6 +314,7 @@ local function newMovementFixture(opts)
         DenyK9UIAccess = DenyK9UIAccess,
         HasK9Access = HasK9Access,
         TriggerServerEvent = TriggerServerEvent,
+        TriggerEvent = TriggerEvent,
         lib = lib,
         PlayerPedId = PlayerPedId,
         DoesEntityExist = DoesEntityExist,
@@ -335,6 +348,14 @@ local function newMovementFixture(opts)
         hasK9AccessCallCount = function() return hasK9AccessCallCount end,
         serverEvents = serverEvents,
         lastServerEvent = function() return serverEvents[#serverEvents] end,
+        localEvents = localEvents,
+        countLocalEvents = function(name)
+            local n = 0
+            for _, e in ipairs(localEvents) do
+                if e.event == name then n = n + 1 end
+            end
+            return n
+        end,
         notifyCalls = notifyCalls,
         alertDialogCalls = alertDialogCalls,
         setAlertDialogResponse = function(v) alertDialogResponse = v end,

@@ -71,6 +71,14 @@ FROM (
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'
          AND COLUMN_NAME IN ('k9_citizenid','handler_citizenid','established_by','established_at','ended_by','ended_at','active'))
+    -- Column list deliberately stays at the ORIGINAL 4 founding columns
+    -- (migration 0002), NOT the 5 real columns this table has carried
+    -- since migration 0017 added `handler_xp` -- see sql/install.sql's own
+    -- `k9_progression` header ("`handler_xp` DELIBERATELY NOT ADDED...")
+    -- for the full reasoning: including it here would misreport every
+    -- real, legitimately-ours database that has not yet applied migration
+    -- 0017 as a "!! CONFLICT" against a foreign table, which is exactly
+    -- the false positive this check exists to avoid.
     UNION ALL SELECT 'k9_progression', 4,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'),
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression'),
@@ -199,11 +207,24 @@ FROM (
     -- from this check entirely -- the exact same class of silent gap
     -- migrations 0010/0011/0013/0014/0015's tables had here before being
     -- fixed (see the comments on those rows above).
+    -- FIX (db-schema idempotency-verification pass, 2026-08-26): this row's
+    -- own column list was missing `created_at` -- the real k9_individual_overrides
+    -- table (sql/install.sql) has 9 columns and this row already correctly
+    -- said "9 expected", but the list of names to look for only ever listed
+    -- 8 of them. That meant this check could NEVER match all 9 columns, even
+    -- against a table this same install.sql had just created moments earlier
+    -- -- so it reported a false "!! CONFLICT" on this resource's OWN table on
+    -- every single run after the very first install, which makes
+    -- k9_setup.sh (which refuses to proceed on any "!!" line) permanently
+    -- refuse to ever upgrade this database again. Caught by actually running
+    -- install.sql twice in a row against a real database, not by inspection
+    -- -- the exact "run it twice" check this resource's own migrations are
+    -- held to. `created_at` added below to match the real table.
     UNION ALL SELECT 'k9_individual_overrides', 9,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'),
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides'
-         AND COLUMN_NAME IN ('citizenid','speed_multiplier','scent_range_multiplier','medkit_cooldown_multiplier','note','deleted','updated_by','updated_at'))
+         AND COLUMN_NAME IN ('citizenid','speed_multiplier','scent_range_multiplier','medkit_cooldown_multiplier','note','deleted','created_at','updated_by','updated_at'))
     UNION ALL SELECT 'k9_individual_override_audit', 6,
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'),
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit'),

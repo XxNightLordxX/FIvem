@@ -369,6 +369,93 @@ t.test('Onboarding flow: skipping every step (no action taken at all) still reac
 });
 
 // ======================================================================
+// THE HONESTY TEST -- the K9 Role step's Summary line reports the REAL,
+// freshly-reloaded server state, never the click's own claimed `ok:true`.
+// tablet:assignK9Role is stubbed here to return `ok:true` on EVERY call
+// (a real "your click was accepted" response) while a SEPARATE, directly-
+// controlled `rec.assignedK9Model` decides what the following
+// tablet:requestPersonSummary re-fetch actually reports -- proving the
+// Summary's "assigned"/"not applied" wording tracks that re-fetch, not the
+// mutation's own response, exactly the property this pass's own report
+// calls out as the one that stops this becoming another screen that
+// claims success it does not have.
+// ======================================================================
+
+t.test('Onboarding flow: K9 Role step -- Summary reports "skipped" honestly when unused, and the REAL re-derived outcome (not the click\'s own claimed success) when used', async () => {
+    const rec = makePersonRecord();
+    let serverActuallyPersistedTheModel = false; // flips independently of the click's own response below
+    const h = await openTablet(baseHandlers(rec, HIGH_COMMAND_VIEWER, {
+        // Every call reports ok:true -- a real "accepted" response --
+        // regardless of `serverActuallyPersistedTheModel`. If the Summary
+        // trusted this alone, it would ALWAYS show "assigned", which the
+        // assertions below prove it does not.
+        'tablet:assignK9Role': () => ({ ok: true }),
+        'tablet:requestPersonSummary': () => ({
+            ok: true, target: rec.target, certifications: rec.certifications, xp: rec.xp, tierLabel: rec.tierLabel, permissions: rec.permissions,
+            assignedK9Model: serverActuallyPersistedTheModel ? 'a_c_shepherd' : null,
+        }),
+    }), { peds: [{ model: 'a_c_shepherd', label: 'German Shepherd' }] });
+
+    findByText(h.getRoot(), 'Guided Flows')[0].click();
+    await settle();
+    clickCard(h.getRoot(), 'Set Up a New Handler');
+    await settle();
+    findByText(h.getRoot(), 'Select')[0].click();
+    await settle(6);
+
+    // Skip Certify -- irrelevant to this test's own claim.
+    findByText(h.getRoot(), 'Skip this step')[0].click();
+    await settle();
+
+    // Step 2: K9 Role -- SKIPPED, never touched.
+    t.equals(findByText(h.getRoot(), 'Assign K9 Role').length, 1, 'a real, present action, genuinely skipped -- not an empty step');
+    findByText(h.getRoot(), 'Skip this step')[0].click(); // -> Tier & Specializations
+    await settle();
+    findByText(h.getRoot(), 'Next')[0].click(); // -> Feature Access (nothing certified to set a tier on)
+    await settle();
+    findByText(h.getRoot(), 'Skip this step')[0].click(); // -> Summary
+    await settle();
+
+    t.equals(findByText(h.getRoot(), 'K9 role step skipped -- no change to this person\'s model.').length, 1, 'SKIPPED case: reported plainly, never as a warning');
+    t.equals(h.fetchCalls.some((c) => c.url.endsWith('tablet:assignK9Role')), false, 'the callback was genuinely never called for the skipped case');
+
+    // Back to the K9 Role step and USE it this time -- the click itself
+    // reports ok:true (see the stub above), but the server has NOT
+    // actually persisted the model yet (async confirm still pending, or a
+    // silent failure -- either way, this is the exact shape a real
+    // deployment can produce).
+    findByText(h.getRoot(), '3. K9 Role')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'Assign K9 Role')[0].click();
+    await settle(6);
+    t.isTrue(h.fetchCalls.some((c) => c.url.endsWith('tablet:assignK9Role') && c.body.targetCitizenId === 'TARGET1' && c.body.modelName === 'a_c_shepherd'), 'the SAME tablet:assignK9Role callback the standalone Person screen uses actually ran, with the model chosen in this step');
+
+    findByText(h.getRoot(), '6. Summary')[0].click();
+    await settle();
+    t.equals(findByText(h.getRoot(), 'K9 role was not applied this pass.').length, 1, 'USED-BUT-NOT-PERSISTED case: the click claimed ok:true, but the summary reports the REAL re-derived state, never the click\'s own claim');
+    t.equals(findByText(h.getRoot(), 'Assigned the K9 role this pass (German Shepherd).').length, 0);
+
+    // Now the server-side state catches up (the async confirm lands) and
+    // the SAME onSettled reload this click already triggered picks it up
+    // on the very next fetch -- re-visit the K9 Role step and back
+    // (forces buildFlowOnboardScreen to re-render against whatever
+    // state.personSummary currently holds; no new click is needed here,
+    // matching this whole file's own "the summary reads state, it never
+    // re-derives on its own" convention).
+    serverActuallyPersistedTheModel = true;
+    findByText(h.getRoot(), '3. K9 Role')[0].click();
+    await settle();
+    findByText(h.getRoot(), 'Assign K9 Role')[0].click(); // a second, now-successful attempt -- refreshPersonAndSelf() re-fetches tablet:requestPersonSummary, which now reports the model
+    await settle(6);
+
+    findByText(h.getRoot(), '6. Summary')[0].click();
+    await settle();
+    t.equals(findByText(h.getRoot(), 'Assigned the K9 role this pass (German Shepherd).').length, 1, 'USED-AND-APPLIED case: the summary reflects the freshly reloaded server truth');
+    t.equals(findByText(h.getRoot(), 'K9 role was not applied this pass.').length, 0);
+    t.equals(findByText(h.getRoot(), 'K9 role step skipped -- no change to this person\'s model.').length, 0, '"skipped" and "used" are mutually exclusive -- once used, it never reverts to reading as skipped');
+});
+
+// ======================================================================
 // OFFBOARDING FLOW
 // ======================================================================
 
@@ -580,15 +667,45 @@ t.test('Guided Flows: a malicious person name, department label, feature label, 
     t.isTrue(findAll(h.getRoot(), (n) => n._textContent === MALICIOUS).length >= 3, 'the mutation-failure message also renders verbatim via textContent (shared actionNotice banner)');
     t.equals(everyElementInnerHTMLWriteCount(h), 0);
 
-    // Certify was refused, so no department was actually certified -- the
-    // Tier & Specializations step correctly has nothing to do yet, and its
-    // own Next button reads "Next", not "Skip this step".
-    findByText(h.getRoot(), 'Skip this step')[0].click(); // Certify -> Tier & Specializations
+    // Certify was refused, so no department was actually certified. No
+    // peds are configured for this test's own openData, so the K9 Role
+    // step ALSO correctly has nothing to do -- and, downstream of that,
+    // neither does Tier & Specializations -- both read "Next", never
+    // "Skip this step".
+    findByText(h.getRoot(), 'Skip this step')[0].click(); // Certify -> K9 Role
+    await settle();
+    findByText(h.getRoot(), 'Next')[0].click(); // K9 Role -> Tier & Specializations
     await settle();
     findByText(h.getRoot(), 'Next')[0].click(); // Tier & Specializations -> Feature Access
     await settle();
 
     t.isTrue(findAll(h.getRoot(), (n) => n._textContent === MALICIOUS).length >= 1, 'the malicious feature label on the Feature Access step also renders verbatim via textContent');
+    t.equals(everyElementInnerHTMLWriteCount(h), 0, 'zero innerHTML writes anywhere in the document across this entire flow');
+});
+
+t.test('Guided Flows: a malicious ped LABEL (server-configured Config.Peds, sent at tablet:open) reaches the K9 Role step\'s own model picker AND its Summary line only via textContent/.value, never innerHTML', async () => {
+    const rec = makePersonRecord();
+    const h = await openTablet(baseHandlers(rec, HIGH_COMMAND_VIEWER), { peds: [{ model: 'a_c_shepherd', label: MALICIOUS }] });
+
+    findByText(h.getRoot(), 'Guided Flows')[0].click();
+    await settle();
+    clickCard(h.getRoot(), 'Set Up a New Handler');
+    await settle();
+    findByText(h.getRoot(), 'Select')[0].click();
+    await settle(6);
+
+    findByText(h.getRoot(), 'Skip this step')[0].click(); // Certify -> K9 Role
+    await settle();
+
+    t.isTrue(findAll(h.getRoot(), (n) => n.tagName === 'option' && n._textContent === MALICIOUS).length >= 1, 'the malicious ped label appears verbatim, via textContent, as the model picker\'s own option text');
+    t.equals(everyElementInnerHTMLWriteCount(h), 0);
+
+    findByText(h.getRoot(), 'Assign K9 Role')[0].click();
+    await settle(6);
+    findByText(h.getRoot(), '6. Summary')[0].click();
+    await settle();
+
+    t.isTrue(findAll(h.getRoot(), (n) => typeof n._textContent === 'string' && n._textContent.indexOf(MALICIOUS) !== -1 && n._textContent.indexOf('Assigned the K9 role this pass') !== -1).length >= 1, 'the SAME malicious label, resolved back from the assigned model via pedDisplayLabel(), also appears verbatim in the Summary\'s own K9 Role line');
     t.equals(everyElementInnerHTMLWriteCount(h), 0, 'zero innerHTML writes anywhere in the document across this entire flow');
 });
 

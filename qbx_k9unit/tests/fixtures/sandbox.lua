@@ -218,4 +218,69 @@ function Sandbox.newThreadRunner()
     return runner
 end
 
+
+-- ======================================================================
+-- INSTALLED-SCHEMA PROBE ANSWER
+--
+-- server/datastore.lua runs one INFORMATION_SCHEMA.COLUMNS query at boot
+-- to work out whether this resource's own tables are actually there. If
+-- they are all missing it concludes "the SQL was never imported" and
+-- forces the whole resource into memory-only mode; if only some are
+-- missing it concludes "part-installed" and does the same. That is the
+-- right behaviour on a real server, and tests/datastore_spec.lua proves
+-- it directly.
+--
+-- It also means any spec whose fixture says `Config.Database.enabled =
+-- true` is claiming to be a server WITH the SQL imported, and therefore
+-- has to answer that probe. A stub that returns {} for every query it
+-- does not recognise is, as far as the probe is concerned, an empty
+-- database -- so the spec silently ends up testing memory mode instead of
+-- the database path it meant to test.
+--
+-- Sandbox.installedSchemaRows() returns exactly what a fully-installed
+-- database would answer. It is DERIVED from server/datastore.lua's own
+-- EXPECTED_TABLE_COLUMNS source text rather than being a second, hand-kept
+-- copy of the table list -- so adding a table or a column to the real
+-- resource cannot leave this fixture quietly describing an older schema.
+-- Same "read the real source, do not re-type it" technique the HTML specs
+-- already use for COMMAND_REFERENCE.
+-- ======================================================================
+local cachedSchemaRows
+
+function Sandbox.installedSchemaRows()
+    if cachedSchemaRows then return cachedSchemaRows end
+
+    local handle = assert(io.open('../server/datastore.lua', 'r'), 'sandbox: could not open ../server/datastore.lua -- specs are expected to run with qbx_k9unit/tests as the working directory, the same assumption Sandbox.loadInto already makes')
+    local source = handle:read('*a')
+    handle:close()
+
+    local startPos = source:find('local EXPECTED_TABLE_COLUMNS = {', 1, true)
+    assert(startPos, 'sandbox: EXPECTED_TABLE_COLUMNS not found in server/datastore.lua -- this helper needs updating alongside whatever renamed it')
+    local endPos = source:find('\n}', startPos, true)
+    assert(endPos, 'sandbox: could not find the end of EXPECTED_TABLE_COLUMNS in server/datastore.lua')
+
+    local rows = {}
+    for line in source:sub(startPos, endPos):gmatch('[^\n]+') do
+        local tableName, columnList = line:match("^%s*([%w_]+)%s*=%s*{(.-)}")
+        if tableName and columnList then
+            for column in columnList:gmatch("'([%w_]+)'") do
+                rows[#rows + 1] = { tbl = tableName, col = column }
+            end
+        end
+    end
+    assert(#rows > 0, 'sandbox: parsed EXPECTED_TABLE_COLUMNS but found no columns -- the table shape must have changed')
+
+    cachedSchemaRows = rows
+    return rows
+end
+
+--- True when `sql` is server/datastore.lua's boot schema probe. Use this in
+--- a fixture's own `query.await` stub to answer the probe before falling
+--- through to whatever queries that spec actually cares about.
+--- @param sql string
+--- @return boolean
+function Sandbox.isSchemaProbe(sql)
+    return type(sql) == 'string' and sql:find('INFORMATION_SCHEMA.COLUMNS', 1, true) ~= nil
+end
+
 return Sandbox

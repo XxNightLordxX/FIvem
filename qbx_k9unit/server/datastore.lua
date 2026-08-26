@@ -136,15 +136,21 @@ K9Store = {}
 -- BACKEND SELECTION -- the ONE flag read in this whole resource.
 -- ======================================================================
 
--- Set to `true`, at most once, by VerifyTableShapesAgainstKnownSchema() near
--- the bottom of this file (db-schema pass, 2026-08-26) if this database has
--- a `k9_*` table whose NAME this resource owns but whose COLUMNS do not
--- match -- i.e. some OTHER resource's table happens to share one of our
--- names. See that function's own header for the full "why", "what this
--- costs", and "how to fix it" writeup -- not repeated here. Declared here,
--- ahead of DatabaseEnabled() below, purely so that one flag can force every
--- K9Store.* function in this file back to the already-proven memory-only
--- path without any of them needing their own awareness of it.
+-- Set to `true`, at most once per reason, by either of two independent
+-- checks in this file -- VerifyTableShapesAgainstKnownSchema() (db-schema
+-- pass, 2026-08-26) near the bottom, if this database has a `k9_*` table
+-- whose NAME this resource owns but whose COLUMNS do not match (some OTHER
+-- resource's table happens to share one of our names); or the "LIVE
+-- QUERY-FAILURE CIRCUIT BREAKER" just below, if a REAL query against one of
+-- this resource's own tables fails because that table does not exist at
+-- all (no-SQL-import pass, same date) -- either because sql/install.sql was
+-- never run, or because it was run and the table was later dropped while
+-- this resource kept running. See each check's own header for the full
+-- "why", "what this costs", and "how to fix it" writeup for its own case --
+-- not repeated here. Declared here, ahead of DatabaseEnabled() below,
+-- purely so that one flag can force every K9Store.* function in this file
+-- back to the already-proven memory-only path without any of them needing
+-- their own awareness of it.
 local SCHEMA_COLLISION_DETECTED = false
 
 -- Set to `true` exactly once the schema-collision determination above is
@@ -3185,6 +3191,52 @@ local function VerifyTableShapesAgainstKnownSchema()
     for _, row in ipairs(rows) do
         actualColumnsByTable[row.tbl] = actualColumnsByTable[row.tbl] or {}
         actualColumnsByTable[row.tbl][row.col] = true
+    end
+
+    -- MISSING-TABLE CHECK -- "the SQL was never imported", which is a
+    -- COMPLETELY different situation from a name collision and needs a
+    -- completely different message. A collision means someone else owns a
+    -- table we wanted; a missing table means nobody does, because
+    -- sql/install.sql has not been run (or was run and the table was later
+    -- dropped -- taking the SQL back out is something an owner is entitled
+    -- to do, see config.lua's Config.Database block).
+    --
+    -- Why this forces memory mode for EVERY feature rather than only the
+    -- ones whose own table is missing: a half-installed database is the
+    -- worst of both worlds. Certifications would save and XP would not, so
+    -- a handler would be certified after a restart but back at rank one,
+    -- and nothing would tell the owner why. Memory-only is at least
+    -- consistent and is already a fully supported way to run -- everything
+    -- works tonight, nothing is remembered after a restart.
+    --
+    -- Deliberately NOT a hard failure: refusing to start would take the
+    -- whole resource down over something the owner can fix in a minute,
+    -- and would punish exactly the person who is trying it for the first
+    -- time. Loud once, in plain English, then run.
+    local missing = {}
+    local totalExpected = 0
+    for tableName in pairs(EXPECTED_TABLE_COLUMNS) do
+        totalExpected = totalExpected + 1
+        if not actualColumnsByTable[tableName] then
+            missing[#missing + 1] = tableName
+        end
+    end
+    table.sort(missing) -- pairs() order is undefined; an operator reading this needs a stable, scannable list
+
+    if #missing == totalExpected then
+        SCHEMA_COLLISION_DETECTED = true
+        print('[qbx_k9unit] datastore: this resource\'s own tables were not found in this database -- it looks like the SQL was never imported.')
+        print('[qbx_k9unit] datastore: Running IN MEMORY ONLY for this session. Every feature works right now, for everyone on the server -- certifications, XP, partnerships, permissions, the tablet, all of it. What is missing is memory across a restart: when this server next restarts, all of it resets and everyone starts over. The audit trail is not kept at all.')
+        print('[qbx_k9unit] datastore: TO FIX: import sql/install.sql into the database this server uses, then restart this resource. Nothing else needs changing -- Config.Database.enabled is already true. If you MEANT to run without a database, set Config.Database.enabled = false in config.lua and this message stops.')
+        return
+    end
+
+    if #missing > 0 then
+        SCHEMA_COLLISION_DETECTED = true
+        print(('[qbx_k9unit] datastore: !! PART-INSTALLED DATABASE -- %d of this resource\'s %d tables do not exist in this database: %s'):format(#missing, totalExpected, table.concat(missing, ', ')))
+        print('[qbx_k9unit] datastore: !! This usually means sql/install.sql was run at some point but a later migration in sql/migrations/ was not, or a table was dropped afterwards. Running IN MEMORY ONLY for this session rather than saving some things and silently losing others -- a half-saved server is worse than an honestly forgetful one, because nobody can tell which half worked.')
+        print('[qbx_k9unit] datastore: !! TO FIX: run the migrations in sql/migrations/ in number order (or re-run sql/install.sql, which is safe to run again -- it creates only what is missing), then restart this resource.')
+        return
     end
 
     local collided = {}

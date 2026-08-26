@@ -136,6 +136,15 @@ local fixtureResponder = nil
 local MySQLStub = {
     query = {
         await = function(sql, params)
+            -- server/datastore.lua's boot schema probe is infrastructure,
+            -- not a query any test here is about. Answer it as a fully
+            -- installed database (otherwise the probe concludes the SQL was
+            -- never imported and forces memory-only mode, and every
+            -- database-backed assertion below silently stops issuing its
+            -- real query), and deliberately do NOT record it -- several
+            -- tests below assert an EXACT query count, and a boot-time
+            -- probe is not one of the queries they mean.
+            if Sandbox.isSchemaProbe(sql) then return Sandbox.installedSchemaRows() end
             capturedQueries[#capturedQueries + 1] = { sql = sql, params = params }
             if fixtureResponder then
                 return fixtureResponder(sql, params) or {}
@@ -2013,7 +2022,14 @@ t.test('CONFIG-ABORT REGRESSION: a MISSING Config.AdminAudit.MaxResults.CatalogA
             end
             return nil
         end } },
-        MySQL = { query = { await = function(_sql, _params) return {} end } },
+        -- Answers server/datastore.lua's boot schema probe as a fully
+        -- installed database; every other query returns no rows, which is
+        -- all these tests need. Before the probe existed this was just
+        -- `return {}`, and that now reads as "the SQL was never imported".
+        MySQL = { query = { await = function(sql, _params)
+            if Sandbox.isSchemaProbe(sql) then return Sandbox.installedSchemaRows() end
+            return {}
+        end } },
         NotifyPlayer = function(...) end,
         print = printStub2,
         Config = Config2,

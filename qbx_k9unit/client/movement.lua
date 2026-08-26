@@ -125,6 +125,26 @@
       if IsLeashed(), it calls DetachLeash(). Both surfaces (ox_target and
       radial) end up calling the SAME two functions — don't let a second,
       divergent leash-request code path grow in radial.lua.
+    - THIS FILE fires a purely LOCAL 'qbx_k9unit:client:leashStateChanged'
+      event (TriggerEvent, never RegisterNetEvent — same "local-only
+      re-broadcast" shape as client/featureblocks.lua's own
+      'qbx_k9unit:client:featureBlocksApplied') every time `leashState` is
+      set or cleared (leashAttached/leashDetached below), so
+      client/radial.lua can re-run RegisterK9RadialMenu() and pick up the
+      new state immediately. RADIAL DETACH-AVAILABILITY BUG FIX: this
+      exists because client/radial.lua's "Attach/Detach Leash" item used to
+      be built ONLY inside `if Config.Features.LeashMechanics then ... end`
+      -- that flag is THIS CLIENT's own local copy, read once at ITS OWN
+      resource start from its own copy of config.lua, never updated again
+      for an already-connected client even when server/runtimecontrol.lua's
+      runtimeSetFeature flips the flag live server-side. A server booting
+      with LeashMechanics off, then turned on live, then a pairing actually
+      forming (CheckLeashEligibility re-checks the flag live, server-side,
+      independent of this client's stale copy) left this client with
+      IsLeashed() == true but no "Detach" item ever added to its own radial
+      menu at all -- the button to press simply did not exist. See
+      client/radial.lua's own header/RegisterK9RadialMenu for the other
+      half of this fix (the item's build-time visibility condition itself).
     - THIS FILE also registers the "Certify K9 Handler" / "Revoke K9
       Certification" ox_target options on nearby player peds (DEVELOPER_REFERENCE.md
       §4.3's flow table, §8 step 3 — the previously-missing entry point;
@@ -517,6 +537,14 @@ RegisterNetEvent('qbx_k9unit:client:leashAttached', function(partnerServerId, is
     -- `leashState` fresh every iteration, so simply setting it here is
     -- sufficient to "wake" the tighter-interval pulling behavior on the
     -- constrained client — no separate thread-start call needed.
+
+    -- RADIAL DETACH-AVAILABILITY BUG FIX -- see this file's own
+    -- FILE-TO-FILE CONTRACT header for the full writeup. Local-only
+    -- re-broadcast (never RegisterNetEvent) so client/radial.lua's
+    -- RegisterK9RadialMenu() re-runs and re-evaluates IsLeashed() right
+    -- now, not merely at this client's own resource start / ox_lib
+    -- restart / featureBlocksApplied sync.
+    TriggerEvent('qbx_k9unit:client:leashStateChanged')
 end)
 
 --- The pairing has ended — manual detach by either side, the constrained
@@ -544,6 +572,19 @@ RegisterNetEvent('qbx_k9unit:client:leashDetached', function(reason)
     lib.notify({ title = locale('common.notify_title'), description = description, type = 'info' })
     -- The elastic-restriction thread below naturally stops doing anything
     -- once IsLeashed() is false — nothing else to tear down here.
+
+    -- RADIAL DETACH-AVAILABILITY BUG FIX -- see this file's own
+    -- FILE-TO-FILE CONTRACT header for the full writeup. Mirrors the
+    -- identical re-broadcast on the leashAttached handler above: without
+    -- this, a radial item that only exists right now because IsLeashed()
+    -- was true at the last rebuild (Config.Features.LeashMechanics -- this
+    -- client's own stale local copy -- being false) would keep lingering
+    -- after the pairing actually ends, instead of disappearing along with
+    -- it. onSelect's own IsLeashed() re-check (see client/radial.lua) means
+    -- clicking a stale leftover item was never unsafe, only visually
+    -- wrong; this call makes the item's disappearance immediate, matching
+    -- its appearance.
+    TriggerEvent('qbx_k9unit:client:leashStateChanged')
 end)
 
 -- Elastic movement-restriction thread — the part of the leash mechanic
