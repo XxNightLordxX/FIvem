@@ -461,6 +461,50 @@ t.test('server/partnership.lua registers playerDropped, onResourceStart, and QBC
     t.equals(#(f.eventHandlers['QBCore:Server:PlayerLoaded'] or {}), 1)
 end)
 
+t.test('EVERY tracker in server/partnership.lua has a cleanup strategy -- source-keyed ones register a playerDropped hook, key-keyed ones sweep, and none has neither', function()
+    -- THE REAL TRIPWIRE. The exact-count assertion above only catches a
+    -- cleanup hook being REMOVED. It cannot catch the thing that actually
+    -- happens: somebody adds a NewCooldown()/NewMutex() and forgets
+    -- .RegisterPlayerDropped(), which leaves the count unchanged and this
+    -- file green while a table grows for the whole uptime of the server.
+    --
+    -- tests/combat_spec.lua found and fixed this exact blind spot for its
+    -- own file. The fix lived there and never reached the other specs
+    -- asserting the same invariant the same broken way -- this is that
+    -- propagation.
+    --
+    -- NOTE ON PartnershipEstablishMutex, which is why this file needs the
+    -- ALLOWLIST the other copies of this test do not: it is deliberately
+    -- keyed by ONE FIXED resource-wide key rather than by a source, so it
+    -- holds at most a single entry and has nothing to leak. It correctly
+    -- has neither a playerDropped hook nor a sweep, and adding either would
+    -- be wrong. Every OTHER tracker must have one.
+    local ALLOWED_WITHOUT_CLEANUP = { PartnershipEstablishMutex = true }
+
+    local handle = assert(io.open('../server/partnership.lua', 'r'))
+    local text = handle:read('*a')
+    handle:close()
+
+    local declared = {}
+    for name in text:gmatch('local%s+([%w_]+)%s*=%s*New[CM]') do
+        declared[#declared + 1] = name
+    end
+    t.isTrue(#declared >= 2,
+        ('sanity: only found %d tracker declaration(s) in server/partnership.lua -- the pattern has probably drifted; fix it rather than lowering this floor'):format(#declared))
+
+    local checked = 0
+    for _, name in ipairs(declared) do
+        if not ALLOWED_WITHOUT_CLEANUP[name] then
+            checked = checked + 1
+            local hasPlayerDropped = text:find(name .. '.RegisterPlayerDropped(', 1, true) ~= nil
+            local hasSweep = text:find(name .. '.StartSweep(', 1, true) ~= nil
+            t.isTrue(hasPlayerDropped or hasSweep,
+                name .. ' has neither .RegisterPlayerDropped() nor .StartSweep() -- whatever it is keyed by, its table grows for the whole uptime of the server with nothing to bound it')
+        end
+    end
+    t.isTrue(checked >= 1, 'the allowlist must never grow to cover every tracker -- that would make this test vacuous')
+end)
+
 -- ========================================================================
 -- REGRESSION (same class of bug QA reproduced against server/combat.lua):
 -- PartnerRequestCooldown = NewCooldown(Config.Partnership.RequestCooldownMs)

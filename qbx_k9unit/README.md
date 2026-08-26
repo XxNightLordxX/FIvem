@@ -250,6 +250,13 @@ resource, not flipping a switch.
 5. Certify your first handler: get an eligible job at a high enough
    rank (or department boss), then run `/k9certify [your own server id]`.
 
+   **Your "server id" is not your Steam name or your citizen ID.** It is
+   the small number FiveM gives every connected player, and it changes
+   every time you reconnect. To find yours, open the pause menu and look
+   at Online Players — your own id is next to your name. Most servers
+   also answer `/id` in chat. If your id is 3, the command is
+   `/k9certify 3`.
+
 `config.lua` is long but ships its own plain-English index at the top
 ("WHAT IS IN THIS FILE") — search it for the setting you want rather
 than reading start to finish. Nearly every one of its `Config.Features`
@@ -620,3 +627,12 @@ needed to get this resource running:
 - **`KNOWN_ISSUES.md`** — bugs and disclosed limitations, for whoever
   maintains the code next.
 - **`PROJECT_HISTORY.md`** — what shipped and when.
+- **`CHANGELOG.md`** — what changed between versions, written for you.
+  Read this one before taking an update.
+- **`WATCHDOG_LOG.md`** and **`TABLET_REWORK_SPEC.md`** — internal
+  working notes from building this. Neither is written for you, neither
+  is kept current, and nothing in them is needed to run the resource.
+  They are listed here only so that finding them in the folder does not
+  send you off reading the wrong thing — `TABLET_REWORK_SPEC.md` in
+  particular is named after a feature you *will* use, and is not its
+  documentation. The tablet documents itself, in its own Help tab.

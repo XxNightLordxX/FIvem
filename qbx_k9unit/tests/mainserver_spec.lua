@@ -682,6 +682,44 @@ t.test('playerDropped handler count is 4 when cooldowns.lua is loaded alongside:
     t.equals(f.eventHandlerCount('playerDropped'), 4)
 end)
 
+t.test('EVERY tracker in server/main.lua has a cleanup strategy -- source-keyed ones register a playerDropped hook, key-keyed ones sweep, and none has neither', function()
+    -- THE REAL TRIPWIRE. The exact-count assertion above only catches a
+    -- cleanup hook being REMOVED. It cannot catch the thing that actually
+    -- happens: somebody adds a NewCooldown()/NewMutex() and forgets
+    -- .RegisterPlayerDropped(), which leaves the count unchanged and this
+    -- file green while a table grows for the whole uptime of the server.
+    --
+    -- tests/combat_spec.lua found and fixed this exact blind spot for its
+    -- own file. The fix lived there and never reached the other specs
+    -- asserting the same invariant the same broken way -- this is that
+    -- propagation.
+    --
+    -- Two legitimate cleanup strategies, and which is correct depends on
+    -- what the key IS:
+    --   keyed by a player `src`      -> .RegisterPlayerDropped()
+    --   keyed by anything else       -> .StartSweep(), because there is no
+    --                                   connection to hang cleanup off
+    -- A tracker with NEITHER leaks. Reads the file's own text because these
+    -- are file-locals with no accessor.
+    local handle = assert(io.open('../server/main.lua', 'r'))
+    local text = handle:read('*a')
+    handle:close()
+
+    local declared = {}
+    for name in text:gmatch('local%s+([%w_]+)%s*=%s*New[CM]') do
+        declared[#declared + 1] = name
+    end
+    t.isTrue(#declared >= 4,
+        ('sanity: only found %d tracker declaration(s) in server/main.lua -- the pattern has probably drifted; fix it rather than lowering this floor'):format(#declared))
+
+    for _, name in ipairs(declared) do
+        local hasPlayerDropped = text:find(name .. '.RegisterPlayerDropped(', 1, true) ~= nil
+        local hasSweep = text:find(name .. '.StartSweep(', 1, true) ~= nil
+        t.isTrue(hasPlayerDropped or hasSweep,
+            name .. ' has neither .RegisterPlayerDropped() nor .StartSweep() -- whatever it is keyed by, its table grows for the whole uptime of the server with nothing to bound it')
+    end
+end)
+
 t.test('server/main.lua exposes ForceDetachLeashForSource and ForceDetachOfficerLeashForSource as resource-global functions', function()
     local f = newMainFixture()
     t.equals(type(f.ForceDetachLeashForSource), 'function')

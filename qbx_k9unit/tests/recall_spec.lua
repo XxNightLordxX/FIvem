@@ -425,7 +425,23 @@ t.test('SOURCE AUDIT: server/recall.lua never actually CALLS CanShowK9UI (the id
     local text = handle:read('a')
     handle:close()
     t.isTrue(text:find('CanShowK9UI', 1, true) ~= nil, 'sanity: the identifier really is discussed in this file\'s own header -- if this ever goes false the header prose itself was removed, worth a second look')
-    t.isFalse(text:find('CanShowK9UI%s*%(') ~= nil, 'if this ever fails, someone added a server-side CanShowK9UI CALL to the termination path -- see this file\'s own "NO UNBOUNDED TRAP" header section before "fixing" this test')
+
+    -- STRIP COMMENTS FIRST, matching the HasPermission audit further down
+    -- this same file (and tests/training_spec.lua's stripLuaComments). This
+    -- test used to search the RAW text for `CanShowK9UI%s*%(`, which was
+    -- narrower than its sibling for no reason: a header comment that ever
+    -- wrote the name with parentheses after it -- `CanShowK9UI()`, the
+    -- ordinary way anybody refers to a function in prose -- would have
+    -- failed this test over a comment. Two tests proving the same class of
+    -- absence in one file should not disagree about what counts as code.
+    local stripped = text:gsub('%-%-%[%[.-%]%]', '')
+    local codeOnly = {}
+    for line in (stripped .. '\n'):gmatch('(.-)\n') do
+        codeOnly[#codeOnly + 1] = line:match('^(.-)%-%-') or line
+    end
+    local code = table.concat(codeOnly, '\n')
+
+    t.isFalse(code:find('CanShowK9UI') ~= nil, 'if this ever fails, someone added a server-side CanShowK9UI reference to the termination path -- see this file\'s own "NO UNBOUNDED TRAP" header section before "fixing" this test')
 end)
 
 -- ========================================================================
@@ -594,6 +610,44 @@ end)
 t.test('server/recall.lua registers exactly 1 playerDropped handler (RecallCooldown\'s own RegisterPlayerDropped)', function()
     local f = newFixture()
     t.equals(#(f.eventHandlers['playerDropped'] or {}), 1)
+end)
+
+t.test('EVERY tracker in server/recall.lua has a cleanup strategy -- source-keyed ones register a playerDropped hook, key-keyed ones sweep, and none has neither', function()
+    -- THE REAL TRIPWIRE. The exact-count assertion above only catches a
+    -- cleanup hook being REMOVED. It cannot catch the thing that actually
+    -- happens: somebody adds a NewCooldown()/NewMutex() and forgets
+    -- .RegisterPlayerDropped(), which leaves the count unchanged and this
+    -- file green while a table grows for the whole uptime of the server.
+    --
+    -- tests/combat_spec.lua found and fixed this exact blind spot for its
+    -- own file. The fix lived there and never reached the other specs
+    -- asserting the same invariant the same broken way -- this is that
+    -- propagation.
+    --
+    -- Two legitimate cleanup strategies, and which is correct depends on
+    -- what the key IS:
+    --   keyed by a player `src`      -> .RegisterPlayerDropped()
+    --   keyed by anything else       -> .StartSweep(), because there is no
+    --                                   connection to hang cleanup off
+    -- A tracker with NEITHER leaks. Reads the file's own text because these
+    -- are file-locals with no accessor.
+    local handle = assert(io.open('../server/recall.lua', 'r'))
+    local text = handle:read('*a')
+    handle:close()
+
+    local declared = {}
+    for name in text:gmatch('local%s+([%w_]+)%s*=%s*New[CM]') do
+        declared[#declared + 1] = name
+    end
+    t.isTrue(#declared >= 1,
+        ('sanity: only found %d tracker declaration(s) in server/recall.lua -- the pattern has probably drifted; fix it rather than lowering this floor'):format(#declared))
+
+    for _, name in ipairs(declared) do
+        local hasPlayerDropped = text:find(name .. '.RegisterPlayerDropped(', 1, true) ~= nil
+        local hasSweep = text:find(name .. '.StartSweep(', 1, true) ~= nil
+        t.isTrue(hasPlayerDropped or hasSweep,
+            name .. ' has neither .RegisterPlayerDropped() nor .StartSweep() -- whatever it is keyed by, its table grows for the whole uptime of the server with nothing to bound it')
+    end
 end)
 
 t.test('playerDropped clears the disconnecting source\'s own cooldown -- a fresh occupant of the SAME recycled id is not blocked by the prior occupant\'s recent request', function()
