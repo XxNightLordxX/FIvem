@@ -192,16 +192,29 @@
                     end` at that file's own top level -- other files may
                     register their own tablet-only surfaces the same way;
                     this file does not attempt to enumerate every one).
-      clientonly -- RadialMenu, VehicleEntryExit, AgilityBasicJump,
-                    AgilityAdvanced, ThermalVision, NightVision,
-                    HealthStaminaHUD, ContrabandScreenFX, AdvancedBarkRadial,
-                    ProximityAudioFX, WaterTrackingDecay -- zero occurrences
-                    in any server/*.lua file (confirmed by grep before
-                    writing this list, not assumed from the name), so there
-                    is no server-side enforcement point for this file to
-                    touch at all. Listed in ListFeatures' response as
+      clientonly -- RadialMenu, AgilityBasicJump, AgilityAdvanced,
+                    ThermalVision, NightVision, HealthStaminaHUD,
+                    ContrabandScreenFX, AdvancedBarkRadial, ProximityAudioFX,
+                    WaterTrackingDecay -- zero occurrences in any
+                    server/*.lua file (confirmed by grep before writing this
+                    list, not assumed from the name), so there is no
+                    server-side enforcement point for this file to touch at
+                    all. Listed in ListFeatures' response as
                     `tier = 'clientonly'` so the tablet can grey these out
                     rather than silently omit them.
+                    VEHICLEENTRYEXIT WAS IN THIS LIST AND IS NOT ANY MORE
+                    (2026-08-26): the claim above was true when it was
+                    written and stopped being true the moment vehicle entry
+                    gained a server half. server/vehicle.lua now arbitrates
+                    seat claims and re-reads this flag live on every claim
+                    request, so it is `tier = 'live'`. Leaving it as
+                    clientonly would have told an operator, in this tablet's
+                    own words, that switching it off does nothing until a
+                    restart -- while the server was in fact already refusing
+                    claims. This entry is corrected here rather than
+                    quietly, because a stale tier claim is exactly the class
+                    of thing this file's own CameraFeedPiP note exists to
+                    warn about.
       protected  -- NO ENTRIES USE THIS TIER as of the 2026-08-26 owner-
                     directive pass -- HighCommand/PermissionGrants (the only
                     two that ever did) are now tier = 'live' with
@@ -614,7 +627,19 @@ local FEATURE_TIERS = {
 
     -- tier = 'clientonly' -- zero occurrences in any server/*.lua file (grepped before writing this list); nothing server-side to toggle.
     RadialMenu             = { tier = 'clientonly' },
-    VehicleEntryExit       = { tier = 'clientonly' },
+    -- LIVE, not clientonly. server/vehicle.lua's seat-claim handler
+    -- re-reads Config.Features.VehicleEntryExit on every request, so
+    -- switching this off stops new claims being granted immediately, with
+    -- no restart -- and switching it on starts granting them immediately.
+    -- The claim-expiry sweep in that same file is started unconditionally
+    -- and checks the flag inside its own loop, precisely so that flipping
+    -- this on mid-session can never leave claims being created with nothing
+    -- running to clean them up (the live-flip trap server/combat.lua and
+    -- server/wellbeing.lua each had to be fixed for). The CLIENT half still
+    -- only reads its own gate at resource start, so an already-connected
+    -- player keeps their local entry controls until they reconnect -- which
+    -- costs nothing, because the server refuses the claim regardless.
+    VehicleEntryExit       = { tier = 'live', note = 'Turning this off stops new vehicle entries being granted straight away -- the server refuses the seat claim. A player already connected keeps the on-screen prompt until they reconnect, but pressing it will be refused. Anyone already sitting in a vehicle stays there and can always get out; that is never gated.' },
     AgilityBasicJump       = { tier = 'clientonly' },
     AgilityAdvanced        = { tier = 'clientonly' },
     ThermalVision          = { tier = 'clientonly' },
@@ -2356,6 +2381,32 @@ AddEventHandler('onResourceStart', function(resourceName)
     local overrideRows = K9Store.Override_GetAll()
     local appliedCount, skippedCount = 0, 0
 
+    -- THE SILENT-CLOBBER LOG (operator-tuning audit).
+    --
+    -- Re-applying a stored override is correct and deliberate: a setting
+    -- changed from the tablet is meant to keep winning over config.lua
+    -- until somebody resets it from the tablet. The tablet screen itself
+    -- discloses this well.
+    --
+    -- What was missing is the one place an owner actually looks. Someone
+    -- edits config.lua, restarts, watches the console, and sees only
+    -- "N override(s) re-applied" -- a number. If one of those N happened to
+    -- be the exact setting they just edited, their edit was thrown away and
+    -- nothing told them. They then spend an evening convinced the setting
+    -- does not work.
+    --
+    -- So: name every override whose stored value DISAGREES with what
+    -- config.lua now says, and say how to undo it. Deliberately only the
+    -- disagreements -- an override that matches the file cost the operator
+    -- nothing, and printing those too would bury the ones that did in noise
+    -- on every single boot.
+    --
+    -- CONFIG_LUA_DEFAULT_FEATURES / _TUNABLES are the right thing to
+    -- compare against: both are snapshotted at this file's own load time,
+    -- from config.lua as it sits on disk, BEFORE any override below is
+    -- applied. They are literally "what the file says right now".
+    local clobbered = {}
+
     for _, row in ipairs(overrideRows) do
         local applied = false
         local handledAsSessionOnly = false
@@ -2398,7 +2449,13 @@ AddEventHandler('onResourceStart', function(resourceName)
             local tier = GetFeatureTier(name)
             local sessionOnly = GetFeatureSessionOnly(name)
             if name and Config.Features and Config.Features[name] ~= nil and tier ~= 'protected' and tier ~= 'unaudited' and not sessionOnly then
-                ApplyFeatureOverride(name, row.value == 'true')
+                local storedValue = row.value == 'true'
+                local fileValue = CONFIG_LUA_DEFAULT_FEATURES[name]
+                if fileValue ~= nil and fileValue ~= storedValue then
+                    clobbered[#clobbered + 1] = ('Config.Features.%s -- config.lua says %s, a tablet change says %s (the tablet wins)')
+                        :format(name, tostring(fileValue), tostring(storedValue))
+                end
+                ApplyFeatureOverride(name, storedValue)
                 applied = true
             elseif name and sessionOnly then
                 -- Distinct from the generic "stale/unrecognized" skip
@@ -2421,6 +2478,11 @@ AddEventHandler('onResourceStart', function(resourceName)
             if entry then
                 local numberValue = tonumber(row.value)
                 if numberValue and numberValue >= entry.min and numberValue <= entry.max then
+                    local fileValue = CONFIG_LUA_DEFAULT_TUNABLES[key]
+                    if type(fileValue) == 'number' and fileValue ~= numberValue then
+                        clobbered[#clobbered + 1] = ('%s -- config.lua says %s, a tablet change says %s (the tablet wins)')
+                            :format(key, tostring(fileValue), tostring(numberValue))
+                    end
                     ApplyTunableOverride(key, numberValue)
                     applied = true
                 end
@@ -2470,6 +2532,15 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 
     print(('[qbx_k9unit] runtimecontrol.lua: %d override(s) re-applied, %d skipped, at resource start.'):format(appliedCount, skippedCount))
+
+    -- Printed AFTER the count line, so it reads as the detail behind the
+    -- number rather than an unrelated warning somewhere further up the log.
+    if clobbered[1] then
+        print(('[qbx_k9unit] runtimecontrol.lua: HEADS UP -- %d of those override(s) DISAGREE with what config.lua currently says. If you just edited one of these in config.lua, your edit is NOT in effect: a change made from the tablet keeps winning over the file until somebody resets it from the tablet (K9 Tablet -> Settings -> the row -> Reset to config.lua). The file is not being ignored generally; only these specific settings:'):format(#clobbered))
+        for _, line in ipairs(clobbered) do
+            print('[qbx_k9unit] runtimecontrol.lua:   * ' .. line)
+        end
+    end
 end)
 
 -- ======================================================================

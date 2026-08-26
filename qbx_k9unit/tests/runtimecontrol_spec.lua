@@ -588,6 +588,73 @@ t.test('THE ONE THING THAT GENUINELY MATTERS: turning HighCommand off from the t
     t.equals(#world.overrideAudit, 1, 'the permanent audit record of the toggle must still exist after the restart, even though nothing was re-applied')
 end)
 
+-- ----------------------------------------------------------------------
+-- SILENT-CLOBBER LOG. Re-applying a stored override over config.lua is
+-- correct and deliberate. What was missing was telling anybody: the boot
+-- line printed only a COUNT, so an operator who edited config.lua,
+-- restarted, and watched the console had no way to learn that the exact
+-- setting they had just changed was thrown away by a tablet edit somebody
+-- made weeks ago. They then spend an evening convinced the setting is
+-- broken.
+-- ----------------------------------------------------------------------
+
+--- @param lines table
+--- @param needle string
+--- @return boolean
+local function anyPrintedLineContains(lines, needle)
+    for _, line in ipairs(lines) do
+        if line:find(needle, 1, true) then return true end
+    end
+    return false
+end
+
+t.test('SILENT-CLOBBER LOG: a stored override that DISAGREES with config.lua is named at boot, with both values and the way to undo it', function()
+    local world = newWorld()
+    local first = boot({ world = world })
+    first.env.IsHighCommand = function() return true end
+
+    -- AdminAuditCommands ships false in this fixture. An officer turns it
+    -- on from the tablet, which persists a real override row.
+    t.isTrue(first.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'AdminAuditCommands', true).ok)
+    t.isNotNil(world.overrides['feature:AdminAuditCommands'], 'precondition: a durable row really exists')
+
+    -- Restart. config.lua still says false; the stored override says true.
+    -- The override correctly wins -- and must now SAY so.
+    local second = boot({ world = world })
+    t.isTrue(second.env.Config.Features.AdminAuditCommands, 'unchanged behaviour: the tablet still wins, that is the design')
+
+    t.isTrue(anyPrintedLineContains(second.printedLines, 'Config.Features.AdminAuditCommands'),
+        'naming the setting is the whole point -- a bare count tells an operator nothing')
+    t.isTrue(anyPrintedLineContains(second.printedLines, 'config.lua says false'),
+        'it has to say what the FILE says, or the operator cannot tell whether their edit is the one being ignored')
+    t.isTrue(anyPrintedLineContains(second.printedLines, 'a tablet change says true'),
+        'and what is actually in effect instead')
+    t.isTrue(anyPrintedLineContains(second.printedLines, 'Reset to config.lua'),
+        'and how to get their edit back -- a warning with no remedy just makes someone feel stuck')
+end)
+
+t.test('SILENT-CLOBBER LOG: a stored override that AGREES with config.lua is NOT named -- it cost the operator nothing, and printing it every boot would bury the ones that did', function()
+    local world = newWorld()
+    local first = boot({ world = world })
+    first.env.IsHighCommand = function() return true end
+    t.isTrue(first.callbacks['qbx_k9unit:server:runtimeSetFeature'](HC_SOURCE, 'AdminAuditCommands', true).ok)
+
+    -- The operator then ALSO edits config.lua to true -- file and override
+    -- now agree, so nothing of theirs is being discarded.
+    local second = boot({
+        world = world,
+        config = { Features = { RuntimeFeatureControl = true, TabletTheming = true, HighCommand = true, AdminAuditCommands = true }, AdminAudit = {}, Tracking = { Scent = {}, Blood = {}, Gunpowder = {} } },
+    })
+    t.isTrue(second.env.Config.Features.AdminAuditCommands)
+    t.isFalse(anyPrintedLineContains(second.printedLines, 'HEADS UP'),
+        'no disagreement, so no warning -- otherwise every boot cries wolf and the real one gets ignored')
+end)
+
+t.test('SILENT-CLOBBER LOG: a boot with no stored overrides at all prints no warning', function()
+    local f = boot()
+    t.isFalse(anyPrintedLineContains(f.printedLines, 'HEADS UP'))
+end)
+
 t.test('LOCKOUT-RISK: ResetFeature on HighCommand/PermissionGrants also requires the exact-name confirm (symmetric with SetFeature, not a quieter back door)', function()
     local f = boot()
     f.env.IsHighCommand = function() return true end

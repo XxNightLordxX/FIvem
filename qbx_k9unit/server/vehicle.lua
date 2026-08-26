@@ -210,6 +210,52 @@ local function ClearVehicleSeatClaim(netId, seatIndex, src)
     end
 end
 
+--- Per-person feature control for vehicle entry, in the exact four-step
+--- shape every other server-enforced feature in this resource uses (see
+--- server/kennel.lua's IsDeployableKennelPermittedForCitizenId, which this
+--- mirrors step for step):
+---   1. NOT consulted on any exit/release path -- getting OUT of a vehicle,
+---      and giving up a claim, are never gated on anything. That is this
+---      file's and this resource's oldest rule.
+---   2. an explicit block.VehicleEntryExit grant -> DENY
+---   3. VehicleEntryExit listed in Config.FeatureControl.RequireGrant ->
+---      ALLOW only with an active feature.VehicleEntryExit grant
+---   4. otherwise -> ALLOW
+---
+--- WHY THIS EXISTS NOW AND DID NOT BEFORE. Until vehicle entry gained a
+--- server half it was tier='clientonly', and its only per-person block path
+--- was client/featureblocks.lua -- which a modified client simply does not
+--- run. The moment the server started arbitrating seat claims, the
+--- resource's own drift guard (tests/customizationregistry_spec.lua) was
+--- right to demand this: a feature the server enforces must be blockable
+--- per person on the server too, or "High Command blocked you from vehicle
+--- entry" is a suggestion rather than a rule.
+---
+--- @param citizenid string
+--- @return boolean allowed
+local function IsVehicleEntryPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- server/
+    -- kennel.lua and server/pursuitsprint.lua carry the identical comment
+    -- on their own copies of this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.VehicleEntryExit') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.VehicleEntryExit == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.VehicleEntryExit') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- Step 1 (and only step): a K9 handler's client asks to claim a specific
 --- seat in a specific vehicle. THE FIX — see this file's own header for the
 --- full design. The CHECK (GetLiveClaim) and the WRITE
@@ -251,6 +297,15 @@ RegisterNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', function(vehicleNe
     -- FIRST time vehicle entry has ever been re-verified server-side.
     if not HasK9Access(src) then
         deny(locale('common.no_k9_access'))
+        return
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsVehicleEntryPermittedForCitizenId
+    -- above. Deliberately AFTER HasK9Access (an uncertified caller is not
+    -- owed a "you are blocked" message about a feature they could not use
+    -- anyway) and BEFORE anything that resolves or touches the vehicle.
+    if not IsVehicleEntryPermittedForCitizenId(citizenid) then
+        deny(locale('vehicle.entry_not_permitted'))
         return
     end
 
@@ -341,18 +396,38 @@ AddEventHandler('onResourceStop', function(resourceName)
 end)
 
 -- Periodic sweep — see this file's header "A CLAIM MUST NEVER OUTLIVE..."
--- section, mechanism 4. Gated on Config.Features.VehicleEntryExit AT FILE
--- LOAD (never a live, no-restart toggle for this flag anywhere in this
--- resource -- see client/vehicle.lua's own FILE-TOP FEATURE GATE section
--- for the full reasoning, which applies identically here), so a server
--- that never runs this feature at all never pays for an idle thread woken
--- every VEHICLE_SEAT_CLAIM_SWEEP_INTERVAL_MS for a table that could never
--- hold anything.
-if Config.Features.VehicleEntryExit then
-    CreateThread(function()
-        while true do
-            Wait(VEHICLE_SEAT_CLAIM_SWEEP_INTERVAL_MS)
+-- section, mechanism 4.
+--
+-- STARTED UNCONDITIONALLY, flag checked INSIDE the loop. This was gated on
+-- Config.Features.VehicleEntryExit at file load, on the reasoning that the
+-- flag is never toggled live. That reasoning was wrong, and wrong in the
+-- one direction that matters:
+--
+--   * The claim handler above re-reads the flag on every request, so the
+--     moment an operator turns this feature ON from the tablet, claims
+--     start being granted.
+--   * A thread gated at FILE LOAD saw the flag as it was at BOOT. On a
+--     server that booted with the feature off, turning it on mid-session
+--     therefore meant claims being created with nothing whatsoever running
+--     to expire them -- and a stranded claim is a seat nobody can sit in
+--     for the rest of the server's uptime. That is a worse bug than the
+--     two-dogs-one-seat race this whole file exists to fix.
+--
+-- server/combat.lua and server/wellbeing.lua were each fixed for this exact
+-- live-flip trap already, in the same direction, with the same trade-off
+-- written down: the cost is one thread paying a single Wait() every sweep
+-- interval on a server that never uses this feature, which is nothing next
+-- to a mechanic that can start but never clean up. Following that
+-- precedent rather than re-litigating it.
+CreateThread(function()
+    while true do
+        Wait(VEHICLE_SEAT_CLAIM_SWEEP_INTERVAL_MS)
 
+        -- Read LIVE, every pass -- never a boot-time snapshot. When the
+        -- feature is off there is nothing to sweep, and the table is
+        -- already emptied by playerDropped/onResourceStop regardless, so
+        -- this costs one comparison.
+        if Config.Features.VehicleEntryExit then
             local now = GetGameTimer()
             for netId, seats in pairs(VehicleSeatClaims) do
                 -- VEHICLE-GONE CHECK -- the one thing lazy TTL expiry alone
@@ -375,5 +450,5 @@ if Config.Features.VehicleEntryExit then
                 end
             end
         end
-    end)
-end
+    end
+end)

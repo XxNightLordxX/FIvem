@@ -749,14 +749,78 @@ end)
 -- TTL sweep too. Gated on Config.Features.VehicleEntryExit at file load.
 -- ========================================================================
 
-t.test('feature off: the periodic sweep thread is never even created', function()
+-- LIVE-FLIP FIX. The sweep used to be created only `if
+-- Config.Features.VehicleEntryExit` at file load. That looked thrifty and
+-- was a trap: the claim handler re-reads the flag on EVERY request, so on a
+-- server that booted with this feature off, an operator turning it on from
+-- the tablet started granting claims with nothing whatsoever running to
+-- expire them -- and a stranded claim is a seat nobody can sit in for the
+-- rest of the server's uptime, which is worse than the race this whole file
+-- exists to fix. server/combat.lua and server/wellbeing.lua were each fixed
+-- for the identical trap already; this follows them.
+
+t.test('LIVE-FLIP FIX: the sweep thread is created even with the feature OFF at boot -- it is what makes turning the feature on later safe', function()
     local f = newVehicleServerFixture({ vehicleEntryExit = false })
-    t.equals(f.threadCreateCount(), 0)
+    t.equals(f.threadCreateCount(), 1,
+        'gating thread CREATION on a boot-time flag snapshot is the exact bug: the flag can change, the missing thread cannot appear later')
 end)
 
 t.test('feature on: the periodic sweep thread IS created', function()
     local f = newVehicleServerFixture()
     t.equals(f.threadCreateCount(), 1)
+end)
+
+t.test('LIVE-FLIP FIX: a feature turned ON after boot still gets its claims expired -- no seat is stranded for the rest of the server\'s uptime', function()
+    -- Boots with the feature OFF, exactly like a server that had never
+    -- enabled vehicle entry.
+    local f = newVehicleServerFixture({ vehicleEntryExit = false })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.setAccess(3, true)
+    f.setPlayer(3, 'CIT2')
+    f.setPed(3, 11, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+
+    -- High command turns it on from the tablet mid-session. This is what
+    -- ApplyFeatureOverride does: it writes straight into the live table.
+    f.env.Config.Features.VehicleEntryExit = true
+
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    local grantedTwo = false
+    for _, c in ipairs(f.clientEvents) do
+        if c.event == 'qbx_k9unit:client:vehicleSeatClaimGranted' and c.target == 2 then grantedTwo = true end
+    end
+    t.isTrue(grantedTwo, 'precondition: the claim handler really does honour a live flip-on -- which is exactly why the sweep must exist')
+
+    -- The claimant vanishes without ever releasing, and never comes back.
+    -- Nothing but the sweep can free this seat now.
+    f.removeVehicleExistence(50)
+    f.stepSweep() -- primes the loop's own first Wait()
+    f.stepSweep() -- one full sweep pass
+
+    f.registerVehicle(500, 51, { coords = { x = 0, y = 0, z = 0 } })
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 3, 500, 1, 2)
+    local grantedThree = false
+    for _, c in ipairs(f.clientEvents) do
+        if c.event == 'qbx_k9unit:client:vehicleSeatClaimGranted' and c.target == 3 then grantedThree = true end
+    end
+    t.isTrue(grantedThree, 'without the sweep running, this seat would be unusable for the rest of the server\'s uptime')
+end)
+
+t.test('LIVE-FLIP FIX: while the feature is genuinely OFF, the sweep does nothing at all -- it costs a comparison, not work', function()
+    local f = newVehicleServerFixture({ vehicleEntryExit = false })
+    f.setAccess(2, true)
+    f.setPlayer(2, 'CIT1')
+    f.setPed(2, 10, { x = 0, y = 0, z = 0 })
+    f.registerVehicle(500, 50, { coords = { x = 0, y = 0, z = 0 } })
+
+    -- No claim can even be created while the feature is off, so there is
+    -- nothing for the sweep to find. It must simply not error.
+    f.dispatchNetEvent('qbx_k9unit:server:requestVehicleSeatClaim', 2, 500, 1, 1)
+    f.stepSweep()
+    f.stepSweep()
+    t.equals(#f.clientEvents, 0, 'nothing granted, nothing denied, nothing swept -- an inert feature stays inert')
 end)
 
 t.test('sweep: proactively drops a claim naming a vehicle that no longer exists at all, even well before its own TTL would have expired it', function()

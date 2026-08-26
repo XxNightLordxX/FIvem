@@ -94,15 +94,30 @@
     when execution is not an option -- narrow pattern matching against each
     file's own real, already-established text shape, not a general parser.
 
-    HAND-MAINTAINED FILE LIST, SAME DISCLOSED TRADEOFF
-    tests/schemaconvergence_spec.lua'S OWN MIGRATION_FILES_THAT_CREATE_TABLES
-    ALREADY ACCEPTS: Section 5's literal `block.<Name>` scan reads a fixed
-    list of server/*.lua filenames (SERVER_LUA_FILES below) rather than
-    globbing the directory (this plain-Lua suite has no directory-listing
-    primitive anywhere, by design -- see that file's own header on this
-    exact point). A brand-new server/*.lua file that adds its own
-    `block.<Name>` check must be added to that list in the same change, or
-    this spec will not know to look at it and will report a false gap.
+    NO LONGER A HAND-MAINTAINED FILE LIST (2026-08-26). Section 5's literal
+    `block.<Name>` scan used to read a fixed, hand-typed list of
+    server/*.lua filenames, with a disclosed tradeoff: "a brand-new
+    server/*.lua file that adds its own `block.<Name>` check must be added
+    to that list in the same change, or this spec will not know to look at
+    it and will report a false gap."
+
+    That tradeoff came due. server/vehicle.lua was added, vehicle entry
+    moved from tier='clientonly' to tier='live' because it gained real
+    server-side enforcement, this spec correctly demanded a per-person
+    block path for it -- and then could not see the one that had just been
+    written, because the new file was not in the hand-typed list. The
+    check reported a gap that did not exist, which is the failure mode that
+    gets a test deleted rather than fixed.
+
+    The list is now DERIVED from fxmanifest.lua's own `server_scripts`
+    block, read as text. That file is the single authoritative statement of
+    which server files this resource actually loads -- a server file missing
+    from it does not run at all, so it cannot be a source of enforcement
+    this scan needs to see. Same "read a table's key set straight out of
+    source text when execution is not an option" precedent as everything
+    else in this file. A floor assertion below guards against the pattern
+    silently matching nothing and making Section 5 pass vacuously, which
+    would be worse than the false gap it replaces.
 ]]
 
 local t = dofile('testkit.lua')
@@ -408,22 +423,58 @@ end)
 -- the real, existing documentation that justifies the exemption.
 -- ============================================================================
 
--- Hand-maintained list of every server/*.lua file, used only to scan for a
--- literal `HasPermission(citizenid, 'block.<Name>')` call -- see this file's
--- header "HAND-MAINTAINED FILE LIST, SAME DISCLOSED TRADEOFF". Snapshot taken
--- 2026-08-26; a new server/*.lua file that adds its own block check must be
--- added here in the same change.
-local SERVER_LUA_FILES = {
-    'events.lua', 'cooldowns.lua', 'entities.lua', 'highcommand.lua', 'notify.lua',
-    'equipmentshop.lua', 'scentlineup.lua', 'findalert.lua', 'exports.lua', 'scenttrail.lua',
-    'sarcalls.lua', 'kennel.lua', 'recall.lua', 'admin.lua', 'inventory.lua',
-    'propattachment.lua', 'training.lua', 'combat.lua', 'defense.lua', 'tracking.lua',
-    'fetch.lua', 'leaderboard.lua', 'wellbeing.lua', 'tablet.lua', 'certtiers.lua',
-    'medkit.lua', 'partnership.lua', 'runtimecontrol.lua', 'main.lua', 'pursuitsprint.lua',
-    'tenure.lua', 'appearance.lua', 'search.lua', 'bonetool.lua', 'progression.lua',
-    'datastore.lua', 'permissionkeycatalog.lua', 'integrations.lua', 'permissions.lua',
-    'certifications.lua', 'xptiers.lua',
-}
+--- Every server/*.lua file this resource actually loads, read straight out
+--- of fxmanifest.lua's own `server_scripts` block -- see this file's header
+--- ("NO LONGER A HAND-MAINTAINED FILE LIST") for why this is derived rather
+--- than typed out, and what went wrong when it was typed out.
+---
+--- Deliberately anchored to the `'server/<name>.lua'` quoted-path shape
+--- fxmanifest.lua really uses, so a path mentioned in one of that file's
+--- own long explanatory comments is not mistaken for a registration. The
+--- floor assertion below is what stops a future reformat of fxmanifest.lua
+--- silently turning this whole section into a no-op.
+--- @return string[]
+local function DeriveServerLuaFiles()
+    local manifest = ReadFile('../fxmanifest.lua')
+    local files, seen = {}, {}
+    for line in manifest:gmatch('[^\n]+') do
+        -- Strip a trailing line comment before matching, so a filename
+        -- quoted inside a comment on the same line cannot be picked up.
+        local code = line:match('^(.-)%-%-') or line
+        local name = code:match("^%s*'server/([%w_]+%.lua)'%s*,?%s*$")
+        if name and not seen[name] then
+            seen[name] = true
+            files[#files + 1] = name
+        end
+    end
+    return files
+end
+
+local SERVER_LUA_FILES = DeriveServerLuaFiles()
+
+-- FLOOR. Section 5's headline check reports "no per-person block path
+-- exists for this feature" by finding nothing. If DeriveServerLuaFiles()
+-- ever silently returns an empty or near-empty list -- fxmanifest.lua
+-- reformatted, the quoted-path shape changed, the file moved -- Section 5
+-- would not fail, it would report EVERY feature as uncontrollable and read
+-- like a catastrophe, or (worse, depending which way the sets fall) pass
+-- while checking nothing. Neither is acceptable for a guard whose whole job
+-- is noticing absence, so the derivation is checked before it is trusted.
+t.test('DERIVATION FLOOR: the server file list really came out of fxmanifest.lua -- a scan of nothing must never be mistaken for a clean result', function()
+    t.isTrue(#SERVER_LUA_FILES >= 35,
+        ('only derived %d server/*.lua file(s) from fxmanifest.lua -- expected at least 35. The quoted-path shape this parses has probably changed; fix the pattern, do not lower this number.'):format(#SERVER_LUA_FILES))
+
+    -- A few files that must be there by construction: each is loaded by
+    -- this resource and each contains a real block.<Name> check, so their
+    -- absence would silently reopen exactly the gap Section 5 exists to
+    -- close.
+    local present = {}
+    for _, name in ipairs(SERVER_LUA_FILES) do present[name] = true end
+    for _, expected in ipairs({ 'combat.lua', 'kennel.lua', 'equipmentshop.lua', 'vehicle.lua', 'permissions.lua' }) do
+        t.isTrue(present[expected] == true, expected .. ' must be among the derived server files')
+    end
+end)
+
 
 --- Every literal `HasPermission(<anything-without-a-comma>, 'block.<Name>')`
 --- call site across every file in SERVER_LUA_FILES -- deliberately anchored
@@ -467,7 +518,8 @@ end
 --     shared checker function, a fourth featureName that does not come
 --     through TRACK_TYPE_FEATURE_FLAGS at all since ScentVision has no
 --     trackType of its own.
--- HAND-MAINTAINED, SAME DISCLOSED TRADEOFF AS SERVER_LUA_FILES ABOVE: a new
+-- HAND-MAINTAINED (SERVER_LUA_FILES above no longer is -- see its own
+-- comment; this one still is, and the tradeoff below still applies): a new
 -- literal argument added to one of these four checkers' call sites must be
 -- added here in the same change.
 local DYNAMIC_BLOCK_COVERAGE = {

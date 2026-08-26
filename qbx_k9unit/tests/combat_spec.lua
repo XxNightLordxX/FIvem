@@ -684,13 +684,59 @@ end)
 
 t.test('server/combat.lua registers exactly 7 playerDropped handlers (its own, plus BiteHoldCooldown/TakedownCooldown/TakedownMutex, the BiteHoldXpMintCooldown/TakedownXpMintCooldown anti-farm trackers added when the seventh XP farm was closed, and DragCooldown added when PropDragging finally got the cooldowns it had always been documented as having)', function()
     local f = newCombatFixture()
-    -- Deliberately an exact count rather than a floor: each of these is a
-    -- per-source table that leaks an entry per disconnect without one, so a
-    -- new source-keyed tracker arriving with no cleanup hook should make
-    -- this test fail and be noticed. DragTargetCooldown is correctly NOT in
-    -- this count -- it is keyed by targetNetId, which has no connection to
-    -- clean up on, and is bounded by its own TTL sweep instead.
+    -- WHAT THIS ACTUALLY GUARDS, stated honestly. An earlier version of
+    -- this comment claimed it would catch "a new source-keyed tracker
+    -- arriving with no cleanup hook". It cannot, and the arithmetic is not
+    -- subtle: if somebody adds a NewCooldown() and forgets
+    -- .RegisterPlayerDropped(), the number of registered playerDropped
+    -- handlers stays at 7 and this passes. It only ever catches the
+    -- OPPOSITE regression -- an existing hook being removed. That
+    -- overclaim is the same shape as the XP tripwire this suite already
+    -- had to fix once, where an assertion was satisfied by something other
+    -- than the invariant it advertised, so it is corrected rather than
+    -- left to be trusted.
+    --
+    -- The claim it used to make is now made for real by the structural
+    -- test immediately below, which reads the file's own text.
+    --
+    -- DragTargetCooldown is correctly NOT in this count -- it is keyed by
+    -- targetNetId, which has no connection to clean up on, and is bounded
+    -- by its own TTL sweep instead.
     t.equals(f.eventHandlerCount('playerDropped'), 7)
+end)
+
+t.test('EVERY tracker in server/combat.lua has a cleanup strategy -- source-keyed ones register a playerDropped hook, target-keyed ones start a sweep, and none has neither', function()
+    -- THE REAL TRIPWIRE, and the one the count test above only pretended to
+    -- be. Every NewCooldown()/NewMutex() in this file holds a table that
+    -- grows as people play and never shrinks on its own. There are exactly
+    -- two legitimate ways to bound one, and which is correct depends on
+    -- what the key IS:
+    --   * keyed by a player `src`      -> .RegisterPlayerDropped()
+    --   * keyed by a target netId/hash -> .StartSweep(), because there is
+    --     no connection to hang cleanup off
+    -- A tracker with NEITHER leaks for the entire uptime of the server, and
+    -- nothing else in this suite would notice.
+    --
+    -- Reads the file's own text rather than the loaded chunk because these
+    -- are all file-locals with no accessor -- same established technique as
+    -- tests/customizationregistry_spec.lua's own source scans.
+    local handle = assert(io.open('../server/combat.lua', 'r'))
+    local text = handle:read('*a')
+    handle:close()
+
+    local declared = {}
+    for name in text:gmatch('local%s+([%w_]+)%s*=%s*New[CM]') do
+        declared[#declared + 1] = name
+    end
+    t.isTrue(#declared >= 6,
+        ('sanity: only found %d tracker declaration(s) in server/combat.lua -- the pattern has probably drifted; fix it rather than lowering this floor'):format(#declared))
+
+    for _, name in ipairs(declared) do
+        local hasPlayerDropped = text:find(name .. '.RegisterPlayerDropped(', 1, true) ~= nil
+        local hasSweep = text:find(name .. '.StartSweep(', 1, true) ~= nil
+        t.isTrue(hasPlayerDropped or hasSweep,
+            name .. ' has neither .RegisterPlayerDropped() nor .StartSweep() -- whatever it is keyed by, its table grows for the whole uptime of the server with nothing to bound it')
+    end
 end)
 
 t.test('server/combat.lua registers exactly 1 onResourceStart handler (the PropDragging override warning)', function()

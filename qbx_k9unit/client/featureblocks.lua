@@ -10,10 +10,12 @@
     client-rendered/client-local and have NO server-side registration point
     a block could ever be checked from -- confirmed by grep across every
     server/*.lua file, not assumed from the name:
-        RadialMenu, VehicleEntryExit, AgilityBasicJump, AgilityAdvanced,
+        RadialMenu, AgilityBasicJump, AgilityAdvanced,
         ThermalVision, NightVision, HealthStaminaHUD, ContrabandScreenFX,
         AdvancedBarkRadial, ProximityAudioFX, WaterTrackingDecay,
         CameraFeedPiP
+    (VehicleEntryExit was the twelfth and is no longer one of them -- see
+    CLIENT_ENFORCED_FEATURES below for why it moved.)
     server/runtimecontrol.lua's own FEATURE_TIERS table already documents
     exactly this list under `tier = 'clientonly'`, for the SAME underlying
     reason (no server-side point to toggle from) applied to the GLOBAL
@@ -225,9 +227,23 @@
 -- future-drifted payload can never accidentally start blocking a
 -- server-enforced feature this file has nothing to do with, or a feature
 -- name typo'd on either end of this contract.
+-- VEHICLEENTRYEXIT WAS IN THIS TABLE AND IS NOT ANY MORE (2026-08-26).
+-- It belonged here for as long as vehicle entry was purely client-local,
+-- with no server-side registration point a block could ever be checked
+-- from. That stopped being true the moment vehicle entry gained a server
+-- half: server/vehicle.lua now arbitrates seat claims and checks
+-- `block.VehicleEntryExit` itself, per person, before granting one.
+--
+-- Leaving it here as well would not merely be redundant, it would be a
+-- LIE ABOUT WHERE THE BOUNDARY IS -- this file's own header is explicit
+-- that a client-enforced block is a courtesy a modified client can simply
+-- decline, and listing a now-server-enforced feature alongside the genuinely
+-- unenforceable ones invites the next reader to assume the server has it
+-- covered for all twelve. The resource's own drift guard
+-- (tests/customizationregistry_spec.lua) caught this the moment the tier
+-- changed, which is exactly what it is for.
 local CLIENT_ENFORCED_FEATURES = {
     RadialMenu = true,
-    VehicleEntryExit = true,
     AgilityBasicJump = true,
     AgilityAdvanced = true,
     ThermalVision = true,

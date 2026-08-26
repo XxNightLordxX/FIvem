@@ -1708,6 +1708,7 @@
         "released_on_death": "Your K9 went down while loaded — released from the vehicle.",
         "no_seat_available": "Every seat in that vehicle is taken — your K9 has nowhere to sit.",
         "entry_interrupted": "Loading your K9 into the vehicle was interrupted — try again.",
+        "entry_not_permitted": "High Command has blocked you from loading your K9 into vehicles. This is not a missing certification -- ask them why.",
         "claim_too_far": "You need to be closer to the vehicle to load your K9 in.",
         "target_enter_label": "Get in the Back Seat",
         "target_exit_label": "Get Out of the Vehicle"
