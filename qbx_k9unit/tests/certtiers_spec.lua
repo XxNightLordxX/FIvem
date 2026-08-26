@@ -905,4 +905,104 @@ t.test('DEFECT 2: a busy-skip (lock contention) alone remains ok = true -- uncha
     f.env.TierEditMutex.Release('trainee')
 end)
 
+-- ============================================================================
+-- SECTION 12 -- SELF-SERVICE VISIBILITY (economy red-team follow-up,
+-- coder-security pass). HAZARD 4 already establishes there is no privilege-
+-- escalation shape here (CAPABILITY_CATALOG cannot grant a permission or
+-- become high command) -- these tests cover a DIFFERENT property: granting
+-- or revoking a capability on the tier the ACTING OFFICER currently holds
+-- themselves must be named distinctly in both the audit trail and the
+-- response, never indistinguishable from an ordinary, unrelated tier edit.
+-- ============================================================================
+
+t.test('SELF-TIER CAPABILITY EDIT: granting a capability to the tier the acting officer currently holds is flagged distinctly in both the audit and the response', function()
+    local world = newWorld()
+    local f = boot({
+        world = world,
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        playersBySource = {
+            [HC_SOURCE] = { PlayerData = { citizenid = 'CHIEF1', job = { name = 'police' } } },
+        },
+        getCertificationTier = function(citizenid, jobName, _includeExpired)
+            if citizenid == 'CHIEF1' and jobName == 'police' then return 'senior' end
+            return nil
+        end,
+    })
+
+    local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+        key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' },
+    })
+    t.isTrue(result.ok, tostring(result.reason))
+    t.isNotNil(result.warning, 'granting a capability to your OWN currently-held tier must be disclosed in the response, not silently applied')
+    t.contains(result.warning, 'senior')
+
+    t.equals(#world.audit, 1)
+    t.contains(world.audit[1].detail, 'SELF-TIER CAPABILITY EDIT')
+    t.contains(world.audit[1].detail, 'CHIEF1')
+end)
+
+t.test('SELF-TIER CAPABILITY EDIT: editing a DIFFERENT tier than the one the acting officer holds is NOT flagged', function()
+    local world = newWorld()
+    local f = boot({
+        world = world,
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        playersBySource = {
+            [HC_SOURCE] = { PlayerData = { citizenid = 'CHIEF1', job = { name = 'police' } } },
+        },
+        getCertificationTier = function(_citizenid, _jobName) return 'senior' end,
+    })
+
+    local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+        key = 'trainee', label = 'Trainee', capabilities = { 'advanced_tracking' },
+    })
+    t.isTrue(result.ok, tostring(result.reason))
+    t.isNil(result.warning, 'editing a tier the officer does NOT themselves hold must not manufacture a self-tier warning')
+    t.notContains(world.audit[1].detail, 'SELF-TIER')
+end)
+
+t.test('SELF-TIER CAPABILITY EDIT: a REVOKE from the officer\'s own tier is exactly as visible in the audit trail as the original grant', function()
+    local world = newWorld()
+    local f = boot({
+        world = world,
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        playersBySource = {
+            [HC_SOURCE] = { PlayerData = { citizenid = 'CHIEF1', job = { name = 'police' } } },
+        },
+        getCertificationTier = function(_citizenid, _jobName) return 'senior' end,
+    })
+
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = { 'bite_hold_and_takedown' } })
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local revoke = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = {} })
+
+    t.isTrue(revoke.ok, tostring(revoke.reason))
+    t.isNotNil(revoke.warning, 'revoking a capability from your own tier must be disclosed exactly like the original grant was')
+    t.equals(#world.audit, 2)
+    t.contains(world.audit[2].detail, 'SELF-TIER CAPABILITY EDIT')
+end)
+
+t.test('SELF-TIER CAPABILITY EDIT: never flagged when the acting officer\'s own tier cannot be resolved (soft dependency, no GetCertificationTier loaded)', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    -- No getCertificationTier stub supplied at all -- production code must
+    -- degrade exactly like server/certifications.lua not being loaded,
+    -- never error, matching this file's own established soft-dependency
+    -- convention (SECTION 9's own "allows when GetCertificationTier is
+    -- entirely absent" case).
+    local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+        key = 'senior', label = 'Senior', capabilities = { 'advanced_tracking' },
+    })
+    t.isTrue(result.ok, tostring(result.reason))
+    t.isNil(result.warning)
+end)
+
+t.test('SELF-TIER CAPABILITY EDIT: legitimate equivalent still works -- an ordinary capability grant to an unrelated tier completes cleanly with no self-service noise', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+        key = 'trainee', label = 'Trainee', capabilities = { 'advanced_tracking' },
+    })
+    t.isTrue(result.ok, tostring(result.reason))
+    t.isNil(result.warning)
+    t.isTrue(f.env.TierHasCapability('trainee', 'advanced_tracking'))
+end)
+
 os.exit(t.summary())

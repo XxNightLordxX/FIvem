@@ -1068,6 +1068,7 @@
         shop_item_required_tier_label: 'Required Certification Tier',
         shop_item_required_specialization_label: 'Required Specialization',
         shop_item_no_requirement: 'None',
+        shop_item_retired_reference_badge: '(retired)',
         shop_item_save_label: 'Save Item',
         shop_item_cancel_label: 'Cancel',
         shop_item_edit_label: 'Edit',
@@ -3816,59 +3817,81 @@
         // Required Tier -- populated from state.certTiers (opportunistic,
         // see the tab's own click handler comment) -- a "None" option is
         // ALWAYS first, never omitted, since a purchase requirement is
-        // optional. Falls back to the raw stored key as plain, non-select
-        // text when the tier catalog itself never loaded (a caller who
-        // could open this screen but not certTiersList, or a request still
-        // in flight) -- never a broken/empty dropdown.
+        // optional. ALWAYS a real, editable <select>, never a read-only
+        // text fallback -- see the RETIRED REFERENCE note just below for
+        // why a read-only fallback would itself be a hazard here.
+        //
+        // RETIRED REFERENCE: `draft.requiredTierKey` may name a tier this
+        // screen's own (possibly stale, possibly never-loaded)
+        // state.certTiers does not currently contain -- e.g. a tier
+        // retired by a different high-command session since this item was
+        // last saved, or a session where the certTiersList fetch was
+        // denied/still in flight. Per this function's own header ("an
+        // edit draft always starts pre-filled... equipmentShopItemsUpsert
+        // REPLACES ... wholesale from whatever this ONE payload sends"),
+        // silently DROPPING it from the <select> would make a plain Save
+        // (touching nothing else) silently CLEAR a real, currently-
+        // configured purchase requirement the operator never asked to
+        // remove -- so it is always added as its own, clearly-labelled
+        // option and pre-selected instead: visible, and only ever cleared
+        // by a deliberate choice of "None", never a hidden side effect.
         var tierRow = mk('div', { class: 'k9tablet-theme-field' + (state.shopItemFieldError === 'requiredTierKey' ? ' k9tablet-theme-field--invalid' : '') });
         tierRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_item_required_tier_label') }));
-        if (Array.isArray(state.certTiers) && state.certTiers.length > 0) {
-            var tierSelect = mk('select', { class: 'k9tablet-role-select' });
-            var noneTierOption = mk('option', { text: S('shop_item_no_requirement') });
-            noneTierOption.setAttribute('value', '');
-            tierSelect.appendChild(noneTierOption);
+        var tierSelect = mk('select', { class: 'k9tablet-role-select' });
+        var noneTierOption = mk('option', { text: S('shop_item_no_requirement') });
+        noneTierOption.setAttribute('value', '');
+        tierSelect.appendChild(noneTierOption);
+        var knownTierKeys = {};
+        if (Array.isArray(state.certTiers)) {
             for (var ti = 0; ti < state.certTiers.length; ti++) {
                 var tierEntry = state.certTiers[ti];
                 if (!tierEntry || typeof tierEntry.key !== 'string' || tierEntry.key.length === 0) continue;
+                knownTierKeys[tierEntry.key] = true;
                 var tierOption = mk('option', { text: (typeof tierEntry.label === 'string' && tierEntry.label.length > 0) ? tierEntry.label : tierEntry.key });
                 tierOption.setAttribute('value', tierEntry.key);
                 tierSelect.appendChild(tierOption);
             }
-            tierSelect.value = draft.requiredTierKey;
-            tierSelect.addEventListener('input', function (e) { draft.requiredTierKey = e.target.value; });
-            tierRow.appendChild(tierSelect);
-        } else {
-            tierRow.appendChild(mk('p', { class: 'k9tablet-muted', text: draft.requiredTierKey.length > 0 ? tierDisplayLabel(draft.requiredTierKey) : S('shop_item_no_requirement') }));
         }
+        if (draft.requiredTierKey.length > 0 && !knownTierKeys[draft.requiredTierKey]) {
+            var retiredTierOption = mk('option', { text: tierDisplayLabel(draft.requiredTierKey) + ' ' + S('shop_item_retired_reference_badge') });
+            retiredTierOption.setAttribute('value', draft.requiredTierKey);
+            tierSelect.appendChild(retiredTierOption);
+        }
+        tierSelect.value = draft.requiredTierKey;
+        tierSelect.addEventListener('input', function (e) { draft.requiredTierKey = e.target.value; });
+        tierRow.appendChild(tierSelect);
         wrap.appendChild(tierRow);
 
-        // Required Specialization -- SAME shape as Required Tier above,
-        // populated from state.specializations (Config.K9Specializations,
-        // sent verbatim at tablet:open -- always available with no
-        // separate fetch, unlike the tier catalog).
+        // Required Specialization -- SAME shape, SAME RETIRED REFERENCE
+        // safeguard, as Required Tier immediately above. Populated from
+        // state.specializations (Config.K9Specializations, sent verbatim
+        // at tablet:open -- always available with no separate fetch,
+        // unlike the tier catalog, but an operator can still rename/remove
+        // a specialization key in config.lua between this item's last
+        // save and now, so the same hazard applies).
         var specRow = mk('div', { class: 'k9tablet-theme-field' + (state.shopItemFieldError === 'requiredSpecialization' ? ' k9tablet-theme-field--invalid' : '') });
         specRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_item_required_specialization_label') }));
         var specCatalog = (state.specializations && typeof state.specializations === 'object') ? state.specializations : {};
-        var specKeys = [];
+        var specSelect = mk('select', { class: 'k9tablet-role-select' });
+        var noneSpecOption = mk('option', { text: S('shop_item_no_requirement') });
+        noneSpecOption.setAttribute('value', '');
+        specSelect.appendChild(noneSpecOption);
+        var knownSpecKeys = {};
         for (var specKey in specCatalog) {
-            if (Object.prototype.hasOwnProperty.call(specCatalog, specKey)) specKeys.push(specKey);
+            if (!Object.prototype.hasOwnProperty.call(specCatalog, specKey)) continue;
+            knownSpecKeys[specKey] = true;
+            var specOption = mk('option', { text: specializationDisplayLabel(specKey) });
+            specOption.setAttribute('value', specKey);
+            specSelect.appendChild(specOption);
         }
-        if (specKeys.length > 0) {
-            var specSelect = mk('select', { class: 'k9tablet-role-select' });
-            var noneSpecOption = mk('option', { text: S('shop_item_no_requirement') });
-            noneSpecOption.setAttribute('value', '');
-            specSelect.appendChild(noneSpecOption);
-            for (var si = 0; si < specKeys.length; si++) {
-                var specOption = mk('option', { text: specializationDisplayLabel(specKeys[si]) });
-                specOption.setAttribute('value', specKeys[si]);
-                specSelect.appendChild(specOption);
-            }
-            specSelect.value = draft.requiredSpecialization;
-            specSelect.addEventListener('input', function (e) { draft.requiredSpecialization = e.target.value; });
-            specRow.appendChild(specSelect);
-        } else {
-            specRow.appendChild(mk('p', { class: 'k9tablet-muted', text: draft.requiredSpecialization.length > 0 ? specializationDisplayLabel(draft.requiredSpecialization) : S('shop_item_no_requirement') }));
+        if (draft.requiredSpecialization.length > 0 && !knownSpecKeys[draft.requiredSpecialization]) {
+            var retiredSpecOption = mk('option', { text: specializationDisplayLabel(draft.requiredSpecialization) + ' ' + S('shop_item_retired_reference_badge') });
+            retiredSpecOption.setAttribute('value', draft.requiredSpecialization);
+            specSelect.appendChild(retiredSpecOption);
         }
+        specSelect.value = draft.requiredSpecialization;
+        specSelect.addEventListener('input', function (e) { draft.requiredSpecialization = e.target.value; });
+        specRow.appendChild(specSelect);
         wrap.appendChild(specRow);
 
         var actions = mk('div', { class: 'k9tablet-theme-actions' });

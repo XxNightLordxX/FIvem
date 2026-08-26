@@ -727,6 +727,7 @@ local TABLET_STRING_KEYS = {
     'shop_item_label_label', 'shop_item_label_placeholder', 'shop_item_currency_label',
     'shop_item_currency_placeholder', 'shop_item_required_tier_label',
     'shop_item_required_specialization_label', 'shop_item_no_requirement',
+    'shop_item_retired_reference_badge',
     'shop_item_save_label', 'shop_item_cancel_label', 'shop_item_edit_label',
     'shop_item_delete_label', 'shop_item_move_up_label', 'shop_item_move_up_title',
     'shop_item_move_down_label', 'shop_item_move_down_title', 'shop_item_price_free_badge',

@@ -773,4 +773,212 @@ t.test('PERSISTENCE: a custom key, a relabel, and a delete all survive a resourc
     t.isFalse(second.env.IsKnownPermissionCatalogKey('k9.givexp'), 'the deletion (tombstone) must survive a restart, never silently un-delete')
 end)
 
+-- ============================================================================
+-- SECTION 12 -- BOOT-ORDER RACE against server/datastore.lua's schema-
+-- collision probe (interaction review + fix, db-schema boot-order pass).
+--
+-- server/datastore.lua loads before this file and registers its own
+-- onResourceStart handler FIRST -- but that handler's own MySQL.query.await
+-- is a real, YIELDING call, and a yielding handler does not block FXServer's
+-- event dispatch from moving straight on to the NEXT registered handler
+-- (this file's own, below) while the probe is still in flight. Every OTHER
+-- test in this file uses the synchronous `boot()`/`makeMysqlStub` helpers
+-- above, which never yield at all (plain Lua functions), so they cannot
+-- exercise this. This section builds its own small, separate,
+-- coroutine-based dispatcher instead, reproducing that ONE real FXServer
+-- property precisely: every onResourceStart handler registered for the same
+-- event runs in its OWN coroutine, in registration order, and a handler
+-- that yields hands control back immediately rather than blocking the next
+-- one. See server/datastore.lua's own K9Store.WaitForSchemaCheckToSettle
+-- for the fix this proves.
+-- ============================================================================
+
+--- @param opts table? -- { foreignPermKeyRows: table? -- canned response
+---   for this catalog's own `SELECT permission_key, label, description,
+---   deleted FROM k9_permission_keys` if it is ever actually issued }
+--- @return table fixture -- { env, printedLines, coros, fireResourceStart,
+---   resumeNext, permKeysQueryCallCount }
+local function bootWithRacingMySQL(opts)
+    opts = opts or {}
+
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
+    local eventHandlers = {}
+    local function AddEventHandlerStub(eventName, fn)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = fn
+    end
+
+    -- The probe's own INFORMATION_SCHEMA query YIELDS and is resumed only
+    -- when the test explicitly resumes that coroutine -- modelling a real,
+    -- in-flight oxmysql promise precisely, never returning on its own
+    -- schedule. `permKeysQueryCalls` counts how many times this catalog's
+    -- OWN narrower SELECT actually ran -- the exact thing every test below
+    -- proves must never happen before the probe has settled.
+    local permKeysQueryCalls = 0
+    local queryStub = {
+        await = function(sql, _params)
+            if sql:find('SELECT permission_key, label, description, deleted FROM k9_permission_keys', 1, true) then
+                permKeysQueryCalls = permKeysQueryCalls + 1
+                return opts.foreignPermKeyRows or {}
+            end
+            if sql:find('INFORMATION_SCHEMA.COLUMNS', 1, true) then
+                return coroutine.yield()
+            end
+            error('bootWithRacingMySQL: unexpected query, no stub behavior defined: ' .. tostring(sql))
+        end,
+    }
+
+    local env = Sandbox.newEnv({
+        Config = {
+            Database = { enabled = true },
+            Permissions = opts.permissions or DEFAULT_PERMISSIONS,
+            Departments = { police = { label = 'Police', certifierGrade = 4, auditGrade = 4, highCommandGrade = 6 } },
+            Features = { PermissionGrants = true, CommandTablet = false, BiteAndHold = true },
+        },
+        AddEventHandler = AddEventHandlerStub,
+        RegisterNetEvent = function(_name, _fn) end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        GetPlayers = function() return {} end, -- keeps permissions.lua's own onResourceStart backfill loop a harmless no-op here
+        GetGameTimer = function() return 0 end,
+        -- Yields, mirroring the real FXServer scheduler closely enough for
+        -- K9Store.WaitForSchemaCheckToSettle's own bounded poll loop to
+        -- actually suspend this catalog's handler between polls -- exactly
+        -- what every test below drives explicitly via `resumeNext`.
+        Wait = function(_ms) coroutine.yield() end,
+        lib = { callback = { register = function() end } },
+        exports = { qbx_core = { GetPlayer = function() end, GetPlayerByCitizenId = function() end } },
+        MySQL = { query = queryStub },
+        print = printStub,
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/permissions.lua', env)
+    Sandbox.loadInto('../server/permissionkeycatalog.lua', env)
+
+    local coros = {}
+
+    local function fireResourceStart()
+        for i, fn in ipairs(eventHandlers['onResourceStart']) do
+            local co = coroutine.create(fn)
+            coros[i] = co
+            local ok, err = coroutine.resume(co, 'qbx_k9unit')
+            if not ok then error(('onResourceStart handler #%d errored: %s'):format(i, tostring(err))) end
+        end
+    end
+
+    --- Resumes the FIRST currently-suspended coroutine (registration
+    --- order), passing `value` through as whatever that coroutine's own
+    --- `coroutine.yield()` call is waiting on. Returns `false`, resuming
+    --- nothing, once every handler has already run to completion.
+    local function resumeNext(value)
+        for _, co in ipairs(coros) do
+            if coroutine.status(co) == 'suspended' then
+                local ok, err = coroutine.resume(co, value)
+                if not ok then error('resumeNext: handler errored on resume: ' .. tostring(err)) end
+                return true
+            end
+        end
+        return false
+    end
+
+    return {
+        env = env, printedLines = printedLines, coros = coros,
+        fireResourceStart = fireResourceStart, resumeNext = resumeNext,
+        permKeysQueryCallCount = function() return permKeysQueryCalls end,
+    }
+end
+
+t.test('BOOT-ORDER RACE (the actual bug, fixed): a foreign k9_permission_keys table that satisfies this catalog\'s own narrower SELECT but fails the FULL schema probe must never reach the live permission-key catalog', function()
+    local f = bootWithRacingMySQL({
+        foreignPermKeyRows = { { permission_key = 'someone.elses.row', label = 'NOT OURS', description = nil, deleted = 0 } },
+    })
+
+    f.fireResourceStart()
+    -- Per real FXServer semantics: datastore.lua's own probe handler has
+    -- yielded (its INFORMATION_SCHEMA query is "in flight") and this
+    -- file's own onResourceStart handler (registered after it) has
+    -- ALREADY been invoked too, up to its own first Wait().
+    t.equals(f.permKeysQueryCallCount(), 0, 'the catalog must not issue its own narrower SELECT before the schema probe has settled')
+
+    -- Resolve the probe: a foreign table with only 4 of the 7 columns
+    -- k9_permission_keys is checked against -- exactly the 4 columns this
+    -- catalog's own SELECT names -- a genuine collision.
+    t.isTrue(f.resumeNext({
+        { tbl = 'k9_permission_keys', col = 'permission_key' },
+        { tbl = 'k9_permission_keys', col = 'label' },
+        { tbl = 'k9_permission_keys', col = 'description' },
+        { tbl = 'k9_permission_keys', col = 'deleted' },
+    }), 'the probe must still be suspended, waiting to be resolved')
+    t.isFalse(f.env.K9Store.IsDatabaseEnabled(), 'the collision must have been detected')
+    t.equals(f.permKeysQueryCallCount(), 0, 'still not read immediately after settling')
+
+    t.isTrue(f.resumeNext(), 'the catalog handler, parked inside its own bounded wait, wakes on its next poll')
+    t.equals(f.permKeysQueryCallCount(), 0, 'DatabaseEnabled() is now false, so the catalog takes the MEMORY branch -- it must NEVER have issued its own narrower SELECT against the foreign table, before or after settling')
+    t.isFalse(f.env.IsKnownPermissionCatalogKey('someone.elses.row'), 'the foreign row must never reach the live permission-key catalog')
+    t.isTrue(f.env.IsKnownPermissionCatalogKey('k9.access'), 'falls back to config-shipped defaults exactly like Config.Database.enabled = false, never to an empty catalog')
+    t.isFalse(f.resumeNext(), 'every handler has now run to completion')
+end)
+
+t.test('BOOT-ORDER RACE control: once the probe settles with NO collision, the catalog performs its real read and picks up legitimate persisted rows -- the fix must not break the ordinary, non-colliding path', function()
+    local f = bootWithRacingMySQL({
+        foreignPermKeyRows = { { permission_key = 'k9.real', label = 'Real DB Row', description = nil, deleted = 0 } },
+    })
+
+    f.fireResourceStart()
+    t.equals(f.permKeysQueryCallCount(), 0)
+
+    -- A schema response naming every column k9_permission_keys is checked
+    -- against -- a clean, non-colliding table.
+    t.isTrue(f.resumeNext({
+        { tbl = 'k9_permission_keys', col = 'permission_key' },
+        { tbl = 'k9_permission_keys', col = 'label' },
+        { tbl = 'k9_permission_keys', col = 'description' },
+        { tbl = 'k9_permission_keys', col = 'deleted' },
+        { tbl = 'k9_permission_keys', col = 'created_at' },
+        { tbl = 'k9_permission_keys', col = 'updated_by' },
+        { tbl = 'k9_permission_keys', col = 'updated_at' },
+    }))
+    t.isTrue(f.env.K9Store.IsDatabaseEnabled(), 'no collision -- the real database stays live')
+
+    t.isTrue(f.resumeNext(), 'the catalog handler wakes on its next poll')
+    t.equals(f.permKeysQueryCallCount(), 1, 'now that settlement confirmed no collision, the catalog performs its real read exactly once')
+    t.isTrue(f.env.IsKnownPermissionCatalogKey('k9.real'), 'the legitimate persisted row must be picked up')
+    t.isFalse(f.resumeNext())
+end)
+
+t.test('BOOT-ORDER RACE bounded timeout: if the schema probe never settles, this catalog gives up after a bounded number of polls and boots to config-only defaults -- it must never hang and never read the unconfirmed table', function()
+    local f = bootWithRacingMySQL({
+        foreignPermKeyRows = { { permission_key = 'k9.real', label = 'Real DB Row', description = nil, deleted = 0 } },
+    })
+    f.fireResourceStart()
+    t.equals(f.permKeysQueryCallCount(), 0)
+
+    -- Never resume coros[1] (the probe) at all -- a hung query that never
+    -- comes back, not merely a slow one. Keep waking ONLY this catalog's
+    -- own handler (coros[3]) on its own bounded poll loop until it either
+    -- gives up (dies) or this test's own generous ceiling is hit -- the
+    -- ceiling exists purely so a regression that makes the production wait
+    -- loop genuinely infinite fails this test instead of hanging the whole
+    -- suite.
+    local resumes = 0
+    while coroutine.status(f.coros[3]) == 'suspended' and resumes < 200 do
+        coroutine.resume(f.coros[3])
+        resumes = resumes + 1
+    end
+
+    t.isTrue(resumes < 200, 'must give up within a bounded number of polls, never spin forever waiting on a probe that never answers')
+    t.isTrue(coroutine.status(f.coros[3]) == 'dead', 'the catalog\'s own onResourceStart handler must finish (give up), not remain permanently suspended')
+    t.equals(f.permKeysQueryCallCount(), 0, 'must never issue its own narrower SELECT while the collision state is genuinely unknown -- fail-closed, exactly like Config.Database.enabled = false')
+    t.isFalse(f.env.IsKnownPermissionCatalogKey('k9.real'), 'no DB row -- real or foreign -- reaches the catalog while unsettled')
+    t.isTrue(f.env.IsKnownPermissionCatalogKey('k9.access'), 'config-shipped defaults remain in effect')
+    t.contains(table.concat(f.printedLines, '\n'), 'schema-collision check had not finished', 'the fallback must be logged clearly, never silent')
+end)
+
 os.exit(t.summary())
