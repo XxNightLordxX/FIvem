@@ -227,6 +227,17 @@ local function newMedkitFixture(opts)
         return { PlayerData = p }
     end
 
+    -- PER-PERSON FEATURE CONTROL (this pass) -- mirrors
+    -- tests/pursuitsprint_spec.lua's own `permissionGrants`/
+    -- `defaultHasPermission`/`grantPermission` fixture shape, for
+    -- IsK9MedkitPermittedForCitizenId (gates the USING player, never the
+    -- K9 being treated -- see that function's own doc comment in
+    -- server/medkit.lua).
+    local permissionGrants = {} -- [citizenid][key] = true/false
+    local function defaultHasPermission(citizenid, key)
+        return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+    end
+
     local pedBySource = {}
     local function GetPlayerPed(src) return pedBySource[src] or 0 end
 
@@ -291,6 +302,7 @@ local function newMedkitFixture(opts)
         Features = { K9Medkit = opts.k9Medkit ~= false },
         Departments = opts.departments or baselineDepartments(),
         K9Medkit = opts.k9MedkitCfg or baselineK9MedkitConfig(),
+        FeatureControl = { RequireGrant = {} },
         -- COMPAT-LAYER MIGRATION (coder-backend, this pass): pins the
         -- 'inventory' system straight to 'ox_inventory' via `override`
         -- (shared/compat/core.lua's TIER 1, skipping the candidate walk).
@@ -341,6 +353,7 @@ local function newMedkitFixture(opts)
         GetEntityModel = GetEntityModel,
         IsConfiguredK9Model = IsConfiguredK9Model,
         HasK9Role = HasK9Role,
+        HasPermission = defaultHasPermission,
         lib = libStub,
         Config = config,
         -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory is
@@ -413,6 +426,12 @@ local function newMedkitFixture(opts)
         setNow = function(ms) fakeNow = ms end,
         now = function() return fakeNow end,
         setPlayer = function(src, shape) playersBySource[src] = shape end,
+        -- PER-PERSON FEATURE CONTROL (this pass) -- see this fixture's own
+        -- header comment above.
+        grantPermission = function(citizenid, key, value)
+            permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+            permissionGrants[citizenid][key] = value
+        end,
         setPed = function(src, ped) pedBySource[src] = ped end,
         setCoords = function(ped, x, y, z) coordsByPed[ped] = vec3(x, y, z) end,
         setHealth = function(ped, hp) healthByPed[ped] = hp end,
@@ -1235,6 +1254,70 @@ t.test('CROSS-CHECK: all nine client-recognized reason strings are exercised som
         'too_far', 'on_cooldown', 'no_item', 'treatment_in_progress', 'medkit_failed',
     }
     t.equals(#reasons, 9)
+end)
+
+-- ========================================================================
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsK9MedkitPermittedForCitizenId, gating the USING player
+-- (never the K9 being treated). Mirrors tests/pursuitsprint_spec.lua's own
+-- section of the same name.
+-- ========================================================================
+
+t.test('useK9Medkit BLOCK: an explicit block.K9Medkit grant on the USING player denies, and burns NO target cooldown', function()
+    local f = newMedkitFixture()
+    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
+    wireTargetK9(f, TARGET_SRC)
+    f.grantPermission('USER-CID-' .. USER_SRC, 'block.K9Medkit', true)
+
+    local r1 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isFalse(r1.ok)
+    t.equals(r1.reason, 'no_access')
+    t.equals(f.getItemCount(USER_SRC, f.config.K9Medkit.itemName), 1, 'a blocked attempt must never consume the item either')
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had stamped the target's own cooldown, this would now fail as
+    -- on_cooldown instead of succeeding.
+    f.grantPermission('USER-CID-' .. USER_SRC, 'block.K9Medkit', false)
+    local r2 = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r2.ok, 'a block must never burn the cooldown a legitimate follow-up treat still needs')
+end)
+
+t.test('useK9Medkit BLOCK only affects the USING player -- a block on the TARGET K9\'s own citizenid has no effect on someone else treating it', function()
+    local f = newMedkitFixture()
+    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
+    wireTargetK9(f, TARGET_SRC, { citizenid = 'K9-CID' })
+    f.grantPermission('K9-CID', 'block.K9Medkit', true) -- the TARGET, not the using player
+    local r = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r.ok, 'IsK9MedkitPermittedForCitizenId gates the using player only, per its own doc comment')
+end)
+
+t.test('useK9Medkit not blocked: an ordinary using player with no grant/block row at all still treats (default allow, step 4)', function()
+    local f = newMedkitFixture()
+    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
+    wireTargetK9(f, TARGET_SRC)
+    local r = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r.ok)
+end)
+
+t.test('useK9Medkit RequireGrant listed + no grant held -- denied even though every other check passes', function()
+    local f = newMedkitFixture()
+    f.config.FeatureControl.RequireGrant.K9Medkit = true
+    wireUsingPlayer(f, USER_SRC, { itemCount = 1 })
+    wireTargetK9(f, TARGET_SRC)
+    -- deliberately NOT granted
+    local r = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isFalse(r.ok)
+    t.equals(r.reason, 'no_access')
+end)
+
+t.test('useK9Medkit RequireGrant listed + an active feature.K9Medkit grant on the using player -- allowed', function()
+    local f = newMedkitFixture()
+    f.config.FeatureControl.RequireGrant.K9Medkit = true
+    wireUsingPlayer(f, USER_SRC, { itemCount = 1, citizenid = 'USER-CID' })
+    wireTargetK9(f, TARGET_SRC)
+    f.grantPermission('USER-CID', 'feature.K9Medkit', true)
+    local r = f.invokeCallback(CALLBACK_NAME, USER_SRC, TARGET_SRC)
+    t.isTrue(r.ok)
 end)
 
 -- ========================================================================

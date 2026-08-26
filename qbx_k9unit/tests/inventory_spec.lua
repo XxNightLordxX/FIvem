@@ -221,6 +221,17 @@ local function newInventoryFixture(opts)
         return { PlayerData = p }
     end
 
+    -- PER-PERSON FEATURE CONTROL (this pass) -- mirrors
+    -- tests/pursuitsprint_spec.lua's own `permissionGrants`/
+    -- `defaultHasPermission`/`grantPermission` fixture shape, for
+    -- IsK9InventoryPermittedForCitizenId (gates the INTERACTOR, i.e.
+    -- whichever src calls openK9Inventory -- see that function's own doc
+    -- comment in server/inventory.lua).
+    local permissionGrants = {} -- [citizenid][key] = true/false
+    local function defaultHasPermission(citizenid, key)
+        return permissionGrants[citizenid] and permissionGrants[citizenid][key] == true
+    end
+
     local departments = opts.departments or { police = { label = 'Police' } }
     local config = {
         Features = { K9Inventory = opts.featureOn ~= false },
@@ -232,6 +243,7 @@ local function newInventoryFixture(opts)
             allowedItems  = opts.allowedItems, -- nil by default, matching the shipped default
         },
         Departments = departments,
+        FeatureControl = { RequireGrant = {} },
         -- COMPAT-LAYER MIGRATION (this pass): pins the 'inventory' system
         -- straight to 'ox_inventory' via `override` (shared/compat/
         -- core.lua's TIER 1, skipping the whole candidate-scanning walk).
@@ -268,6 +280,7 @@ local function newInventoryFixture(opts)
         GetEntityCoords               = GetEntityCoords,
         HasK9Access                   = HasK9Access,
         IsConfiguredK9Model           = IsConfiguredK9Model,
+        HasPermission                 = defaultHasPermission,
         Config                        = config,
         -- COMPAT-LAYER MIGRATION (this pass): server realm; only
         -- 'ox_inventory' reports a state at all, exactly mirroring
@@ -352,6 +365,12 @@ local function newInventoryFixture(opts)
         setAccess = function(src, allowed) hasAccessBySource[src] = allowed end,
         setPlayerRecord = function(src, shape) playersBySource[src] = shape end,
         clearPlayerRecord = function(src) playersBySource[src] = nil end,
+        -- PER-PERSON FEATURE CONTROL (this pass) -- see this fixture's own
+        -- header comment above.
+        grantPermission = function(citizenid, key, value)
+            permissionGrants[citizenid] = permissionGrants[citizenid] or {}
+            permissionGrants[citizenid][key] = value
+        end,
     }
 end
 
@@ -787,6 +806,65 @@ t.test('openK9Inventory: on_cooldown is checked BEFORE feature_disabled would ev
     local r = f.invokeCallback('qbx_k9unit:server:openK9Inventory', INTERACTOR_SRC, netId)
     t.isFalse(r.ok)
     t.equals(#f.registerStashCalls, 1, 'no additional RegisterStash call from the rejected repeat request')
+end)
+
+-- ========================================================================
+-- PER-PERSON FEATURE CONTROL (config.lua's Config.FeatureControl 4-step
+-- resolution) -- IsK9InventoryPermittedForCitizenId, gating the INTERACTOR
+-- (never the target K9). Mirrors tests/pursuitsprint_spec.lua's own
+-- section of the same name.
+-- ========================================================================
+
+t.test('openK9Inventory BLOCK: an explicit block.K9Inventory grant on the INTERACTOR denies, and burns NO cooldown', function()
+    local f = newInventoryFixture()
+    local netId = wireEligibleOpen(f)
+    f.grantPermission('HANDLER-CID', 'block.K9Inventory', true)
+
+    local r1 = f.invokeCallback('qbx_k9unit:server:openK9Inventory', INTERACTOR_SRC, netId)
+    t.isFalse(r1.ok)
+    t.equals(r1.reason, 'not_authorized')
+    t.equals(#f.registerStashCalls, 0)
+
+    -- Unblock and retry IMMEDIATELY (same tick) -- if the blocked attempt
+    -- had consumed K9InventoryOpenCooldown, this would now fail as
+    -- on_cooldown instead of succeeding.
+    f.grantPermission('HANDLER-CID', 'block.K9Inventory', false)
+    local r2 = f.invokeCallback('qbx_k9unit:server:openK9Inventory', INTERACTOR_SRC, netId)
+    t.isTrue(r2.ok, 'a block must never burn the cooldown a legitimate follow-up request still needs')
+end)
+
+t.test('openK9Inventory BLOCK only affects the INTERACTOR -- a block on the TARGET K9\'s own citizenid has no effect on someone else opening its gear', function()
+    local f = newInventoryFixture()
+    local netId = wireEligibleOpen(f, { targetCitizenid = 'K9-CID' })
+    f.grantPermission('K9-CID', 'block.K9Inventory', true) -- the TARGET, not the interactor
+    local r = f.invokeCallback('qbx_k9unit:server:openK9Inventory', INTERACTOR_SRC, netId)
+    t.isTrue(r.ok, 'IsK9InventoryPermittedForCitizenId gates the interactor only, per its own doc comment')
+end)
+
+t.test('openK9Inventory not blocked: an ordinary interactor with no grant/block row at all still works (default allow, step 4)', function()
+    local f = newInventoryFixture()
+    local netId = wireEligibleOpen(f)
+    local r = f.invokeCallback('qbx_k9unit:server:openK9Inventory', INTERACTOR_SRC, netId)
+    t.isTrue(r.ok)
+end)
+
+t.test('openK9Inventory RequireGrant listed + no grant held -- denied even though every other check passes', function()
+    local f = newInventoryFixture()
+    f.config.FeatureControl.RequireGrant.K9Inventory = true
+    local netId = wireEligibleOpen(f)
+    -- deliberately NOT granted
+    local r = f.invokeCallback('qbx_k9unit:server:openK9Inventory', INTERACTOR_SRC, netId)
+    t.isFalse(r.ok)
+    t.equals(r.reason, 'not_authorized')
+end)
+
+t.test('openK9Inventory RequireGrant listed + an active feature.K9Inventory grant on the interactor -- allowed', function()
+    local f = newInventoryFixture()
+    f.config.FeatureControl.RequireGrant.K9Inventory = true
+    local netId = wireEligibleOpen(f)
+    f.grantPermission('HANDLER-CID', 'feature.K9Inventory', true)
+    local r = f.invokeCallback('qbx_k9unit:server:openK9Inventory', INTERACTOR_SRC, netId)
+    t.isTrue(r.ok)
 end)
 
 os.exit(t.summary())

@@ -1084,6 +1084,58 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 end)
 
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL (Config.FeatureControl -- config.lua's own
+-- header documents the 4-step resolution; step 1, Config.Features.<Type>,
+-- is checked separately below before this function is ever reached).
+-- Mirrors server/pursuitsprint.lua's IsPursuitSprintPermittedForCitizenId
+-- shape verbatim (that file's own header says to read it before writing
+-- another variant) -- parameterized by featureName here since this file
+-- gates THREE independent Config.Features flags (ScentTracking/
+-- BloodTracking/GunpowderSniffing) through the identical shape, one call
+-- site each, rather than three near-duplicate functions.
+--
+-- SCOPE, DELIBERATE: this gates ONLY the QUERY side (findTrackableSource
+-- below -- the "use the ability" entry point a K9 actually presses a
+-- button for). It does NOT gate relayDamageEvent/relayWeaponFire (blood/
+-- gunpowder CAPTURE) or the 'swapItems' ox_inventory hook (scent CAPTURE)
+-- above -- those log an AMBIENT world event (a victim taking damage, a
+-- shooter firing, an item hitting the ground) keyed by WHOEVER caused it,
+-- not by the K9 who might later search for it. Gating capture on a
+-- searching K9's own block/grant status would be a category error (the
+-- reporting party is frequently a suspect, never the K9 in question), and
+-- for gunpowder specifically this was examined and deliberately rejected
+-- today: gating capture would stop logging shots fired by exactly the
+-- people this feature exists to track, defeating the feature for every K9
+-- who might legitimately search that log later, blocked or not. See
+-- tests/tracking_spec.lua's regression coverage asserting capture stays
+-- ungated.
+--- @param citizenid string
+--- @param featureName string -- exact Config.Features key: 'ScentTracking' | 'BloodTracking' | 'GunpowderSniffing'
+--- @return boolean allowed
+local function IsTrackingFeaturePermittedForCitizenId(citizenid, featureName)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.' .. featureName) == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant[featureName] == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.' .. featureName) == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 --- DEVELOPER_REFERENCE.md §11.4 item 1. Resolves the nearest trackable source of
 --- `trackType` for the CALLING K9's own live server-side position.
 --- Validation order (cheapest/most-defensive checks first, same discipline
@@ -1096,6 +1148,10 @@ end)
 ---   2. Config.Features.<Type> — real server-side no-op regardless of
 ---      client UI state.
 ---   3. HasK9Access(source).
+---   3b. PER-PERSON FEATURE CONTROL (IsTrackingFeaturePermittedForCitizenId
+---      above) -- checked BEFORE the cooldown below is ever consumed, so a
+---      blocked/not-yet-granted K9 never burns their own query cooldown on
+---      a request that was always going to be refused.
 ---   4. Per-(source, trackType) cooldown — stamped BEFORE any lookup work
 ---      below, mirroring the ordering fix DEVELOPER_REFERENCE.md#contraband-search §3
 ---      step 13 mandates for searchTarget's cooldown-vs-await race (applies
@@ -1130,6 +1186,18 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
 
     if not HasK9Access(source) then
         return { found = false } -- reuse the global from server/certifications.lua, do not re-derive
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsTrackingFeaturePermittedForCitizenId
+    -- above for the full 4-step resolution and why this gates the QUERY only,
+    -- never blood/gunpowder/scent CAPTURE. Deliberately BEFORE the cooldown
+    -- consume just below -- a block must never burn a cooldown slot.
+    local trackerPlayerForPermission = exports.qbx_core:GetPlayer(source)
+    local trackerCitizenidForPermission = trackerPlayerForPermission and trackerPlayerForPermission.PlayerData
+        and trackerPlayerForPermission.PlayerData.citizenid
+    if not trackerCitizenidForPermission
+        or not IsTrackingFeaturePermittedForCitizenId(trackerCitizenidForPermission, TRACK_TYPE_FEATURE_FLAGS[trackType]) then
+        return { found = false } -- same bare, reasonless shape every other denial in this callback already uses (§11.4 item 1's own signature has no reason field)
     end
 
     local trackingConfig = TRACK_TYPE_CONFIG[trackType]
@@ -1303,6 +1371,16 @@ end)
 --- event with no real search having resolved anything, or from far away, or
 --- repeatedly, gets nothing: no pending entry / an expired entry / a live
 --- distance still over the radius all fall through to a silent no-op below.
+-- DELIBERATELY NOT RE-CHECKED against IsTrackingFeaturePermittedForCitizenId
+-- here: the block/grant gate is the ENTRY POINT (findTrackableSource above,
+-- where the ticket was minted) -- by the time a K9 is walking toward an
+-- already-resolved, already-authorized source, they hold a ticket earned
+-- fair and square. Re-checking here would gate the SYMPTOM (claiming an
+-- already-earned reward) rather than the entry point, and would strand a K9
+-- who was blocked one tick after a legitimate find, with real travel already
+-- spent, out of an XP award they had already qualified for -- the same
+-- "no unbounded trap" reasoning this resource applies to termination paths,
+-- applied here to an in-flight reward instead.
 RegisterNetEvent('qbx_k9unit:server:reportTrackSourceArrival', function()
     local src = source
 
