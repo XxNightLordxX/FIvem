@@ -87,6 +87,135 @@
     toggle thermal/night vision, exactly as they can already toggle the
     first/third-person camera.
     ======================================================================
+
+    ======================================================================
+    CAMERA FEED (Config.Features.CameraFeedPiP) — ADDED THIS PASS, owner
+    directive: "do whatever it takes to finish the CameraFeedPiP." Two
+    prior agents independently confirmed zero implementing code existed
+    anywhere in this resource for this flag before this pass (grepped and
+    read; only reference was config.lua's own comment declaring it
+    impossible and this file's header, unedited, did not mention it
+    either). This section is the first real implementation.
+
+    WHAT THIS IS NOT, RE-VERIFIED INDEPENDENTLY THIS PASS, NOT JUST
+    INHERITED FROM CONFIG.LUA'S EARLIER RESEARCH: a genuine simultaneous
+    inset (two live 3D views on screen at once, the literal meaning of
+    "picture-in-picture") remains IMPOSSIBLE with documented natives.
+    Verified by live-fetching the authoritative CFX native reference
+    (https://runtime.fivem.net/doc/natives.json — reachable from this
+    session; the task brief's assumed fallback was in fact available,
+    not the native-decls repo alone, which only documents CFX-specific
+    natives and 404s on ordinary GTA5 natives regardless of whether they
+    exist) and enumerating the ENTIRE `CAM` namespace (202 natives) plus
+    every `RENDERTARGET`-named native (`HUD` namespace:
+    REGISTER_NAMED_RENDERTARGET, LINK_NAMED_RENDERTARGET,
+    GET_NAMED_RENDERTARGET_RENDER_ID, IS_NAMED_RENDERTARGET_REGISTERED/
+    LINKED, RELEASE_NAMED_RENDERTARGET). The render-target natives that DO
+    exist let a script draw 2D sprites/text (or a DUI/NUI page, via
+    CREATE_RUNTIME_TEXTURE_FROM_DUI_HANDLE) onto a prop's texture (arcade
+    cabinets, in-world screens) — none of them render a live 3D scene from
+    an arbitrary CAM object into that texture. Nothing in the CAM
+    namespace above does the reverse either (there is no
+    "render this cam to a texture" native, only natives that manipulate a
+    cam's own state or make it the ONE active full-screen view via
+    RENDER_SCRIPT_CAMS). This confirms and strengthens config.lua's own
+    prior conclusion (citizenfx/fivem#3835 open, no native, no ecosystem
+    resource has solved this either) with a positive, dated, sourced
+    check against the full namespace, not just a handful of 404s.
+
+    WHAT THIS IS INSTEAD, PER OWNER-APPROVED SCOPE ("a full-screen camera
+    view the handler toggles into rather than an inset... build that and
+    be explicit about what it is and is not"): ToggleCameraFeed() below
+    swaps the LOCAL player's entire view (RENDER_SCRIPT_CAMS) to a script
+    camera anchored to their ACTIVE PARTNER's ped (client/partnership.lua's
+    HandlerPartnership registry — the two-real-players Partner Up
+    mechanic, not a spawned/despawned companion), oriented to match that
+    partner's current body rotation every frame, until toggled off again
+    or an exit condition fires. This is a real, live, per-frame-updated
+    view of what your partner is near and facing — not a texture inset,
+    not a recording, not a still image — but it is a full camera SWITCH,
+    matching the "full camera switch" category config.lua's own research
+    already flagged as the ecosystem's actual practice for this class of
+    feature (as opposed to the "cosmetic overlay on your own view"
+    category, which this deliberately is not — it is a real second
+    vantage point, not decoration).
+
+    GATING — SAME COMBINATOR AS EVERY OTHER DEPARTMENTAL CAPABILITY,
+    DELIBERATELY NOT IsOwnModelK9() ALONE (contrast thermal/night vision
+    above): CanShowK9UI(), client/main.lua's role/model-decoupled
+    combinator. This is the owner's explicit requirement for this feature
+    specifically ("it works for a role-holder on any ped... a handler on a
+    human body must get it too") satisfied for free, with no new gating
+    code invented: under this resource's DEFAULT config
+    (Config.K9Appearance.requireK9ModelForRole == false),
+    CanShowK9UI() already reduces to `IsK9Role() and HasK9Access()` —
+    model-independent by construction — the exact decoupling
+    client/appearance.lua's own header cites as landing specifically for
+    "I also want everything to work with any ped." A human-modeled
+    handler viewing their K9 partner's feed, or a K9-modeled player
+    viewing their human handler partner's feed, both pass identically.
+
+    SOFT DEPENDENCY ON client/partnership.lua, SAME CONVENTION AS
+    client/hud.lua's GetCurrentXPTier() GUARD: this file never assumes
+    Config.Features.HandlerPartnership is on. `IsPartnered`/
+    `GetPartnerServerId`/`RefreshPartnershipStateFromServer` are only
+    defined resource-globals when that file's own top-of-file gate passed
+    — every call site below is guarded with `type(...) == 'function'`
+    first, and ToggleCameraFeed() reuses that file's existing
+    'partnership.feature_disabled' / 'partnership.not_partnered_with_anyone'
+    locale keys verbatim (this resource's established "reuse an existing
+    key, don't mint a near-duplicate" convention) rather than inventing
+    parallel copies with a different wording.
+
+    DISCLOSED LIMITATIONS (do not silently paper over these — an honest
+    partial feature per the owner's own "partial-but-honest beats absent"
+    framing, not a feature that quietly does less than it implies):
+    1. VANTAGE HEIGHT IS APPROXIMATE, NOT SKELETON-DERIVED. Contrast
+       ToggleK9Camera() above, which gets a per-model-correct eye height
+       for FREE from SetFollowPedCamViewMode because that native mode
+       reads the LOCAL player's own live skeleton — there is no
+       equivalent "give me a REMOTE entity's real eye-bone height" native
+       exposed to scripts. This file instead anchors the camera to the
+       partner ped's root position via a config-tunable, role-specific
+       CONSTANT (Config.CameraFeed.k9EyeHeightOffset /
+       .handlerEyeHeightOffset), picked by `IsEntityModelK9(partnerPed)`.
+       This will look reasonable for a typical human or typical
+       configured K9 model and may look slightly high/low for an
+       unusually large or small model an operator has added to
+       Config.Peds — tune those two constants for your installed models,
+       the same "tune this for your roster" posture
+       Config.DeployableKennel.propModel's own comment already documents
+       for a different asset.
+    2. FACING FOLLOWS BODY ROTATION, NOT HEAD/EYE AIM. GetEntityRotation
+       is the partner's whole-body yaw/pitch/roll — GTA does not expose a
+       ped's independent head/eye aim direction to scripts. The feed
+       therefore shows "the direction your partner's body is facing," a
+       reasonable proxy, not literally "exactly where their eyes are
+       looking" (a human partner looking left without turning their torso
+       will not be reflected).
+    3. RANGE IS BOUNDED BY ORDINARY FIveM ENTITY STREAMING, NOT ANYTHING
+       THIS RESOURCE CONTROLS OR WIDENS. GetPlayerPed(partnerPlayer)
+       returns 0 the moment the partner's ped is not currently streamed
+       into the local client's world (typically on the order of a few
+       hundred meters, dynamic, server/client-streaming-config dependent)
+       — ToggleCameraFeed() below detects exactly this (`partnerPed == 0
+       or not DoesEntityExist(partnerPed)`) and refuses with a clear
+       notification rather than pretending to show a feed it cannot
+       render. This is a real, load-bearing constraint on how useful this
+       feature is for a partner who is genuinely far away, not a bug to
+       silently work around — there is no native that would let this
+       resource widen it.
+    4. THE LOCAL PLAYER IS BLIND TO THEIR OWN SURROUNDINGS WHILE ACTIVE
+       (their entire view is replaced) — FreezeEntityPosition(true) is
+       applied for exactly this reason, the same safety posture published
+       community "full camera switch" bodycam/cctv resources use (per
+       config.lua's own research citation), removed unconditionally the
+       moment the feed ends through ANY exit path (manual toggle-off,
+       partner disconnect/out-of-range, this player's own death, or losing
+       CanShowK9UI() mid-view) — see StopCameraFeed() below, the single
+       choke point every exit path routes through, so freezing can never
+       be applied without a matching unfreeze on every single exit.
+    ======================================================================
 ]]
 
 --- Thin wrapper over the native's OWN getter — the native is the source
@@ -264,6 +393,274 @@ function ToggleNightVision()
     end
 end
 
+-- ----------------------------------------------------------------------
+-- CAMERA FEED (Config.Features.CameraFeedPiP) — see this file's header
+-- "CAMERA FEED" section for the full contract, what this is/is not, the
+-- gating rationale, and the disclosed limitations. Everything below is a
+-- direct implementation of that section.
+-- ----------------------------------------------------------------------
+
+-- DEFENSIVE FALLBACK, NOT THE REAL TUNING SOURCE: this file does not own
+-- config.lua (a different agent's file, per this pass's own task
+-- boundary), so it cannot guarantee Config.CameraFeed lands in the same
+-- change as Config.Features.CameraFeedPiP flipping true. Missing config
+-- for an ENABLED feature must degrade to a sane default, never a hard
+-- top-level-chunk error that would also take down ThermalVision/NightVision
+-- above (a `Config.CameraFeed.x` index on a nil table at file-load time
+-- inside the registration block below would do exactly that) -- this
+-- table is consulted everywhere below instead of reading `Config.CameraFeed`
+-- directly. Real values from config.lua win the moment that table exists;
+-- these three constants are the requested/documented defaults (see this
+-- pass's hand-off message to main for the exact Config.CameraFeed schema
+-- requested) and only ever apply if config.lua has not been updated yet.
+local CAMERA_FEED_DEFAULTS = {
+    toggleKey = 'H',
+    fov = 50.0,
+    k9EyeHeightOffset = 0.65,
+    handlerEyeHeightOffset = 1.6,
+}
+
+--- @return table
+local function GetCameraFeedConfig()
+    if type(Config.CameraFeed) == 'table' then return Config.CameraFeed end
+    return CAMERA_FEED_DEFAULTS
+end
+
+--- Local-only state for the currently-active camera feed, if any. Never
+--- read from another file — StopCameraFeed()/ToggleCameraFeed() are the
+--- only mutators, mirroring this file's own `visionMaintenanceThreadRunning`
+--- convention above (file-local, not exposed).
+--- @type { active: boolean, cam: number?, partnerServerId: number? }
+local cameraFeedState = {
+    active = false,
+    cam = nil,
+    partnerServerId = nil,
+}
+
+--- Single choke point for ending an active camera feed, from ANY exit
+--- path (manual toggle-off, partner disconnect/out-of-range, own death,
+--- losing CanShowK9UI() mid-view, or this resource stopping). Every path
+--- routes through here so the render-cams-off / cam-destroy / unfreeze
+--- triple can never be applied partially or skipped on one path but not
+--- another — the same "one place every exit path shares" discipline
+--- client/movement.lua's DetachLeash() and this file's own
+--- EnsureVisionMaintenanceThreadRunning() cleanup already apply elsewhere
+--- in this resource. Safe to call when no feed is active (no-op) or more
+--- than once (idempotent) — every native call below is itself idempotent
+--- or guarded by an existence check first.
+--- @param notifyLocaleKey string? -- locale key to notify with, or nil for a silent stop (this resource stopping, no player-facing message needed)
+local function StopCameraFeed(notifyLocaleKey)
+    if not cameraFeedState.active then return end
+
+    -- Order matters: stop rendering the script cam BEFORE destroying it
+    -- (destroying an actively-rendering cam with nothing else to fall
+    -- back on is the class of bug this resource's own "reverse sticky
+    -- native state in the right order" convention exists to avoid — see
+    -- client/vehicle.lua's onResourceStop header for the general
+    -- statement of this principle).
+    RenderScriptCams(false, true, 350, true, false)
+    if cameraFeedState.cam and DoesCamExist(cameraFeedState.cam) then
+        SetCamActive(cameraFeedState.cam, false)
+        DestroyCam(cameraFeedState.cam, false)
+    end
+
+    local localPed = PlayerPedId()
+    if DoesEntityExist(localPed) then
+        FreezeEntityPosition(localPed, false)
+    end
+
+    cameraFeedState.active = false
+    cameraFeedState.cam = nil
+    cameraFeedState.partnerServerId = nil
+
+    if notifyLocaleKey then
+        lib.notify({ title = locale('common.notify_title'), description = locale(notifyLocaleKey), type = 'info' })
+    end
+end
+
+-- Maintenance thread lifecycle guard for the camera feed — same
+-- "started explicitly on the turning-on transition, exits itself once
+-- there is nothing left to do" shape as `visionMaintenanceThreadRunning`
+-- above, kept as an independent flag/thread rather than folded into that
+-- one: thermal/night vision's maintenance thread polls at 1000ms
+-- (a cleanup/safety net, not a rendering concern, per that thread's own
+-- comment); this one must run every frame while active to keep the
+-- camera's rotation tracking the partner's live body rotation smoothly,
+-- an entirely different responsiveness requirement that would force the
+-- shared thermal/night thread to needlessly tighten to Wait(0) forever
+-- for a feature most sessions never touch.
+local cameraFeedThreadRunning = false
+
+--- Starts the per-frame camera-feed tracking/exit-condition thread if it
+--- isn't already running. Wait(0) is deliberate and correctly scoped, not
+--- a stray tight loop left running: this thread does not exist at all
+--- until ToggleCameraFeed() turns a feed on, and it exits itself the
+--- instant that feed ends through any path (see the `while
+--- cameraFeedState.active do` loop condition below) — the same "no thread
+--- at all until actually used, exits the moment there's nothing left to
+--- do" posture EnsureVisionMaintenanceThreadRunning() above already
+--- documents, applied here at Wait(0) instead of Wait(1000) because
+--- smooth per-frame rotation tracking (this file's header, disclosed
+--- limitation 2) is the entire point of this specific thread while it
+--- runs, not a cleanup poll.
+local function EnsureCameraFeedThreadRunning()
+    if cameraFeedThreadRunning then return end
+    cameraFeedThreadRunning = true
+
+    CreateThread(function()
+        while cameraFeedState.active do
+            Wait(0)
+
+            if IsEntityDead(PlayerPedId()) then
+                StopCameraFeed('cameraFeed.feed_ended_own_death')
+                break
+            end
+
+            if not CanShowK9UI() then
+                StopCameraFeed('cameraFeed.feed_ended_access_lost')
+                break
+            end
+
+            -- Cheap, local, synchronous read (see client/partnership.lua's
+            -- own doc comment on IsPartnered()) — no round trip every
+            -- frame. Only reachable here with `type(...) == 'function'`
+            -- already true (ToggleCameraFeed() could not have started this
+            -- thread otherwise), guarded again anyway per this resource's
+            -- established soft-dependency convention.
+            if type(IsPartnered) == 'function' and not IsPartnered() then
+                StopCameraFeed('cameraFeed.feed_ended_partner_lost')
+                break
+            end
+
+            -- Re-resolved FRESH every tick, never cached across frames:
+            -- a player ped handle is not guaranteed stable across a
+            -- respawn, and GetPlayerPed/GetPlayerFromServerId are cheap
+            -- local natives, not network round trips — caching either
+            -- here would risk driving the camera off a stale handle after
+            -- exactly the kind of transition (partner death/respawn) this
+            -- feed most needs to survive gracefully.
+            local partnerPlayer = GetPlayerFromServerId(cameraFeedState.partnerServerId)
+            if not partnerPlayer or partnerPlayer == -1 then
+                StopCameraFeed('cameraFeed.feed_ended_partner_lost')
+                break
+            end
+
+            local partnerPed = GetPlayerPed(partnerPlayer)
+            if not partnerPed or partnerPed == 0 or not DoesEntityExist(partnerPed) then
+                StopCameraFeed('cameraFeed.feed_ended_partner_lost')
+                break
+            end
+
+            -- Disclosed limitation 2 (this file's header): whole-body
+            -- rotation, not independent head/eye aim -- no native exposes
+            -- the latter for a remote ped.
+            local rot = GetEntityRotation(partnerPed, 2)
+            SetCamRot(cameraFeedState.cam, rot.x, rot.y, rot.z, 2)
+        end
+
+        cameraFeedThreadRunning = false
+    end)
+end
+
+--- Toggles the K9<->handler partner camera feed. See this file's header
+--- "CAMERA FEED" section for the full contract. Toggle-off (pressing the
+--- same key again while a feed is active) always succeeds unconditionally
+--- through StopCameraFeed() -- mirrors this resource's established
+--- "termination must never be gated" posture (client/partnership.lua's
+--- BreakPartnership(), client/movement.lua's DetachLeash()) -- only
+--- STARTING a feed is gated.
+function ToggleCameraFeed()
+    if cameraFeedState.active then
+        StopCameraFeed('cameraFeed.feed_ended_manual')
+        return
+    end
+
+    if not CanShowK9UI() then
+        DenyK9UIAccess()
+        return
+    end
+
+    -- SOFT DEPENDENCY (this file's header) -- client/partnership.lua may
+    -- not have registered these resource-globals at all if
+    -- Config.Features.HandlerPartnership is false. Reuses that file's own
+    -- 'partnership.feature_disabled' key verbatim rather than minting a
+    -- near-duplicate, per this resource's established locale convention.
+    if type(RefreshPartnershipStateFromServer) ~= 'function' then
+        lib.notify({ title = locale('common.notify_title'), description = locale('partnership.feature_disabled'), type = 'error' })
+        return
+    end
+
+    -- Fresh, server-authoritative check -- NOT the synchronous
+    -- IsPartnered()/GetPartnerServerId() pair, for the exact reason
+    -- client/partnership.lua's own header documents under "KNOWN
+    -- CACHE-STALENESS GAP": those two can under-report immediately after
+    -- a reconnect/restart even for a genuinely still-partnered player.
+    local isPartneredNow, partnerServerId = RefreshPartnershipStateFromServer()
+    if not isPartneredNow or not partnerServerId then
+        lib.notify({ title = locale('common.notify_title'), description = locale('partnership.not_partnered_with_anyone'), type = 'error' })
+        return
+    end
+
+    local partnerPlayer = GetPlayerFromServerId(partnerServerId)
+    if not partnerPlayer or partnerPlayer == -1 then
+        -- Partnership persists across a disconnect (client/partnership.lua's
+        -- own header) -- this is the "partnered, but they are not online
+        -- right now" case, distinct from "not partnered at all" above.
+        lib.notify({ title = locale('common.notify_title'), description = locale('common.target_no_longer_online'), type = 'error' })
+        return
+    end
+
+    local partnerPed = GetPlayerPed(partnerPlayer)
+    if not partnerPed or partnerPed == 0 or not DoesEntityExist(partnerPed) then
+        -- Disclosed limitation 3 (this file's header): ordinary FiveM
+        -- entity streaming range, not a distance this resource controls.
+        lib.notify({ title = locale('common.notify_title'), description = locale('cameraFeed.partner_not_in_range'), type = 'error' })
+        return
+    end
+
+    local cam = CreateCam('DEFAULT_SCRIPTED_CAMERA', false)
+    if not cam or cam == 0 then
+        lib.notify({ title = locale('common.notify_title'), description = locale('cameraFeed.camera_create_failed'), type = 'error' })
+        return
+    end
+
+    -- Disclosed limitation 1 (this file's header): approximate,
+    -- config-tunable vantage height, not skeleton-derived. A pure Z
+    -- offset only (no X/Y) is deliberate -- rotation-invariant around
+    -- yaw, so this stays anchored correctly above the partner regardless
+    -- of which way isRelative resolves the horizontal offset frame for a
+    -- turning entity (not independently verified in-engine this pass).
+    local cameraFeedConfig = GetCameraFeedConfig()
+    local eyeHeightOffset = IsEntityModelK9(partnerPed)
+        and cameraFeedConfig.k9EyeHeightOffset
+        or cameraFeedConfig.handlerEyeHeightOffset
+    AttachCamToEntity(cam, partnerPed, 0.0, 0.0, eyeHeightOffset, true)
+    SetCamFov(cam, cameraFeedConfig.fov)
+
+    local rot = GetEntityRotation(partnerPed, 2)
+    SetCamRot(cam, rot.x, rot.y, rot.z, 2)
+    SetCamActive(cam, true)
+    RenderScriptCams(true, true, 350, true, false)
+    FreezeEntityPosition(PlayerPedId(), true)
+
+    cameraFeedState.active = true
+    cameraFeedState.cam = cam
+    cameraFeedState.partnerServerId = partnerServerId
+
+    lib.notify({
+        title = locale('common.notify_title'),
+        description = locale('cameraFeed.feed_started', GetPlayerName(partnerPlayer)),
+        type = 'success',
+    })
+
+    EnsureCameraFeedThreadRunning()
+end
+
+if Config.Features.CameraFeedPiP then
+    RegisterCommand('qbx_k9unit:toggleCameraFeed', function() ToggleCameraFeed() end, false)
+    RegisterKeyMapping('qbx_k9unit:toggleCameraFeed', locale('cameraFeed.toggle_keybind_label'), 'keyboard', GetCameraFeedConfig().toggleKey)
+end
+
 -- Config-gated command + keybind registration for BOTH toggles — DEVELOPER_REFERENCE.md
 -- §11.2's Config.Vision schema,
 -- phase2_notes/DEVELOPER_REFERENCE.md#vision §1's "Config-gated registration,
@@ -321,4 +718,11 @@ AddEventHandler('onResourceStop', function(resourceName)
 
     SetSeethrough(false)
     SetNightvision(false)
+
+    -- Silent stop (nil notify key) -- the resource (and every keybind/NUI
+    -- surface it owns) is stopping anyway, so a player-facing message here
+    -- would be pointless. StopCameraFeed() itself is the single choke
+    -- point that reverses RENDER_SCRIPT_CAMS/the cam/the freeze
+    -- regardless -- see this file's header, disclosed limitation 4.
+    StopCameraFeed(nil)
 end)

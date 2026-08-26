@@ -392,6 +392,15 @@ local TABLET_STRING_KEYS = {
     'column_xp', 'column_actions', 'certified_yes', 'certified_no',
     'certify_label', 'decertify_label', 'confirm_label', 'grant_label',
     'revoke_label', 'block_label', 'unblock_label', 'manage_label',
+    -- Block Effect column (html/tablet.js's featureBlockEnforcement()) --
+    -- THE HONESTY REQUIREMENT: server/tablet.lua's own `blocked`/`state`
+    -- fields never told the operator whether a block does anything; these
+    -- four keys are this page's plain-language rendering of the new,
+    -- REQUESTED `blockEnforcement` field (see html/tablet.js's own
+    -- PersonFeaturesResult doc comment for the full three-state contract
+    -- and why it is never guessed client-side).
+    'column_block_effect', 'block_enforced_badge', 'block_not_yet_enforced_badge',
+    'block_not_yet_enforced_hint', 'block_not_enforceable_note',
     'back_label', 'givexp_label', 'givexp_placeholder', 'givexp_max_hint',
     'self_grant_disabled_title', 'truncated_notice', 'action_working',
     'action_failed', 'action_succeeded', 'no_certifications',
@@ -574,6 +583,7 @@ function OpenTablet()
             peds = Config.Peds, -- shared config, no round trip -- see this file's header NUI CONTRACT note on tablet:assignK9Role
             themingEnabled = Config.Features and Config.Features.TabletTheming == true, -- UX hint only, see NUI CONTRACT
             shopLocationsEnabled = Config.Features and Config.Features.K9EquipmentShop == true, -- UX hint only, SAME shape as themingEnabled -- see NUI CONTRACT
+            runtimeControlEnabled = Config.Features and Config.Features.RuntimeFeatureControl == true, -- UX hint only, SAME shape as themingEnabled/shopLocationsEnabled -- see NUI CONTRACT
             branding = (type(Config.CommandTablet) == 'table' and type(Config.CommandTablet.branding) == 'table')
                 and Config.CommandTablet.branding or {}, -- shared config, no round trip -- { serverName, logo, theme:{4 colors} } -- see this file's header NUI CONTRACT note
         },
@@ -1427,6 +1437,83 @@ RegisterNUICallback('tablet:equipmentShopRemoveLocation', function(data, cb)
         return
     end
     cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopRemoveLocation', data.locationKey)))
+end)
+
+-- ----------------------------------------------------------------------
+-- RUNTIME FEATURE CONTROL + TUNING -- server/runtimecontrol.lua PART 1/1B,
+-- high command only (CanManageRuntimeControl re-checked there on every one
+-- of these six calls; this file adds no authorization of its own). Owner's
+-- own words: "Lets high command switch features on and off SERVER-WIDE
+-- from the tablet, and tune numbers live." Every response is routed
+-- through the SAME TranslateReasonResult already used for theme/cert-tier/
+-- shop-location calls above -- server/runtimecontrol.lua's own header
+-- states its response shape is the identical `{ ok, reason, ... }` outcome
+-- table convention.
+--
+-- THE ENGINE CONSTRAINT, bridged honestly: server/runtimecontrol.lua's own
+-- header classifies every feature into one of five tiers
+-- (live/onstart/rawtoplevel/clientonly/protected, plus 'unaudited' for a
+-- feature its own FEATURE_TIERS table has never classified) describing
+-- whether a toggle takes effect immediately, needs a restart, needs a
+-- config.lua edit AND a restart, has no confirmed server-side effect at
+-- all, or cannot be toggled through this system at all. THIS FILE forwards
+-- `tier` (and, on a rejected set, the tunable's real `min`/`max`) VERBATIM
+-- -- but per that file's own "LOCALE KEYS THIS FILE NEEDS: none... never
+-- player-facing prose" header note, it never sends a human-readable
+-- sentence of its own; html/tablet.js's own runtimeTierLabel()/
+-- runtimeTierDescription() are what turn a bare `tier` string into the
+-- locale-driven plain-language explanation the operator actually reads --
+-- see this file's header NUI CONTRACT note for the full reasoning.
+-- ----------------------------------------------------------------------
+
+RegisterNUICallback('tablet:runtimeListFeatures', function(_, cb)
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeListFeatures')))
+end)
+
+RegisterNUICallback('tablet:runtimeSetFeature', function(data, cb)
+    if type(data) ~= 'table' or type(data.name) ~= 'string' or data.name == '' or type(data.value) ~= 'boolean' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeSetFeature', data.name, data.value)))
+end)
+
+RegisterNUICallback('tablet:runtimeResetFeature', function(data, cb)
+    if type(data) ~= 'table' or type(data.name) ~= 'string' or data.name == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeResetFeature', data.name)))
+end)
+
+RegisterNUICallback('tablet:runtimeListTunables', function(_, cb)
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeListTunables')))
+end)
+
+--- `value` is FORWARDED AS-IS, never clamped/rounded here -- see this
+--- file's header NUI CONTRACT note: server/runtimecontrol.lua's own
+--- SetTunable is the only real, authoritative [min,max]/integer check;
+--- this file's own type(data.value) ~= 'number' guard below rejects only
+--- something that could not possibly be a valid tunable value at all
+--- (missing, a string, NaN would still pass `type(...) == 'number'` in
+--- Lua, but the SERVER's own `newValue == newValue` NaN test -- see that
+--- file's own SetTunable comment -- is what actually catches that; this
+--- file duplicating it would be exactly the "treat client-side validation
+--- as authoritative" mistake this task's own brief warns against).
+RegisterNUICallback('tablet:runtimeSetTunable', function(data, cb)
+    if type(data) ~= 'table' or type(data.key) ~= 'string' or data.key == '' or type(data.value) ~= 'number' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeSetTunable', data.key, data.value)))
+end)
+
+RegisterNUICallback('tablet:runtimeResetTunable', function(data, cb)
+    if type(data) ~= 'table' or type(data.key) ~= 'string' or data.key == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:runtimeResetTunable', data.key)))
 end)
 
 -- Lua-INITIATED push, SAME shape/posture as tablet:themeUpdated just below

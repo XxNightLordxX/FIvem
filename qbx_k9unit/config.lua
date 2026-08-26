@@ -379,36 +379,28 @@ Config.Features = {
     PropAttachments      = true,
     FetchMechanic        = true,
     DeployableKennel     = true,
-    -- NOT EXPERIMENTAL -- IMPOSSIBLE, and re-confirmed 2026-08-25 rather than
-    -- carried forward on an old note. This is the only flag in this table with
-    -- no implementing code, and it should stay that way until the specific
-    -- things below change.
-    --   * citizenfx/fivem#3835 is OPEN, labelled documentation+triage, no PR,
-    --     no maintainer response. It ASKS for a camera-to-texture API; it does
-    --     not report an undocumented one.
-    --   * No native exists. CreateRuntimeTextureFromDuiHandle goes the OPPOSITE
-    --     direction (an HTML page onto a world texture). The entire CAM
-    --     namespace is camera STATE -- position, FOV, shake, interpolation --
-    --     with nothing touching a render target or pixel buffer. Candidate
-    --     render-target names 404. No open natives PR mentions camera or
-    --     texture work.
-    --   * Nobody in the ecosystem has solved it either. Published bodycam
-    --     resources are either cosmetic overlays on the player's OWN view, or
-    --     a full camera switch with a decoy ped -- never two feeds at once.
-    -- CONCRETE RE-CHECK, so the next pass diffs rather than re-researches:
-    -- has #3835 closed, or has a file matching ext/native-decls/*RenderTarget*
-    -- appeared? If neither, nothing has changed.
-    -- DELIBERATELY FALSE, and the only flag in this table that is.
-    -- The 2026-08-25 pass enabled every other feature at the owner's
-    -- request; this one is excluded because there is NO IMPLEMENTING CODE
-    -- ANYWHERE IN THIS RESOURCE for it -- grep the tree, it is referenced
-    -- only here. It is not an unfinished feature, it is a placeholder for
-    -- one the engine cannot currently support (see the research notes
-    -- above). Setting it true would not switch anything on; it would only
-    -- tell an operator reading this file that a picture-in-picture camera
-    -- feed exists, which it does not. Flip it to true only in the same
-    -- change that adds the code, never before.
-    CameraFeedPiP        = false,
+    -- client/vision.lua. CAMERA FEED — see what your partner sees.
+    --
+    -- A true picture-in-picture, two live views on screen at once, is
+    -- genuinely impossible in FiveM. That was re-confirmed on 2026-08-26 by
+    -- enumerating the entire camera namespace (202 calls) plus every
+    -- render-target call against the live native list: nothing renders a
+    -- camera into a texture. So it was not built, and no amount of asking
+    -- will produce it.
+    --
+    -- What IS built, and works: press a key and your WHOLE screen switches
+    -- to your partner's viewpoint, until you press it again. You need an
+    -- active partnership. Honest limits, written up in full in
+    -- client/vision.lua's own header: the eye height is an approximation
+    -- per role rather than read off the skeleton, it follows their body
+    -- rather than where they are looking, and it cuts out at normal
+    -- streaming range.
+    --
+    -- Switched ON: real code now exists behind it, gated the same way every
+    -- other departmental ability is, and it does nothing at all for someone
+    -- with no partner. The name still says PiP for compatibility with
+    -- anything referencing it.
+    CameraFeedPiP        = true,
 
     -- server/certifications.lua. Opt-in periodic recertification: new
     -- grants get an expiry date and lapse unless renewed. OFF by default,
@@ -1382,6 +1374,14 @@ Config.DoorInteraction = {
 -- custom shader/asset -- see §11.6 for the exact natives confirmed/refined
 -- against DEVELOPER_REFERENCE.md §7's original claim.
 -- ======================================================================
+-- client/vision.lua. Tuning for the partner camera feed above.
+Config.CameraFeed = {
+    toggleKey              = 'H',   -- rebindable in-game like any other key
+    fov                    = 50.0,  -- field of view, degrees. Lower = more zoomed in.
+    k9EyeHeightOffset      = 0.65,  -- metres above a dog-shaped partner's feet. Approximate, not read off the model — tune it for the breeds you actually use.
+    handlerEyeHeightOffset = 1.6,   -- metres above a human-shaped partner's feet. Same caveat.
+}
+
 Config.Vision = {
     Thermal = { toggleKey = 'K' }, -- drives SetSeethrough(true/false) -- see §11.6
     Night   = { toggleKey = 'J' }, -- drives SetNightvision(true/false) -- see §11.6

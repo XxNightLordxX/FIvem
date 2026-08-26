@@ -403,6 +403,34 @@ body {
     gap: 6px;
 }
 
+/* Block Effect column -- html/tablet.js's featureBlockEnforcement()/
+   buildPersonFeatureRow(). THE HONESTY REQUIREMENT this task exists to
+   satisfy: 'enforced' (green, matches .k9tablet-feature-state--available)
+   vs 'not_yet_enforced' (amber, matches the other non-blocking states --
+   this is a warning, not a failure: the control still works, it just
+   does not yet stop anything in-game) vs 'not_enforceable' (red-muted --
+   no Block/Unblock control is rendered at all for this one, see that
+   function's own comment on why it is hidden, not merely labeled). */
+.k9tablet-block-badge {
+    display: inline-block;
+    font-size: 12px;
+    white-space: normal;
+}
+
+.k9tablet-block-badge--enforced {
+    color: #9bd17f;
+}
+
+.k9tablet-block-badge--not_yet_enforced {
+    color: #d1b37f;
+    cursor: help;
+}
+
+.k9tablet-block-badge--unavailable {
+    color: #6d7280;
+    font-style: italic;
+}
+
 .k9tablet-givexp {
     display: flex;
     align-items: center;

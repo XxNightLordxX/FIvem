@@ -86,7 +86,7 @@ local locale = Sandbox.locale
 --- FILE-LOAD time -- same reasoning as clientradial_spec.lua's own
 --- fixture) + the real client/vision.lua, plus a controllable/capturing
 --- stand-in for every native it touches.
---- @param opts { features: table?, isOwnModelK9: boolean?, hasK9Access: boolean? }?
+--- @param opts { features: table?, isOwnModelK9: boolean?, hasK9Access: boolean?, partnershipAvailable: boolean? }?
 --- @return table fixture
 local function newVisionFixture(opts)
     opts = opts or {}
@@ -102,6 +102,93 @@ local function newVisionFixture(opts)
     local function HasK9Access() hasK9AccessCallCount = hasK9AccessCallCount + 1; return hasK9Access end
     local function IsEntityDead(_ped) return isEntityDead end
     local function PlayerPedId() return 1 end
+
+    -- ------------------------------------------------------------------
+    -- CAMERA FEED fixture additions. Real client/vision.lua calls
+    -- CanShowK9UI()/DenyK9UIAccess()/IsEntityModelK9() as bare resource-
+    -- globals normally defined by client/main.lua -- this spec never loads
+    -- that file (same reasoning IsOwnModelK9()/HasK9Access() above already
+    -- establish: a controllable stand-in, not the real cross-file
+    -- dependency), so they are stubbed here too, independently of the
+    -- IsOwnModelK9()/HasK9Access() pair above (CanShowK9UI() is a DIFFERENT
+    -- combinator in the real file, not derived from these two in THIS
+    -- fixture -- tests that care about the real composition belong in
+    -- tests/main_spec.lua, not here).
+    -- ------------------------------------------------------------------
+    local canShowK9UI = true
+    local function CanShowK9UI() return canShowK9UI end
+    local denyK9UIAccessCallCount = 0
+    local function DenyK9UIAccess() denyK9UIAccessCallCount = denyK9UIAccessCallCount + 1 end
+
+    local isEntityModelK9 = false -- which role the PARTNER ped resolves as, for the eye-height-offset branch
+    local function IsEntityModelK9(_entity) return isEntityModelK9 end
+
+    -- Partnership soft dependency -- `refreshFn` being nil (the default)
+    -- means client/partnership.lua's own top-of-file gate did not pass
+    -- (Config.Features.HandlerPartnership false), so the resource-global
+    -- is genuinely UNDEFINED, not a stub returning false -- this fixture
+    -- reproduces that exact shape by simply never adding the key to `env`
+    -- at all rather than adding a function that returns a "disabled"
+    -- answer (see `refreshPartnershipStateFromServerAvailable` below).
+    -- MUST be an `opts` input, not a post-construction setter: whether
+    -- these two resource-globals are even ADDED to `env` is decided once,
+    -- before Sandbox.loadInto('../client/vision.lua', env) runs -- a
+    -- setter called AFTER newVisionFixture() has already returned would
+    -- be too late to change what the production file's `type(...) ==
+    -- 'function'` guard already saw at its own load time.
+    local refreshPartnershipStateFromServerAvailable = opts.partnershipAvailable == true
+    local isPartneredNowResult, partnerServerIdResult = false, nil
+    local refreshCallCount = 0
+    local function RefreshPartnershipStateFromServer()
+        refreshCallCount = refreshCallCount + 1
+        return isPartneredNowResult, partnerServerIdResult
+    end
+    local isPartnered = true
+    local function IsPartnered() return isPartnered end
+
+    local partnerPlayerIndex = 2 -- GetPlayerFromServerId's return; -1 simulates offline
+    local function GetPlayerFromServerId(_serverId) return partnerPlayerIndex end
+    local partnerPed = 999 -- GetPlayerPed's return; 0 simulates "not streamed in"
+    local function GetPlayerPed(_player) return partnerPed end
+    local partnerName = 'PartnerOfficer'
+    local function GetPlayerName(_player) return partnerName end
+
+    -- DoesEntityExist must answer for BOTH the local ped (id 1, always
+    -- exists in this fixture -- StopCameraFeed()'s own unfreeze guard
+    -- reads it) and the partner ped (configurable, id from `partnerPed`
+    -- above) -- a single existence set, not two separate booleans, so a
+    -- test cannot accidentally leave one stale relative to the other.
+    local existingEntities = { [1] = true, [999] = true }
+    local function DoesEntityExist(entity) return existingEntities[entity] == true end
+
+    local createCamReturn = 42 -- 0 simulates CreateCam failure
+    local createCamCalls = {}
+    local function CreateCam(camName, active)
+        createCamCalls[#createCamCalls + 1] = { camName = camName, active = active }
+        return createCamReturn
+    end
+    local attachCamToEntityCalls = {}
+    local function AttachCamToEntity(cam, entity, x, y, z, isRelative)
+        attachCamToEntityCalls[#attachCamToEntityCalls + 1] = { cam = cam, entity = entity, x = x, y = y, z = z, isRelative = isRelative }
+    end
+    local setCamFovCalls = {}
+    local function SetCamFov(cam, fov) setCamFovCalls[#setCamFovCalls + 1] = { cam = cam, fov = fov } end
+    local entityRotation = { x = 11.0, y = 22.0, z = 33.0 }
+    local function GetEntityRotation(_entity, _order) return entityRotation end
+    local setCamRotCalls = {}
+    local function SetCamRot(cam, x, y, z, order) setCamRotCalls[#setCamRotCalls + 1] = { cam = cam, x = x, y = y, z = z, order = order } end
+    local setCamActiveCalls = {}
+    local function SetCamActive(cam, active) setCamActiveCalls[#setCamActiveCalls + 1] = { cam = cam, active = active } end
+    local renderScriptCamsCalls = {}
+    local function RenderScriptCams(render, ease, easeTime, easeCoordsAnim, p4)
+        renderScriptCamsCalls[#renderScriptCamsCalls + 1] = { render = render, ease = ease, easeTime = easeTime, easeCoordsAnim = easeCoordsAnim, p4 = p4 }
+    end
+    local camExists = true
+    local function DoesCamExist(_cam) return camExists end
+    local destroyCamCalls = {}
+    local function DestroyCam(cam, bScriptHostCam) destroyCamCalls[#destroyCamCalls + 1] = { cam = cam, bScriptHostCam = bScriptHostCam } end
+    local freezeEntityPositionCalls = {}
+    local function FreezeEntityPosition(entity, toggle) freezeEntityPositionCalls[#freezeEntityPositionCalls + 1] = { entity = entity, toggle = toggle } end
 
     -- The two native toggle pairs -- state lives here, in the fixture, NOT
     -- re-implemented as a separate boolean the way this file's own header
@@ -153,7 +240,7 @@ local function newVisionFixture(opts)
         eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
     end
 
-    local env = Sandbox.newEnv({
+    local envTable = {
         IsOwnModelK9 = IsOwnModelK9,
         HasK9Access = HasK9Access,
         IsEntityDead = IsEntityDead,
@@ -169,7 +256,35 @@ local function newVisionFixture(opts)
         RegisterKeyMapping = RegisterKeyMapping,
         GetCurrentResourceName = GetCurrentResourceName,
         AddEventHandler = AddEventHandler,
-    })
+        CanShowK9UI = CanShowK9UI,
+        DenyK9UIAccess = DenyK9UIAccess,
+        IsEntityModelK9 = IsEntityModelK9,
+        GetPlayerFromServerId = GetPlayerFromServerId,
+        GetPlayerPed = GetPlayerPed,
+        GetPlayerName = GetPlayerName,
+        DoesEntityExist = DoesEntityExist,
+        CreateCam = CreateCam,
+        AttachCamToEntity = AttachCamToEntity,
+        SetCamFov = SetCamFov,
+        GetEntityRotation = GetEntityRotation,
+        SetCamRot = SetCamRot,
+        SetCamActive = SetCamActive,
+        RenderScriptCams = RenderScriptCams,
+        DoesCamExist = DoesCamExist,
+        DestroyCam = DestroyCam,
+        FreezeEntityPosition = FreezeEntityPosition,
+    }
+    -- SOFT DEPENDENCY SHAPE (see the declaration comment above): only
+    -- added to the env at all when `opts.partnershipAvailable` is true --
+    -- a MISSING key, not a "returns false" stub, is what reproduces
+    -- client/partnership.lua's own top-of-file gate returning early
+    -- without ever defining these two resource-globals.
+    if refreshPartnershipStateFromServerAvailable then
+        envTable.RefreshPartnershipStateFromServer = RefreshPartnershipStateFromServer
+        envTable.IsPartnered = IsPartnered
+    end
+
+    local env = Sandbox.newEnv(envTable)
 
     Sandbox.loadInto('../config.lua', env)
 
@@ -177,11 +292,19 @@ local function newVisionFixture(opts)
     -- concurrency incident as tests/clientradial_spec.lua's own baseline
     -- (see that file's header): config.lua is edited by other agents
     -- while this suite runs, so this fixture pins ThermalVision/
-    -- NightVision to a known value BEFORE applying `opts.features`,
-    -- rather than trusting whatever config.lua's live defaults happen to
-    -- be at the moment a given test runs.
+    -- NightVision/CameraFeedPiP to a known value BEFORE applying
+    -- `opts.features`, rather than trusting whatever config.lua's live
+    -- defaults happen to be at the moment a given test runs. Same
+    -- reasoning for `Config.CameraFeed` -- pinned to a known table
+    -- REGARDLESS of whether config.lua has been given that table yet (see
+    -- client/vision.lua's own GetCameraFeedConfig() fallback for the
+    -- production-side half of this same defensiveness), so this suite's
+    -- own assertions about exact fov/eye-height/toggleKey values passed to
+    -- the CAM natives stay meaningful and stable either way.
     env.Config.Features.ThermalVision = false
     env.Config.Features.NightVision = false
+    env.Config.Features.CameraFeedPiP = false
+    env.Config.CameraFeed = { toggleKey = 'H', fov = 45.0, k9EyeHeightOffset = 0.6, handlerEyeHeightOffset = 1.5 }
     for key, value in pairs(opts.features or {}) do
         env.Config.Features[key] = value
     end
@@ -218,6 +341,29 @@ local function newVisionFixture(opts)
             end
         end,
         onResourceStopHandlerCount = function() return #(eventHandlers['onResourceStop'] or {}) end,
+
+        -- CAMERA FEED fixture controls/inspectors
+        setCanShowK9UI = function(v) canShowK9UI = v end,
+        denyK9UIAccessCallCount = function() return denyK9UIAccessCallCount end,
+        setIsEntityModelK9 = function(v) isEntityModelK9 = v end,
+        setRefreshResult = function(isPartneredNow, partnerServerId) isPartneredNowResult = isPartneredNow; partnerServerIdResult = partnerServerId end,
+        refreshCallCount = function() return refreshCallCount end,
+        setIsPartnered = function(v) isPartnered = v end,
+        setPartnerPlayerIndex = function(v) partnerPlayerIndex = v end,
+        setPartnerPed = function(v) partnerPed = v end,
+        setEntityExists = function(entity, exists) existingEntities[entity] = exists or nil end,
+        setPartnerName = function(v) partnerName = v end,
+        setCreateCamReturn = function(v) createCamReturn = v end,
+        createCamCalls = createCamCalls,
+        attachCamToEntityCalls = attachCamToEntityCalls,
+        setCamFovCalls = setCamFovCalls,
+        setEntityRotation = function(v) entityRotation = v end,
+        setCamRotCalls = setCamRotCalls,
+        setCamActiveCalls = setCamActiveCalls,
+        renderScriptCamsCalls = renderScriptCamsCalls,
+        setCamExists = function(v) camExists = v end,
+        destroyCamCalls = destroyCamCalls,
+        freezeEntityPositionCalls = freezeEntityPositionCalls,
     }
 end
 
@@ -518,6 +664,364 @@ t.test('both true: both commands are registered, and the captured command handle
 
     thermalHandler()
     t.isTrue(f.isSeethroughActive(), 'the registered command handler must really call the production ToggleThermalVision(), not a copy')
+end)
+
+-- ========================================================================
+-- CAMERA FEED (Config.Features.CameraFeedPiP) -- see client/vision.lua's
+-- own header "CAMERA FEED" section for the full contract this section
+-- tests against.
+-- ========================================================================
+
+t.test('CameraFeedPiP false: zero command/keybind registered, matching every other flag-gated registration in this file', function()
+    local f = newVisionFixture({ features = { CameraFeedPiP = false } })
+    t.equals(#f.registerCommandCalls, 0)
+    t.equals(#f.registerKeyMappingCalls, 0)
+end)
+
+t.test('CameraFeedPiP true: exactly one command/keybind registered, using Config.CameraFeed.toggleKey', function()
+    local f = newVisionFixture({ features = { CameraFeedPiP = true } })
+    t.equals(#f.registerCommandCalls, 1)
+    t.equals(f.registerCommandCalls[1].name, 'qbx_k9unit:toggleCameraFeed')
+    t.equals(#f.registerKeyMappingCalls, 1)
+    t.equals(f.registerKeyMappingCalls[1].commandName, 'qbx_k9unit:toggleCameraFeed')
+    t.equals(f.registerKeyMappingCalls[1].description, locale('cameraFeed.toggle_keybind_label'))
+    t.equals(f.registerKeyMappingCalls[1].defaultKey, f.Config.CameraFeed.toggleKey)
+end)
+
+t.test('CameraFeedPiP true but Config.CameraFeed is missing entirely: registration falls back to the hardcoded default key rather than erroring the whole file (defensive fallback -- this file does not own config.lua)', function()
+    -- Simulate config.lua NOT having been updated yet, as if this pass's
+    -- request to main never landed: overwrite the fixture's own baseline
+    -- AFTER load is too late for the registration block (already ran at
+    -- file-load time) -- so this specific test rebuilds the sandbox by
+    -- hand with Config.CameraFeed deleted before client/vision.lua loads.
+    -- (A second fixture variant, not a shared helper, because this is the
+    -- one test in this file that needs to intervene BETWEEN config.lua
+    -- loading and client/vision.lua loading.)
+    local capturedKeyMappingCalls = {}
+    local env = Sandbox.newEnv({
+        RegisterCommand = function() end,
+        RegisterKeyMapping = function(commandName, description, ioType, defaultKey)
+            capturedKeyMappingCalls[#capturedKeyMappingCalls + 1] = { commandName = commandName, defaultKey = defaultKey }
+        end,
+        AddEventHandler = function() end,
+        lib = { notify = function() end },
+    })
+    Sandbox.loadInto('../config.lua', env)
+    -- Pinned for the same reason every other fixture in this file pins
+    -- these two -- config.lua is edited by other agents while this suite
+    -- runs, and this ad hoc env (unlike newVisionFixture()'s own) has no
+    -- other reason to touch these, so pin them explicitly rather than
+    -- relying on registration ORDER alone to keep this assertion honest.
+    env.Config.Features.ThermalVision = false
+    env.Config.Features.NightVision = false
+    env.Config.Features.CameraFeedPiP = true
+    env.Config.CameraFeed = nil
+    local ok = pcall(Sandbox.loadInto, '../client/vision.lua', env)
+    t.isTrue(ok, 'a missing Config.CameraFeed must never error client/vision.lua\'s top-level chunk (that would also silently disable ThermalVision/NightVision in the same file)')
+    t.equals(#capturedKeyMappingCalls, 1)
+    t.equals(capturedKeyMappingCalls[1].commandName, 'qbx_k9unit:toggleCameraFeed')
+    t.equals(capturedKeyMappingCalls[1].defaultKey, 'H', 'falls back to CAMERA_FEED_DEFAULTS.toggleKey')
+end)
+
+t.test('ToggleCameraFeed: not a role-holder (CanShowK9UI false) -- denied, no cam created', function()
+    local f = newVisionFixture()
+    f.setCanShowK9UI(false)
+    f.env.ToggleCameraFeed()
+    t.equals(f.denyK9UIAccessCallCount(), 1)
+    t.equals(#f.createCamCalls, 0)
+end)
+
+t.test('ToggleCameraFeed: HandlerPartnership feature is off (RefreshPartnershipStateFromServer genuinely undefined, not a stub) -- notifies partnership.feature_disabled, reusing that exact locale key, no cam created', function()
+    local f = newVisionFixture({ partnershipAvailable = false })
+    f.env.ToggleCameraFeed()
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('partnership.feature_disabled'))
+    t.equals(#f.createCamCalls, 0)
+end)
+
+t.test('ToggleCameraFeed: partnership enabled but not currently partnered -- notifies partnership.not_partnered_with_anyone, reused verbatim', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(false, nil)
+    f.env.ToggleCameraFeed()
+    t.equals(f.refreshCallCount(), 1, 'must call the FRESH server-authoritative refresh, not a cached synchronous read')
+    t.equals(f.notifyCalls[1].description, locale('partnership.not_partnered_with_anyone'))
+    t.equals(#f.createCamCalls, 0)
+end)
+
+t.test('ToggleCameraFeed: partnered, but partner is offline (GetPlayerFromServerId -1) -- notifies common.target_no_longer_online, distinct from "not partnered at all"', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.setPartnerPlayerIndex(-1)
+    f.env.ToggleCameraFeed()
+    t.equals(f.notifyCalls[1].description, locale('common.target_no_longer_online'))
+    t.equals(#f.createCamCalls, 0)
+end)
+
+t.test('ToggleCameraFeed: partner online but their ped is not streamed in (GetPlayerPed returns 0) -- notifies cameraFeed.partner_not_in_range', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.setPartnerPed(0)
+    f.env.ToggleCameraFeed()
+    t.equals(f.notifyCalls[1].description, locale('cameraFeed.partner_not_in_range'))
+    t.equals(#f.createCamCalls, 0)
+end)
+
+t.test('ToggleCameraFeed: partner ped handle is nonzero but DoesEntityExist is false -- also treated as out of range, never assumed to exist from a handle alone', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.setPartnerPed(999)
+    f.setEntityExists(999, false)
+    f.env.ToggleCameraFeed()
+    t.equals(f.notifyCalls[1].description, locale('cameraFeed.partner_not_in_range'))
+end)
+
+t.test('ToggleCameraFeed: CreateCam fails (returns 0) -- notifies cameraFeed.camera_create_failed, no active state, no freeze', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.setCreateCamReturn(0)
+    f.env.ToggleCameraFeed()
+    t.equals(f.notifyCalls[1].description, locale('cameraFeed.camera_create_failed'))
+    t.equals(#f.freezeEntityPositionCalls, 0)
+end)
+
+t.test('ToggleCameraFeed: full success against a HANDLER partner (IsEntityModelK9 false) -- correct cam wiring, handlerEyeHeightOffset used, freeze applied, thread started, success notification names the partner', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.setIsEntityModelK9(false)
+    f.setPartnerName('Officer Rivera')
+    f.setEntityRotation({ x = 1.0, y = 2.0, z = 3.0 })
+
+    f.env.ToggleCameraFeed()
+
+    t.equals(#f.createCamCalls, 1)
+    t.equals(f.createCamCalls[1].camName, 'DEFAULT_SCRIPTED_CAMERA')
+    t.equals(f.createCamCalls[1].active, false, 'created inactive -- SetCamActive(true) is a separate, explicit call below')
+
+    t.equals(#f.attachCamToEntityCalls, 1)
+    t.equals(f.attachCamToEntityCalls[1].entity, 999)
+    t.equals(f.attachCamToEntityCalls[1].x, 0.0)
+    t.equals(f.attachCamToEntityCalls[1].y, 0.0)
+    t.equals(f.attachCamToEntityCalls[1].z, f.Config.CameraFeed.handlerEyeHeightOffset, 'handler role -> handlerEyeHeightOffset, not the K9 one')
+    t.isTrue(f.attachCamToEntityCalls[1].isRelative)
+
+    t.equals(#f.setCamFovCalls, 1)
+    t.equals(f.setCamFovCalls[1].fov, f.Config.CameraFeed.fov)
+
+    t.equals(#f.setCamRotCalls, 1)
+    t.equals(f.setCamRotCalls[1].x, 1.0)
+    t.equals(f.setCamRotCalls[1].y, 2.0)
+    t.equals(f.setCamRotCalls[1].z, 3.0)
+    t.equals(f.setCamRotCalls[1].order, 2)
+
+    t.equals(#f.setCamActiveCalls, 1)
+    t.isTrue(f.setCamActiveCalls[1].active)
+
+    t.equals(#f.renderScriptCamsCalls, 1)
+    t.isTrue(f.renderScriptCamsCalls[1].render)
+
+    t.equals(#f.freezeEntityPositionCalls, 1)
+    t.equals(f.freezeEntityPositionCalls[1].entity, 1, 'freezes the LOCAL player ped (id 1 in this fixture), never the partner')
+    t.isTrue(f.freezeEntityPositionCalls[1].toggle)
+
+    t.equals(f.notifyCalls[1].description, locale('cameraFeed.feed_started', 'Officer Rivera'))
+    t.equals(f.notifyCalls[1].type, 'success')
+
+    t.equals(f.threadCreateCount(), 1)
+end)
+
+t.test('ToggleCameraFeed: full success against a K9 partner (IsEntityModelK9 true) uses k9EyeHeightOffset, not handlerEyeHeightOffset', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.setIsEntityModelK9(true)
+
+    f.env.ToggleCameraFeed()
+
+    t.equals(f.attachCamToEntityCalls[1].z, f.Config.CameraFeed.k9EyeHeightOffset)
+end)
+
+t.test('ToggleCameraFeed: calling it AGAIN while already active toggles OFF instead of starting a second feed', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed() -- on
+    t.equals(#f.createCamCalls, 1)
+
+    f.env.ToggleCameraFeed() -- off
+    t.equals(#f.createCamCalls, 1, 'must not create a second cam -- this call is a toggle-off, not a fresh start')
+    t.equals(#f.renderScriptCamsCalls, 2)
+    t.isFalse(f.renderScriptCamsCalls[2].render)
+    t.equals(#f.setCamActiveCalls, 2)
+    t.isFalse(f.setCamActiveCalls[2].active)
+    t.equals(#f.destroyCamCalls, 1)
+    t.equals(#f.freezeEntityPositionCalls, 2)
+    t.isFalse(f.freezeEntityPositionCalls[2].toggle, 'unfrozen on the way out')
+    t.equals(f.notifyCalls[2].description, locale('cameraFeed.feed_ended_manual'))
+end)
+
+t.test('ToggleCameraFeed: toggle-off is UNCONDITIONAL -- works even with CanShowK9UI now false, mirroring this resource\'s "termination must never be gated" convention', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed() -- on
+
+    f.setCanShowK9UI(false) -- access revoked mid-view
+    f.env.ToggleCameraFeed() -- off -- must still succeed, not re-deny
+
+    t.equals(f.denyK9UIAccessCallCount(), 0, 'toggling OFF must never re-check CanShowK9UI at all')
+    t.equals(#f.destroyCamCalls, 1)
+end)
+
+t.test('ToggleCameraFeed: StopCameraFeed is idempotent against an already-destroyed cam (DoesCamExist false) -- SetCamActive/DestroyCam are skipped, not called on a dead handle', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed() -- on
+    f.setCamExists(false) -- simulate the cam having already been destroyed by something else
+
+    f.env.ToggleCameraFeed() -- off
+    t.equals(#f.setCamActiveCalls, 1, 'only the turn-on SetCamActive(true) -- the turn-off one is skipped since DoesCamExist is false')
+    t.equals(#f.destroyCamCalls, 0)
+    t.equals(#f.freezeEntityPositionCalls, 2, 'the unfreeze itself is unconditional and still happens regardless of the cam\'s own existence')
+end)
+
+-- ------------------------------------------------------------------
+-- Per-frame tracking/exit-condition thread. STEPPING NOTES FOR THIS
+-- THREAD: its body is `while cameraFeedState.active do Wait(0) ... end`
+-- -- the loop CONDITION is the very first thing evaluated (unlike this
+-- file's OWN thermal/night thread, which runs a plain assignment before
+-- its own while-check), so:
+--   step() call #1 -- resumes from the start: evaluates the while-
+--     condition (true, since ToggleCameraFeed() already set it before
+--     this thread's body ever runs), enters the loop, and yields
+--     immediately at Wait(0). A pure "prime" step, same as the thermal/
+--     night thread's own step #1, for a different structural reason.
+--   step() call #2 onward -- resumes after Wait(0), runs exactly one pass
+--     of the exit-condition checks (and SetCamRot if none tripped), then
+--     re-checks the while-condition: still true -> loops back to Wait(0)
+--     and yields again; now false (a check just called StopCameraFeed())
+--     -> falls out of the loop, clears cameraFeedThreadRunning, and the
+--     coroutine dies within that SAME step() call.
+-- ------------------------------------------------------------------
+
+t.test('camera feed thread: does not exist at all before any feed is ever turned on', function()
+    local f = newVisionFixture()
+    t.equals(f.threadCreateCount(), 0)
+end)
+
+t.test('camera feed thread: while active and nothing has changed, each pass re-reads the partner\'s live rotation and re-applies SetCamRot -- the whole point of this thread', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed() -- on; SetCamRot already called once here
+    f.step() -- prime
+
+    f.setEntityRotation({ x = 9.0, y = 8.0, z = 7.0 })
+    f.step() -- one real pass
+
+    t.equals(#f.setCamRotCalls, 2, 'the onset call plus one thread pass')
+    t.equals(f.setCamRotCalls[2].x, 9.0)
+    t.equals(f.setCamRotCalls[2].y, 8.0)
+    t.equals(f.setCamRotCalls[2].z, 7.0)
+end)
+
+t.test('camera feed thread: local player\'s own death ends the feed with feed_ended_own_death', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed()
+    f.step() -- prime
+
+    f.setIsEntityDead(true)
+    f.step()
+
+    t.equals(#f.destroyCamCalls, 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('cameraFeed.feed_ended_own_death'))
+end)
+
+t.test('camera feed thread: losing CanShowK9UI mid-view ends the feed with feed_ended_access_lost', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed()
+    f.step() -- prime
+
+    f.setCanShowK9UI(false)
+    f.step()
+
+    t.equals(#f.destroyCamCalls, 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('cameraFeed.feed_ended_access_lost'))
+end)
+
+t.test('camera feed thread: the partnership itself ending (IsPartnered turns false) ends the feed with feed_ended_partner_lost', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed()
+    f.step() -- prime
+
+    f.setIsPartnered(false)
+    f.step()
+
+    t.equals(#f.destroyCamCalls, 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('cameraFeed.feed_ended_partner_lost'))
+end)
+
+t.test('camera feed thread: partner disconnecting mid-view (GetPlayerFromServerId now -1) ends the feed with feed_ended_partner_lost', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed()
+    f.step() -- prime
+
+    f.setPartnerPlayerIndex(-1)
+    f.step()
+
+    t.equals(#f.destroyCamCalls, 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('cameraFeed.feed_ended_partner_lost'))
+end)
+
+t.test('camera feed thread: partner streaming out mid-view (their ped stops existing) ends the feed with feed_ended_partner_lost -- re-resolved fresh every tick, never a stale cached handle', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed()
+    f.step() -- prime
+
+    f.setEntityExists(999, false)
+    f.step()
+
+    t.equals(#f.destroyCamCalls, 1)
+    t.equals(f.notifyCalls[#f.notifyCalls].description, locale('cameraFeed.feed_ended_partner_lost'))
+end)
+
+t.test('camera feed thread: self-terminates once the feed ends -- a LATER toggle-on starts a genuinely NEW thread', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed() -- on -- thread #1
+    t.equals(f.threadCreateCount(), 1)
+    f.step() -- prime
+    f.setIsEntityDead(true)
+    f.step() -- ends the feed, thread dies, guard resets
+
+    f.setIsEntityDead(false)
+    f.env.ToggleCameraFeed() -- on again
+    t.equals(f.threadCreateCount(), 2, 'a fresh ON transition after the previous thread self-terminated must start a NEW thread')
+end)
+
+-- ------------------------------------------------------------------
+-- onResourceStop -- extends the existing thermal/night handler; must also
+-- silently (no notify) tear down an active camera feed.
+-- ------------------------------------------------------------------
+
+t.test('onResourceStop: an active camera feed is silently torn down (no notify) alongside the existing thermal/night reset', function()
+    local f = newVisionFixture({ partnershipAvailable = true })
+    f.setRefreshResult(true, 42)
+    f.env.ToggleCameraFeed() -- on
+    local notifyCountBefore = #f.notifyCalls
+
+    f.fireResourceStop(f.resourceName)
+
+    t.equals(#f.destroyCamCalls, 1)
+    t.equals(#f.notifyCalls, notifyCountBefore, 'silent stop -- no player-facing message when the resource itself is stopping')
+    t.equals(f.freezeEntityPositionCalls[#f.freezeEntityPositionCalls].toggle, false)
+end)
+
+t.test('onResourceStop: a harmless no-op when no camera feed was ever started', function()
+    local f = newVisionFixture()
+    local ok = pcall(f.fireResourceStop, f.resourceName)
+    t.isTrue(ok)
+    t.equals(#f.destroyCamCalls, 0)
 end)
 
 os.exit(t.summary())

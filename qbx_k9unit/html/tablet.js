@@ -180,6 +180,43 @@
                 granted: boolean,          // meaningful only if requiresGrant -- does this TARGET currently hold an explicit grant
                 blocked: boolean,          // does this TARGET currently have an explicit block row -- ORTHOGONAL to requiresGrant/granted, see config.lua's own "steps 2 and 3 are DIFFERENT THINGS" note
                 state: 'global_off'|'blocked'|'requires_grant_missing'|'available',
+                blockEnforcement?: 'enforced'|'not_yet_enforced'|'not_enforceable',
+                // ^ REQUESTED FROM THE SERVER, NOT YET LANDED for every key as of
+                // this pass -- see server/tablet.lua's own `blocked`/`state` fields
+                // above: neither one tells the operator whether setting block.<key>
+                // actually stops anything. This page cannot answer that itself
+                // (Do not invent a client-side list here -- see featureBlockEnforcement()
+                // below for why, and THE SECURITY RULE for why a hardcoded guess would
+                // rot the moment another feature's own server file gets a real
+                // `block.<key>` check wired in). Server-side, three states:
+                //   'enforced'         -- some feature-owning server file confirmed,
+                //                         by direct code read, to check
+                //                         HasPermission(citizenid, 'block.<key>') before
+                //                         permitting the actual ability -- mirrors
+                //                         server/runtimecontrol.lua's own FEATURE_TIERS
+                //                         discipline (a small, explicit, code-read-verified
+                //                         registry, not a guess), for the identical reason:
+                //                         a manually-derived claim needs a human to have
+                //                         actually read the file it's claiming something about.
+                //   'not_enforceable'  -- structurally cannot ever take effect: either no
+                //                         server-side implementation exists for this key at
+                //                         all (server/runtimecontrol.lua's own `tier ===
+                //                         'clientonly'` classification -- e.g. ThermalVision/
+                //                         NightVision, a client-toggled ability with nothing
+                //                         server-side to check a block against, so even a
+                //                         wired check could never stop a modified client),
+                //                         OR the feature's own owning file documents a
+                //                         DELIBERATE decision never to honour one (e.g.
+                //                         server/recall.lua's block.Recall -- a termination/
+                //                         escape-hatch path that must never be gated, by this
+                //                         resource's own "no unbounded trap" rule).
+                //   'not_yet_enforced' -- (also the FALLBACK for a missing/unrecognized
+                //                         value, and for this field being entirely absent
+                //                         from an older server response) -- structurally
+                //                         possible, simply not read/confirmed yet. THE SAFE
+                //                         DEFAULT DIRECTION: this page never renders a
+                //                         feature as 'enforced' unless the server explicitly
+                //                         says so.
               },
             ],
           }
@@ -268,6 +305,72 @@
         above. HIGH COMMAND ONLY, re-verified server-side on every one of
         these three mutating calls regardless of what this page shows.
 
+      tablet:runtimeListFeatures {} -> cb({ ok, features?, error? })
+        HIGH COMMAND ONLY screen (server/runtimecontrol.lua's own
+        runtimeListFeatures re-verifies CanManageRuntimeControl itself
+        regardless of what this page shows). `features` is an ARRAY (order
+        NOT guaranteed -- this page sorts it by `name` for a stable
+        display), one entry per Config.Features key:
+          { name, currentValue: boolean, configLuaDefault: boolean,
+            tier: 'live'|'onstart'|'rawtoplevel'|'clientonly'|'protected'|'unaudited',
+            note?: string, overridden: boolean, overriddenBy?: string,
+            overriddenAt?: string, protected: boolean }
+        `tier` is THE HONESTY REQUIREMENT this screen exists to satisfy --
+        see runtimeTierLabel()/runtimeTierDescription() below, which turn
+        this bare string into the plain-language explanation shown on every
+        row BEFORE a toggle is ever pressed. `note`, when present, is
+        server-authored SUPPLEMENTARY prose about a specific partial-
+        liveness gap for that one feature (e.g. ScentTracking's drop-hook
+        caveat) -- rendered as a passthrough, same posture as this page's
+        own `message`-field handling elsewhere, never this row's PRIMARY
+        (locale-driven) explanation.
+
+      tablet:runtimeSetFeature { name: string, value: boolean } -> cb({ ok, appliedLive?, restartRequired?, configEditRequired?, tier?, error? })
+        A `protected`/`unaudited` tier feature is REFUSED outright
+        (`error='protected_feature'`/`'unaudited_feature'`) -- this page
+        never even renders a toggle for either (see buildRuntimeFeatureRow()
+        below), so reaching this refusal at all would mean a modified
+        client bypassed this page entirely, exactly the case THE SECURITY
+        RULE above already assumes. On success, the post-action notice
+        reuses the SAME tier description already shown on the row before
+        the click was made (never re-derived from `note`, which this file
+        does not forward at all -- see runtimeFeatureListFeatures' own doc
+        note above and this page's header THE SECURITY RULE).
+
+      tablet:runtimeResetFeature { name: string } -> cb({ ok, value?, restartRequired?, error? })
+        Restores `name` to its config.lua-shipped default. NOTE: this
+        page does NOT trust this response's own `restartRequired` (server/
+        runtimecontrol.lua's own runtimeResetFeature always reports `false`
+        regardless of tier -- a known asymmetry flagged upstream, not
+        relied on here); the post-reset notice instead reuses this row's
+        OWN, already-known `tier` from the last successful
+        tablet:runtimeListFeatures load, same as a successful Set above.
+
+      tablet:runtimeListTunables {} -> cb({ ok, tunables?, error? })
+        Same HIGH COMMAND ONLY posture as runtimeListFeatures above.
+        `tunables` is an ARRAY (order not guaranteed -- sorted by `key`
+        here), one entry per TUNABLE_REGISTRY key:
+          { key, currentValue: number, configLuaDefault: number,
+            min: number, max: number, integer: boolean, overridden: boolean,
+            overriddenBy?: string, overriddenAt?: string }
+        Every tunable is server-confirmed LIVE (server/runtimecontrol.lua's
+        own header PART 1B, exclusion rule 3) -- there is no tier concept
+        for this list.
+
+      tablet:runtimeSetTunable { key: string, value: number } -> cb({ ok, appliedLive?, restartRequired?, value?, error?, min?, max? })
+        `value` is forwarded AS-IS (only a basic "is this even a number"
+        guard applies client-side) -- server/runtimecontrol.lua's own
+        [min,max]/integer check is the only authoritative gate; a rejection
+        (`error='out_of_range'`) carries the REAL `min`/`max` back, echoed
+        verbatim by this page's own runtimeTunableErrorText(), never a
+        client-guessed range.
+
+      tablet:runtimeResetTunable { key: string } -> cb({ ok, value?, restartRequired?, error? })
+        Restores `key` to its config.lua-shipped default. Unlike
+        runtimeResetFeature above, `restartRequired` here is always
+        correctly `false` (every tunable is live), so no special handling
+        is needed on this page for it.
+
     Lua -> JS (SendNUIMessage on the TOP window, relayed into this page's
     OWN window by html/tablet-bridge.js for any action matching /^tablet:/
     -- see that file's header for why a relay is needed at all):
@@ -277,6 +380,7 @@
           strings: { <key>: <resolved locale string>, ... },        // see DEFAULT_STRINGS below for the full key list this page understands
           maxXpPerGrant: number|null,                               // Config.HighCommand.maxXpPerGrant, UX hint only
           shopLocationsEnabled: boolean,                            // Config.Features.K9EquipmentShop -- UX hint only, SAME posture as themingEnabled: shows a disabled-server-wide note rather than hiding the screen; every equipmentShop* callback re-checks this live, server-side, regardless
+          runtimeControlEnabled: boolean,                           // Config.Features.RuntimeFeatureControl -- UX hint only, SAME posture as themingEnabled/shopLocationsEnabled: shows a disabled-server-wide note rather than hiding the screen; runtimeListFeatures/ListTunables have no such gate at all (read-only values still load), only the four mutating runtimeSetFeature/runtimeSetTunable/runtimeResetFeature/runtimeResetTunable calls actually refuse ('feature_disabled') when this is off
         } }
         Sent once per open (every time the player runs the command/keybind
         that opens the tablet). This page reacts by becoming visible and
@@ -395,6 +499,11 @@
         revoke_label: 'Revoke',
         block_label: 'Block',
         unblock_label: 'Unblock',
+        column_block_effect: 'Block Effect',
+        block_enforced_badge: 'Enforced',
+        block_not_yet_enforced_badge: 'Not enforced yet',
+        block_not_yet_enforced_hint: 'Blocking this here will not currently stop the feature in-game -- the server does not enforce this block yet.',
+        block_not_enforceable_note: 'Cannot be blocked per-person -- there is no server-side enforcement point for this feature.',
         manage_label: 'Manage',
         back_label: '← Back to roster',
         givexp_label: 'Give XP',
@@ -545,6 +654,62 @@
         shop_location_error_invalid_payload: 'That request was malformed. Try again.',
         shop_location_error_db_error: 'A database error occurred. Try again.',
         shop_location_error_feature_disabled: 'The K9 Supply Shop is disabled server-wide.',
+
+        // ---- Runtime feature control + tuning (its own tab, high command
+        // only) -- server/runtimecontrol.lua PART 1/1B. Owner's own words:
+        // "Lets high command switch features on and off SERVER-WIDE from
+        // the tablet, and tune numbers live." THE HONESTY REQUIREMENT: the
+        // six `runtime_tier_*`/`runtime_tier_*_desc` pairs below are this
+        // page's OWN plain-language rendering of server/runtimecontrol.lua's
+        // `tier` field (see runtimeTierLabel()/runtimeTierDescription()) --
+        // that file's raw English `note` prose is NEVER rendered verbatim,
+        // per its own header ("LOCALE KEYS THIS FILE NEEDS: none... never
+        // player-facing prose").
+        tab_runtime_control: 'Runtime Control',
+        runtime_control_heading: 'Runtime Feature Control',
+        runtime_control_intro: 'These settings apply server-wide, for every player. Check the Effect column before changing anything — not every switch takes effect immediately.',
+        runtime_control_disabled_note: 'Runtime feature control is disabled server-wide. Current values are shown for reference only; changes will not save until it is re-enabled.',
+        runtime_features_heading: 'Features',
+        runtime_features_empty: 'No features to show.',
+        runtime_tunables_heading: 'Tunables',
+        runtime_tunables_empty: 'No tunables to show.',
+        column_tier: 'Effect',
+        column_current_value: 'Current Value',
+        column_range: 'Range',
+        column_type: 'Type',
+        runtime_tier_live: 'Live',
+        runtime_tier_live_desc: 'Takes effect immediately for every player, and can be switched back at any time.',
+        runtime_tier_onstart: 'Restart Required',
+        runtime_tier_onstart_desc: 'Saved now, but only takes effect after this resource is restarted. Nothing changes for players in this session.',
+        runtime_tier_rawtoplevel: 'Config Edit + Restart Required',
+        runtime_tier_rawtoplevel_desc: 'Saved, but a restart of this resource alone is NOT enough -- config.lua itself must also be edited to match, and the server restarted, for this to actually take effect.',
+        runtime_tier_clientonly: 'Client-Side Only',
+        runtime_tier_clientonly_desc: 'This feature has no confirmed server-side effect. Saving this value cannot be confirmed to change anything for a connected player.',
+        runtime_tier_protected: 'Protected',
+        runtime_tier_protected_desc: 'This feature protects the authorization system this panel itself depends on, and can never be toggled from here. Change it in config.lua and restart if you are certain.',
+        runtime_tier_unaudited: 'Not Yet Classified',
+        runtime_tier_unaudited_desc: 'This feature has not yet been classified for runtime control, and is refused for safety. Ask a developer to audit it before it can be toggled here.',
+        runtime_value_on: 'On',
+        runtime_value_off: 'Off',
+        runtime_overridden_by_at: 'Overridden by {who} at {when}',
+        runtime_feature_toggle_on_label: 'Enable',
+        runtime_feature_toggle_off_label: 'Disable',
+        runtime_feature_reset_label: 'Reset to config.lua default',
+        runtime_error_denied: 'You are not authorized to manage runtime feature control.',
+        runtime_error_rate_limited: 'Please wait a moment before trying again.',
+        runtime_error_db_error: 'A database error occurred. Try again.',
+        runtime_feature_error_invalid_feature: 'That feature no longer exists.',
+        runtime_feature_error_invalid_value: 'That value was rejected by the server.',
+        runtime_tunable_edit_label: 'Edit',
+        runtime_tunable_save_label: 'Save Value',
+        runtime_tunable_cancel_label: 'Cancel',
+        runtime_tunable_reset_label: 'Reset to config.lua default',
+        runtime_tunable_type_integer: 'Whole number',
+        runtime_tunable_type_decimal: 'Decimal',
+        runtime_tunable_error_invalid_key: 'That tunable no longer exists.',
+        runtime_tunable_error_out_of_range: 'That value must be between {min} and {max}.',
+        runtime_tunable_error_not_integer: 'This value must be a whole number.',
+        runtime_tunable_error_not_a_number: 'Enter a valid number.',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -600,7 +765,7 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'my_record', // 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations'
+        screen: 'my_record', // 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control'
         strings: {},
         capabilities: {},
         maxXpPerGrant: null,
@@ -672,6 +837,25 @@
         shopLocationsRequestId: 0,
         shopLocationDraft: null, // { key: string|null, label, model, scenario } -- key===null means "new location"; null = form closed
         shopLocationActionError: null, // { key, text } -- a Move/Remove refusal rendered inline on that specific row, same shape as certTierActionError
+
+        // Runtime feature control + tuning -- server/runtimecontrol.lua
+        // PART 1/1B. `runtimeFeatures`/`runtimeTunables` are null until the
+        // first successful load, same "never hardcoded, never preloaded"
+        // posture as certTiers/shopLocations above -- the registry lives
+        // entirely server-side (FEATURE_TIERS/TUNABLE_REGISTRY), never
+        // duplicated here.
+        runtimeControlEnabled: false, // Config.Features.RuntimeFeatureControl -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
+        runtimeFeatures: null, // [{ name, currentValue, configLuaDefault, tier, note, overridden, overriddenBy, overriddenAt, protected }, ...]
+        runtimeFeaturesLoading: false,
+        runtimeFeaturesError: null,
+        runtimeFeaturesRequestId: 0, // STALE-RESPONSE GUARD -- same request-id shape as shopLocationsRequestId above (this list has no per-request identity to compare against arrival order)
+        runtimeFeatureActionError: null, // { key: featureName, text } -- a Set/Reset refusal rendered inline on that specific row, same convention as certTierActionError/shopLocationActionError
+        runtimeTunables: null, // [{ key, currentValue, configLuaDefault, min, max, integer, overridden, overriddenBy, overriddenAt }, ...]
+        runtimeTunablesLoading: false,
+        runtimeTunablesError: null,
+        runtimeTunablesRequestId: 0, // STALE-RESPONSE GUARD, same shape as runtimeFeaturesRequestId
+        runtimeTunableDraft: null, // { key, value: string } -- the inline number-editor's own working copy for ONE tunable at a time; null = no editor open
+        runtimeTunableFieldError: null, // { key, text } -- a Set refusal (out_of_range/not_integer/etc.) rendered inline on that specific row
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit
         actionNotice: null, // { kind: 'ok'|'error', text: string } -- transient, cleared on next navigation/reload
@@ -836,6 +1020,34 @@
         }
     }
 
+    /**
+     * Normalizes `feature.blockEnforcement` (server-reported, see this
+     * file's own PersonFeaturesResult doc comment for the three real
+     * values and why 'not_yet_enforced' is the safe fallback) -- NEVER
+     * derived from `feature.key` here. This page has no hardcoded list of
+     * which features honour a block and never will: the whole point of
+     * this field is that the server is the only place that answer can
+     * come from without rotting the moment another feature gets wired
+     * (see server/runtimecontrol.lua's own FEATURE_TIERS for the identical
+     * reasoning applied to a different question). An unrecognized or
+     * absent value collapses to 'not_yet_enforced', the same direction
+     * server/runtimecontrol.lua's own 'unaudited' tier fails closed in --
+     * this page must never claim a block works when it does not know.
+     * @param {{blockEnforcement?: string}} feature
+     * @returns {'enforced'|'not_enforceable'|'not_yet_enforced'}
+     */
+    function featureBlockEnforcement(feature) {
+        var v = feature && feature.blockEnforcement;
+        if (v === 'enforced' || v === 'not_enforceable') return v;
+        return 'not_yet_enforced';
+    }
+
+    /** @param {'enforced'|'not_enforceable'|'not_yet_enforced'} enforcement @returns {string} */
+    function blockEnforcementBadgeLabel(enforcement) {
+        if (enforcement === 'enforced') return S('block_enforced_badge');
+        return S('block_not_yet_enforced_badge');
+    }
+
     // ------------------------------------------------------------------
     // DOM BUILD HELPERS -- every string value below is assigned via
     // `.textContent`, NEVER `.innerHTML` (this page never writes innerHTML
@@ -966,6 +1178,8 @@
             panel.appendChild(buildCertTiersScreen());
         } else if (state.screen === 'shop_locations' && state.viewer.isHighCommand) {
             panel.appendChild(buildShopLocationsScreen());
+        } else if (state.screen === 'runtime_control' && state.viewer.isHighCommand) {
+            panel.appendChild(buildRuntimeControlScreen());
         } else {
             panel.appendChild(buildMyRecordScreen());
         }
@@ -1126,6 +1340,23 @@
                 loadShopLocations();
             });
             tabs.appendChild(shopLocationsTab);
+
+            // Runtime feature control + tuning -- SAME high-command gate
+            // (server/runtimecontrol.lua's own CanManageRuntimeControl is
+            // the real, re-verified-per-call gate; this tab hides the
+            // screen from everyone else as a convenience only). Fresh
+            // entry clears any leftover in-progress tunable edit/refusal,
+            // same reset discipline as every other tab switch on this page.
+            var runtimeControlTab = mkButton(S('tab_runtime_control'), 'k9tablet-tab' + (state.screen === 'runtime_control' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'runtime_control';
+                state.runtimeFeatureActionError = null;
+                state.runtimeTunableDraft = null;
+                state.runtimeTunableFieldError = null;
+                render();
+                loadRuntimeFeatures();
+                loadRuntimeTunables();
+            });
+            tabs.appendChild(runtimeControlTab);
         }
         return tabs;
     }
@@ -1548,7 +1779,7 @@
         var table = mk('table', { class: 'k9tablet-table k9tablet-feature-table' });
         var thead = mk('thead');
         var headRow = mk('tr');
-        [S('feature_column'), S('status_column'), S('column_actions')].forEach(function (h) {
+        [S('feature_column'), S('status_column'), S('column_block_effect'), S('column_actions')].forEach(function (h) {
             headRow.appendChild(mk('th', { text: h }));
         });
         thead.appendChild(headRow);
@@ -1563,39 +1794,81 @@
         return wrap;
     }
 
+    /**
+     * THE HONESTY REQUIREMENT this task exists to satisfy: this row's
+     * Block Effect cell renders BEFORE Actions, so an operator sees what a
+     * block would actually do to this feature BEFORE deciding whether to
+     * press it -- never after. See featureBlockEnforcement() above for the
+     * three-state contract this reads and why it is never derived from
+     * `feature.key` here.
+     */
     function buildPersonFeatureRow(feature) {
         var tr = mk('tr');
         tr.appendChild(mk('td', { text: featureLabel(feature) }));
         tr.appendChild(mk('td', { class: 'k9tablet-feature-state--' + feature.state, text: featureStateLabel(feature.state) }));
 
-        var actionsTd = mk('td', { class: 'k9tablet-feature-actions' });
         var citizenid = state.person.citizenid;
         var key = feature.key;
+        var enforcement = featureBlockEnforcement(feature);
+
+        var blockEffectTd = mk('td', { class: 'k9tablet-block-effect' });
 
         if (!feature.globallyEnabled) {
             // Step 1 is absolute -- see this file's header. NO controls
             // rendered at all for a globally-disabled feature: a grant here
             // would produce a button that silently does nothing, and this
-            // page must not offer that.
-            actionsTd.appendChild(mk('span', { class: 'k9tablet-muted', text: S('state_global_off') }));
-            tr.appendChild(actionsTd);
+            // page must not offer that. The Block Effect column stays
+            // blank/muted for the same reason -- whether a block would be
+            // honoured is moot when the feature cannot run at all.
+            tr.appendChild(blockEffectTd);
+            var offActionsTd = mk('td', { class: 'k9tablet-feature-actions' });
+            offActionsTd.appendChild(mk('span', { class: 'k9tablet-muted', text: S('state_global_off') }));
+            tr.appendChild(offActionsTd);
             return tr;
         }
 
-        // Block/Unblock -- ALWAYS offered (independent of requiresGrant),
-        // per config.lua's own "steps 2 and 3 are different things" note.
-        if (feature.blocked) {
-            actionsTd.appendChild(mkButton(S('unblock_label'), 'k9tablet-btn', function () {
-                runMutation('tablet:unblockFeature', { targetCitizenId: citizenid, feature: key }, function () {
-                    loadPersonFeatures(citizenid);
-                });
-            }, { disabled: state.pendingAction }));
+        if (enforcement === 'not_enforceable') {
+            blockEffectTd.appendChild(mk('span', {
+                class: 'k9tablet-block-badge k9tablet-block-badge--unavailable',
+                text: S('block_not_enforceable_note'),
+            }));
         } else {
-            actionsTd.appendChild(mkConfirmButton(S('block_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
-                runMutation('tablet:blockFeature', { targetCitizenId: citizenid, feature: key }, function () {
-                    loadPersonFeatures(citizenid);
-                });
-            }, { disabled: state.pendingAction }));
+            blockEffectTd.appendChild(mk('span', {
+                class: 'k9tablet-block-badge k9tablet-block-badge--' + enforcement,
+                text: blockEnforcementBadgeLabel(enforcement),
+                title: enforcement === 'not_yet_enforced' ? S('block_not_yet_enforced_hint') : undefined,
+            }));
+        }
+        tr.appendChild(blockEffectTd);
+
+        var actionsTd = mk('td', { class: 'k9tablet-feature-actions' });
+
+        // Block/Unblock -- offered for every feature EXCEPT one this page
+        // has been told, server-side, can never honour one (`enforcement
+        // === 'not_enforceable'`) -- see this file's own PersonFeaturesResult
+        // doc comment above for the two ways that happens (no server-side
+        // implementation point at all, e.g. a client-toggled ability like
+        // ThermalVision/NightVision against a modified client; or a
+        // deliberate design decision, e.g. server/recall.lua's escape-hatch
+        // path). Offering a button that can never do anything is exactly
+        // the dishonest control this task exists to remove -- HIDDEN, not
+        // merely labeled, for this one case. `feature.blocked` (a block row
+        // may already exist from before this distinction was surfaced) is
+        // still shown via the state badge above regardless.
+        if (enforcement !== 'not_enforceable') {
+            if (feature.blocked) {
+                actionsTd.appendChild(mkButton(S('unblock_label'), 'k9tablet-btn', function () {
+                    runMutation('tablet:unblockFeature', { targetCitizenId: citizenid, feature: key }, function () {
+                        loadPersonFeatures(citizenid);
+                    });
+                }, { disabled: state.pendingAction }));
+            } else {
+                actionsTd.appendChild(mkConfirmButton(S('block_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
+                    runMutation('tablet:blockFeature', { targetCitizenId: citizenid, feature: key }, function () {
+                        loadPersonFeatures(citizenid);
+                    });
+                }, { disabled: state.pendingAction }));
+            }
         }
 
         // Grant/Revoke -- ONLY when this feature is actually grant-gated.
@@ -2161,6 +2434,351 @@
         }
     }
 
+    // ---- Runtime feature control + tuning screen (high command only) ----
+
+    /**
+     * Owner's own words: "Lets high command switch features on and off
+     * SERVER-WIDE from the tablet, and tune numbers live."
+     * server/runtimecontrol.lua's own CanManageRuntimeControl is the real
+     * authorization gate, re-checked on every one of the six callbacks
+     * this screen calls -- see THE SECURITY RULE. Renders TWO independent
+     * sections (Features, Tunables) on one screen -- same "several headed
+     * sections, one screen" shape buildMyRecordScreen() already uses for
+     * Certifications/XP/Abilities.
+     */
+    function buildRuntimeControlScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('runtime_control_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('runtime_control_intro') }));
+
+        if (!state.runtimeControlEnabled) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('runtime_control_disabled_note') }));
+        }
+
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('runtime_features_heading') }));
+        wrap.appendChild(buildRuntimeFeaturesSection());
+
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('runtime_tunables_heading') }));
+        wrap.appendChild(buildRuntimeTunablesSection());
+
+        return wrap;
+    }
+
+    /** @param {string} tier @returns {string} plain-language badge text -- NEVER server/runtimecontrol.lua's own raw `note` prose, see this screen's own header note. */
+    function runtimeTierLabel(tier) {
+        switch (tier) {
+            case 'live': return S('runtime_tier_live');
+            case 'onstart': return S('runtime_tier_onstart');
+            case 'rawtoplevel': return S('runtime_tier_rawtoplevel');
+            case 'clientonly': return S('runtime_tier_clientonly');
+            case 'protected': return S('runtime_tier_protected');
+            default: return S('runtime_tier_unaudited');
+        }
+    }
+
+    /** @param {string} tier @returns {string} one-sentence, locale-driven explanation of what this tier actually means -- rendered BEFORE a toggle is ever pressed (always visible on the row) and reused as the post-action notice text (see toggleRuntimeFeature()/resetRuntimeFeature() below), so the SAME honest explanation is shown before and after. */
+    function runtimeTierDescription(tier) {
+        switch (tier) {
+            case 'live': return S('runtime_tier_live_desc');
+            case 'onstart': return S('runtime_tier_onstart_desc');
+            case 'rawtoplevel': return S('runtime_tier_rawtoplevel_desc');
+            case 'clientonly': return S('runtime_tier_clientonly_desc');
+            case 'protected': return S('runtime_tier_protected_desc');
+            default: return S('runtime_tier_unaudited_desc');
+        }
+    }
+
+    /** `state.runtimeFeatures` arrives as a Lua array built from `pairs()`
+     * traversal order (server/runtimecontrol.lua's own runtimeListFeatures),
+     * which is NOT a stable/predictable order across boots -- sorted here
+     * purely for a stable display, same reasoning as
+     * sortedShopLocationEntries() above. @returns {Array<object>} */
+    function sortedRuntimeFeatures() {
+        var list = (state.runtimeFeatures || []).slice();
+        list.sort(function (a, b) { return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0); });
+        return list;
+    }
+
+    /** @returns {Array<object>} same reasoning as sortedRuntimeFeatures() above, sorted by `key`. */
+    function sortedRuntimeTunables() {
+        var list = (state.runtimeTunables || []).slice();
+        list.sort(function (a, b) { return a.key < b.key ? -1 : (a.key > b.key ? 1 : 0); });
+        return list;
+    }
+
+    function buildRuntimeFeaturesSection() {
+        var wrap = mk('div', {});
+        if (state.runtimeFeaturesLoading && !state.runtimeFeatures) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.runtimeFeaturesError && !state.runtimeFeatures) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: runtimeListErrorText(state.runtimeFeaturesError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadRuntimeFeatures));
+            return wrap;
+        }
+        if (!state.runtimeFeatures) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        wrap.appendChild(buildRuntimeFeaturesTable());
+        return wrap;
+    }
+
+    function buildRuntimeFeaturesTable() {
+        var list = sortedRuntimeFeatures();
+        if (list.length === 0) {
+            return mk('p', { class: 'k9tablet-muted', text: S('runtime_features_empty') });
+        }
+
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_name'), S('column_tier'), S('column_current_value'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < list.length; i++) tbody.appendChild(buildRuntimeFeatureRow(list[i]));
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /**
+     * @param {{name:string,currentValue:boolean,tier:string,note?:string,overridden:boolean,overriddenBy?:string,overriddenAt?:string}} feature
+     */
+    function buildRuntimeFeatureRow(feature) {
+        var tr = mk('tr');
+        tr.appendChild(mk('td', { text: feature.name }));
+
+        var tierTd = mk('td');
+        tierTd.appendChild(mk('span', { class: 'k9tablet-runtime-tier k9tablet-runtime-tier--' + feature.tier, text: runtimeTierLabel(feature.tier) }));
+        // THE HONESTY REQUIREMENT, satisfied BEFORE any click: this
+        // sentence is always visible on the row, never hidden behind a
+        // hover/tooltip -- see this screen's own header note and
+        // buildRuntimeControlScreen()'s doc comment.
+        tierTd.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: runtimeTierDescription(feature.tier) }));
+        // A per-feature caveat (e.g. ScentTracking's drop-hook gap) is
+        // server-authored, dynamic supplementary text -- rendered as a
+        // passthrough, same posture as errorText()'s own `message` field,
+        // NEVER treated as this row's PRIMARY (locale-driven) explanation.
+        if (typeof feature.note === 'string' && feature.note.length > 0) {
+            tierTd.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: feature.note }));
+        }
+        tr.appendChild(tierTd);
+
+        var valueTd = mk('td');
+        valueTd.appendChild(mk('span', { class: 'k9tablet-runtime-value k9tablet-runtime-value--' + (feature.currentValue ? 'on' : 'off'), text: feature.currentValue ? S('runtime_value_on') : S('runtime_value_off') }));
+        if (feature.overridden) {
+            valueTd.appendChild(mk('p', { class: 'k9tablet-muted', text: formatTemplate(S('runtime_overridden_by_at'), { who: feature.overriddenBy || '?', when: feature.overriddenAt || '?' }) }));
+        }
+        tr.appendChild(valueTd);
+
+        var actionsTd = mk('td', { class: 'k9tablet-cert-tier-actions' });
+        if (feature.tier === 'protected' || feature.tier === 'unaudited') {
+            // NO TOGGLE RENDERED AT ALL for these two -- server/runtimecontrol.lua
+            // refuses both unconditionally (reason='protected_feature'/
+            // 'unaudited_feature'); offering a button that always comes
+            // back refused would be exactly the "switch that appears to
+            // work" problem this task exists to fix.
+            actionsTd.appendChild(mk('p', { class: 'k9tablet-muted', text: runtimeTierDescription(feature.tier) }));
+        } else {
+            var toggleLabel = feature.currentValue ? S('runtime_feature_toggle_off_label') : S('runtime_feature_toggle_on_label');
+            actionsTd.appendChild(mkConfirmButton(toggleLabel, 'k9tablet-btn' + (feature.currentValue ? ' k9tablet-btn--danger' : ''), function () {
+                toggleRuntimeFeature(feature.name, !feature.currentValue, feature.tier);
+            }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+
+            if (feature.overridden) {
+                actionsTd.appendChild(mkConfirmButton(S('runtime_feature_reset_label'), 'k9tablet-link-btn', function () {
+                    resetRuntimeFeature(feature.name, feature.tier);
+                }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+            }
+        }
+
+        // A Set/Reset REFUSAL renders INLINE on THIS specific row --
+        // "cannot, and here is why" -- same convention as
+        // certTierActionError/shopLocationActionError above.
+        if (state.runtimeFeatureActionError && state.runtimeFeatureActionError.key === feature.name) {
+            actionsTd.appendChild(mk('p', { class: 'k9tablet-error-text k9tablet-cert-tier-row-error', text: state.runtimeFeatureActionError.text }));
+        }
+
+        tr.appendChild(actionsTd);
+        return tr;
+    }
+
+    function buildRuntimeTunablesSection() {
+        var wrap = mk('div', {});
+        if (state.runtimeTunablesLoading && !state.runtimeTunables) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.runtimeTunablesError && !state.runtimeTunables) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: runtimeListErrorText(state.runtimeTunablesError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadRuntimeTunables));
+            return wrap;
+        }
+        if (!state.runtimeTunables) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        wrap.appendChild(buildRuntimeTunablesTable());
+        return wrap;
+    }
+
+    function buildRuntimeTunablesTable() {
+        var list = sortedRuntimeTunables();
+        if (list.length === 0) {
+            return mk('p', { class: 'k9tablet-muted', text: S('runtime_tunables_empty') });
+        }
+
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_key'), S('column_current_value'), S('column_range'), S('column_type'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < list.length; i++) tbody.appendChild(buildRuntimeTunableRow(list[i]));
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /**
+     * @param {{key:string,currentValue:number,min:number,max:number,integer:boolean,overridden:boolean,overriddenBy?:string,overriddenAt?:string}} tunable
+     */
+    function buildRuntimeTunableRow(tunable) {
+        var tr = mk('tr');
+        tr.appendChild(mk('td', { text: tunable.key }));
+
+        var isEditing = state.runtimeTunableDraft && state.runtimeTunableDraft.key === tunable.key;
+
+        var valueTd = mk('td');
+        if (isEditing) {
+            // A plain number-input HINT only (min/max/step) -- NOT an
+            // authoritative gate: this page never blocks Save based on
+            // these attributes, and reads `.value` directly rather than
+            // relying on native form validation to enforce them (see
+            // saveRuntimeTunableDraft() below and this screen's own header
+            // note: "do not duplicate the validation client-side as if it
+            // were authoritative").
+            var input = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'number', min: String(tunable.min), max: String(tunable.max), step: tunable.integer ? '1' : 'any' } });
+            input.value = state.runtimeTunableDraft.value;
+            input.addEventListener('input', function (e) { state.runtimeTunableDraft.value = e.target.value; });
+            valueTd.appendChild(input);
+        } else {
+            valueTd.appendChild(mk('span', { text: String(tunable.currentValue) }));
+            if (tunable.overridden) {
+                valueTd.appendChild(mk('p', { class: 'k9tablet-muted', text: formatTemplate(S('runtime_overridden_by_at'), { who: tunable.overriddenBy || '?', when: tunable.overriddenAt || '?' }) }));
+            }
+        }
+        tr.appendChild(valueTd);
+
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: tunable.min + ' – ' + tunable.max }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: tunable.integer ? S('runtime_tunable_type_integer') : S('runtime_tunable_type_decimal') }));
+
+        var actionsTd = mk('td', { class: 'k9tablet-cert-tier-actions' });
+        if (isEditing) {
+            actionsTd.appendChild(mkButton(S('runtime_tunable_save_label'), 'k9tablet-btn', function () {
+                saveRuntimeTunableDraft(tunable);
+            }, { disabled: state.pendingAction }));
+            actionsTd.appendChild(mkButton(S('runtime_tunable_cancel_label'), 'k9tablet-link-btn', closeRuntimeTunableDraft));
+        } else {
+            actionsTd.appendChild(mkButton(S('runtime_tunable_edit_label'), 'k9tablet-btn', function () {
+                openRuntimeTunableDraft(tunable);
+            }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+            if (tunable.overridden) {
+                actionsTd.appendChild(mkConfirmButton(S('runtime_tunable_reset_label'), 'k9tablet-link-btn', function () {
+                    resetRuntimeTunable(tunable.key);
+                }, { disabled: state.pendingAction || !state.runtimeControlEnabled }));
+            }
+        }
+
+        if (state.runtimeTunableFieldError && state.runtimeTunableFieldError.key === tunable.key) {
+            actionsTd.appendChild(mk('p', { class: 'k9tablet-error-text k9tablet-cert-tier-row-error', text: state.runtimeTunableFieldError.text }));
+        }
+
+        tr.appendChild(actionsTd);
+        return tr;
+    }
+
+    /** Shared by both the Features and Tunables LIST loaders below -- their
+     * only failure mode beyond fetchNui()'s own synthetic timeout/network
+     * codes is `reason='denied'` (CanManageRuntimeControl), renamed to
+     * `error` by client/tablet.lua's TranslateReasonResult.
+     * @param {object|undefined} result @returns {string} */
+    function runtimeListErrorText(result) {
+        if (!result) return S('error_generic');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        if (result.error === 'denied') return S('runtime_error_denied');
+        return errorText(result);
+    }
+
+    /** @param {object|undefined} result @returns {string} */
+    function runtimeFeatureErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'denied': return S('runtime_error_denied');
+            case 'rate_limited': return S('runtime_error_rate_limited');
+            case 'invalid_feature': return S('runtime_feature_error_invalid_feature');
+            case 'invalid_value': return S('runtime_feature_error_invalid_value');
+            // REFUSALS ("cannot, and here is why"), not generic failures --
+            // per this task's own explicit instruction -- reuse the SAME
+            // tier description this row already shows before the click,
+            // so the reason given here is never a DIFFERENT story than the
+            // one already on screen.
+            case 'protected_feature': return S('runtime_tier_protected_desc');
+            case 'unaudited_feature': return S('runtime_tier_unaudited_desc');
+            case 'feature_disabled': return S('runtime_control_disabled_note');
+            case 'db_error': return S('runtime_error_db_error');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
+    /** @param {object|undefined} result @returns {string} */
+    function runtimeTunableErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'denied': return S('runtime_error_denied');
+            case 'rate_limited': return S('runtime_error_rate_limited');
+            case 'invalid_key': return S('runtime_tunable_error_invalid_key');
+            // The server's OWN real min/max, echoed back verbatim -- see
+            // this file's header NUI CONTRACT note: never a client-guessed
+            // range.
+            case 'out_of_range': return formatTemplate(S('runtime_tunable_error_out_of_range'), {
+                min: (result && result.min !== undefined && result.min !== null) ? result.min : '?',
+                max: (result && result.max !== undefined && result.max !== null) ? result.max : '?',
+            });
+            case 'not_integer': return S('runtime_tunable_error_not_integer');
+            case 'feature_disabled': return S('runtime_control_disabled_note');
+            case 'db_error': return S('runtime_error_db_error');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
+    /** @param {object} tunable */
+    function openRuntimeTunableDraft(tunable) {
+        state.runtimeTunableDraft = { key: tunable.key, value: String(tunable.currentValue) };
+        state.runtimeTunableFieldError = null;
+        render();
+    }
+
+    function closeRuntimeTunableDraft() {
+        state.runtimeTunableDraft = null;
+        state.runtimeTunableFieldError = null;
+        render();
+    }
+
     // ------------------------------------------------------------------
     // DATA LOADERS
     // ------------------------------------------------------------------
@@ -2478,6 +3096,55 @@
                 return;
             }
             state.shopLocations = (result.locations && typeof result.locations === 'object') ? result.locations : {};
+            render();
+        });
+    }
+
+    /** Fetched fresh every time the Runtime Control tab is opened (see
+     * buildTabs()) -- NEVER a hardcoded list, same posture as
+     * loadCertTiers()/loadShopLocations() above. High command only
+     * (server-side gate -- see buildRuntimeControlScreen()'s own doc
+     * comment). STALE-RESPONSE GUARD: same request-id shape as
+     * loadShopLocations() above -- this list has no per-request identity
+     * (like a citizenid/query) to compare against arrival order. */
+    function loadRuntimeFeatures() {
+        state.runtimeFeaturesLoading = true;
+        state.runtimeFeaturesError = null;
+        var requestId = ++state.runtimeFeaturesRequestId;
+        render();
+
+        fetchNui('tablet:runtimeListFeatures', {}).then(function (result) {
+            if (requestId !== state.runtimeFeaturesRequestId) return;
+
+            state.runtimeFeaturesLoading = false;
+            if (!result || result.ok !== true) {
+                state.runtimeFeaturesError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.runtimeFeatures = Array.isArray(result.features) ? result.features : [];
+            render();
+        });
+    }
+
+    /** Same posture as loadRuntimeFeatures() immediately above, for the
+     * Tunables section on the same screen. */
+    function loadRuntimeTunables() {
+        state.runtimeTunablesLoading = true;
+        state.runtimeTunablesError = null;
+        var requestId = ++state.runtimeTunablesRequestId;
+        render();
+
+        fetchNui('tablet:runtimeListTunables', {}).then(function (result) {
+            if (requestId !== state.runtimeTunablesRequestId) return;
+
+            state.runtimeTunablesLoading = false;
+            if (!result || result.ok !== true) {
+                state.runtimeTunablesError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.runtimeTunables = Array.isArray(result.tunables) ? result.tunables : [];
             render();
         });
     }
@@ -2882,6 +3549,136 @@
         });
     }
 
+    /**
+     * Toggles feature `name` to `newValue` -- NOT the generic runMutation()
+     * helper: this page never optimistically mutates its own runtimeFeatures
+     * copy (the response carries no full, refreshed list the way
+     * certTiersUpsert's own `tiers` does), so a successful set/reset always
+     * re-pulls via loadRuntimeFeatures() instead, same "re-pull the
+     * authoritative version" posture as saveShopLocationDraft() above.
+     *
+     * THE HONESTY REQUIREMENT, satisfied AFTER the click too: the post-action
+     * notice reuses the SAME tier description already shown on the row
+     * BEFORE this was pressed (the `tier` argument here is this row's own,
+     * already-known tier -- never trusted from the mutation response, since
+     * server/runtimecontrol.lua's own runtimeResetFeature always reports
+     * `restartRequired = false` regardless of tier, a known asymmetry
+     * flagged to main rather than relied upon here).
+     * @param {string} name @param {boolean} newValue @param {string} tier
+     */
+    function toggleRuntimeFeature(name, newValue, tier) {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.runtimeFeatureActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:runtimeSetFeature', { name: name, value: newValue }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.actionNotice = { kind: 'ok', text: runtimeTierDescription(tier) };
+                loadRuntimeFeatures();
+            } else {
+                var text = runtimeFeatureErrorText(result);
+                state.runtimeFeatureActionError = { key: name, text: text };
+                state.actionNotice = { kind: 'error', text: text };
+                render();
+            }
+        });
+    }
+
+    /** Restores feature `name` to its config.lua-shipped default -- a
+     * destructive action from an operator's point of view (discards an
+     * override), hence mkConfirmButton's two-click guard at its own call
+     * site, same posture as resetThemeToDefault()/deleteCertTier() above.
+     * @param {string} name @param {string} tier -- this row's own,
+     * already-known tier, see toggleRuntimeFeature()'s own doc comment on
+     * why the response is not trusted for this. */
+    function resetRuntimeFeature(name, tier) {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.runtimeFeatureActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:runtimeResetFeature', { name: name }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.actionNotice = { kind: 'ok', text: runtimeTierDescription(tier) };
+                loadRuntimeFeatures();
+            } else {
+                var text = runtimeFeatureErrorText(result);
+                state.runtimeFeatureActionError = { key: name, text: text };
+                state.actionNotice = { kind: 'error', text: text };
+                render();
+            }
+        });
+    }
+
+    /**
+     * Saves the inline number-editor's current working copy for ONE
+     * tunable. Only a basic "is this even parseable as a number" guard is
+     * applied HERE (see this file's header NUI CONTRACT note) -- the real
+     * [min,max]/integer check is server/runtimecontrol.lua's own
+     * runtimeSetTunable, whose exact bounds are echoed back verbatim on a
+     * rejection (see runtimeTunableErrorText() above) rather than guessed
+     * or re-derived client-side.
+     * @param {{key:string}} tunable
+     */
+    function saveRuntimeTunableDraft(tunable) {
+        if (state.pendingAction || !state.runtimeTunableDraft || state.runtimeTunableDraft.key !== tunable.key) return;
+
+        var numericValue = parseFloat(state.runtimeTunableDraft.value);
+        if (!isFinite(numericValue)) {
+            state.runtimeTunableFieldError = { key: tunable.key, text: S('runtime_tunable_error_not_a_number') };
+            render();
+            return;
+        }
+
+        state.pendingAction = true;
+        state.runtimeTunableFieldError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:runtimeSetTunable', { key: tunable.key, value: numericValue }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.runtimeTunableDraft = null;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+                loadRuntimeTunables();
+            } else {
+                var text = runtimeTunableErrorText(result);
+                state.runtimeTunableFieldError = { key: tunable.key, text: text };
+                state.actionNotice = { kind: 'error', text: text };
+                render();
+            }
+        });
+    }
+
+    /** Restores tunable `key` to its config.lua-shipped default -- same
+     * two-click destructive-action posture as resetRuntimeFeature() above.
+     * @param {string} key */
+    function resetRuntimeTunable(key) {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.runtimeTunableFieldError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:runtimeResetTunable', { key: key }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+                loadRuntimeTunables();
+            } else {
+                var text = runtimeTunableErrorText(result);
+                state.runtimeTunableFieldError = { key: key, text: text };
+                state.actionNotice = { kind: 'error', text: text };
+                render();
+            }
+        });
+    }
+
     // ------------------------------------------------------------------
     // OPEN / CLOSE
     // ------------------------------------------------------------------
@@ -2895,6 +3692,7 @@
         state.peds = Array.isArray(data.peds) ? data.peds : [];
         state.themingEnabled = data.themingEnabled === true;
         state.shopLocationsEnabled = data.shopLocationsEnabled === true;
+        state.runtimeControlEnabled = data.runtimeControlEnabled === true;
         state.branding = (data.branding && typeof data.branding === 'object') ? data.branding : {};
 
         // First-open ONLY, cosmetic seeding -- see applyBrandingSeedTheme()'s

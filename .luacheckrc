@@ -205,6 +205,22 @@ read_globals = {
     "SetEntityCollision", "SetEntityVisible", "FreezeEntityPosition",
     "AttachEntityToEntity", "DetachEntity", "GetGamePool",
     "GetHashKey",
+    -- CAM namespace + GetEntityRotation, for client/vision.lua's partner
+    -- camera feed. Verified 2026-08-26 against runtime.fivem.net's live
+    -- natives.json (HTTP 200, 2.7MB), not from memory and not from the
+    -- decl pages, which 404 for all of these -- a 404 there is not proof
+    -- of absence, which is exactly why the fallback exists. Every one
+    -- resolves in the CAM namespace (GetEntityRotation in ENTITY) with a
+    -- real hash and no apiset key, i.e. client-only, matching how they are
+    -- used. Hashes at time of check: CreateCam 0xC3981DCE61D9E13F,
+    -- AttachCamToEntity 0xFEDB7D269E8C60E3, RenderScriptCams
+    -- 0x07E5B515DB0636FC, SetCamActive 0x026FB97D0A425F84, DestroyCam
+    -- 0x865908C81A2C22E9, DoesCamExist 0xA7A932170592B50E, SetCamFov
+    -- 0xB13C14F66A00D047, SetCamRot 0x85973643155D0B07,
+    -- GetEntityRotation 0xAFBD61CC738D9EB9.
+    "CreateCam", "AttachCamToEntity", "SetCamFov", "GetEntityRotation",
+    "SetCamRot", "SetCamActive", "RenderScriptCams", "DoesCamExist",
+    "DestroyCam",
     -- GetWaterHeightNoWaves: NOT verified to this file's usual standard, and
     -- recorded as such rather than left looking checked. Its decl page 404s
     -- (not proof of absence -- many real natives have none), and the fallback
@@ -435,6 +451,9 @@ globals = {
     -- was consulting the other four and not this one, so a forced revert
     -- could fire on a player still wearing an attached prop.
     "IsPropAttachmentEngaged",
+    -- ToggleCameraFeed: client/vision.lua's partner-camera toggle, same
+    -- cross-file shape as ToggleThermalVision/ToggleNightVision.
+    "ToggleCameraFeed",
     -- TierCapabilityPermits: server/certtiers.lua's capability gate, called
     -- by feature files to ask "does this person's certification tier allow
     -- this action". Deliberately fail-PERMISSIVE: it returns true unless the
