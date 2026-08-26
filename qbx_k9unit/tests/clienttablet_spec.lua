@@ -1395,4 +1395,131 @@ t.test('tablet:certTiersDelete: a successful delete forwards the refreshed tiers
     t.equals(result.tiers[1].key, 'certified')
 end)
 
+-- ----------------------------------------------------------------------
+-- K9 Audit Trail viewer -- server/admin.lua's five tabletAudit* callbacks
+-- (Cert/Partner/Search/Xp/Dept), bridged one-to-one by
+-- tablet:auditCert/Partner/Search/Xp/Dept. Every one is forwarded
+-- VERBATIM (no TranslateReasonResult -- server/admin.lua's own response
+-- shape already matches this contract's `{ok, error, message}` directly),
+-- so these tests cover only: shape validation (rejected before any
+-- server round trip), correct callback name/argument order, and the
+-- `limit`/`value` optional-argument handling client/tablet.lua's own
+-- OptionalNumericLimit/tablet:auditSearch comments describe.
+-- ----------------------------------------------------------------------
+
+t.test('tablet:auditCert: missing/blank targetCitizenId is rejected before any server round trip', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:auditCert', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:auditCert', { targetCitizenId = '' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:auditCert: forwards citizenid + limit, in that order, and returns the server response verbatim', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditCert', { ok = true, rows = { { job = 'police', active = 1 } }, label = 'Certification history for ABC123' })
+    local result = f.callNui('tablet:auditCert', { targetCitizenId = 'ABC123', limit = 40 })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletAuditCert')
+    t.equals(f.callbackCallLog[1].args[1], 'ABC123')
+    t.equals(f.callbackCallLog[1].args[2], 40)
+    t.isTrue(result.ok)
+    t.equals(result.rows[1].job, 'police')
+    t.equals(result.label, 'Certification history for ABC123')
+end)
+
+t.test('tablet:auditCert: a non-number limit (or an absent one) is dropped to nil, never forwarded raw', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditCert', { ok = true, rows = {}, label = '' })
+    f.callNui('tablet:auditCert', { targetCitizenId = 'ABC123', limit = 'not-a-number' })
+    t.isNil(f.callbackCallLog[1].args[2])
+
+    f.callNui('tablet:auditCert', { targetCitizenId = 'ABC123' })
+    t.isNil(f.callbackCallLog[2].args[2])
+end)
+
+t.test('tablet:auditCert: not_authorized/rate_limited from the server forward verbatim, no translation', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditCert', { ok = false, error = 'not_authorized', message = 'You are not authorized to view this.' })
+    local result = f.callNui('tablet:auditCert', { targetCitizenId = 'ABC123' })
+    t.isFalse(result.ok)
+    t.equals(result.error, 'not_authorized')
+    t.equals(result.message, 'You are not authorized to view this.')
+end)
+
+t.test('tablet:auditPartner: same shape guard and forwarding as tablet:auditCert', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:auditPartner', {}).error, 'invalid_args')
+
+    f.setServerCallback('qbx_k9unit:server:tabletAuditPartner', { ok = true, rows = {}, label = 'Partnership history for ABC123' })
+    f.callNui('tablet:auditPartner', { targetCitizenId = 'ABC123', limit = 5 })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletAuditPartner')
+    t.equals(f.callbackCallLog[1].args[1], 'ABC123')
+    t.equals(f.callbackCallLog[1].args[2], 5)
+end)
+
+t.test('tablet:auditXp: requires targetCitizenId, forwards it ALONE -- no limit argument at all', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:auditXp', {}).error, 'invalid_args')
+
+    f.setServerCallback('qbx_k9unit:server:tabletAuditXp', { ok = true, rows = { { xp = 1234, updated_at = '2026-01-01' } }, label = 'XP snapshot for ABC123' })
+    local result = f.callNui('tablet:auditXp', { targetCitizenId = 'ABC123', limit = 99 })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletAuditXp')
+    t.equals(f.callbackCallLog[1].args[1], 'ABC123')
+    t.isNil(f.callbackCallLog[1].args[2], 'limit is never forwarded for auditXp, even if the caller sent one')
+    t.equals(result.rows[1].xp, 1234)
+end)
+
+t.test('tablet:auditDept: requires departmentKey, forwards it verbatim (never validated against a hardcoded department list client-side)', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:auditDept', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:auditDept', { departmentKey = '' }).error, 'invalid_args')
+
+    f.setServerCallback('qbx_k9unit:server:tabletAuditDept', { ok = true, rows = { { citizenid = 'ABC123' } }, label = 'Roster for police' })
+    f.callNui('tablet:auditDept', { departmentKey = 'police', limit = 10 })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletAuditDept')
+    t.equals(f.callbackCallLog[1].args[1], 'police')
+    t.equals(f.callbackCallLog[1].args[2], 10)
+end)
+
+t.test('tablet:auditSearch: requires a non-blank mode string, rejected before any server round trip', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:auditSearch', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:auditSearch', { mode = '' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:auditSearch: `mode` is forwarded VERBATIM, unchecked against any client-side whitelist -- the server is the real gate', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditSearch', { ok = false, error = 'invalid_args' })
+    f.callNui('tablet:auditSearch', { mode = 'not-a-real-mode' })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:tabletAuditSearch')
+    t.equals(f.callbackCallLog[1].args[1], 'not-a-real-mode')
+end)
+
+t.test('tablet:auditSearch: officer/person modes forward {mode, value, limit} in order', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditSearch', { ok = true, rows = {}, label = '' })
+    f.callNui('tablet:auditSearch', { mode = 'officer', value = 'ABC123', limit = 15 })
+    t.equals(f.callbackCallLog[1].args[1], 'officer')
+    t.equals(f.callbackCallLog[1].args[2], 'ABC123')
+    t.equals(f.callbackCallLog[1].args[3], 15)
+end)
+
+t.test('tablet:auditSearch: a missing/non-string value is sent as an empty string, NEVER nil -- value is not this call\'s last positional argument', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditSearch', { ok = true, rows = {}, label = '' })
+    f.callNui('tablet:auditSearch', { mode = 'recent' })
+    t.equals(f.callbackCallLog[1].args[1], 'recent')
+    t.equals(f.callbackCallLog[1].args[2], '', 'empty string, not nil, so a NON-TRAILING nil can never shift limit out of position')
+    t.isNil(f.callbackCallLog[1].args[3], 'limit itself is still correctly nil when the caller sent none')
+end)
+
+t.test('tablet:auditSearch: recent mode forwards a real limit correctly positioned after the empty value', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:tabletAuditSearch', { ok = true, rows = {}, label = 'Most recent searches' })
+    f.callNui('tablet:auditSearch', { mode = 'recent', limit = 25 })
+    t.equals(f.callbackCallLog[1].args[1], 'recent')
+    t.equals(f.callbackCallLog[1].args[2], '')
+    t.equals(f.callbackCallLog[1].args[3], 25)
+end)
+
 os.exit(t.summary())

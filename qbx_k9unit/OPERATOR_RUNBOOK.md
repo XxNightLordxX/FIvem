@@ -6,15 +6,26 @@ breaks. For player-facing behavior see `PLAYER_GUIDE.md`; for design
 rationale and internals see `DEVELOPER_REFERENCE.md`.
 
 **The state of the feature flags, in one sentence:** nearly every one of
-`config.lua`'s ~50 `Config.Features` flags ships `true`. The two
-exceptions are `CameraFeedPiP` (no implementing code exists at all — the
-engine has no native for a second camera feed, so there's nothing to
-enable) and `CertificationExpiry` (off on purpose — but it is safe to turn
-on: every certification that already exists keeps no expiry date unless
-someone explicitly renews it, and only new grants get one. It is off
-because starting a recertification cycle is a decision to make on purpose,
-not because switching it on would strip anybody). Read `config.lua`'s own comments before flipping anything;
-they're written for this, not just for developers.
+`config.lua`'s 56 `Config.Features` flags ships `true`. The one
+exception is `CertificationExpiry` (off on purpose — but it is safe to
+turn on: every certification that already exists keeps no expiry date
+unless someone explicitly renews it, and only new grants get one. It is
+off because starting a recertification cycle is a decision to make on
+purpose, not because switching it on would strip anybody). Read
+`config.lua`'s own comments before flipping anything; they're written for
+this, not just for developers.
+
+**A note on `CameraFeedPiP` specifically**, since its name overpromises:
+it ships `true`, and it is real, but it is not a literal
+picture-in-picture — a true simultaneous two-camera inset is not possible
+with FiveM's current natives (confirmed against the full native list, not
+assumed). What it actually does: a handler or K9 with an active partner
+can press a key (`H` by default, `Config.CameraFeed.toggleKey`) to switch
+their *entire screen* to their partner's viewpoint until they press it
+again. It requires `HandlerPartnership` to be on and an active partnership
+between the two players; see `PLAYER_GUIDE.md` for the player-facing
+description and `Config.CameraFeed` in `config.lua` for the tunables
+(field of view, eye-height offsets per body type).
 
 ---
 
@@ -74,8 +85,12 @@ actually applied.
 Work through these before real players see this resource:
 
 - **`Config.Departments`** — your real job names, and per department:
-  `certifierGrade` (who can certify), `auditGrade` (who can run the
-  read-only audit commands), `highCommandGrade` (who bypasses every other
+  `certifierGrade` (who can certify), `auditGrade` (the *rank* required to
+  run the read-only audit commands — on the shipped default config,
+  reaching this rank is not enough by itself; see "Per-person feature
+  control" in §5 below, `AdminAuditCommands` needs an individual grant
+  too, for every single person, including a department boss),
+  `highCommandGrade` (who bypasses every other
   rank check and can mint XP — set this deliberately, and higher than
   `auditGrade`), `nonComplianceAlertGrade`.
 - **`Config.Peds`** — which ped models count as a K9. Any model works,
@@ -168,6 +183,12 @@ See `DEVELOPER_REFERENCE.md`'s combat trust-boundary write-up for the full
 reasoning and the exact sequenced test to run on a dev client if you want
 to verify it yourself before going live.
 
+One more gate worth knowing about: if high command has granted the
+"Bite & Hold / Non-Lethal Takedown" certification-tier capability to any
+tier (§5's "Certification tier editor"), only handlers/K9s holding a
+tier with that capability can bite or take down — on a fresh install, no
+tier has it, so this gate does nothing until someone opts into it.
+
 **`Config.Combat.NonComplianceDetection.enabled` ships `false`** even
 though the three mechanics above are on — turn it on if you want a log
 (or staff notification) of suspected non-compliance. It only ever logs or
@@ -198,21 +219,68 @@ nothing.
   by `Config.HighCommand.maxXpPerGrant`), and grant/revoke the four named
   permissions in `Config.Permissions` (`k9.access`, `k9.certify`,
   `k9.audit`, `k9.givexp`) to specific people.
-- **Per-person feature control** (`Config.FeatureControl.RequireGrant`) —
-  a short list of features (currently: `BiteAndHold`,
-  `NonLethalTakedown`, `PropDragging`, `AdminAuditCommands`,
-  `FindAlerts`, `ScentTrailHunt`, `PursuitSprint`, `ScentLineup`,
-  `SARCalls`) need an individual grant from the tablet even when their
-  global flag is on. A server-wide flag being `false` always wins — a
-  personal grant can never turn on something switched off globally.
+- **Per-person feature control** works two ways, and they are not the same
+  tool:
+  - **Require a grant** (`Config.FeatureControl.RequireGrant`) — a short,
+    named list of features (currently: `BiteAndHold`, `NonLethalTakedown`,
+    `PropDragging`, `AdminAuditCommands`, `FindAlerts`, `ScentTrailHunt`,
+    `PursuitSprint`, `ScentLineup`, `SARCalls`) that need an individual
+    grant from the tablet before anyone can use them **even when their
+    global flag is on**. This is opt-IN by default: nobody has any of
+    these nine until high command grants them, one person at a time.
+    **Note this includes `AdminAuditCommands`** — meeting the
+    `auditGrade` rank (or being a department boss, or even being high
+    command) is not enough on its own; the `/k9audit*` commands also need
+    this explicit grant, for every single person who runs them, on the
+    shipped default config.
+  - **Block one person** — a much broader mechanism, covering most named
+    features in this resource (leash, tracking types, search, combat,
+    fetch, kennel, medkit, K9 inventory, bark, door interaction, the
+    leaderboard, and more), not only the nine above. This is opt-OUT: a
+    feature works normally for everyone until high command explicitly
+    blocks it for one specific person or K9, at which point that one
+    mechanic refuses for them alone (never for the whole server) until
+    unblocked. A handful of purely cosmetic/client-only effects (radial
+    menu structure, thermal/night vision, the vitality HUD, ambient audio,
+    the camera feed, and a few others) can also be blocked this way, with
+    the same disclosed limit every client-side check in this resource has:
+    it only works on an ordinary, unmodified client, never against someone
+    running modified game files.
+  - Either way, **a server-wide flag being `false` always wins** — a
+    personal grant or the absence of a block can never turn on something
+    switched off globally.
 - **Runtime feature control** (`Config.Features.RuntimeFeatureControl`) —
-  high command can flip most flags and tune a small set of numbers live
-  from the tablet, without editing `config.lua`. Whether a given change
-  takes effect immediately or needs a resource restart depends on how
-  that specific feature registers its own commands/events — the tablet
-  tells you which for each one. Two flags, `HighCommand` and
-  `PermissionGrants`, can never be toggled this way (they gate the
-  authorization check the tablet itself depends on).
+  high command can flip most flags live from the tablet, without editing
+  `config.lua`, and can also tune a large number of individual gameplay
+  numbers live (ranges, cooldowns, thresholds, XP amounts, and similar —
+  not every number in `config.lua`, only the ones a server-side handler
+  actually re-reads on each use; the tablet lists exactly which). Whether
+  a flag flip or a number change takes effect immediately or needs a
+  resource restart depends on how that specific feature registers its own
+  commands/events — the tablet tells you which for each one. Two flags,
+  `HighCommand` and `PermissionGrants`, can never be toggled this way
+  (they gate the authorization check the tablet itself depends on).
+- **Certification tier editor** — high command can rename the three
+  shipped tiers (Trainee/Certified/Senior), add new ones, reorder them,
+  and grant each tier a **capability** from a small, fixed list, all from
+  the tablet. Two things worth knowing before touching this:
+  - **On a fresh install, capability enforcement does nothing at all.**
+    All three shipped tiers start with an empty capability list, and a
+    capability only starts being checked, resource-wide, the moment high
+    command grants it to **any one tier**. Until then, tier does not
+    restrict anything — it is purely a label. This is deliberate (nobody
+    should get a new restriction just because this feature existed), but
+    it means the first time you grant a capability to a tier, you are
+    switching on a real gate for *every* handler and K9 in *every*
+    configured department, not just the one you were looking at.
+  - Only two of the five listed capabilities currently gate anything:
+    **"Bite & Hold / Non-Lethal Takedown"** (grant it to a tier and *only*
+    that tier can bite or take down — dragging is unaffected, and anyone
+    already mid-hold can still be released) and **"Eligible to hold K9
+    specializations"** (grant it to a tier and only that tier can be given
+    narcotics/explosives/patrol — anyone who already holds one keeps it).
+    The other three are reserved for mechanics that don't exist yet in
+    this resource and currently do nothing if granted.
 - **Tablet theming** (`Config.Features.TabletTheming`) is purely cosmetic
   — it can never change what anyone is authorized to do or see.
 

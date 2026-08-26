@@ -2248,13 +2248,21 @@ arguably more exploit-sensitive than a search.
 (five real `.ogg` files ship under `html/sounds/`, per
 `html/sounds/CREDITS.md`; `prop_doghouse_01` was refuted during
 implementation and replaced with the confirmed-real `prop_dog_cage_01`).
-`CameraFeedPiP` stays `false` and is expected to permanently: a true inset
-live-3D-video picture-in-picture is **not achievable** with stock FiveM
+**CORRECTED, 2026-08-26 — this paragraph is stale, kept for the research
+trail below it, not as a current status claim.** `CameraFeedPiP` no
+longer ships `false`; a later, owner-directed pass built exactly the
+narrower spike this paragraph describes as achievable (`client/vision.lua`'s
+`ToggleCameraFeed()` — `CreateCam`/`RenderScriptCams`, a full-screen
+takeover of your active partner's viewpoint, not an inset). The research
+below about a true inset being unachievable is still accurate and was
+re-confirmed independently at build time, not superseded:
+
+A true inset live-3D-video picture-in-picture is **not achievable** with stock FiveM
 natives (DUI/NUI textures render HTML, not the 3D scene), corroborated by a
 still-open upstream `citizenfx/fivem` GitHub issue (#3835). A full-screen
 K9-POV camera **takeover** (not an inset) is fully native-only and
-achievable (`CreateCam`/`RenderScriptCams`) if a future pass wants that
-narrower spike instead.
+achievable (`CreateCam`/`RenderScriptCams`) — see above, this is what
+shipped.
 
 **`PropAttachments`/`FetchMechanic` remain genuinely unresolved** and are
 why both still use the root-bone placeholder attach point pending the
@@ -2445,9 +2453,13 @@ that produced today's defaults, not a substitute for reading those two
 files.**
 
 **The one-paragraph history:** this resource shipped with 5 of ~40 feature
-flags enabled and the rest off pending review. All flags (except
-`CameraFeedPiP`, which has no implementing code) were later switched on at
-once. Turning a flag on does not, by itself, answer an open safety
+flags enabled and the rest off pending review. All flags (`CameraFeedPiP`
+included at the time — it had no implementing code back then) were later
+switched on at once; `CameraFeedPiP` itself gained a real implementation
+in a later, separate pass (2026-08-26 — see §"Phase 5 features" above,
+which carries its own correction), so it is no longer the exception this
+sentence originally carved out. Turning a flag on does not, by itself,
+answer an open safety
 question about that flag's feature — it just means whatever risk the
 question describes is live on a real server now, not hypothetical. Two such
 questions remain genuinely open (D3, D13 below); a test suite passing tells
@@ -2576,9 +2588,11 @@ since their reasoning is still what a citation is pointing at.
 
 **Already shipped** (kept below as the original reasoning, not an open ask):
 1. **Real export/event API** — prerequisite for everything else in this
-   section. Shipped: `server/exports.lua`/`client/exports.lua`, six
-   outbound `qbx_k9unit:events:*` events — see `README.md`'s "Public API"
-   section for the current, authoritative list.
+   section. Shipped: `server/exports.lua`/`client/exports.lua`, outbound
+   `qbx_k9unit:events:*` events (six at the time this line was first
+   written; fourteen as of 2026-08-26, per `server/exports.lua`'s own
+   header) — see `README.md`'s "Public API" section for the current,
+   authoritative list and count.
 2. **Dispatch integration** (`ps-dispatch` confirmed real/current;
    `cd_dispatch`/`qs-dispatch` named by convention only, not independently
    verified) — outbound alert on a contraband find; inbound via

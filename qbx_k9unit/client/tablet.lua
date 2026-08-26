@@ -54,12 +54,21 @@
         broader 'tablet:runCommand' generic bridge -- allowlisting
         k9certify/k9decertify/k9givexp plus five k9audit* commands -- was
         REMOVED this pass: it had no caller anywhere in html/, was never
-        part of this file's own documented NUI CONTRACT below, and the
-        five audit commands it existed to reach are chat/console-notify
-        oriented at the server layer with no callback that returns
-        structured data -- see this pass's own report for the full
-        reasoning and the exact server-side change that would be needed
-        before a real audit tab could be built.)
+        part of this file's own documented NUI CONTRACT below, and at the
+        time the five k9audit* commands it existed to reach were
+        chat/console-notify oriented at the server layer with no callback
+        that returned structured data. STATUS UPDATE (later pass):
+        server/admin.lua has since grown the exact `lib.callback.register`
+        surface that gap named (tabletAuditCert/Partner/Search/Xp/Dept,
+        each returning `{ok, rows, label}` -- see its own header CALLBACK
+        SURFACE section), and this file's own NUI CONTRACT below now lists
+        the five tablet:audit* bridges built against it, plus the real
+        Audit Trail tab in html/tablet.js that consumes them -- the "real
+        audit tab" this note originally deferred. Left here, corrected
+        rather than deleted, so the reasoning for the ORIGINAL removal
+        (a generic passthrough is not how this file exposes new server
+        capability) still reads accurately for whoever finds this
+        comment.)
     ======================================================================
 
     ======================================================================
@@ -122,8 +131,12 @@
       tablet:requestPersonSummary {targetCitizenId}               -> cb(PersonSummaryResult)    [console audience]
       tablet:requestPersonFeatures {targetCitizenId}               -> cb(PersonFeaturesResult)   [high command only]
       tablet:triggerFeature {feature}                             -> cb({ok,error?})            [SECTION 2]
-      tablet:certify {targetCitizenId, departmentKey}             -> cb({ok,error?,message?})   [SECTION 3 / proposed]
+      tablet:certify {targetCitizenId, departmentKey}             -> cb({ok,error?,message?})   [server/certifications.lua's tabletCertify -- online OR offline, see GrantCertificationForTablet's own header]
       tablet:decertify {targetCitizenId, departmentKey}           -> cb({ok,error?,message?})   [SECTION 3, k9decertifyoffline]
+      tablet:setCertificationTier {targetCitizenId, departmentKey, tier}     -> cb({ok,error?})  [server/certifications.lua's tabletSetCertificationTier -- online OR offline]
+      tablet:renewCertification {targetCitizenId, departmentKey}            -> cb({ok,error?})  [tabletRenewCertification -- online OR offline]
+      tablet:grantSpecialization {targetCitizenId, departmentKey, specialization}  -> cb({ok,error?})  [tabletGrantSpecialization -- ONLINE ONLY, see that function's own header for why]
+      tablet:revokeSpecialization {targetCitizenId, departmentKey, specialization} -> cb({ok,error?})  [tabletRevokeSpecialization -- online OR offline]
       tablet:givexp {targetCitizenId, amount}                     -> cb({ok,error?,message?})   [proposed]
       tablet:grantPermission {targetCitizenId, permission}        -> cb({ok,error?,message?})   [server/permissions.lua]
       tablet:revokePermission {targetCitizenId, permission}       -> cb({ok,error?,message?})
@@ -266,14 +279,50 @@
         the only real gate), only uses it as an `<input type="number">`
         min/max HINT that does not block submission.
 
+      tablet:auditCert {targetCitizenId, limit?}    -> cb(AuditResult)  [server/admin.lua's tabletAuditCert]
+      tablet:auditPartner {targetCitizenId, limit?} -> cb(AuditResult)  [tabletAuditPartner]
+      tablet:auditSearch {mode, value?, limit?}     -> cb(AuditResult)  [tabletAuditSearch -- mode in {'officer','plate','person','recent'}]
+      tablet:auditXp {targetCitizenId}              -> cb(AuditResult)  [tabletAuditXp -- no limit, single-row point lookup]
+      tablet:auditDept {departmentKey, limit?}      -> cb(AuditResult)  [tabletAuditDept]
+        AuditResult = { ok:true, rows:table, label:string } |
+                      { ok:false, error:'not_authorized'|'rate_limited'|'invalid_args', message?:string }
+        Five NEW bridges (this pass) closing the gap server/admin.lua's own
+        header names by name: "no NUI callback and no client/tablet.lua
+        change are part of this pass; this is the server-side contract a
+        follow-up tablet screen builds against." Forwarded VERBATIM -- that
+        file's own CALLBACK SURFACE header states its response shape
+        mirrors THIS file's established `{ok, error, message}` convention
+        DIRECTLY, so AwaitServerCallback's own synthetic
+        `{ok=false, error='timeout'}` (a thrown/unregistered callback)
+        already matches without a translator, same as every other
+        passthrough bridge above. `rows`'s exact column shape differs PER
+        CALLBACK -- see server/admin.lua's own Query* functions
+        (QueryCertificationHistory/QueryPartnershipHistory/
+        QuerySearchLogBy{Officer,Plate,Person}/Recent/
+        QueryProgressionSnapshot/QueryDepartmentRoster) for the
+        authoritative column list of each; this file does not reshape or
+        rename a single field. `limit` is always OPTIONAL: an absent or
+        non-number value is dropped to `nil` here (see
+        OptionalNumericLimit below), letting server/admin.lua's own
+        ClampLimit apply ITS configured default/hard cap (HARD_MAX_RESULTS
+        = 100) rather than this file guessing one. GATING: that file's own
+        IsAuthorizedAdmin (job.isboss, job.grade >=
+        Config.Departments[job.name].auditGrade, an explicit 'k9.audit'
+        permission grant, or high command) is the ONLY real gate,
+        re-verified from the caller's own live `source` on every single
+        invocation -- same THE SECURITY RULE as every other callback in
+        this file.
+
     Lua -> JS (SendNUIMessage):
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
           strings = BuildTabletStrings() (locales/en.json's `tablet` group -- see LOCALIZATION below),
           maxXpPerGrant = Config.HighCommand.maxXpPerGrant,
           peds = Config.Peds,               -- shared config, no round trip -- display list only for tablet:assignK9Role's model picker; server/appearance.lua's IsValidPedModelName is the real gate
+          specializations = Config.K9Specializations, -- shared config, no round trip -- display list only for the person screen's specialization grant picker (buildCertificationRow); server/certifications.lua's GrantSpecialization re-checks this SAME table server-side, the real gate
           themingEnabled = Config.Features.TabletTheming == true, -- UX hint only -- hides the theme editor's Save/Reset controls when off rather than offering ones that would always come back 'feature_disabled'; the CURRENT theme is still fetched/applied for every viewer regardless (tablet:getTheme has no such gate)
           shopLocationsEnabled = Config.Features.K9EquipmentShop == true, -- UX hint only, SAME shape as themingEnabled just above -- shows a disabled-server-wide note on the Shop Locations screen rather than one that would always come back 'feature_disabled'; tablet:equipmentShopGetLocations/Add/Move/RemoveLocation all re-check this live, server-side, regardless of what this flag says
           runtimeControlEnabled = Config.Features.RuntimeFeatureControl == true, -- UX hint only, SAME shape as themingEnabled/shopLocationsEnabled -- runtimeListFeatures/ListTunables have NO such gate server-side (open to any high-command caller regardless), only the four mutating runtimeSet*/Reset* calls actually refuse with `reason='feature_disabled'` when this is off; this page still shows the disabled note and the (read-only) current values regardless
+          auditEnabled = Config.Features.AdminAuditCommands == true, -- UX hint only, but UNLIKE the three flags above: server/admin.lua gates its five tabletAudit* callbacks at REGISTRATION TIME behind this same flag, so a query made while it is false hangs until a generic 'timeout' synthesizes, not a clean 'feature_disabled' refusal -- html/tablet.js disables the Audit screen's query controls (and shows a disabled note) whenever this is false, specifically to avoid that confusing dead end
           branding = Config.CommandTablet.branding,  -- shared config, no round trip -- { serverName: string, logo: string (relative to html/), theme: {primaryColor,accentColor,backgroundColor,textColor} }. Owner-supplied server identity (name/logo) PLUS the operator's chosen starting palette for a fresh install -- COSMETIC ONLY, same as tablet:getTheme's own theme, never consulted by any authorization check. html/tablet.js renders `logo` with a `serverName`-text fallback on load failure (never a broken-image icon -- the operator hand-swaps this file and may typo it) and seeds its OWN pre-fetch initial paint from `branding.theme`'s four colours ONLY until the real, authoritative tablet:getTheme response lands (which always wins once it does, same "config is the starting point, the runtime edit wins" precedence server/runtimecontrol.lua's own DEFAULT_THEME->k9_tablet_theme-DB-override chain already establishes for that file's own default).
       } }
       { action = 'tablet:close', data = {} }
@@ -383,7 +432,9 @@ end
 --- tests/tablet_strings_spec.lua both iterate the SAME set, and so a key
 --- added to html/tablet.js without a matching addition here/in
 --- locales/en.json's `tablet` group is caught by that spec instead of
---- silently falling back to English forever. 197 keys total.
+--- silently falling back to English forever. 255 keys total (this pass
+--- added the 53 K9 Audit Trail viewer keys at the end of this list; see
+--- this pass's own report for the count this changed from).
 local TABLET_STRING_KEYS = {
     'title', 'close_label', 'tab_console', 'tab_my_record', 'loading',
     'error_generic', 'error_not_authorized', 'error_timeout', 'error_network',
@@ -478,6 +529,43 @@ local TABLET_STRING_KEYS = {
     'runtime_tunable_type_integer', 'runtime_tunable_type_decimal',
     'runtime_tunable_error_invalid_key', 'runtime_tunable_error_out_of_range',
     'runtime_tunable_error_not_integer', 'runtime_tunable_error_not_a_number',
+    -- K9 Audit Trail viewer (its own tab -- see this file's own NUI
+    -- CONTRACT section on tablet:auditCert/Partner/Search/Xp/Dept). NOT
+    -- YET present in locales/en.json's `tablet` group as of this pass --
+    -- flagged to that file's owner (see this pass's own report for the
+    -- full key -> English-string list); BuildTabletStrings()'s own
+    -- pcall-per-key guard means each is simply omitted from `strings`
+    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
+    -- that exact gap in the meantime, same resilience-net role it already
+    -- documents for every other key.
+    'tab_audit', 'audit_heading', 'audit_intro', 'audit_disabled_note',
+    'audit_mode_cert', 'audit_mode_partner', 'audit_mode_search', 'audit_mode_xp',
+    'audit_mode_dept', 'audit_citizenid_label', 'audit_citizenid_placeholder',
+    'audit_department_label', 'audit_department_placeholder', 'audit_department_hint',
+    'audit_search_mode_label', 'audit_search_mode_officer', 'audit_search_mode_plate',
+    'audit_search_mode_person', 'audit_search_mode_recent', 'audit_value_label',
+    'audit_value_placeholder_citizenid', 'audit_value_placeholder_plate',
+    'audit_limit_label', 'audit_run_label', 'audit_result_empty', 'audit_result_prompt',
+    'audit_error_not_authorized', 'audit_error_rate_limited', 'audit_error_invalid_args',
+    'audit_boolean_yes', 'audit_boolean_no', 'audit_na', 'column_active',
+    'column_granted_by', 'column_granted_at', 'column_revoked_by', 'column_revoked_at',
+    'column_k9', 'column_handler', 'column_established_by', 'column_established_at',
+    'column_ended_by', 'column_ended_at', 'column_searched_at', 'column_searcher',
+    'column_searcher_job', 'column_target_type', 'column_target', 'column_result',
+    'column_weight', 'column_alert_tier', 'column_audit_xp', 'column_updated_at',
+    -- CERTIFICATION TIER / RENEWAL / SPECIALIZATION (this pass) -- the
+    -- person screen's certification row grows a tier control, a renew
+    -- button, and a specializations sub-list (buildCertificationRow).
+    -- SAME disclosed-gap posture as the 'tab_audit'/'audit_*' block
+    -- immediately above (added by a concurrent pass): these 7 keys are
+    -- NOT YET present in locales/en.json's `tablet` group as of this pass
+    -- -- flagged to that file's owner (see this pass's own report for the
+    -- exact key -> English-string list). BuildTabletStrings()'s own
+    -- pcall-per-key guard means each is simply omitted from `strings`
+    -- until added there, and html/tablet.js's own DEFAULT_STRINGS covers
+    -- that exact gap in the meantime.
+    'tier_label', 'tier_set_label', 'renew_label', 'specializations_heading',
+    'no_specializations', 'expires_label', 'expired_badge',
 }
 
 --- Builds the FULL, localized `strings` payload for tablet:open, one
@@ -584,6 +672,30 @@ function OpenTablet()
             themingEnabled = Config.Features and Config.Features.TabletTheming == true, -- UX hint only, see NUI CONTRACT
             shopLocationsEnabled = Config.Features and Config.Features.K9EquipmentShop == true, -- UX hint only, SAME shape as themingEnabled -- see NUI CONTRACT
             runtimeControlEnabled = Config.Features and Config.Features.RuntimeFeatureControl == true, -- UX hint only, SAME shape as themingEnabled/shopLocationsEnabled -- see NUI CONTRACT
+            -- UX hint only, but a MEANINGFULLY DIFFERENT shape from the
+            -- three above: server/admin.lua gates its five tabletAudit*
+            -- callbacks at REGISTRATION TIME behind this SAME flag (if not
+            -- `true`, none of them are ever registered at all, not merely a
+            -- runtime no-op) -- so unlike themingEnabled/shopLocationsEnabled/
+            -- runtimeControlEnabled (whose underlying read callbacks stay
+            -- live either way), a tabletAudit* call made while this is
+            -- false would hang until AwaitServerCallback's own pcall
+            -- synthesizes a generic 'timeout', not a clean 'feature_disabled'
+            -- refusal. html/tablet.js disables the Audit screen's query
+            -- controls (and shows a disabled-server-wide note) whenever this
+            -- is false, precisely to avoid surfacing that confusing generic
+            -- timeout for an officer who otherwise qualifies.
+            auditEnabled = Config.Features and Config.Features.AdminAuditCommands == true,
+            -- CERTIFICATION SPECIALIZATIONS -- shared config, no round trip,
+            -- SAME "no hardcoded list" posture as `peds` above:
+            -- Config.K9Specializations (server/certifications.lua's
+            -- GrantSpecialization is the real, server-side gate on this
+            -- exact same table) is the resource's ONE real specialization
+            -- catalog -- html/tablet.js's specialization picker populates
+            -- from this, never a hardcoded narcotics/explosives/patrol
+            -- list, so an operator-added specialization key appears with
+            -- zero UI change the moment it's added to config.lua.
+            specializations = (type(Config.K9Specializations) == 'table') and Config.K9Specializations or {},
             branding = (type(Config.CommandTablet) == 'table' and type(Config.CommandTablet.branding) == 'table')
                 and Config.CommandTablet.branding or {}, -- shared config, no round trip -- { serverName, logo, theme:{4 colors} } -- see this file's header NUI CONTRACT note
         },
@@ -1042,12 +1154,18 @@ RegisterNUICallback('tablet:requestPersonFeatures', function(data, cb)
 end)
 
 RegisterNUICallback('tablet:certify', function(data, cb)
-    -- PROPOSED server callback -- see this pass's own report. Note (also
-    -- flagged there, and by html/tablet.js's own author): the EXISTING
-    -- GrantCertification (server/certifications.lua) requires an ONLINE
-    -- target resolved by server id, not an arbitrary citizenid -- unlike
-    -- decertify below, there is no offline-capable equivalent to reuse via
-    -- SECTION 3's command bridge today.
+    -- UPDATED THIS PASS (coordinator-directed follow-up): this comment
+    -- used to say certify has "no offline-capable equivalent to reuse,
+    -- unlike decertify below" -- that was true when it was written, but
+    -- server/certifications.lua's own GrantCertificationForTablet now
+    -- resolves an offline `targetCitizenId` to GrantCertificationOffline
+    -- internally (see that function's own header for the full "why this
+    -- is now safe on the shipped Config.K9Appearance.requireK9ModelForRole
+    -- default, and when it deliberately still refuses" writeup). NO CHANGE
+    -- NEEDED HERE: this callback was already citizenid-keyed and already
+    -- forwarded verbatim, so it transparently gained offline support the
+    -- moment the server side did -- exactly like decertify below already
+    -- worked this way for revoke.
     if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == ''
         or type(data.departmentKey) ~= 'string' or data.departmentKey == '' then
         cb({ ok = false, error = 'invalid_args' })
@@ -1083,6 +1201,65 @@ RegisterNUICallback('tablet:decertify', function(data, cb)
     end
     local ok, errorCode = SubmitAllowlistedCommand('k9decertifyoffline', { data.targetCitizenId, data.departmentKey })
     cb({ ok = ok, error = (not ok) and errorCode or nil })
+end)
+
+-- ----------------------------------------------------------------------
+-- CERTIFICATION TIER / RENEWAL / SPECIALIZATION -- closing this file's own
+-- biggest remaining "reachable only via net event/command, no tablet path
+-- at all" gap (server/certifications.lua's SetCertificationTier/
+-- RenewCertification/GrantSpecialization/RevokeSpecialization). Forwarded
+-- VERBATIM, mirroring tablet:certify/tablet:grantPermission's own shape
+-- EXACTLY: each server callback (server/certifications.lua's
+-- tabletSetCertificationTier/tabletRenewCertification/
+-- tabletGrantSpecialization/tabletRevokeSpecialization) already returns
+-- this contract's `{ok, error?}` shape directly (no `reason` field to
+-- translate, unlike TranslateReasonResult's targets below), already
+-- re-verifies IsEligibleCertifier/the shared cooldown/TierEditMutex
+-- internally, and already resolves online-vs-offline targets itself --
+-- this file adds no authorization, no online/offline branching, and no
+-- second mutation path of its own. `departmentKey` selects WHICH of the
+-- target's per-department certification rows to act on (the tablet
+-- already renders one row per configured department, see
+-- buildCertificationRow) -- never used to override the target's actual
+-- live job when online (server-side `department_mismatch` handles that).
+-- ----------------------------------------------------------------------
+RegisterNUICallback('tablet:setCertificationTier', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == ''
+        or type(data.departmentKey) ~= 'string' or data.departmentKey == ''
+        or type(data.tier) ~= 'string' or data.tier == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletSetCertificationTier', data.targetCitizenId, data.departmentKey, data.tier))
+end)
+
+RegisterNUICallback('tablet:renewCertification', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == ''
+        or type(data.departmentKey) ~= 'string' or data.departmentKey == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletRenewCertification', data.targetCitizenId, data.departmentKey))
+end)
+
+RegisterNUICallback('tablet:grantSpecialization', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == ''
+        or type(data.departmentKey) ~= 'string' or data.departmentKey == ''
+        or type(data.specialization) ~= 'string' or data.specialization == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletGrantSpecialization', data.targetCitizenId, data.departmentKey, data.specialization))
+end)
+
+RegisterNUICallback('tablet:revokeSpecialization', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == ''
+        or type(data.departmentKey) ~= 'string' or data.departmentKey == ''
+        or type(data.specialization) ~= 'string' or data.specialization == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletRevokeSpecialization', data.targetCitizenId, data.departmentKey, data.specialization))
 end)
 
 RegisterNUICallback('tablet:givexp', function(data, cb)
@@ -1537,6 +1714,123 @@ end)
 -- like every other AddEventHandler in this file.
 AddEventHandler('qbx_k9unit:client:themeUpdated', function(theme)
     SendNUIMessage({ action = 'tablet:themeUpdated', data = theme })
+end)
+
+-- ----------------------------------------------------------------------
+-- K9 AUDIT TRAIL VIEWER -- server/admin.lua's five tabletAudit* callbacks
+-- (Cert/Partner/Search/Xp/Dept), added this pass to close the gap that
+-- file's own header names by name: "no NUI callback and no
+-- client/tablet.lua change are part of this pass; this is the
+-- server-side contract a follow-up tablet screen builds against." This
+-- IS that follow-up -- see this file's own header NUI CONTRACT note on
+-- these five names for the full AuditResult contract.
+--
+-- THE TABLET IS A VIEW. IT DECIDES NOTHING -- same rule as every other
+-- callback in this file. server/admin.lua's own IsAuthorizedAdmin is the
+-- ONLY real gate, re-verified from the CALLER's own live `source` on
+-- every single invocation; this file adds no authorization of its own
+-- and no second query path.
+-- ----------------------------------------------------------------------
+
+--- Shared helper for the five bridges below: an optional numeric `limit`
+--- field, dropped to `nil` (never forwarded as anything else) unless it
+--- is already a plain Lua number. A trailing `nil` argument is always
+--- safe here (indistinguishable, on the receiving Lua function, from the
+--- argument simply being omitted -- true whether or not the ox_lib wire
+--- transport itself preserves the trailing slot) precisely BECAUSE
+--- `limit` is always the LAST positional argument passed to
+--- AwaitServerCallback at every one of this section's five call sites --
+--- server/admin.lua's own ClampLimit already treats an absent/non-number
+--- rawArg identically to this file passing `nil` outright (falls back to
+--- its own configured default, then still floor+range-clamps into
+--- [1, HARD_MAX_RESULTS]), so this file need not guess a default itself.
+--- @param data table
+--- @return number? limit
+local function OptionalNumericLimit(data)
+    return (type(data.limit) == 'number') and data.limit or nil
+end
+
+--- 'tablet:auditCert' -- mirrors server/admin.lua's '/k9auditcert'. `rows`
+--- shape: one row per k9_certifications grant/revoke event for this
+--- citizenid, across every department (job, granted_by, granted_at,
+--- revoked_by, revoked_at, active) -- see that file's own
+--- QueryCertificationHistory doc comment for the authoritative column
+--- list.
+RegisterNUICallback('tablet:auditCert', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditCert', data.targetCitizenId, OptionalNumericLimit(data)))
+end)
+
+--- 'tablet:auditPartner' -- mirrors '/k9auditpartner'. `rows` shape: this
+--- citizenid's full partnership history in EITHER role (id, k9_citizenid,
+--- handler_citizenid, established_by, established_at, ended_by, ended_at,
+--- active) -- see QueryPartnershipHistory's own doc comment.
+RegisterNUICallback('tablet:auditPartner', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditPartner', data.targetCitizenId, OptionalNumericLimit(data)))
+end)
+
+--- 'tablet:auditSearch' -- mirrors '/k9auditsearch'. `data.mode` is
+--- forwarded VERBATIM, unchecked against server/admin.lua's own
+--- VALID_SEARCH_LOG_MODES whitelist here -- that file's own callback
+--- already whitelist-checks it before `value` is even inspected and
+--- returns 'invalid_args' for anything else, so a second copy of that
+--- whitelist here would only be able to drift from the real one, never
+--- make it any safer (THE SECURITY RULE). `rows` shape is IDENTICAL
+--- across all four modes (searcher_citizenid, searcher_job, target_type,
+--- target_plate, target_citizenid, result, total_weight, alert_tier,
+--- searched_at, id) -- see QuerySearchLogByOfficer/ByPlate/ByPerson/
+--- Recent's own doc comments.
+RegisterNUICallback('tablet:auditSearch', function(data, cb)
+    if type(data) ~= 'table' or type(data.mode) ~= 'string' or data.mode == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    -- `value` is sent as an empty string, NEVER Lua `nil`, when absent or
+    -- not already a string -- unlike `limit` above, `value` is NOT this
+    -- call's last positional argument (`limit` follows it), and an
+    -- explicit nil in a NON-TRAILING position risks the wire transport
+    -- misaligning every argument after it. An empty string is safe here
+    -- regardless: server/admin.lua's own IsValidCitizenId/
+    -- NormalizePlateArg both already reject '' as invalid input for
+    -- every mode that inspects `value` at all, and 'recent' never reads
+    -- it either way.
+    local value = (type(data.value) == 'string') and data.value or ''
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditSearch', data.mode, value, OptionalNumericLimit(data)))
+end)
+
+--- 'tablet:auditXp' -- mirrors '/k9auditxp'. NO `limit` argument --
+--- citizenid is k9_progression's own PRIMARY KEY, so `rows` is always 0
+--- or 1 elements ({ xp, updated_at }) regardless of what any caller
+--- supplies -- see QueryProgressionSnapshot's own doc comment.
+RegisterNUICallback('tablet:auditXp', function(data, cb)
+    if type(data) ~= 'table' or type(data.targetCitizenId) ~= 'string' or data.targetCitizenId == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditXp', data.targetCitizenId))
+end)
+
+--- 'tablet:auditDept' -- mirrors '/k9auditdept'. `departmentKey` is
+--- forwarded VERBATIM as the server's own `job` argument -- server-side
+--- IsValidDepartment (a `Config.Departments[job] ~= nil` lookup) is the
+--- real gate; this file does not hardcode or duplicate the configured
+--- department list. `rows` shape: this department's CURRENT active-only
+--- certified-handler roster (citizenid, granted_by, granted_at) -- see
+--- QueryDepartmentRoster's own doc comment, including why revoked rows
+--- are deliberately excluded.
+RegisterNUICallback('tablet:auditDept', function(data, cb)
+    if type(data) ~= 'table' or type(data.departmentKey) ~= 'string' or data.departmentKey == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditDept', data.departmentKey, OptionalNumericLimit(data)))
 end)
 
 -- ----------------------------------------------------------------------

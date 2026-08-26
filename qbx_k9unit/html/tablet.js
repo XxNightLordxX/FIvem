@@ -81,7 +81,12 @@
               effectivePermissions: string[],
               allowSelfGrant: boolean, // mirrors Config.HighCommand.allowSelfGrant, UX hint only
             },
-            certifications: [ { departmentKey, departmentLabel, active, grantedBy: string|null } ],
+            certifications: [ { departmentKey, departmentLabel, active, grantedBy: string|null,
+              // ^ tier/expiresAtUnix/expired/specializations are only ever populated
+              // for an ACTIVE row (server/tablet.lua's BuildCertificationsArray) --
+              // never guess a value for a department this citizenid has never held.
+              tier: string|null, expiresAtUnix: number|null, expired: boolean,
+              specializations: string[] } ],
             xp: number|null,       // null if XPProgression is off or no record yet
             tierLabel: string|null,
             // Every Config.Features key this resource considers
@@ -151,7 +156,12 @@
           {
             ok: true,
             target: { citizenid, name },
-            certifications: [ { departmentKey, departmentLabel, active, grantedBy: string|null } ],
+            certifications: [ { departmentKey, departmentLabel, active, grantedBy: string|null,
+              // ^ tier/expiresAtUnix/expired/specializations are only ever populated
+              // for an ACTIVE row (server/tablet.lua's BuildCertificationsArray) --
+              // never guess a value for a department this citizenid has never held.
+              tier: string|null, expiresAtUnix: number|null, expired: boolean,
+              specializations: string[] } ],
             // ^ ONE ROW PER CONFIGURED DEPARTMENT (Config.Departments),
             // including departments this citizenid has never held, so the
             // UI can offer "Certify" for a brand-new department, not only
@@ -226,7 +236,35 @@
       tablet:decertify { targetCitizenId: string, departmentKey: string } -> cb({ ok, error?, message? })
         Requires effectivePermissions to include 'k9.certify' (which already
         covers high command and legacy-rank certifiers per config.lua's own
-        resolution order) -- re-verified server-side.
+        resolution order) -- re-verified server-side. Both work for an
+        ONLINE or OFFLINE target (server/certifications.lua's
+        GrantCertificationForTablet/RevokeCertificationOffline resolve
+        this themselves) -- this page never needs to know or ask which.
+
+      tablet:setCertificationTier { targetCitizenId: string, departmentKey: string, tier: string } -> cb({ ok, error?, message? })
+      tablet:renewCertification { targetCitizenId: string, departmentKey: string } -> cb({ ok, error?, message? })
+      tablet:revokeSpecialization { targetCitizenId: string, departmentKey: string, specialization: string } -> cb({ ok, error?, message? })
+        Same 'k9.certify' gate as certify/decertify above, same online-OR-
+        offline transparency. `tier` is validated server-side against the
+        LIVE tier catalog (server/certtiers.lua) -- this page's own tier
+        picker (buildCertificationDetail) is populated from
+        tablet:certTiersList, never a hardcoded trainee/certified/senior
+        list, but a modified client sending an arbitrary string still gets
+        a clean 'invalid_tier' refusal, not a crash or a silent no-op.
+
+      tablet:grantSpecialization { targetCitizenId: string, departmentKey: string, specialization: string } -> cb({ ok, error?, message? })
+        Same 'k9.certify' gate -- but, UNLIKE the four calls immediately
+        above, ONLINE TARGETS ONLY (server/certifications.lua's
+        GrantSpecializationForTablet own header explains why: the
+        precondition this gates on -- an active, non-expired base
+        certification AND a tier-capability check -- is read from
+        online-only cached state that cannot be safely reconstructed for a
+        disconnected citizenid without weakening the check). A disconnected
+        target gets 'target_must_be_online' back, an honest, distinguishable
+        refusal -- this page does not attempt to disable the Grant control
+        based on the target's online status (it has no reliable way to know
+        that live from a person summary that already works offline), it
+        simply surfaces whatever error?/message? the server returns.
 
       tablet:givexp { targetCitizenId: string, amount: number } -> cb({ ok, error?, message? })
         Requires effectivePermissions to include 'k9.givexp'. `amount` is
@@ -371,6 +409,62 @@
         correctly `false` (every tunable is live), so no special handling
         is needed on this page for it.
 
+      tablet:auditCert { targetCitizenId: string, limit?: number } -> cb(AuditResult)
+      tablet:auditPartner { targetCitizenId: string, limit?: number } -> cb(AuditResult)
+      tablet:auditSearch { mode: 'officer'|'plate'|'person'|'recent', value?: string, limit?: number } -> cb(AuditResult)
+      tablet:auditXp { targetCitizenId: string } -> cb(AuditResult)
+      tablet:auditDept { departmentKey: string, limit?: number } -> cb(AuditResult)
+        The K9 Audit Trail viewer's own tab -- server/admin.lua's five
+        tabletAudit* callbacks, verified directly against that file's own
+        source (not assumed): each is a thin, read-only wrapper around the
+        EXACT SAME Query* function/K9Store accessor its `/k9audit*` chat
+        command counterpart already calls, gated by the SAME
+        IsAuthorizedAdmin(source) and the SAME shared per-source cooldown
+        budget. AuditResult, success:
+          { ok: true, rows: Array<object>, label: string }
+        `label` is SERVER-AUTHORED, already locale()-resolved prose (this
+        resource's `admin` locale group, a DIFFERENT namespace than this
+        page's own `strings`/S()) -- rendered verbatim via textContent as
+        a result-set caption, same "message-field passthrough" posture
+        this page already applies to every other server-authored detail
+        string. `rows`'s column shape is DIFFERENT PER MODE, never
+        reshaped by this page -- see buildAuditResultTable() below for the
+        exact column list each mode renders:
+          cert:    { job, granted_by, granted_at, revoked_by, revoked_at, active }
+          partner: { k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active } (also carries `id`, a sort key only -- never rendered)
+          search:  { searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at } (also carries `id`, not rendered)
+          xp:      { xp, updated_at } -- 0 or 1 rows, citizenid is k9_progression's own PRIMARY KEY
+          dept:    { citizenid, granted_by, granted_at } -- ACTIVE roster only, never revoked history
+        Failure: { ok: false, error: 'not_authorized'|'rate_limited'|'invalid_args'|'timeout'|'network_error'|'exception', message?: string }
+        -- same generic failure shape/fetchNui() synthesis as every other
+        callback on this page; see auditErrorText() below.
+        GATING (a CONVENIENCE ONLY, per THE SECURITY RULE -- see canViewAudit()
+        below): server/admin.lua's own IsAuthorizedAdmin qualifies a caller
+        via job.isboss, job.grade >= Config.Departments[job.name].auditGrade,
+        an explicit 'k9.audit' permission grant, OR high command -- the FIRST
+        THREE of those are EXACTLY what server/tablet.lua's own
+        MeetsDepartmentRank(source, 'auditGrade')/ResolveEffectivePermissions
+        already resolve into viewer.effectivePermissions containing
+        'k9.audit' (verified directly against that file's source, not
+        assumed) -- so this page shows the Audit tab to ANY viewer whose
+        effectivePermissions includes 'k9.audit', not only isHighCommand,
+        unlike the Theme/Cert Tiers/Shop Locations/Runtime Control tabs
+        above. The one thing this client-side signal does NOT reflect is
+        server/admin.lua's own PER-PERSON FEATURE CONTROL layer
+        (block.AdminAuditCommands / RequireGrant.AdminAuditCommands) --
+        exactly why this is a convenience only: a viewer who qualifies by
+        rank/grant but is individually blocked still sees this tab, and
+        simply gets `error: 'not_authorized'` back on every query, which
+        this screen renders as a normal error state, never a blank one.
+        `limit`, wherever accepted, is OPTIONAL -- an absent value lets
+        server/admin.lua's own ClampLimit apply its configured default;
+        this page still clamps whatever it sends into
+        [AUDIT_LIMIT_MIN, AUDIT_LIMIT_MAX] client-side (see those
+        constants' own comment for why AUDIT_LIMIT_MAX mirrors, but cannot
+        dynamically read, that file's own HARD_MAX_RESULTS=100) so a typed
+        value is never silently truncated server-side with no visible
+        feedback here.
+
     Lua -> JS (SendNUIMessage on the TOP window, relayed into this page's
     OWN window by html/tablet-bridge.js for any action matching /^tablet:/
     -- see that file's header for why a relay is needed at all):
@@ -455,6 +549,25 @@
      * FiveM's CEF-based NUI does not reliably support native browser
      * dialogs, so a real, in-DOM two-click confirm is used instead. */
     var CONFIRM_WINDOW_MS = 3000;
+
+    /** [Min, max] this page enforces on every tabletAudit* `limit` input,
+     * client-side, BEFORE it is ever sent -- so a typed value is never
+     * silently truncated server-side with no visible feedback here (this
+     * task's own "make the UI agree with what the server enforces"
+     * instruction). AUDIT_LIMIT_MAX mirrors server/admin.lua's own
+     * HARD_MAX_RESULTS constant, verified directly against that file's
+     * source (`local HARD_MAX_RESULTS = 100`) -- but NOT fetched
+     * dynamically: no tabletAudit* response carries it, so this is a
+     * hardcoded, disclosed duplicate that must be updated by hand if that
+     * server-side constant ever changes (flagged as a reasonable
+     * follow-up: have server/admin.lua's own AuditResult carry its real
+     * max back, the same way runtimeSetTunable's own `min`/`max` already
+     * do, rather than this page guessing). This is a UX convenience only,
+     * same as every other client-side clamp on this page -- ClampLimit
+     * server-side is the only real bound regardless of what this page
+     * ever sends. */
+    var AUDIT_LIMIT_MIN = 1;
+    var AUDIT_LIMIT_MAX = 100;
 
     /** English fallback UI-chrome strings, keyed exactly as
      * client/tablet.lua's `strings` map in the tablet:open payload uses
@@ -710,6 +823,83 @@
         runtime_tunable_error_out_of_range: 'That value must be between {min} and {max}.',
         runtime_tunable_error_not_integer: 'This value must be a whole number.',
         runtime_tunable_error_not_a_number: 'Enter a valid number.',
+
+        // ---- K9 Audit Trail viewer (its own tab) -- server/admin.lua's
+        // five tabletAudit* callbacks. Shown to any viewer whose
+        // effectivePermissions includes 'k9.audit' (isHighCommand also
+        // qualifies), NOT high-command-only like the four tabs above --
+        // see canViewAudit()/buildTabs()'s own comment for why.
+        tab_audit: 'Audit Trail',
+        audit_heading: 'K9 Audit Trail',
+        audit_intro: 'Read-only history from this resource\'s own certification, partnership, search, XP and department records. Every query here is rate-limited and logged, the same as running the equivalent chat command.',
+        audit_disabled_note: 'The audit command surface is disabled server-wide. Queries cannot be run until it is re-enabled.',
+        audit_mode_cert: 'Certifications',
+        audit_mode_partner: 'Partnerships',
+        audit_mode_search: 'Search Log',
+        audit_mode_xp: 'XP Snapshot',
+        audit_mode_dept: 'Department Roster',
+        audit_citizenid_label: 'Citizen ID',
+        audit_citizenid_placeholder: 'e.g. ABC12345',
+        audit_department_label: 'Department',
+        audit_department_placeholder: 'e.g. police',
+        audit_department_hint: 'Must match a configured department key -- pick one of your own certified departments below, or type another.',
+        audit_search_mode_label: 'Search by',
+        audit_search_mode_officer: 'Officer (searches performed by)',
+        audit_search_mode_plate: 'Vehicle plate',
+        audit_search_mode_person: 'Person (searches of)',
+        audit_search_mode_recent: 'Most recent (any)',
+        audit_value_label: 'Value',
+        audit_value_placeholder_citizenid: 'e.g. ABC12345',
+        audit_value_placeholder_plate: 'e.g. ABC123',
+        audit_limit_label: 'Max results',
+        audit_run_label: 'Run Query',
+        audit_result_empty: 'No matching records found.',
+        audit_result_prompt: 'Fill in the fields above and press "Run Query".',
+        audit_error_not_authorized: 'You are not authorized to view the audit trail.',
+        audit_error_rate_limited: 'Please wait a moment before running another audit query.',
+        audit_error_invalid_args: 'That query is invalid -- check the required field and try again.',
+        audit_boolean_yes: 'Yes',
+        audit_boolean_no: 'No',
+        audit_na: 'N/A',
+        // column_department (roster's own, above) is reused verbatim for
+        // the audit dept-roster table -- same word, same meaning, no
+        // separate key needed. column_xp (also above, 'XP / Tier') is
+        // NOT reused here -- the audit XP snapshot shows a raw, undecorated
+        // total (server/admin.lua's own "COMPUTES NOTHING NEW" rule; no
+        // derived tier), so it gets its own distinct column_audit_xp key
+        // instead of silently redefining column_xp's text out from under
+        // the roster table that key already serves.
+        column_active: 'Active',
+        column_granted_by: 'Granted By',
+        column_granted_at: 'Granted At',
+        column_revoked_by: 'Revoked By',
+        column_revoked_at: 'Revoked At',
+        column_k9: 'K9',
+        column_handler: 'Handler',
+        column_established_by: 'Established By',
+        column_established_at: 'Established At',
+        column_ended_by: 'Ended By',
+        column_ended_at: 'Ended At',
+        column_searched_at: 'Searched At',
+        column_searcher: 'Searcher',
+        column_searcher_job: 'Searcher Job',
+        column_target_type: 'Target Type',
+        column_target: 'Target',
+        column_result: 'Result',
+        column_weight: 'Weight',
+        column_alert_tier: 'Alert Tier',
+        column_audit_xp: 'XP',
+        column_updated_at: 'Updated At',
+        // CERTIFICATION TIER / RENEWAL / SPECIALIZATION (this pass) -- see
+        // client/tablet.lua's own TABLET_STRING_KEYS comment on this exact
+        // 7-key set for the "not yet in locales/en.json" disclosure.
+        tier_label: 'Tier',
+        tier_set_label: 'Set Tier',
+        renew_label: 'Renew',
+        specializations_heading: 'Specializations',
+        no_specializations: 'No specializations held.',
+        expires_label: 'Expires',
+        expired_badge: 'Expired',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -770,6 +960,7 @@
         capabilities: {},
         maxXpPerGrant: null,
         peds: [], // Config.Peds, verbatim -- see tablet:assignK9Role's own NUI contract note; display list only, server re-validates the chosen model regardless
+        specializations: {}, // Config.K9Specializations, verbatim -- display list only for the person screen's specialization grant picker; server/certifications.lua's GrantSpecialization re-checks this SAME table server-side
         themingEnabled: false, // Config.Features.TabletTheming -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
         shopLocationsEnabled: false, // Config.Features.K9EquipmentShop -- UX hint only, SAME posture as themingEnabled
         branding: {}, // { serverName, logo, theme:{4 colors} } -- Config.CommandTablet.branding, verbatim; see buildBrandingElement()/applyBrandingSeedTheme()
@@ -856,6 +1047,24 @@
         runtimeTunablesRequestId: 0, // STALE-RESPONSE GUARD, same shape as runtimeFeaturesRequestId
         runtimeTunableDraft: null, // { key, value: string } -- the inline number-editor's own working copy for ONE tunable at a time; null = no editor open
         runtimeTunableFieldError: null, // { key, text } -- a Set refusal (out_of_range/not_integer/etc.) rendered inline on that specific row
+
+        // K9 Audit Trail viewer -- server/admin.lua's five tabletAudit*
+        // callbacks (this file's own NUI CONTRACT note on
+        // tablet:auditCert/Partner/Search/Xp/Dept has the full contract).
+        // Gated on canViewAudit() (see buildTabs()), NOT isHighCommand
+        // alone, unlike runtimeControlEnabled/shopLocationsEnabled/
+        // themingEnabled above -- see that function's own comment.
+        auditEnabled: false, // Config.Features.AdminAuditCommands -- UX hint only, but see this file's own NUI CONTRACT note on why this one specifically disables the query controls rather than just showing a note
+        auditMode: 'cert', // 'cert' | 'partner' | 'search' | 'xp' | 'dept' -- which of the five tabletAudit* callbacks the query form below currently targets
+        auditCitizenId: '', // shared free-text input for the cert/partner/xp modes
+        auditDepartment: '', // tabletAuditDept's own `departmentKey` input -- free text, but pre-offered as a <select> from state.myRecord.certifications' own real departmentKey list (never a hardcoded department list -- see buildAuditDeptFields())
+        auditSearchMode: 'officer', // 'officer' | 'plate' | 'person' | 'recent' -- tabletAuditSearch's own `mode`
+        auditSearchValue: '', // citizenid (officer/person) or plate (plate); unused for 'recent'
+        auditLimit: 20, // shared numeric input for every mode except 'xp' (which takes none) -- clamped into [AUDIT_LIMIT_MIN, AUDIT_LIMIT_MAX] before ever being sent, see runAuditQuery()
+        auditLoading: false,
+        auditError: null, // { error, message } -- the LAST failed tabletAudit* response, cleared on the next successful query or mode switch
+        auditResult: null, // { rows, label } -- the LAST successful response; NOT reset on tab re-entry (same posture as roster/theme -- switching away and back keeps showing the last result), only on mode switch or tablet:open
+        auditRequestId: 0, // STALE-RESPONSE GUARD, same request-id shape as shopLocationsRequestId/runtimeFeaturesRequestId above -- a user can switch mode or press Run Query again while an earlier query is still in flight
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit
         actionNotice: null, // { kind: 'ok'|'error', text: string } -- transient, cleared on next navigation/reload
@@ -1008,6 +1217,49 @@
         return humanizeFeatureKey(feature ? feature.key : '') || (feature ? String(feature.key) : '');
     }
 
+    /**
+     * Human label for a certification tier KEY -- resolved against the
+     * LIVE tier catalog (state.certTiers, populated by loadCertTiers(),
+     * server/certtiers.lua's own tablet:certTiersList) whenever it has
+     * been loaded, falling back to the raw key otherwise -- NEVER a
+     * hardcoded trainee/certified/senior map (server/certtiers.lua's own
+     * header: an operator can add/rename tiers at runtime, and this page
+     * must reflect that with no UI change). state.certTiers can be null
+     * (never loaded, or the caller lacks the console-management access
+     * tablet:certTiersList requires) -- the raw key fallback keeps this
+     * always safe to call.
+     * @param {any} tierKey @returns {string} */
+    function tierDisplayLabel(tierKey) {
+        if (typeof tierKey !== 'string' || tierKey.length === 0) return String(tierKey);
+        var tiers = state.certTiers;
+        if (Array.isArray(tiers)) {
+            for (var i = 0; i < tiers.length; i++) {
+                var tier = tiers[i];
+                if (tier && tier.key === tierKey) {
+                    return (typeof tier.label === 'string' && tier.label.length > 0) ? tier.label : tierKey;
+                }
+            }
+        }
+        return tierKey;
+    }
+
+    /**
+     * Human label for a specialization KEY -- resolved against
+     * state.specializations (Config.K9Specializations, sent verbatim in
+     * tablet:open's payload -- see client/tablet.lua's own header) whenever
+     * that entry carries a `.label`, falling back to the raw key
+     * otherwise. NEVER a hardcoded narcotics/explosives/patrol map -- an
+     * operator-added specialization key must render correctly with no UI
+     * change.
+     * @param {any} key @returns {string} */
+    function specializationDisplayLabel(key) {
+        var catalog = state.specializations;
+        if (catalog && typeof catalog === 'object' && catalog[key] && typeof catalog[key].label === 'string' && catalog[key].label.length > 0) {
+            return catalog[key].label;
+        }
+        return String(key);
+    }
+
     /** @param {string} state key @returns {string} localized state badge text */
     function featureStateLabel(s) {
         switch (s) {
@@ -1129,6 +1381,33 @@
         return btn;
     }
 
+    /**
+     * Gate for the Audit Trail tab/screen -- a CONVENIENCE ONLY, per THE
+     * SECURITY RULE, same as every other `if (canX(...))` on this page.
+     * Deliberately NOT `state.viewer.isHighCommand` alone, unlike the
+     * Theme/Cert Tiers/Shop Locations/Runtime Control tabs: server/
+     * tablet.lua's own MeetsDepartmentRank(source, 'auditGrade') /
+     * ResolveEffectivePermissions already resolve 'k9.audit' into
+     * viewer.effectivePermissions for EXACTLY the same job.isboss /
+     * job.grade>=auditGrade / explicit-grant / high-command paths
+     * server/admin.lua's own IsAuthorizedAdmin checks for its five
+     * tabletAudit* callbacks (verified directly against both files'
+     * source, not assumed) -- so a senior officer who qualifies by rank
+     * but is NOT high command already sees this tab, the same way they
+     * would see the Console tab for holding any other capability. The one
+     * thing this does NOT reflect is server/admin.lua's own PER-PERSON
+     * FEATURE CONTROL layer (an individual block/missing-grant on
+     * 'feature.AdminAuditCommands') -- a viewer who passes this client-side
+     * check but is blocked there simply gets `error: 'not_authorized'`
+     * back on every query, rendered as a normal error state by this
+     * screen, never a blank one.
+     * @returns {boolean}
+     */
+    function canViewAudit() {
+        return !!(state.viewer && (state.viewer.isHighCommand
+            || (Array.isArray(state.viewer.effectivePermissions) && state.viewer.effectivePermissions.indexOf('k9.audit') !== -1)));
+    }
+
     // ------------------------------------------------------------------
     // RENDER
     // ------------------------------------------------------------------
@@ -1180,6 +1459,8 @@
             panel.appendChild(buildShopLocationsScreen());
         } else if (state.screen === 'runtime_control' && state.viewer.isHighCommand) {
             panel.appendChild(buildRuntimeControlScreen());
+        } else if (state.screen === 'audit' && canViewAudit()) {
+            panel.appendChild(buildAuditScreen());
         } else {
             panel.appendChild(buildMyRecordScreen());
         }
@@ -1358,6 +1639,23 @@
             });
             tabs.appendChild(runtimeControlTab);
         }
+
+        // K9 Audit Trail viewer -- DELIBERATELY its own gate, NOT nested in
+        // the `state.viewer.isHighCommand` block above -- see canViewAudit()'s
+        // own doc comment for why a rank/grant-qualifying non-high-command
+        // officer must see this tab too. No reset-on-click beyond the
+        // screen switch itself: unlike the three tabs above, nothing here
+        // auto-fetches on entry (every mode needs at least one caller-typed
+        // field), so the last query's mode/inputs/result are left exactly
+        // as the viewer left them, the same way the Console tab's own
+        // rosterQuery persists across a tab switch.
+        if (canViewAudit()) {
+            var auditTab = mkButton(S('tab_audit'), 'k9tablet-tab' + (state.screen === 'audit' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'audit';
+                render();
+            });
+            tabs.appendChild(auditTab);
+        }
         return tabs;
     }
 
@@ -1420,6 +1718,19 @@
         if (entry.active && typeof entry.grantedBy === 'string' && entry.grantedBy.length > 0) {
             row.appendChild(mk('span', { class: 'k9tablet-cert-granter', text: entry.grantedBy }));
         }
+
+        // TIER / EXPIRY / SPECIALIZATIONS -- only meaningful for an ACTIVE
+        // certification (an inactive/never-held row has none of these to
+        // show, matching server/tablet.lua's own BuildCertificationsArray
+        // contract: tier/expiresAtUnix/specializations are only populated
+        // for `active == true` rows). Read-only in My Record (onAction is
+        // null); with real controls on the Person screen when the viewer
+        // holds k9.certify (see buildCertificationDetail's own doc comment
+        // for exactly which controls need which additional preconditions).
+        if (entry.active) {
+            row.appendChild(buildCertificationDetail(entry, onAction));
+        }
+
         if (onAction) {
             if (entry.active) {
                 row.appendChild(mkConfirmButton(S('decertify_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
@@ -1430,6 +1741,143 @@
                     onAction('certify', entry.departmentKey);
                 }, { disabled: state.pendingAction }));
             }
+        }
+        return row;
+    }
+
+    /**
+     * Tier / expiry / specializations detail block for an ACTIVE
+     * certification row -- see buildCertificationRow's own call site
+     * comment for when this is read-only vs. controlled.
+     *
+     * TIER ASSIGNMENT IS ADDITIONALLY GATED ON state.certTiers BEING
+     * LOADED (loadCertTiers(), called from openPerson() below) -- a real,
+     * disclosed scope decision, not an oversight: server/certtiers.lua's
+     * own tablet:certTiersList/CanManageCertTiers is HIGH-COMMAND ONLY
+     * today (narrower than the k9.certify/IsEligibleCertifier gate that
+     * actually authorizes tablet:setCertificationTier server-side -- see
+     * that file's own header, "a follow-up pass can widen this... tracked
+     * here, not silently done"). Rather than render a tier picker with NO
+     * real choices behind it for a plain certifier-grade officer who is
+     * not high command (a control that would always fail 'denied' the
+     * moment loadCertTiers() itself gets refused), this falls back to
+     * read-only tier text for that caller -- honest about what THIS
+     * SESSION can actually do, never a button that looks live but cannot
+     * work. Renew/specialization controls have no such extra gate (their
+     * own server-side authorization is k9.certify, matching
+     * certify/decertify already on this same row).
+     * @param {object} entry
+     * @param {((kind:string, departmentKey:string, extra?:string) => void)|null} onAction
+     */
+    function buildCertificationDetail(entry, onAction) {
+        var wrap = mk('div', { class: 'k9tablet-cert-detail' });
+
+        var tierLine = mk('div', { class: 'k9tablet-cert-tier-line' });
+        tierLine.appendChild(mk('span', { class: 'k9tablet-cert-tier-label', text: S('tier_label') + ': ' + tierDisplayLabel(entry.tier) }));
+        if (entry.expired) {
+            tierLine.appendChild(mk('span', { class: 'k9tablet-cert-expired-badge', text: S('expired_badge') }));
+        } else if (typeof entry.expiresAtUnix === 'number') {
+            tierLine.appendChild(mk('span', {
+                class: 'k9tablet-cert-expiry',
+                text: S('expires_label') + ': ' + new Date(entry.expiresAtUnix * 1000).toLocaleDateString(),
+            }));
+        }
+        wrap.appendChild(tierLine);
+
+        if (onAction) {
+            var tiers = Array.isArray(state.certTiers) ? state.certTiers : null;
+            if (tiers && tiers.length > 0) {
+                var tierRow = mk('div', { class: 'k9tablet-cert-tier-controls' });
+                var select = mk('select', { class: 'k9tablet-cert-tier-select k9tablet-role-select' });
+                for (var i = 0; i < tiers.length; i++) {
+                    var tier = tiers[i];
+                    if (!tier || typeof tier.key !== 'string' || tier.key.length === 0) continue;
+                    var option = mk('option', { text: (typeof tier.label === 'string' && tier.label.length > 0) ? tier.label : tier.key });
+                    option.setAttribute('value', tier.key);
+                    select.appendChild(option);
+                }
+                if (typeof entry.tier === 'string') select.value = entry.tier;
+                tierRow.appendChild(select);
+                tierRow.appendChild(mkButton(S('tier_set_label'), 'k9tablet-btn', function () {
+                    var chosen = select.value;
+                    if (!chosen || chosen === entry.tier) return;
+                    onAction('setTier', entry.departmentKey, chosen);
+                }, { disabled: state.pendingAction }));
+                wrap.appendChild(tierRow);
+            }
+
+            wrap.appendChild(mkButton(S('renew_label'), 'k9tablet-btn', function () {
+                onAction('renew', entry.departmentKey);
+            }, { disabled: state.pendingAction }));
+        }
+
+        wrap.appendChild(buildSpecializationsBlock(entry, onAction));
+
+        return wrap;
+    }
+
+    /**
+     * Specializations sub-list for one active certification row -- the
+     * held set (entry.specializations, a plain string[] of keys) plus, for
+     * a controlled row, a picker over whatever this resource's REAL
+     * specialization catalog (state.specializations ==
+     * Config.K9Specializations, sent verbatim in tablet:open -- see
+     * client/tablet.lua's own header) currently contains that this
+     * citizenid does not already hold. Never a hardcoded
+     * narcotics/explosives/patrol list.
+     * @param {object} entry
+     * @param {((kind:string, departmentKey:string, extra?:string) => void)|null} onAction
+     */
+    function buildSpecializationsBlock(entry, onAction) {
+        var wrap = mk('div', { class: 'k9tablet-specializations' });
+        wrap.appendChild(mk('span', { class: 'k9tablet-specializations-heading', text: S('specializations_heading') }));
+
+        var held = Array.isArray(entry.specializations) ? entry.specializations : [];
+        if (held.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('no_specializations') }));
+        } else {
+            for (var i = 0; i < held.length; i++) {
+                wrap.appendChild(buildSpecializationRow(held[i], entry, onAction));
+            }
+        }
+
+        if (onAction) {
+            var catalog = (state.specializations && typeof state.specializations === 'object') ? state.specializations : {};
+            var available = [];
+            for (var key in catalog) {
+                if (Object.prototype.hasOwnProperty.call(catalog, key) && held.indexOf(key) === -1) {
+                    available.push(key);
+                }
+            }
+            if (available.length > 0) {
+                var addRow = mk('div', { class: 'k9tablet-specialization-add' });
+                var select = mk('select', { class: 'k9tablet-specialization-select k9tablet-role-select' });
+                for (var j = 0; j < available.length; j++) {
+                    var option = mk('option', { text: specializationDisplayLabel(available[j]) });
+                    option.setAttribute('value', available[j]);
+                    select.appendChild(option);
+                }
+                addRow.appendChild(select);
+                addRow.appendChild(mkButton(S('grant_label'), 'k9tablet-btn', function () {
+                    var chosen = select.value;
+                    if (!chosen) return;
+                    onAction('grantSpecialization', entry.departmentKey, chosen);
+                }, { disabled: state.pendingAction }));
+                wrap.appendChild(addRow);
+            }
+        }
+
+        return wrap;
+    }
+
+    /** @param {string} key @param {object} entry @param {((kind:string, departmentKey:string, extra?:string) => void)|null} onAction */
+    function buildSpecializationRow(key, entry, onAction) {
+        var row = mk('div', { class: 'k9tablet-specialization-row' });
+        row.appendChild(mk('span', { class: 'k9tablet-specialization-label', text: specializationDisplayLabel(key) }));
+        if (onAction) {
+            row.appendChild(mkConfirmButton(S('revoke_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
+                onAction('revokeSpecialization', entry.departmentKey, key);
+            }, { disabled: state.pendingAction }));
         }
         return row;
     }
@@ -1663,14 +2111,35 @@
         return wrap;
     }
 
-    function handlePersonCertAction(kind, departmentKey) {
+    /**
+     * @param {string} kind -- 'certify' | 'decertify' | 'setTier' | 'renew' | 'grantSpecialization' | 'revokeSpecialization'
+     * @param {string} departmentKey
+     * @param {string} [extra] -- the chosen tier key (setTier) or specialization key (grant/revokeSpecialization); unused otherwise
+     */
+    function handlePersonCertAction(kind, departmentKey, extra) {
         var citizenid = state.person.citizenid;
         if (kind === 'certify') {
             runMutation('tablet:certify', { targetCitizenId: citizenid, departmentKey: departmentKey }, function () {
                 loadPersonSummary(citizenid);
             });
-        } else {
+        } else if (kind === 'decertify') {
             runMutation('tablet:decertify', { targetCitizenId: citizenid, departmentKey: departmentKey }, function () {
+                loadPersonSummary(citizenid);
+            });
+        } else if (kind === 'setTier') {
+            runMutation('tablet:setCertificationTier', { targetCitizenId: citizenid, departmentKey: departmentKey, tier: extra }, function () {
+                loadPersonSummary(citizenid);
+            });
+        } else if (kind === 'renew') {
+            runMutation('tablet:renewCertification', { targetCitizenId: citizenid, departmentKey: departmentKey }, function () {
+                loadPersonSummary(citizenid);
+            });
+        } else if (kind === 'grantSpecialization') {
+            runMutation('tablet:grantSpecialization', { targetCitizenId: citizenid, departmentKey: departmentKey, specialization: extra }, function () {
+                loadPersonSummary(citizenid);
+            });
+        } else if (kind === 'revokeSpecialization') {
+            runMutation('tablet:revokeSpecialization', { targetCitizenId: citizenid, departmentKey: departmentKey, specialization: extra }, function () {
                 loadPersonSummary(citizenid);
             });
         }
@@ -2779,6 +3248,313 @@
         render();
     }
 
+    // ---- K9 Audit Trail viewer screen (see canViewAudit()) ----
+
+    /** Fixed order the five mode buttons render in -- matches
+     * server/admin.lua's own COMMAND SURFACE listing (k9auditcert,
+     * k9auditpartner, k9auditsearch, k9auditxp, k9auditdept). */
+    var AUDIT_MODES = ['cert', 'partner', 'search', 'xp', 'dept'];
+
+    /** @param {string} mode @returns {string} */
+    function auditModeLabel(mode) {
+        switch (mode) {
+            case 'cert': return S('audit_mode_cert');
+            case 'partner': return S('audit_mode_partner');
+            case 'search': return S('audit_mode_search');
+            case 'xp': return S('audit_mode_xp');
+            case 'dept': return S('audit_mode_dept');
+            default: return mode;
+        }
+    }
+
+    /**
+     * Owner's own framing (relayed): the audit trail this resource
+     * carefully writes -- certification grants/revokes, partnership
+     * history, the search log, XP totals, department rosters -- was
+     * invisible to anyone without server console/SQL access, even though
+     * server/admin.lua's own five commands already existed to query it.
+     * This screen is that surface. server/admin.lua's own IsAuthorizedAdmin
+     * is the ONLY real gate (see canViewAudit()'s own doc comment); every
+     * control here is a convenience, per THE SECURITY RULE.
+     */
+    function buildAuditScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('audit_heading') }));
+        wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('audit_intro') }));
+
+        if (!state.auditEnabled) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('audit_disabled_note') }));
+        }
+
+        wrap.appendChild(buildAuditModeSwitch());
+        wrap.appendChild(buildAuditForm());
+        wrap.appendChild(buildAuditResults());
+        return wrap;
+    }
+
+    function buildAuditModeSwitch() {
+        var row = mk('div', { class: 'k9tablet-audit-modes' });
+        AUDIT_MODES.forEach(function (mode) {
+            row.appendChild(mkButton(auditModeLabel(mode), 'k9tablet-tab' + (state.auditMode === mode ? ' k9tablet-tab--active' : ''), function () {
+                // Switching mode changes which fields/columns even apply --
+                // the LAST mode's result would be the wrong shape to keep
+                // showing under a different mode's table columns, so it (and
+                // any leftover error) is cleared here. The typed field
+                // VALUES themselves (citizenid/department/search value/limit)
+                // are deliberately left alone -- several modes share the
+                // same citizenid input, and there is no reason to make an
+                // officer retype it just for glancing between Certifications
+                // and Partnerships for the same person.
+                state.auditMode = mode;
+                state.auditError = null;
+                state.auditResult = null;
+                render();
+            }, { disabled: state.auditLoading }));
+        });
+        return row;
+    }
+
+    /**
+     * @returns {string[]} the REAL, configured department keys this VIEWER
+     * currently holds a certification row for -- server/tablet.lua's own
+     * tabletRequestMyRecord returns "ONE ROW PER CONFIGURED DEPARTMENT",
+     * so this is never a hardcoded department list, and needs no extra
+     * round trip: loadMyRecord() already runs on every tablet:open. Used
+     * ONLY as `<datalist>` autocomplete suggestions for the Department
+     * Roster mode's free-text input, never as the sole way to enter one
+     * -- server/admin.lua's own IsValidDepartment is the real gate, and an
+     * operator may legitimately want to audit a department this VIEWER
+     * personally holds no certification in at all (that file's own header:
+     * "NOT SCOPED TO THE CALLER'S OWN DEPARTMENT").
+     */
+    function knownDepartmentKeys() {
+        if (!state.myRecord || !Array.isArray(state.myRecord.certifications)) return [];
+        var out = [];
+        state.myRecord.certifications.forEach(function (c) {
+            if (c && typeof c.departmentKey === 'string' && c.departmentKey.length > 0) out.push(c.departmentKey);
+        });
+        return out;
+    }
+
+    function buildAuditForm() {
+        var form = mk('div', { class: 'k9tablet-audit-form' });
+
+        if (state.auditMode === 'cert' || state.auditMode === 'partner' || state.auditMode === 'xp') {
+            form.appendChild(mk('span', { class: 'k9tablet-audit-label', text: S('audit_citizenid_label') }));
+            var idInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('audit_citizenid_placeholder') } });
+            idInput.value = state.auditCitizenId;
+            idInput.addEventListener('input', function (e) { state.auditCitizenId = e.target.value; });
+            form.appendChild(idInput);
+        } else if (state.auditMode === 'dept') {
+            form.appendChild(mk('span', { class: 'k9tablet-audit-label', text: S('audit_department_label') }));
+            var deptInput = mk('input', { class: 'k9tablet-search', attrs: { type: 'text', placeholder: S('audit_department_placeholder'), list: 'k9tablet-audit-dept-options' } });
+            deptInput.value = state.auditDepartment;
+            deptInput.addEventListener('input', function (e) { state.auditDepartment = e.target.value; });
+            form.appendChild(deptInput);
+
+            var knownDepts = knownDepartmentKeys();
+            if (knownDepts.length > 0) {
+                var dataList = mk('datalist', { attrs: { id: 'k9tablet-audit-dept-options' } });
+                knownDepts.forEach(function (key) {
+                    var opt = mk('option', {});
+                    opt.setAttribute('value', key);
+                    dataList.appendChild(opt);
+                });
+                form.appendChild(dataList);
+            } else {
+                form.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('audit_department_hint') }));
+            }
+        } else if (state.auditMode === 'search') {
+            form.appendChild(mk('span', { class: 'k9tablet-audit-label', text: S('audit_search_mode_label') }));
+            var modeSelect = mk('select', { class: 'k9tablet-audit-select' });
+            [
+                ['officer', S('audit_search_mode_officer')],
+                ['plate', S('audit_search_mode_plate')],
+                ['person', S('audit_search_mode_person')],
+                ['recent', S('audit_search_mode_recent')],
+            ].forEach(function (pair) {
+                var opt = mk('option', { text: pair[1] });
+                opt.setAttribute('value', pair[0]);
+                modeSelect.appendChild(opt);
+            });
+            modeSelect.value = state.auditSearchMode;
+            modeSelect.addEventListener('input', function (e) {
+                state.auditSearchMode = e.target.value;
+                render(); // the Value field below only applies to 3 of the 4 sub-modes -- must appear/disappear immediately, unlike a plain text field's own deferred-render convention elsewhere on this page
+            });
+            form.appendChild(modeSelect);
+
+            if (state.auditSearchMode !== 'recent') {
+                form.appendChild(mk('span', { class: 'k9tablet-audit-label', text: S('audit_value_label') }));
+                var valueInput = mk('input', {
+                    class: 'k9tablet-search',
+                    attrs: {
+                        type: 'text',
+                        placeholder: state.auditSearchMode === 'plate' ? S('audit_value_placeholder_plate') : S('audit_value_placeholder_citizenid'),
+                    },
+                });
+                valueInput.value = state.auditSearchValue;
+                valueInput.addEventListener('input', function (e) { state.auditSearchValue = e.target.value; });
+                form.appendChild(valueInput);
+            }
+        }
+
+        if (state.auditMode !== 'xp') {
+            form.appendChild(mk('span', { class: 'k9tablet-audit-label', text: S('audit_limit_label') }));
+            var limitInput = mk('input', {
+                class: 'k9tablet-audit-limit-input',
+                attrs: { type: 'number', min: String(AUDIT_LIMIT_MIN), max: String(AUDIT_LIMIT_MAX) },
+            });
+            limitInput.value = String(state.auditLimit);
+            limitInput.addEventListener('input', function (e) { state.auditLimit = e.target.value; });
+            form.appendChild(limitInput);
+        }
+
+        form.appendChild(mkButton(S('audit_run_label'), 'k9tablet-btn', runAuditQuery, { disabled: state.auditLoading || !state.auditEnabled }));
+        return form;
+    }
+
+    /** @param {*} v @returns {string} S('audit_na') for null/undefined/'' -- never a raw 'null'/'undefined' string on screen. */
+    function auditText(v) {
+        if (v === null || v === undefined || v === '') return S('audit_na');
+        return String(v);
+    }
+
+    /** @param {*} v @returns {string} */
+    function auditBoolText(v) {
+        return v ? S('audit_boolean_yes') : S('audit_boolean_no');
+    }
+
+    /** @param {object|undefined} result @returns {string} */
+    function auditErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'not_authorized': return S('audit_error_not_authorized');
+            case 'rate_limited': return S('audit_error_rate_limited');
+            case 'invalid_args': return S('audit_error_invalid_args');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
+    /**
+     * Per-mode column definitions -- see this file's own NUI CONTRACT note
+     * on tablet:auditCert/Partner/Search/Xp/Dept for the authoritative row
+     * shape each mode returns; this table renders EXACTLY those fields,
+     * nothing reshaped or renamed. `id` (partner/search rows' own sort key)
+     * is deliberately never a column here -- it is a MergeSortedByIdDesc
+     * implementation detail server-side, meaningless to an officer reading
+     * the table.
+     * @param {'cert'|'partner'|'search'|'xp'|'dept'} mode
+     * @returns {Array<{header:string, render:(row:object)=>string}>}
+     */
+    function auditColumnsForMode(mode) {
+        switch (mode) {
+            case 'cert':
+                return [
+                    { header: S('column_department'), render: function (r) { return auditText(r.job); } },
+                    { header: S('column_active'), render: function (r) { return auditBoolText(r.active); } },
+                    { header: S('column_granted_by'), render: function (r) { return auditText(r.granted_by); } },
+                    { header: S('column_granted_at'), render: function (r) { return auditText(r.granted_at); } },
+                    { header: S('column_revoked_by'), render: function (r) { return auditText(r.revoked_by); } },
+                    { header: S('column_revoked_at'), render: function (r) { return auditText(r.revoked_at); } },
+                ];
+            case 'partner':
+                return [
+                    { header: S('column_k9'), render: function (r) { return auditText(r.k9_citizenid); } },
+                    { header: S('column_handler'), render: function (r) { return auditText(r.handler_citizenid); } },
+                    { header: S('column_active'), render: function (r) { return auditBoolText(r.active); } },
+                    { header: S('column_established_by'), render: function (r) { return auditText(r.established_by); } },
+                    { header: S('column_established_at'), render: function (r) { return auditText(r.established_at); } },
+                    { header: S('column_ended_by'), render: function (r) { return auditText(r.ended_by); } },
+                    { header: S('column_ended_at'), render: function (r) { return auditText(r.ended_at); } },
+                ];
+            case 'search':
+                return [
+                    { header: S('column_searched_at'), render: function (r) { return auditText(r.searched_at); } },
+                    { header: S('column_searcher'), render: function (r) { return auditText(r.searcher_citizenid); } },
+                    { header: S('column_searcher_job'), render: function (r) { return auditText(r.searcher_job); } },
+                    { header: S('column_target_type'), render: function (r) { return auditText(r.target_type); } },
+                    { header: S('column_target'), render: function (r) { return auditText(r.target_type === 'vehicle' ? r.target_plate : r.target_citizenid); } },
+                    { header: S('column_result'), render: function (r) { return auditText(r.result); } },
+                    { header: S('column_weight'), render: function (r) { return auditText(r.total_weight); } },
+                    { header: S('column_alert_tier'), render: function (r) { return auditText(r.alert_tier); } },
+                ];
+            case 'xp':
+                return [
+                    { header: S('column_audit_xp'), render: function (r) { return auditText(r.xp); } },
+                    { header: S('column_updated_at'), render: function (r) { return auditText(r.updated_at); } },
+                ];
+            case 'dept':
+                return [
+                    { header: S('column_citizenid'), render: function (r) { return auditText(r.citizenid); } },
+                    { header: S('column_granted_by'), render: function (r) { return auditText(r.granted_by); } },
+                    { header: S('column_granted_at'), render: function (r) { return auditText(r.granted_at); } },
+                ];
+            default:
+                return [];
+        }
+    }
+
+    /**
+     * @param {'cert'|'partner'|'search'|'xp'|'dept'} mode
+     * @param {Array<object>} rows
+     */
+    function buildAuditResultTable(mode, rows) {
+        var columns = auditColumnsForMode(mode);
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        columns.forEach(function (c) { headRow.appendChild(mk('th', { text: c.header })); });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        rows.forEach(function (row) {
+            var tr = mk('tr');
+            columns.forEach(function (c) { tr.appendChild(mk('td', { text: c.render(row) })); });
+            tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /**
+     * Renders exactly ONE of: a loading line, an error (with NO further
+     * explanation lost -- see auditErrorText()), a first-visit prompt (never
+     * a blank panel before the officer has run anything), an explicit empty-
+     * result note, or the results table -- per this task's own "a failed
+     * callback must not leave the screen blank with no explanation"
+     * requirement.
+     */
+    function buildAuditResults() {
+        var wrap = mk('div', {});
+
+        if (state.auditLoading) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.auditError) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: auditErrorText(state.auditError) }));
+            return wrap;
+        }
+        if (!state.auditResult) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('audit_result_prompt') }));
+            return wrap;
+        }
+        if (state.auditResult.label) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: state.auditResult.label }));
+        }
+        if (state.auditResult.rows.length === 0) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('audit_result_empty') }));
+            return wrap;
+        }
+        wrap.appendChild(buildAuditResultTable(state.auditMode, state.auditResult.rows));
+        return wrap;
+    }
+
     // ------------------------------------------------------------------
     // DATA LOADERS
     // ------------------------------------------------------------------
@@ -2854,6 +3630,17 @@
         if (state.viewer && state.viewer.isHighCommand) {
             loadPersonFeatures(citizenid);
         }
+        // Opportunistic, best-effort: populates state.certTiers for this
+        // screen's tier-assignment picker (buildCertificationDetail).
+        // loadCertTiers() is target-independent and safe to call
+        // regardless of arrival order (same note already on this
+        // function's own definition) -- a caller who is not high command
+        // simply gets `error:'denied'` back, state.certTiers stays
+        // whatever it was (usually null), and the tier control falls back
+        // to read-only text; see buildCertificationDetail's own doc
+        // comment for why that fallback, rather than a second gate, is the
+        // right call here.
+        loadCertTiers();
     }
 
     function loadPersonSummary(citizenid) {
@@ -3679,6 +4466,124 @@
         });
     }
 
+    /** @param {*} value @returns {number} floored + clamped into
+     * [AUDIT_LIMIT_MIN, AUDIT_LIMIT_MAX] -- see those constants' own
+     * comment. Never lets an unclamped value reach fetchNui(), even
+     * though server/admin.lua's own ClampLimit would independently catch
+     * it anyway -- this page's own "make the UI agree with what the
+     * server enforces" duty, per this task's instruction. `Number('')` is
+     * NaN, `Number(undefined)` is NaN, `Math.floor(NaN)` is NaN, and
+     * `NaN < x`/`NaN > x` are both false for any x -- so a blank/garbage
+     * input falls through both clamp branches below unless caught first,
+     * exactly the failure shape server/admin.lua's own ClampLimit doc
+     * comment names for the identical reason; guarded here the same way,
+     * once, via `isFinite`. */
+    function clampAuditLimit(value) {
+        var n = Math.floor(Number(value));
+        if (!isFinite(n)) return AUDIT_LIMIT_MIN;
+        if (n < AUDIT_LIMIT_MIN) return AUDIT_LIMIT_MIN;
+        if (n > AUDIT_LIMIT_MAX) return AUDIT_LIMIT_MAX;
+        return n;
+    }
+
+    /**
+     * Submits the CURRENT audit form's fields to whichever tabletAudit*
+     * callback state.auditMode selects. The blank-required-field checks
+     * below are a UX CONVENIENCE ONLY, per THE SECURITY RULE -- they
+     * synthesize the SAME `{error: 'invalid_args'}` shape server/admin.lua's
+     * own IsValidCitizenId/IsValidDepartment/VALID_SEARCH_LOG_MODES would
+     * refuse with anyway, rendered through the exact same auditErrorText(),
+     * purely to avoid a pointless round trip for an obviously-incomplete
+     * form -- a modified client skipping this check entirely still gets
+     * refused, just one network hop later, by the real gate.
+     * STALE-RESPONSE GUARD: same request-id shape as
+     * shopLocationsRequestId/runtimeFeaturesRequestId elsewhere on this
+     * page -- an officer can switch mode or press Run Query again while an
+     * earlier query is still in flight; only the MOST RECENTLY issued
+     * request's response is ever applied.
+     */
+    function runAuditQuery() {
+        if (state.auditLoading || !state.auditEnabled) return;
+
+        var limit = clampAuditLimit(state.auditLimit);
+        state.auditLimit = limit; // reflect the clamp back into the input itself, so a typed 500 visibly becomes 100, never silently
+
+        var name, payload;
+        switch (state.auditMode) {
+            case 'cert':
+            case 'partner': {
+                var certOrPartnerId = state.auditCitizenId.trim();
+                if (certOrPartnerId.length === 0) {
+                    state.auditError = { error: 'invalid_args' };
+                    render();
+                    return;
+                }
+                name = (state.auditMode === 'cert') ? 'tablet:auditCert' : 'tablet:auditPartner';
+                payload = { targetCitizenId: certOrPartnerId, limit: limit };
+                break;
+            }
+            case 'xp': {
+                var xpId = state.auditCitizenId.trim();
+                if (xpId.length === 0) {
+                    state.auditError = { error: 'invalid_args' };
+                    render();
+                    return;
+                }
+                name = 'tablet:auditXp';
+                payload = { targetCitizenId: xpId };
+                break;
+            }
+            case 'dept': {
+                var dept = state.auditDepartment.trim();
+                if (dept.length === 0) {
+                    state.auditError = { error: 'invalid_args' };
+                    render();
+                    return;
+                }
+                name = 'tablet:auditDept';
+                payload = { departmentKey: dept, limit: limit };
+                break;
+            }
+            case 'search': {
+                var searchMode = state.auditSearchMode;
+                var searchValue = state.auditSearchValue.trim();
+                if (searchMode !== 'recent' && searchValue.length === 0) {
+                    state.auditError = { error: 'invalid_args' };
+                    render();
+                    return;
+                }
+                name = 'tablet:auditSearch';
+                payload = { mode: searchMode, limit: limit };
+                if (searchMode !== 'recent') payload.value = searchValue;
+                break;
+            }
+            default:
+                return;
+        }
+
+        state.auditLoading = true;
+        state.auditError = null;
+        var requestId = ++state.auditRequestId;
+        render();
+
+        fetchNui(name, payload).then(function (result) {
+            if (requestId !== state.auditRequestId) return; // STALE-RESPONSE GUARD -- a newer query has since been issued
+
+            state.auditLoading = false;
+            if (!result || result.ok !== true) {
+                state.auditError = result || { error: 'unknown_error' };
+                state.auditResult = null;
+                render();
+                return;
+            }
+            state.auditResult = {
+                rows: Array.isArray(result.rows) ? result.rows : [],
+                label: (typeof result.label === 'string') ? result.label : '',
+            };
+            render();
+        });
+    }
+
     // ------------------------------------------------------------------
     // OPEN / CLOSE
     // ------------------------------------------------------------------
@@ -3690,9 +4595,11 @@
         state.capabilities = (data.capabilities && typeof data.capabilities === 'object') ? data.capabilities : {};
         state.maxXpPerGrant = typeof data.maxXpPerGrant === 'number' ? data.maxXpPerGrant : null;
         state.peds = Array.isArray(data.peds) ? data.peds : [];
+        state.specializations = (data.specializations && typeof data.specializations === 'object') ? data.specializations : {};
         state.themingEnabled = data.themingEnabled === true;
         state.shopLocationsEnabled = data.shopLocationsEnabled === true;
         state.runtimeControlEnabled = data.runtimeControlEnabled === true;
+        state.auditEnabled = data.auditEnabled === true;
         state.branding = (data.branding && typeof data.branding === 'object') ? data.branding : {};
 
         // First-open ONLY, cosmetic seeding -- see applyBrandingSeedTheme()'s
@@ -3719,6 +4626,13 @@
         state.personSummary = null;
         state.personFeatures = null;
         state.actionNotice = null;
+        state.auditMode = 'cert';
+        state.auditCitizenId = '';
+        state.auditDepartment = '';
+        state.auditSearchMode = 'officer';
+        state.auditSearchValue = '';
+        state.auditError = null;
+        state.auditResult = null;
 
         // Theme is DELIBERATELY NOT reset to null/defaults here, unlike
         // everything above -- see loadTheme()'s own comment: it is applied

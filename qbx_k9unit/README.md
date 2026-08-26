@@ -55,19 +55,24 @@ Last checked compatible against: `qbx_core` 1.24.0, `ox_lib` 3.39.0,
 may work; they simply haven't been re-checked.
 
 This resource also ships an auto-detection layer (`Config.Compat`) that
-can talk to some non-`ox_*` inventories/target scripts/frameworks if
-that's what your server actually runs. It changes which script this
+can talk to some non-`ox_*` inventories/target/dispatch/ambulance scripts
+if that's what your server actually runs. It changes which script this
 resource *talks to* at runtime — it does **not** remove the five hard
 dependencies above. `ox_target` and `ox_inventory` still have to be
 installed and started, full stop, even if `Config.Compat` ends up routing
 around them for a specific system. Run `/k9compat` in-game (high command
 only) to see what it actually detected.
 
-**No ESX support beyond what `Config.Compat` can auto-detect.** This
-resource's own security/permission model is written against Qbox's job/
-grade shape; a QBCore- or ESX-flavored framework can be picked up by
-`Config.Compat` for player-lookup purposes, but `qbx_core` remains a hard
-dependency regardless.
+**No QBCore or ESX support, no matter what `/k9compat` reports.** This
+resource's whole authorization model (certifications, permissions, the
+tablet, XP, combat, and effectively everything else) reads Qbox's job/
+grade shape directly; `Config.Compat`'s framework detection will
+correctly identify QBCore or ESX if you run one, but that is a detection
+statement, not a compatibility promise — almost nothing in this resource
+actually routes through the detected framework, so it will not run on
+either. `qbx_core` is, and remains, a hard dependency. See
+`config.lua`'s own `Config.Compat.Systems.framework` comment and
+`ISSUES.md` if you're considering the work to change that.
 
 ## Installing
 
@@ -99,11 +104,19 @@ dependency regardless.
 
 `config.lua` is long but ships with its own plain-English index at the
 top ("WHAT IS IN THIS FILE") — search it for the setting you want rather
-than hunting by eye. Nearly every one of its ~50 feature flags ships
-`true`; the two exceptions are `CameraFeedPiP` (no implementing code
-exists — the engine has no native for it) and `CertificationExpiry`
-(off by default because turning it on starts an expiry clock on every
-certification that already exists).
+than hunting by eye. Nearly every one of its 56 `Config.Features` flags
+ships `true`. The one deliberate exception is `CertificationExpiry`
+(off by default) — and it is off because starting a recertification
+cadence at all is a policy decision worth making on purpose, **not**
+because turning it on is destructive: every certification that already
+exists keeps no expiry date, forever, unless a certifier explicitly
+renews it — only new grants and explicit renewals ever get an expiry
+date. `CameraFeedPiP` also ships `true`: a true picture-in-picture (two
+live 3D views on screen at once) genuinely isn't possible with FiveM's
+current natives, but what shipped instead is real — pressing a key
+switches your whole screen to your active partner's viewpoint until you
+press it again. See `PLAYER_GUIDE.md` and `config.lua`'s own
+`Config.CameraFeed` comment for what it can and can't do.
 
 ## Documentation map
 
@@ -138,13 +151,13 @@ check `.major` before relying on either.
 | `GetXPTier` | `(citizenid)` | `{ xp, label, speedMultiplier, scentRangeMultiplier }` |
 | `IsFeatureEnabled` | `(featureKey)` | `boolean?` — `nil` if the key isn't recognized |
 
-### Client (`client/exports.lua`) — version `1.1.0`
+### Client (`client/exports.lua`) — version `1.2.0`
 
 | Export | Signature | Returns |
 |---|---|---|
 | `GetAPIVersion` | `()` | `{ major, minor, patch, string }` |
 | `HasK9Access` / `CanShowK9UI` | `()` | `boolean` (yields on a server round trip, ~1s cached) |
-| `IsOwnModelK9` / `IsLeashed` / `IsInK9Vehicle` / `IsPartnered` / `IsTracking` / `IsThermalVisionActive` / `IsNightVisionActive` / `IsBiteHoldEngaged` / `IsDragEngaged` / `IsFetchCarryEngaged` / `HasFreshDefensePrompt` | `()` | `boolean` |
+| `IsOwnModelK9` / `IsLeashed` / `IsInK9Vehicle` / `IsPartnered` / `IsTracking` / `IsThermalVisionActive` / `IsNightVisionActive` / `IsBiteHoldEngaged` / `IsDragEngaged` / `IsFetchCarryEngaged` / `IsPropAttachmentEngaged` / `HasFreshDefensePrompt` | `()` | `boolean` |
 | `GetPartnerServerId` | `()` | `number?` |
 | `GetCurrentXPTier` | `()` | `{ xp, label, speedMultiplier, scentRangeMultiplier }?` |
 | `GetActiveTrackType` | `()` | `'scent' \| 'blood' \| 'gunpowder' \| nil` |
@@ -159,8 +172,13 @@ No **action** export exists on either side (no `RequestPartnerUp`,
 carries its own consent/proximity/cooldown logic in this resource's own
 UI flow that a direct export call would bypass.
 
-Six outbound events also fire under real gameplay conditions, not gated
-on any feature flag: `qbx_k9unit:events:certificationGranted`,
-`certificationRevoked`, `partnershipEstablished`, `partnershipEnded`,
-`searchCompleted`, `xpTierReached`. `AddEventHandler` for any of these
-from another resource.
+Fourteen outbound events also fire under real gameplay conditions, not
+gated on any feature flag: `qbx_k9unit:events:certificationGranted`,
+`certificationRenewed`, `certificationRevoked`, `certificationTierChanged`,
+`k9Down`, `partnershipEnded`, `partnershipEstablished`,
+`sarCallCompleted`, `sarCallStarted`, `scentLineupResolved`,
+`searchCompleted`, `specializationGranted`, `specializationRevoked`,
+`xpTierReached`. `AddEventHandler` for any of these from another
+resource. See `server/exports.lua`'s own header for each one's exact
+payload shape and firing point — the list above is a name index, not the
+full contract.

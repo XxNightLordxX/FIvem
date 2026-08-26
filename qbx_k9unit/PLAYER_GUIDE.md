@@ -31,22 +31,29 @@ to turn on deliberately.
 
 ## Is this stuff turned on for me?
 
-This resource ships with around fifty independently-switched pieces.
+This resource ships with 56 independently-switched pieces.
 **Nearly all of them ship on by default** — tracking, searching, combat,
-gear, wellbeing, fetch, kennels, vests, XP, training, the shop, and the
-command tablet included. The two exceptions are a camera feature with no
-code behind it yet (nothing to notice either way) and certification
-expiry (off by default; ask staff if your server uses it). Your server's
-staff can still switch any individual piece off, so if something below
-doesn't work or a command isn't recognized, that's the most likely reason
-— not a mistake on your part.
+gear, wellbeing, fetch, kennels, vests, XP, training, the shop, the
+partner camera feed, and the command tablet included. The one exception
+is certification expiry (off by default; ask staff if your server uses
+it). Your server's staff can still switch any individual piece off, so if
+something below doesn't work or a command isn't recognized, that's the
+most likely reason — not a mistake on your part.
 
 **A handful of features also need a personal OK from high command on top
 of the server-wide switch**: Bite & Hold, Non-Lethal Takedown, Dragging,
-Find Alerts, Scent Trail Hunt, Pursuit Sprint, Scent Lineup, and SAR
-Calls. If one of these is on for the server but you still get refused,
-ask a high-command officer to grant it to you specifically from the
-command tablet.
+Find Alerts, Scent Trail Hunt, Pursuit Sprint, Scent Lineup, SAR Calls,
+and the staff-only audit commands (`/k9audit*` below). If one of these is
+on for the server but you still get refused, ask a high-command officer
+to grant it to you specifically from the command tablet.
+
+Separately, your server's high command may also have set up
+**certification tiers with extra requirements** — for example, reserving
+Bite & Hold, Non-Lethal Takedown, or eligibility for a specialization to
+one specific tier. This is off by default (a fresh server doesn't
+restrict anything by tier), so most servers won't have this; if you're
+refused with a message about your certification tier, that's what's
+happening — ask a supervisor which tier you need.
 
 One more thing worth knowing plainly: the combat features (Bite & Hold,
 Non-Lethal Takedown, Dragging) rely on the *target's own game* to apply
@@ -66,10 +73,13 @@ value here."
 | Command | What it does | Who can use it |
 |---|---|---|
 | `/k9certify [server id]` | Certifies someone as a K9 for their department | A qualifying supervisor/boss |
+| `/k9certifyoffline [citizen id] [job]` | Certifies an offline player | Same |
 | `/k9decertify [server id]` | Revokes an online player's certification | Same |
 | `/k9decertifyoffline [citizen id] [job]` | Revokes an offline player's certification | Same |
 | `/k9recertify [server id]` | Renews a certification before it lapses | Same |
+| `/k9recertifyoffline [citizen id] [job]` | Same, offline | Same |
 | `/k9settier [server id] [tier]` | Changes a K9's certification tier | Same |
+| `/k9settieroffline [citizen id] [job] [tier]` | Same, offline | Same |
 | `/k9specialize [server id] [specialization]` | Grants a specialization (e.g. `narcotics`) | Same |
 | `/k9unspecialize [server id] [specialization]` | Removes an online K9's specialization | Same |
 | `/k9unspecializeoffline [citizen id] [job] [specialization]` | Same, offline | Same |
@@ -97,18 +107,21 @@ value here."
 
 ### Staff-only and developer-only
 
-These check a high rank in an eligible department, not a special staff
-grant — you'll likely never run these unless you're senior in a K9
-department yourself.
+These check a high rank in an eligible department — you'll likely never
+run these unless you're senior in a K9 department yourself. The five
+`/k9audit*` commands additionally need an individual grant from high
+command on the shipped default config (see "Is this stuff turned on for
+me?" above) — meeting the rank alone, even as a department boss, is not
+enough to run them unless your server has changed that default.
 
 | Command | What it does |
 |---|---|
 | `/k9givexp [server id] [amount]` | High command: grants XP directly |
-| `/k9auditcert [citizen id] [limit]` | High-rank: certification history for one citizen |
-| `/k9auditpartner [citizen id] [limit]` | High-rank: partnership history |
-| `/k9auditsearch <officer\|plate\|person\|recent> [value] [limit]` | High-rank: search records |
-| `/k9auditxp [citizen id]` | High-rank: a K9's current XP total |
-| `/k9auditdept [job] [limit]` | High-rank: everyone currently certified in a department |
+| `/k9auditcert [citizen id] [limit]` | High-rank + grant: certification history for one citizen |
+| `/k9auditpartner [citizen id] [limit]` | High-rank + grant: partnership history |
+| `/k9auditsearch <officer\|plate\|person\|recent> [value] [limit]` | High-rank + grant: search records |
+| `/k9auditxp [citizen id]` | High-rank + grant: a K9's current XP total |
+| `/k9auditdept [job] [limit]` | High-rank + grant: everyone currently certified in a department |
 | `/k9bonetool ...` | Developer tool for lining up cosmetic attachment points. Needs a department-boss rank **and** a server-wide switch staff must turn on on purpose. Never on for regular play. |
 
 ---
@@ -400,6 +413,19 @@ remapped these). Work for **any** player currently on a K9-modeled
 character, even uncertified — treated as the dog's own senses, not a
 department privilege. Turning one on turns the other off.
 
+## Partner camera feed (needs "Handler Partnership")
+
+Press **H** (your server may have remapped this) to switch your *entire
+screen* to your active partner's viewpoint — a real full-screen switch,
+not a small inset window, and not a literal picture-in-picture (that's
+not possible in this game). Press **H** again to switch back. Needs an
+active partnership (see below) and works for the K9 or the handler side,
+whoever presses it. It automatically ends and gives your view back if
+your partner disconnects, goes out of range, you die, or you lose access
+to K9 features mid-view — you're never stuck watching through it. Your
+own character stands still and can't act while it's active, the same way
+looking at a menu would.
+
 ## Training Mode (on by default)
 
 A practice sandbox. Stand in a training yard (your server's staff sets
@@ -460,8 +486,8 @@ whoever you searched.
 ## Scent Trail Hunt, SAR Calls, and Scent Lineup
 
 Three "hunting" mini-games, each its own switch and each requiring a
-personal grant from high command on top of that switch (see "Personal
-permissions" above).
+personal grant from high command on top of that switch (see "Is this
+stuff turned on for me?" above).
 
 - **Scent Trail Hunt** — `/k9nosehunt` sets your K9 off after a hidden
   spot somewhere nearby. There's no marker or blip — only a growl that

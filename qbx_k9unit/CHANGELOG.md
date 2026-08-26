@@ -15,6 +15,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+**Certification tiers made real, per-person blocking greatly widened, live
+tunables expanded 20 → 94, and the partner camera feed shipped — 2026-08-26
+(later than the compat-layer entry below).** The largest batch of
+operator-facing change since the "all flags on" flip. Verified directly
+against the current `config.lua`/`server/*.lua`/`client/*.lua`, not
+against commit messages alone.
+
+- **High command can now edit certification tiers from the tablet.**
+  Rename Trainee/Certified/Senior, add new tiers (up to 40), reorder them,
+  and grant each one a **capability** from a fixed, five-entry list
+  (`server/certtiers.lua`). Two of the five actually gate something today
+  — "Bite & Hold / Non-Lethal Takedown" and "Eligible to hold K9
+  specializations" — the other three are reserved for mechanics that don't
+  exist yet and currently do nothing if granted. **Enforcement is
+  deliberately dormant on a fresh install**: all three shipped tiers start
+  with an empty capability set, and a capability only starts being
+  checked, resource-wide, the moment it's granted to *any single tier*.
+  This is intentional (nobody gets a new restriction just because this
+  landed), but it means the first grant is a bigger switch than it looks
+  like from the tablet — see `OPERATOR_RUNBOOK.md` §5. Existing
+  certification rows and the pre-existing hardcoded tier ordinals are
+  unaffected; a bad/missing config falls back to the original three tiers
+  rather than stranding anyone.
+- **Per-person feature blocking is now much broader than the original
+  nine-feature grant list.** High command can now block a specific person
+  or K9 from most named features in this resource individually — leash,
+  each tracking type, search, all three combat mechanics, fetch, kennel,
+  medkit, K9 inventory, bark, door interaction, the leaderboard, and more
+  server-side, plus a smaller set of client-only cosmetic effects (radial
+  structure, vision toggles, the HUD, ambient audio, the camera feed) with
+  the same disclosed "works against an ordinary client, not a modified
+  one" limit every client-side check in this resource already carries.
+  This is a different mechanism from `Config.FeatureControl.RequireGrant`
+  (opt-in, nine features, listed in `config.lua`) — blocking is opt-out
+  and much wider. Landed across several passes this session
+  (`server/permissions.lua`'s `block.<Name>` rows, `client/featureblocks.lua`
+  for the client-only set); the tablet was also fixed to stop offering a
+  block toggle for a feature that had no enforcement point to check it,
+  which would have looked like it worked and silently done nothing.
+- **Live-editable tunables (the tablet's "Runtime feature control" numeric
+  dials) expanded from 20 to 94** — most of `config.lua`'s server-enforced
+  ranges/cooldowns/thresholds/XP amounts are now live-editable from the
+  tablet, not just flags. A related bug in the tablet's own feature-reset
+  reporting (`server/runtimecontrol.lua`'s tier classification, distinct
+  from certification tiers above) was also fixed in the same pass — not
+  independently re-verified in detail for this doc pass, flagged here so
+  it isn't lost.
+- **The partner camera feed (`Config.Features.CameraFeedPiP`) is a real,
+  shipped feature now, not an infeasible placeholder.** A true
+  simultaneous two-camera inset is still impossible with FiveM's current
+  natives (re-confirmed against the full native list this pass) — what
+  shipped instead, by explicit owner direction, is a full-screen switch to
+  your active partner's viewpoint (`H` by default), gated the same way
+  every other departmental ability is, ending automatically on partner
+  disconnect/out-of-range, your own death, or losing K9 access mid-view.
+  **Every doc that previously said this feature "has no implementing code"
+  or "is impossible" is now stale** — `README.md`, `OPERATOR_RUNBOOK.md`,
+  and `PLAYER_GUIDE.md` are corrected as of this pass; `DEVELOPER_REFERENCE.md`
+  carries two dated notes flagging its own older "stays false permanently"
+  passages as historical, not current.
+- **Two config comments that actively misled an operator are corrected.**
+  `Config.Features.CertificationExpiry`'s comment used to say switching it
+  on "starts an expiry clock retroactively on everyone" — it never did;
+  only new grants and explicit renewals ever get an expiry date, and this
+  is now stated plainly rather than the reverse. `Config.Compat.Systems.framework`'s
+  comment now says outright that QBCore/ESX detection is real but the
+  resource will not work on either regardless — previously implied
+  partial support.
+- **A move-rate/speed gap closed**: a K9-role holder on a non-K9-modeled
+  body (a human handler holding the role, per this resource's own
+  "everything works with any ped" design) was not consistently getting
+  the same speed effects a K9-modeled role-holder gets; the composer now
+  applies uniformly regardless of body model, with an always-on watchdog
+  that converges a player back to neutral the moment they lose K9 access,
+  even off-model.
+- **A race in `server/sarcalls.lua`** that could let a search-and-rescue
+  call resolve against stale state is closed in the same pass.
+- **Two K9s could partner with each other**, with one silently cast as the
+  "handler" side despite neither actually holding that role — fixed;
+  `HandlerPartnership` now requires the two sides to actually be a K9 and
+  a handler.
+- **Scent Trail Hunts and SAR calls in progress are now abandoned cleanly
+  when the resource stops** instead of leaving orphaned per-player state
+  that a restart previously had to paper over.
+- **`ISSUES.md` corrected** for two stale rows found while landing the
+  above, and updated to record what was still in flight at the time.
+
 **Compat layer finished, plus a watchdog pass — 2026-08-26.** The
 resource now reaches every third-party script through one adapter instead
 of calling `ox_target`/`ox_inventory` by name:

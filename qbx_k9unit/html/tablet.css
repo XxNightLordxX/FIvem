@@ -366,6 +366,90 @@ body {
     font-size: 13px;
 }
 
+/*
+    CERTIFICATION TIER / RENEWAL / SPECIALIZATIONS (this pass) --
+    html/tablet.js's buildCertificationDetail()/buildSpecializationsBlock().
+    .k9tablet-cert-row itself gains flex-wrap so this detail block drops to
+    its OWN full-width line below the dept/status/granter/decertify header
+    line, rather than squeezing in beside them -- the row's OTHER children
+    (dept/status/granter/action button) are unaffected, they simply keep
+    their existing single-line layout when there is no detail block to wrap
+    around (an inactive/never-held department row never renders one).
+*/
+.k9tablet-cert-row {
+    flex-wrap: wrap;
+}
+
+.k9tablet-cert-detail {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.k9tablet-cert-tier-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: #c7cbd4;
+}
+
+.k9tablet-cert-tier-label {
+    font-weight: 500;
+}
+
+.k9tablet-cert-expired-badge {
+    color: #e08a8a;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 11px;
+}
+
+.k9tablet-cert-expiry {
+    color: #9aa0ab;
+}
+
+.k9tablet-cert-tier-controls,
+.k9tablet-specialization-add {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.k9tablet-specializations {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.k9tablet-specializations-heading {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #9aa0ab;
+}
+
+.k9tablet-specialization-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 8px;
+    background: #23262e;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.k9tablet-specialization-label {
+    flex: 1 1 auto;
+}
+
 .k9tablet-cert-dept,
 .k9tablet-feature-label,
 .k9tablet-capability-label {
@@ -657,4 +741,57 @@ body {
 
 .k9tablet-runtime-value--off {
     color: #9aa0ab;
+}
+
+/*
+    K9 AUDIT TRAIL VIEWER (its own tab -- see html/tablet.js's own
+    canViewAudit() for its distinct, non-high-command-only gate) --
+    server/admin.lua's five tabletAudit* callbacks. Same "reuse, don't
+    reinvent" posture as Runtime Control above: the mode switch reuses
+    .k9tablet-tab/.k9tablet-tab--active verbatim (it IS a tab bar, just a
+    nested one), and results render via the SAME .k9tablet-table/
+    .k9tablet-muted/.k9tablet-error-text/.k9tablet-hint rules every other
+    screen already uses. Only the query form itself needs a few new,
+    narrowly-scoped rules, matching .k9tablet-theme-field's own visual
+    weight (same dark input fill/border/radius/padding/font-size every
+    other text input on this page already uses) rather than inventing a
+    new look for this one screen.
+*/
+.k9tablet-audit-modes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 12px;
+}
+
+.k9tablet-audit-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    margin-bottom: 14px;
+}
+
+.k9tablet-audit-label {
+    font-size: 13px;
+    color: #b7bcc6;
+}
+
+.k9tablet-audit-select {
+    background: #14161a;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #f2f2f2;
+    padding: 7px 10px;
+    font-size: 13px;
+}
+
+.k9tablet-audit-limit-input {
+    width: 70px;
+    background: #14161a;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #f2f2f2;
+    padding: 7px 10px;
+    font-size: 13px;
 }
