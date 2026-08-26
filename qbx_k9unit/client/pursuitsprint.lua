@@ -115,15 +115,36 @@
     EVENT CONTRACT (agreed with coder-backend -- see server/pursuitsprint.lua's
     own header for the full writeup):
       Client -> Server: 'qbx_k9unit:server:requestPursuitSprint' (targetNetId: number)
-      Server -> Client: 'qbx_k9unit:client:pursuitSprintGranted' ()  -- NO PAYLOAD
-        Deliberately payload-less: Config.PursuitSprint.speedMultiplier/
+      Server -> Client: 'qbx_k9unit:client:pursuitSprintGranted' (speedMultiplier: number, durationMs: number)
+        CARRIES A PAYLOAD NOW -- CHANGED THIS PASS (closing a real
+        tablet-tunable sync gap; see server/pursuitsprint.lua's own header
+        "EVENT CONTRACT" for the full writeup). This USED TO be
+        payload-less on the theory that "Config.PursuitSprint.speedMultiplier/
         durationMs are shared_scripts config, already identical on both
-        sides of the network boundary -- sending them again as event
-        arguments would just be a second, redundant copy that could in
-        principle drift from the config this same client already loaded
-        (it cannot, in practice, since both sides read the same file, but
-        there is no reason to introduce even a theoretical second source of
-        truth for a value already available locally).
+        sides" -- true only as long as neither side's copy could ever change
+        independently, which stopped being true the moment
+        server/runtimecontrol.lua's tablet gained the ability to mutate the
+        SERVER's own in-memory Config.PursuitSprint live, with nothing that
+        ever reaches an already-connected client's own separate config.lua
+        copy. This file now applies WHATEVER THE SERVER SENT for this one
+        grant, never re-reading `Config.PursuitSprint.speedMultiplier`/
+        `.durationMs` for that purpose again below -- those two fields are
+        used ONLY as the fallback for a malformed/missing payload (see the
+        grant handler's own "PAYLOAD VALIDATION" comment), never as the
+        primary source once a real grant has arrived. Applying a value this
+        client was actually SENT, rather than one it looked up itself, is
+        what makes a live tablet edit genuinely reach an already-connected
+        K9 on its next grant -- see server/pursuitsprint.lua's own "LIVE
+        EDIT MID-SPRINT" note for why a burst ALREADY GRANTED keeps its own
+        captured value for its full duration rather than updating mid-flight.
+        NOT A NEW TRUST BOUNDARY: this event's origin is still restricted to
+        the genuine server by the SOURCE-ORIGIN GUARD below, exactly as
+        before -- a forged local trigger was already the only way to feed
+        this handler a fabricated value, payload or not, and gains nothing
+        new from the payload existing (the SERVER never reads anything back
+        from this client for this feature at all; see
+        server/pursuitsprint.lua's own request handler, which takes only a
+        `targetNetId`).
       A rejected request is NEVER a dedicated client event -- the server
       sends a single ox_lib notify (via NotifyPlayer) and nothing else. Do
       not add a 'qbx_k9unit:client:pursuitSprintDenied' event without
@@ -323,7 +344,39 @@ local function ResetPursuitSprintModifier()
     end
 end
 
-RegisterNetEvent('qbx_k9unit:client:pursuitSprintGranted', function()
+--- PAYLOAD VALIDATION -- defense in depth, not a security boundary (this
+--- event's origin is already restricted to the genuine server by the
+--- SOURCE-ORIGIN GUARD below; a server this client trusts enough to accept
+--- ANY event from is trusted for these two numbers too). Still validated
+--- with the SAME rule this file's own ResolveConfiguredPositiveNumber
+--- already applies to a bad config.lua value (positive, finite, non-NaN),
+--- so a bug somewhere upstream -- a mis-set tunable override that somehow
+--- slipped past server/runtimecontrol.lua's own [min,max] gate, a stale/
+--- future version mismatch between the two files -- degrades to this
+--- client's OWN last-resolved Config.PursuitSprint default rather than ever
+--- reaching RecomputeK9MoveRate()/SetPedMoveRateOverride with an unchecked
+--- number. Neither inversion this task warns against is reachable here: a
+--- non-positive/NaN speedMultiplier can never silently mean "no boost" or
+--- "infinite boost" (rejected outright, falls back to a known-good default),
+--- and a non-positive/NaN durationMs can never mean "forever" (the end-timer
+--- loop below is a plain `while elapsed < durationMs`, so a non-positive
+--- value would otherwise end the burst on its very first 100ms tick --
+--- harmless in this specific direction, but rejected anyway for
+--- consistency, so this file never has to reason about which direction is
+--- "safe" for a value that should never be reachable in the first place).
+--- @param value any
+--- @param fallback number
+--- @return number
+local function ResolveGrantedPositiveNumber(value, fallback)
+    if type(value) == 'number' and value == value and value > 0 and value < math.huge then
+        return value
+    end
+    return fallback
+end
+
+--- @param speedMultiplier number
+--- @param durationMs number
+RegisterNetEvent('qbx_k9unit:client:pursuitSprintGranted', function(speedMultiplier, durationMs)
     if source ~= 65535 then return end -- SOURCE-ORIGIN GUARD, see this file's header
 
     -- Soft dependency on client/movement.lua's shared move-rate composer
@@ -338,18 +391,31 @@ RegisterNetEvent('qbx_k9unit:client:pursuitSprintGranted', function()
         return
     end
 
+    -- APPLY WHAT WAS SENT, NOT THIS CLIENT'S OWN CONFIG COPY -- see this
+    -- file's header "EVENT CONTRACT" for the full writeup on why. Falls back
+    -- to this client's own last-resolved Config.PursuitSprint defaults only
+    -- for a malformed/missing payload -- see ResolveGrantedPositiveNumber's
+    -- own doc comment above.
+    speedMultiplier = ResolveGrantedPositiveNumber(speedMultiplier, Config.PursuitSprint.speedMultiplier)
+    durationMs = ResolveGrantedPositiveNumber(durationMs, Config.PursuitSprint.durationMs)
+
     sprintGeneration = sprintGeneration + 1
     local myGeneration = sprintGeneration
 
-    K9MoveRateModifiers.pursuitSprint = Config.PursuitSprint.speedMultiplier
+    K9MoveRateModifiers.pursuitSprint = speedMultiplier
     RecomputeK9MoveRate()
     lib.notify({ title = locale('common.notify_title'), description = locale('pursuitsprint.activated'), type = 'success' })
 
     -- Feature-scoped thread -- exists ONLY for the bounded lifetime of one
-    -- burst (Config.PursuitSprint.durationMs, a few seconds), never an
-    -- always-on loop. Ticks at a fixed 100ms so an in-progress death is
-    -- noticed promptly without polling every frame.
-    local durationMs = Config.PursuitSprint.durationMs
+    -- burst (the granted durationMs, a few seconds), never an always-on
+    -- loop. Ticks at a fixed 100ms so an in-progress death is noticed
+    -- promptly without polling every frame. Captured into a local here
+    -- (already was) -- this is now doubly load-bearing, since `durationMs`
+    -- is this specific grant's OWN value, not a re-readable Config field a
+    -- later live edit could ever retroactively change out from under an
+    -- already-running burst (see this file's header "LIVE EDIT MID-SPRINT"
+    -- note in server/pursuitsprint.lua for why that is the chosen behavior,
+    -- not an oversight).
     local tickMs = 100
     CreateThread(function()
         local elapsed = 0

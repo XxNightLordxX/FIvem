@@ -680,16 +680,59 @@ local TUNABLE_REGISTRY = {
     -- server/pursuitsprint.lua (Config.Features.PursuitSprint, rawtoplevel).
     -- requestRangeMeters is re-read directly off Config in the request
     -- handler (that file's own comment says so explicitly) -- genuinely
-    -- live. speedMultiplier/durationMs are DELIBERATELY EXCLUDED even though
-    -- this file normalizes them back onto Config at load: the granted-sprint
-    -- event carries NO PAYLOAD (that file's own header) -- the speed boost
-    -- and its duration are applied entirely by the K9's OWN CLIENT reading
-    -- its OWN independent shared_scripts copy of config.lua, never this
-    -- server's in-memory table. A live edit here would be a silent no-op for
-    -- the one thing an operator would actually be trying to change.
-    -- cooldownMs is EXCLUDED (baked into PursuitCooldown's own NewCooldown
-    -- constructor).
+    -- live.
+    --
+    -- speedMultiplier/durationMs -- FORMERLY EXCLUDED, NOW INCLUDED (this
+    -- pass, "make the speed boost and duration numbers genuinely editable"
+    -- task). THE OLD EXCLUSION WAS CORRECT AS OF WHEN IT WAS WRITTEN: the
+    -- granted-sprint event used to carry NO PAYLOAD at all, so the boost/
+    -- duration were applied entirely by the K9's own client reading its own
+    -- independent shared_scripts copy of config.lua -- a live edit here
+    -- would have been a silent no-op for the one thing an operator was
+    -- actually trying to change, exactly the failure this registry's own
+    -- rule 3 exists to refuse. THE SYNC GAP IS NOW CLOSED, not just
+    -- asserted closed: server/pursuitsprint.lua's request handler now reads
+    -- both fields fresh off THIS live `Config.PursuitSprint` at the exact
+    -- moment each grant is decided and sends them AS the
+    -- 'qbx_k9unit:client:pursuitSprintGranted' event's own payload;
+    -- client/pursuitsprint.lua applies whatever it was sent, never its own
+    -- local config copy, for that one grant (see both files' own headers,
+    -- section "EVENT CONTRACT", for the full writeup). A tablet edit here is
+    -- therefore genuinely live -- it takes effect on the AFFECTED K9's NEXT
+    -- grant (server/pursuitsprint.lua's own documented, deliberate choice:
+    -- a burst already in flight keeps the exact value it was granted with
+    -- for its own duration, never updated retroactively mid-burst -- see
+    -- that file's "LIVE EDIT MID-SPRINT" note for why). RANGES: speedMultiplier's
+    -- floor of 1.0 keeps a "boost" from ever becoming a same-or-worse-than-
+    -- baseline slow (a non-positive/zero multiplier is refused outright by
+    -- this file's own [min,max] check below, same discipline this task
+    -- itself named as non-negotiable); its ceiling of 3.0 is generous
+    -- headroom for an operator, made SAFE regardless of how high it is set
+    -- by infrastructure that predates this tunable entirely --
+    -- client/movement.lua's RecomputeK9MoveRate() clamps the PRODUCT of
+    -- every active move-rate modifier to [0.1, 2.0] (that file's own "CLAMP
+    -- RANGE" header), so this tunable can never itself become the vector for
+    -- an unbounded speed (see this file's own pursuitsprint.lua header, "THE
+    -- BALANCE PROBLEM", for the full worst-case arithmetic, unchanged by
+    -- this tunable's existence). durationMs's floor of 500ms keeps a "short
+    -- burst" from ever being misread as instant/zero-duration (this file's
+    -- own [min,max] check refuses a non-positive value outright -- the
+    -- "does 0 mean instant or forever" ambiguity this task warns against is
+    -- structurally unreachable here); its ceiling of 30000ms (30s) keeps an
+    -- operator from turning a short burst into a de facto permanent buff
+    -- while still leaving ample room above the shipped 5s default. NO
+    -- UNBOUNDED TRAP either way: client/pursuitsprint.lua's own end-timer,
+    -- generation guard, and onResourceStop reset are UNCHANGED by this
+    -- tunable's existence -- every one of those already reads whatever
+    -- duration/multiplier this specific grant actually carried, never a
+    -- live Config re-read mid-burst, so a tablet edit landing while a burst
+    -- is already running cannot strand anyone at a stale value (there is
+    -- nothing stale to strand -- the running burst was never going to
+    -- re-read Config again regardless). cooldownMs remains EXCLUDED (baked
+    -- into PursuitCooldown's own NewCooldown constructor).
     ['PursuitSprint.requestRangeMeters']        = { path = { 'PursuitSprint', 'requestRangeMeters' },            min = 5.0,   max = 100.0,     integer = false },
+    ['PursuitSprint.speedMultiplier']           = { path = { 'PursuitSprint', 'speedMultiplier' },                min = 1.0,   max = 3.0,       integer = false },
+    ['PursuitSprint.durationMs']                = { path = { 'PursuitSprint', 'durationMs' },                     min = 500,   max = 30000,     integer = true },
 
     -- server/sarcalls.lua (Config.Features.SARCalls, rawtoplevel).
     -- `local tuning = Config.SARCalls` is a live reference; RollSarTarget/
@@ -916,18 +959,58 @@ local TUNABLE_REGISTRY = {
     -- tick-loop body that consumes it, confirmed by direct read.
     -- tickIntervalMs is EXCLUDED -- captured once into TICK_INTERVAL_MS,
     -- feeding the shared tick thread's own Wait() and every dtSeconds
-    -- calculation. Fatigue.*/Mood.performancePenalty*/
-    -- Injury.speedPenaltyMultiplier/Injury.jumpBlockThreshold/
-    -- Injury.sprintBlockThreshold are ALL EXCLUDED -- grepped zero
-    -- occurrences anywhere in server/wellbeing.lua outside comments; every
-    -- one of these move-rate/input-block values is applied entirely by
+    -- calculation.
+    --
+    -- Fatigue.speedPenaltyThreshold/speedPenaltyMultiplier,
+    -- Mood.performancePenaltyThreshold/performancePenaltyMultiplier, and
+    -- Injury.sprintBlockThreshold/jumpBlockThreshold/speedPenaltyMultiplier
+    -- -- FORMERLY EXCLUDED, NOW INCLUDED (this pass, "make the speed boost
+    -- and stamina numbers genuinely editable" task, widened by the owner to
+    -- every K9 stat). THE OLD EXCLUSION WAS CORRECT WHEN WRITTEN: these
+    -- seven move-rate/input-block values used to be applied entirely by
     -- client/movement.lua and client/wellbeing.lua reading their own
-    -- shared_scripts copy, the same "independent client copy, no server
-    -- enforcement point" shape PursuitSprint's speedMultiplier was excluded
-    -- for above (and, per config.lua's own documented incident, exactly the
-    -- kind of value where independently-reasonable-looking numbers already
-    -- compounded into a live balance bug once -- a further reason not to
-    -- offer a live dial this file cannot even confirm reaches the client).
+    -- shared_scripts copy, with no server push of any kind -- "a live dial
+    -- this file cannot even confirm reaches the client" (this comment's own
+    -- prior wording). THE SYNC GAP IS NOW CLOSED, not just asserted closed:
+    -- server/wellbeing.lua's SnapshotOf (the SAME function that already
+    -- piggybacks the five `featureFlags` booleans onto its existing
+    -- `wellbeingUpdate` tick push / `getWellbeingSnapshot` on-demand fetch)
+    -- now ALSO piggybacks these seven numbers as `wellbeingTunables` --
+    -- extending the existing channel, never a new one. client/wellbeing.lua
+    -- mirrors them into `LiveWellbeingTunables` and reads that instead of
+    -- its own static Config copy at every point of use (see that file's own
+    -- header "LIVE WELLBEING TUNABLES" for the full writeup, including the
+    -- MID-EFFECT decision: unlike PursuitSprint's one-shot grant, these are
+    -- continuous per-tick judgments re-evaluated every tick regardless, so a
+    -- live edit updates an ALREADY-APPLIED penalty/block on its very next
+    -- recompute rather than waiting for a fresh grant -- the right choice
+    -- for a value class server/wellbeing.lua's own tick loop was already
+    -- re-deciding from scratch every cycle). RANGES: every *Threshold below
+    -- is bounded to [1, 99] -- never 0 (a non-positive threshold could never
+    -- misread as "always on" the way a cooldown does, since a stat can be 0
+    -- but never negative, but 0 would still mean "only exactly-zero
+    -- triggers it", a degenerate no-op nobody configuring this dial would
+    -- intend) and never >= 100 (this resource's own shipped `max` for each
+    -- of these three stats), so a threshold can never be set to the exact
+    -- ceiling value where it would read as "the penalty applies to every
+    -- non-maximum stat value" by surprise. Every *Multiplier below is
+    -- bounded to [0.1, 1.0] -- the floor of 0.1 matches
+    -- client/movement.lua's own RecomputeK9MoveRate() composer floor (that
+    -- file's "CLAMP RANGE [0.1, 2.0]" header) so this tunable is never
+    -- itself the source of a non-positive/zero move-rate input; the ceiling
+    -- of 1.0 keeps a "penalty" multiplier from being configured into an
+    -- accidental BUFF (a value above 1.0 would speed the K9 up while
+    -- supposedly penalizing it -- nonsensical for this field's own documented
+    -- purpose, refused outright rather than silently accepted). NO
+    -- UNBOUNDED TRAP: neither this registry's own range check nor the
+    -- client-side mirror change anything about client/wellbeing.lua's
+    -- existing, UNCHANGED removal paths (LiveFeatureFlags gating that
+    -- already resets each modifier to 1.0 the instant its owning flag is
+    -- off, the Injury block thread's own per-iteration re-check, this file's
+    -- own onResourceStop-independent nature since these are pure config
+    -- reads with no per-effect state of their own to leak) -- a live edit to
+    -- any of these seven can only ever change WHICH threshold/multiplier the
+    -- existing, already-reviewed removal machinery uses, never bypass it.
     -- Fatigue.max/Mood.max/FearStress.max/Injury.max are ALSO EXCLUDED even
     -- though several are read live server-side -- each stat's `max` is ALSO
     -- read independently by the client for its own HUD gauge scaling, and a
@@ -946,16 +1029,23 @@ local TUNABLE_REGISTRY = {
     -- that same mechanic (a handler calming their OWN K9) and are kept --
     -- widening them only ever helps the victim of that exploit, never the
     -- forger.
+    ['Wellbeing.Fatigue.speedPenaltyThreshold']  = { path = { 'Wellbeing', 'Fatigue', 'speedPenaltyThreshold' },  min = 1,     max = 99,        integer = false },
+    ['Wellbeing.Fatigue.speedPenaltyMultiplier'] = { path = { 'Wellbeing', 'Fatigue', 'speedPenaltyMultiplier' }, min = 0.1,   max = 1.0,       integer = false },
     ['Wellbeing.Mood.damageDecayAmount']        = { path = { 'Wellbeing', 'Mood', 'damageDecayAmount' },         min = 1,     max = 100,       integer = true },
     ['Wellbeing.Mood.petCooldownMs']            = { path = { 'Wellbeing', 'Mood', 'petCooldownMs' },             min = 1000,  max = 120000,    integer = true },
     ['Wellbeing.Mood.petRegenAmount']           = { path = { 'Wellbeing', 'Mood', 'petRegenAmount' },            min = 1,     max = 100,       integer = true },
     ['Wellbeing.Mood.feedRegenAmount']          = { path = { 'Wellbeing', 'Mood', 'feedRegenAmount' },           min = 1,     max = 100,       integer = true },
     ['Wellbeing.Mood.passiveRegenPerTick']      = { path = { 'Wellbeing', 'Mood', 'passiveRegenPerTick' },       min = 0.1,   max = 20.0,      integer = false },
+    ['Wellbeing.Mood.performancePenaltyThreshold']  = { path = { 'Wellbeing', 'Mood', 'performancePenaltyThreshold' },  min = 1,   max = 99,  integer = false },
+    ['Wellbeing.Mood.performancePenaltyMultiplier'] = { path = { 'Wellbeing', 'Mood', 'performancePenaltyMultiplier' }, min = 0.1, max = 1.0, integer = false },
     ['Wellbeing.FearStress.calmDownReduceAmount'] = { path = { 'Wellbeing', 'FearStress', 'calmDownReduceAmount' }, min = 1,  max = 100,       integer = true },
     ['Wellbeing.FearStress.calmDownCooldownMs'] = { path = { 'Wellbeing', 'FearStress', 'calmDownCooldownMs' },  min = 1000,  max = 120000,    integer = true },
     ['Wellbeing.FearStress.passiveDecayPerTick'] = { path = { 'Wellbeing', 'FearStress', 'passiveDecayPerTick' }, min = 0.1,  max = 20.0,      integer = false },
     ['Wellbeing.Injury.damageDecayAmount']      = { path = { 'Wellbeing', 'Injury', 'damageDecayAmount' },       min = 1,     max = 100,       integer = true },
     ['Wellbeing.Injury.passiveRegenPerTick']    = { path = { 'Wellbeing', 'Injury', 'passiveRegenPerTick' },     min = 0.1,   max = 20.0,      integer = false },
+    ['Wellbeing.Injury.sprintBlockThreshold']   = { path = { 'Wellbeing', 'Injury', 'sprintBlockThreshold' },    min = 1,     max = 99,        integer = false },
+    ['Wellbeing.Injury.jumpBlockThreshold']     = { path = { 'Wellbeing', 'Injury', 'jumpBlockThreshold' },      min = 1,     max = 99,        integer = false },
+    ['Wellbeing.Injury.speedPenaltyMultiplier'] = { path = { 'Wellbeing', 'Injury', 'speedPenaltyMultiplier' },  min = 0.1,   max = 1.0,       integer = false },
     -- config.lua's own comment on this exact field: "CONFIGURABLE: set to 0
     -- to disable entirely... or any value in [0, Injury.max]" -- the [0,100]
     -- bound below is not this pass's own judgment call, it is that comment's

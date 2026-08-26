@@ -136,6 +136,17 @@ local function newFixture(opts)
     local officerLeashDetachCalls = {}  -- ForceDetachOfficerLeashForSource(src, reason)
     local partnershipBreakCalls = {}    -- ForceBreakPartnershipForCitizenId(citizenid, reason)
     local effectEndCalls = {}           -- EndActiveEffectForHolder(src) -- server/combat.lua, called via pcall at every "must not outlive certification" call site in the production file; never previously stubbed/observed by this spec (opts.includeEffectHook, default true, mirrors opts.includePartnershipHook's own existence-guard test below)
+    -- APPEARANCE HOOK (coder-security, this pass -- "prove role and model
+    -- are genuinely separate, everywhere" audit): ApplyK9AppearanceOnGrant/
+    -- MaybeRevertK9Appearance (server/appearance.lua) were found completely
+    -- unwired in this file despite that file's own header documenting them
+    -- as called from here -- see certifications.lua's own newly-added
+    -- FILE-TO-FILE CONTRACT entry for the full writeup. Same
+    -- runtime-existence-guard convention/opt-out shape as
+    -- includePartnershipHook/includeEffectHook above (opts.includeAppearanceHook,
+    -- default true).
+    local appearanceApplyCalls = {}   -- ApplyK9AppearanceOnGrant(targetCitizenid, granterCitizenid, modelName?)
+    local appearanceRevertCalls = {}  -- MaybeRevertK9Appearance(citizenid)
 
     local playersBySource = {}
     local playersByCitizenId = {}
@@ -326,6 +337,16 @@ local function newFixture(opts)
             effectEndCalls[#effectEndCalls + 1] = src
         end
     end
+    -- See appearanceApplyCalls/appearanceRevertCalls's own declaration-site
+    -- comment above for the full writeup.
+    if opts.includeAppearanceHook ~= false then
+        overrides.ApplyK9AppearanceOnGrant = function(targetCitizenid, granterCitizenid, modelName)
+            appearanceApplyCalls[#appearanceApplyCalls + 1] = { targetCitizenid, granterCitizenid, modelName }
+        end
+        overrides.MaybeRevertK9Appearance = function(citizenid)
+            appearanceRevertCalls[#appearanceRevertCalls + 1] = citizenid
+        end
+    end
 
     local env = Sandbox.newEnv(overrides)
 
@@ -354,6 +375,8 @@ local function newFixture(opts)
         officerLeashDetachCalls = officerLeashDetachCalls,
         partnershipBreakCalls = partnershipBreakCalls,
         effectEndCalls = effectEndCalls,
+        appearanceApplyCalls = appearanceApplyCalls,
+        appearanceRevertCalls = appearanceRevertCalls,
         registerPlayer = registerPlayer,
         disconnectPlayer = disconnectPlayer,
         setPed = setPed,
@@ -847,6 +870,141 @@ t.test('GrantCertification: full success path -- INSERT fires once, cache reflec
     t.isTrue(firedGrant, 'the outbound integration event must fire only after the INSERT + cache refresh already committed')
 end)
 
+-- ======================================================================
+-- SECURITY FIX (coder-security, this pass -- "prove role and model are
+-- genuinely separate, everywhere" audit): ApplyK9AppearanceOnGrant/
+-- MaybeRevertK9Appearance (server/appearance.lua) were documented, in that
+-- file's own header, as being called from THIS file's grant/revoke paths --
+-- but were never actually wired in anywhere here until this pass. See
+-- certifications.lua's own newly-added FILE-TO-FILE CONTRACT entry for the
+-- full writeup. These tests pin the new wiring at every call site this pass
+-- touched.
+-- ======================================================================
+
+t.test('GrantCertification: APPEARANCE FIX -- with Config.K9Appearance.applyPedModelOnCertify on, a successful online grant calls ApplyK9AppearanceOnGrant(targetCitizenid, granterCitizenid)', function()
+    local f = newFixture({ k9Appearance = { applyPedModelOnCertify = true } })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    t.equals(#f.appearanceApplyCalls, 1, 'a plain /k9certify grant must apply the K9 ped, exactly like a k9.access permission grant already does')
+    t.equals(f.appearanceApplyCalls[1][1], 'TARGET')
+    t.equals(f.appearanceApplyCalls[1][2], 'GRANTER')
+    t.isNil(f.appearanceApplyCalls[1][3], 'this function carries no explicit model choice of its own -- ApplyK9AppearanceOnGrant\'s own Config.Peds[1].model default must apply, same as the k9.access-grant path')
+end)
+
+t.test('GrantCertification: APPEARANCE FIX -- the role-holder ends up on an ORDINARY HUMAN BODY (no configured K9 model) and the certification/appearance-apply still both succeed -- role and model are genuinely independent', function()
+    -- Config.K9Appearance.requireK9ModelForRole is absent (shipped default,
+    -- false) -- the target's LIVE ped model is deliberately NOT a
+    -- configured K9 model at all, proving the grant (and its automatic
+    -- appearance-apply side effect) is not gated on, or blocked by, the
+    -- target's current body.
+    local f = newFixture({ k9Appearance = { applyPedModelOnCertify = true } })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), NON_K9_HASH) -- an ordinary human body, not a Config.Peds model
+
+    -- Same "pre-check sees nothing, post-insert refresh sees the row this
+    -- INSERT just created" scalar-call-count stub as the pre-existing "full
+    -- success path" test above -- otherwise RefreshCertificationCache's own
+    -- post-insert re-query would (incorrectly, only for this stub's sake)
+    -- read back as inactive and HasK9Access(20) would be a false negative
+    -- unrelated to the appearance wiring this test actually exercises.
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        if scalarCallCount == 1 then return nil end
+        return 77
+    end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    t.isTrue(f.env.HasK9Access(20), 'the ROLE must be granted regardless of the target\'s CURRENT model')
+    t.equals(#f.appearanceApplyCalls, 1, 'the automatic appearance-apply side effect must still fire for a human-bodied role-holder -- it is what is SUPPOSED to turn them into the ped, not a check that refuses because they are not one yet')
+    t.equals(f.appearanceApplyCalls[1][1], 'TARGET')
+end)
+
+t.test('GrantCertification: APPEARANCE FIX -- with Config.K9Appearance.applyPedModelOnCertify explicitly false, the appearance-apply hook is never called', function()
+    local f = newFixture({ k9Appearance = { applyPedModelOnCertify = false } })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        if scalarCallCount == 1 then return nil end
+        return 77
+    end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    t.isTrue(f.env.HasK9Access(20), 'the role itself must still be granted -- only the automatic appearance side effect is opted out')
+    t.equals(#f.appearanceApplyCalls, 0)
+end)
+
+t.test('GrantCertification: APPEARANCE FIX -- with Config.K9Appearance entirely absent (a config predating this feature), the appearance-apply hook is never called -- no crash, no behavior change from before this pass', function()
+    local f = newFixture() -- no k9Appearance opt at all -- Config.K9Appearance is nil
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        if scalarCallCount == 1 then return nil end
+        return 77
+    end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:certifyHandler'](20)
+
+    t.isTrue(f.env.HasK9Access(20))
+    t.equals(#f.appearanceApplyCalls, 0)
+end)
+
+t.test('GrantCertification: APPEARANCE FIX -- the runtime existence guard genuinely tolerates ApplyK9AppearanceOnGrant being entirely absent (server/appearance.lua not loaded)', function()
+    local f = newFixture({ k9Appearance = { applyPedModelOnCertify = true }, includeAppearanceHook = false })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'TARGET', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1000, vec3(0, 0, 0))
+    f.setPed(20, 2000, vec3(1, 0, 0), K9_HASH_SHEPHERD)
+
+    local scalarCallCount = 0
+    f.mysql.scalar.await = function()
+        scalarCallCount = scalarCallCount + 1
+        if scalarCallCount == 1 then return nil end
+        return 77
+    end
+
+    f.setSource(10)
+    local ok = pcall(f.events['qbx_k9unit:server:certifyHandler'], 20)
+
+    t.isTrue(ok, 'a missing soft dependency must never throw out of the grant path')
+    t.isTrue(f.env.HasK9Access(20), 'the grant itself must still succeed with server/appearance.lua entirely absent')
+end)
+
+t.test('GrantCertificationOffline: APPEARANCE FIX -- with Config.K9Appearance.applyPedModelOnCertify on, a successful offline grant (/k9certifyoffline) calls ApplyK9AppearanceOnGrant(citizenid, granterCitizenid) too -- closes the "only one of the two doors" asymmetry', function()
+    local f = newFixture({ k9Appearance = { applyPedModelOnCertify = true } })
+    f.registerPlayer(10, 'GRANTER', { name = 'police', isboss = true })
+    -- TARGET intentionally never registered -- genuinely offline.
+
+    f.commands['k9certifyoffline'].fn(10, { 'TARGET', 'police' })
+
+    t.equals(#f.appearanceApplyCalls, 1, 'an offline /k9certifyoffline grant must apply the K9 ped exactly like the online path -- ApplyK9AppearanceOnGrant/SendSwapRequest already handle a currently-offline target on their own')
+    t.equals(f.appearanceApplyCalls[1][1], 'TARGET')
+    t.equals(f.appearanceApplyCalls[1][2], 'GRANTER')
+end)
+
 -- ----------------------------------------------------------------------
 -- CertificationExpiry (Config.Features.CertificationExpiry) -- traced
 -- end-to-end from GrantCertification's own INSERT through to the cache,
@@ -1139,6 +1297,67 @@ t.test('RevokeCertification: full online success path -- UPDATE fires with the g
         if ev[1] == 'qbx_k9unit:events:certificationRevoked' and ev[2] == 'REVOKEE' and ev[3] == 'police' and ev[4] == 'manual' then fired = true end
     end
     t.isTrue(fired)
+end)
+
+-- ======================================================================
+-- SECURITY FIX (coder-security, this pass) -- MaybeRevertK9Appearance was
+-- documented (server/appearance.lua's own header) as being called from this
+-- file's five "K9-role access just, provably, ended" sites, but never
+-- actually was. MID-STATE REVERSION MATTERS HERE: without this call, a
+-- citizenid whose ONLY route to the role was this exact certification (no
+-- separate 'k9.access' permission grant) would keep the K9 ped model
+-- forever after being revoked -- stranded, per this pass's own brief.
+-- ======================================================================
+
+t.test('RevokeCertification: APPEARANCE FIX -- a full online revoke calls MaybeRevertK9Appearance(targetCitizenid), so a citizenid whose ONLY route to the role was this certification is never stranded on the K9 model', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('REVOKEE', 'police')
+
+    f.mysql.update.await = function() return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    f.setSource(10)
+    f.events['qbx_k9unit:server:revokeHandler'](20)
+
+    t.equals(#f.appearanceRevertCalls, 1)
+    t.equals(f.appearanceRevertCalls[1], 'REVOKEE')
+end)
+
+t.test('RevokeCertification: APPEARANCE FIX -- the runtime existence guard genuinely tolerates MaybeRevertK9Appearance being entirely absent (server/appearance.lua not loaded)', function()
+    local f = newFixture({ includeAppearanceHook = false })
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    f.registerPlayer(20, 'REVOKEE', { name = 'police', grade = { level = 1 } })
+    f.setPed(10, 1010, vec3(0, 0, 0))
+    f.setPed(20, 1020, vec3(0, 0, 0))
+    f.mysql.scalar.await = function() return 5 end
+    f.env.RefreshCertificationCache('REVOKEE', 'police')
+
+    f.mysql.update.await = function() return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    f.setSource(10)
+    local ok = pcall(f.events['qbx_k9unit:server:revokeHandler'], 20)
+
+    t.isTrue(ok, 'a missing soft dependency must never throw out of the revoke path')
+    t.isFalse(f.env.HasK9Access(20), 'the revoke itself must still succeed with server/appearance.lua entirely absent')
+end)
+
+t.test('RevokeCertificationOffline: APPEARANCE FIX -- an offline revoke (/k9decertifyoffline) also calls MaybeRevertK9Appearance(citizenid)', function()
+    local f = newFixture()
+    f.registerPlayer(10, 'REVOKER', { name = 'police', isboss = true })
+    -- REVOKEE intentionally never registered -- genuinely offline.
+    f.mysql.update.await = function() return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    f.commands['k9decertifyoffline'].fn(10, { 'REVOKEE', 'police' })
+
+    t.equals(#f.appearanceRevertCalls, 1)
+    t.equals(f.appearanceRevertCalls[1], 'REVOKEE')
 end)
 
 t.test('RevokeCertification: a target holding no active cert for that department is a distinguishable no-op, not a silent success', function()
@@ -1480,6 +1699,21 @@ t.test('OnJobUpdate: FIX -- a same-department demotion below autoAccessGrade, fo
     t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][2], 'k9_access_lost')
 end)
 
+t.test('OnJobUpdate: APPEARANCE FIX -- a same-department demotion below autoAccessGrade (no cached cert) also calls MaybeRevertK9Appearance, so an autoAccessGrade-only role-holder is never stranded on the K9 model after losing the grade', function()
+    local f = newFixture({ departments = {
+        police = { label = 'Police', certifierGrade = 4, autoAccessGrade = 5 },
+    } })
+    f.registerPlayer(90, 'CIT90', { name = 'police', grade = { level = 5 } })
+    f.mysql.scalar.await = function() return nil end
+    f.env.RefreshCertificationCache('CIT90', 'police')
+    t.isTrue(f.env.HasK9Access(90))
+
+    fireJobUpdate(f, 90, { name = 'police', grade = { level = 3 } })
+
+    t.equals(#f.appearanceRevertCalls, 1)
+    t.equals(f.appearanceRevertCalls[1], 'CIT90')
+end)
+
 t.test('OnJobUpdate: FIX -- a same-department demotion that STAYS at/above autoAccessGrade does nothing (access genuinely unchanged)', function()
     local f = newFixture({ departments = {
         police = { label = 'Police', certifierGrade = 4, autoAccessGrade = 5 },
@@ -1571,6 +1805,22 @@ t.test('OnJobUpdate: a REAL department change revokes the old cert, re-scopes th
         if ev[1] == 'qbx_k9unit:events:certificationRevoked' and ev[2] == 'CIT40' and ev[3] == 'police' and ev[4] == 'job_changed' then fired = true end
     end
     t.isTrue(fired)
+end)
+
+t.test('OnJobUpdate: APPEARANCE FIX -- a real department (job-name) change that auto-revokes the old certification also calls MaybeRevertK9Appearance, closing the last of the five "K9-role access just ended" sites that never wired it', function()
+    local f = newFixture()
+    f.registerPlayer(40, 'CIT40', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 9 end
+    f.env.RefreshCertificationCache('CIT40', 'police')
+    t.isTrue(f.env.HasK9Access(40))
+
+    f.mysql.update.await = function() return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    fireJobUpdate(f, 40, { name = 'sheriff', grade = { level = 1 } })
+
+    t.equals(#f.appearanceRevertCalls, 1)
+    t.equals(f.appearanceRevertCalls[1], 'CIT40')
 end)
 
 t.test('OnJobUpdate: losing department membership entirely (new job not in Config.Departments) force-detaches the OFFICER-role leash even with no cert of the player\'s own', function()
@@ -1667,6 +1917,45 @@ t.test('OnJobUpdate: FIFTH-GAP FIX -- a K9-role party with autoAccessGrade-only 
     -- a replacement of it.
     t.equals(f.officerLeashDetachCalls[#f.officerLeashDetachCalls][1], 95)
     t.equals(f.officerLeashDetachCalls[#f.officerLeashDetachCalls][2], 'department_changed')
+end)
+
+t.test('OnJobUpdate: APPEARANCE FIX -- losing department membership entirely also calls MaybeRevertK9Appearance for the K9-role citizenid (autoAccessGrade/permission-grant-only access, no certification row at all, is exactly the case with no OTHER call site left to ever revert it)', function()
+    local f = newFixture({
+        departments = {
+            police = { label = 'Police Department', certifierGrade = 4, autoAccessGrade = 5 },
+        },
+    })
+    f.registerPlayer(95, 'CIT95', { name = 'police', grade = { level = 5 } })
+    t.isTrue(f.env.HasK9Access(95), 'sanity: autoAccessGrade alone grants K9 access with zero certification cache entry')
+
+    fireJobUpdate(f, 95, { name = 'taxi', grade = { level = 5 } })
+
+    t.equals(#f.appearanceRevertCalls, 1)
+    t.equals(f.appearanceRevertCalls[1], 'CIT95')
+end)
+
+t.test('OnJobUpdate: APPEARANCE FIX -- department loss with a STILL-ACTIVE certification row correctly defers the revert to the later job-name-change branch instead of double-firing here (MaybeRevertK9Appearance itself is idempotent/reconciling, so calling it from both branches is safe either way)', function()
+    local f = newFixture()
+    f.registerPlayer(60, 'CIT60', { name = 'police', grade = { level = 1 } })
+    f.mysql.scalar.await = function() return 1 end
+    f.env.RefreshCertificationCache('CIT60', 'police')
+
+    f.mysql.update.await = function() return 1 end
+    f.mysql.scalar.await = function() return nil end
+
+    fireJobUpdate(f, 60, { name = 'taxi', grade = { level = 1 } })
+
+    -- Both the department-loss branch AND the job-name-change cert-revoke
+    -- branch fire for this exact scenario (see the pre-existing "BOTH the
+    -- officer-role leash detach AND the cert-revoke leash detach" test
+    -- above) -- MaybeRevertK9Appearance is called from both, but the stub
+    -- here simply records every call rather than de-duplicating, so this
+    -- pins the OBSERVED count (2) rather than assuming a single call site
+    -- wins, matching this file's own "pinned as observed, not assumed
+    -- exclusive" precedent for the leash-detach calls in that sibling test.
+    t.equals(#f.appearanceRevertCalls, 2)
+    t.equals(f.appearanceRevertCalls[1], 'CIT60')
+    t.equals(f.appearanceRevertCalls[2], 'CIT60')
 end)
 
 t.test('OnJobUpdate: the runtime existence guard genuinely tolerates ForceBreakPartnershipForCitizenId being entirely absent (server/partnership.lua not loaded / feature off)', function()

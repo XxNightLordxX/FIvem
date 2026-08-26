@@ -240,12 +240,17 @@ local function newServerFixture(opts)
         setPedCoords = function(entity, x, y, z) pedCoords[entity] = vec3(x, y, z) end,
         --- Dispatches the real captured 'qbx_k9unit:server:requestPursuitSprint'
         --- handler with `env.source` set to `src`, mirroring
-        --- tests/recall_spec.lua's own `dispatch` helper exactly.
-        dispatch = function(src, targetNetId)
+        --- tests/recall_spec.lua's own `dispatch` helper exactly. Accepts
+        --- (and forwards) any EXTRA trailing arguments beyond targetNetId --
+        --- the real handler's own signature is `function(targetNetId)`, so
+        --- Lua silently discards anything past the first argument, exactly
+        --- as it would for a modified client trying to smuggle extra values
+        --- onto this event -- see the "A CLIENT CLAIMING A VALUE..." test.
+        dispatch = function(src, targetNetId, ...)
             env.source = src
             local handler = assert(capturedEvents['qbx_k9unit:server:requestPursuitSprint'],
                 'server/pursuitsprint.lua did not register qbx_k9unit:server:requestPursuitSprint')
-            handler(targetNetId)
+            handler(targetNetId, ...)
         end,
         firePlayerDropped = function(src)
             env.source = src
@@ -494,7 +499,7 @@ end)
 -- Happy path + ANY PED / role-only gating
 -- ------------------------------------------------------------------
 
-t.test('HAPPY PATH: a certified K9, in range, against a wanted player target, with a real feature grant, is GRANTED -- TriggerClientEvent fires, no payload', function()
+t.test('HAPPY PATH: a certified K9, in range, against a wanted player target, with a real feature grant, is GRANTED -- TriggerClientEvent fires, carrying the live speedMultiplier/durationMs payload', function()
     local f = newServerFixture()
     f.registerPlayer(1, 'K9-CID', 100, nil)
     f.registerPlayer(2, 'TARGET-CID', 200, { wanted = true })
@@ -508,8 +513,57 @@ t.test('HAPPY PATH: a certified K9, in range, against a wanted player target, wi
     t.equals(#f.triggerClientEventCalls, 1)
     t.equals(f.triggerClientEventCalls[1].name, 'qbx_k9unit:client:pursuitSprintGranted')
     t.equals(f.triggerClientEventCalls[1].target, 1)
-    t.equals(#f.triggerClientEventCalls[1].args, 0, 'the grant event must carry NO payload -- see this file\'s own header on why')
+    t.equals(#f.triggerClientEventCalls[1].args, 2, 'the grant event now carries a 2-value payload (speedMultiplier, durationMs) -- see this file\'s own header "EVENT CONTRACT" on why')
+    t.equals(f.triggerClientEventCalls[1].args[1], REAL_SPEED_MULTIPLIER, 'must send the LIVE Config.PursuitSprint.speedMultiplier at the moment of grant')
+    t.equals(f.triggerClientEventCalls[1].args[2], REAL_DURATION_MS, 'must send the LIVE Config.PursuitSprint.durationMs at the moment of grant')
     t.isNil(lastNotifyFor(f, 1), 'a successful grant sends no NotifyPlayer at all -- only TriggerClientEvent')
+end)
+
+t.test('LIVE TUNABLE SYNC: a live edit to Config.PursuitSprint.speedMultiplier/durationMs (mirroring a server/runtimecontrol.lua SetTunable call) between two requests reaches the SECOND grant\'s own payload, never retroactively touching the first', function()
+    local f = newServerFixture()
+    f.registerPlayer(1, 'K9-CID', 100, nil)
+    f.registerPlayer(2, 'TARGET-CID', 200, { wanted = true })
+    f.grantPermission('K9-CID', 'feature.PursuitSprint', true)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setPedCoords(200, 1, 0, 0)
+    f.registerTargetNetId(9001, 200)
+
+    f.dispatch(1, 9001)
+    t.equals(f.triggerClientEventCalls[1].args[1], REAL_SPEED_MULTIPLIER)
+    t.equals(f.triggerClientEventCalls[1].args[2], REAL_DURATION_MS)
+
+    -- Simulate a tablet tunable edit landing mid-session -- SetTunable's own
+    -- real effect is exactly this: mutating Config.PursuitSprint in place.
+    f.Config.PursuitSprint.speedMultiplier = 2.0
+    f.Config.PursuitSprint.durationMs = 9000
+
+    f.advance(REAL_COOLDOWN_MS)
+    f.dispatch(1, 9001)
+    t.equals(#f.triggerClientEventCalls, 2)
+    t.equals(f.triggerClientEventCalls[2].args[1], 2.0, 'the SECOND grant must reflect the newly-edited multiplier')
+    t.equals(f.triggerClientEventCalls[2].args[2], 9000, 'the SECOND grant must reflect the newly-edited duration')
+    t.equals(f.triggerClientEventCalls[1].args[1], REAL_SPEED_MULTIPLIER, 'the FIRST grant\'s own already-sent payload must never be retroactively rewritten')
+end)
+
+t.test('A CLIENT CLAIMING A VALUE IT WAS NOT SENT CHANGES NOTHING SERVER-SIDE: extra client-supplied arguments on the request event are ignored -- the grant payload is always decided from live server Config, never from anything the requesting client sent', function()
+    local f = newServerFixture()
+    f.registerPlayer(1, 'K9-CID', 100, nil)
+    f.registerPlayer(2, 'TARGET-CID', 200, { wanted = true })
+    f.grantPermission('K9-CID', 'feature.PursuitSprint', true)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setPedCoords(200, 5, 0, 0)
+    f.registerTargetNetId(9001, 200)
+
+    -- The real 'qbx_k9unit:server:requestPursuitSprint' handler signature is
+    -- `function(targetNetId)` -- it never declares a second parameter, so
+    -- any extra argument a modified client sends is simply discarded by Lua
+    -- at the call boundary, never reaching anything that could act on it.
+    -- This dispatches through the SAME captured real handler with bogus
+    -- extra arguments appended, proving the payload is unaffected.
+    f.dispatch(1, 9001, 999.0, 1)
+    t.equals(#f.triggerClientEventCalls, 1)
+    t.equals(f.triggerClientEventCalls[1].args[1], REAL_SPEED_MULTIPLIER, 'must be the server\'s own live Config value, never the bogus 999.0 the client tried to smuggle in')
+    t.equals(f.triggerClientEventCalls[1].args[2], REAL_DURATION_MS, 'must be the server\'s own live Config value, never the bogus 1 the client tried to smuggle in')
 end)
 
 t.test('ANY PED: HasK9Access(src) is the ONLY role check -- this file never reads GetEntityModel/IsEntityModelK9/IsOwnModelK9 anywhere (grep-provable, re-asserted here behaviorally): a request from a source with NO ped-model stub registered at all still resolves purely on HasK9Access', function()
@@ -1178,12 +1232,19 @@ local function newClientFixture(opts)
         end,
         --- Dispatches the real captured 'qbx_k9unit:client:pursuitSprintGranted'
         --- handler with `env.source` set, mirroring every other spec's
-        --- SOURCE-ORIGIN GUARD test convention in this suite.
-        dispatchGrant = function(src)
+        --- SOURCE-ORIGIN GUARD test convention in this suite. `speedMultiplier`/
+        --- `durationMs` are OPTIONAL -- omitted (nil), the real server would
+        --- never actually send nil for either (server/pursuitsprint.lua
+        --- always sends real numbers), but this fixture allows it so every
+        --- PRE-EXISTING test below (written before this event carried a
+        --- payload) keeps exercising the exact same fallback-to-this-client's-
+        --- own-Config-default behavior it always implicitly relied on -- see
+        --- ResolveGrantedPositiveNumber's own doc comment in the real file.
+        dispatchGrant = function(src, speedMultiplier, durationMs)
             env.source = src
             local handler = assert(capturedEvents['qbx_k9unit:client:pursuitSprintGranted'],
                 'client/pursuitsprint.lua did not register qbx_k9unit:client:pursuitSprintGranted')
-            handler()
+            handler(speedMultiplier, durationMs)
         end,
         --- Fires EVERY captured onResourceStop handler, matching what a real
         --- resource stop actually does -- client/movement.lua's own THREE
@@ -1350,6 +1411,61 @@ t.test('genuine grant (source == 65535), already on a K9 model: applies the mult
     t.equals(#f.notifyCalls, 1)
     t.equals(f.notifyCalls[1].description, locale('pursuitsprint.activated'))
     t.equals(f.notifyCalls[1].type, 'success')
+end)
+
+-- ------------------------------------------------------------------
+-- PAYLOAD APPLICATION -- this file now applies WHATEVER THE SERVER SENT,
+-- not this client's own local Config.PursuitSprint copy. See this file's
+-- header "EVENT CONTRACT" for the full writeup on why.
+-- ------------------------------------------------------------------
+
+t.test('PAYLOAD APPLIED, NOT LOCAL CONFIG: a grant carrying a DIFFERENT speedMultiplier/durationMs than this client\'s own Config.PursuitSprint applies the SENT values -- proving a live tablet edit reaches an already-connected K9 on its next grant', function()
+    local f = newClientFixture() -- this client's own Config: speedMultiplier=1.4, durationMs=300
+    -- 1.8, not 2.5: stays inside client/movement.lua's own [0.1, 2.0]
+    -- composed-rate ceiling so this test proves THIS file applied the sent
+    -- value, uncomplicated by that separate, already-covered clamp (see the
+    -- dedicated "ABSURD PAYLOAD" test below for the clamp itself).
+    f.dispatchGrant(65535, 1.8, 500) -- server-sent values, deliberately different from this client's own config
+    t.equals(f.K9MoveRateModifiers.pursuitSprint, 1.8, 'must apply the SENT multiplier, not this client\'s own 1.4 default')
+    t.equals(f.setMoveRateCalls[1].rate, 1.8)
+
+    -- End-timer must honor the SENT duration (500ms = 5 ticks of 100ms),
+    -- not this client's own local 300ms (3 ticks) default.
+    f.runner.step() -- prime
+    f.runner.step() -- 100
+    f.runner.step() -- 200
+    f.runner.step() -- 300 -- would have ended here under the LOCAL 300ms default -- must still be boosted
+    t.equals(f.K9MoveRateModifiers.pursuitSprint, 1.8, 'must still be boosted past the client\'s own local durationMs default -- the SENT duration (500ms) governs')
+    f.runner.step() -- 400
+    f.runner.step() -- 500 -- the SENT duration's own end
+    t.equals(f.K9MoveRateModifiers.pursuitSprint, 1.0, 'must reset once the SENT duration (500ms), not the local default, elapses')
+end)
+
+t.test('MALFORMED PAYLOAD FALLS BACK, NEVER CRASHES, NEVER APPLIES THE BAD VALUE: every rejected shape (zero, negative, NaN, wrong type) falls back to this client\'s own Config.PursuitSprint default', function()
+    local cases = {
+        { label = 'zero',          value = 0 },
+        { label = 'negative',      value = -1.4 },
+        { label = 'NaN',           value = 0/0 },
+        { label = 'wrong type (string)', value = 'not-a-number' },
+        { label = 'wrong type (table)',  value = {} },
+        { label = 'wrong type (boolean)', value = true },
+    }
+    for _, case in ipairs(cases) do
+        local f = newClientFixture()
+        local ok = pcall(f.dispatchGrant, 65535, case.value, case.value)
+        t.isTrue(ok, ('a malformed payload (%s) must never error the grant handler'):format(case.label))
+        t.equals(f.K9MoveRateModifiers.pursuitSprint, REAL_SPEED_MULTIPLIER,
+            ('%s speedMultiplier must fall back to this client\'s own Config default, never apply the bad value'):format(case.label))
+        t.equals(#f.setMoveRateCalls, 1, ('%s must still grant using the fallback -- a malformed payload degrades safely, it does not cancel the grant'):format(case.label))
+        t.equals(f.setMoveRateCalls[1].rate, REAL_SPEED_MULTIPLIER)
+    end
+end)
+
+t.test('ABSURD (out-of-any-sane-range) PAYLOAD IS ACCEPTED INTO THE MODIFIER, BUT NEVER REACHES THE NATIVE UNCLAMPED -- this file\'s own validation only rejects non-positive/NaN/non-number, it does not re-implement server/runtimecontrol.lua\'s own [min,max] range check (a genuinely out-of-range value could only reach here from a bug elsewhere, since SetTunable itself already refuses it before it can ever be saved); the REAL safety net for an absurd value is client/movement.lua\'s own [0.1, 2.0] composed-rate clamp, proven here against the REAL composer, not a second range check duplicated in this file', function()
+    local f = newClientFixture()
+    f.dispatchGrant(65535, 999999.0, 999999)
+    t.equals(f.K9MoveRateModifiers.pursuitSprint, 999999.0, 'this file itself writes whatever positive/finite number it was sent, unclamped -- clamping is the composer\'s job, not this file\'s')
+    t.equals(f.setMoveRateCalls[1].rate, 2.0, 'client/movement.lua\'s RecomputeK9MoveRate() clamps the composed product to its own [0.1, 2.0] ceiling regardless of how large any single modifier is -- the actual native call never sees the raw 999999.0')
 end)
 
 -- ------------------------------------------------------------------

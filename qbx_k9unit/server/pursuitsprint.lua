@@ -121,12 +121,49 @@
           -- (role, block/grant, live proximity, player-vs-NPC, wanted
           -- status, cooldown).
       Server -> Client:
-        'qbx_k9unit:client:pursuitSprintGranted' ()
-          -- NO PAYLOAD. Config.PursuitSprint.speedMultiplier/durationMs are
-          -- shared_scripts config, already identical on both sides -- this
-          -- event is purely "you are cleared, right now", not a value
-          -- carrier. See client/pursuitsprint.lua's own header for why a
-          -- payload was deliberately not added here.
+        'qbx_k9unit:client:pursuitSprintGranted' (speedMultiplier: number, durationMs: number)
+          -- CARRIES A PAYLOAD NOW -- CHANGED THIS PASS, closing a real
+          -- tablet-tunable sync gap (see server/runtimecontrol.lua's own
+          -- TUNABLE_REGISTRY entries for 'PursuitSprint.speedMultiplier'/
+          -- 'PursuitSprint.durationMs'). This USED TO be a payload-less
+          -- event on the theory that "Config.PursuitSprint.speedMultiplier/
+          -- durationMs are shared_scripts config, already identical on both
+          -- sides" -- true only as long as neither side's copy could ever
+          -- change independently. server/runtimecontrol.lua's own tablet
+          -- can now mutate THIS SERVER's in-memory Config.PursuitSprint
+          -- live, with no mechanism that ever reaches an already-connected
+          -- client's own independent copy of config.lua -- so a payload-less
+          -- grant would have made a live tablet edit a SILENT NO-OP for the
+          -- one thing an operator would actually be trying to change,
+          -- exactly the failure class this resource keeps finding and
+          -- closing. Both values are read fresh off `Config.PursuitSprint`
+          -- at the exact moment a grant is decided (see the request handler
+          -- below) and sent as this event's own payload; the client applies
+          -- WHAT IT WAS SENT, never re-reading its own local config copy for
+          -- these two fields again (client/pursuitsprint.lua's own header
+          -- has the client-side half of this fix).
+          -- LIVE EDIT MID-SPRINT, THE DECISION: a burst ALREADY GRANTED
+          -- keeps the exact multiplier/duration it was granted with for its
+          -- entire lifetime -- these two values are captured ONCE, right
+          -- here, at grant time, never re-read by the client's own end-timer
+          -- or re-pushed mid-burst. A live tablet edit therefore always
+          -- takes effect on the K9's NEXT grant, never retroactively
+          -- reaching over into a burst already in flight. Chosen over
+          -- "update a running burst live" for two concrete reasons: (1) this
+          -- is a short (single-digit seconds), self-terminating grant, not a
+          -- continuous per-tick recomputation like server/wellbeing.lua's
+          -- penalties below -- there is no natural "next tick" moment to
+          -- re-apply a changed value against without inventing a second
+          -- mid-flight message this event's own one-shot "you are cleared,
+          -- right now" semantics were never designed to carry; (2) a boost
+          -- that could change value while already applied would make the
+          -- exact number a K9 is currently benefiting from a moving target
+          -- an operator could shift mid-chase, which is a strictly harder
+          -- thing to reason about fairly than "every grant uses whatever was
+          -- configured at the moment it was granted." requestRangeMeters
+          -- (the ELIGIBILITY gate, decided before a grant ever happens) is
+          -- unaffected by this choice either way -- it was already, and
+          -- remains, re-read fresh on every single request.
       Denial is NEVER a dedicated client event -- exactly like
       server/combat.lua's own ValidateCombatRequest callers, a rejected
       request gets a single NotifyPlayer(src, ..., 'error') call and
@@ -518,5 +555,13 @@ RegisterNetEvent('qbx_k9unit:server:requestPursuitSprint', function(targetNetId)
         return
     end
 
-    TriggerClientEvent('qbx_k9unit:client:pursuitSprintGranted', src)
+    -- Read fresh, at the exact moment this grant is decided -- see this
+    -- file's own header "EVENT CONTRACT" for the full "why a payload now,
+    -- and why a running burst keeps its granted value" writeup. A live
+    -- tablet edit (server/runtimecontrol.lua's runtimeSetTunable) to either
+    -- field always reaches the NEXT grant this way, since both are read off
+    -- live `Config.PursuitSprint` here, never a value captured once at this
+    -- file's own load time.
+    TriggerClientEvent('qbx_k9unit:client:pursuitSprintGranted', src,
+        Config.PursuitSprint.speedMultiplier, Config.PursuitSprint.durationMs)
 end)

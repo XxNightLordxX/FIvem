@@ -842,6 +842,20 @@ Config.CommandTablet = {
     -- a third open mode, and it honours the same authorization either way.
     command = 'k9tablet',
 
+    -- A SECOND, separate chat command that opens the SAME tablet, but goes
+    -- straight to the High Command console screen instead of the player's
+    -- own record -- a shortcut for your senior staff so they don't have to
+    -- open the tablet and click across to the console tab every time.
+    --
+    -- This is only ever a shortcut to a SCREEN, never a way to grant
+    -- access: someone who is not High Command and types this command still
+    -- gets refused the console (with a message explaining why) and simply
+    -- sees their own record instead, exactly as the regular command above
+    -- would show them. Always available (regardless of `openMode` above)
+    -- whenever this tablet feature is turned on at all. Rename it to
+    -- whatever fits your server, or leave it as the default below.
+    highCommandCommand = 'k9hqtablet',
+
     -- The ox_inventory item, used by 'item' and 'both'.
     --
     -- READ THIS BEFORE SETTING openMode = 'item': the item must already
@@ -905,16 +919,33 @@ Config.CommandTablet = {
         FearStressSystem  = true,
     },
     -- ==================================================================
-    -- YOUR SERVER'S BRANDING ON THE TABLET.
+    -- YOUR SERVER'S BRANDING ON THE TABLET. The tablet now shows this logo
+    -- in several places (the header on every screen, plus a larger badge
+    -- on the opening/loading screen) -- you do not choose where; it is
+    -- placed automatically everywhere it makes sense.
     --
     -- TO USE YOUR OWN LOGO: save it as html/images/logo.png, replacing the
-    -- placeholder that ships there. Any square-ish image works; something
-    -- around 512x512 looks right. That is the only step -- you do not need
-    -- to edit anything else, and you do not need to restart anything other
-    -- than the resource.
+    -- placeholder that ships there. That is the only step -- you do not
+    -- need to edit anything else in this file or in fxmanifest.lua, and
+    -- you do not need to restart anything other than the resource.
     --
-    -- If the file is missing or fails to load, the tablet falls back to
-    -- showing `serverName` as text. It never shows a broken image.
+    -- WHAT IMAGE TO USE: a SQUARE image (same width and height, e.g.
+    -- 512x512 or 1024x1024) looks best -- that is the shape the tablet's
+    -- layout is built around. A non-square image (a wide banner or a tall
+    -- crest) still displays correctly and is never stretched or squashed,
+    -- but a square badge is the recommended shape.
+    --
+    -- WHAT NOT TO USE: a web address (anything starting with http:// or
+    -- https://). The tablet's security settings only allow it to load
+    -- files shipped with this resource, so a web address will silently
+    -- fail to load -- it will not show an error, it will just fall back
+    -- to showing `serverName` as plain text below, exactly as if the file
+    -- were missing. Always use a local file under html/images/.
+    --
+    -- If the file is missing, unreadable, or otherwise fails to load, the
+    -- tablet falls back to showing `serverName` as text everywhere the
+    -- logo would have appeared. It never shows a broken-image icon and
+    -- never leaves an empty gap.
     -- ==================================================================
     branding = {
         -- Shown beside the logo, and instead of it if the image cannot
@@ -924,12 +955,14 @@ Config.CommandTablet = {
         -- Where the logo lives. Change this only if you also add the new
         -- path to fxmanifest.lua's files{} block -- an image the manifest
         -- does not list is simply not sent to players, and shows as
-        -- nothing with no error to explain why.
+        -- nothing with no error to explain why. Must be a local path
+        -- under html/ -- see the "WHAT NOT TO USE" note above.
         logo = 'images/logo.png',
 
-        -- Starting colours, matched to the shipped logo. High command can
-        -- change all of these live from the tablet itself; these are just
-        -- what a fresh install looks like. Hex, six digits, with the #.
+        -- Starting colours, matched to the shipped logo (crimson red on
+        -- near-black). High command can change all of these live from the
+        -- tablet itself; these are just what a fresh install looks like.
+        -- Hex, six digits, with the #.
         theme = {
             primaryColor    = '#C8102E', -- crimson: headers, active tabs
             accentColor     = '#FF2D2D', -- brighter red: buttons, highlights

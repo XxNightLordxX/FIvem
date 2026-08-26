@@ -810,6 +810,29 @@ end
 -- this fix -- a flag reported here as false now REMOVES an in-flight
 -- modifier immediately, rather than merely stopping it from being
 -- reapplied.
+--
+-- LIVE WELLBEING TUNABLE PUSH (this pass -- "make the speed boost and
+-- stamina numbers genuinely editable" task, extended by the owner to every
+-- K9 stat). server/runtimecontrol.lua's TUNABLE_REGISTRY used to EXCLUDE
+-- Fatigue.speedPenaltyThreshold/speedPenaltyMultiplier,
+-- Mood.performancePenaltyThreshold/performancePenaltyMultiplier, and
+-- Injury.sprintBlockThreshold/jumpBlockThreshold/speedPenaltyMultiplier for
+-- the EXACT same reason `featureFlags` used to be missing: "every one of
+-- these move-rate/input-block values is applied entirely by
+-- client/movement.lua and client/wellbeing.lua reading their own
+-- shared_scripts copy... a live dial this file cannot even confirm reaches
+-- the client" (that exclusion comment's own words, now corrected). SAME FIX,
+-- SAME CHANNEL, EXTENDED rather than duplicated: `wellbeingTunables` is a
+-- second piggybacked table alongside `featureFlags` on this identical
+-- push/fetch pair -- still no new event, no new round trip. Every field
+-- below is read FRESH off the live `Config.Wellbeing.*` table at snapshot
+-- time, so a server/runtimecontrol.lua SetTunable/ResetTunable call reaches
+-- an already-connected K9 within one TICK_INTERVAL_MS, exactly like
+-- featureFlags above. See client/wellbeing.lua's own `LiveWellbeingTunables`
+-- mirror for the client-side half, and this file's own report for the
+-- MID-EFFECT decision made for this class of value (deliberately DIFFERENT
+-- from PursuitSprint's "keep the granted value" choice, and why that is
+-- still not an inconsistency).
 --- @param stats table
 --- @return table snapshot -- a plain copy safe to hand to TriggerClientEvent/lib.callback
 local function SnapshotOf(stats)
@@ -826,6 +849,15 @@ local function SnapshotOf(stats)
             FearStressSystem = Config.Features.FearStressSystem == true,
             DistractionSystem = Config.Features.DistractionSystem == true,
             InjuryLimping = Config.Features.InjuryLimping == true,
+        },
+        wellbeingTunables = {
+            fatigueSpeedPenaltyThreshold     = Config.Wellbeing.Fatigue.speedPenaltyThreshold,
+            fatigueSpeedPenaltyMultiplier    = Config.Wellbeing.Fatigue.speedPenaltyMultiplier,
+            moodPerformancePenaltyThreshold  = Config.Wellbeing.Mood.performancePenaltyThreshold,
+            moodPerformancePenaltyMultiplier = Config.Wellbeing.Mood.performancePenaltyMultiplier,
+            injurySprintBlockThreshold       = Config.Wellbeing.Injury.sprintBlockThreshold,
+            injuryJumpBlockThreshold         = Config.Wellbeing.Injury.jumpBlockThreshold,
+            injurySpeedPenaltyMultiplier     = Config.Wellbeing.Injury.speedPenaltyMultiplier,
         },
     }
 end

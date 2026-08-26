@@ -160,6 +160,72 @@ local LiveFeatureFlags = {
     InjuryLimping = Config.Features.InjuryLimping == true,
 }
 
+-- ======================================================================
+-- LIVE WELLBEING TUNABLES (this pass -- "make the speed boost and stamina
+-- numbers genuinely editable" task, extended by the owner to every K9
+-- stat). SAME MECHANISM, SAME CHANNEL AS "LIVE FEATURE FLAGS" ABOVE, NOT A
+-- SECOND ONE -- server/wellbeing.lua's SnapshotOf now piggybacks a SECOND
+-- table, `wellbeingTunables`, onto the identical `wellbeingUpdate` push /
+-- `getWellbeingSnapshot` fetch this section's own comment already
+-- describes in full; read that comment first, it is not repeated here.
+--
+-- WHAT THIS REPLACES: every one of the seven fields below used to be read
+-- directly off THIS CLIENT's own static `Config.Wellbeing.<Stat>.<Field>`
+-- copy at the exact point of use (`ApplyMoveRateModifiers` and the Injury
+-- sprint/jump block thread further down) -- fixed at THIS client's own
+-- resource start, never updated by a runtime tablet edit
+-- (server/runtimecontrol.lua's runtimeSetTunable/runtimeResetTunable only
+-- ever mutate the SERVER's own in-memory Config table). server/wellbeing.lua
+-- used to document this exact gap as the reason those seven fields were
+-- EXCLUDED from TUNABLE_REGISTRY outright -- "a live dial this file cannot
+-- even confirm reaches the client" (that exclusion comment's own words).
+-- That gap is now closed the same way LiveFeatureFlags closed it for the
+-- five boolean flags: mirror the server's CURRENT value here, read FRESH by
+-- every call site below, kept fresh by every wellbeingUpdate push.
+--
+-- MID-EFFECT DECISION, STATED PLAINLY (deliberately DIFFERENT from
+-- server/pursuitsprint.lua's "a running burst keeps its granted value"
+-- choice -- not an inconsistency, a different value class): a live tablet
+-- edit to any of these seven fields takes effect on THIS K9's very next
+-- `ApplyMoveRateModifiers()` recompute (within one
+-- `Config.Wellbeing.tickIntervalMs` of the edit for an already-connected K9)
+-- -- including retroactively re-judging a PENALTY/BLOCK ALREADY IN EFFECT
+-- right now against the new threshold/multiplier. This is the right choice
+-- for THIS class of value, for a reason PursuitSprint's grant does not
+-- share: these are not one-shot grants with a natural start/end a client
+-- privately owns -- they are CONTINUOUS, per-tick judgments
+-- (`lastStats.<stat> < threshold`) that server/wellbeing.lua's own tick loop
+-- already re-evaluates from scratch every single tick regardless of this
+-- fix. Freezing a stale threshold for the remainder of "whatever effect was
+-- already applied" has no natural boundary to freeze it UNTIL (unlike a
+-- bounded few-second sprint burst) -- it would mean an operator's edit
+-- never reaches a K9 who happened to already be penalized at the moment of
+-- the edit, for as long as they stay penalized, which could be indefinite.
+-- Updating immediately is also what makes the "no unbounded trap" rule
+-- actually hold for this fix: a threshold raised (or a multiplier
+-- loosened) so an already-blocked/penalized K9 no longer qualifies must
+-- lift that block/penalty on the very next recompute, not merely stop it
+-- from being reapplied at whatever number it started under -- exactly
+-- ApplyMoveRateModifiers' own existing "LIVE FEATURE FLAGS" precedent for a
+-- flag switched off mid-effect, applied here to a threshold/multiplier
+-- edited mid-effect instead.
+--
+-- DEFAULT VALUE, DELIBERATE: seeded from this client's own
+-- `Config.Wellbeing.<Stat>.<Field>` copy -- i.e. IDENTICAL behaviour to
+-- before this fix -- until the very first snapshot arrives, same reasoning
+-- and same safety argument as LiveFeatureFlags' own default-value comment
+-- above (nothing here is a security boundary either).
+-- ======================================================================
+local LiveWellbeingTunables = {
+    fatigueSpeedPenaltyThreshold     = Config.Wellbeing.Fatigue.speedPenaltyThreshold,
+    fatigueSpeedPenaltyMultiplier    = Config.Wellbeing.Fatigue.speedPenaltyMultiplier,
+    moodPerformancePenaltyThreshold  = Config.Wellbeing.Mood.performancePenaltyThreshold,
+    moodPerformancePenaltyMultiplier = Config.Wellbeing.Mood.performancePenaltyMultiplier,
+    injurySprintBlockThreshold       = Config.Wellbeing.Injury.sprintBlockThreshold,
+    injuryJumpBlockThreshold         = Config.Wellbeing.Injury.jumpBlockThreshold,
+    injurySpeedPenaltyMultiplier     = Config.Wellbeing.Injury.speedPenaltyMultiplier,
+}
+
 --- Recomputes this file's three owned `K9MoveRateModifiers` slots from
 --- `lastStats` and asks client/movement.lua's composer to recompute the
 --- single real `SetPedMoveRateOverride` call. UPDATED (this pass, see "LIVE
@@ -182,8 +248,8 @@ local function ApplyMoveRateModifiers()
     -- stat the instant its own flag is false, so nothing else was ever
     -- going to clear this on its own).
     if LiveFeatureFlags.FatigueSystem then
-        if lastStats.fatigue < Config.Wellbeing.Fatigue.speedPenaltyThreshold then
-            K9MoveRateModifiers.fatigue = Config.Wellbeing.Fatigue.speedPenaltyMultiplier
+        if lastStats.fatigue < LiveWellbeingTunables.fatigueSpeedPenaltyThreshold then
+            K9MoveRateModifiers.fatigue = LiveWellbeingTunables.fatigueSpeedPenaltyMultiplier
         else
             K9MoveRateModifiers.fatigue = 1.0
         end
@@ -192,9 +258,9 @@ local function ApplyMoveRateModifiers()
     end
 
     if LiveFeatureFlags.InjuryLimping then
-        local injuryPenaltyThreshold = math.max(Config.Wellbeing.Injury.sprintBlockThreshold, Config.Wellbeing.Injury.jumpBlockThreshold)
+        local injuryPenaltyThreshold = math.max(LiveWellbeingTunables.injurySprintBlockThreshold, LiveWellbeingTunables.injuryJumpBlockThreshold)
         if lastStats.injury < injuryPenaltyThreshold then
-            K9MoveRateModifiers.injury = Config.Wellbeing.Injury.speedPenaltyMultiplier
+            K9MoveRateModifiers.injury = LiveWellbeingTunables.injurySpeedPenaltyMultiplier
         else
             K9MoveRateModifiers.injury = 1.0
         end
@@ -203,8 +269,8 @@ local function ApplyMoveRateModifiers()
     end
 
     if LiveFeatureFlags.MoodSystem then
-        if lastStats.mood < Config.Wellbeing.Mood.performancePenaltyThreshold then
-            K9MoveRateModifiers.mood = Config.Wellbeing.Mood.performancePenaltyMultiplier
+        if lastStats.mood < LiveWellbeingTunables.moodPerformancePenaltyThreshold then
+            K9MoveRateModifiers.mood = LiveWellbeingTunables.moodPerformancePenaltyMultiplier
         else
             K9MoveRateModifiers.mood = 1.0
         end
@@ -237,6 +303,24 @@ local function ApplyWellbeingSnapshot(stats)
             local incoming = stats.featureFlags[flagName]
             if type(incoming) == 'boolean' then
                 LiveFeatureFlags[flagName] = incoming
+            end
+        end
+    end
+
+    -- LIVE WELLBEING TUNABLE INGEST -- see this file's header "LIVE
+    -- WELLBEING TUNABLES". Same defensive shape as the featureFlags ingest
+    -- immediately above: every entry is type-checked individually (a real
+    -- number, never NaN -- `incoming == incoming` is Lua's standard NaN
+    -- test, matching every other numeric-payload guard in this codebase)
+    -- and only overwrites a name this table already tracks -- a malformed/
+    -- missing `wellbeingTunables` field (an older server, or a snapshot from
+    -- before the very first push) leaves every tunable at its current (or
+    -- shipped-default) value, never errors, and never invents a new key.
+    if type(stats.wellbeingTunables) == 'table' then
+        for tunableName in pairs(LiveWellbeingTunables) do
+            local incoming = stats.wellbeingTunables[tunableName]
+            if type(incoming) == 'number' and incoming == incoming then
+                LiveWellbeingTunables[tunableName] = incoming
             end
         end
     end
@@ -456,8 +540,15 @@ do
             if not LiveFeatureFlags.InjuryLimping then
                 Wait(1000)
             elseif IsEntityModelK9(PlayerPedId()) and not IsEntityDead(PlayerPedId()) then
-                local sprintBlocked = lastStats.injury < Config.Wellbeing.Injury.sprintBlockThreshold
-                local jumpBlocked = lastStats.injury < Config.Wellbeing.Injury.jumpBlockThreshold
+                -- LIVE TUNABLE READ (this pass -- see this file's header
+                -- "LIVE WELLBEING TUNABLES"): reads the server's CURRENT
+                -- threshold, not this client's static config copy, so a
+                -- tablet edit that raises a threshold lifts an existing
+                -- block on this very next 1000ms-or-sooner iteration, never
+                -- stranding a K9 at a stale value for the rest of the
+                -- session.
+                local sprintBlocked = lastStats.injury < LiveWellbeingTunables.injurySprintBlockThreshold
+                local jumpBlocked = lastStats.injury < LiveWellbeingTunables.injuryJumpBlockThreshold
                 if sprintBlocked or jumpBlocked then
                     if sprintBlocked then
                         DisableControlAction(0, INPUT_SPRINT, true)

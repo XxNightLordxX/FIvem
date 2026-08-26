@@ -390,6 +390,19 @@ server_scripts {
     -- other's relative firing order -- see this file's own header,
     -- "WHY IN-PLACE MUTATION").
     'server/xptiers.lua',
+    -- Owner-directed "god over that tablet, full customization over
+    -- everything related to that K9" pass -- the per-INDIVIDUAL-K9 override
+    -- half (server/xptiers.lua immediately above already covers the
+    -- per-RANK half; see this file's own header for the full "what already
+    -- existed" writeup and the explicit GLOBAL DEFAULT -> XP TIER ->
+    -- INDIVIDUAL OVERRIDE resolution order). Persists via migration 0016.
+    -- Loaded after server/cooldowns.lua (NewCooldown/NewMutex at file-load
+    -- time), server/highcommand.lua (IsHighCommand, runtime-only soft
+    -- dependency), server/datastore.lua (K9Store.Override_*), and
+    -- server/progression.lua/server/xptiers.lua (GetXPTier, runtime-only
+    -- soft dependency -- see this file's own "INTEGRATION HANDOFF" section
+    -- for why nothing here actually calls it eagerly at load time either).
+    'server/k9profiles.lua',
     -- Phase 3 (BiteAndHold/NonLethalTakedown, DEVELOPER_REFERENCE.md §12.5.1/
     -- §12.5.2/§12.0 item 8) -- loaded after cooldowns.lua (NewCooldown/
     -- NewMutex at file-load time, per this file's own header) and
