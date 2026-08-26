@@ -187,6 +187,31 @@ local function newFixture(opts)
     local capturedCallbacks = {}
     local libStub = { callback = { register = function(name, fn) capturedCallbacks[name] = fn end } }
 
+    -- FIX (this pass, "the de-assign button" finding) -- RevokePermission's
+    -- 'k9.access'-fully-revoked teardown calls these three, all of which
+    -- load AFTER server/permissions.lua in fxmanifest.lua's server_scripts
+    -- list (server/main.lua, server/combat.lua, server/partnership.lua
+    -- respectively) and are therefore genuine soft dependencies, guarded by
+    -- `type(...) == 'function'` at every call site -- included by default so
+    -- most tests can assert they fire; opts.includeTeardownHooks = false
+    -- (default true) omits all three from the env to confirm the guards
+    -- genuinely tolerate them being entirely absent.
+    local leashDetachCalls = {}      -- ForceDetachLeashForSource(src, reason)
+    local effectEndCalls = {}        -- EndActiveEffectForHolder(src)
+    local partnershipBreakCalls = {} -- ForceBreakPartnershipForCitizenId(citizenid, reason)
+    local teardownOverrides = {}
+    if opts.includeTeardownHooks ~= false then
+        teardownOverrides.ForceDetachLeashForSource = function(src, reason)
+            leashDetachCalls[#leashDetachCalls + 1] = { src, reason }
+        end
+        teardownOverrides.EndActiveEffectForHolder = function(src)
+            effectEndCalls[#effectEndCalls + 1] = src
+        end
+        teardownOverrides.ForceBreakPartnershipForCitizenId = function(citizenid, reason)
+            partnershipBreakCalls[#partnershipBreakCalls + 1] = { citizenid, reason }
+        end
+    end
+
     local Config = {
         Features = opts.features or {
             PermissionGrants = (opts.permissionGrantsEnabled ~= false), -- default true
@@ -216,7 +241,7 @@ local function newFixture(opts)
         },
     }
 
-    local env = Sandbox.newEnv({
+    local envOverrides = {
         Config = Config,
         GetGameTimer = GetGameTimer,
         MySQL = mysql,
@@ -230,7 +255,10 @@ local function newFixture(opts)
         -- Test-controlled soft dependencies -- see this file's header.
         IsHighCommand = opts.isHighCommand or function(_source) return false end,
         HasK9Access = opts.hasK9Access, -- deliberately nil by default (type() guard must tolerate absence)
-    })
+    }
+    for key, value in pairs(teardownOverrides) do envOverrides[key] = value end
+
+    local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../server/cooldowns.lua', env)
     -- real K9Store -- server/permissions.lua's own RefreshPermissionCache/
@@ -252,6 +280,9 @@ local function newFixture(opts)
         printLog = printLog,
         eventHandlers = eventHandlers,
         callbacks = capturedCallbacks,
+        leashDetachCalls = leashDetachCalls,
+        effectEndCalls = effectEndCalls,
+        partnershipBreakCalls = partnershipBreakCalls,
         registerPlayer = registerPlayer,
         disconnectPlayer = disconnectPlayer,
         setSource = function(src) env.source = src end,
@@ -862,6 +893,99 @@ do
         local n = lastNotifyFor(f, target)
         t.isNotNil(n)
         t.contains(n.message, 'Use K9 abilities')
+    end)
+
+    -- ========================================================================
+    -- FIX (this pass, "the de-assign button" finding): server/tablet.lua
+    -- documents RevokePermission(..., 'k9.access') as high command's ONLY,
+    -- official "de-assign K9 role" action -- on a CONFIRMED full loss
+    -- (stillHasAccess == nil), this must now also force-detach any leash,
+    -- end any held effect, and break any partnership, exactly like a
+    -- certification revoke already does.
+    -- ========================================================================
+
+    t.test('RevokePermission: FIX -- fully removing k9.access force-detaches the leash, ends any held effect, and breaks the partnership for the online target', function()
+        f.advanceTime(2000)
+        local target = f.registerPlayer(210, 'K9ACCESS-TEARDOWN', { name = 'police', grade = { level = 1 } })
+        f.env.GrantPermission(hcSrc, 'K9ACCESS-TEARDOWN', 'k9.access')
+        f.advanceTime(2000)
+        local ok, outcome, stillHasAccess = f.env.RevokePermission(hcSrc, 'K9ACCESS-TEARDOWN', 'k9.access')
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
+        t.isNil(stillHasAccess)
+
+        t.equals(f.leashDetachCalls[#f.leashDetachCalls][1], target)
+        t.equals(f.leashDetachCalls[#f.leashDetachCalls][2], 'k9_access_revoked')
+        t.equals(f.effectEndCalls[#f.effectEndCalls], target)
+        t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][1], 'K9ACCESS-TEARDOWN')
+        t.equals(f.partnershipBreakCalls[#f.partnershipBreakCalls][2], 'k9_access_revoked')
+    end)
+
+    t.test('RevokePermission: FIX -- revoking a DIFFERENT permission (k9.certify) never triggers the K9-access teardown', function()
+        f.advanceTime(2000)
+        f.registerPlayer(211, 'CERTIFY-ONLY-REVOKE', { name = 'police', grade = { level = 1 } })
+        f.rows[#f.rows + 1] = { id = 99100, citizenid = 'CERTIFY-ONLY-REVOKE', permission = 'k9.certify', granted_by = 'SOMEONE-ELSE', active = 1 }
+        local leashCountBefore, effectCountBefore, partnershipCountBefore = #f.leashDetachCalls, #f.effectEndCalls, #f.partnershipBreakCalls
+
+        local ok, outcome, stillHasAccess = f.env.RevokePermission(hcSrc, 'CERTIFY-ONLY-REVOKE', 'k9.certify')
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
+        t.isNil(stillHasAccess)
+
+        t.equals(#f.leashDetachCalls, leashCountBefore, 'revoking k9.certify must never touch the K9-access teardown')
+        t.equals(#f.effectEndCalls, effectCountBefore)
+        t.equals(#f.partnershipBreakCalls, partnershipCountBefore)
+    end)
+
+    t.test('RevokePermission: FIX -- revoking k9.access does NOT tear anything down when the online target still qualifies via SOME OTHER route (stillHasAccess == "rank_or_high_command")', function()
+        f.advanceTime(2000)
+        local target = f.registerPlayer(212, 'STILLHASACCESS-TEARDOWN', { name = 'police', grade = { level = 1 } })
+        f.env.GrantPermission(hcSrc, 'STILLHASACCESS-TEARDOWN', 'k9.access')
+        f.advanceTime(2000)
+        -- Same pattern as the pre-existing "reuses the real HasK9Access"
+        -- test below -- simulate HasK9Access still returning true for this
+        -- citizenid via some OTHER path (e.g. an active cert cache entry)
+        -- after this specific grant is gone.
+        f.env.HasK9Access = function(source) return source == target end
+        local leashCountBefore, effectCountBefore, partnershipCountBefore = #f.leashDetachCalls, #f.effectEndCalls, #f.partnershipBreakCalls
+
+        local ok, outcome, stillHasAccess = f.env.RevokePermission(hcSrc, 'STILLHASACCESS-TEARDOWN', 'k9.access')
+        f.env.HasK9Access = nil
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
+        t.equals(stillHasAccess, 'rank_or_high_command')
+
+        t.equals(#f.leashDetachCalls, leashCountBefore, 'access was never actually lost -- nothing to tear down')
+        t.equals(#f.effectEndCalls, effectCountBefore)
+        t.equals(#f.partnershipBreakCalls, partnershipCountBefore)
+    end)
+
+    t.test('RevokePermission: FIX -- revoking k9.access from an OFFLINE target does NOT tear anything down (stillHasAccess == "unknown_target_offline", never claimed as a confirmed loss)', function()
+        f.advanceTime(2000)
+        f.rows[#f.rows + 1] = { id = 99102, citizenid = 'WILLDISCONNECT-TEARDOWN', permission = 'k9.access', granted_by = 'SOMEONE-ELSE', active = 1 }
+        local leashCountBefore, effectCountBefore, partnershipCountBefore = #f.leashDetachCalls, #f.effectEndCalls, #f.partnershipBreakCalls
+
+        local ok, outcome, stillHasAccess = f.env.RevokePermission(hcSrc, 'WILLDISCONNECT-TEARDOWN', 'k9.access')
+        t.isTrue(ok)
+        t.equals(outcome, 'ok')
+        t.equals(stillHasAccess, 'unknown_target_offline')
+
+        t.equals(#f.leashDetachCalls, leashCountBefore, 'an unverifiable outcome must never be treated as a confirmed loss')
+        t.equals(#f.effectEndCalls, effectCountBefore)
+        t.equals(#f.partnershipBreakCalls, partnershipCountBefore)
+    end)
+
+    t.test('RevokePermission: FIX -- the runtime existence guard genuinely tolerates ForceDetachLeashForSource/EndActiveEffectForHolder/ForceBreakPartnershipForCitizenId being entirely absent (server/main.lua, server/combat.lua, server/partnership.lua not loaded)', function()
+        local g = newFixture({ isHighCommand = function(source) return source == 300 end, includeTeardownHooks = false })
+        local hc2 = g.registerPlayer(300, 'HC2', { name = 'police', isboss = true })
+        g.registerPlayer(301, 'NOHOOKS-TARGET', { name = 'police', grade = { level = 1 } })
+        g.env.GrantPermission(hc2, 'NOHOOKS-TARGET', 'k9.access')
+        g.advanceTime(2000)
+
+        local ok, outcome, stillHasAccess = g.env.RevokePermission(hc2, 'NOHOOKS-TARGET', 'k9.access')
+        t.isTrue(ok, 'must not error even with all three globals entirely absent')
+        t.equals(outcome, 'ok')
+        t.isNil(stillHasAccess)
     end)
 
     t.test('RevokePermission: self-revoke (an officer revoking their own earlier grant) is allowed -- unlike self-grant', function()

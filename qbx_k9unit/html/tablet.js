@@ -227,6 +227,47 @@
         hiding itself locally (see closeTablet() below -- the close path
         must never depend on a round trip succeeding).
 
+      tablet:equipmentShopGetLocations {} -> cb({ ok, locations?, error? })
+        HIGH COMMAND ONLY screen (server/equipmentshop.lua's own
+        GetLocations callback has no such gate -- open to any connected
+        player -- but this page only ever shows the management screen to
+        high command, per THE SECURITY RULE a convenience, not the real
+        gate). `locations` is a map keyed by location key
+        (`cfg:<n>` -- defined in config.lua, read-only from here -- or
+        `db:<id>` -- added via this screen, editable/removable) to
+        `{ x, y, z, heading, model, scenario, label }`, ALL fields already
+        resolved against the shop's own defaults server-side (never nil).
+
+      tablet:equipmentShopAddLocation { label?: string, model?: string, scenario?: string } -> cb({ ok, locationKey?, locations?, error? })
+        COORDINATES ARE NEVER SENT BY THIS PAGE -- a CEF browser page has no
+        native access to GetEntityCoords/GetEntityHeading at all.
+        client/tablet.lua captures the OPERATOR'S OWN current position at
+        the moment this fires and adds it before forwarding to the server
+        -- see this task's own instruction: "Get it client-side and send
+        it; do not expect the server to know where they are." A blank
+        label/model/scenario field is sent as an EMPTY STRING here and
+        OMITTED by client/tablet.lua before forwarding (never sent as `''`,
+        which the server would reject) -- meaning "inherit the shop-wide
+        default," same as a config.lua location entry with that field
+        unset.
+
+      tablet:equipmentShopMoveLocation { locationKey: string, updates?: { label?: string|false, model?: string|false, scenario?: string|false }, useCurrentPosition?: boolean } -> cb({ ok, locations?, error? })
+        Serves BOTH this screen's "Edit" (metadata only: `updates` present,
+        `useCurrentPosition` absent -- each of label/model/scenario is
+        EITHER a non-empty string override OR `false` to reset that field
+        back to the shop-wide default; ALWAYS all three, never omitted,
+        since the edit form always starts pre-filled from a real,
+        already-resolved value) and "Move Here" (`useCurrentPosition: true`,
+        `updates` absent -- client/tablet.lua captures the SAME
+        GetEntityCoords/GetEntityHeading this page cannot). Only ever valid
+        for a `db:<id>` locationKey -- refused (`invalid_key`) for a
+        `cfg:<n>` one, which this page never offers Edit/Move Here for.
+
+      tablet:equipmentShopRemoveLocation { locationKey: string } -> cb({ ok, locations?, error? })
+        Only ever valid for a `db:<id>` locationKey, same reasoning as Move
+        above. HIGH COMMAND ONLY, re-verified server-side on every one of
+        these three mutating calls regardless of what this page shows.
+
     Lua -> JS (SendNUIMessage on the TOP window, relayed into this page's
     OWN window by html/tablet-bridge.js for any action matching /^tablet:/
     -- see that file's header for why a relay is needed at all):
@@ -235,6 +276,7 @@
           capabilities: { 'k9.access': {label,description}, ... },  // verbatim Config.Permissions text -- see html/tablet-bridge... no, see this file's DEFAULT_CAPABILITIES for the exact fallback copy this must match
           strings: { <key>: <resolved locale string>, ... },        // see DEFAULT_STRINGS below for the full key list this page understands
           maxXpPerGrant: number|null,                               // Config.HighCommand.maxXpPerGrant, UX hint only
+          shopLocationsEnabled: boolean,                            // Config.Features.K9EquipmentShop -- UX hint only, SAME posture as themingEnabled: shows a disabled-server-wide note rather than hiding the screen; every equipmentShop* callback re-checks this live, server-side, regardless
         } }
         Sent once per open (every time the player runs the command/keybind
         that opens the tablet). This page reacts by becoming visible and
@@ -245,6 +287,14 @@
         session, resource stop). This page hides itself and resets ALL
         internal state back to a fresh-open baseline, so a later reopen
         never shows stale data from a previous session.
+
+      { action: 'tablet:equipmentShopLocationsUpdated', data: { <key>: {x,y,z,heading,model,scenario,label}, ... } }
+        Lua-INITIATED, NOT tied to this player's own tablet being open --
+        fires for EVERY connected client on every successful Add/Move/
+        RemoveLocation, so an already-open Shop Locations screen elsewhere
+        updates live without a tab-switch or a tablet reopen. Applied
+        unconditionally to state.shopLocations; never touches an
+        in-progress add/edit draft (see handleShopLocationsUpdated()).
     ======================================================================
 
     ARCHITECTURE NOTE -- why an iframe, not a panel inside index.html:
@@ -451,6 +501,50 @@
         cert_tier_error_invalid_key_set: 'The new order must include every existing tier, with none missing or duplicated.',
         cert_tier_error_db_error: 'A database error occurred. Try again.',
         cert_tier_error_invalid_payload: 'That request was malformed. Try again.',
+
+        // ---- K9 Supply Shop location management (its own tab, high
+        // command only). Owner's own words: "make the shop a dog ped and i
+        // can change the locations in the config or add more locations
+        // remove locations etc along with in the high command tablet."
+        // config.lua's own locations stay editable only by hand (shown
+        // here read-only, source_config); this tab manages the runtime,
+        // database-backed pool ONLY (source_runtime) -- see
+        // server/equipmentshop.lua's own SCOPE note.
+        tab_shop_locations: 'Shop Locations',
+        shop_locations_heading: 'K9 Supply Shop Locations',
+        shop_locations_disabled_note: 'The K9 Supply Shop is disabled server-wide. Existing locations are shown for reference only.',
+        shop_locations_empty: 'No shop locations configured yet.',
+        column_coordinates: 'Coordinates',
+        column_model: 'Ped Model',
+        column_source: 'Source',
+        source_config: 'Config',
+        source_runtime: 'Runtime',
+        shop_location_add_here_label: 'Add Location Here',
+        shop_location_add_hint: 'Adds a new shop location at your CURRENT in-game position. Walk to the spot first, then press this button.',
+        shop_location_label_label: 'Label',
+        shop_location_label_placeholder: 'e.g. Downtown K9 Supply',
+        shop_location_model_label: 'Ped model',
+        shop_location_model_placeholder: 'Leave blank to use the shop default',
+        shop_location_scenario_label: 'Idle scenario',
+        shop_location_scenario_placeholder: 'Leave blank to use the shop default',
+        shop_location_save_label: 'Save Location',
+        shop_location_cancel_label: 'Cancel',
+        shop_location_edit_label: 'Edit',
+        shop_location_move_here_label: 'Move Here',
+        shop_location_move_here_hint: 'Moves this location to your CURRENT in-game position.',
+        shop_location_remove_label: 'Remove',
+        shop_location_config_note: 'Defined in config.lua -- edit that file and restart the resource to change or remove this one.',
+        shop_location_error_denied: 'You are not authorized to manage shop locations.',
+        shop_location_error_rate_limited: 'Please wait a moment before trying again.',
+        shop_location_error_invalid_coords: 'Your current position could not be used. Try again.',
+        shop_location_error_invalid_heading: 'That heading was rejected by the server.',
+        shop_location_error_invalid_model: 'That ped model is invalid. Use a plain model name with no special characters.',
+        shop_location_error_invalid_scenario: 'That scenario name is invalid. Use a plain name with no special characters.',
+        shop_location_error_invalid_label: 'That label is invalid or too long.',
+        shop_location_error_invalid_key: 'That location no longer exists, or cannot be edited from here.',
+        shop_location_error_invalid_payload: 'That request was malformed. Try again.',
+        shop_location_error_db_error: 'A database error occurred. Try again.',
+        shop_location_error_feature_disabled: 'The K9 Supply Shop is disabled server-wide.',
     };
 
     /** English fallback for Config.Permissions -- MUST be kept byte-identical
@@ -506,12 +600,13 @@
     // ------------------------------------------------------------------
     var state = {
         open: false,
-        screen: 'my_record', // 'my_record' | 'console' | 'person' | 'theme'
+        screen: 'my_record', // 'my_record' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations'
         strings: {},
         capabilities: {},
         maxXpPerGrant: null,
         peds: [], // Config.Peds, verbatim -- see tablet:assignK9Role's own NUI contract note; display list only, server re-validates the chosen model regardless
         themingEnabled: false, // Config.Features.TabletTheming -- UX hint only, see client/tablet.lua's own NUI CONTRACT note
+        shopLocationsEnabled: false, // Config.Features.K9EquipmentShop -- UX hint only, SAME posture as themingEnabled
         branding: {}, // { serverName, logo, theme:{4 colors} } -- Config.CommandTablet.branding, verbatim; see buildBrandingElement()/applyBrandingSeedTheme()
 
         viewer: null, // set once tablet:requestMyRecord resolves successfully
@@ -557,6 +652,26 @@
         certTierDraft: null, // { key, label, capabilities: {capKey:true}, isNew } -- the add/edit form's own working copy; null = form closed
         certTierFieldError: null, // 'key' | 'label' | 'capabilities' | null -- which of the draft form's own inputs the server's last certTiersUpsert rejected
         certTierActionError: null, // { key, text } -- a delete REFUSAL (tier_in_use/protected_tier) rendered inline on that specific row, not just the generic top-of-panel notice
+
+        // K9 Supply Shop location management -- server/equipmentshop.lua.
+        // Owner's own words: "make the shop a dog ped and i can change the
+        // locations in the config or add more locations remove locations
+        // etc along with in the high command tablet." `shopLocations` is
+        // null until the first successful tablet:equipmentShopGetLocations,
+        // same "never hardcoded, never preloaded" posture as certTiers.
+        shopLocations: null, // { [locationKey]: {x,y,z,heading,model,scenario,label} } -- raw map from the server, keyed 'cfg:<n>' (config.lua, read-only here) or 'db:<id>' (runtime, editable)
+        shopLocationsLoading: false,
+        shopLocationsError: null,
+        // STALE-RESPONSE GUARD counter -- see loadShopLocations()'s own
+        // comment. This list has no per-viewer "identity" to compare
+        // against arrival order the way loadPersonSummary() compares
+        // targetCitizenId, so a monotonically increasing request id is
+        // used instead: a response is only applied if it is still the
+        // MOST RECENT request issued, discarding an older one that
+        // resolves late (tab re-visited, or Refresh pressed twice).
+        shopLocationsRequestId: 0,
+        shopLocationDraft: null, // { key: string|null, label, model, scenario } -- key===null means "new location"; null = form closed
+        shopLocationActionError: null, // { key, text } -- a Move/Remove refusal rendered inline on that specific row, same shape as certTierActionError
 
         pendingAction: false, // true while ANY mutation/trigger fetch is in flight -- disables action buttons to prevent double-submit
         actionNotice: null, // { kind: 'ok'|'error', text: string } -- transient, cleared on next navigation/reload
@@ -849,6 +964,8 @@
             panel.appendChild(buildThemeScreen());
         } else if (state.screen === 'cert_tiers' && state.viewer.isHighCommand) {
             panel.appendChild(buildCertTiersScreen());
+        } else if (state.screen === 'shop_locations' && state.viewer.isHighCommand) {
+            panel.appendChild(buildShopLocationsScreen());
         } else {
             panel.appendChild(buildMyRecordScreen());
         }
@@ -994,6 +1111,21 @@
                 loadCertTiers();
             });
             tabs.appendChild(certTiersTab);
+
+            // K9 Supply Shop location management -- SAME high-command gate
+            // (server/equipmentshop.lua's own CanManageShopLocations is the
+            // real, re-verified-per-call gate; this tab hides the screen
+            // from everyone else as a convenience only). Fresh entry clears
+            // any leftover draft/refusal, same reset discipline as every
+            // other tab switch on this page.
+            var shopLocationsTab = mkButton(S('tab_shop_locations'), 'k9tablet-tab' + (state.screen === 'shop_locations' ? ' k9tablet-tab--active' : ''), function () {
+                state.screen = 'shop_locations';
+                state.shopLocationDraft = null;
+                state.shopLocationActionError = null;
+                render();
+                loadShopLocations();
+            });
+            tabs.appendChild(shopLocationsTab);
         }
         return tabs;
     }
@@ -1774,6 +1906,261 @@
         return row;
     }
 
+    // ---- K9 Supply Shop location management screen (high command only) ----
+
+    /**
+     * Owner's own words: "make the shop a dog ped and i can change the
+     * locations in the config or add more locations remove locations etc
+     * along with in the high command tablet." Renders the LIVE, effective
+     * location list from state.shopLocations (populated by
+     * loadShopLocations() -- never hardcoded here), each row either a
+     * read-only `cfg:<n>` (config.lua) entry or an editable/removable
+     * `db:<id>` (runtime) one, plus (when a draft is open) the add/edit
+     * form below the table. server/equipmentshop.lua's own
+     * CanManageShopLocations is the real authorization gate, re-checked on
+     * every one of the three mutating callbacks this screen calls -- see
+     * THE SECURITY RULE.
+     */
+    function buildShopLocationsScreen() {
+        var wrap = mk('div', { class: 'k9tablet-screen' });
+        wrap.appendChild(mk('h2', { class: 'k9tablet-section-heading', text: S('shop_locations_heading') }));
+
+        if (!state.shopLocationsEnabled) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('shop_locations_disabled_note') }));
+        }
+
+        if (state.shopLocationsLoading && !state.shopLocations) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+        if (state.shopLocationsError && !state.shopLocations) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-error-text', text: shopLocationErrorText(state.shopLocationsError) }));
+            wrap.appendChild(mkButton(S('retry_label'), 'k9tablet-btn', loadShopLocations));
+            return wrap;
+        }
+        if (!state.shopLocations) {
+            wrap.appendChild(mk('p', { text: S('loading') }));
+            return wrap;
+        }
+
+        wrap.appendChild(buildShopLocationsTable());
+
+        if (state.shopLocationDraft) {
+            wrap.appendChild(buildShopLocationDraftForm());
+        } else {
+            wrap.appendChild(mkButton(S('shop_location_add_here_label'), 'k9tablet-btn', openNewShopLocationDraft, { disabled: state.pendingAction }));
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('shop_location_add_hint') }));
+        }
+
+        return wrap;
+    }
+
+    /**
+     * `state.shopLocations` is a MAP (location key -> location), not an
+     * array -- server/equipmentshop.lua's own GetLocations response shape
+     * (`table<string, ShopLocation>`). Sorted here purely for a stable,
+     * predictable display order: config.lua's own `cfg:<n>` entries first
+     * (by their numeric config-array index), then runtime `db:<id>` ones
+     * (by numeric id) -- never an ordinal the server tracks (there isn't
+     * one for this list, unlike certification tiers).
+     * @returns {Array<{key: string, loc: object}>}
+     */
+    function sortedShopLocationEntries() {
+        var keys = [];
+        for (var k in state.shopLocations) {
+            if (Object.prototype.hasOwnProperty.call(state.shopLocations, k)) keys.push(k);
+        }
+        keys.sort(function (a, b) {
+            var aIsConfig = a.indexOf('cfg:') === 0;
+            var bIsConfig = b.indexOf('cfg:') === 0;
+            if (aIsConfig !== bIsConfig) return aIsConfig ? -1 : 1;
+            var aNum = parseInt(a.split(':')[1], 10);
+            var bNum = parseInt(b.split(':')[1], 10);
+            if (isFinite(aNum) && isFinite(bNum) && aNum !== bNum) return aNum - bNum;
+            return a < b ? -1 : (a > b ? 1 : 0);
+        });
+        var out = [];
+        for (var i = 0; i < keys.length; i++) out.push({ key: keys[i], loc: state.shopLocations[keys[i]] });
+        return out;
+    }
+
+    /** @param {object} loc @returns {string} e.g. "123.4, -456.7, 30.0" */
+    function formatShopLocationCoordinates(loc) {
+        if (!loc || typeof loc.x !== 'number' || typeof loc.y !== 'number' || typeof loc.z !== 'number') return '';
+        return loc.x.toFixed(1) + ', ' + loc.y.toFixed(1) + ', ' + loc.z.toFixed(1);
+    }
+
+    function buildShopLocationsTable() {
+        var entries = sortedShopLocationEntries();
+        if (entries.length === 0) {
+            var empty = mk('div', {});
+            empty.appendChild(mk('p', { class: 'k9tablet-muted', text: S('shop_locations_empty') }));
+            return empty;
+        }
+
+        var table = mk('table', { class: 'k9tablet-table' });
+        var thead = mk('thead');
+        var headRow = mk('tr');
+        [S('column_label'), S('column_coordinates'), S('column_model'), S('column_source'), S('column_actions')].forEach(function (h) {
+            headRow.appendChild(mk('th', { text: h }));
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        var tbody = mk('tbody');
+        for (var i = 0; i < entries.length; i++) {
+            tbody.appendChild(buildShopLocationRow(entries[i].key, entries[i].loc));
+        }
+        table.appendChild(tbody);
+        return table;
+    }
+
+    /**
+     * @param {string} key -- 'cfg:<n>' (config.lua, read-only) or 'db:<id>' (runtime, editable/removable)
+     * @param {object} loc -- {x,y,z,heading,model,scenario,label}, ALL already resolved server-side, never nil
+     */
+    function buildShopLocationRow(key, loc) {
+        var tr = mk('tr');
+        tr.appendChild(mk('td', { text: (loc && typeof loc.label === 'string') ? loc.label : '' }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: formatShopLocationCoordinates(loc) }));
+        tr.appendChild(mk('td', { class: 'k9tablet-muted', text: (loc && typeof loc.model === 'string') ? loc.model : '' }));
+
+        var isRuntime = key.indexOf('db:') === 0;
+        tr.appendChild(mk('td', { text: isRuntime ? S('source_runtime') : S('source_config') }));
+
+        var actionsTd = mk('td', { class: 'k9tablet-cert-tier-actions' });
+        if (isRuntime) {
+            actionsTd.appendChild(mkButton(S('shop_location_edit_label'), 'k9tablet-btn', function () {
+                openEditShopLocationDraft(key, loc);
+            }, { disabled: state.pendingAction }));
+            // Two-click confirm (not styled `--danger`: repositioning is
+            // reversible, but consequential enough -- it moves a live shop
+            // ped to wherever the operator happens to be standing -- that a
+            // stray click deserves a second one, same reasoning as every
+            // other mkConfirmButton on this page).
+            actionsTd.appendChild(mkConfirmButton(S('shop_location_move_here_label'), 'k9tablet-btn', function () {
+                moveShopLocationHere(key);
+            }, { disabled: state.pendingAction, title: S('shop_location_move_here_hint') }));
+            actionsTd.appendChild(mkConfirmButton(S('shop_location_remove_label'), 'k9tablet-btn k9tablet-btn--danger', function () {
+                removeShopLocation(key);
+            }, { disabled: state.pendingAction }));
+        } else {
+            // config.lua entries are NEVER editable/removable from here --
+            // see server/equipmentshop.lua's own SCOPE note: a stored
+            // override keyed to config.lua's own array index would silently
+            // apply to the wrong location the instant an operator reorders
+            // that array.
+            actionsTd.appendChild(mk('span', { class: 'k9tablet-muted', text: S('shop_location_config_note') }));
+        }
+
+        // A Move/Remove REFUSAL renders INLINE on THIS specific row --
+        // "cannot, and here is why" -- same convention as
+        // certTierActionError just above.
+        if (state.shopLocationActionError && state.shopLocationActionError.key === key) {
+            actionsTd.appendChild(mk('p', { class: 'k9tablet-error-text k9tablet-cert-tier-row-error', text: state.shopLocationActionError.text }));
+        }
+
+        tr.appendChild(actionsTd);
+        return tr;
+    }
+
+    /** Opens a BLANK draft for a brand-new location -- `key: null` marks it
+     * as "new" for saveShopLocationDraft() below. Deliberately NO x/y/z/
+     * heading fields on this draft at all: those are captured entirely
+     * client(Lua)-side from the operator's own current position at Save
+     * time (see client/tablet.lua's own tablet:equipmentShopAddLocation --
+     * this page has no native access to GetEntityCoords to offer them even
+     * if it wanted to). */
+    function openNewShopLocationDraft() {
+        state.shopLocationDraft = { key: null, label: '', model: '', scenario: '' };
+        render();
+    }
+
+    /** Opens a draft pre-filled from an EXISTING runtime location -- a COPY
+     * of its fields, never the live object, so Cancel never mutates
+     * state.shopLocations. @param {string} key @param {object} loc */
+    function openEditShopLocationDraft(key, loc) {
+        state.shopLocationDraft = {
+            key: key,
+            label: (loc && typeof loc.label === 'string') ? loc.label : '',
+            model: (loc && typeof loc.model === 'string') ? loc.model : '',
+            scenario: (loc && typeof loc.scenario === 'string') ? loc.scenario : '',
+        };
+        render();
+    }
+
+    function closeShopLocationDraft() {
+        state.shopLocationDraft = null;
+        render();
+    }
+
+    /** Add/Edit form -- label/model/scenario ONLY, reusing the SAME field/
+     * form classes as the theme editor / certification tier form (no new
+     * CSS introduced for this screen -- see html/tablet.css's own note).
+     * Position is NEVER edited here -- see openNewShopLocationDraft()'s own
+     * comment and the "Move Here" row action instead. */
+    function buildShopLocationDraftForm() {
+        var draft = state.shopLocationDraft;
+        var wrap = mk('div', { class: 'k9tablet-cert-tier-form' });
+
+        var labelRow = mk('div', { class: 'k9tablet-theme-field' });
+        labelRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_location_label_label') }));
+        var labelInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', placeholder: S('shop_location_label_placeholder'), maxlength: '100' } });
+        labelInput.value = draft.label;
+        labelInput.addEventListener('input', function (e) { draft.label = e.target.value; });
+        labelRow.appendChild(labelInput);
+        wrap.appendChild(labelRow);
+
+        var modelRow = mk('div', { class: 'k9tablet-theme-field' });
+        modelRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_location_model_label') }));
+        var modelInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', placeholder: S('shop_location_model_placeholder'), maxlength: '64' } });
+        modelInput.value = draft.model;
+        modelInput.addEventListener('input', function (e) { draft.model = e.target.value; });
+        modelRow.appendChild(modelInput);
+        wrap.appendChild(modelRow);
+
+        var scenarioRow = mk('div', { class: 'k9tablet-theme-field' });
+        scenarioRow.appendChild(mk('label', { class: 'k9tablet-theme-field-label', text: S('shop_location_scenario_label') }));
+        var scenarioInput = mk('input', { class: 'k9tablet-cert-tier-label-input', attrs: { type: 'text', placeholder: S('shop_location_scenario_placeholder'), maxlength: '64' } });
+        scenarioInput.value = draft.scenario;
+        scenarioInput.addEventListener('input', function (e) { draft.scenario = e.target.value; });
+        scenarioRow.appendChild(scenarioInput);
+        wrap.appendChild(scenarioRow);
+
+        var actions = mk('div', { class: 'k9tablet-theme-actions' });
+        actions.appendChild(mkButton(S('shop_location_save_label'), 'k9tablet-btn', saveShopLocationDraft, { disabled: state.pendingAction }));
+        actions.appendChild(mkButton(S('shop_location_cancel_label'), 'k9tablet-link-btn', closeShopLocationDraft));
+        wrap.appendChild(actions);
+
+        if (draft.key === null) {
+            wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('shop_location_add_hint') }));
+        }
+
+        return wrap;
+    }
+
+    /** @param {object|undefined} result @returns {string} */
+    function shopLocationErrorText(result) {
+        if (!result) return S('action_failed');
+        if (typeof result.message === 'string' && result.message.length > 0) return result.message;
+        switch (result.error) {
+            case 'denied': return S('shop_location_error_denied');
+            case 'rate_limited': return S('shop_location_error_rate_limited');
+            case 'invalid_coords': return S('shop_location_error_invalid_coords');
+            case 'invalid_heading': return S('shop_location_error_invalid_heading');
+            case 'invalid_model': return S('shop_location_error_invalid_model');
+            case 'invalid_scenario': return S('shop_location_error_invalid_scenario');
+            case 'invalid_label': return S('shop_location_error_invalid_label');
+            case 'invalid_key': return S('shop_location_error_invalid_key');
+            case 'invalid_payload': return S('shop_location_error_invalid_payload');
+            case 'db_error': return S('shop_location_error_db_error');
+            case 'feature_disabled': return S('shop_location_error_feature_disabled');
+            case 'timeout': return S('error_timeout');
+            case 'network_error': return S('error_network');
+            default: return S('action_failed');
+        }
+    }
+
     // ------------------------------------------------------------------
     // DATA LOADERS
     // ------------------------------------------------------------------
@@ -2059,6 +2446,42 @@
         });
     }
 
+    /** Fetched fresh every time the Shop Locations tab is opened (see
+     * buildTabs()) -- NEVER a hardcoded list, same posture as
+     * loadCertTiers() just above. High command only (server-side gate --
+     * see this screen's own buildShopLocationsScreen() doc comment). */
+    function loadShopLocations() {
+        state.shopLocationsLoading = true;
+        state.shopLocationsError = null;
+        // STALE-RESPONSE GUARD: this tab can be left and revisited (or
+        // Refresh -- via Retry after an error -- pressed twice) while an
+        // earlier tablet:equipmentShopGetLocations request is still in
+        // flight; nothing here cancels the underlying fetch. Unlike
+        // loadPersonSummary()/loadRoster() (which compare the in-flight
+        // request's own captured target/query against current state at
+        // resolution time), this list has no such per-request identity to
+        // key off -- so a plain, monotonically increasing request id is
+        // used instead: only the response for the MOST RECENTLY issued
+        // request is ever applied, exactly the same class of fix, applied
+        // the only way it CAN be applied when every request asks the exact
+        // same question.
+        var requestId = ++state.shopLocationsRequestId;
+        render();
+
+        fetchNui('tablet:equipmentShopGetLocations', {}).then(function (result) {
+            if (requestId !== state.shopLocationsRequestId) return;
+
+            state.shopLocationsLoading = false;
+            if (!result || result.ok !== true) {
+                state.shopLocationsError = result || { error: 'unknown_error' };
+                render();
+                return;
+            }
+            state.shopLocations = (result.locations && typeof result.locations === 'object') ? result.locations : {};
+            render();
+        });
+    }
+
     /** @param {object|undefined} result @returns {string} */
     function certTierErrorText(result) {
         if (!result) return S('action_failed');
@@ -2334,6 +2757,127 @@
         });
     }
 
+    /**
+     * Saves the shop-location draft form -- either creating a brand-new
+     * location (draft.key === null, via tablet:equipmentShopAddLocation)
+     * or editing an existing runtime one's metadata (via
+     * tablet:equipmentShopMoveLocation's `updates` shape). NOT the generic
+     * runMutation() helper: this page never optimistically mutates its own
+     * shopLocations map for anything other than the server's own returned
+     * `locations` (same "re-pull the authoritative version" posture as
+     * every other mutation on this page), and needs its OWN post-success
+     * handling (close the draft) rather than a generic reload callback.
+     *
+     * A blank field means two DIFFERENT things depending on isNew -- see
+     * client/tablet.lua's own tablet:equipmentShopAddLocation/
+     * MoveLocation doc comments for the full reasoning:
+     *   - Add (isNew): OMITTED entirely (empty string is never sent) --
+     *     "inherit the shop-wide default".
+     *   - Edit: sent as `false` -- "reset this field back to the shop-wide
+     *     default", since an edit draft always starts pre-filled from a
+     *     real, already-resolved (never blank) value, so a blank field here
+     *     is always a DELIBERATE clear, not an untouched default.
+     */
+    function saveShopLocationDraft() {
+        if (state.pendingAction || !state.shopLocationDraft) return;
+        var draft = state.shopLocationDraft;
+        var isNew = draft.key === null;
+
+        state.pendingAction = true;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        var nuiName, payload;
+        if (isNew) {
+            payload = {};
+            if (draft.label.trim().length > 0) payload.label = draft.label.trim();
+            if (draft.model.trim().length > 0) payload.model = draft.model.trim();
+            if (draft.scenario.trim().length > 0) payload.scenario = draft.scenario.trim();
+            nuiName = 'tablet:equipmentShopAddLocation';
+        } else {
+            var toUpdateValue = function (value) {
+                var trimmed = value.trim();
+                return trimmed.length > 0 ? trimmed : false;
+            };
+            payload = {
+                locationKey: draft.key,
+                updates: {
+                    label: toUpdateValue(draft.label),
+                    model: toUpdateValue(draft.model),
+                    scenario: toUpdateValue(draft.scenario),
+                },
+            };
+            nuiName = 'tablet:equipmentShopMoveLocation';
+        }
+
+        fetchNui(nuiName, payload).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                if (result.locations && typeof result.locations === 'object') state.shopLocations = result.locations;
+                state.shopLocationDraft = null;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                state.actionNotice = { kind: 'error', text: shopLocationErrorText(result) };
+            }
+            render();
+        });
+    }
+
+    /**
+     * "Move Here" -- repositions an EXISTING runtime location to the
+     * operator's own CURRENT in-game position. `useCurrentPosition: true`
+     * is the ONLY thing sent for coordinates -- this page has no native
+     * access to GetEntityCoords at all; client/tablet.lua captures the
+     * real values at the moment this callback fires (see that file's own
+     * tablet:equipmentShopMoveLocation doc comment).
+     * @param {string} key
+     */
+    function moveShopLocationHere(key) {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.shopLocationActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:equipmentShopMoveLocation', { locationKey: key, useCurrentPosition: true }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                if (result.locations && typeof result.locations === 'object') state.shopLocations = result.locations;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                var text = shopLocationErrorText(result);
+                state.shopLocationActionError = { key: key, text: text };
+                state.actionNotice = { kind: 'error', text: text };
+            }
+            render();
+        });
+    }
+
+    /** Deletes runtime location `key`. A refusal renders INLINE on that
+     * row (state.shopLocationActionError), same "cannot, and here is why"
+     * convention as deleteCertTier() above.
+     * @param {string} key */
+    function removeShopLocation(key) {
+        if (state.pendingAction) return;
+        state.pendingAction = true;
+        state.shopLocationActionError = null;
+        state.actionNotice = { kind: 'ok', text: S('action_working') };
+        render();
+
+        fetchNui('tablet:equipmentShopRemoveLocation', { locationKey: key }).then(function (result) {
+            state.pendingAction = false;
+            if (result && result.ok === true) {
+                if (result.locations && typeof result.locations === 'object') state.shopLocations = result.locations;
+                state.actionNotice = { kind: 'ok', text: S('action_succeeded') };
+            } else {
+                var text = shopLocationErrorText(result);
+                state.shopLocationActionError = { key: key, text: text };
+                state.actionNotice = { kind: 'error', text: text };
+            }
+            render();
+        });
+    }
+
     // ------------------------------------------------------------------
     // OPEN / CLOSE
     // ------------------------------------------------------------------
@@ -2346,6 +2890,7 @@
         state.maxXpPerGrant = typeof data.maxXpPerGrant === 'number' ? data.maxXpPerGrant : null;
         state.peds = Array.isArray(data.peds) ? data.peds : [];
         state.themingEnabled = data.themingEnabled === true;
+        state.shopLocationsEnabled = data.shopLocationsEnabled === true;
         state.branding = (data.branding && typeof data.branding === 'object') ? data.branding : {};
 
         // First-open ONLY, cosmetic seeding -- see applyBrandingSeedTheme()'s
@@ -2451,6 +2996,25 @@
         render();
     }
 
+    /** qbx_k9unit:client:equipmentShopLocationsUpdated relayed push -- SAME
+     * posture as handleThemeUpdated() just above: fires for EVERY connected
+     * client on every successful Add/Move/RemoveLocation, not only the
+     * officer who triggered it, and NOT gated on this page's own open/
+     * closed state. Applied unconditionally to state.shopLocations so an
+     * already-open Shop Locations screen updates live; deliberately never
+     * touches state.shopLocationDraft -- an in-progress add/edit form is
+     * left alone, same as the theme editor's own working copy is (there)
+     * intentionally overwritten but this one is not, since a location
+     * DRAFT's own key may not even be present in the pushed map yet (a new,
+     * unsaved one) and forcibly closing it out from under the operator
+     * would discard work in progress for no correctness benefit.
+     * @param {object} locations */
+    function handleShopLocationsUpdated(locations) {
+        if (!locations || typeof locations !== 'object') return;
+        state.shopLocations = locations;
+        render();
+    }
+
     function init() {
         rootEl = document.getElementById('k9tablet-root');
 
@@ -2466,6 +3030,9 @@
                     break;
                 case 'tablet:themeUpdated':
                     handleThemeUpdated(msg.data);
+                    break;
+                case 'tablet:equipmentShopLocationsUpdated':
+                    handleShopLocationsUpdated(msg.data);
                     break;
                 default:
                     break;

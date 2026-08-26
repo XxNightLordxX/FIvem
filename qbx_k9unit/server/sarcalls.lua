@@ -175,7 +175,11 @@
        scenttrail.lua's startScentHunt exactly, including the "denied"
        collapse for feature-off/no-access/citizenid-unresolvable/no-live-ped
        (this resource's established "don't invent a distinction the server
-       doesn't give data for" precedent). Resolves the CALLER'S OWN live
+       doesn't give data for" precedent) -- a per-person block.SARCalls
+       grant, or a missing feature.SARCalls grant while
+       Config.FeatureControl.RequireGrant.SARCalls is true, collapses into
+       the same 'denied' reason (see PER-PERSON FEATURE CONTROL below, and
+       IsSarCallsPermittedForCitizenId's own doc comment). Resolves the CALLER'S OWN live
        server-side position as the origin to roll a target near -- NEVER a
        client-supplied coordinate. The call's type ('person' | 'property')
        is rolled here too and kept server-side only until the call resolves
@@ -217,6 +221,34 @@
     those are client/sarcalls.lua's concern ('/k9sarcall [stop]').
     ======================================================================
 
+    PER-PERSON FEATURE CONTROL -- ADDED A LATER PASS (this pass found and
+    closed the gap; not present when this file was first written).
+    config.lua's own Config.FeatureControl.RequireGrant.SARCalls entry has
+    existed since that block was authored (with its own comment explaining
+    SARCalls is listed there "so high command can phase the hunt in per
+    person"), but requestSarCall below checked only Config.Features.SARCalls
+    and HasK9Access(source) -- the grant/block never had any effect. Fixed by
+    copying server/pursuitsprint.lua's own
+    IsPursuitSprintPermittedForCitizenId shape verbatim (see
+    IsSarCallsPermittedForCitizenId below) -- pursuitsprint.lua's own header
+    says to read it before writing another variant, and server/findalert.lua
+    already did the same for its own equivalent gap. Checked AFTER citizenid
+    resolves (a request that cannot be attributed to a real citizenid was
+    already 'denied' before this existed) and BEFORE
+    StartSarCallCooldown.Consume(citizenid) -- a denied request must never
+    spend the caller's cooldown budget, same reasoning the citizenid
+    resolution check immediately above it already established.
+    UNCONDITIONAL AND UNAFFECTED: 'qbx_k9unit:server:abandonSarCall' and the
+    tick loop's own timeout/found resolution -- this gate exists ONLY on the
+    call-START path. A citizenid whose grant is revoked, or who is freshly
+    blocked, mid-call must still be able to end that call exactly like
+    everyone else (see "NO UNBOUNDED TRAP" above) -- this resource's
+    established rule that a termination path is never gated on
+    access/certification/permission is not negotiable, and gating abandon
+    here would violate it for no benefit (the call is already running; all
+    a block should do is stop a NEW one from starting).
+    ======================================================================
+
     FILE-TO-FILE CONTRACT:
     - Calls HasK9Access(source) (server/certifications.lua), reused, never
       re-derived.
@@ -234,6 +266,11 @@
       fxmanifest.lua's server_scripts list relative to
       server/progression.lua does not matter.
     - Calls NotifyPlayer (server/notify.lua), reused, never re-derived.
+    - Calls HasPermission (server/permissions.lua) behind a
+      `type(HasPermission) == 'function'` runtime-existence guard, only from
+      IsSarCallsPermittedForCitizenId below -- same soft-dependency
+      convention as AwardXP above, matching server/pursuitsprint.lua's own
+      identical guard on its own copy of this exact check.
     - Exposes NO resource-global functions. ActiveSarCalls and
       StartSarCallCooldown are this file's own private state; nothing
       outside this file ever reads them directly.
@@ -572,6 +609,44 @@ CreateThread(function()
     end
 end)
 
+--- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
+--- resolution (config.lua's own Config.FeatureControl header), implemented
+--- in the EXACT shape server/pursuitsprint.lua's own
+--- IsPursuitSprintPermittedForCitizenId establishes (server/findalert.lua's
+--- own IsFindAlertsPermittedForCitizenId is a second, independent copy of
+--- the same shape) -- that file's own header says to read it before writing
+--- a variant, so this is a copy of its shape, not a new one. Step 1 (the
+--- global Config.Features.SARCalls flag) is already checked by
+--- requestSarCall below, before this function is ever reached:
+---   2. an explicit block.SARCalls grant -> DENY
+---   3. SARCalls listed in RequireGrant -> ALLOW only with an active
+---      feature.SARCalls grant
+---   4. otherwise -> ALLOW
+--- @param citizenid string
+--- @return boolean allowed
+local function IsSarCallsPermittedForCitizenId(citizenid)
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.SARCalls') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.SARCalls == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.SARCalls') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
+end
+
 lib.callback.register('qbx_k9unit:server:requestSarCall', function(source)
     if not Config.Features.SARCalls then return { started = false, reason = 'denied' } end
     if not HasK9Access(source) then return { started = false, reason = 'denied' } end
@@ -589,6 +664,19 @@ lib.callback.register('qbx_k9unit:server:requestSarCall', function(source)
     local citizenid = player and player.PlayerData and player.PlayerData.citizenid
     local jobName = player and player.PlayerData and player.PlayerData.job and player.PlayerData.job.name
     if not citizenid then
+        return { started = false, reason = 'denied' }
+    end
+
+    -- PER-PERSON FEATURE CONTROL -- see IsSarCallsPermittedForCitizenId
+    -- above and this file's own header "PER-PERSON FEATURE CONTROL" section.
+    -- Checked BEFORE consuming the cooldown, same reasoning as the
+    -- citizenid-resolution check immediately above: a denied request must
+    -- never spend the cooldown budget it would otherwise have been charged
+    -- to. Collapsed into the same 'denied' reason as every other non-
+    -- cooldown/non-already_active rejection in this callback -- this file's
+    -- own documented "don't invent a distinction the server doesn't give
+    -- data for" precedent (see the reason enum's own doc comment above).
+    if not IsSarCallsPermittedForCitizenId(citizenid) then
         return { started = false, reason = 'denied' }
     end
 

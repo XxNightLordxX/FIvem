@@ -557,3 +557,18 @@ body {
     font-size: 13px;
     cursor: pointer;
 }
+
+/*
+    K9 SUPPLY SHOP LOCATION MANAGEMENT (its own tab, high command only) --
+    server/equipmentshop.lua. Deliberately introduces NO new form/action
+    classes of its own: html/tablet.js's buildShopLocationsScreen() reuses
+    the SAME .k9tablet-cert-tier-form/.k9tablet-theme-field/
+    .k9tablet-cert-tier-label-input/.k9tablet-cert-tier-actions/
+    .k9tablet-cert-tier-row-error rules already defined above for the
+    theme editor and certification tier form -- one set of rules for a
+    third feature now, not a new visual language. The only genuinely new
+    rule this screen needs is tabular-aligned coordinate text below.
+*/
+.k9tablet-table .k9tablet-muted {
+    font-variant-numeric: tabular-nums;
+}
