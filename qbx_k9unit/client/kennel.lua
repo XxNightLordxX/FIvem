@@ -618,6 +618,35 @@ RegisterNetEvent('qbx_k9unit:client:enterKennelConfirmed', function(netId)
         return -- streamed out / changed in the brief round trip -- fail closed
     end
 
+    -- MUTUAL GUARD vs. client/vehicle.lua's real vehicle seating --
+    -- re-checked HERE, not just at onSelect time, for the identical
+    -- round-trip-window reason every other re-validate-after-a-server-trip
+    -- check in this resource exists (client/vehicle.lua's own
+    -- vehicleSeatClaimGranted handler re-checks its own drag/bite-hold/
+    -- kennel-rest guards for the same reason): the player could have
+    -- selected "Enter Vehicle" (a SEPARATE, ALSO server-arbitrated action)
+    -- in the gap between this file's own onSelect guard passing and this
+    -- confirmation arriving. server/kennel.lua's own requestEnterKennel
+    -- handler already wrote KennelOccupants[citizenid] BEFORE sending this
+    -- event -- refusing locally here without telling the server would leave
+    -- that occupancy claim held forever (server/kennel.lua's own
+    -- requestExitKennel is the ONLY thing that clears it short of a
+    -- disconnect; there is no TTL on it at all, unlike
+    -- client/vehicle.lua's own 10s seat-claim TTL backstop), so the release
+    -- below is not optional. ReleaseKennelRest() is NOT used for this --
+    -- restState was never set on this path, so it would see nothing to do
+    -- and skip sending anything at all (see its own `if not restState then
+    -- return end` guard) -- the release must be sent directly.
+    --
+    -- Soft dependency, this resource's established convention -- see this
+    -- file's own "Rest in Kennel" canInteract/onSelect guards above for the
+    -- same check.
+    if type(IsInK9Vehicle) == 'function' and IsInK9Vehicle() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_by_vehicle'), type = 'error' })
+        TriggerServerEvent('qbx_k9unit:server:requestExitKennel')
+        return
+    end
+
     local ped = PlayerPedId()
     local kennelCoords = GetEntityCoords(entity)
     local kennelHeading = GetEntityHeading(entity)
@@ -963,6 +992,17 @@ local function RegisterKennelOxTargetOption()
             canInteract = function(entity, distance, coords, name)
                 if not Config.Features.DeployableKennel then return false end
                 if IsRestingInKennel() or IsCarryingKennel() then return false end
+                -- MUTUAL GUARD vs. client/vehicle.lua's real vehicle seating
+                -- -- QA-reported real defect, this pass, closed from both
+                -- sides at once (see this guard's own onSelect-side doc
+                -- comment below for the full reasoning). Display-optimization
+                -- mirror only: PerformSearch-style, the real refusal lives in
+                -- onSelect and, defensively, in enterKennelConfirmed below.
+                -- Soft dependency, this resource's established convention --
+                -- IsInK9Vehicle() only exists once client/vehicle.lua's own
+                -- Config.Features.VehicleEntryExit gate lets that file define
+                -- it, and this file has no hard load-order requirement on it.
+                if type(IsInK9Vehicle) == 'function' and IsInK9Vehicle() then return false end
                 -- ANY PED (this resource's own established convention,
                 -- confirmed by this file's own test suite: "never calls
                 -- IsOwnModelK9() anywhere") -- CanShowK9UI() alone already
@@ -974,6 +1014,35 @@ local function RegisterKennelOxTargetOption()
             end,
             onSelect = function(data)
                 if not data or not data.entity or not DoesEntityExist(data.entity) then return end
+                -- MUTUAL GUARD vs. client/vehicle.lua's real vehicle seating
+                -- (SET_PED_INTO_VEHICLE) -- QA-reported real defect, this
+                -- pass: neither file previously knew about the other, so a
+                -- K9 already seated in a vehicle could still request
+                -- entering a kennel, and 'qbx_k9unit:client:enterKennelConfirmed'
+                -- below would AttachEntityToEntity the SAME ped the vehicle
+                -- already owns via a real seat -- the two mechanics would
+                -- then fight (the kennel watchdog re-asserting the attach
+                -- every ~1s against a ped the vehicle also claims) or one
+                -- would silently win, leaving the OTHER mechanic's own
+                -- bookkeeping (vehicleState / restState) pointing at a state
+                -- that is no longer true. Checked HERE, before
+                -- requestEnterKennel is ever sent, for the same reason
+                -- client/vehicle.lua's own kennel-rest guard is checked
+                -- before its seat claim is requested: server/kennel.lua's
+                -- requestEnterKennel writes KennelOccupants[citizenid]
+                -- IMMEDIATELY, before this client ever attaches anything --
+                -- an occupancy claim taken and then abandoned here would
+                -- have NO timeout at all (unlike client/vehicle.lua's own
+                -- 10s VEHICLE_SEAT_CLAIM_TTL_MS backstop), so it must never
+                -- be requested in the first place while already in a
+                -- vehicle, not merely refused after the fact.
+                --
+                -- Soft dependency, this resource's established convention --
+                -- see the canInteract mirror above for the same guard.
+                if type(IsInK9Vehicle) == 'function' and IsInK9Vehicle() then
+                    lib.notify({ title = locale('common.notify_title'), description = locale('combat.blocked_by_vehicle'), type = 'error' })
+                    return
+                end
                 local netId = NetworkGetNetworkIdFromEntity(data.entity)
                 TriggerServerEvent('qbx_k9unit:server:requestEnterKennel', netId)
             end,

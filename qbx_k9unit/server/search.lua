@@ -112,7 +112,12 @@
       see HandleSearchTarget's own doc comment, step 8) — deliberate,
       not a duplicate-by-accident, since certification.lua's revoke path
       can run to completion during that same await window.
-    - THIS FILE exposes exactly one resource-global function:
+    - THIS FILE exposes TWO resource-global functions (PERFORMANCE AUDIT
+      PASS, this pass — was "exactly one" before `ForEachNearbyPlayer` was
+      extracted; see that function's own doc comment, right above
+      BroadcastContrabandAlert below, for the full writeup: a pure,
+      read-only "who is near this point right now" helper with no gating of
+      its own, reused by server/main.lua's relayBark/relayDoorScratch).
       `GetContrabandAlertTier(totalWeight)` — a thin pass-through to the
       file-local `ResolveAlertTier`, added purely as a test/inspection seam
       (same shape and same reason as server/progression.lua's
@@ -157,6 +162,19 @@
       establish. No load-order assumption on server/progression.lua either
       way. See config.lua's `Config.XP.awards.searchContrabandFound` comment
       for the award's own design rationale.
+    - SEARCHER-BUSY GUARD (server-side half of client/search.lua's own
+      IsBusyWithSomethingElse(), commit a32a554 — see IsSearcherBusyElsewhere's
+      own doc comment below for the full writeup): THIS FILE also calls
+      `IsK9CurrentlyHolding(holderSrc)`, a READ-ONLY resource-global
+      server/combat.lua exposes over its own file-local K9ActiveEffect table
+      (same "global helper, private per-file state" shape as that file's own
+      CountActiveHoldsByEffectType/EndActiveEffectForHolder) — via a
+      `type(IsK9CurrentlyHolding) == 'function'` runtime existence guard,
+      the same soft-dependency convention as the AwardXP/GetXPTier bullet
+      immediately above. No load-order assumption on server/combat.lua
+      either way; a server predating this accessor simply never blocks on
+      this specific case, degrading to the pre-fix behavior for that one
+      check only, never an error.
     - ECONOMY-AUDIT FIX: THIS FILE also owns `ContrabandXpState`
       below (per-resolved-target last-awarded contraband weight cache) —
       see that table's own declaration comment, right after
@@ -551,31 +569,61 @@ function GetContrabandAlertTier(totalWeight)
     return ResolveAlertTier(totalWeight)
 end
 
---- BLOCKING per DEVELOPER_REFERENCE.md#contraband-search §1: iterates
---- connected players and only notifies those within
---- Config.SearchZones.alertBroadcastRadius of the TARGET's own live
---- coordinates — NEVER a global TriggerClientEvent(-1, ...) like
---- relayBark's, since (unlike a bark) this payload identifies a specific
---- vehicle/person just flagged for contraband; a global broadcast would
---- leak that fact to an accomplice anywhere on the map. Payload carries
---- ONLY `targetNetId` + `alertTier` — NEVER `totalWeight`/`contrabandFound`
---- (security review §1's "secondary" finding).
---- @param targetCoords vector3 -- the searched target's own live coords, resolved server-side
---- @param targetNetId number -- the searched target's own netId (client-supplied but already verified to resolve to this exact entity by the time this is called)
---- @param alertTierName string
-local function BroadcastContrabandAlert(targetCoords, targetNetId, alertTierName)
+--- Iterates every currently-connected player and calls
+--- `callback(playerId, playerPed)` for each one currently within `radius`
+--- meters of `coords` — a live, server-computed distance check, never a
+--- client-claimed one. Pure read-only helper: never mutates any of this
+--- file's own state, never gates on HasK9Access/Config.Features/anything
+--- else — callers apply their own gating before or inside `callback`, same
+--- division of responsibility as this codebase's other shared,
+--- single-purpose accessors (e.g. server/combat.lua's
+--- CountActiveHoldsByEffectType).
+---
+--- Extracted from BroadcastContrabandAlert's own original inline loop
+--- (below) into a named, reusable, resource-global helper (this resource's
+--- established "global helper, private per-file state" convention) so
+--- server/main.lua's relayBark/relayDoorScratch — a PERFORMANCE fix, not a
+--- security one, see those two handlers' own comments for why an
+--- unfiltered `-1` broadcast was never a privacy leak for either of them,
+--- unlike THIS file's own BroadcastContrabandAlert below — can reuse the
+--- exact same "who is genuinely near this point right now" logic instead
+--- of each hand-rolling its own GetPlayers()/GetPlayerPed()/distance loop.
+--- Behavior is byte-identical to the original inline loop; this is a pure
+--- extraction, not a rewrite.
+--- @param coords vector3
+--- @param radius number
+--- @param callback fun(playerId: number, playerPed: number)
+function ForEachNearbyPlayer(coords, radius, callback)
     for _, playerIdStr in ipairs(GetPlayers()) do
         local playerId = tonumber(playerIdStr)
         if playerId then
             local ped = GetPlayerPed(playerId)
             if ped ~= 0 then
-                local dist = #(GetEntityCoords(ped) - targetCoords)
-                if dist <= Config.SearchZones.alertBroadcastRadius then
-                    TriggerClientEvent('qbx_k9unit:client:playContrabandAlert', playerId, targetNetId, alertTierName)
+                local dist = #(GetEntityCoords(ped) - coords)
+                if dist <= radius then
+                    callback(playerId, ped)
                 end
             end
         end
     end
+end
+
+--- BLOCKING per DEVELOPER_REFERENCE.md#contraband-search §1: notifies only
+--- players within Config.SearchZones.alertBroadcastRadius of the TARGET's
+--- own live coordinates (via ForEachNearbyPlayer above) — NEVER a global
+--- TriggerClientEvent(-1, ...) like relayBark's, since (unlike a bark) this
+--- payload identifies a specific vehicle/person just flagged for
+--- contraband; a global broadcast would leak that fact to an accomplice
+--- anywhere on the map. Payload carries ONLY `targetNetId` + `alertTier` —
+--- NEVER `totalWeight`/`contrabandFound` (security review §1's "secondary"
+--- finding).
+--- @param targetCoords vector3 -- the searched target's own live coords, resolved server-side
+--- @param targetNetId number -- the searched target's own netId (client-supplied but already verified to resolve to this exact entity by the time this is called)
+--- @param alertTierName string
+local function BroadcastContrabandAlert(targetCoords, targetNetId, alertTierName)
+    ForEachNearbyPlayer(targetCoords, Config.SearchZones.alertBroadcastRadius, function(playerId)
+        TriggerClientEvent('qbx_k9unit:client:playContrabandAlert', playerId, targetNetId, alertTierName)
+    end)
 end
 
 -- An entry older than its own cooldown window is by definition no longer
@@ -1078,6 +1126,89 @@ local function LogSearchAttempt(source, targetType, plateOrNil, targetCitizenidO
     FireOutboundEvent('qbx_k9unit:events:searchCompleted', searcherCitizenid, searcherJob, targetType, result, totalWeightOrNil, alertTierOrNil)
 end
 
+--- SERVER-SIDE HALF of client/search.lua's own IsBusyWithSomethingElse()
+--- guard (commit a32a554) — see that function's own doc comment
+--- (client/search.lua) for the CLIENT-side half this mirrors. That guard,
+--- and client/combat.lua's reverse guard (refusing to start a
+--- bite/takedown/drag while a search is running), are BOTH client-side
+--- only — a modified client simply never runs either file, so neither is a
+--- real security boundary on its own. THIS function is the actual
+--- enforcement, checked unconditionally regardless of what any client
+--- claims or skips.
+---
+--- Only TWO of that client-side guard's checks are mirrored here — the two
+--- that carry a real, exploitable consequence if a modified client skips
+--- them (the other two, noted at the bottom of this comment, do not):
+---   1. K9 IN VEHICLE: a K9 strapped into a vehicle seat could still select
+---      ox_target's "Search Person"/"Search Vehicle" against a target
+---      standing OUTSIDE that vehicle — ox_target's own reach check has no
+---      opinion on whether the requester is seated (client/search.lua's own
+---      IsBusyWithSomethingElse doc comment: "a dog sitting in the back of
+---      a cruiser could search a person standing outside it, through the
+---      door... nothing refused it -- not this file, not the server").
+---      Checked via a plain native call against the REQUESTER's own live
+---      ped — no cross-file accessor needed. `IsPedInAnyVehicle` is the
+---      same native server/combat.lua's own ValidateCombatRequest already
+---      relies on for its own (different — TARGET-seated, not
+---      requester-seated) vehicle exclusion; see that function's own doc
+---      comment for the confirmation this native is server-registered.
+---   2. K9 ALREADY HOLDING A TARGET: a K9 mid-bite/mid-takedown/mid-drag on
+---      one target has no business simultaneously running a contraband
+---      search against a SECOND, unrelated target — one ped cannot
+---      physically do both, and nothing server-side stopped it before this
+---      fix, letting a modified client fire searchTarget freely while
+---      server/combat.lua's own hold-compliance sampling kept running
+---      unaffected on the first target in the background. Checked via
+---      `IsK9CurrentlyHolding(source)` — see this file's own FILE-TO-FILE
+---      CONTRACT above (SEARCHER-BUSY GUARD bullet) for the accessor's full
+---      soft-dependency writeup.
+---
+--- DELIBERATELY NOT MIRRORED: client/search.lua's IsBusyWithSomethingElse
+--- also refuses to start a search for IsDragTargetEngaged (this ped is
+--- currently the one BEING dragged) and IsFetchCarryEngaged (carrying a
+--- fetch item in its mouth). Neither has an equivalent real-capability
+--- consequence worth closing server-side: a ped currently being restrained
+--- has no ordinary way to select an ox_target option in the first place
+--- (and if it somehow could, it would still fail this file's own
+--- proximity/entity checks the same as any other request), and fetch-carry
+--- is a purely client-cosmetic prop attachment with no server-side registry
+--- to check against at all. Closing cases 1/2 above closes every case that
+--- actually lets a modified client reach a search this resource's own
+--- design says should be unreachable.
+--- @param source number
+--- @param requesterPed number -- already resolved by the caller, confirmed ~= 0
+--- @return boolean busy
+--- @return string? reason -- only set when busy is true
+local function IsSearcherBusyElsewhere(source, requesterPed)
+    -- INCIDENT FIX (this pass, coordinator-flagged, OOM on a shared test
+    -- box): IsPedInAnyVehicle is a confirmed, always-present FXServer
+    -- native in real production (server/combat.lua's own ValidateCombatRequest
+    -- already calls it unguarded, correctly, for that same reason) -- this
+    -- `type(...) == 'function'` check therefore NEVER short-circuits on a
+    -- real server; it exists purely so a Lua TEST SANDBOX that has not
+    -- (yet, or ever) stubbed this native for its own fixture degrades to
+    -- "not busy" instead of a hard `attempt to call a nil value` error.
+    -- Without this guard, tests/coopsearchbonus_spec.lua's own sandbox
+    -- (which loads this file's real callback but predates this call site
+    -- and never stubbed this native) turned every real search call into a
+    -- thrown error, which that spec's own round-robin "loop until XP
+    -- crosses a threshold" (`while env.GetXP(citizenid) < targetXp do ...
+    -- end`) never recovered from -- XP could never move, so the loop never
+    -- terminated, consuming unbounded memory on every failed iteration.
+    -- This is a test-fixture-robustness guard, not a production security
+    -- relaxation: a genuinely malicious/modified CLIENT has no way to make
+    -- a real FXServer's own IsPedInAnyVehicle native stop existing.
+    if type(IsPedInAnyVehicle) == 'function' and IsPedInAnyVehicle(requesterPed, false) then
+        return true, 'searcher_in_vehicle'
+    end
+
+    if type(IsK9CurrentlyHolding) == 'function' and IsK9CurrentlyHolding(source) then
+        return true, 'searcher_engaged'
+    end
+
+    return false, nil
+end
+
 --- Internal implementation for the searchTarget callback below. Called
 --- only after the callback's own cheap checks (payload shape, feature
 --- flag, HasK9Access, in-flight mutex, flat per-source cooldown) already
@@ -1090,6 +1221,16 @@ end
 --- reordering "for convenience," e.g. moving the inventory read before
 --- the proximity check, silently reopens the map-wide oracle this
 --- ordering exists to prevent):
+---   0. (Added this pass — see IsSearcherBusyElsewhere's own doc comment
+---      immediately above.) Before even step 1: resolve the REQUESTER's
+---      own live ped and reject outright if it is currently seated in a
+---      vehicle or already holding another target in a bite/takedown/drag
+---      — server-side half of client/search.lua's own MUTUAL GUARD (commit
+---      a32a554). Cheaper than every step below and independent of which
+---      target was requested, so it runs first. Steps 1-11 below keep
+---      their original numbering and are otherwise unchanged by this
+---      addition; `requesterPed` resolved here is reused, not re-derived,
+---      by step 3's own proximity check further down.
 ---   1. Resolve `targetNetId` to a live entity — reject if it doesn't
 ---      exist (despawned, garbage netId, or never existed).
 ---   2. Cross-check the resolved entity's REAL type against the CLAIMED
@@ -1186,6 +1327,19 @@ end
 --- @param requestedAt number -- GetGameTimer() at the moment the flat cooldown check passed, reused as the single timestamp for both cooldown stamps
 --- @return table result
 local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
+    -- STEP 0 — see IsSearcherBusyElsewhere's own doc comment above for the
+    -- full writeup. `requesterPed` is resolved HERE, once, and reused by
+    -- step 3's own proximity check further below (never re-derived).
+    local requesterPed = GetPlayerPed(source)
+    if requesterPed == 0 then
+        return { ok = false, reason = 'invalid_target' }
+    end
+
+    local searcherBusy, searcherBusyReason = IsSearcherBusyElsewhere(source, requesterPed)
+    if searcherBusy then
+        return { ok = false, reason = searcherBusyReason }
+    end
+
     -- DEVELOPER_REFERENCE.md near-term item 2: was
     -- `NetworkGetEntityFromNetworkId(targetNetId)` + a bare `entity == 0`
     -- check, no DoesEntityExist call. Now server/entities.lua's shared
@@ -1231,12 +1385,9 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     end
 
     -- MANDATORY, FIRST-CLASS live proximity check — BEFORE any
-    -- ox_inventory query, unconditionally.
-    local requesterPed = GetPlayerPed(source)
-    if requesterPed == 0 then
-        return { ok = false, reason = 'invalid_target' }
-    end
-
+    -- ox_inventory query, unconditionally. `requesterPed` already resolved
+    -- (and confirmed ~= 0) by STEP 0 at the top of this function — reused
+    -- here, never re-derived.
     local maxDistance = targetType == 'vehicle' and Config.SearchZones.vehicleSearchDistance or Config.SearchZones.personSearchDistance
     local dist = #(GetEntityCoords(requesterPed) - GetEntityCoords(entity))
     if dist > maxDistance then

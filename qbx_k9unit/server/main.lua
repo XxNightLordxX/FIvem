@@ -77,12 +77,25 @@
       [client/main.lua] — netId is still present here because the
       *receiving* clients need to know which entity to attach the sound
       to; it's server-resolved from the sender, not client-claimed.
+      PERFORMANCE FIX (this pass, coder-backend): used to be a global `-1`
+      broadcast; now distance-filtered to players within
+      NEARBY_BROADCAST_RADIUS_METERS of the barking K9's own live coords
+      via server/search.lua's shared ForEachNearbyPlayer helper — see the
+      relayBark handler's own comment below for the full writeup and why
+      this is a bandwidth fix, not a security one (unlike
+      server/search.lua's own contraband-alert broadcast, a bark's netId is
+      inert to any client that never has that entity streamed in, so there
+      was never an information leak here, only wasted network chatter).
     - 'qbx_k9unit:client:playDoorScratch' (doorNetId: number)
-      [client/movement.lua] — mirrors playBark above; sent as a global
-      broadcast (-1), deliberately, since a door's location carries no
-      person/vehicle identity to leak (see the relayDoorScratch handler's
-      own comment below for why this is NOT the pattern to copy for
-      server/search.lua's contraband-alert broadcast).
+      [client/movement.lua] — mirrors playBark above; NOW ALSO
+      distance-filtered, same PERFORMANCE FIX and same shared helper (see
+      the relayDoorScratch handler's own comment below) — NOT because a
+      door's location carries any person/vehicle identity to leak (it does
+      not, see that handler's own comment for why this was never the
+      pattern to copy for server/search.lua's own contraband-alert
+      broadcast on privacy grounds), purely because broadcasting to a
+      player who cannot possibly have the door entity streamed in is pure
+      waste.
     - 'qbx_k9unit:client:leashAttachRequest' (fromServerId: number)
       [client/movement.lua] — shown to the target as an accept/decline
       prompt.
@@ -430,16 +443,18 @@ AddEventHandler('onResourceStart', function(resourceName)
     end
 end)
 
--- coder-security: relayBark broadcasts to EVERY connected client
--- (TriggerClientEvent(..., -1, ...) below) on every call — with no
--- per-player throttle, a single modified client spamming this event as
--- fast as the network allows turns into a server-wide broadcast flood
--- (network chatter to every player, plus a PlaySoundFromEntity call fired
--- on every one of their clients), i.e. an abuse-resistance gap per
--- DEVELOPER_REFERENCE.md's general "spammable actions" concern even though a bark itself
--- has no other gameplay effect. A small per-player cooldown closes this
--- without needing a config addition — bark has no legitimate reason to be
--- triggered faster than this.
+-- coder-security: relayBark used to broadcast to EVERY connected client
+-- (TriggerClientEvent(..., -1, ...)) on every call — with no per-player
+-- throttle, a single modified client spamming this event as fast as the
+-- network allows turns into a server-wide broadcast flood (network chatter
+-- to every player, plus a PlaySoundFromEntity call fired on every one of
+-- their clients), i.e. an abuse-resistance gap per DEVELOPER_REFERENCE.md's
+-- general "spammable actions" concern even though a bark itself has no
+-- other gameplay effect. A small per-player cooldown closes this without
+-- needing a config addition — bark has no legitimate reason to be
+-- triggered faster than this. (The `-1` broadcast itself was later
+-- separately addressed by a PERFORMANCE fix, NOT this security one — see
+-- NEARBY_BROADCAST_RADIUS_METERS's own comment below.)
 --
 -- DEVELOPER_REFERENCE.md item 1: was its own hand-rolled `lastBarkAt` table,
 -- now a NewCooldown() instance (server/cooldowns.lua) — same threshold,
@@ -466,6 +481,55 @@ BarkCooldown.RegisterPlayerDropped()
 -- handful of short Phase 5 AdvancedBarkRadial variants, without leaving
 -- room to smuggle a large payload through this event.
 local BARK_TYPE_MAX_LENGTH = 16
+
+-- PERFORMANCE AUDIT FIX (this pass, coder-backend — two independent
+-- reviewers): relayBark below and relayDoorScratch further down both used
+-- to broadcast via a plain `TriggerClientEvent(..., -1, ...)` — every
+-- connected player, regardless of distance, on every accepted call. At 128
+-- players with several dogs barking, that is on the order of ~1,000
+-- needless network messages/sec, none of which do anything useful for a
+-- player who is nowhere near the barking K9 or scratched door: the
+-- RECEIVING client's own playBark/playDoorScratch handler (client/main.lua)
+-- already no-ops harmlessly if that netId isn't streamed in for them
+-- (NetworkDoesEntityExistWithNetworkId guard inside PlaySoundOnNetworkEntity)
+-- — so every one of those messages to a far-away player was pure waste,
+-- never a missed effect. THIS IS A BANDWIDTH FIX, NOT A SECURITY ONE, for
+-- BOTH events — unlike server/search.lua's own contraband-alert broadcast
+-- (which distance-filters because its payload identifies a SPECIFIC
+-- vehicle/person just flagged for contraband, and a global broadcast would
+-- leak that fact to an accomplice anywhere on the map), a bark's or a door
+-- scratch's netId carries no such identity to leak: it is inert to any
+-- client that never had the entity streamed in, exactly like every other
+-- normal OneSync-scoped entity reference in this resource. See
+-- relayDoorScratch's own comment further below for why THAT handler's
+-- long-standing "deliberately -1, do not copy the search-alert pattern"
+-- note is about the PRIVACY question only, not about bandwidth, and stays
+-- correct on that question even after this fix.
+--
+-- RADIUS CHOSEN: 300.0m. Reused (via server/search.lua's ForEachNearbyPlayer,
+-- a resource-global read-only helper — never re-implemented here) rather
+-- than each handler hand-rolling its own GetPlayers()/GetPlayerPed()/
+-- distance loop. This resource does not control or configure FiveM/OneSync's
+-- own entity-streaming radius (client/vision.lua's own header calls that
+-- "ordinary FiveM entity streaming range, not a distance this resource
+-- controls") — 300.0m is chosen comfortably ABOVE the streaming/population
+-- range a real server is ever likely to run (commonly cited in the 300-424m
+-- range for a standard, non-exotic OneSync configuration), specifically so
+-- this filter can only ever drop a player who could never have had the
+-- entity streamed in anyway, and never one who legitimately could have
+-- heard/seen the effect — "a bark you cannot hear because the filter was
+-- too tight is a worse bug than the waste" outweighs shaving the radius
+-- down further. Still two orders of magnitude below a full map traversal
+-- (a GTA V map edge-to-edge run is on the order of several kilometers), so
+-- the bandwidth saving against the unfiltered -1 case remains real on any
+-- populated server. A LOCAL implementation constant, not a Config.* field —
+-- same "internal defensive/performance bound, not a server-owner tuning
+-- knob" posture server/search.lua's own MAX_CONTAINER_RECURSION_DEPTH
+-- already establishes for this file: getting this number wrong in either
+-- direction only ever costs bandwidth or (if set too low) a missed
+-- effect, never a security property, so there is nothing here worth
+-- exposing as a per-server tunable.
+local NEARBY_BROADCAST_RADIUS_METERS = 300.0
 
 --- PER-PERSON FEATURE CONTROL -- this resource's documented 4-step
 --- resolution (config.lua's own Config.FeatureControl header), implemented
@@ -504,12 +568,16 @@ local function IsBasicBarkSoundsPermittedForCitizenId(citizenid)
     return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
 end
 
---- Relays a bark to every client so anyone near the K9 entity hears it.
---- Gated by Config.Features.BasicBarkSounds AND HasK9Access(source) —
---- both re-checked HERE, server-side, regardless of whether the client UI
---- that triggered this (client/radial.lua's Bark item) already checked
---- them, per DEVELOPER_REFERENCE.md §3's "disabled feature must be a no-op server-side,
---- not just hidden client-side" requirement.
+--- Relays a bark to clients near the K9 entity so anyone who could
+--- plausibly hear/see it does. Gated by Config.Features.BasicBarkSounds AND
+--- HasK9Access(source) — both re-checked HERE, server-side, regardless of
+--- whether the client UI that triggered this (client/radial.lua's Bark
+--- item) already checked them, per DEVELOPER_REFERENCE.md §3's "disabled
+--- feature must be a no-op server-side, not just hidden client-side"
+--- requirement. PERFORMANCE FIX (this pass): distance-filtered to
+--- NEARBY_BROADCAST_RADIUS_METERS of the K9's own live coords (see that
+--- constant's own comment above) instead of a global `-1` broadcast —
+--- never a security boundary either way, see that same comment for why.
 --- @param barkType string
 RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     local src = source
@@ -550,7 +618,28 @@ RegisterNetEvent('qbx_k9unit:server:relayBark', function(barkType)
     -- (BARK_TYPE_MAX_LENGTH above) purely as a bandwidth/abuse bound, not a
     -- content restriction — that check is independent of whether an enum
     -- ever gets added.
-    TriggerClientEvent('qbx_k9unit:client:playBark', -1, netId, barkType)
+    --
+    -- PERFORMANCE FIX (this pass): used to be TriggerClientEvent(...,  -1,
+    -- ...) -- every connected player, regardless of distance. Now routed
+    -- through server/search.lua's shared, resource-global
+    -- ForEachNearbyPlayer helper, distance-filtered to
+    -- NEARBY_BROADCAST_RADIUS_METERS of the K9's own live coords (see that
+    -- constant's own declaration comment above for the full writeup and the
+    -- radius choice). Soft-dependency guarded (`type(...) == 'function'`,
+    -- this file's own established convention, e.g. HasPermission above) —
+    -- FALLS BACK TO THE ORIGINAL, SAFE `-1` BROADCAST if ForEachNearbyPlayer
+    -- is ever unavailable (a load-order edge case, or server/search.lua
+    -- absent), never to silently not broadcasting at all: a bark nobody
+    -- hears because a helper failed to load is a worse bug than the
+    -- bandwidth this fix saves.
+    if type(ForEachNearbyPlayer) == 'function' then
+        local k9Coords = GetEntityCoords(ped)
+        ForEachNearbyPlayer(k9Coords, NEARBY_BROADCAST_RADIUS_METERS, function(playerId)
+            TriggerClientEvent('qbx_k9unit:client:playBark', playerId, netId, barkType)
+        end)
+    else
+        TriggerClientEvent('qbx_k9unit:client:playBark', -1, netId, barkType)
+    end
 end)
 
 -- DEVELOPER_REFERENCE.md §9 item 16 (Phase 2 event-contract hardening pass finding, closed
@@ -711,11 +800,17 @@ local function IsDoorInteractionPermittedForCitizenId(citizenid)
     return true -- step 4: not listed in RequireGrant at all -- default allow (matches config.lua's own documented default)
 end
 
---- Relays a door-scratch sound to every client so anyone with the door
---- entity streamed in hears it. Gated by Config.Features.DoorInteraction AND
---- HasK9Access(source) — both re-checked HERE, server-side, same standard as
---- relayBark above (DEVELOPER_REFERENCE.md §3's "disabled feature must be a no-op
---- server-side" requirement).
+--- Relays a door-scratch sound to clients near the door so anyone who could
+--- plausibly have it streamed in hears it. Gated by
+--- Config.Features.DoorInteraction AND HasK9Access(source) — both
+--- re-checked HERE, server-side, same standard as relayBark above
+--- (DEVELOPER_REFERENCE.md §3's "disabled feature must be a no-op
+--- server-side" requirement). PERFORMANCE FIX (this pass): distance-filtered
+--- to NEARBY_BROADCAST_RADIUS_METERS of the door's own coords instead of a
+--- global `-1` broadcast — see the broadcast call site's own comment below
+--- for why this is a bandwidth fix, not a privacy one (this event's payload
+--- was never privacy-sensitive, unlike server/search.lua's contraband
+--- alert).
 --- @param doorNetId number
 RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
     local src = source
@@ -792,17 +887,38 @@ RegisterNetEvent('qbx_k9unit:server:relayDoorScratch', function(doorNetId)
     DoorScratchCooldown.Touch(src, now)
     DoorScratchByDoorCooldown.Touch(doorNetId, now)
 
-    -- DELIBERATE broadcast to EVERYONE (-1), not distance-filtered to nearby
-    -- clients server-side, and NOT the pattern to copy if you're touching
-    -- server/search.lua's contraband-alert broadcast instead: a door's
-    -- location carries no person/vehicle identity to leak (DEVELOPER_REFERENCE.md §11.4
-    -- item 5: "No inventory/lock-state reveal of any kind — purely a sound
-    -- cue"), unlike a search alert which does need scope-limiting to avoid
+    -- NOT the pattern to copy if you're touching server/search.lua's
+    -- contraband-alert broadcast instead: a door's location carries no
+    -- person/vehicle identity to leak (DEVELOPER_REFERENCE.md §11.4 item 5:
+    -- "No inventory/lock-state reveal of any kind — purely a sound cue"),
+    -- unlike a search alert which does need scope-limiting to avoid
     -- broadcasting a specific player/vehicle's search outcome resource-wide.
-    -- This mirrors relayBark's own -1 broadcast exactly, on purpose — do not
-    -- "fix" this later by pattern-matching off the search-alert's
-    -- distance-filtering requirement.
-    TriggerClientEvent('qbx_k9unit:client:playDoorScratch', -1, doorNetId)
+    -- That PRIVACY reasoning is still exactly why this event carries no
+    -- identity-revealing payload and never will — it is NOT, however, a
+    -- reason to broadcast to every connected player regardless of distance.
+    --
+    -- PERFORMANCE FIX (this pass): used to be a DELIBERATE
+    -- TriggerClientEvent(..., -1, ...) broadcast to EVERYONE, on the
+    -- (correct, still-true) reasoning above that there was no PRIVACY
+    -- reason to filter it. A later performance audit pointed out that "no
+    -- reason to filter for privacy" is not the same claim as "no reason to
+    -- filter at all" — a player who could not possibly have doorEntity
+    -- streamed in gets nothing useful from receiving this event regardless
+    -- of the payload's own harmlessness, purely wasted bandwidth. Now
+    -- routed through the SAME shared ForEachNearbyPlayer helper and the
+    -- SAME NEARBY_BROADCAST_RADIUS_METERS radius relayBark above uses (see
+    -- that constant's own declaration comment for the full writeup),
+    -- centered on the DOOR's own coords (the sound's actual source), not
+    -- the calling K9's. Same soft-dependency fallback-to-original-`-1`-
+    -- broadcast posture as relayBark above, for the same reason.
+    if type(ForEachNearbyPlayer) == 'function' then
+        local doorCoords = GetEntityCoords(doorEntity)
+        ForEachNearbyPlayer(doorCoords, NEARBY_BROADCAST_RADIUS_METERS, function(playerId)
+            TriggerClientEvent('qbx_k9unit:client:playDoorScratch', playerId, doorNetId)
+        end)
+    else
+        TriggerClientEvent('qbx_k9unit:client:playDoorScratch', -1, doorNetId)
+    end
 end)
 
 --- @param source number

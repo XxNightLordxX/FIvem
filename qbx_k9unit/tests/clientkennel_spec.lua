@@ -143,6 +143,17 @@ local function newKennelFixture(opts)
     local isOwnModelK9Value = true
     local function IsOwnModelK9() return isOwnModelK9Value end
 
+    -- KENNEL-VS-VEHICLE MUTUAL GUARD (this pass) -- IsInK9Vehicle()
+    -- (client/vehicle.lua) controllable stand-in, same soft-dependency shape
+    -- as IsOwnModelK9()/HasK9Access() above. `opts.inK9VehicleAvailable`
+    -- defaults to true; set false to model a server that never loads
+    -- client/vehicle.lua at all (Config.Features.VehicleEntryExit off),
+    -- proving this file's own `type(fn) == 'function'` guard degrades to
+    -- "skip this check" rather than erroring.
+    local inK9VehicleAvailable = opts.inK9VehicleAvailable
+    if inK9VehicleAvailable == nil then inK9VehicleAvailable = true end
+    local isInK9Vehicle = opts.isInK9Vehicle or false
+
     local notifyCalls = {}
     local lib = { notify = function(payload) notifyCalls[#notifyCalls + 1] = payload end }
 
@@ -358,6 +369,9 @@ local function newKennelFixture(opts)
         print = function(line) printLines[#printLines + 1] = line end,
         K9Compat = K9Compat,
     })
+    if inK9VehicleAvailable then
+        env.IsInK9Vehicle = function() return isInK9Vehicle end
+    end
 
     Sandbox.loadInto('../client/kennel.lua', env)
 
@@ -411,6 +425,7 @@ local function newKennelFixture(opts)
         lastAttachCall = function() return attachCalls[#attachCalls] end,
         controlRequestCalls = controlRequestCalls,
         setPedDead = function(ped, dead) deadPeds[ped] = dead end,
+        setInK9Vehicle = function(v) isInK9Vehicle = v end,
         MY_PED = MY_PED,
         --- Registers a networked entity THIS handler did not itself create
         --- via deployKennelAt (e.g. some other feature's prop, or another
@@ -1052,6 +1067,90 @@ t.test('"Rest in Kennel": canInteract also hides while already resting or carryi
 
     f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
     t.isFalse(enterOption.canInteract(101, 1.0, {}, 'anything'), 'already resting -- must not offer to enter again')
+end)
+
+-- ========================================================================
+-- KENNEL-VS-VEHICLE MUTUAL GUARD (this pass) -- IsInK9Vehicle()
+-- (client/vehicle.lua). QA found no guard existed in EITHER direction
+-- between resting in a kennel and being seated in a K9 vehicle. This half
+-- closes "seated in a vehicle, then selects Rest in Kennel" -- both a
+-- pre-flight refusal (onSelect, before requestEnterKennel is ever sent --
+-- server/kennel.lua's own requestEnterKennel handler writes
+-- KennelOccupants[citizenid] BEFORE this client ever attaches anything, and
+-- that occupancy has NO timeout at all short of a disconnect, so it must
+-- never be requested while already in a vehicle in the first place) and a
+-- defensive re-check inside enterKennelConfirmed itself (the round trip's
+-- own window: the player could select "Enter Vehicle" -- a SEPARATE,
+-- ALSO server-arbitrated action -- in the gap between onSelect and this
+-- confirmation arriving). See client/vehicle.lua's own symmetric
+-- IsRestingInKennel() guard (tests/clientvehicle_spec.lua) for the other,
+-- reverse direction.
+-- ========================================================================
+
+t.test('"Rest in Kennel": canInteract hides while seated in a K9 vehicle', function()
+    local f = newKennelFixture()
+    local netId = 960
+    f.registerForeignEntity(netId, 160, GetHashKey(PRIMARY_MODEL))
+    f.fireResourceStart(RESOURCE_NAME)
+    local enterOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:enterKennel' then enterOption = option end
+    end
+    t.isTrue(enterOption.canInteract(160, 1.0, {}, 'anything'))
+
+    f.setInK9Vehicle(true)
+    t.isFalse(enterOption.canInteract(160, 1.0, {}, 'anything'), 'seated in a vehicle -- must not offer to also start resting in a kennel')
+end)
+
+t.test('"Rest in Kennel": onSelect refuses BEFORE requestEnterKennel is ever sent while seated in a K9 vehicle -- a claim taken and then abandoned has NO timeout at all', function()
+    local f = newKennelFixture()
+    local netId = 961
+    f.registerForeignEntity(netId, 161, GetHashKey(PRIMARY_MODEL))
+    f.setInK9Vehicle(true)
+    f.fireResourceStart(RESOURCE_NAME)
+    local enterOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:enterKennel' then enterOption = option end
+    end
+
+    enterOption.onSelect({ entity = 161 })
+
+    t.equals(#f.serverEvents, 0, 'must refuse locally before ever contacting the server')
+    t.isFalse(f.env.IsRestingInKennel())
+    t.equals(f.lastNotify().description, locale('combat.blocked_by_vehicle'))
+end)
+
+t.test('enterKennelConfirmed: MID-ROUND-TRIP re-check -- the client entered a K9 vehicle AFTER onSelect but before this confirmation arrived -- refuses locally, does NOT attach, and releases the server-side occupancy claim it was just granted', function()
+    local f = newKennelFixture()
+    local netId = 962
+    f.registerForeignEntity(netId, 162, GetHashKey(PRIMARY_MODEL))
+    f.setInK9Vehicle(true) -- started mid-round-trip, i.e. true by the time the confirmation lands
+
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+
+    t.isFalse(f.env.IsRestingInKennel(), 'must never attach a ped that is now seated in a vehicle')
+    t.equals(#f.attachCalls, 0, 'must never AttachEntityToEntity a ped the vehicle already owns via a real seat')
+    t.equals(f.lastNotify().description, locale('combat.blocked_by_vehicle'))
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestExitKennel', 'ReleaseKennelRest() would no-op here (restState was never set) -- the release must be sent directly, or server/kennel.lua\'s KennelOccupants entry (written BEFORE this event was even sent) leaks forever')
+end)
+
+t.test('KENNEL-VS-VEHICLE soft dependency: with client/vehicle.lua not loaded at all (no IsInK9Vehicle global), Rest in Kennel works exactly as before this pass', function()
+    local f = newKennelFixture({ inK9VehicleAvailable = false })
+    t.isNil(f.env.IsInK9Vehicle)
+    local netId = 963
+    f.registerForeignEntity(netId, 163, GetHashKey(PRIMARY_MODEL))
+    f.fireResourceStart(RESOURCE_NAME)
+    local enterOption
+    for _, option in ipairs(f.addModelCalls[#f.addModelCalls].options) do
+        if option.name == 'qbx_k9unit:enterKennel' then enterOption = option end
+    end
+    t.isTrue(enterOption.canInteract(163, 1.0, {}, 'anything'), 'an absent optional global must be a skipped check, never an error')
+
+    enterOption.onSelect({ entity = 163 })
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestEnterKennel')
+
+    f.dispatchNetEvent('qbx_k9unit:client:enterKennelConfirmed', 65535, netId)
+    t.isTrue(f.env.IsRestingInKennel())
 end)
 
 t.test('"Exit Kennel": canInteract only true for the SPECIFIC entity this client is actually resting in', function()

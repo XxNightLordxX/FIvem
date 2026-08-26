@@ -559,6 +559,45 @@ function EnterNearestK9Vehicle()
         return
     end
 
+    -- MUTUAL GUARD vs. client/kennel.lua's "Rest in Kennel" -- QA-reported
+    -- real defect, this pass, same shape as the IsBlockedByVehicleTuck()
+    -- pairing client/combat.lua carries against THIS exact function
+    -- (see that function's own doc comment for the full "a guard in only
+    -- one direction is not a guard" reasoning, not repeated here). A K9
+    -- resting in a kennel is genuinely AttachEntityToEntity'd to the kennel
+    -- prop (client/kennel.lua's enterKennelConfirmed handler) -- seating that
+    -- SAME ped into a vehicle on top of that would either fight the kennel's
+    -- own ~1s watchdog re-assertion every tick (client/kennel.lua's shared
+    -- watchdog thread, restState branch) or silently win and leave
+    -- IsRestingInKennel() reporting true (and server/kennel.lua's own
+    -- KennelOccupants entry still held) for a ped that is no longer actually
+    -- resting anywhere. Checked here, BEFORE the seat claim is ever
+    -- requested (per this pass's own finding that vehicle entry is now
+    -- server-arbitrated, server/vehicle.lua) -- refusing only after a grant
+    -- would take a real seat claim and then abandon it, leaving that exact
+    -- seat unusable by anyone else until VEHICLE_SEAT_CLAIM_TTL_MS elapses
+    -- (server/vehicle.lua's own header "A CLAIM MUST NEVER OUTLIVE...").
+    --
+    -- Soft dependency, `type(...) == 'function'` runtime existence guard --
+    -- this resource's established convention (see the IsDragEngaged/
+    -- IsBiteHoldEngaged/IsDragTargetEngaged guards immediately above) --
+    -- IsRestingInKennel() only exists once client/kennel.lua loads, which is
+    -- unconditional at that file's own top (declared outside its
+    -- Config.Features.DeployableKennel registration gate) but this file has
+    -- no hard load-order requirement on it regardless.
+    --
+    -- LOCALE KEY: reuses 'kennel.enter_already_resting' ("You are already
+    -- resting in a kennel.") rather than minting a new key -- this file is
+    -- not locales/en.json's owner, and that string is already the accurate,
+    -- honest reason for this refusal (mirrors client/search.lua's own
+    -- IsBusyWithSomethingElse() reusing 'combat.blocked_by_vehicle' across
+    -- files for the identical "the real-world reason is the same, so is the
+    -- message" precedent).
+    if type(IsRestingInKennel) == 'function' and IsRestingInKennel() then
+        lib.notify({ title = locale('common.notify_title'), description = locale('kennel.enter_already_resting'), type = 'error' })
+        return
+    end
+
     local ped = PlayerPedId()
     -- Real-defect guard: IS_PED_IN_ANY_VEHICLE (verified against the Cfx
     -- native reference, PED namespace, BOOL return) catches the case where
@@ -711,6 +750,19 @@ RegisterNetEvent('qbx_k9unit:client:vehicleSeatClaimGranted', function(vehicleNe
             -- gives this effect the same window to start in between that
             -- drag/bite-hold already get re-checked for.
             abortReason = 'vehicle.blocked_by_being_dragged'
+        elseif type(IsRestingInKennel) == 'function' and IsRestingInKennel() then
+            -- Mirrors the pre-flight kennel-rest guard above — see its own
+            -- doc comment for the full reasoning. Re-checked here for the
+            -- identical "the door-open delay is a window too" reason as
+            -- every other guard in this chain: "Rest in Kennel" is its own
+            -- independent, server-arbitrated round trip
+            -- (client/kennel.lua's requestEnterKennel/enterKennelConfirmed)
+            -- that can complete during this exact VEHICLE_DOOR_OPEN_DELAY_MS
+            -- window even though it wasn't true at the moment the seat claim
+            -- was first requested. Same reused locale key as the pre-flight
+            -- guard above ('kennel.enter_already_resting') -- see that
+            -- guard's own doc comment for why.
+            abortReason = 'kennel.enter_already_resting'
         end
 
         if abortReason then
@@ -1025,6 +1077,9 @@ local function RegisterVehicleOxTargetOptions()
                 if type(IsDragEngaged) == 'function' and IsDragEngaged() then return false end
                 if type(IsBiteHoldEngaged) == 'function' and IsBiteHoldEngaged() then return false end
                 if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then return false end
+                -- DISPLAY-OPTIMIZATION MIRROR of EnterNearestK9Vehicle()'s own
+                -- kennel-rest mutual guard above — see its own doc comment.
+                if type(IsRestingInKennel) == 'function' and IsRestingInKennel() then return false end
                 if not K9VehicleHashes[GetEntityModel(entity)] then return false end
                 -- DISPLAY-OPTIMIZATION MIRROR of EnterNearestK9Vehicle()'s own
                 -- FindBestK9Seat() refusal (this resource's own "never show an

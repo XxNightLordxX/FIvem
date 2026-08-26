@@ -169,6 +169,22 @@ local function newVehicleFixture(opts)
     -- `type(fn) == 'function'` degrade pattern a third time here).
     local dragTargetEngaged = opts.isDragTargetEngaged or false
 
+    -- KENNEL-VS-VEHICLE MUTUAL GUARD (this pass) -- IsRestingInKennel()
+    -- controllable stand-in, same shape as dragTargetEngaged above.
+    -- `opts.restingInKennelAvailable`, unlike dragTargetEngaged, DOES get its
+    -- own soft-dependency-omission test below (mirroring
+    -- opts.featureBlocksAvailable's own shape above) -- IsRestingInKennel()
+    -- is declared unconditionally at client/kennel.lua's own file top
+    -- (outside that file's Config.Features.DeployableKennel registration
+    -- gate), but that is a fact about THAT file, not a hard load-order
+    -- guarantee this file may assume; the `type(...) == 'function'` guard
+    -- exists specifically so a server that never loads client/kennel.lua at
+    -- all (or loads it after this file) still degrades to "skip this check"
+    -- rather than erroring.
+    local restingInKennelAvailable = opts.restingInKennelAvailable
+    if restingInKennelAvailable == nil then restingInKennelAvailable = true end
+    local restingInKennel = opts.isRestingInKennel or false
+
     local notifyCalls = {}
     local lib = { notify = function(payload) notifyCalls[#notifyCalls + 1] = payload end }
 
@@ -425,6 +441,9 @@ local function newVehicleFixture(opts)
         envOverrides.IsK9FeatureBlocked = IsK9FeatureBlocked
         envOverrides.DenyK9FeatureBlocked = DenyK9FeatureBlocked
     end
+    if restingInKennelAvailable then
+        envOverrides.IsRestingInKennel = function() return restingInKennel end
+    end
     local env = Sandbox.newEnv(envOverrides)
 
     Sandbox.loadInto('../client/vehicle.lua', env)
@@ -491,6 +510,7 @@ local function newVehicleFixture(opts)
         setBlocked = function(name, blocked) blockedFeatures[name] = blocked or nil end,
         denyK9FeatureBlockedCallCount = function() return denyK9FeatureBlockedCallCount end,
         setDragTargetEngaged = function(v) dragTargetEngaged = v end,
+        setRestingInKennel = function(v) restingInKennel = v end,
         -- SEAT-RACE FIX -- see this file's own header for the full design.
         serverEventCalls = serverEventCalls,
         lastServerEventNamed = lastServerEventNamed,
@@ -982,6 +1002,70 @@ t.test('IsDragTargetEngaged MID-DELAY re-check: starts being dragged AFTER a gra
     t.isFalse(f.env.IsInK9Vehicle())
     t.equals(f.lastNotify().description, locale('vehicle.blocked_by_being_dragged'))
     t.isNotNil(f.lastServerEventNamed('qbx_k9unit:server:releaseVehicleSeatClaim'), 'the now-unneeded granted claim must be released')
+end)
+
+-- ========================================================================
+-- KENNEL-VS-VEHICLE MUTUAL GUARD (this pass) -- IsRestingInKennel()
+-- (client/kennel.lua). QA found no guard existed in EITHER direction between
+-- resting in a kennel and being seated in a K9 vehicle; this half closes the
+-- "resting, then selects Enter Vehicle" direction. See client/kennel.lua's
+-- own "Rest in Kennel" onSelect/canInteract and enterKennelConfirmed guards
+-- for the other, symmetric half (tests/clientkennel_spec.lua).
+-- ========================================================================
+
+t.test('IsRestingInKennel pre-flight guard: refuses immediately, no thread, no server contact, when the local ped is currently resting in a kennel', function()
+    local f = newVehicleFixture({ isRestingInKennel = true })
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+
+    f.env.EnterNearestK9Vehicle()
+
+    t.equals(#f.serverEventCalls, 0, 'must refuse before ever contacting the server -- a claim taken and then abandoned holds a seat until it times out')
+    t.equals(f.threadCount(), 0)
+    t.equals(f.lastNotify().description, locale('kennel.enter_already_resting'))
+end)
+
+t.test('IsRestingInKennel canInteract mirror: the "Load Into Vehicle" option hides while resting in a kennel', function()
+    local f = newVehicleFixture({ isRestingInKennel = true })
+    f.fireResourceStart(RESOURCE_NAME)
+    local enterOption
+    for _, o in ipairs(f.addGlobalVehicleCalls[1]) do
+        if o.name == 'qbx_k9unit:enterVehicle' then enterOption = o end
+    end
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+
+    t.isFalse(enterOption.canInteract(50, 1.0, {}, VEHICLE_MODEL))
+
+    f.setRestingInKennel(false)
+    t.isTrue(enterOption.canInteract(50, 1.0, {}, VEHICLE_MODEL))
+end)
+
+t.test('IsRestingInKennel MID-DELAY re-check: starts resting in a kennel AFTER a grant but before the door-open delay finishes -- aborts, shuts the door back, releases the claim', function()
+    local f = newVehicleFixture()
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
+    t.equals(#f.doorOpenCalls, 1)
+
+    f.setRestingInKennel(true) -- starts mid-delay (a SEPARATE, ALSO server-arbitrated round trip completing in this exact window)
+    f.runLatestThreadToCompletion()
+
+    t.equals(#f.seatCalls, 0, 'must never seat a ped that started resting in a kennel during the delay')
+    t.equals(#f.doorShutCalls, 1, 'the door this file opened must still be shut again')
+    t.isFalse(f.env.IsInK9Vehicle())
+    t.equals(f.lastNotify().description, locale('kennel.enter_already_resting'))
+    t.isNotNil(f.lastServerEventNamed('qbx_k9unit:server:releaseVehicleSeatClaim'), 'the now-unneeded granted claim must be released')
+end)
+
+t.test('IsRestingInKennel soft dependency: with client/kennel.lua not loaded at all (no IsRestingInKennel global), entry proceeds normally instead of erroring', function()
+    local f = newVehicleFixture({ restingInKennelAvailable = false })
+    t.isNil(f.env.IsRestingInKennel)
+    f.addVehicle(50, VEHICLE_MODEL, 0.5, 0.0, 0.0)
+
+    f.env.EnterNearestK9Vehicle()
+    f.grantSeatClaim()
+    f.runLatestThreadToCompletion()
+
+    t.equals(#f.seatCalls, 1, 'an absent optional global must be a skipped check, never an error')
 end)
 
 -- ========================================================================

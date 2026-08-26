@@ -1666,7 +1666,11 @@
         "person_target_label": "Search Person for Contraband"
     },
     "tenure": {
-        "milestone_reached": "Your partnership has reached a new tenure milestone."
+        "milestone_reached": "Your partnership has reached a new tenure milestone.",
+        "milestone_reached_with_xp": "Your partnership has reached a new tenure milestone. You earned %d XP from it.",
+        "milestone_reached_named_with_xp": "Your partnership has reached the %s milestone! You earned %d XP from it.",
+        "milestone_reached_no_xp": "Your partnership has reached a new tenure milestone, but you did not earn any XP from it.",
+        "milestone_reached_named_no_xp": "Your partnership has reached the %s milestone, but you did not earn any XP from it."
     },
     "tracking": {
         "trail_lost_death": "You went down — the trail is lost.",

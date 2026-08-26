@@ -208,6 +208,19 @@ local function newFixture()
         GetVehicleNumberPlateText = function(entity) return 'PLATE' .. tostring(entity) end,
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
+        -- Nobody in this file is ever in a vehicle. Stubbed because
+        -- server/search.lua's own "is the searcher busy" gate calls this
+        -- native unguarded, the way every real FXServer native is called in
+        -- this codebase. An unstubbed native does not return nil here the
+        -- way it would on a live server -- it is a nil GLOBAL, so calling it
+        -- throws, and that throw is swallowed by searchTarget's outer pcall
+        -- and returned as a plain 'search_failed'. This file's ECONOMIC
+        -- PROOF loop below reads as "keep searching until XP reaches the
+        -- target", so every search failing silently meant XP never moved and
+        -- that loop never ended: a hang that grew past 6GB and took the
+        -- whole suite with it, since nothing alphabetically after this file
+        -- runs once it stops returning.
+        IsPedInAnyVehicle = function() return false end,
         GetActivePartnerCitizenId = function(citizenid) return partnerOf[citizenid] end,
         Config = Config,
         -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory
@@ -298,7 +311,25 @@ local function newFixture()
             -- in this stub, exactly as they are in the real exports.qbx_core.
             playersBySource[90000] = { PlayerData = { citizenid = citizenid, job = { name = 'police' } } }
             local netId = 100000
+
+            -- HARD ITERATION BOUND, and it is not defensive padding.
+            -- This loop's exit condition is "XP reached the target", which
+            -- it drives indirectly through the REAL searchTarget callback.
+            -- Anything that stops a search from paying out -- a new gate, a
+            -- native this file's sandbox does not stub, a changed award --
+            -- makes the condition unreachable, and an unbounded loop in a
+            -- test does not fail, it HANGS: no result, no output, every
+            -- spec after this one never runs, and memory climbs until
+            -- something on the machine dies. That happened for real.
+            -- A bound turns that entire class of future breakage from a
+            -- silent hang into a one-line failure naming what stalled.
+            local iterations, maxIterations = 0, 500
             while env.GetXP(citizenid) < targetXp do
+                iterations = iterations + 1
+                if iterations > maxIterations then
+                    error(('coopsearchbonus_spec: the XP grinder made no progress -- %d searches drove XP for %s only to %s, target was %s. A search is no longer paying out; look for a new gate in server/search.lua, or a native its call path uses that this file\'s sandbox does not stub.')
+                        :format(maxIterations, tostring(citizenid), tostring(env.GetXP(citizenid)), tostring(targetXp)), 0)
+                end
                 fakeNow = fakeNow + 3700000
                 netId = netId + 1
                 itemsByInvId['trunkPLATE' .. tostring(netId)] = { { name = 'weed_baggy', weight = 999, slot = 1 } }

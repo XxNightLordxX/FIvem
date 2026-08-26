@@ -202,6 +202,63 @@ local function IsCurrentlyEngaged()
     if type(IsFetchCarryEngaged) == 'function' and IsFetchCarryEngaged() then return true end
     if type(IsInK9Vehicle) == 'function' and IsInK9Vehicle() then return true end
     if type(IsPropAttachmentEngaged) == 'function' and IsPropAttachmentEngaged() then return true end
+    -- ======================================================================
+    -- TARGET-SIDE ADDITIONS (this pass) -- every check above is HOLDER-side
+    -- (or, for IsInK9Vehicle/IsPropAttachmentEngaged, a self-administered
+    -- state): none of them ask whether THIS ped is the TARGET of something
+    -- another client's own per-tick native calls are currently driving.
+    -- server/combat.lua's ActiveHolds is keyed by the TARGET's own netId
+    -- (grep-confirmed in that file) -- a model swap here does not merely
+    -- risk a stale bookkeeping entry, it changes the very ped that hold's
+    -- own client-side enforcement (DisableControlAction / the move-rate
+    -- override / a live AttachEntityToEntity relationship) is running
+    -- against, mid-flight, out from under a hold the server (and, for a
+    -- drag, another player's client) still believes is running against a
+    -- consistent, unchanging body. REFUSE, not force-clear, same doctrine as
+    -- every check above -- this file has no more authority to reach into
+    -- client/combat.lua's target-side state than into its holder-side state.
+    --
+    -- IsDragTargetEngaged() (client/combat.lua) already exists as a
+    -- resource-global answering exactly this for PropDragging -- added to
+    -- .luacheckrc's globals when it shipped, consumed here for the first
+    -- time this pass.
+    if type(IsDragTargetEngaged) == 'function' and IsDragTargetEngaged() then return true end
+    -- IsLocalPlayerForceRagdolled() (client/combat.lua) answers the
+    -- identical question for NonLethalTakedown's own target-side state
+    -- (ActiveForcedRagdoll -- the ragdoll/damage-immunity bracket) -- already
+    -- a resource-global (added for client/tablet.lua's own force-close
+    -- watch thread), consumed here for the first time this pass. Same class
+    -- of hazard as the drag case above: a swap mid-ragdoll would leave that
+    -- damage-immunity bracket running against a ped the server's own hold no
+    -- longer coherently describes.
+    if type(IsLocalPlayerForceRagdolled) == 'function' and IsLocalPlayerForceRagdolled() then return true end
+    -- IsBiteHoldTargetEngaged() -- DOES NOT EXIST YET. BiteAndHold's own
+    -- target-side state (ActiveBiteHold, client/combat.lua) is currently a
+    -- bare file `local` with no exposed predicate at all -- unlike
+    -- ActiveDragSpeedLimit/ActiveForcedRagdoll above, which both already
+    -- have one. This call site is wired in now, ahead of that function
+    -- existing, the same way server/tablet.lua's own call to the
+    -- not-yet-defined ForceRevertK9Appearance was wired in ahead of
+    -- server/appearance.lua defining it (see .luacheckrc's own "PENDING"
+    -- comment on that entry for the identical precedent this follows): the
+    -- `type(...) == 'function'` guard makes an absent global a skipped
+    -- check, never an error, so this is a genuine no-op today and activates
+    -- itself the instant client/combat.lua's owner adds the function --
+    -- no second appearance.lua patch needed. Flagged to the team (see this
+    -- pass's own report) rather than defined here: client/combat.lua is not
+    -- this file's file to edit.
+    if type(IsBiteHoldTargetEngaged) == 'function' and IsBiteHoldTargetEngaged() then return true end
+    -- IsRestingInKennel() (client/kennel.lua) -- a dog attached inside a
+    -- kennel object (AttachEntityToEntity, client/kennel.lua's
+    -- enterKennelConfirmed handler) is exactly the same "another mechanic's
+    -- native state currently depends on this ped's present form" hazard
+    -- IsInK9Vehicle()/IsPropAttachmentEngaged() above already gate --
+    -- IsCurrentlyEngaged() simply never asked it. Already a resource-global,
+    -- already allowlisted (see .luacheckrc's own comment: "exposed for a
+    -- future client/appearance.lua model-swap guard, not yet wired there")
+    -- -- wired in for the first time this pass.
+    if type(IsRestingInKennel) == 'function' and IsRestingInKennel() then return true end
+    -- ======================================================================
     return false
 end
 

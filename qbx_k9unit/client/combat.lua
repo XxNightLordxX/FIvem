@@ -753,6 +753,32 @@ function IsBiteHoldEngaged()
     return MyEngagedTargetNetId ~= nil
 end
 
+--- Am I the one currently BEING held by a K9's bite? The other half of the
+--- question IsBiteHoldEngaged() above answers ("am I the dog doing the
+--- holding"), and the direct sibling of IsDragTargetEngaged() further down.
+---
+--- WHY IT EXISTS. Every "is this ped busy" query in this resource was
+--- holder-side, which meant a person being bitten counted as idle for the
+--- purposes of anything that asks. The concrete case that prompted this:
+--- client/appearance.lua refuses a model swap while the ped is engaged, and
+--- its list checked leash, bite-as-holder, drag-as-holder, fetch carry,
+--- vehicle and prop attachment -- none of which are true of somebody who is
+--- being held. So a K9 pinned by another K9's bite could swap model out from
+--- under the hold: the server's hold is keyed to the old ped's netId, and
+--- the target-side restrictions keep running against a body that hold no
+--- longer refers to, ending only on their own local deadline.
+---
+--- ActiveBiteHold is the right state to read: it is set for exactly as long
+--- as this client is a held target (applyBiteHold on grant, cleared by its
+--- own end handler, by the maintenance thread's local deadline, and by
+--- onResourceStop), and it is set on nobody else -- an NPC target has no
+--- client, and the holder gets its own separate state instead.
+---
+--- @return boolean
+function IsBiteHoldTargetEngaged()
+    return ActiveBiteHold ~= nil
+end
+
 --- Self-initiated NonLethalTakedown trigger — DEVELOPER_REFERENCE.md §12.5.2. No
 --- local "is the target fleeing" check is attempted here — that is
 --- EXCLUSIVELY a server-computed speed gate from live position samples

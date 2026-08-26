@@ -252,6 +252,25 @@ env.GetEntityType = function(_entity) return 2 end -- every entity in this secti
 env.GetVehicleNumberPlateText = function(entity) return 'PLATE' .. tostring(entity) end
 env.GetPlayerPed = function(_source) return 42 end -- fixed nonzero ped handle for every source; irrelevant to the proximity math below since GetEntityCoords is constant for every handle
 env.GetEntityCoords = function(_entity) return ZERO_VEC end -- every entity (requester ped AND searched vehicle) reports the same coords -- proximity distance is always 0, well under any maxDistance/alertBroadcastRadius configured below
+
+-- SEARCHER-BUSY GUARD (server-side half of client/search.lua's own
+-- IsBusyWithSomethingElse(), commit a32a554 -- see server/search.lua's own
+-- IsSearcherBusyElsewhere doc comment for the full writeup). `requesterInVehicle`
+-- defaults false so every EXISTING test in this section (written before this
+-- guard existed) keeps exercising the exact same "requester not in a
+-- vehicle" path it always has -- only the two dedicated SEARCHER-BUSY GUARD
+-- tests further below flip it. `env.IsK9CurrentlyHolding` is DELIBERATELY
+-- left undefined here (never assigned in this shared section) -- this is
+-- the REAL current production state (server/combat.lua has not defined this
+-- accessor yet; see this file's own FILE-TO-FILE CONTRACT header), and every
+-- existing test below must keep passing with the soft dependency genuinely
+-- absent, not merely stubbed to return false. The dedicated
+-- "K9ActiveEffect[source] set" test further below assigns and then restores
+-- (sets back to nil) this exact global, rather than pre-declaring a stub
+-- here, specifically to prove BOTH states -- absent, and present-and-true --
+-- are handled correctly.
+local requesterInVehicle = false
+env.IsPedInAnyVehicle = function(_ped, _atGetIn) return requesterInVehicle end
 env.GetPlayers = function() return { '501' } end -- one fixed bystander id for BroadcastContrabandAlert's own loop, resolved via the same fixed GetPlayerPed stub above
 env.TriggerEvent = function(_eventName, ...) triggerEventCount = triggerEventCount + 1 end -- FireOutboundEvent's outbound 'qbx_k9unit:events:searchCompleted'
 env.TriggerClientEvent = function(eventName, _playerId, ...)
@@ -401,6 +420,131 @@ t.test("the mint cooldown is keyed by the SEARCHER, not the target: a second, di
     local resultB = searchVehicle(702, netId, 9) -- a DIFFERENT officer, weight genuinely changed since the last PAID weight (8 -> 9)
     t.isTrue(resultB.ok)
     t.equals(#awardCalls, awardsBefore + 2, "a second, different officer must not be blocked by the first officer's own per-searcher mint cooldown")
+end)
+
+-- ----------------------------------------------------------------------
+-- SEARCHER-BUSY GUARD -- server-side half of client/search.lua's own
+-- IsBusyWithSomethingElse() (commit a32a554). See server/search.lua's
+-- IsSearcherBusyElsewhere doc comment for the full writeup: a modified
+-- client never runs client/search.lua's guard at all, so these two checks
+-- are the actual enforcement.
+-- ----------------------------------------------------------------------
+
+t.test('SEARCHER-BUSY GUARD: a K9 currently seated in a vehicle is rejected with searcher_in_vehicle, before any inventory read/cooldown stamp', function()
+    fakeNow = 100000 -- a source/netId pair never used elsewhere in this section
+    local mysqlBefore = mysqlInsertCount
+    requesterInVehicle = true
+    local result = searchVehicle(801, 8008, 10)
+    requesterInVehicle = false
+
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'searcher_in_vehicle')
+    t.equals(mysqlInsertCount, mysqlBefore, 'a searcher-busy rejection must never reach the real inventory read/audit log -- it is cheaper than even step 1')
+
+    -- Proves the rejection above genuinely happened BEFORE either cooldown
+    -- was stamped (STEP 0 runs before TargetSearchCooldown/SearchCooldown
+    -- are ever touched): the SAME source, SAME target, one tick later
+    -- (nowhere near any real cooldown window), now NOT in a vehicle, must
+    -- succeed normally -- if the busy-rejection had incorrectly stamped a
+    -- cooldown anyway, this would read on_cooldown instead.
+    fakeNow = 100001
+    local followUp = searchVehicle(801, 8008, 10)
+    t.isTrue(followUp.ok, 'a prior searcher-busy rejection must never leave a stray cooldown stamp behind')
+end)
+
+t.test('SEARCHER-BUSY GUARD: not in a vehicle and IsK9CurrentlyHolding undefined (the real current production state, server/combat.lua has not defined it yet) never blocks', function()
+    t.isNil(env.IsK9CurrentlyHolding, 'sanity check: this global must genuinely be undefined for this assertion to mean anything')
+    fakeNow = 100010
+    -- Fresh source (never 801 -- that one is still inside its own flat
+    -- SearchCooldown window from the prior test, only 9ms earlier against a
+    -- 10ms sniffAnimDurationMs) so this assertion is never confounded by an
+    -- unrelated cooldown rejection.
+    local result = searchVehicle(804, 8010, 10)
+    t.isTrue(result.ok, 'the soft dependency being absent must degrade to "not busy", never to an error')
+end)
+
+t.test('SEARCHER-BUSY GUARD: IsK9CurrentlyHolding available and true is rejected with searcher_engaged, before any inventory read/cooldown stamp', function()
+    fakeNow = 100020
+    local mysqlBefore = mysqlInsertCount
+    env.IsK9CurrentlyHolding = function(_holderSrc) return true end
+    local result = searchVehicle(802, 8020, 10)
+    env.IsK9CurrentlyHolding = nil -- restore the "undefined" default for every later test in this file
+
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'searcher_engaged')
+    t.equals(mysqlInsertCount, mysqlBefore, 'a searcher-busy rejection must never reach the real inventory read/audit log')
+end)
+
+t.test('SEARCHER-BUSY GUARD: IsK9CurrentlyHolding available and false does not block (only a TRUE result does)', function()
+    fakeNow = 100030
+    env.IsK9CurrentlyHolding = function(_holderSrc) return false end
+    local result = searchVehicle(803, 8030, 10)
+    env.IsK9CurrentlyHolding = nil -- restore the "undefined" default for every later test in this file
+
+    t.isTrue(result.ok)
+end)
+
+-- ----------------------------------------------------------------------
+-- SearchMutex re-entrancy -- does a SECOND searchTarget request from the
+-- SAME source, arriving while the FIRST is genuinely mid-flight (yielded
+-- on the ox_inventory read, exactly like a real uncached vehicle-trunk lazy
+-- DB load per this file's own extensive doc comment on that scenario),
+-- actually get rejected? And is the mutex fully released once the first
+-- completes, rather than left permanently stuck held? Direct evidence, not
+-- reasoning-only: this drives the REAL, unmodified searchTarget callback
+-- across a real coroutine suspend/resume boundary.
+-- ----------------------------------------------------------------------
+
+t.test('SearchMutex: a second request from the SAME source while the first is genuinely mid-flight is rejected with search_in_progress, and the mutex is fully released once the first completes', function()
+    fakeNow = 300000
+    local netId = 9001
+    local invId = 'trunkPLATE' .. tostring(netId)
+    currentItemsByInvId[invId] = { { name = 'weed_baggy', weight = 5, slot = 1 } }
+
+    -- Make GetInventoryItems for this one test yield ONCE, so the first
+    -- request's own HandleSearchTarget genuinely suspends mid-flight --
+    -- exactly the real uncached-vehicle-trunk lazy-DB-load scenario
+    -- server/search.lua's own doc comment (right above its pcall-wrapped
+    -- GetInventoryItems call site) describes as the genuine reason this
+    -- mutex exists at all.
+    local originalGetInventoryItems = exportsStub.ox_inventory.GetInventoryItems
+    exportsStub.ox_inventory.GetInventoryItems = function(_self, invOrId)
+        coroutine.yield()
+        local invId2 = type(invOrId) == 'table' and invOrId.id or invOrId
+        return currentItemsByInvId[invId2] or {}
+    end
+
+    local firstResult
+    local co = coroutine.create(function()
+        firstResult = searchTargetCallback(901, 'vehicle', netId)
+    end)
+    local resumeOk, resumeErr = coroutine.resume(co)
+    t.isTrue(resumeOk, 'first request must suspend cleanly at the stubbed yield point: ' .. tostring(resumeErr))
+    t.equals(coroutine.status(co), 'suspended', 'the first request must genuinely be mid-flight (yielded), not already finished')
+
+    -- SECOND request, SAME source, fired while the first is STILL suspended
+    -- mid-flight. SearchMutex.TryAcquire is a synchronous check-then-set --
+    -- this call must return immediately (never yield) with search_in_progress.
+    local secondResult = searchTargetCallback(901, 'vehicle', netId)
+    t.isFalse(secondResult.ok)
+    t.equals(secondResult.reason, 'search_in_progress', 'the mutex must reject a second request from the same source while the first is genuinely mid-flight')
+
+    -- Let the first request run to completion.
+    local resumeOk2, resumeErr2 = coroutine.resume(co)
+    t.isTrue(resumeOk2, 'first request must complete cleanly once resumed: ' .. tostring(resumeErr2))
+    t.equals(coroutine.status(co), 'dead')
+    t.isTrue(firstResult.ok, 'the first request itself must have succeeded normally, unaffected by the rejected second one')
+
+    exportsStub.ox_inventory.GetInventoryItems = originalGetInventoryItems
+
+    -- THIRD request, same source, once the first has genuinely completed
+    -- (mutex released) and the flat per-source cooldown has cleared: must
+    -- succeed normally -- proving the mutex was released, not left stuck
+    -- held forever by the earlier in-flight request.
+    fakeNow = 300100
+    currentItemsByInvId[invId] = {}
+    local thirdResult = searchTargetCallback(901, 'vehicle', netId)
+    t.isTrue(thirdResult.ok, 'the mutex must be fully released after the first request completes, not left stuck held')
 end)
 
 t.test('GetContrabandAlertTier: never leaks a mutable reference that corrupts Config.ContrabandAlertTiers on write', function()
@@ -574,6 +718,9 @@ local function newSearchPlusProgressionFixture()
         GetVehicleNumberPlateText = function(entity) return 'PLATE' .. tostring(entity) end,
         GetPlayerPed = function(_source) return 42 end,
         GetEntityCoords = function(_entity) return ZERO_VEC end,
+        -- SEARCHER-BUSY GUARD -- this fixture is about the shared XP-mint
+        -- budget, not this guard, so a fixed `false` is correct throughout.
+        IsPedInAnyVehicle = function() return false end,
         Config = Config2,
         -- COMPAT-LAYER MIGRATION (this pass): server realm; ox_inventory
         -- always reports 'started'.
@@ -840,6 +987,10 @@ local function newSearchQbInventoryFixture()
         GetVehicleNumberPlateText = function(entity) return 'PLATE' .. tostring(entity) end,
         GetPlayerPed = function(_source) return 42 end,
         GetEntityCoords = function(_entity) return ZERO_VEC end,
+        -- SEARCHER-BUSY GUARD -- this fixture is about the qb-inventory
+        -- vehicle-search fix, not this guard, so a fixed `false` is correct
+        -- throughout.
+        IsPedInAnyVehicle = function() return false end,
         Config = Config3,
         IsDuplicityVersion = function() return true end,
         -- qb-inventory always reports 'started'; ox_inventory is absent
@@ -1033,6 +1184,14 @@ local function newSearchPermissionFixture(opts)
         GetPlayerPed = function() return 42 end,
         GetEntityCoords = function() return ZERO_VEC end,
         GetPlayers = function() return { '501' } end,
+        -- SEARCHER-BUSY GUARD (server-side half of client/search.lua's own
+        -- IsBusyWithSomethingElse(), commit a32a554) -- this fixture never
+        -- exercises that guard itself (a self-contained PER-PERSON FEATURE
+        -- CONTROL fixture, orthogonal to it), so a fixed `false` is correct
+        -- for every test built on it. IsK9CurrentlyHolding is deliberately
+        -- left undefined here too, same "genuinely absent, matching real
+        -- production today" reasoning as the shared top-level env above.
+        IsPedInAnyVehicle = function() return false end,
         Config = Config4,
         IsDuplicityVersion = function() return true end,
         GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,

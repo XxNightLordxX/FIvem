@@ -92,6 +92,20 @@ local function newFixture(opts)
     local function IsFetchCarryEngaged() return engaged.fetchCarry == true end
     local function IsInK9Vehicle() return engaged.vehicle == true end
     local function IsPropAttachmentEngaged() return engaged.propAttachment == true end
+    -- TARGET-SIDE ADDITIONS (this pass) -- see client/appearance.lua's own
+    -- IsCurrentlyEngaged() doc comment for the full "none of the six above
+    -- ever asked whether this ped is the TARGET of something" writeup.
+    -- IsBiteHoldTargetEngaged is stubbed here even though client/combat.lua
+    -- does not define it yet in production (it is a `type(fn) == 'function'`
+    -- PENDING call site there, same precedent as .luacheckrc's own
+    -- ForceRevertK9Appearance entry) -- this fixture proves
+    -- client/appearance.lua's OWN call site reacts correctly the moment that
+    -- global exists, independent of when client/combat.lua actually lands
+    -- it.
+    local function IsDragTargetEngaged() return engaged.dragTarget == true end
+    local function IsLocalPlayerForceRagdolled() return engaged.forceRagdolled == true end
+    local function IsBiteHoldTargetEngaged() return engaged.biteHoldTarget == true end
+    local function IsRestingInKennel() return engaged.restingInKennel == true end
 
     -- RequestModel/HasModelLoaded/SetModelAsNoLongerNeeded/IsModelValid --
     -- same shape as tests covering client/kennel.lua's identical
@@ -155,6 +169,10 @@ local function newFixture(opts)
         IsFetchCarryEngaged = IsFetchCarryEngaged,
         IsInK9Vehicle = IsInK9Vehicle,
         IsPropAttachmentEngaged = IsPropAttachmentEngaged,
+        IsDragTargetEngaged = IsDragTargetEngaged,
+        IsLocalPlayerForceRagdolled = IsLocalPlayerForceRagdolled,
+        IsBiteHoldTargetEngaged = IsBiteHoldTargetEngaged,
+        IsRestingInKennel = IsRestingInKennel,
         RequestModel = RequestModel,
         HasModelLoaded = HasModelLoaded,
         SetModelAsNoLongerNeeded = SetModelAsNoLongerNeeded,
@@ -322,11 +340,21 @@ t.test('applyK9Ped: a genuine server-origin trigger (source == 65535) is process
 end)
 
 -- ----------------------------------------------------------------------
--- "REFUSE, DON'T FORCE-CLEAR" -- engaged in ANY of the six tracked states
--- refuses the swap outright, before RequestModel is ever called.
+-- "REFUSE, DON'T FORCE-CLEAR" -- engaged in ANY of the now TEN tracked
+-- states refuses the swap outright, before RequestModel is ever called.
+-- The last four (dragTarget/forceRagdolled/biteHoldTarget/restingInKennel)
+-- are THIS PASS's own addition -- see client/appearance.lua's own
+-- IsCurrentlyEngaged() doc comment "TARGET-SIDE ADDITIONS" section for why:
+-- every one of the original six is HOLDER-side (or self-administered), and
+-- none of them ever asked whether this ped is the TARGET of a bite hold/
+-- drag/takedown someone ELSE's client is currently driving native calls
+-- against, or is attached inside a kennel.
 -- ----------------------------------------------------------------------
 
-local ENGAGED_KEYS = { 'leashed', 'biteHold', 'drag', 'fetchCarry', 'vehicle', 'propAttachment' }
+local ENGAGED_KEYS = {
+    'leashed', 'biteHold', 'drag', 'fetchCarry', 'vehicle', 'propAttachment',
+    'dragTarget', 'forceRagdolled', 'biteHoldTarget', 'restingInKennel',
+}
 for _, key in ipairs(ENGAGED_KEYS) do
     t.test(('applyK9Ped: refuses outright when engaged via %s -- no model ever requested, reports "engaged"'):format(key), function()
         local f = newFixture()

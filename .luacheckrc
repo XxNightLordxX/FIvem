@@ -658,6 +658,22 @@ globals = {
     -- a missing function stops being visible, which is the failure class
     -- this project keeps finding.
     "ForceRevertK9Appearance",
+    -- IsBiteHoldTargetEngaged -- PENDING, same precedent as
+    -- ForceRevertK9Appearance immediately above, listed here deliberately
+    -- rather than left to redden lint for everyone: client/appearance.lua's
+    -- IsCurrentlyEngaged() (this pass, mutual-guard sweep) already calls it
+    -- so a bite-hold TARGET refuses a mid-hold model swap, mirroring the
+    -- sibling IsDragTargetEngaged()/IsLocalPlayerForceRagdolled() checks
+    -- right beside it in that same function -- but client/combat.lua has
+    -- not defined it yet (its own ActiveBiteHold target-side state is
+    -- currently a bare file `local` with no exposed predicate at all,
+    -- unlike ActiveDragSpeedLimit/ActiveForcedRagdoll, which both already
+    -- have one). The call site guards with `type(fn) == 'function'` and is a
+    -- clean no-op today, not an error. REMOVE THIS ENTRY if the function is
+    -- ever abandoned -- an allowlisted name that nothing defines is how a
+    -- missing function stops being visible, which is the failure class this
+    -- project keeps finding.
+    "IsBiteHoldTargetEngaged",
     -- server/main.lua
     "ForceDetachLeashForSource", "ForceDetachOfficerLeashForSource",
     -- client/main.lua
@@ -920,6 +936,17 @@ globals = {
     -- reconnected. Guarded at its one call site with the same
     -- `type(fn) == 'function'` convention as every other cross-file global.
     "RefreshXPProgressionLiveStateForAllOnline",
+    -- server/progression.lua -- the HANDLER-side twin of
+    -- RefreshXPProgressionLiveStateForAllOnline immediately above, added
+    -- when a client push (qbx_k9unit:client:handlerXpTierChanged) was
+    -- built for the handler XP ladder for the first time ("a handler
+    -- cannot see their own rank or XP anywhere" gap closure). NOT YET
+    -- called from server/runtimecontrol.lua's ApplyFeatureOverride as of
+    -- this entry -- see this function's own declaration comment
+    -- (server/progression.lua) for the exact one-branch hookup that file
+    -- still needs and why it was not made in the same pass that added this
+    -- function.
+    "RefreshHandlerXPProgressionLiveStateForAllOnline",
     -- server/combat.lua / server/kennel.lua -- READ-ONLY live headcount
     -- accessors for server/runtimecontrol.lua's own "ACTIVE-USAGE
     -- CONFIRMATION FEATURES" gate (that file's own header section): "how
@@ -932,6 +959,38 @@ globals = {
     -- above -- server/runtimecontrol.lua's own test sandbox does not load
     -- either combat.lua or kennel.lua, by that spec's own design.
     "CountActiveHoldsByEffectType", "CountKennelOccupants",
+    -- server/search.lua -- READ-ONLY: iterates connected players within a
+    -- given radius of a given point and calls back for each. Extracted from
+    -- BroadcastContrabandAlert's own original inline loop (PERFORMANCE AUDIT
+    -- PASS, this pass, coder-backend) so server/main.lua's relayBark/
+    -- relayDoorScratch can reuse the identical "who is genuinely near this
+    -- point right now" logic instead of each hand-rolling its own
+    -- GetPlayers()/GetPlayerPed()/distance loop, to distance-filter what
+    -- used to be unconditional `TriggerClientEvent(..., -1, ...)`
+    -- broadcasts. Never gates on anything itself (no HasK9Access/
+    -- Config.Features check) -- every caller applies its own gating before
+    -- or inside the callback it passes in.
+    "ForEachNearbyPlayer",
+    -- IsK9CurrentlyHolding -- PENDING, same precedent as
+    -- ForceRevertK9Appearance/IsBiteHoldTargetEngaged above, listed here
+    -- deliberately rather than left to redden lint for everyone:
+    -- server/search.lua's new SEARCHER-BUSY GUARD (server-side half of
+    -- client/search.lua's own IsBusyWithSomethingElse(), commit a32a554 --
+    -- see that file's own IsSearcherBusyElsewhere doc comment) already calls
+    -- it behind a `type(fn) == 'function'` guard so a K9 mid-bite/
+    -- mid-takedown/mid-drag cannot simultaneously start a contraband search
+    -- against a second target, but server/combat.lua has not defined it yet
+    -- (a proposed READ-ONLY accessor over that file's own file-local
+    -- K9ActiveEffect table, same "global helper, private per-file state"
+    -- shape as CountActiveHoldsByEffectType directly above -- expected
+    -- shape: `function IsK9CurrentlyHolding(holderSrc) return
+    -- K9ActiveEffect[holderSrc] ~= nil end`). The call site guards with
+    -- `type(fn) == 'function'` and is a clean no-op today (this one check
+    -- simply never fires), not an error. REMOVE THIS ENTRY if the function
+    -- is ever abandoned -- an allowlisted name that nothing defines is how a
+    -- missing function stops being visible, which is the failure class this
+    -- project keeps finding.
+    "IsK9CurrentlyHolding",
 }
 
 -- Unused-argument checking is off. Rationale, not a blanket "quiet the
