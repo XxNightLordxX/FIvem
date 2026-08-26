@@ -93,6 +93,81 @@
     `reserved_namespace` outcome the tablet can explain plainly.
 
     ======================================================================
+    RESERVED INTERNAL CAPABILITY KEYS -- CLOSES A CONFIRMED PRIVILEGE
+    ESCALATION (red-team pass, this task). See IsReservedInternalCapabilityKey
+    below for the exact list and the "how to re-derive it" audit command.
+    ======================================================================
+
+    Several files elsewhere in this resource each ship their OWN
+    `HasPermission(citizenid, '<literal>')` escape hatch, believed safe
+    ONLY because that exact literal string is not (yet) a key of
+    Config.Permissions -- server/runtimecontrol.lua's own header says so in
+    those words: "the permission-grant escape hatch activat[es]
+    automatically ... the moment those two keys are added" (its two keys:
+    'k9.runtimecontrol', 'k9.tablettheme', gating CanManageRuntimeControl/
+    CanManageTabletTheme). server/equipmentshop.lua ships the identical
+    pattern for 'k9.equipmentshoplocations'/'k9.equipmentshopitems'
+    (CanManageShopLocations/CanManageShopItems). Every one of those four
+    literals is, by shape alone, an ordinary 'k9.<word>' string --
+    IsValidPermissionCatalogKey below cannot, and must not try to, tell one
+    of them apart from a legitimate brand-new custom key an operator might
+    want (the four REAL Config.Permissions defaults -- k9.access/k9.certify/
+    k9.audit/k9.givexp -- share the exact same shape), so the shape
+    validator alone was never going to catch this.
+
+    THE CHAIN THIS CLOSES, TRACED END TO END: before this section existed,
+    permKeysUpsert let ANY high-command officer manufacture
+    'k9.runtimecontrol' (or any of the other three) as a brand-new catalog
+    key at RUNTIME -- no restart, no config.lua edit, nothing
+    IsReservedNamespaceKey's feature./block. check above was ever built to
+    catch. server/permissions.lua's GrantPermission then had no reason to
+    refuse handing that freshly-manufactured key to ANY citizenid at all --
+    GrantPermission requires only the GRANTER to be high command, never the
+    recipient (a grant targets a citizenid, not a rank). The result: an
+    already-verified high-command officer could permanently deputize an
+    ORDINARY PLAYER with server/runtimecontrol.lua's full feature/tunable-
+    toggle authority (or server/equipmentshop.lua's shop-management
+    authority) -- a capability manufactured out of thin air that no
+    config.lua edit ever sanctioned.
+
+    THIS IS NOT the same decision as "high command may grant anything to
+    themselves" (config.lua's Config.FeatureControl.allowHighCommandSelfGrant,
+    server/permissions.lua's own SELF-GRANT section): that governs what an
+    ALREADY-VERIFIED officer may hold for themselves. This bug let high
+    command manufacture a NEW kind of authority and hand it to someone who
+    is not high command at all -- an escalation nobody asked for, and
+    distinct from anything the self-grant switch controls (self-grant does
+    not even apply here: the target citizenid need not be the granter's
+    own).
+
+    FIXED HERE, not in either consuming file (this catalog is the ONLY
+    place a brand-new key can be manufactured at all -- see "THE SEAM THIS
+    FILE EXTENDS" above): IsReservedInternalCapabilityKey refuses to create
+    (or rename/restore) any of the four known literals through
+    permKeysUpsert, unconditionally -- the same absolute "cannot create,
+    rename, or shadow" treatment IsReservedNamespaceKey already gives
+    feature./block. NEVER blocks the deliberate, config-owner-driven
+    activation path: BuildPermissionCatalogFromConfigDefaults still ingests
+    any of these four literals unconditionally the moment a human adds it
+    to Config.Permissions in config.lua and restarts -- exactly the "the
+    moment those two keys are added" activation server/runtimecontrol.lua's
+    own header already documents as intended and owner-authorized. Nor does
+    it touch permKeysDelete: tombstoning a key that could never have been
+    created through this surface in the first place is already an inert
+    no-op via the ordinary `unknown_key` path.
+
+    A MANUALLY-MAINTAINED LIST, NOT A SELF-REGISTERING MECHANISM, DISCLOSED
+    PLAINLY: this file does not own, and must not edit,
+    server/runtimecontrol.lua or server/equipmentshop.lua, so neither can
+    be made to call back into this file and register its own literal. A
+    FIFTH file shipping a fifth such hardcoded-but-unwired
+    `HasPermission(citizenid, 'k9.<word>')` gate in the future REOPENS this
+    exact hole for that one new literal unless it is also added to
+    IsReservedInternalCapabilityKey's own table -- see that function's own
+    doc comment for the audit command that re-derives the full, current
+    list directly from source whenever this needs rechecking.
+
+    ======================================================================
     WHY NO ORDINAL, NO CAPABILITIES TABLE (a deliberate, disclosed
     departure from server/certtiers.lua's own shape)
     ======================================================================
@@ -550,6 +625,43 @@ local function IsReservedNamespaceKey(key)
     return key:match('^feature%.') ~= nil or key:match('^block%.') ~= nil
 end
 
+--- RESERVED INTERNAL CAPABILITY KEYS -- see header "RESERVED INTERNAL
+--- CAPABILITY KEYS" for the full privilege-escalation writeup this closes.
+--- Every entry below is a `HasPermission(citizenid, '<literal>')` escape
+--- hatch some OTHER file in this resource hardcodes, deliberately left
+--- INERT by that file's own author because the literal is not (yet) a key
+--- of Config.Permissions -- this catalog must never let that literal be
+--- manufactured out of thin air through permKeysUpsert, or the "inert"
+--- premise silently stops being true.
+---
+--- AUDIT COMMAND -- re-run this any time a new file might have added one of
+--- these gates, and add whatever it finds that is NOT already a genuine
+--- Config.Permissions default to the table below:
+---   grep -rhoE "HasPermission\([^,]+, *'k9\.[a-z0-9_.]+'\)" server/*.lua \
+---     | sed -E "s/.*'(k9\.[a-z0-9_.]+)'.*/\1/" | sort -u
+--- As of this pass that command returns exactly eight keys. Four are real
+--- Config.Permissions defaults (k9.access, k9.audit, k9.certify, k9.givexp
+--- -- NEVER add these here: they are the legitimate, config-owner-issued
+--- capability catalog this whole file exists to serve, and reserving a live
+--- default would wrongly block high command from ever relabeling it). The
+--- remaining four are every currently-known inert hatch, reserved below:
+---   k9.runtimecontrol        -- server/runtimecontrol.lua CanManageRuntimeControl
+---   k9.tablettheme           -- server/runtimecontrol.lua CanManageTabletTheme
+---   k9.equipmentshoplocations -- server/equipmentshop.lua CanManageShopLocations
+---   k9.equipmentshopitems    -- server/equipmentshop.lua CanManageShopItems
+--- @param key any
+--- @return boolean
+local RESERVED_INTERNAL_CAPABILITY_KEYS = {
+    ['k9.runtimecontrol']         = true,
+    ['k9.tablettheme']            = true,
+    ['k9.equipmentshoplocations'] = true,
+    ['k9.equipmentshopitems']     = true,
+}
+
+local function IsReservedInternalCapabilityKey(key)
+    return type(key) == 'string' and RESERVED_INTERNAL_CAPABILITY_KEYS[key] == true
+end
+
 --- 2-40 chars, lowercase-start, lowercase/digit/underscore/dot segments
 --- only (matches the shape every shipped key already uses, e.g.
 --- 'k9.access') -- comfortably inside both k9_permission_keys
@@ -636,6 +748,15 @@ lib.callback.register('qbx_k9unit:server:permKeysUpsert', function(source, paylo
     local key = payload.key
     if IsReservedNamespaceKey(key) then
         return { ok = false, reason = 'reserved_namespace' }
+    end
+    -- PRIVILEGE-ESCALATION FIX (this pass) -- see header "RESERVED INTERNAL
+    -- CAPABILITY KEYS". Checked before the shape validator, same reasoning
+    -- IsReservedNamespaceKey's own placement comment gives: a caller gets
+    -- the more specific, more honest 'reserved_internal_key' refusal for a
+    -- key that is shaped correctly but names an inert authorization hatch
+    -- another file already hardcodes, rather than the generic 'invalid_key'.
+    if IsReservedInternalCapabilityKey(key) then
+        return { ok = false, reason = 'reserved_internal_key' }
     end
     if not IsValidPermissionCatalogKey(key) then
         return { ok = false, reason = 'invalid_key' }

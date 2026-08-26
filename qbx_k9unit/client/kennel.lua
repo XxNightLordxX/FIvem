@@ -889,8 +889,17 @@ local function RegisterKennelOxTargetOption()
             icon = 'fas fa-dog',
             label = locale('kennel.exit_target_label'),
             distance = Config.DeployableKennel.interactDistanceMeters,
+            -- GATE THE START OF A THING, NEVER THE STOP: this is the exact
+            -- client-side half of server/kennel.lua's own requestExitKennel
+            -- handler (that file's event 7' doc comment: "NEVER gated on
+            -- Config.Features.DeployableKennel... or anything else outside
+            -- the occupant's own citizenid"). ReleaseKennelRest itself is
+            -- already unconditional (see its own doc comment) and does not
+            -- read this flag either -- rereading it here bought nothing but
+            -- a way for a future live config push to hide this option out
+            -- from under a still-attached occupant and strand them inside
+            -- the prop. No flag check belongs on an exit path.
             canInteract = function(entity, distance, coords, name)
-                if not Config.Features.DeployableKennel then return false end
                 return IsRestingInKennel() and ResolveKennelFromRestState() == entity
             end,
             onSelect = function()

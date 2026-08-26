@@ -1,7 +1,7 @@
 --[[
     qbx_k9unit/client/vision.lua
 
-    Phase 2 (coder-frontend). fxmanifest.lua lists this file under
+    Phase 2. fxmanifest.lua lists this file under
     client_scripts, config.lua's Config.Vision (§11.2) has landed, and
     client/radial.lua deliberately gets NO items for this feature (this is
     keybind-only, by design — see below).
@@ -17,9 +17,9 @@
     DELIBERATELY extended beyond ToggleK9Camera()'s precedent
     (config-gated registration).
 
-    Supplementary implementation detail cited in the TODOs below
-    (non-authoritative — DEVELOPER_REFERENCE.md §11 is the source of truth if anything
-    here drifts from it): DEVELOPER_REFERENCE.md#vision (the
+    Supplementary implementation detail cited below (non-authoritative —
+    DEVELOPER_REFERENCE.md §11 is the source of truth if anything here drifts
+    from it): DEVELOPER_REFERENCE.md#vision (the
     revised, §11-reconciled pass — read its own header before trusting
     anything in it that contradicts DEVELOPER_REFERENCE.md §11.5/§11.6 directly) and
     DEVELOPER_REFERENCE.md#vision /
@@ -42,8 +42,8 @@
     - THIS FILE will expose four resource-global (no `local`) functions.
       These names are already settled — DEVELOPER_REFERENCE.md §11 left this an open
       naming slot, DEVELOPER_REFERENCE.md#vision §7 filled it, and
-      README.md's "Public API (exports)" section's "Batch 2" validation pass
-      confirmed no other design note proposed a competing name for the
+      README.md's "Public API for developers (exports/events)" section
+      confirms no other design note proposed a competing name for the
       same slot:
         ToggleThermalVision()
         ToggleNightVision()
@@ -54,8 +54,9 @@
       Phase 2 file's design references vision toggling") — exposed as
       resource-globals anyway, per this codebase's established convention
       that every toggle/action function is a resource-global (see
-      README.md's "Public API (exports)" section's Phase 1 contract table), in case a
-      later phase wants to call in from outside this file.
+      README.md's "Public API for developers (exports/events)" section's
+      Phase 1 contract table), in case a later phase wants to call in
+      from outside this file.
     - THIS FILE calls client/main.lua's IsOwnModelK9() — see the RESOLVED
       ACCESS-GATING DECISION section immediately below for why this is
       IsOwnModelK9() and explicitly NOT CanShowK9UI().
@@ -89,25 +90,23 @@
     ======================================================================
 
     ======================================================================
-    CAMERA FEED (Config.Features.CameraFeedPiP) — ADDED THIS PASS, owner
-    directive: "do whatever it takes to finish the CameraFeedPiP." Two
-    prior agents independently confirmed zero implementing code existed
-    anywhere in this resource for this flag before this pass (grepped and
-    read; only reference was config.lua's own comment declaring it
-    impossible and this file's header, unedited, did not mention it
+    CAMERA FEED (Config.Features.CameraFeedPiP), owner directive: "do
+    whatever it takes to finish the CameraFeedPiP." Zero implementing code
+    existed anywhere in this resource for this flag before this file
+    (confirmed by grep; the only reference was config.lua's own comment
+    declaring it impossible, and this file's own header did not mention it
     either). This section is the first real implementation.
 
-    WHAT THIS IS NOT, RE-VERIFIED INDEPENDENTLY THIS PASS, NOT JUST
-    INHERITED FROM CONFIG.LUA'S EARLIER RESEARCH: a genuine simultaneous
-    inset (two live 3D views on screen at once, the literal meaning of
-    "picture-in-picture") remains IMPOSSIBLE with documented natives.
-    Verified by live-fetching the authoritative CFX native reference
-    (https://runtime.fivem.net/doc/natives.json — reachable from this
-    session; the task brief's assumed fallback was in fact available,
-    not the native-decls repo alone, which only documents CFX-specific
-    natives and 404s on ordinary GTA5 natives regardless of whether they
-    exist) and enumerating the ENTIRE `CAM` namespace (202 natives) plus
-    every `RENDERTARGET`-named native (`HUD` namespace:
+    WHAT THIS IS NOT, RE-VERIFIED INDEPENDENTLY, NOT JUST INHERITED FROM
+    CONFIG.LUA'S EARLIER RESEARCH: a genuine simultaneous inset (two live
+    3D views on screen at once, the literal meaning of "picture-in-picture")
+    remains IMPOSSIBLE with documented natives. Verified by live-fetching
+    the authoritative CFX native reference
+    (https://runtime.fivem.net/doc/natives.json — reachable and used here
+    rather than the native-decls repo alone, which only documents
+    CFX-specific natives and 404s on ordinary GTA5 natives regardless of
+    whether they exist) and enumerating the ENTIRE `CAM` namespace (202
+    natives) plus every `RENDERTARGET`-named native (`HUD` namespace:
     REGISTER_NAMED_RENDERTARGET, LINK_NAMED_RENDERTARGET,
     GET_NAMED_RENDERTARGET_RENDER_ID, IS_NAMED_RENDERTARGET_REGISTERED/
     LINKED, RELEASE_NAMED_RENDERTARGET). The render-target natives that DO
@@ -263,9 +262,9 @@ end
 -- Toggle*Vision() function's "turning on" branch rather than an
 -- always-idling poll (unlike client/movement.lua's leash thread, which can
 -- afford to idle at 1000ms forever since it's a single perpetual thread for
--- a Phase 1 feature already always loaded) — resource-performance-profiler's
--- lens: a feature most players never touch should not run any thread at
--- all until it's actually used at least once.
+-- a Phase 1 feature already always loaded) — this resource's own
+-- established performance posture: a feature most players never touch
+-- should not run any thread at all until it's actually used at least once.
 local visionMaintenanceThreadRunning = false
 
 --- Starts the maintenance/cleanup thread (see below) if it isn't already
@@ -366,13 +365,13 @@ function ToggleThermalVision()
 
     local turningOn = not IsThermalVisionActive()
 
-    -- Per-person block (client/featureblocks.lua, REQUESTED -- see that
-    -- file's header for the full contract). Checked ONLY on the
-    -- turning-ON branch, never on turning off -- this must never be able
-    -- to trap someone with thermal vision stuck active. `type(...) ==
-    -- 'function'` guard per this resource's soft-dependency convention:
-    -- if client/featureblocks.lua is not yet loaded, this degrades to
-    -- "never blocked", the correct fail-open direction.
+    -- Per-person block (client/featureblocks.lua -- see that file's header
+    -- for the full contract). Checked ONLY on the turning-ON branch, never
+    -- on turning off -- this must never be able to trap someone with
+    -- thermal vision stuck active. `type(...) == 'function'` guard per
+    -- this resource's soft-dependency convention: if
+    -- client/featureblocks.lua is not yet loaded, this degrades to "never
+    -- blocked", the correct fail-open direction.
     if turningOn and type(IsK9FeatureBlocked) == 'function' and IsK9FeatureBlocked('ThermalVision') then
         if type(DenyK9FeatureBlocked) == 'function' then DenyK9FeatureBlocked() end
         return
@@ -441,18 +440,17 @@ end
 -- ----------------------------------------------------------------------
 
 -- DEFENSIVE FALLBACK, NOT THE REAL TUNING SOURCE: this file does not own
--- config.lua (a different agent's file, per this pass's own task
--- boundary), so it cannot guarantee Config.CameraFeed lands in the same
--- change as Config.Features.CameraFeedPiP flipping true. Missing config
--- for an ENABLED feature must degrade to a sane default, never a hard
--- top-level-chunk error that would also take down ThermalVision/NightVision
--- above (a `Config.CameraFeed.x` index on a nil table at file-load time
--- inside the registration block below would do exactly that) -- this
--- table is consulted everywhere below instead of reading `Config.CameraFeed`
--- directly. Real values from config.lua win the moment that table exists;
--- these three constants are the requested/documented defaults (see this
--- pass's hand-off message to main for the exact Config.CameraFeed schema
--- requested) and only ever apply if config.lua has not been updated yet.
+-- config.lua, so it cannot guarantee Config.CameraFeed stays in sync with
+-- Config.Features.CameraFeedPiP if the two are ever edited separately.
+-- Missing config for an ENABLED feature must degrade to a sane default,
+-- never a hard top-level-chunk error that would also take down
+-- ThermalVision/NightVision above (a `Config.CameraFeed.x` index on a nil
+-- table at file-load time inside the registration block below would do
+-- exactly that) -- this table is consulted everywhere below instead of
+-- reading `Config.CameraFeed` directly. Real values from config.lua (now
+-- shipped, matching these exactly) win the moment that table exists;
+-- these three constants are the fallback defaults, used only if config.lua
+-- is ever missing this table.
 local CAMERA_FEED_DEFAULTS = {
     toggleKey = 'H',
     fov = 50.0,
@@ -710,7 +708,7 @@ local function StartCameraFeedAttempt()
     -- offset only (no X/Y) is deliberate -- rotation-invariant around
     -- yaw, so this stays anchored correctly above the partner regardless
     -- of which way isRelative resolves the horizontal offset frame for a
-    -- turning entity (not independently verified in-engine this pass).
+    -- turning entity (not independently verified in-engine).
     local cameraFeedConfig = GetCameraFeedConfig()
     local eyeHeightOffset = IsEntityModelK9(partnerPed)
         and cameraFeedConfig.k9EyeHeightOffset
@@ -819,7 +817,7 @@ end
 -- part of a player disconnecting) — high confidence per that note's own
 -- reasoning, flagged there as "verify this assumption once real code
 -- exists" rather than asserted with certainty, since it was not
--- independently tested in-engine this session.
+-- independently tested in-engine.
 AddEventHandler('onResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
 

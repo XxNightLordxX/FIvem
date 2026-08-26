@@ -633,6 +633,21 @@ end
 --- is checked FIRST and is completely unaffected by this change -- that
 --- namespace is never represented in the permission-key catalog at all,
 --- by construction on both sides.
+---
+--- PRIVILEGE-ESCALATION FIX, DISCLOSED HERE EVEN THOUGH THE FIX ITSELF
+--- LIVES ELSEWHERE (server/permissionkeycatalog.lua's own header "RESERVED
+--- INTERNAL CAPABILITY KEYS" has the full writeup): IsKnownPermissionCatalogKey
+--- now permanently refuses to ever report `true` for 'k9.runtimecontrol' /
+--- 'k9.tablettheme' / 'k9.equipmentshoplocations' / 'k9.equipmentshopitems'
+--- unless a human has put one of them in Config.Permissions directly --
+--- those four literals are every currently-known
+--- `HasPermission(citizenid, '<literal>')` escape hatch another file in
+--- this resource hardcodes without ever wiring it through Config.Permissions,
+--- and this function (via GrantPermission below) is the ONLY place that
+--- could otherwise have handed one of them to an arbitrary citizenid once
+--- the catalog file let it be manufactured at runtime. Nothing in THIS
+--- function changed to close that hole -- the fix is a refusal one layer
+--- up, in the only place a brand-new catalog key can ever be created.
 --- @param value any
 --- @return boolean
 local function IsValidPermissionKey(value)

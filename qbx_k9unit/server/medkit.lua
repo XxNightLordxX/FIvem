@@ -917,19 +917,15 @@ lib.callback.register('qbx_k9unit:server:useK9Medkit', function(source, targetSe
     -- either cause cannot tell which one to fix; a distinct reason string
     -- lets the client eventually tell them.
     --
-    -- `not_granted` is a NEW reason value this callback did not emit before
-    -- this pass. client/medkit.lua's own reasonLabel lookup table (that
-    -- file is out of this pass's file-ownership) does not recognize it yet
-    -- and falls back to its own already-existing, by-design "unrecognized
-    -- reason -> generic medkit_failed notify" branch for it today -- that
-    -- file's own comment already promises exactly this degrade path for
-    -- "if server/medkit.lua ever adds a new reason value": never a crash,
-    -- never a wrong-but-confident message, merely not yet as specific as it
-    -- will be once a client-side change adds this one key to that lookup
-    -- table (reported separately, not fixed here -- this pass may not edit
-    -- client/*.lua). `locale('medkit.reason_not_granted')` (locales/en.json)
-    -- is added in this SAME change so the string exists and is ready the
-    -- moment that client-side mapping lands.
+    -- `not_granted` is a reason value this callback did not emit before the
+    -- REASON SPLIT pass above. client/medkit.lua's own reasonLabel lookup
+    -- table has since been updated (confirmed by reading it) to map this
+    -- reason to `locale('medkit.reason_not_granted')` instead of falling
+    -- through to the generic medkit_failed notify -- that fallback still
+    -- exists for genuinely unrecognized reasons, but this one is no longer
+    -- among them. `locale('medkit.reason_not_granted')` (locales/en.json)
+    -- was added alongside this reason so the string existed the moment the
+    -- client-side mapping landed.
     local usingPlayer = exports.qbx_core:GetPlayer(source)
     local usingCitizenid = usingPlayer and usingPlayer.PlayerData and usingPlayer.PlayerData.citizenid
     if not usingCitizenid then

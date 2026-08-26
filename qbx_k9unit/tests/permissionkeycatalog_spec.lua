@@ -546,6 +546,190 @@ t.test('NAMESPACE: the feature./block. namespace keeps working UNAFFECTED by thi
 end)
 
 -- ============================================================================
+-- SECTION 5b -- PRIVILEGE ESCALATION REGRESSION (red-team pass, this task).
+-- server/runtimecontrol.lua's CanManageRuntimeControl/CanManageTabletTheme
+-- and server/equipmentshop.lua's CanManageShopLocations/CanManageShopItems
+-- each hardcode a `HasPermission(citizenid, 'k9.<word>')` escape hatch that
+-- was believed permanently inert because that literal is not a key of
+-- Config.Permissions. Before this pass's fix, permKeysUpsert had no idea
+-- those four literals were special -- any high-command officer could
+-- manufacture one at runtime and GrantPermission would then hand it to ANY
+-- citizenid, deputizing an ordinary player with runtime-control/shop-admin
+-- authority. See server/permissionkeycatalog.lua's own header "RESERVED
+-- INTERNAL CAPABILITY KEYS" for the full writeup this section proves.
+-- ============================================================================
+
+t.test('PRIVILEGE ESCALATION FIX: permKeysUpsert refuses to create k9.runtimecontrol as reserved_internal_key', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    local result = f.callbacks['qbx_k9unit:server:permKeysUpsert'](HC_SOURCE, { key = 'k9.runtimecontrol', label = 'Manage Runtime Control' })
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'reserved_internal_key')
+    t.isFalse(f.env.IsKnownPermissionCatalogKey('k9.runtimecontrol'), 'the key must never actually be created')
+end)
+
+t.test('PRIVILEGE ESCALATION FIX: all four currently-known reserved internal literals are refused the same way', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    for _, badKey in ipairs({ 'k9.runtimecontrol', 'k9.tablettheme', 'k9.equipmentshoplocations', 'k9.equipmentshopitems' }) do
+        f.fakeNow.value = f.fakeNow.value + 2000
+        local result = f.callbacks['qbx_k9unit:server:permKeysUpsert'](HC_SOURCE, { key = badKey, label = 'X' })
+        t.isFalse(result.ok, badKey .. ' must be refused')
+        t.equals(result.reason, 'reserved_internal_key')
+        t.isFalse(f.env.IsKnownPermissionCatalogKey(badKey))
+    end
+end)
+
+t.test('PRIVILEGE ESCALATION FIX: GrantPermission therefore refuses k9.runtimecontrol for anyone -- invalid_permission, since the catalog never let it exist', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        playersBySource = { [300] = { PlayerData = { citizenid = 'ORDINARY_PLAYER', source = 300 } } },
+    })
+    -- The exact attack: high command tries to create the hatch key, then
+    -- grant it to an ordinary (non-high-command) citizenid.
+    f.callbacks['qbx_k9unit:server:permKeysUpsert'](HC_SOURCE, { key = 'k9.runtimecontrol', label = 'Manage Runtime Control' })
+
+    local ok, outcome = f.env.GrantPermission(HC_SOURCE, 'ORDINARY_PLAYER', 'k9.runtimecontrol')
+    t.isFalse(ok, 'the grant must fail -- the key was never actually created')
+    t.equals(outcome, 'invalid_permission')
+    t.isFalse(f.env.HasPermission('ORDINARY_PLAYER', 'k9.runtimecontrol'))
+end)
+
+t.test('PRIVILEGE ESCALATION FIX (END TO END, real server/runtimecontrol.lua loaded alongside): the deputized ordinary player still cannot call runtimeSetFeature after the exact attack chain', function()
+    -- Loads the REAL, unmodified server/runtimecontrol.lua on top of the
+    -- REAL server/permissions.lua + server/permissionkeycatalog.lua this
+    -- spec already exercises -- the closest this harness can get to
+    -- reproducing "traced end to end" against production code on both
+    -- sides of the seam, not merely this file's own accessors.
+    local rcWorld = { overrides = {}, overrideAudit = {}, theme = nil, themeAudit = {} }
+    local permWorld = newWorld()
+
+    local printedLines = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printedLines[#printedLines + 1] = table.concat(parts, '\t')
+    end
+
+    local callbacks = {}
+    local libStub = { callback = { register = function(name, handler) callbacks[name] = handler end } }
+
+    local eventHandlers = {}
+    local function AddEventHandlerStub(eventName, handler)
+        eventHandlers[eventName] = eventHandlers[eventName] or {}
+        eventHandlers[eventName][#eventHandlers[eventName] + 1] = handler
+    end
+
+    local HC_SRC, TARGET_SRC = 100, 300
+    local playersBySource = {
+        [HC_SRC] = { PlayerData = { citizenid = 'HC_CIT', source = HC_SRC } },
+        [TARGET_SRC] = { PlayerData = { citizenid = 'ORDINARY_PLAYER', source = TARGET_SRC } },
+    }
+    local playersByCitizenId = {}
+    for _, p in pairs(playersBySource) do playersByCitizenId[p.PlayerData.citizenid] = p end
+    local exportsStub = {
+        qbx_core = {
+            GetPlayer = function(_self, src) return playersBySource[src] end,
+            GetPlayerByCitizenId = function(_self, citizenid) return playersByCitizenId[citizenid] end,
+        },
+    }
+
+    -- ONE combined MySQL stub covering both this catalog's own tables
+    -- (k9_permission_keys/k9_permission_key_audit/k9_permissions, via
+    -- makeMysqlStub above) AND server/runtimecontrol.lua's own tables
+    -- (k9_runtime_feature_overrides/.../k9_tablet_theme*), since both real
+    -- production files run against the SAME env.MySQL in one real boot.
+    local baseMysql = makeMysqlStub(permWorld)
+    local mysqlStub = {
+        query = { await = function(sql, params)
+            if sql:find('k9_runtime_feature_override', 1, true) or sql:find('k9_tablet_theme', 1, true) then
+                if sql:find('SELECT override_key, kind, value, updated_by, updated_at FROM k9_runtime_feature_overrides', 1, true) then
+                    local out = {}
+                    for key, row in pairs(rcWorld.overrides) do
+                        out[#out + 1] = { override_key = key, kind = row.kind, value = row.value, updated_by = row.updated_by, updated_at = row.updated_at }
+                    end
+                    return out
+                elseif sql:find('INSERT INTO k9_runtime_feature_overrides', 1, true) then
+                    local key, kind, value, updatedBy = params[1], params[2], params[3], params[4]
+                    rcWorld.overrides[key] = { kind = kind, value = value, updated_by = updatedBy, updated_at = '2026-01-01 00:00:00' }
+                    return {}
+                elseif sql:find('DELETE FROM k9_runtime_feature_overrides', 1, true) then
+                    rcWorld.overrides[params[1]] = nil
+                    return {}
+                elseif sql:find('INSERT INTO k9_runtime_override_audit', 1, true) then
+                    return {}
+                elseif sql:find('SELECT primary_color, accent_color, background_color, text_color, density, header_title FROM k9_tablet_theme', 1, true) then
+                    if rcWorld.theme then return { rcWorld.theme } end
+                    return {}
+                elseif sql:find('INSERT INTO k9_tablet_theme_audit', 1, true) then
+                    return {}
+                elseif sql:find('INSERT INTO k9_tablet_theme (', 1, true) then
+                    rcWorld.theme = { primary_color = params[1], accent_color = params[2], background_color = params[3], text_color = params[4], density = params[5], header_title = params[6] }
+                    return {}
+                end
+                error('end-to-end spec: unhandled runtimecontrol SQL: ' .. tostring(sql))
+            end
+            return baseMysql.query.await(sql, params)
+        end },
+        scalar = baseMysql.scalar,
+        insert = baseMysql.insert,
+        update = baseMysql.update,
+    }
+
+    local fakeNow = { value = 0 }
+    local env = Sandbox.newEnv({
+        GetGameTimer = function() return fakeNow.value end,
+        AddEventHandler = AddEventHandlerStub,
+        RegisterNetEvent = function(_name, _fn) end,
+        TriggerClientEvent = function() end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        print = printStub,
+        lib = libStub,
+        exports = exportsStub,
+        MySQL = mysqlStub,
+        NotifyPlayer = function() end,
+        GetPlayers = function() return {} end,
+        IsHighCommand = function(src) return src == HC_SRC end,
+        Config = {
+            Features = {
+                PermissionGrants = true, CommandTablet = false,
+                RuntimeFeatureControl = true, TabletTheming = true,
+                BiteAndHold = true, DoorInteraction = true, HighCommand = true,
+            },
+            Permissions = DEFAULT_PERMISSIONS,
+            Departments = { police = { label = 'Police', certifierGrade = 4, auditGrade = 4, highCommandGrade = 6 } },
+            Tracking = { Scent = {}, Blood = {}, Gunpowder = {} },
+            AdminAudit = { MaxResults = {} },
+        },
+    })
+
+    Sandbox.loadInto('../server/cooldowns.lua', env)
+    Sandbox.loadInto('../server/datastore.lua', env)
+    Sandbox.loadInto('../server/permissions.lua', env)
+    Sandbox.loadInto('../server/permissionkeycatalog.lua', env)
+    Sandbox.loadInto('../server/runtimecontrol.lua', env)
+    for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do handler('qbx_k9unit') end
+
+    t.isNotNil(callbacks['qbx_k9unit:server:runtimeSetFeature'], 'sanity: the real runtimecontrol.lua callback must have registered')
+
+    -- STEP 1: high command tries to manufacture the hatch key.
+    local upsertResult = callbacks['qbx_k9unit:server:permKeysUpsert'](HC_SRC, { key = 'k9.runtimecontrol', label = 'Manage Runtime Control' })
+    t.isFalse(upsertResult.ok, 'the catalog must refuse to manufacture this literal')
+    t.equals(upsertResult.reason, 'reserved_internal_key')
+
+    -- STEP 2: high command tries to grant it anyway (proves GrantPermission
+    -- itself never had a path around the catalog's own refusal).
+    local grantOk = env.GrantPermission(HC_SRC, 'ORDINARY_PLAYER', 'k9.runtimecontrol')
+    t.isFalse(grantOk, 'the grant must fail -- the key never validated')
+    t.isFalse(env.HasPermission('ORDINARY_PLAYER', 'k9.runtimecontrol'))
+
+    -- STEP 3: the "deputized" ordinary player tries the real, unmodified
+    -- runtimeSetFeature callback directly -- the actual exploit surface the
+    -- task named. Must still be denied.
+    local setFeatureResult = callbacks['qbx_k9unit:server:runtimeSetFeature'](TARGET_SRC, 'DoorInteraction', false)
+    t.isFalse(setFeatureResult.ok, 'an ordinary player must never be able to manage runtime control through this chain')
+    t.equals(setFeatureResult.reason, 'denied')
+end)
+
+-- ============================================================================
 -- SECTION 6 -- THE DELETE-VS-GRANT RACE.
 -- ============================================================================
 

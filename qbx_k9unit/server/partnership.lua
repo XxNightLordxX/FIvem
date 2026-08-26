@@ -1,8 +1,7 @@
 --[[
     qbx_k9unit/server/partnership.lua
 
-    Phase 3 implementation (coder-backend), DEVELOPER_REFERENCE.md §12.0 item 7
-    (Revision 5, coder-architect resolution) / §12.3's file-plan entry.
+    DEVELOPER_REFERENCE.md §12.0 item 7 / §12.3's file-plan entry.
     Owns the "K9 partnership" registry -- a persistent, DB-backed,
     mutually-consented "who is my ongoing handler/K9 partner" relationship,
     independent of momentary leash state (server/main.lua's `LeashPairs`).
@@ -145,7 +144,7 @@
 
     ======================================================================
     FUTURE CONSUMERS, AS ORIGINALLY WRITTEN (both explicitly OUT OF SCOPE
-    for this file/pass at the time this section was written -- read
+    for this file at the time this section was written -- read
     DEVELOPER_REFERENCE.md §12.0 item 7's "Consumers, made concrete" block for
     the original design). Both are now LANDED -- see
     GetActivePartnerCitizenId's and IsActivePartnerOf's own doc comments
@@ -187,9 +186,9 @@
       leash) and then runs the DB establish flow under
       PartnershipEstablishMutex -- and, inside that mutex-protected critical
       section, RE-VALIDATES HasK9Access/department membership a SECOND
-      time, immediately before the INSERT (red-team fix; see that critical
-      section's own "RED-TEAM FINDING FIX" comment for the exact race this
-      closes that the earlier, pre-mutex re-check alone could not).
+      time, immediately before the INSERT (a TOCTOU fix; see that critical
+      section's own comment for the exact race this closes that the
+      earlier, pre-mutex re-check alone could not).
     - 'qbx_k9unit:server:breakPartnership' ()
       Either party, at any time, ZERO consent needed -- mirrors leash's
       detachLeash exactly (DEVELOPER_REFERENCE.md §12.0 item 7 point 3's own "no
@@ -198,8 +197,8 @@
 
     Callbacks (ox_lib lib.callback), THIS FILE:
     - 'qbx_k9unit:server:getPartnershipState' () -> isPartnered: boolean, partnerServerId: number?, isK9: boolean?
-      Server-authoritative "am I currently partnered, and with whom"
-      read for the CALLING player, resolved via a fresh RefreshPartnershipCache
+      Server-authoritative "am I currently partnered, and with whom" read
+      for the CALLING player, resolved via a fresh RefreshPartnershipCache
       call (never a stale read, never a client claim) -- modeled directly
       on server/certifications.lua's 'qbx_k9unit:server:hasK9Access'
       callback, this resource's own established precedent for exactly this
@@ -231,8 +230,8 @@
       is called from this file's own onResourceStart backfill loop (see
       below), and an unguarded read there would abort that loop for every
       player after the first one processed, exactly the bug class
-      RefreshCertificationCache was hardened against this session. Exposed
-      globally (not `local`) for the same "documented reuse hook" reason
+      RefreshCertificationCache was hardened against. Exposed globally (not
+      `local`) for the same "documented reuse hook" reason
       IsConfiguredK9Model was -- no other file calls this today, but a
       future admin command forcing a resync for one citizenid without a
       full resource restart is a plausible, cheap reuse.
@@ -291,8 +290,7 @@
     ======================================================================
 
     ======================================================================
-    ANTI-FARM GUARD EXTENSION (this pass, coder-backend -- "expand
-    partnership progression" task): server/tenure.lua's partnership-tenure
+    ANTI-FARM GUARD EXTENSION: server/tenure.lua's partnership-tenure
     milestones reset to zero on every brand-new row, by design (see that
     file's header, design question 4) -- correct for "partner with someone
     ELSE," but NOT sufficient on its own against the SAME two citizenids
@@ -311,9 +309,9 @@
     server/tenure.lua's own tick already uses). See `PairTenureSeed`'s own
     declaration comment (below, near `Partnerships`) for the full "why now,
     why in-memory, why not TTL'd" writeup, and server/tenure.lua's own
-    closing comment block ("DEEPER PROGRESSION PASS -- FURTHER PROPOSED
-    ADDITIONS", item 3) for the fully schema-backed version this in-memory
-    guard is a real-but-partial (restart-bounded) stand-in for.
+    closing comment block ("TENURE PROGRESSION EXTENSIONS -- FURTHER
+    PROPOSED ADDITIONS", item 3) for the fully schema-backed version this
+    in-memory guard is a real-but-partial (restart-bounded) stand-in for.
     ======================================================================
 
     FILE-TO-FILE CONTRACT:
@@ -376,13 +374,10 @@ local Partnerships = {}
 local PendingPartnershipRequests = {}
 
 -- ======================================================================
--- ANTI-FARM GUARD EXTENSION (this pass, coder-backend -- "expand
--- partnership progression" task, step 3's explicit instruction: "the
--- existing one-time bonuses already guard against exactly this -- find
--- that guard and extend it rather than working around it"). See
--- CaptureTenureSeedForPair/TenurePairKey below for the actual mechanism;
--- this comment records WHY it exists, since the gap it closes is not
--- obvious from server/tenure.lua's own header alone.
+-- ANTI-FARM GUARD EXTENSION. See CaptureTenureSeedForPair/TenurePairKey
+-- below for the actual mechanism; this comment records WHY it exists,
+-- since the gap it closes is not obvious from server/tenure.lua's own
+-- header alone.
 --
 -- THE GAP: server/tenure.lua's own header, design question 4 ("RESET OR
 -- PERSIST ACROSS A BREAK + RE-FORM?"), reasons at length that resetting
@@ -430,11 +425,11 @@ local PendingPartnershipRequests = {}
 -- table repopulates from the NEXT break. A fully restart-proof version
 -- needs a persisted per-(k9_citizenid, handler_citizenid) record --
 -- proposed, not built, in server/tenure.lua's own closing comment block
--- (sql/*/server/datastore.lua are off limits to this pass). This
--- in-memory guard still closes the COMMON case (a farmer cycling
--- break/reform without a lucky restart in between) for the resource's
--- actual running uptime, which is a real, meaningful improvement over
--- having no guard at all, not merely a cosmetic one.
+-- (sql/*/server/datastore.lua are not edited here). This in-memory guard
+-- still closes the COMMON case (a farmer cycling break/reform without a
+-- lucky restart in between) for the resource's actual running uptime,
+-- which is a real, meaningful improvement over having no guard at all, not
+-- merely a cosmetic one.
 --
 -- BOUNDED MEMORY, NOT TIME-EXPIRED, AND WHY: entries are NEVER evicted on
 -- a TTL or on `playerDropped` (unlike `Partnerships`/`PendingPartnershipRequests`
@@ -444,18 +439,18 @@ local PendingPartnershipRequests = {}
 -- milestone thresholds THEMSELVES (hours to days), not a UI-harassment
 -- timescale a normal cooldown would use; and `playerDropped` eviction
 -- would hand a farmer a trivial bypass (disconnect once, reconnect, break,
--- reform -- the exact "reconnecting" vector this task's own brief names
--- as something the guard must survive). Growth is bounded IN PRACTICE, not
--- via an eviction policy: one small, fixed-size entry is added only on an
--- actual completed BREAK event for a pair that had already earned at least
--- one milestone tier -- a real, deliberate, comparatively rare player
--- action, not a hot path -- so this table's size tracks the number of
--- DISTINCT (k9, handler) pairs that have ever both partnered AND stayed
--- partnered long enough to earn a milestone AND then broken up, over this
--- resource's entire uptime. Same "unbounded-but-fine growth profile"
--- framing server/tenure.lua's own `TenureFullyCollected` cache already
--- uses for the identical class of tradeoff (that file's own comment, verbatim
--- phrase reused deliberately here).
+-- reform -- the exact "reconnecting" vector this guard must survive).
+-- Growth is bounded IN PRACTICE, not via an eviction policy: one small,
+-- fixed-size entry is added only on an actual completed BREAK event for a
+-- pair that had already earned at least one milestone tier -- a real,
+-- deliberate, comparatively rare player action, not a hot path -- so this
+-- table's size tracks the number of DISTINCT (k9, handler) pairs that have
+-- ever both partnered AND stayed partnered long enough to earn a milestone
+-- AND then broken up, over this resource's entire uptime. Same
+-- "unbounded-but-fine growth profile" framing server/tenure.lua's own
+-- `TenureFullyCollected` cache already uses for the identical class of
+-- tradeoff (that file's own comment, verbatim phrase reused deliberately
+-- here).
 -- ======================================================================
 
 -- PairTenureSeed[k9Citizenid .. ':' .. handlerCitizenid] = { tier = number }
@@ -489,17 +484,15 @@ end
 --- DoBreakPartnership below (the SHARED core for BOTH the player-initiated
 --- `breakPartnership` event AND `ForceBreakPartnershipForCitizenId`, so this
 --- single call site covers self-initiated breaks, decertification-forced
---- breaks, AND department-change-forced breaks alike -- exactly the three
---- vectors this task's own brief names: "breaking and re-forming... or
---- switching jobs"). Read-only against K9Store.Partner_GetTenureRow
---- (server/tenure.lua's own accessor, unmodified, already exposed) --
---- never mutates anything, and can NEVER abort or delay the break itself:
---- every exit path below is a silent, best-effort no-op on any failure,
---- which only ever COSTS a future legitimate carry-forward, never grants
---- an extra one -- preserving this file's own "no unbounded trap" rule
---- that a teardown path is never gated on any check (see DoBreakPartnership's
---- own call site: this function's return value, if any, is never
---- inspected/branched on).
+--- breaks, AND department-change-forced breaks alike). Read-only against
+--- K9Store.Partner_GetTenureRow (server/tenure.lua's own accessor,
+--- unmodified, already exposed) -- never mutates anything, and can NEVER
+--- abort or delay the break itself: every exit path below is a silent,
+--- best-effort no-op on any failure, which only ever COSTS a future
+--- legitimate carry-forward, never grants an extra one -- preserving this
+--- file's own "no unbounded trap" rule that a teardown path is never gated
+--- on any check (see DoBreakPartnership's own call site: this function's
+--- return value, if any, is never inspected/branched on).
 --- @param k9Citizenid string
 --- @param handlerCitizenid string
 local function CaptureTenureSeedForPair(k9Citizenid, handlerCitizenid)
@@ -570,22 +563,21 @@ local PARTNERSHIP_ESTABLISH_MUTEX_KEY = 'establish'
 -- NewCooldown()-backed, per-INITIATOR-source keying, same
 -- :RegisterPlayerDropped() cleanup.
 --
--- ResolveConfiguredThresholdMs (server/cooldowns.lua, this pass, QA sandbox
--- repro — see that file's header ADDENDUM) wraps the raw Config read below
--- rather than handing it straight to NewCooldown: an uncaught non-positive
--- value there would abort THIS FILE's load from that line onward instead of
--- just disabling this one cooldown. Fallback matches config.lua's own
--- shipped default.
+-- ResolveConfiguredThresholdMs (server/cooldowns.lua — see that file's
+-- header ADDENDUM) wraps the raw Config read below rather than handing it
+-- straight to NewCooldown: an uncaught non-positive value there would
+-- abort THIS FILE's load from that line onward instead of just disabling
+-- this one cooldown. Fallback matches config.lua's own shipped default.
 local PartnerRequestCooldown = NewCooldown(ResolveConfiguredThresholdMs(
     Config.Partnership.RequestCooldownMs, 1000, 'Config.Partnership.RequestCooldownMs'))
 PartnerRequestCooldown.RegisterPlayerDropped()
 
 -- NotifyPlayer used to be defined here as its own local copy (one of 12
--- independent hand-rolled copies found by DEVELOPER_REFERENCE.md's dedup
--- audit). It is now server/notify.lua's single shared resource-global
--- implementation -- see that file's own header for the extraction writeup.
--- Every call site below is unchanged: this file never passed a custom
--- title, which is server/notify.lua's own default.
+-- independent hand-rolled copies across this resource). It is now
+-- server/notify.lua's single shared resource-global implementation -- see
+-- that file's own header for the extraction writeup. Every call site below
+-- is unchanged: this file never passed a custom title, which is
+-- server/notify.lua's own default.
 
 --- Sends the `partnershipEnded` client event to `citizenid` ONLY if they
 --- currently resolve to a connected server id -- silent no-op otherwise
@@ -609,10 +601,9 @@ end
 --- Fires a stable `qbx_k9unit:events:*` outbound event for other resources
 --- (dispatch/MDT/evidence integrations — see server/exports.lua's header
 --- "EVENT CONTRACT" section for the full documented contract this
---- implements). Identical shape/reasoning to server/certifications.lua's
---- MOVED to server/events.lua (2026-08-25 cross-file cleanup pass): this
---- file's own `FireOutboundEvent` copy — byte-for-byte identical to the
---- five other copies that existed alongside it — is now the single shared
+--- implements). MOVED to server/events.lua: this file's own
+--- `FireOutboundEvent` copy — byte-for-byte identical to the five other
+--- copies that existed alongside it — is now the single shared
 --- resource-global implementation in that file. See server/events.lua's
 --- header for the full extraction writeup. Every call site below is
 --- unchanged: same event names, arguments, order, and firing conditions.
@@ -701,9 +692,9 @@ end
 --- (initiatorIsK9/targetIsK9) CheckPartnershipEligibility computes below --
 --- used ONLY to decide the "both parties are a K9" rejection, never the
 --- "neither party is a K9" one. See that function's own "BOTH-ARE-K9 CASE"
---- comment for the exact gap this closes (owner-directed, this pass: two
---- K9s could partner with each other, with one silently cast as the
---- handler, since the widened check only ever rejects "neither").
+--- comment for the exact gap this closes: two K9s could partner with each
+--- other, with one silently cast as the handler, since the widened check
+--- only ever rejects "neither."
 ---
 --- WHY ROLE, NOT MODEL, NOT THE SAME WIDENED OR THIS FUNCTION USES
 --- ELSEWHERE: server/appearance.lua's own header defines "HOLDS THE K9
@@ -792,11 +783,10 @@ end
 -- locale('partnership.reject_fallback')` fallback already covers it with an
 -- existing, already-shipped, already-tested locale key ("Unable to set up
 -- partnership."), so no NEW locale key is needed (and none is added here --
--- locales/en.json is off-limits for this file to edit directly, and the
--- test sandbox's own `locale()` hard-asserts every key it's asked for
--- actually exists, so introducing an unshipped key here would redden
--- tests/run.sh for every spec that loads this file, not just fail silently
--- at runtime).
+-- locales/en.json is not edited directly by this file, and the test
+-- sandbox's own `locale()` hard-asserts every key it's asked for actually
+-- exists, so introducing an unshipped key here would redden tests/run.sh
+-- for every spec that loads this file, not just fail silently at runtime).
 --
 -- 'both_k9' (see CheckPartnershipEligibility's own "BOTH-ARE-K9 CASE"
 -- comment, and IsGenuinelyK9Party's doc comment, above) DOES get its own
@@ -926,22 +916,22 @@ local function CheckPartnershipEligibility(initiatorSrc, targetSrc)
         return false, nil, nil, 'offline'
     end
 
-    -- SAME-IDENTITY GUARD, BY CITIZENID (owner-directed, this pass): the
-    -- `initiatorSrc == targetSrc` check above only rejects self-targeting
-    -- by SERVER ID -- but a server id is a per-connection number FiveM
-    -- recycles, not a stable identity (see e.g. the playerDropped handler
-    -- below scanning PendingPartnershipRequests specifically because a
-    -- freed id can be reassigned to an unrelated citizenid before a
-    -- pending request's own TTL expires). The citizenid, resolved above
-    -- from each party's OWN current session, is this resource's actual
-    -- identity boundary (every persisted row, every cache entry, every
-    -- per-person feature-control check in this file is keyed by it, never
-    -- by source) -- so this is the check that actually matters if a
-    -- reconnect, a stale pending request resolving against a NEW session
-    -- for the citizenid it used to name, or any other path ever produces
-    -- two distinct server ids that both resolve to the same citizenid at
-    -- once. Checked here, after both citizenids are already resolved,
-    -- rather than duplicating the resolution just to check it earlier.
+    -- SAME-IDENTITY GUARD, BY CITIZENID: the `initiatorSrc == targetSrc`
+    -- check above only rejects self-targeting by SERVER ID -- but a server
+    -- id is a per-connection number FiveM recycles, not a stable identity
+    -- (see e.g. the playerDropped handler below scanning
+    -- PendingPartnershipRequests specifically because a freed id can be
+    -- reassigned to an unrelated citizenid before a pending request's own
+    -- TTL expires). The citizenid, resolved above from each party's OWN
+    -- current session, is this resource's actual identity boundary (every
+    -- persisted row, every cache entry, every per-person feature-control
+    -- check in this file is keyed by it, never by source) -- so this is
+    -- the check that actually matters if a reconnect, a stale pending
+    -- request resolving against a NEW session for the citizenid it used to
+    -- name, or any other path ever produces two distinct server ids that
+    -- both resolve to the same citizenid at once. Checked here, after both
+    -- citizenids are already resolved, rather than duplicating the
+    -- resolution just to check it earlier.
     if initiatorCitizenid == targetCitizenid then
         return false, nil, nil, 'invalid_target'
     end
@@ -979,11 +969,11 @@ local function CheckPartnershipEligibility(initiatorSrc, targetSrc)
         return false, nil, nil, 'no_k9_party'
     end
 
-    -- BOTH-ARE-K9 CASE (owner-reported gap, this pass): the check above
-    -- only ever rejects "NEITHER party is a K9" -- when initiatorIsK9 AND
-    -- targetIsK9 are both true, the tie-break just below silently assigns
-    -- one of two genuine K9s the OFFICER/handler role instead of rejecting
-    -- outright, and that establishment then actually SUCCEEDS, since a K9
+    -- BOTH-ARE-K9 CASE (owner-reported gap): the check above only ever
+    -- rejects "NEITHER party is a K9" -- when initiatorIsK9 AND targetIsK9
+    -- are both true, the tie-break just below silently assigns one of two
+    -- genuine K9s the OFFICER/handler role instead of rejecting outright,
+    -- and that establishment then actually SUCCEEDS, since a K9
     -- role-holder is typically ALSO a department member and so trivially
     -- clears officer_not_in_department too -- there is nothing downstream
     -- that would otherwise catch this. "Neither of you is a K9" and "you
@@ -1022,10 +1012,9 @@ local function CheckPartnershipEligibility(initiatorSrc, targetSrc)
     -- but it still runs BEFORE PartnershipEstablishMutex.TryAcquire, so a
     -- revoke landing between THIS check returning true and the INSERT
     -- actually committing would otherwise slip through uncaught. See
-    -- respondPartnerUp's critical-section comment (search for "RED-TEAM
-    -- FINDING FIX") for where both of these are re-run a SECOND time,
-    -- inside the mutex, immediately before the INSERT, to close that
-    -- specific window.
+    -- respondPartnerUp's critical-section comment (search for "TOCTOU
+    -- FIX") for where both of these are re-run a SECOND time, inside the
+    -- mutex, immediately before the INSERT, to close that specific window.
     if not HasK9Access(k9Src) then
         return false, nil, nil, 'not_certified'
     end
@@ -1077,8 +1066,7 @@ RegisterNetEvent('qbx_k9unit:server:requestPartnerUp', function(targetServerId)
     end
 
     -- SECURITY FIX PRECEDENT APPLIED HERE (mirrors server/main.lua's
-    -- requestLeashAttach, coder-security, exploit-tester + qa-tester
-    -- finding, 2026-08-23): reject a SECOND request outright while a live,
+    -- requestLeashAttach): reject a SECOND request outright while a live,
     -- unexpired one is already pending for this target, rather than
     -- silently overwriting it -- that shape previously let a second
     -- initiator silently clobber a first initiator's pending request with
@@ -1110,10 +1098,9 @@ end)
 
 --- Step 2 of the consent handshake: target's response. Mirrors
 --- server/main.lua's respondLeashAttach's exact validate-before-notify
---- discipline (coder-security, final pass, 2026-08-23 finding on that
---- handler -- restated briefly here since this is a near-verbatim mirror):
---- the pending request is verified genuine (matching initiator + unexpired)
---- BEFORE any TriggerClientEvent/NotifyPlayer referencing the
+--- discipline (restated briefly here since this is a near-verbatim
+--- mirror): the pending request is verified genuine (matching initiator +
+--- unexpired) BEFORE any TriggerClientEvent/NotifyPlayer referencing the
 --- client-supplied `fromServerId` fires, so a spoofed/expired/mismatched
 --- claim only ever results in an error notice to the CALLER themselves,
 --- never an arbitrary-target notification.
@@ -1171,8 +1158,8 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
     -- mutex's own doc comment for why this matters more here than an
     -- ordinary single-request failure would).
     local ranOk, outcomeOrErr = pcall(function()
-        -- RED-TEAM FINDING FIX (MEDIUM, TOCTOU on eligibility, not just on
-        -- "already partnered"): CheckPartnershipEligibility above re-ran
+        -- TOCTOU FIX (MEDIUM severity; eligibility, not just "already
+        -- partnered"): CheckPartnershipEligibility above re-ran
         -- HasK9Access(k9Src) and the officer's department check, but it ran
         -- BEFORE PartnershipEstablishMutex.TryAcquire and before this
         -- pcall's own critical section even began -- a real, exploitable
@@ -1193,9 +1180,9 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         -- re-derived" design (see this file's header), so a race landing
         -- this way would otherwise stand indefinitely.
         --
-        -- CORRECTNESS-PASS FIX (this re-check was previously placed BEFORE
-        -- the two already-partnered SELECTs below, which are themselves two
-        -- more `await` suspension points a concurrent revoke could complete
+        -- CORRECTION (this re-check was previously placed BEFORE the two
+        -- already-partnered SELECTs below, which are themselves two more
+        -- `await` suspension points a concurrent revoke could complete
         -- underneath -- the window this comment block claimed to close
         -- ("immediately before the INSERT") did not actually match the
         -- code order that shipped. HasK9Access/department membership are
@@ -1222,18 +1209,18 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         -- their own expected role's column, since the whole point of this
         -- check is catching a citizenid who raced into the OTHER role
         -- somewhere else. Run BEFORE the HasK9Access/department re-check
-        -- below on purpose (see the CORRECTNESS-PASS FIX note above) --
-        -- these two SELECTs are the only remaining `await` points before
-        -- the INSERT, so the synchronous eligibility re-check must come
-        -- AFTER them, not before, to sit truly adjacent to the INSERT.
+        -- below on purpose (see the CORRECTION note above) -- these two
+        -- SELECTs are the only remaining `await` points before the INSERT,
+        -- so the synchronous eligibility re-check must come AFTER them,
+        -- not before, to sit truly adjacent to the INSERT.
         local k9AlreadyPartnered = K9Store.Partner_GetActiveIdByParty(k9Citizenid)
         if k9AlreadyPartnered then return 'already_partnered' end
 
         local officerAlreadyPartnered = K9Store.Partner_GetActiveIdByParty(officerCitizenid)
         if officerAlreadyPartnered then return 'already_partnered' end
 
-        -- Genuinely last checks before the INSERT -- see the
-        -- CORRECTNESS-PASS FIX note above for why these moved here.
+        -- Genuinely last checks before the INSERT -- see the CORRECTION
+        -- note above for why these moved here.
         if not HasK9Access(k9Src) then
             return 'not_certified'
         end
@@ -1245,12 +1232,12 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         end
 
         -- PER-PERSON FEATURE CONTROL, RE-CHECKED (same TOCTOU race window
-        -- this critical section's own CORRECTNESS-PASS FIX comment above
-        -- already documents for HasK9Access/department membership -- high
-        -- command can grant/revoke a block/grant during the exact same
-        -- await-laden window a certification revoke can land in). Ordered
-        -- here, alongside those two, as the last synchronous check before
-        -- the INSERT.
+        -- this critical section's own CORRECTION note above already
+        -- documents for HasK9Access/department membership -- high command
+        -- can grant/revoke a block/grant during the exact same await-laden
+        -- window a certification revoke can land in). Ordered here,
+        -- alongside those two, as the last synchronous check before the
+        -- INSERT.
         if not IsHandlerPartnershipPermittedForCitizenId(k9Citizenid)
             or not IsHandlerPartnershipPermittedForCitizenId(officerCitizenid) then
             return 'not_granted'
@@ -1289,14 +1276,13 @@ RegisterNetEvent('qbx_k9unit:server:respondPartnerUp', function(fromServerId, ac
         -- column -- extending that existing guard across a reform, not
         -- replacing it with a separate mechanism.
         --
-        -- EVERY WRITE'S RETURN IS CHECKED (per this task's own explicit
-        -- requirement): `seedOk` distinguishes a thrown error from a
-        -- clean call; `seedAffectedRows` distinguishes the CAS actually
-        -- applying from a lost race / a schema not yet migrated (0 or
-        -- nil). Neither failure path aborts, retries, or blocks
-        -- establishment -- a brand-new partnership succeeding is already
-        -- the correct, independent outcome; failing to seed only costs
-        -- this specific anti-farm improvement for this one instance
+        -- EVERY WRITE'S RETURN IS CHECKED: `seedOk` distinguishes a thrown
+        -- error from a clean call; `seedAffectedRows` distinguishes the
+        -- CAS actually applying from a lost race / a schema not yet
+        -- migrated (0 or nil). Neither failure path aborts, retries, or
+        -- blocks establishment -- a brand-new partnership succeeding is
+        -- already the correct, independent outcome; failing to seed only
+        -- costs this specific anti-farm improvement for this one instance
         -- (fail SAFE, never fail OPEN toward an extra grant -- the row's
         -- own column simply stays at its true default, 0, exactly like
         -- today's shipped behaviour), so both are logged and treated as
@@ -1411,7 +1397,7 @@ local function DoBreakPartnership(citizenid, endedByValue, broadcastReason)
 
     local partnerCitizenid = (row.k9_citizenid == citizenid) and row.handler_citizenid or row.k9_citizenid
 
-    -- STATE-CONSISTENCY DESIGN NOTE (this pass -- a partnership break that
+    -- STATE-CONSISTENCY DESIGN NOTE (a partnership break that
     -- "half-succeeds", the SELECT above having worked and this UPDATE then
     -- throwing, is a real, distinct risk from mere error *propagation*):
     -- the SELECT is read-only and can never leave partial state behind on
@@ -1679,8 +1665,8 @@ end)
 AddEventHandler('onResourceStart', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
 
-    -- PERFORMANCE FIX (QA pass): a partnership row can only ever be CREATED
-    -- while Config.Features.HandlerPartnership is true (CheckPartnershipEligibility
+    -- PERFORMANCE FIX: a partnership row can only ever be CREATED while
+    -- Config.Features.HandlerPartnership is true (CheckPartnershipEligibility
     -- above is the only creation path and gates on this same flag), so on a
     -- server where the flag has never been enabled this loop was doing a
     -- real MySQL.single.await per connected player (RefreshPartnershipCache)
