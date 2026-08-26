@@ -517,9 +517,12 @@ assert(type(Config.Departments) == 'table',
     'ever use K9 features," never as a clear config error.')
 for jobName, dept in pairs(Config.Departments) do
     assert(type(dept) == 'table',
-        ('[qbx_k9unit] Config.Departments[%s] must be a table with certifierGrade/autoAccessGrade/label fields -- ' ..
+        ('[qbx_k9unit] Config.Departments[%s] must be a table with certifierGrade/autoAccessGrade fields -- ' ..
         'IsEligibleCertifier and HasK9Access both index straight into it (dept.certifierGrade, dept.autoAccessGrade) ' ..
-        'with no type guard of their own.'):format(tostring(jobName)))
+        'with no type guard of their own. NOTE: dept.label is NOT validated here (unlike the two fields above) -- ' ..
+        'every real consumer (server/tablet.lua, this file\'s own OnJobUpdate department-loss notice) already ' ..
+        'falls back to the job key itself when label is missing or not a string, so an absent/malformed label ' ..
+        'degrades gracefully rather than crashing; asserted only if that ever stops being true everywhere.'):format(tostring(jobName)))
     assert(type(dept.certifierGrade) == 'number',
         ('[qbx_k9unit] Config.Departments[%s].certifierGrade must be a number -- IsEligibleCertifier compares ' ..
         'job.grade.level >= dept.certifierGrade directly for every non-boss officer in this department. A ' ..

@@ -4,7 +4,7 @@
 a decision waiting on you — goes here and nowhere else. If it is not in this
 file, it is not tracked.
 
-Last updated: 2026-08-26 (two decisions now genuinely need you — section 1)
+Last updated: 2026-08-26 (five things need you — section 1)
 
 ---
 
@@ -42,6 +42,57 @@ what happens around it — a dog that can't be upset isn't the feature.
 This is a call about your server's players, not a bug: some servers want
 the emergent chaos, others don't. Leave it on, switch it off, or ask for
 the cooldowns to be tightened.
+
+### Decide: "works with any inventory/dispatch/framework" — one of those three is not true
+
+Auto-detection genuinely works for **inventory** and **targeting**. Those are
+threaded through the whole resource: change your inventory script and this
+adapts.
+
+**Framework is different, and the honest answer is that it does not work.**
+There are well-researched adapters for qb-core and ESX, but only one file in
+the entire resource actually uses them — everything else (certifications,
+permissions, the tablet, XP, combat: about 169 places) calls Qbox directly.
+Qbox is also a hard requirement in the manifest, so the resource will not
+even start without it. If you run qb-core or ESX, detection will correctly
+identify it and the resource will still not work.
+
+Two honest options: **say so plainly** in the docs and config — cheap, and
+what I'd suggest unless you actually need this — or **commit to converting
+those ~169 call sites**, which is a large job, not a quick fix.
+
+There is a smaller version of the same thing: the **ambulance/downed**
+detection is built and researched but nothing calls it yet, so "detect
+whether someone is down" still falls back to a guess unless you set the
+manual override. That one is a small, scoped fix and is being written now.
+
+### Decide: certification tier permissions currently change nothing
+
+High command can add tiers, edit them, reorder them and tick capability
+boxes per tier — that all works and is tested. But **nothing in the game
+reads those capability ticks yet.** Changing what a tier is allowed to do
+changes the checkboxes and nothing else.
+
+This is disclosed in the code, not hidden, but it means the "edit permissions
+for those roles" half of what you asked for is a working control panel wired
+to nothing. Worth deciding whether you want the capabilities to actually gate
+things, and if so which ones.
+
+### Confirm: "any ped" has two more exceptions than the two you decided
+
+You decided a K9 on a human body keeps jump and crouch. Two other things are
+also decided by the body rather than the role, and only one carries a note
+saying you agreed to it:
+
+- **Sprint is also blocked when injured**, on the same body-not-role basis.
+  Recorded as the same decision extended by the same reasoning — sensible,
+  but you did not explicitly say it.
+- **The whole speed system** — breed speed and the fatigue slowdown — only
+  applies on a dog body. So a role-holder on a human body gets no fatigue
+  penalty at all. This one is structural rather than a decision anyone made.
+
+Neither is hidden, but if "everything works with any ped" was meant
+literally, the second one is a real gap. Say the word and it gets fixed.
 
 ### Checked and NOT a risk: the bone sweep dev tool
 
