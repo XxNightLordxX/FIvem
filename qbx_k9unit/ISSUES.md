@@ -4,13 +4,13 @@
 a decision waiting on you — goes here and nowhere else. If it is not in this
 file, it is not tracked.
 
-Last updated: 2026-08-26 (five things need you — section 1)
+Last updated: 2026-08-26 (three things need you — section 1)
 
 ---
 
 ## 1. Waiting on you
 
-Two things genuinely need you rather than more code. Both are about
+Three things genuinely need you rather than more code. All are about
 features that are **switched on in the config you'd ship today**, so they
 are not hypothetical.
 
@@ -66,17 +66,27 @@ detection is built and researched but nothing calls it yet, so "detect
 whether someone is down" still falls back to a guess unless you set the
 manual override. That one is a small, scoped fix and is being written now.
 
-### Decide: certification tier permissions currently change nothing
+### Fixed: certification tier permissions now change something
 
-High command can add tiers, edit them, reorder them and tick capability
-boxes per tier — that all works and is tested. But **nothing in the game
-reads those capability ticks yet.** Changing what a tier is allowed to do
-changes the checkboxes and nothing else.
+**This row said the opposite until 2026-08-26 and is now corrected.** It
+said the capability ticks were a control panel wired to nothing. That was
+true when it was written. It is no longer true.
 
-This is disclosed in the code, not hidden, but it means the "edit permissions
-for those roles" half of what you asked for is a working control panel wired
-to nothing. Worth deciding whether you want the capabilities to actually gate
-things, and if so which ones.
+The ticks are now read at two real gates: granting a specialization, and
+the combat capabilities. A tier whose box is unticked genuinely cannot do
+the thing.
+
+Two honest limits, so this row does not overstate the fix the way it once
+understated it:
+
+- **It is two gates, not every gate.** Features outside specialization and
+  combat still do not consult the tier capabilities. Say the word and more
+  get wired up — the mechanism exists now, so adding a gate is small.
+- **It fails permissive.** If the capability lookup itself cannot answer,
+  the action is ALLOWED rather than refused. That is deliberate: a tier
+  system that locks out your whole department because a lookup hiccuped is
+  worse than one that occasionally lets something through. It is the
+  opposite of how the *access* check behaves, which fails closed.
 
 ### Confirm: "any ped" has two more exceptions than the two you decided
 
@@ -91,8 +101,10 @@ saying you agreed to it:
   applies on a dog body. So a role-holder on a human body gets no fatigue
   penalty at all. This one is structural rather than a decision anyone made.
 
-Neither is hidden, but if "everything works with any ped" was meant
-literally, the second one is a real gap. Say the word and it gets fixed.
+The first is recorded as agreed. **The second is now being fixed** — you
+said "everything works with any ped" and meant it, so a role-holder on a
+human body should carry the same fatigue penalty as one on a dog. No
+decision needed from you unless you disagree with that reading.
 
 ### Checked and NOT a risk: the bone sweep dev tool
 
@@ -205,6 +217,26 @@ everything on restart, and writes no audit trail.
 resource. FiveM refuses to start this script without it, and that check
 happens before your config is ever read. "No SQL" means you never import
 our tables — not that you can remove oxmysql.*
+
+**In flight right now — full command from the tablet.** You asked for the
+tablet and config to be fully customisable, and for high command to have
+full command over everything. These are the pieces still being built:
+
+| Being built | What it gives you |
+|---|---|
+| Assign a tier / grant a specialisation from the tablet | Today tiers can be created and edited in the tablet but only **assigned** by a console command on someone who is online. This makes it a tablet action that works on offline people too. |
+| The audit screen | Five audit lookups already work on the server and are already restricted to high command — nothing in the tablet calls them yet, so the trail this resource carefully writes is currently invisible to you. |
+| Add and remove permissions themselves | You can hand out the four permissions that ship. You cannot yet invent a fifth or retire one without editing a file and restarting. |
+| Set the experience needed for each rank | `Config.XPTiers` is a file you edit and restart for. Becoming a tablet control, like the tiers already are. |
+| Every sub-feature in the config | The 56 on/off switches are done. The numbers *inside* each feature — distances, timers, chances — are being swept for anything hardcoded that you'd plausibly want to tune. |
+| Per-person control on the last twelve features | Twelve features live entirely on the player's own game and cannot be blocked per person yet. |
+| SQL that is safe on your live database | Making install and every migration non-destructive, and making the resource refuse loudly rather than write into a table that has our name but isn't ours. |
+
+**Rules these are all being held to**, because each one has bitten this
+project before: a feature can be gated when it *starts* and never when it
+*stops* (that is how players get stuck); a bad config value warns and falls
+back rather than killing the rest of the file; and a threshold of zero means
+"off", never "permanently on".
 
 
 
