@@ -1232,7 +1232,15 @@ lib.callback.register('qbx_k9unit:server:certTiersReorder', function(source, ord
         beforeParts[#beforeParts + 1] = ('%s=%d'):format(key, TierByKey[key].ordinal)
     end
 
-    local afterParts = {}
+    -- `writeFailedKeys` collects only a genuine post-acquire DB write
+    -- failure (SafeWrite contract: Tier_UpdateOrdinal degrades a thrown DB
+    -- error to `false` rather than propagating) -- NOT a busy-skip, which
+    -- remains the pre-existing, already-disclosed, benign contention
+    -- outcome (logged, ordinal left unchanged, overall response still
+    -- `ok = true`) and is deliberately left untouched below. A write
+    -- failure is a different, more serious class -- an actual DB error,
+    -- not ordinary lock contention -- so it alone escalates the response.
+    local afterParts, writeFailedKeys = {}, {}
     for index, key in ipairs(cleanOrder) do
         -- Per-key mutex, held only for THIS key's own write (not across
         -- the whole loop, to avoid serializing an entire reorder behind
@@ -1248,12 +1256,25 @@ lib.callback.register('qbx_k9unit:server:certTiersReorder', function(source, ord
             -- exactly why this write must never touch `label`, even though
             -- TierByKey[key].label is passed through (used only if this
             -- key has no row in k9_certification_tiers yet at all).
-            K9Store.Tier_UpdateOrdinal(key, TierByKey[key].label, index, citizenid or 'unknown')
+            local wrote = K9Store.Tier_UpdateOrdinal(key, TierByKey[key].label, index, citizenid or 'unknown')
             TierEditMutex.Release(key)
+            if wrote then
+                afterParts[#afterParts + 1] = ('%s=%d'):format(key, index)
+            else
+                -- Acquired the lock but the write itself failed (SafeWrite
+                -- contract: a thrown DB error degrades to `false`). Log it,
+                -- and record the REAL unchanged ordinal (never the intended
+                -- `index`), since the write never actually landed.
+                writeFailedKeys[#writeFailedKeys + 1] = key
+                print(('[qbx_k9unit] certtiers ReorderTiers: tier %s ordinal write failed (db_error) -- its ordinal was left unchanged this pass'):format(key))
+                afterParts[#afterParts + 1] = ('%s=%d'):format(key, TierByKey[key].ordinal)
+            end
         else
+            -- busy-key skip: this branch IS correctly handled, left
+            -- unchanged -- see header comment above.
             print(('[qbx_k9unit] certtiers ReorderTiers: tier %s busy (concurrent edit) -- its ordinal was left unchanged this pass'):format(key))
+            afterParts[#afterParts + 1] = ('%s=%d'):format(key, index)
         end
-        afterParts[#afterParts + 1] = ('%s=%d'):format(key, index)
     end
 
     WriteTierAudit('tier_reorder', 'ALL',
@@ -1262,12 +1283,24 @@ lib.callback.register('qbx_k9unit:server:certTiersReorder', function(source, ord
 
     RefreshCertificationTierCatalog()
 
+    local warningText = 'Reordering tiers changes rank comparisons RETROACTIVELY: every citizenid already holding one ' ..
+        'of these tiers is now ranked at its NEW position immediately. Tier-based checks read the current ' ..
+        'catalog live -- they do not pin to the ordinal that was in effect when a certification was granted.'
+
+    if #writeFailedKeys > 0 then
+        return {
+            ok = false,
+            reason = 'ordinal_write_failed',
+            failedKeys = writeFailedKeys,
+            tiers = ListCertificationTiers(),
+            warning = warningText,
+        }
+    end
+
     return {
         ok = true,
         tiers = ListCertificationTiers(),
-        warning = 'Reordering tiers changes rank comparisons RETROACTIVELY: every citizenid already holding one ' ..
-            'of these tiers is now ranked at its NEW position immediately. Tier-based checks read the current ' ..
-            'catalog live -- they do not pin to the ordinal that was in effect when a certification was granted.',
+        warning = warningText,
     }
 end)
 

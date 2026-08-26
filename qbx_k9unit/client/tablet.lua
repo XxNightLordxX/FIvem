@@ -266,6 +266,27 @@
         purpose -- see that file's own SCOPE note -- and this page never
         offers Move/Remove controls for one, only a note pointing at
         config.lua.
+      tablet:equipmentShopItemsList {}                             -> cb({ok,items?,error?})   [high command -- server/equipmentshop.lua]
+      tablet:equipmentShopItemsUpsert {key,price,label?,currency?,requiredTierKey?,requiredSpecialization?} -> cb({ok,items?,error?})
+      tablet:equipmentShopItemsReorder {orderedKeys:string[]}      -> cb({ok,items?,error?})
+      tablet:equipmentShopItemsDelete {key}                        -> cb({ok,items?,error?})
+        The shop's INVENTORY half (WHICH items are sold, at what price, in
+        what order, and under what certification-tier/specialization
+        purchase requirement) -- the RUNTIME SHOP LOCATIONS callbacks above
+        manage WHERE a shop ped stands, never what it sells. All four
+        forwarded through the SAME TranslateReasonResult as every other
+        surface on this page. High command only for ALL FOUR, including
+        the list read (`CanManageShopItems` re-verified server-side on
+        every call) -- unlike equipmentShopGetLocations above, this list
+        exposes admin-only state (tombstoned/database-vs-config sourcing)
+        an ordinary player has no need to see; the price/availability a
+        player DOES need is already public through ox_inventory's own shop
+        UI regardless. `items` is `{ key, label, price, currency?,
+        sortOrder, requiredTierKey?, requiredSpecialization? }[]`, already
+        sortOrder-ascending. A price edit/reorder/delete takes effect for
+        every already-connected player IMMEDIATELY (server/equipmentshop.lua
+        live-refreshes the registered shop after every successful edit) --
+        no restart needed, unlike a raw config.lua edit.
       tablet:runtimeListFeatures {}                               -> cb({ok,features?,error?})   [high command -- server/runtimecontrol.lua]
       tablet:runtimeSetFeature {name,value:boolean}               -> cb({ok,appliedLive?,restartRequired?,configEditRequired?,tier?,error?})
       tablet:runtimeResetFeature {name}                           -> cb({ok,value?,restartRequired?,error?})
@@ -1826,6 +1847,59 @@ RegisterNUICallback('tablet:equipmentShopRemoveLocation', function(data, cb)
         return
     end
     cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopRemoveLocation', data.locationKey)))
+end)
+
+-- ----------------------------------------------------------------------
+-- K9 EQUIPMENT SHOP ITEM CATALOG -- server/equipmentshop.lua's own
+-- "EQUIPMENT SHOP ITEM CATALOG" section, high command only
+-- (CanManageShopItems re-checked there on every one of these four calls;
+-- this file adds no authorization of its own). Owner's own words: "give
+-- high command real control over the equipment shop" -- which items are
+-- sold, at what price, in what order, and under what certification-tier/
+-- specialization purchase requirement. Mirrors the CERTIFICATION TIER
+-- EDITING bridge immediately above in EVERY respect (same
+-- TranslateReasonResult response translation, same "forward the whole
+-- payload table verbatim for Upsert, a bare array for Reorder, a bare
+-- string key for Delete" shapes) -- see that section's own comment for
+-- why each shape is what it is; not repeated here.
+--
+-- equipmentShopItemsUpsert payload: { key: string, price: number,
+--   label?: string, currency?: string, requiredTierKey?: string,
+--   requiredSpecialization?: string } -- forwarded to
+--   server/equipmentshop.lua's own ShopItemsUpsert EXACTLY as received;
+--   every field is re-validated server-side regardless of what this file
+--   does or does not check first (this file's own checks below are a UX
+--   convenience only -- an early, cheap rejection before a round trip for
+--   the one shape server/equipmentshop.lua's own validator could never
+--   accept anyway).
+-- ----------------------------------------------------------------------
+
+RegisterNUICallback('tablet:equipmentShopItemsList', function(_, cb)
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopItemsList')))
+end)
+
+RegisterNUICallback('tablet:equipmentShopItemsUpsert', function(data, cb)
+    if type(data) ~= 'table' or type(data.key) ~= 'string' or data.key == '' or type(data.price) ~= 'number' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopItemsUpsert', data)))
+end)
+
+RegisterNUICallback('tablet:equipmentShopItemsReorder', function(data, cb)
+    if type(data) ~= 'table' or type(data.orderedKeys) ~= 'table' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopItemsReorder', data.orderedKeys)))
+end)
+
+RegisterNUICallback('tablet:equipmentShopItemsDelete', function(data, cb)
+    if type(data) ~= 'table' or type(data.key) ~= 'string' or data.key == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(TranslateReasonResult(AwaitServerCallback('qbx_k9unit:server:equipmentShopItemsDelete', data.key)))
 end)
 
 -- ----------------------------------------------------------------------

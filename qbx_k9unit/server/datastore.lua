@@ -2502,21 +2502,18 @@ local EXPECTED_TABLE_COLUMNS = {
     k9_xp_tier_audit                   = { 'id', 'action', 'ordinal', 'detail', 'changed_by', 'changed_at' },
     k9_equipment_shop_items            = { 'item_key', 'price', 'sort_order', 'required_tier_key', 'required_specialization', 'deleted', 'updated_by' },
     k9_equipment_shop_item_audit       = { 'id', 'action', 'item_key', 'detail', 'changed_by', 'changed_at' },
-    -- NOTE (this pass): sql/preflight_check.sql's own CHECK 1 (and CHECK
-    -- 1b's hand-maintained table-name list) still needs the two table
-    -- names immediately above added to it, in the SAME shape as its
-    -- existing k9_equipment_shop_locations/k9_equipment_shop_locations_audit
-    -- UNION ALL blocks -- NOT done in this change, since that file is
-    -- reported to be under active, concurrent hardening by another agent
-    -- this same pass, and a collision there was judged a worse outcome
-    -- than a one-pass lag between this list and that one. Reported to
-    -- main/whoever owns sql/** rather than risking that edit here.
-    -- NOTE for whoever lands the k9_permission_keys / k9_permission_key_audit
-    -- migration this file's own PermKey_* functions above already assume
-    -- (see that section's header): add their identifying columns here, and
-    -- to sql/preflight_check.sql's CHECK 1, in the SAME change that adds the
-    -- migration -- this list is deliberately hand-maintained (see the block
-    -- header above for why), so it does not update itself.
+    -- quality pass, 2026-08-26: this file's own PermKey_* functions above
+    -- (K9Store.PermKey_GetAllRows / PermKey_GetDeletedFlagByKey /
+    -- PermKey_Upsert / PermKey_Tombstone) have named `k9_permission_keys`
+    -- and `k9_permission_key_audit` since migration 0013 landed, but these
+    -- two table names were never actually added here -- meaning the schema
+    -- collision safety net silently never checked either of them, the
+    -- exact gap this section's own header warns is easy to introduce.
+    -- Column list mirrors sql/preflight_check.sql's own CHECK 1 entries for
+    -- these two tables exactly (both fixed in the same change) -- keep both
+    -- in sync if either changes.
+    k9_permission_keys                 = { 'permission_key', 'label', 'description', 'deleted', 'created_at', 'updated_by', 'updated_at' },
+    k9_permission_key_audit            = { 'id', 'action', 'permission_key', 'detail', 'changed_by', 'changed_at' },
 }
 
 --- Runs the collision probe described above. READ-ONLY (a single

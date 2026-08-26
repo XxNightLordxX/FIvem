@@ -366,6 +366,109 @@ t.test('OpenTablet(): shopLocationsEnabled is false when the feature flag is off
     t.equals(f.sendNuiMessageCalls[1].data.shopLocationsEnabled, false)
 end)
 
+-- ============================================================================
+-- K9 EQUIPMENT SHOP ITEM CATALOG bridge (this pass) -- server/equipmentshop.lua's
+-- own "EQUIPMENT SHOP ITEM CATALOG" section:
+--   'qbx_k9unit:server:equipmentShopItemsList' (source) -> {ok, items?, reason?}
+--   'qbx_k9unit:server:equipmentShopItemsUpsert' (source, payload) -> {ok, items?, reason?}
+--   'qbx_k9unit:server:equipmentShopItemsReorder' (source, orderedKeys) -> {ok, items?, reason?}
+--   'qbx_k9unit:server:equipmentShopItemsDelete' (source, key) -> {ok, items?, reason?}
+-- Same TranslateReasonResult translation, same "forward the whole payload
+-- table verbatim for Upsert, a bare array for Reorder, a bare string key
+-- for Delete" shapes as the sibling LOCATIONS bridge above.
+-- ============================================================================
+
+t.test('all four equipmentShopItems NUI callbacks are registered', function()
+    local f = newFixture()
+    f.setServerCallback('qbx_k9unit:server:equipmentShopItemsList', { ok = true, items = {} })
+    f.setServerCallback('qbx_k9unit:server:equipmentShopItemsUpsert', { ok = true, items = {} })
+    f.setServerCallback('qbx_k9unit:server:equipmentShopItemsReorder', { ok = true, items = {} })
+    f.setServerCallback('qbx_k9unit:server:equipmentShopItemsDelete', { ok = true, items = {} })
+
+    t.isTrue(pcall(f.callNui, 'tablet:equipmentShopItemsList', {}))
+    t.isTrue(pcall(f.callNui, 'tablet:equipmentShopItemsUpsert', { key = 'k9_medkit', price = 100 }))
+    t.isTrue(pcall(f.callNui, 'tablet:equipmentShopItemsReorder', { orderedKeys = {} }))
+    t.isTrue(pcall(f.callNui, 'tablet:equipmentShopItemsDelete', { key = 'k9_medkit' }))
+end)
+
+t.test('tablet:equipmentShopItemsList: forwards the server result verbatim on success', function()
+    local f = newFixture()
+    local items = { { key = 'k9_medkit', label = 'Field Medkit', price = 150, sortOrder = 1 } }
+    f.setServerCallback('qbx_k9unit:server:equipmentShopItemsList', { ok = true, items = items })
+    local result = f.callNui('tablet:equipmentShopItemsList', {})
+    t.isTrue(result.ok)
+    t.equals(result.items, items)
+end)
+
+t.test('tablet:equipmentShopItemsList: a server `reason` (denied) is renamed to `error`', function()
+    local f = newFixture()
+    f.setServerCallback('qbx_k9unit:server:equipmentShopItemsList', { ok = false, reason = 'denied' })
+    local result = f.callNui('tablet:equipmentShopItemsList', {})
+    t.equals(result.ok, false)
+    t.equals(result.error, 'denied')
+    t.isNil(result.reason)
+end)
+
+t.test('tablet:equipmentShopItemsUpsert: missing key or non-numeric price is invalid_args before any server round trip', function()
+    local f = newFixture()
+    local missingKey = f.callNui('tablet:equipmentShopItemsUpsert', { price = 100 })
+    t.equals(missingKey.error, 'invalid_args')
+    local badPrice = f.callNui('tablet:equipmentShopItemsUpsert', { key = 'k9_medkit', price = 'free' })
+    t.equals(badPrice.error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0, 'neither malformed payload may reach the server at all')
+end)
+
+t.test('tablet:equipmentShopItemsUpsert: forwards the WHOLE payload table verbatim as ONE argument', function()
+    local f = newFixture()
+    f.setServerCallback('qbx_k9unit:server:equipmentShopItemsUpsert', { ok = true, items = {} })
+    local payload = { key = 'k9_medkit', price = 200, label = 'Field Medkit', requiredTierKey = 'senior' }
+    f.callNui('tablet:equipmentShopItemsUpsert', payload)
+    t.equals(#f.callbackCallLog, 1)
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:equipmentShopItemsUpsert')
+    t.equals(f.callbackCallLog[1].args[1], payload)
+end)
+
+t.test('tablet:equipmentShopItemsUpsert: reason="invalid_price"/"invalid_required_tier"/"busy" all forward as the plain error code', function()
+    local f = newFixture()
+    for _, reason in ipairs({ 'invalid_price', 'invalid_required_tier', 'busy' }) do
+        f.setServerCallback('qbx_k9unit:server:equipmentShopItemsUpsert', { ok = false, reason = reason })
+        local result = f.callNui('tablet:equipmentShopItemsUpsert', { key = 'k9_medkit', price = 1 })
+        t.equals(result.error, reason)
+    end
+end)
+
+t.test('tablet:equipmentShopItemsReorder: a non-table orderedKeys is invalid_args before any server round trip', function()
+    local f = newFixture()
+    local result = f.callNui('tablet:equipmentShopItemsReorder', { orderedKeys = 'not-a-table' })
+    t.equals(result.error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:equipmentShopItemsReorder: forwards the bare orderedKeys array as the sole argument', function()
+    local f = newFixture()
+    f.setServerCallback('qbx_k9unit:server:equipmentShopItemsReorder', { ok = true, items = {} })
+    local orderedKeys = { 'k9_treat', 'k9_medkit' }
+    f.callNui('tablet:equipmentShopItemsReorder', { orderedKeys = orderedKeys })
+    t.equals(f.callbackCallLog[1].args[1], orderedKeys)
+end)
+
+t.test('tablet:equipmentShopItemsDelete: missing/blank key is rejected before any server round trip', function()
+    local f = newFixture()
+    local missing = f.callNui('tablet:equipmentShopItemsDelete', {})
+    t.equals(missing.error, 'invalid_args')
+    local blank = f.callNui('tablet:equipmentShopItemsDelete', { key = '' })
+    t.equals(blank.error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:equipmentShopItemsDelete: forwards the bare key string as the sole argument, and a rejected delete renames `reason` to `error`', function()
+    local f = newFixture()
+    f.setServerCallback('qbx_k9unit:server:equipmentShopItemsDelete', { ok = false, reason = 'unknown_item' })
+    local result = f.callNui('tablet:equipmentShopItemsDelete', { key = 'k9_ghost_item' })
+    t.equals(result.error, 'unknown_item')
+    t.equals(f.callbackCallLog[1].args[1], 'k9_ghost_item')
+end)
+
 -- Sanity: the tablet's own localization plumbing already covers that every
 -- TABLET_STRING_KEYS entry this pass added resolves against locales/en.json
 -- (tests/tabletlocalization_spec.lua) -- not re-duplicated here.

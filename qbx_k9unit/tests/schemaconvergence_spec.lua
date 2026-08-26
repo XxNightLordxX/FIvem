@@ -179,6 +179,33 @@ t.test('sql/rollback/backup_k9_tables.sh\'s ALL_TABLES array matches exactly ins
 end)
 
 -- ----------------------------------------------------------------------
+-- server/datastore.lua -- the SCHEMA COLLISION SAFETY NET's own
+-- EXPECTED_TABLE_COLUMNS table (see that file's own header, "THE COLUMN
+-- LIST BELOW MUST STAY IN SYNC WITH sql/preflight_check.sql's CHECK 1").
+-- A table missing here is not a cosmetic gap: VerifyTableShapesAgainstKnownSchema
+-- only ever inspects a table it knows to look for, so a table absent from
+-- this list can never trip the collision safety net at all -- a different
+-- resource's incompatible table squatting that name would go completely
+-- undetected, and every K9Store.* accessor for that table would silently
+-- write into a table this resource does not own. This is a REAL bug this
+-- spec caught by hand once already (k9_permission_keys /
+-- k9_permission_key_audit were named by this file's own PermKey_*
+-- accessors since migration 0013 landed, but were never added to
+-- EXPECTED_TABLE_COLUMNS at all) -- this test is the automated backstop so
+-- the next migration cannot reintroduce the exact same gap silently.
+-- ----------------------------------------------------------------------
+t.test('server/datastore.lua\'s EXPECTED_TABLE_COLUMNS (schema collision safety net) knows about exactly install.sql\'s table set', function()
+    local text = ReadFile('../server/datastore.lua')
+    local startPos = text:find('local EXPECTED_TABLE_COLUMNS = {', 1, true)
+    assert(startPos, 'local EXPECTED_TABLE_COLUMNS = { not found in server/datastore.lua -- this file must have changed shape')
+    local closePos = text:find('\n}', startPos, true)
+    assert(closePos, 'closing "}" for EXPECTED_TABLE_COLUMNS not found in server/datastore.lua')
+    local tableBody = text:sub(startPos, closePos)
+    local tables = ExtractTableSet(tableBody, '(k9_[%w_]+)%s*=%s*{')
+    AssertSameTableSet(tables, installTables, 'server/datastore.lua (EXPECTED_TABLE_COLUMNS)')
+end)
+
+-- ----------------------------------------------------------------------
 -- sql/migrations/*.sql -- every table this resource's UPGRADE path (as
 -- opposed to a fresh install) knows how to create for an existing
 -- database. `k9_certifications` and `k9_search_log` are the two founding

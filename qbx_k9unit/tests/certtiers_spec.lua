@@ -52,6 +52,21 @@ local function makeQueryAwait(world)
             return {}
         elseif sql:find('INSERT INTO k9_certification_tiers', 1, true) then
             local key, label, ordinal, updatedBy = params[1], params[2], params[3], params[4]
+            -- DEFECT-2 TEST HOOK: `world.throwOnTierOrdinalWrite` (a set of
+            -- tier_key strings), when present, makes ONLY the
+            -- Tier_UpdateOrdinal-shaped call (certTiersReorder's own write --
+            -- distinguished from Tier_Upsert's write by the absence of
+            -- `label = VALUES(label)` in its own ON DUPLICATE KEY UPDATE
+            -- clause, see server/datastore.lua's own Tier_UpdateOrdinal doc
+            -- comment) throw for a chosen key, simulating exactly the DB
+            -- blip K9Store's own SafeWrite contract degrades to `false` --
+            -- never a Tier_Upsert call (certTiersUpsert's own create/rename
+            -- path), so tests can freely create/rename tiers before
+            -- exercising a reorder-only failure.
+            if world.throwOnTierOrdinalWrite and world.throwOnTierOrdinalWrite[key]
+                and not sql:find('label = VALUES(label)', 1, true) then
+                error('certtiers_spec test stub: simulated Tier_UpdateOrdinal failure for ' .. tostring(key))
+            end
             local deletedLiteral = sql:find('VALUES (?, ?, ?, 1, ?)', 1, true) and 1 or 0
             world.tiers[key] = { label = label, ordinal = ordinal, deleted = deletedLiteral, updated_by = updatedBy }
             return {}
@@ -68,9 +83,24 @@ local function makeQueryAwait(world)
             end
             return out
         elseif sql:find('INSERT INTO k9_certification_tier_capabilities', 1, true) then
+            -- DEFECT-1 TEST HOOK: `world.throwOnCapabilityInsert` (a set of
+            -- capability_key strings), when present, makes TierCap_Insert
+            -- throw for a chosen capability key -- TierCap_Insert's own
+            -- pcall turns that into `return false`, exactly the SafeWrite
+            -- contract this hook exists to exercise.
+            if world.throwOnCapabilityInsert and world.throwOnCapabilityInsert[params[2]] then
+                error('certtiers_spec test stub: simulated TierCap_Insert failure for ' .. tostring(params[2]))
+            end
             world.capabilities[#world.capabilities + 1] = { tier_key = params[1], capability_key = params[2], granted_by = params[3] }
             return {}
         elseif sql:find('DELETE FROM k9_certification_tier_capabilities WHERE tier_key = ? AND capability_key = ?', 1, true) then
+            -- DEFECT-1 TEST HOOK, removal side: `world.throwOnCapabilityDelete`
+            -- (a set of capability_key strings), when present, makes
+            -- TierCap_Delete throw for a chosen capability key, the same way
+            -- `world.throwOnCapabilityInsert` does for TierCap_Insert above.
+            if world.throwOnCapabilityDelete and world.throwOnCapabilityDelete[params[2]] then
+                error('certtiers_spec test stub: simulated TierCap_Delete failure for ' .. tostring(params[2]))
+            end
             for i = #world.capabilities, 1, -1 do
                 local row = world.capabilities[i]
                 if row.tier_key == params[1] and row.capability_key == params[2] then
@@ -750,6 +780,129 @@ t.test('EXPIRY FIX: GetCertificationTier is never called at all for a malformed 
 
     t.isTrue(f.env.TierCapabilityPermits(nil, 'police', 'bite_hold_and_takedown'))
     t.isTrue(f.env.TierCapabilityPermits('CIT1', nil, 'bite_hold_and_takedown'))
+end)
+
+-- ============================================================================
+-- SECTION 11 -- PARTIAL-WRITE DEFECTS (audit-confirmed): certTiersUpsert's
+-- capability reconciliation loop and certTiersReorder's per-key ordinal
+-- write both used to discard K9Store.TierCap_Insert/TierCap_Delete/
+-- Tier_UpdateOrdinal's own `@return boolean ok` (the SafeWrite contract --
+-- a thrown DB error degrades to `false` rather than propagating, see
+-- tests/datastore_spec.lua's own "SafeWrite contract" pin), so a mid-loop
+-- DB blip left the mutation partially applied while the caller still
+-- received a bare `ok = true` and an audit trail claiming the full
+-- REQUESTED change, not what actually landed.
+-- ============================================================================
+
+t.test('DEFECT 1: certTiersUpsert reports failure, not a bare ok = true, when a capability INSERT throws mid-loop', function()
+    local world = newWorld()
+    world.throwOnCapabilityInsert = { specializations_eligible = true }
+    local f = boot({ world = world, isHighCommand = function(src) return src == HC_SOURCE end })
+
+    -- Two brand-new capabilities requested on a brand-new tier -- one
+    -- (specializations_eligible) is rigged to throw on its own INSERT.
+    local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+        key = 'master', label = 'Master', capabilities = { 'advanced_tracking', 'specializations_eligible' },
+    })
+
+    t.isFalse(result.ok, 'a mid-loop capability write failure must never be reported as a bare ok = true')
+    t.equals(result.reason, 'capability_write_failed')
+    t.isNotNil(result.failedCapabilities)
+    t.equals(#result.failedCapabilities.added, 1)
+    t.equals(result.failedCapabilities.added[1], 'specializations_eligible', 'the response must name exactly what failed')
+
+    -- The returned catalog reflects what ACTUALLY landed, not the fully
+    -- requested set: Tier_Upsert itself succeeded (the tier row exists),
+    -- advanced_tracking's own insert succeeded, but
+    -- specializations_eligible's did not.
+    local masterTier = findTier(f, HC_SOURCE, 'master')
+    t.isNotNil(masterTier, 'the tier row itself is unaffected by a capability-only failure')
+    t.isTrue(masterTier.capabilities.advanced_tracking, 'the capability whose write succeeded must be reflected as granted')
+    t.isNil(masterTier.capabilities.specializations_eligible, 'the capability whose write failed must NOT be reflected as granted')
+    t.isTrue(f.env.TierHasCapability('master', 'advanced_tracking'))
+    t.isFalse(f.env.TierHasCapability('master', 'specializations_eligible'))
+
+    -- The audit trail records only what actually succeeded, never the
+    -- full intended request.
+    local lastAudit = world.audit[#world.audit]
+    t.equals(lastAudit.action, 'tier_create')
+    t.contains(lastAudit.detail, 'capabilities_added=[advanced_tracking]')
+    t.notContains(lastAudit.detail, 'specializations_eligible', 'the audit must not claim a capability that never actually landed')
+
+    -- The mutex must never be left held after a mid-loop failure.
+    t.isTrue(f.env.TierEditMutex.TryAcquire('master'), 'the mutex must be released even after a capability write failure')
+    f.env.TierEditMutex.Release('master')
+end)
+
+t.test('DEFECT 1: certTiersUpsert reports failure when a capability DELETE (revocation) throws mid-loop', function()
+    local world = newWorld()
+    local f = boot({ world = world, isHighCommand = function(src) return src == HC_SOURCE end })
+
+    -- First, successfully grant two capabilities to 'senior'.
+    f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, {
+        key = 'senior', label = 'Senior', capabilities = { 'advanced_tracking', 'bite_hold_and_takedown' },
+    })
+    t.isTrue(f.env.TierHasCapability('senior', 'advanced_tracking'))
+    t.isTrue(f.env.TierHasCapability('senior', 'bite_hold_and_takedown'))
+
+    -- Now request removing BOTH -- rig bite_hold_and_takedown's own DELETE
+    -- to throw, so only advanced_tracking's removal actually lands.
+    world.throwOnCapabilityDelete = { bite_hold_and_takedown = true }
+    f.fakeNow.value = f.fakeNow.value + 2000
+    local result = f.callbacks['qbx_k9unit:server:certTiersUpsert'](HC_SOURCE, { key = 'senior', label = 'Senior', capabilities = {} })
+
+    t.isFalse(result.ok, 'a mid-loop capability revocation failure must never be reported as a bare ok = true')
+    t.equals(result.reason, 'capability_write_failed')
+    t.equals(#result.failedCapabilities.removed, 1)
+    t.equals(result.failedCapabilities.removed[1], 'bite_hold_and_takedown')
+
+    -- Reflects DB truth: advanced_tracking was actually revoked,
+    -- bite_hold_and_takedown's revocation never landed and it is STILL
+    -- granted.
+    t.isFalse(f.env.TierHasCapability('senior', 'advanced_tracking'), 'the removal that succeeded must be reflected')
+    t.isTrue(f.env.TierHasCapability('senior', 'bite_hold_and_takedown'), 'the removal that failed must leave the capability still granted, never silently dropped')
+
+    t.isTrue(f.env.TierEditMutex.TryAcquire('senior'), 'the mutex must be released even after a revocation failure')
+    f.env.TierEditMutex.Release('senior')
+end)
+
+t.test('DEFECT 2: certTiersReorder reports failure when an ordinal write throws after a successful mutex acquire', function()
+    local world = newWorld()
+    local f = boot({ world = world, isHighCommand = function(src) return src == HC_SOURCE end })
+
+    world.throwOnTierOrdinalWrite = { senior = true }
+    local result = f.callbacks['qbx_k9unit:server:certTiersReorder'](HC_SOURCE, { 'senior', 'trainee', 'certified' })
+
+    t.isFalse(result.ok, 'a genuine post-acquire DB write failure must never be reported as a bare ok = true')
+    t.equals(result.reason, 'ordinal_write_failed')
+    t.isNotNil(result.failedKeys)
+    t.equals(#result.failedKeys, 1)
+    t.equals(result.failedKeys[1], 'senior', 'the response must name exactly which key failed to write')
+
+    -- senior's ordinal must reflect its REAL, unchanged value (3) -- the
+    -- write never actually landed, so it must never be reported/left as
+    -- the intended new position (1).
+    t.equals(f.env.GetCertificationTierOrdinal('senior'), 3, 'a failed ordinal write must leave the real ordinal untouched')
+    -- The two keys whose writes DID succeed actually moved.
+    t.equals(f.env.GetCertificationTierOrdinal('trainee'), 2)
+    t.equals(f.env.GetCertificationTierOrdinal('certified'), 3)
+
+    -- The existing retroactive-ranking warning must still be present
+    -- alongside the new failure signal.
+    t.isTrue(type(result.warning) == 'string' and #result.warning > 0, 'the warning must still be surfaced even on failure')
+    t.contains(result.warning:lower(), 'retroactiv')
+
+    -- The mutex for the failed key must never be left held.
+    t.isTrue(f.env.TierEditMutex.TryAcquire('senior'), 'the mutex must be released even after a write failure')
+    f.env.TierEditMutex.Release('senior')
+end)
+
+t.test('DEFECT 2: a busy-skip (lock contention) alone remains ok = true -- unchanged, pre-existing, disclosed behavior, distinct from a genuine write failure', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    f.env.TierEditMutex.TryAcquire('trainee') -- simulate a concurrent in-flight edit holding the lock
+    local result = f.callbacks['qbx_k9unit:server:certTiersReorder'](HC_SOURCE, { 'senior', 'trainee', 'certified' })
+    t.isTrue(result.ok, 'a busy-skip alone must not fail the whole reorder response -- only a genuine DB write failure should')
+    f.env.TierEditMutex.Release('trainee')
 end)
 
 os.exit(t.summary())

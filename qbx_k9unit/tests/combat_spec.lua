@@ -1119,6 +1119,60 @@ t.test('requestBiteHold: RED-TEAM FINDING 3 -- an ACTIVE hold remains releasable
     t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldEnded'), 1, 'a mid-hold vehicle entry must never strand an already-active hold -- release never re-checks vehicle status')
 end)
 
+-- ========================================================================
+-- STATE-MACHINE FIX (this pass, coder-security) -- RED-TEAM FINDING 3's own
+-- IsPedInAnyVehicle check only ever ran at REQUEST time (see the two tests
+-- immediately above/below this block). Nothing previously re-checked
+-- vehicle occupancy for an ALREADY-ACTIVE hold/takedown/drag, so a target
+-- who got INTO a vehicle mid-effect kept the Category B effect running
+-- against them (SetEntityCanBeDamaged(false) briefly undamageable WHILE
+-- DRIVING, for NonLethalTakedown) until the hard expiresAt timeout. The
+-- shared expiry maintenance thread now re-checks this every
+-- MAINTENANCE_INTERVAL_MS tick, uniformly for all three effectTypes, gated
+-- on the SAME Config.Combat.ExcludeVehicleSeatedTargets flag the request-time
+-- check already reads.
+-- ========================================================================
+
+t.test('MAINTENANCE THREAD: a target who enters a vehicle mid-hold is automatically released as target_entered_vehicle, not left running until the hard timeout', function()
+    local f = newCombatFixture()
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+
+    f.setInVehicle(targetPed, true) -- the target gets INTO a vehicle while already held
+    f.runOneTick() -- drives the shared expiry maintenance thread one iteration
+    local ended = lastClientEvent(f, 'qbx_k9unit:client:biteHoldEnded')
+    t.isTrue(ended ~= nil, 'the maintenance thread must end a hold the instant its target is observed seated in a vehicle')
+    t.equals(ended.args[2], 'target_entered_vehicle')
+end)
+
+t.test('MAINTENANCE THREAD: Config.Combat.ExcludeVehicleSeatedTargets = false also disables the MID-HOLD re-check, not just the request-time one -- an operator who opted in to vehicle-seated targets is never surprised by an automatic end', function()
+    local f = newCombatFixture({ excludeVehicleSeatedTargets = false })
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0 })
+    f.dispatchNetEvent('qbx_k9unit:server:requestBiteHold', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:applyNpcBiteHold'), 1)
+
+    f.setInVehicle(targetPed, true)
+    f.runOneTick()
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:biteHoldEnded'), 0, 'the opt-out must hold for the whole lifecycle, not just the initial grant')
+end)
+
+t.test('MAINTENANCE THREAD: PropDragging is covered by the same mid-hold vehicle re-check as BiteAndHold/NonLethalTakedown', function()
+    local f = newCombatFixture({ propDragging = true })
+    wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })
+    local targetPed = wireNpcTarget(f, 500, { x = 1, y = 0, z = 0, health = 50 }) -- <= PED_DEAD_HEALTH_THRESHOLD -- IsTargetDowned's NPC branch reads this as downed
+    f.dispatchNetEvent('qbx_k9unit:server:requestDrag', K9_SRC, 500)
+    t.equals(countClientEvents(f, 'qbx_k9unit:client:dragStarted'), 1)
+
+    f.setInVehicle(targetPed, true) -- the downed target is pulled into a vehicle mid-drag
+    f.runOneTick()
+    local ended = lastClientEvent(f, 'qbx_k9unit:client:dragEnded')
+    t.isTrue(ended ~= nil, 'a drag must not keep a target physically attached to the K9 once that target is seated in a vehicle')
+    t.equals(ended.args[2], 'target_entered_vehicle')
+end)
+
 t.test('requestTakedown: RED-TEAM FINDING 3 -- a target seated in a vehicle is refused (checked at the PRE-yield ValidateCombatRequest call, before the speed-sample Wait())', function()
     local f = newCombatFixture()
     wireK9(f, K9_SRC, { x = 0, y = 0, z = 0 })

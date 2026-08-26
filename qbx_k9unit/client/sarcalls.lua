@@ -512,6 +512,32 @@ local function ShowReveal(callType)
         FreezeEntityPosition(newEntity, true)
     end
 
+    -- STALE-REVEAL GUARD (same bug class as client/kennel.lua's own
+    -- "STALE-KENNEL GUARD" and client/vision.lua's own "STALE-CAM GUARD" on
+    -- ToggleCameraFeed -- read either one first, not re-derived here). Both
+    -- LoadModelWithTimeout branches above can YIELD (their own Wait(50)
+    -- polling loop) before reaching this line. If a SECOND ShowReveal() call
+    -- for a genuinely NEWER sar call (this client finishing one call,
+    -- immediately starting and completing another before the first
+    -- reveal's own model ever finished loading) ran its OWN ClearReveal()
+    -- and full creation sequence to completion WHILE this attempt was still
+    -- stuck waiting on its model, `revealGeneration` has already moved past
+    -- `myGeneration` -- assigning THIS attempt's now-stale `newEntity` into
+    -- `revealEntity` unconditionally would silently overwrite/orphan
+    -- whatever that newer, now-current attempt already created (or is still
+    -- creating): nothing would hold this stale entity's handle again, so
+    -- ClearReveal()/onResourceStop below could never delete it. Detected
+    -- with the exact same generation-counter this function's own
+    -- auto-clear timer below already uses for the identical staleness
+    -- question, just checked one step earlier (at creation, not only at
+    -- auto-clear time).
+    if myGeneration ~= revealGeneration then
+        if DoesEntityExist(newEntity) then
+            DeleteEntity(newEntity)
+        end
+        return
+    end
+
     revealEntity = newEntity
 
     CreateThread(function()

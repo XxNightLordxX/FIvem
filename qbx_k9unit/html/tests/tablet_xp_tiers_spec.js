@@ -532,9 +532,12 @@ t.test('a stale warning from a PREVIOUS visit is cleared when the tab is freshly
     await new Promise((r) => setTimeout(r, 30));
     t.isTrue(findByText(h.getRoot(), 'Some rank(s) were just demoted.').length >= 1);
 
-    // Leave the tab and come back.
-    findByText(h.getRoot(), 'Command Console')[0].click();
-    await settle();
+    // Re-entering the SAME tab (its own onClick handler resets
+    // xpTierWarning unconditionally, same reset discipline every other
+    // admin tab on this page already applies to its own leftover state)
+    // clears the stale banner -- deliberately not routed through the
+    // Console screen, which has its own unrelated NUI callbacks this spec
+    // does not stub.
     openXpTiersTab(h);
     await settle();
 

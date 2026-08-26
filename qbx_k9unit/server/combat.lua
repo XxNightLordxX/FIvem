@@ -474,8 +474,14 @@
        HandleTakedownRequest checked whether the TARGET was seated in a
        vehicle. FIXED: see the IsPedInAnyVehicle check inside
        ValidateCombatRequest (below) — gated behind
-       Config.Combat.ExcludeVehicleSeatedTargets (not yet landed in
-       config.lua; reads `~= false`, defaulting to EXCLUDE until it lands).
+       Config.Combat.ExcludeVehicleSeatedTargets (landed in config.lua,
+       `true` by default; reads `~= false`, defaulting to EXCLUDE). Also
+       re-checked MID-HOLD (STATE-MACHINE FIX, this pass), not just at
+       request time — see ExcludeVehicleSeatedTargetsMidHold's own
+       declaration comment (near the shared expiry maintenance thread) for
+       the full writeup: a target who gets INTO a vehicle after a
+       bite/takedown/drag was already granted no longer had anything
+       re-checking that fact before this fix.
     ======================================================================
 ]]
 
@@ -1544,11 +1550,15 @@ local function ValidateCombatRequest(src, targetNetId, featureEnabled, rangeMete
     -- entity's own synced state, never a client claim), so this is a real,
     -- server-authoritative check, not a client-attested one.
     --
-    -- Config.Combat.ExcludeVehicleSeatedTargets (NOT YET LANDED in
-    -- config.lua -- this file may not edit config.lua this pass; see this
-    -- pass's own report to whoever owns that file). `~= false` means a
-    -- missing/nil field (today's reality until it lands) reads as the
-    -- RECOMMENDED default (EXCLUDE a vehicle-seated target) -- an operator
+    -- Config.Combat.ExcludeVehicleSeatedTargets (STALE-COMMENT FIX, this
+    -- pass, coder-security cross-change regression review -- re-verified
+    -- against the actual current config.lua before rewriting this
+    -- paragraph, not taken on an earlier draft alone: this field HAS SINCE
+    -- LANDED, `true` by default -- the "NOT YET LANDED" framing below is
+    -- what went stale, not the underlying check). `~= false` means a
+    -- missing/nil field (e.g. an older config.lua predating this field)
+    -- still reads as the RECOMMENDED default (EXCLUDE a vehicle-seated
+    -- target) -- an operator
     -- who wants the pre-fix behavior back (e.g. a server that deliberately
     -- wants K9 units to be able to drag a downed driver out of a car -- see
     -- this check's own placement relative to PropDragging's requireAlive =
@@ -2191,6 +2201,41 @@ end
 -- misconfigured detection-sampling interval.
 local MAINTENANCE_INTERVAL_MS = 500
 
+-- STATE-MACHINE FIX (this pass, coder-security) — RED-TEAM FINDING 3's own
+-- IsPedInAnyVehicle check (ValidateCombatRequest, above) only ever runs at
+-- REQUEST time. Nothing previously re-checked vehicle occupancy for an
+-- ALREADY-ACTIVE hold/takedown/drag: a target who was on foot when a bite/
+-- takedown/drag was granted, then got into (or was pulled into) a vehicle
+-- mid-effect, kept the Category B effect running against them regardless —
+-- for NonLethalTakedown specifically that means SetEntityCanBeDamaged(ped,
+-- false) can keep a target briefly undamageable WHILE DRIVING AWAY, and for
+-- BiteAndHold it means DisableControlAction(ATTACK) keeps firing against a
+-- driver who is no longer the pedestrian this mechanic was granted against.
+-- Bounded already by each effect's own hard expiresAt cap (never an
+-- unbounded trap), but the effect outlives the physical situation it was
+-- granted for, the same class of gap HolderPedIsDead/target-unresolvable
+-- above already close for the holder-died/ped-replaced cases.
+--
+-- Read ONCE at thread-creation time, same "Config is read once at resource
+-- start and never mutated at runtime" precedent this file's own sibling
+-- comments already establish immediately below — never re-read Config
+-- inside the loop. Uses the SAME flag ValidateCombatRequest's own
+-- request-time check reads (`~= false` defaults to EXCLUDE), deliberately:
+-- an operator who has explicitly opted OUT of vehicle exclusion (set this
+-- `false`, e.g. specifically so PropDragging can pull a downed driver OUT
+-- of a car — see ValidateCombatRequest's own comment on this exact
+-- tension) gets a mid-hold check that can never fire either, matching their
+-- own stated intent instead of silently re-imposing the exclusion they
+-- turned off. Applied UNIFORMLY to all three effectTypes (bite/takedown/
+-- drag) for the same reason: when this flag is at its default (true), a
+-- vehicle-seated target should never be under an active Category B/A effect
+-- at all, regardless of whether they were seated in a vehicle at grant time
+-- or got into one afterward; when the operator has opted out, this check is
+-- provably a no-op for every effectType (a drag against a target ALLOWED to
+-- start vehicle-seated must not be immediately undone by the very state
+-- that made it eligible).
+local ExcludeVehicleSeatedTargetsMidHold = Config.Combat.ExcludeVehicleSeatedTargets ~= false
+
 -- PERFORMANCE FIX (QA pass), gated at thread-creation time ONLY — never
 -- re-checked inside the loop, matching the sibling compliance-sampling
 -- thread's own "Config is read once at resource start and never mutated at
@@ -2294,6 +2339,25 @@ if Config.Features.BiteAndHold or Config.Features.NonLethalTakedown or Config.Fe
                     local ok, err = pcall(EndHold, targetNetId, 'target_unresolvable')
                     if not ok then
                         print(('[qbx_k9unit] combat EndHold(target_unresolvable) errored for netId %s: %s'):format(targetNetId, tostring(err)))
+                    end
+                elseif ExcludeVehicleSeatedTargetsMidHold and IsPedInAnyVehicle(ResolveNetworkEntity(targetNetId, 1), false) then
+                    -- STATE-MACHINE FIX (this pass) — see
+                    -- ExcludeVehicleSeatedTargetsMidHold's own declaration
+                    -- comment above for the full writeup. targetNetId is
+                    -- guaranteed resolvable here (the elseif immediately
+                    -- above already ended this hold this same tick if it
+                    -- were not) — re-resolving costs one extra native call,
+                    -- matching this thread's own existing style of each
+                    -- branch resolving its own entity independently rather
+                    -- than threading a shared local through the whole
+                    -- if/elseif chain (see DragExceedsMaxDistance's own
+                    -- identical independent resolve immediately below).
+                    -- TERMINATION path — never gated on HasK9Access/
+                    -- Config.Features.*/a cooldown/mutex, same discipline
+                    -- HolderPedIsDead above already establishes.
+                    local ok, err = pcall(EndHold, targetNetId, 'target_entered_vehicle')
+                    if not ok then
+                        print(('[qbx_k9unit] combat EndHold(target_entered_vehicle) errored for netId %s: %s'):format(targetNetId, tostring(err)))
                     end
                 elseif hold.effectType == 'drag' and DragExceedsMaxDistance(hold, targetNetId) then
                     local ok, err = pcall(EndHold, targetNetId, 'max_distance_exceeded')

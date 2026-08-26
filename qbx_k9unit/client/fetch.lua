@@ -228,6 +228,33 @@ RegisterNetEvent('qbx_k9unit:client:throwFetchBallAt', function(spawnX, spawnY, 
         return
     end
 
+    -- STALE-THROW GUARD (client/kennel.lua's own "STALE-KENNEL GUARD" on
+    -- deployKennelAt / client/propattachment.lua's own "STALE-VEST GUARD" on
+    -- attachK9Prop are the precedent this follows, not a second independent
+    -- design -- read either one first). server/fetch.lua's own
+    -- FetchBalls[citizenid]/PendingFetchThrows[citizenid] checks in its
+    -- requestThrowFetchBall handler make a second throw succeeding for the
+    -- same citizenid while a first one is still active hard to reach in the
+    -- ordinary flow, but neither is a hard guarantee THIS handler can rely
+    -- on never seeing two 'throwFetchBallAt' dispatches in a row before
+    -- myThrownBallNetId is ever cleared (removeFetchBall / this file's own
+    -- onResourceStop / the CONFIRM-FAILURE BACKSTOP thread below) -- a
+    -- second dispatch would otherwise overwrite myThrownBallNetId below
+    -- (via SetMyThrownBall) while the FIRST thrown ball's entity stays real
+    -- and untracked: nothing left holds its netId, so nothing will ever
+    -- delete it. No defense-in-depth model check needed on the stale
+    -- entity here (unlike client/kennel.lua's removeKennel handler) --
+    -- myThrownBallNetId is never set from an externally-supplied netId, only
+    -- ever from this file's own prior CreateObject calls, so it is already
+    -- inherently trusted.
+    if myThrownBallNetId then
+        local staleEntity = ResolveNetworkEntity(myThrownBallNetId)
+        if staleEntity then
+            DeleteEntity(staleEntity)
+        end
+        ClearMyThrownBall()
+    end
+
     local modelHash = LoadModelWithTimeout(Config.FetchMechanic.ballPropModel)
     if not modelHash then
         lib.notify({ title = locale('common.notify_title'), description = locale('fetch.prop_load_failed'), type = 'error' })

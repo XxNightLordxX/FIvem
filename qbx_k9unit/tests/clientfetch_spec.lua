@@ -493,6 +493,30 @@ t.test('throwFetchBallAt: CreateObject fails -- notifies, cancels the throw', fu
     t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:cancelFetchThrow')
 end)
 
+t.test('FIXED: STALE-THROW GUARD -- a second throwFetchBallAt dispatch before the first is ever cleared now deletes the first ball instead of orphaning it (mirrors client/kennel.lua\'s own deployKennelAt STALE-KENNEL GUARD)', function()
+    local f = newFetchFixture()
+    f.dispatchNetEvent('qbx_k9unit:client:throwFetchBallAt', 65535, 10.0, 20.0, 5.0, 1.0, 2.0, 3.0)
+    local firstEntity = f.createObjectCalls[1].entity
+    t.equals(#f.deleteEntityCalls, 0, 'the first thrown ball is still alive and untouched after only one dispatch')
+
+    -- A second throwFetchBallAt lands for the SAME client before the first
+    -- ball's netId is ever cleared (removeFetchBall / onResourceStop / the
+    -- CONFIRM-FAILURE BACKSTOP thread) -- see this file's own STALE-THROW
+    -- GUARD comment for the concrete scenarios this models.
+    f.dispatchNetEvent('qbx_k9unit:client:throwFetchBallAt', 65535, 40.0, 50.0, 6.0, 0.0, 0.0, 0.0)
+    local secondEntity = f.createObjectCalls[2].entity
+
+    t.equals(#f.createObjectCalls, 2, 'a second, independent ball object is created')
+    t.equals(#f.deleteEntityCalls, 1, 'FIXED: the STALE-THROW GUARD deletes the first ball before the second is even created')
+    t.equals(f.deleteEntityCalls[1], firstEntity, 'the entity actually deleted by the guard is the FIRST ball, not the second')
+
+    -- The SECOND (now-current) ball is still tracked correctly: onResourceStop
+    -- cleans it up exactly once, and never re-touches the already-deleted first.
+    f.fireResourceStop(RESOURCE_NAME)
+    t.equals(#f.deleteEntityCalls, 2, 'onResourceStop cleans up the second (now-current) ball too')
+    t.equals(f.deleteEntityCalls[2], secondEntity, 'the second delete call targets the SECOND ball, confirming myThrownBallNetId correctly tracks the current one, not the orphaned first')
+end)
+
 t.test('carryFetchBall (mode="fake"): deletes the old ball, plays the carry stance, engages the fake carry', function()
     local f = newFetchFixture()
     f.dispatchNetEvent('qbx_k9unit:client:throwFetchBallAt', 65535, 10.0, 20.0, 5.0, 1.0, 2.0, 3.0)

@@ -104,9 +104,12 @@
        a hunt marked found always self-clears immediately (see
        CompleteHunt()'s own TriggerServerEvent('...stopScentHunt') call,
        client/scenttrail.lua) so a completed hunt never lingers to block a
-       fresh one this way; the only OTHER thing that clears one is this
-       file's own maxHuntDurationMs lazy-expiry check inside pollScentHunt
-       below, or the player disconnecting.
+       fresh one this way; the other things that clear one are this file's
+       own maxHuntDurationMs check (now enforced BOTH lazily inside
+       pollScentHunt below AND unconditionally by the sweep thread near the
+       end of this file -- see "SESSION HYGIENE" below for why the lazy
+       check alone was not enough), pollScentHunt's own access/feature-loss
+       cleanup (same section), or the player disconnecting.
     2. 'qbx_k9unit:server:pollScentHunt' (source) -> { active: boolean,
        distance: number?, found: boolean?, expired: boolean? } [lib.callback]
        Re-validates access on EVERY call (a QUERY, not a termination -- see
@@ -116,7 +119,13 @@
        whatever Config.ScentTrailHunt.pollIntervalMs the operator configures
        for the CLIENT's own cadence -- a defensive floor against a modified
        client polling faster than intended, not the feature's real pacing
-       control.
+       control. IMPORTANT, see "SESSION HYGIENE" below: when either
+       re-validation fails, this callback now ALSO clears ActiveHunts[source]
+       before answering `{ active = false }` -- this is cleanup triggered BY
+       a failed gate check, never cleanup GATED ON a check passing (the
+       standing "gate the start, never the stop" rule is not violated by
+       this: the gate here decides what to report, and reporting "inactive"
+       while leaving a real record behind would itself be the bug).
     3. 'qbx_k9unit:server:stopScentHunt' (source) [RegisterNetEvent] --
        UNCONDITIONAL. Never checks Config.Features.ScentTrailHunt or
        HasK9Access -- an unconditional `ActiveHunts[source] = nil`, so it
@@ -135,17 +144,67 @@
        a dropped push is not a stuck-forever failure mode for the caller
        that triggered it. `huntId` added -- see "STALE-SESSION RACE" below.
 
-    Automatic path: none. Every code path in this file runs in direct
-    response to one of the three named calls above, or to a
-    `playerDropped` disconnect -- no self-scheduled sweep thread exists
-    (ActiveHunts is small, ephemeral, single-slot-per-source, and already
-    bounded by Config.ScentTrailHunt.maxHuntDurationMs's own lazy check
-    inside pollScentHunt -- a dedicated sweep thread would only matter for
-    a source that starts a hunt, then never polls AND never disconnects,
-    which cannot happen from this file's own client: client/scenttrail.lua
-    always either polls on an interval or sends stopScentHunt on death/
-    abandon. `playerDropped` covers the one remaining case, a genuine
-    disconnect).
+    Automatic path: a background sweep thread (see "SESSION HYGIENE" below)
+    and a `playerDropped` handler. Every OTHER code path in this file runs in
+    direct response to one of the three named calls above.
+    ======================================================================
+
+    SESSION HYGIENE -- FIXED THIS PASS (a real defect, of the exact class
+    QA's own repro named: "a client stopping without ending its hunt left a
+    live server record, and the server refuses a new hunt while one is
+    active, so the player was locked out of ever starting another"). This
+    file used to claim (see the paragraph this section replaces) that no
+    sweep thread was needed because "a source that starts a hunt, then never
+    polls AND never disconnects... cannot happen from this file's own
+    client." That reasoning MISSED A REAL CASE: pollScentHunt's own two
+    access-re-validation checks (Config.Features.ScentTrailHunt off,
+    HasK9Access(source) false) used to return `{ active = false }` WITHOUT
+    touching ActiveHunts[source] at all. client/scenttrail.lua's own poll
+    loop treats ANY `{ active = false }` response as "this hunt is over" --
+    it sets `huntActive = false` and stops polling, WITHOUT sending
+    stopScentHunt (that branch is not treated as an abandon, since from the
+    client's point of view nothing needs telling: the server just said the
+    hunt isn't active). So the moment a K9's access was revoked mid-hunt
+    (certification lapse) or Config.Features.ScentTrailHunt was toggled off
+    mid-hunt, the client stopped polling for good, while ActiveHunts[source]
+    silently lived on forever -- not cleared by any lazy check (nothing polls
+    it again to trigger one), not cleared by playerDropped (the player never
+    disconnected). The very next legitimate '/k9nosehunt' from that same
+    source -- even long after access was restored -- was rejected with
+    reason = 'already_active' permanently, for the rest of this resource's
+    uptime or until that player happened to disconnect.
+
+    THE FIX, two independent layers, matching this resource's own "layered
+    checks over a single point of failure" convention:
+      1. pollScentHunt below now clears ActiveHunts[source] itself, in the
+         SAME branch that fails Config.Features.ScentTrailHunt/HasK9Access,
+         before answering `{ active = false }`. This is NOT "gating cleanup
+         on a check" (forbidden by this resource's standing rule) -- it is
+         the opposite: this callback is about to tell the client the hunt is
+         over, so it makes that true server-side in the same breath, rather
+         than lying by omission and leaving an orphaned record behind. The
+         query's own re-validation is unchanged; only its side effect on a
+         failure is new.
+      2. A genuine, unconditional sweep thread (CreateThread below, near the
+         end of this file) now re-checks EVERY entry in ActiveHunts against
+         Config.ScentTrailHunt.maxHuntDurationMs on its own fixed interval,
+         independent of whether anyone ever polls again -- mirroring
+         server/scentlineup.lua's own phase-expiry sweep and
+         server/sarcalls.lua's own tick-loop timeout check, both of which
+         already do not depend on the client for their own expiry. This is a
+         backstop for every OTHER way a client could stop polling without
+         disconnecting that this file cannot enumerate in advance (a client
+         script error outside the pcall'd callback.await, a third-party
+         resource restarting just this resource's client copy in a way that
+         does not reach client/scenttrail.lua's own onResourceStop handler,
+         etc.) -- belt-and-suspenders with fix 1 above, not a replacement for
+         it: fix 1 closes the specific, now-understood access/feature-loss
+         case immediately (no need to wait up to SWEEP_INTERVAL_MS); fix 2
+         closes every case fix 1 does not know to look for.
+    NEITHER fix touches a termination path's own gating -- stopScentHunt
+    remains exactly as unconditional as it already was (see item 3 above);
+    both fixes only ever make a session END sooner/more reliably, never make
+    ending one harder or conditional on anything new.
     ======================================================================
 
     PER-PERSON FEATURE CONTROL -- ADDED A LATER PASS (this pass found and
@@ -271,6 +330,77 @@
 
 local ScentHuntConfig = Config.ScentTrailHunt or {}
 
+-- ======================================================================
+-- CONFIG-SAFETY: CLAMP AND WARN, never assert-and-abort (server/
+-- cooldowns.lua's header ADDENDUM: an uncaught error thrown from this
+-- file's own top-level chunk would abort its load from that line onward,
+-- silently un-registering startScentHunt/pollScentHunt AND the
+-- UNCONDITIONAL stopScentHunt event this file's own EVENT/CALLBACK CONTRACT
+-- item 3 calls a "no unbounded trap" guarantee). minRadius/maxRadius/
+-- arrivalRadius/maxHuntDurationMs below used to be read with a bare
+-- `ScentHuntConfig.X or <default>` idiom at each individual use site --
+-- exactly this resource's own documented footgun (that same header: `0 or
+-- 500` evaluates to `0` in Lua, never the fallback, since 0 is truthy) --
+-- an operator setting any of these four fields to 0/negative/NaN would
+-- silently reach RollHuntTarget/pollScentHunt as a real, accepted, wrong
+-- value instead of falling back to a safe default. server/sarcalls.lua's
+-- own identically-shaped config block (minRadius/maxRadius/arrivalRadius/
+-- burningDistance/hotDistance/warmDistance) already resolves this exact
+-- class of field this same way -- this is that same treatment applied to
+-- this file's own sibling fields, a gap left open when that pattern was
+-- established elsewhere but never brought back to this file.
+-- ======================================================================
+local function IsPositiveNumber(v)
+    return type(v) == 'number' and v == v and v > 0
+end
+
+-- GROUP 1: minRadius/maxRadius (maxRadius must stay >= minRadius) -- kept as
+-- a related pair, same reasoning as server/sarcalls.lua's own GROUP 1:
+-- clamping one half of an inverted/invalid pair without the other could
+-- silently produce an internally-inconsistent range worse than either bad
+-- value alone.
+if not (IsPositiveNumber(ScentHuntConfig.minRadius) and IsPositiveNumber(ScentHuntConfig.maxRadius)
+    and ScentHuntConfig.maxRadius >= ScentHuntConfig.minRadius) then
+    print(
+        ('[qbx_k9unit] Config.ScentTrailHunt.minRadius/maxRadius must both be positive numbers with maxRadius >= ' ..
+         'minRadius (found minRadius=%s, maxRadius=%s) -- RollHuntTarget\'s ring math silently misbehaves ' ..
+         'otherwise. Using the shipped defaults for BOTH fields together (minRadius=10.0, maxRadius=30.0) ' ..
+         'instead of clamping just one into an incoherent pair -- find Config.ScentTrailHunt.minRadius/maxRadius ' ..
+         'in config.lua and fix them together.')
+            :format(tostring(ScentHuntConfig.minRadius), tostring(ScentHuntConfig.maxRadius))
+    )
+    ScentHuntConfig.minRadius, ScentHuntConfig.maxRadius = 10.0, 30.0
+end
+
+-- arrivalRadius: independent of the pair above. A non-positive/NaN value
+-- here means pollScentHunt's own `distance <= arrivalRadius` check could
+-- never pass (0 -- standing exactly on the target's coordinate, not
+-- achievable given a real ped's own collision radius; NaN -- every
+-- comparison against it is false) -- silently making a hunt permanently
+-- un-completable rather than merely harder, the same "fails toward
+-- permanently stuck" direction this resource's cooldown/threshold code
+-- exists to prevent everywhere else (see server/cooldowns.lua's own
+-- IsValidThreshold doc comment).
+if not IsPositiveNumber(ScentHuntConfig.arrivalRadius) then
+    print(
+        ('[qbx_k9unit] Config.ScentTrailHunt.arrivalRadius must be a positive number (found: %s) -- a ' ..
+         'non-positive/NaN value here would make every hunt permanently un-completable (the distance check can ' ..
+         'never pass). Using the shipped default of 3.0 instead -- find Config.ScentTrailHunt.arrivalRadius in ' ..
+         'config.lua and fix it.')
+            :format(tostring(ScentHuntConfig.arrivalRadius))
+    )
+    ScentHuntConfig.arrivalRadius = 3.0
+end
+
+-- maxHuntDurationMs is a genuine duration (a hard elapsed-time expiry, both
+-- in pollScentHunt's own lazy check below AND this file's own sweep thread
+-- near the end of this file -- see header "SESSION HYGIENE") -- an exact
+-- fit for server/cooldowns.lua's own ResolveConfiguredThresholdMs, same as
+-- startCooldownMs a few lines below. Resolved ONCE, here, so both
+-- consumers read the identical, already-validated value.
+ScentHuntConfig.maxHuntDurationMs = ResolveConfiguredThresholdMs(
+    ScentHuntConfig.maxHuntDurationMs, 300000, 'Config.ScentTrailHunt.maxHuntDurationMs')
+
 -- SERVER-ISSUED, monotonically increasing session id -- see this file's
 -- header "STALE-SESSION RACE" section. Minted once per hunt, at the moment
 -- ActiveHunts[source] is created below, and never reused -- a plain
@@ -340,9 +470,17 @@ PollCooldown.RegisterPlayerDropped()
 --- @param originY number
 --- @return number targetX, number targetY
 local function RollHuntTarget(originX, originY)
-    local minR = ScentHuntConfig.minRadius or 10.0
-    local maxR = ScentHuntConfig.maxRadius or 30.0
-    if maxR < minR then maxR = minR end -- defensive: never let a misconfigured inverted range make the radius roll below negative-width
+    -- No defensive `if maxR < minR` re-clamp needed here -- this file's own
+    -- CONFIG-SAFETY block above already guarantees
+    -- ScentHuntConfig.maxRadius >= ScentHuntConfig.minRadius >= (a positive
+    -- number) at file-load time (GROUP 1's clamp-and-warn: either the
+    -- configured pair already satisfies this, or both fields together fall
+    -- back to the shipped defaults, which do) -- provably unreachable here
+    -- rather than merely assumed, same "provably unreachable" standard
+    -- server/sarcalls.lua's own RollSarTarget doc comment states for the
+    -- identical guarantee.
+    local minR = ScentHuntConfig.minRadius
+    local maxR = ScentHuntConfig.maxRadius
 
     local radius = minR + (maxR - minR) * math.random()
     local angle = math.random() * 2 * math.pi
@@ -448,15 +586,29 @@ RegisterNetEvent('qbx_k9unit:server:stopScentHunt', function()
 end)
 
 lib.callback.register('qbx_k9unit:server:pollScentHunt', function(source)
-    if not Config.Features.ScentTrailHunt then return { active = false } end
-    if not HasK9Access(source) then return { active = false } end
+    -- SESSION HYGIENE (see this file's header section by that name): a
+    -- failed re-validation here is ABOUT to answer `{ active = false }`,
+    -- which client/scenttrail.lua's own poll loop treats as "this hunt is
+    -- over" and stops polling for -- WITHOUT ever sending stopScentHunt (it
+    -- is not treated as an abandon on that client). If this file did not
+    -- also clear ActiveHunts[source] in the same breath, the record would
+    -- silently outlive the only thing that was ever going to ask about it
+    -- again, permanently blocking a fresh hunt as 'already_active' the
+    -- instant access/the feature came back. This is cleanup triggered BY a
+    -- failed gate, never cleanup GATED ON a check passing -- the standing
+    -- "gate the start, never the stop" rule is unaffected: the gate still
+    -- only ever decides what this callback REPORTS, and it must not report
+    -- something server-side state disagrees with.
+    if not Config.Features.ScentTrailHunt or not HasK9Access(source) then
+        ActiveHunts[source] = nil
+        return { active = false }
+    end
 
     local hunt = ActiveHunts[source]
     if not hunt then return { active = false } end
 
     local now = GetGameTimer()
-    local maxDurationMs = ScentHuntConfig.maxHuntDurationMs or 300000
-    if (now - hunt.startedAt) > maxDurationMs then
+    if (now - hunt.startedAt) > ScentHuntConfig.maxHuntDurationMs then
         ActiveHunts[source] = nil
         return { active = false, expired = true }
     end
@@ -478,8 +630,7 @@ lib.callback.register('qbx_k9unit:server:pollScentHunt', function(source)
     local dy = coords.y - hunt.targetY
     local distance = math.sqrt(dx * dx + dy * dy)
 
-    local arrivalRadius = ScentHuntConfig.arrivalRadius or 3.0
-    local found = distance <= arrivalRadius
+    local found = distance <= ScentHuntConfig.arrivalRadius
 
     hunt.lastDistance = distance
     hunt.found = found

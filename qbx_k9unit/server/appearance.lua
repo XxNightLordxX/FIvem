@@ -508,12 +508,34 @@ CreateThread(function()
             if now > pending.expiresAt then
                 PendingSwap[citizenid] = nil
                 if pending.kind == 'revert' then
-                    WriteAppearanceReverted(citizenid)
-                    LogAppearanceAudit(pending.granterLabel, 'k9AppearanceRevert', ('citizenid=%s'):format(citizenid), 'forced_timeout')
-                    local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
-                    local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
-                    if onlineSrc then
-                        NotifyPlayer(onlineSrc, locale('appearance.revert_success_target'), 'success')
+                    -- DISCARDED-WRITE FIX (this pass): this is the
+                    -- SECURITY-CRITICAL forced-timeout revert this sweep's own
+                    -- header comment documents -- its whole point is that a
+                    -- hostile/unresponsive client cannot hold a revert open
+                    -- past its grace period. The write's own boolean result
+                    -- was previously discarded, so a DB failure here was
+                    -- logged as 'forced_timeout' (success) and could even
+                    -- tell an online target their appearance was reverted,
+                    -- while k9_ped_assignments still reads active=1.
+                    -- HasK9Role(src) is already false for this citizenid
+                    -- (that's why this is a pending revert at all), so
+                    -- PlayerLoaded's own stale-row backstop still refuses to
+                    -- re-apply the model on their next reconnect regardless --
+                    -- this is a logging/notify accuracy fix, not a second
+                    -- security hole, but the audit trail and the player toast
+                    -- must not claim a persistence success that did not
+                    -- happen.
+                    local wroteOk = WriteAppearanceReverted(citizenid)
+                    if wroteOk then
+                        LogAppearanceAudit(pending.granterLabel, 'k9AppearanceRevert', ('citizenid=%s'):format(citizenid), 'forced_timeout')
+                        local onlinePlayer = exports.qbx_core:GetPlayerByCitizenId(citizenid)
+                        local onlineSrc = onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source
+                        if onlineSrc then
+                            NotifyPlayer(onlineSrc, locale('appearance.revert_success_target'), 'success')
+                        end
+                    else
+                        print(('[qbx_k9unit] appearance.lua forced-timeout revert: DB write failed for citizenid=%s -- k9_ped_assignments still reads active=1.'):format(citizenid))
+                        LogAppearanceAudit(pending.granterLabel, 'k9AppearanceRevert', ('citizenid=%s'):format(citizenid), 'forced_timeout_db_error')
                     end
                 else
                     LogAppearanceAudit(pending.granterLabel, 'k9AppearanceApply', ('citizenid=%s'):format(citizenid), 'abandoned:no_confirm_received')
@@ -536,15 +558,42 @@ RegisterNetEvent('qbx_k9unit:server:confirmK9PedSwap', function(requestId, ok, r
     PendingSwap[citizenid] = nil
 
     if ok then
+        -- DISCARDED-WRITE FIX (this pass): WriteAppearanceApplied/
+        -- WriteAppearanceReverted both follow this resource's SafeWrite
+        -- contract (K9Store.Appearance_UpsertApplied/Appearance_MarkReverted
+        -- degrade a thrown DB error to `false` rather than propagating it) --
+        -- their return value was previously discarded outright here, so a DB
+        -- failure was silently reported to the target as a "success" toast
+        -- AND logged as outcome 'ok', even though k9_ped_assignments was
+        -- never actually written. The client-side model swap itself already
+        -- happened (that's what `ok == true` on this branch means) -- only
+        -- persistence can still fail, and that must not be reported as a
+        -- clean success.
+        local wroteOk
         if pending.kind == 'apply' then
-            WriteAppearanceApplied(citizenid, pending.payload, nil, pending.granterLabel)
-            NotifyPlayer(src, locale('appearance.apply_success_target'), 'success')
+            wroteOk = WriteAppearanceApplied(citizenid, pending.payload, nil, pending.granterLabel)
         else
-            WriteAppearanceReverted(citizenid)
-            NotifyPlayer(src, locale('appearance.revert_success_target'), 'success')
+            wroteOk = WriteAppearanceReverted(citizenid)
         end
-        LogAppearanceAudit(pending.granterLabel, 'k9Appearance' .. (pending.kind == 'apply' and 'Apply' or 'Revert'),
-            ('citizenid=%s'):format(citizenid), 'ok')
+
+        local actionLabel = 'k9Appearance' .. (pending.kind == 'apply' and 'Apply' or 'Revert')
+        if wroteOk then
+            NotifyPlayer(src, locale(pending.kind == 'apply' and 'appearance.apply_success_target' or 'appearance.revert_success_target'), 'success')
+            LogAppearanceAudit(pending.granterLabel, actionLabel, ('citizenid=%s'):format(citizenid), 'ok')
+        else
+            -- No player-facing message is sent here: this file has no
+            -- already-shipped locale key for "the swap displayed but was not
+            -- saved" (reported separately, see this pass's own hand-off), and
+            -- a false "success" would be worse than silence. The accurate
+            -- console/audit trail below is what lets an operator notice and
+            -- retry -- this citizenid's k9_ped_assignments row is unaffected
+            -- (still whatever it was before this confirm), so their NEXT
+            -- reconnect/resource restart re-derives from that unchanged,
+            -- correct row rather than from the visual state that just failed
+            -- to persist.
+            print(('[qbx_k9unit] appearance.lua confirmK9PedSwap: %s DB write failed for citizenid=%s -- the client-side swap succeeded but was NOT persisted.'):format(pending.kind, citizenid))
+            LogAppearanceAudit(pending.granterLabel, actionLabel, ('citizenid=%s'):format(citizenid), 'db_error')
+        end
     else
         -- ABANDONED, per this file's header contract: no DB write at all --
         -- the player is exactly as they were. `reason` is a client-supplied
