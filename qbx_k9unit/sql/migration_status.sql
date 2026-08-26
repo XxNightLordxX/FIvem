@@ -102,7 +102,7 @@ ORDER BY t.table_name;
 
 
 -- ---------------------------------------------------------------------
--- PART 2: sql/migrations/0001-0010 -- what would each one do, in order?
+-- PART 2: sql/migrations/0001-0011 -- what would each one do, in order?
 --
 -- Mirrors each file's own INFORMATION_SCHEMA guard exactly, so the
 -- verdict below is what that file will actually decide, not a guess.

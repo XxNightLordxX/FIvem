@@ -97,6 +97,29 @@
     files say so themselves, e.g. server/fetch.lua's own "GATE AT
     REGISTRATION, NOT INSIDE THE HANDLER" comment):
 
+    UPDATED 2026-08-26: eleven Config.Features keys shipped after this
+    audit was first written (CameraFeedPiP, FindAlerts, K9DownDispatch,
+    K9EquipmentShop, K9Leaderboard, PursuitSprint, ResourceAutoDetect,
+    SARCalls, ScentLineup, ScentTrailHunt, TrainingMode) had no FEATURE_TIERS
+    entry at all -- GetFeatureTier silently resolved every one of them to
+    'unaudited', and runtimeSetFeature did NOT actually refuse an
+    'unaudited' tier despite this header's own "fails closed" claim in
+    "FEATURE REGISTRY" below -- a real doc/implementation mismatch, now
+    fixed on both sides (see that section for the fix). All eleven were
+    read file-by-file this pass exactly like the original 45 and now carry
+    a real tier: live (FindAlerts, ScentTrailHunt), onstart
+    (K9EquipmentShop, ResourceAutoDetect), rawtoplevel (K9DownDispatch,
+    K9Leaderboard, PursuitSprint, SARCalls, ScentLineup, TrainingMode),
+    clientonly (CameraFeedPiP -- a genuine special case; see its own
+    FEATURE_TIERS note below, it has NO implementing code anywhere in this
+    resource at all, server or client). The full file-by-file evidence for
+    each is recorded as that entry's own `note` field in FEATURE_TIERS
+    below, not duplicated a second time in this prose list -- two copies of
+    the same evidence is exactly the kind of thing that drifts.
+    tests/runtimefeaturetiers_spec.lua now fails the whole suite if
+    Config.Features and FEATURE_TIERS are ever allowed to drift apart like
+    this again.
+
       live       -- XPProgression (server/progression.lua's AwardXP),
                     HandlerPartnership (server/partnership.lua's
                     CheckPartnershipEligibility), BiteAndHold /
@@ -384,12 +407,32 @@ end
 
 -- ======================================================================
 -- FEATURE REGISTRY -- tier metadata for every Config.Features key this
--- file knows how to reason about. A name present in Config.Features but
--- NOT in this table (a future feature this file's own audit has not yet
--- covered) is treated as tier = 'unaudited' by GetFeatureTier below --
--- refused for SetFeature (fails closed: never toggle what has not been
--- read), but still listed by ListFeatures so the gap is visible rather
--- than silently absent.
+-- file knows how to reason about. As of the 2026-08-26 pass, this table
+-- has an entry for all 56 current Config.Features keys -- see
+-- tests/runtimefeaturetiers_spec.lua, which fails the entire suite the
+-- moment that stops being true again.
+--
+-- A name present in Config.Features but NOT in this table (a FUTURE
+-- feature this file's own audit has not yet covered -- there is
+-- deliberately none of these today) is treated as tier = 'unaudited' by
+-- GetFeatureTier below. THIS IS NOW THE ACTUAL, ENFORCED BEHAVIOR, not
+-- merely documented intent left unimplemented -- a prior version of this
+-- file wrote this exact "fails closed" claim here while runtimeSetFeature's
+-- own code silently did the opposite (applied the toggle anyway, with only
+-- a note) for eleven shipped features that had no FEATURE_TIERS entry.
+-- That gap is closed on both sides now:
+--   - runtimeSetFeature REFUSES to toggle an unaudited feature (reason =
+--     'unaudited_feature'), the same fail-closed treatment 'protected'
+--     gets, and prints a named console warning identifying exactly which
+--     feature and what to do about it.
+--   - This file ALSO prints a loud, unmissable warning at its own load
+--     time (see the block right after GetFeatureNote below) enumerating
+--     every currently-unaudited Config.Features key, so the gap is visible
+--     on every single boot, not only the moment someone happens to try the
+--     tablet.
+--   - ListFeatures still lists it (tier = 'unaudited' in the response) so
+--     the tablet can show it exists and is not yet toggleable, rather than
+--     silently omitting it.
 -- ======================================================================
 local FEATURE_TIERS = {
     -- tier = 'live' -- see header "THE FULL AUDIT" for the exact evidence per entry.
