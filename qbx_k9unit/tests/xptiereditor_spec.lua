@@ -688,6 +688,64 @@ t.test('VALIDATION: invalid_speed_multiplier / invalid_scent_range_multiplier fo
     t.equals(f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 2, { scentRangeMultiplier = 0/0 })).reason, 'invalid_scent_range_multiplier')
 end)
 
+-- ============================================================================
+-- OWNER-EDITABLE CEILING (Config.MaxSpeedScentMultiplier, Part A). This
+-- file's own MAX_SPEED_SCENT_MULTIPLIER used to be a hardcoded 3.0; it is
+-- now resolved fresh from config.lua at file-load time via this file's own
+-- local ResolveMaxSpeedScentMultiplier (server/k9profiles.lua's identical
+-- resolver already carries the full "no cross-file `local` import
+-- mechanism" writeup -- not repeated here).
+-- ============================================================================
+
+t.test('CEILING IS GENUINELY CONFIG-DRIVEN: Config.MaxSpeedScentMultiplier = 5.0 accepts 4.9 and rejects 5.1', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        config = { XPTiers = defaultXpTiers(), Features = { HighCommand = true, XPProgression = true }, Database = { enabled = false }, MaxSpeedScentMultiplier = 5.0 },
+    })
+    t.isTrue(f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 2, { speedMultiplier = 4.9 })).ok)
+    advance(f)
+    t.equals(f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 2, { speedMultiplier = 5.1 })).reason, 'invalid_speed_multiplier')
+end)
+
+t.test('CEILING IS GENUINELY CONFIG-DRIVEN: a simulated reboot at Config.MaxSpeedScentMultiplier = 50.0 now accepts 40.0 (would have been rejected under the old hardcoded 3.0)', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        config = { XPTiers = defaultXpTiers(), Features = { HighCommand = true, XPProgression = true }, Database = { enabled = false }, MaxSpeedScentMultiplier = 50.0 },
+    })
+    local result = f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 2, { speedMultiplier = 40.0 }))
+    t.isTrue(result.ok, tostring(result.reason))
+    t.equals(f.config.XPTiers[2].speedMultiplier, 40.0)
+end)
+
+t.test('CEILING: 0, negative, NaN, infinity and a string are each rejected at a NON-DEFAULT ceiling too, and the call never errors (pcall)', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        config = { XPTiers = defaultXpTiers(), Features = { HighCommand = true, XPProgression = true }, Database = { enabled = false }, MaxSpeedScentMultiplier = 5.0 },
+    })
+    local nan = 0 / 0
+    for _, bad in ipairs({ 0, -1, nan, math.huge, -math.huge, 'not a number' }) do
+        advance(f)
+        local ok, result = pcall(f.callbacks['qbx_k9unit:server:xpTiersUpsert'], HC_SOURCE, validPayload(f, 2, { speedMultiplier = bad }))
+        t.isTrue(ok, ('must never throw for speedMultiplier = %s'):format(tostring(bad)))
+        t.isFalse(result.ok)
+        t.equals(result.reason, 'invalid_speed_multiplier', tostring(bad))
+    end
+end)
+
+t.test('CEILING: Config.MaxSpeedScentMultiplier missing entirely falls back to 10.0 with a named warning, never asserts/crashes the file', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end }) -- default config from boot() never sets MaxSpeedScentMultiplier
+    t.isNotNil(f.callbacks['qbx_k9unit:server:xpTiersUpsert'])
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.MaxSpeedScentMultiplier', 1, true) and line:find('10', 1, true) then found = true end
+    end
+    t.isTrue(found, 'a missing Config.MaxSpeedScentMultiplier must print a warning naming the exact setting and the 10.0 fallback')
+
+    t.isTrue(f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 2, { speedMultiplier = 10.0 })).ok)
+    advance(f)
+    t.equals(f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 2, { speedMultiplier = 10.01 })).reason, 'invalid_speed_multiplier')
+end)
+
 t.test('VALIDATION: invalid_medkit_cooldown_multiplier for a present-but-out-of-(0,1]-range value; nil/omitted is always fine', function()
     local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
     t.equals(f.callbacks['qbx_k9unit:server:xpTiersUpsert'](HC_SOURCE, validPayload(f, 3, { medkitCooldownMultiplier = 0 })).reason, 'invalid_medkit_cooldown_multiplier')

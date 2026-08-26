@@ -63,27 +63,59 @@ end
 
 -- Snapshot taken 2026-08-26 -- see this file's own header "HAND-MAINTAINED
 -- FILE LIST" above for the disclosed tradeoff and obligation.
+-- 'announce.lua', 'selfcheck.lua', 'vehicle.lua', 'webhook.lua' added this
+-- pass -- see tests/commandreferenceregistry_spec.lua's matching comment
+-- for the full reasoning (all four register zero commands today; this only
+-- closes the "silently missing FILE" gap class for the future).
+-- 'dogcharacter.lua' (family #2, k9setdog/k9removedog) added alongside that
+-- family's own HIDDEN_ALIAS_COMMANDS entries.
 local SERVER_LUA_FILES = {
-    'admin.lua', 'appearance.lua', 'bonetool.lua', 'certifications.lua', 'certtiers.lua',
-    'combat.lua', 'cooldowns.lua', 'datastore.lua', 'defense.lua', 'entities.lua',
+    'admin.lua', 'announce.lua', 'appearance.lua', 'bonetool.lua', 'certifications.lua', 'certtiers.lua',
+    'combat.lua', 'cooldowns.lua', 'datastore.lua', 'defense.lua', 'dogcharacter.lua', 'entities.lua',
     'equipmentshop.lua', 'events.lua', 'exports.lua', 'fetch.lua', 'findalert.lua',
     'highcommand.lua', 'integrations.lua', 'inventory.lua', 'k9profiles.lua', 'kennel.lua',
     'leaderboard.lua', 'main.lua', 'medkit.lua', 'notify.lua', 'partnership.lua',
     'permissionkeycatalog.lua', 'permissions.lua', 'progression.lua', 'propattachment.lua',
     'pursuitsprint.lua', 'recall.lua', 'runtimecontrol.lua', 'sarcalls.lua', 'scentlineup.lua',
-    'scenttrail.lua', 'search.lua', 'tablet.lua', 'tenure.lua', 'tracking.lua', 'training.lua',
-    'wellbeing.lua', 'xptiers.lua',
+    'scenttrail.lua', 'search.lua', 'selfcheck.lua', 'tablet.lua', 'tenure.lua', 'tracking.lua', 'training.lua',
+    'vehicle.lua', 'webhook.lua', 'wellbeing.lua', 'xptiers.lua',
 }
 
 local CLIENT_LUA_FILES = {
-    'agility.lua', 'appearance.lua', 'audio.lua', 'bonetool.lua', 'combat.lua',
-    'commandsuggestions.lua', 'defense.lua',
+    'agility.lua', 'announce.lua', 'appearance.lua', 'audio.lua', 'bonetool.lua', 'combat.lua',
+    'commandsuggestions.lua', 'dangerwarn.lua', 'defense.lua',
     'equipmentshop.lua', 'exports.lua', 'featureblocks.lua', 'fetch.lua', 'findalert.lua',
     'hud.lua', 'inventory.lua', 'keybinds.lua', 'kennel.lua', 'leashvisual.lua', 'main.lua', 'medkit.lua',
     'movement.lua', 'partnership.lua', 'progression.lua', 'propattachment.lua', 'proximityaudio.lua',
     'pursuitsprint.lua', 'radial.lua', 'recall.lua', 'sarcalls.lua', 'scentlineup.lua',
     'scenttrail.lua', 'screenfx.lua', 'search.lua', 'tablet.lua', 'tracking.lua', 'training.lua',
     'vehicle.lua', 'vision.lua', 'wellbeing.lua',
+}
+
+-- HIDDEN_ALIAS_COMMANDS (COMMAND_CONSOLIDATION_SPEC.md §3) -- old,
+-- single-purpose command names that a command-family merge (§5) folded
+-- into one new canonical command. Each one is STILL a real, live
+-- RegisterCommand(...) call (macros/keybinds/cheat-sheets keep working
+-- forever) -- it is simply no longer chat-suggested or tablet-documented,
+-- so the "real command with no suggestion" check below must not flag it.
+-- A SMALL, EXPLICIT, HAND-MAINTAINED ALLOWLIST, deliberately NOT a
+-- wildcard/pattern -- see the "every allowlisted name must still be REAL"
+-- test immediately below this table for what stops a genuinely removed
+-- command from hiding in here forever instead of being caught.
+local HIDDEN_ALIAS_COMMANDS = {
+    -- family #1: audit (5 -> 1, 'k9audit') -- server/admin.lua
+    k9auditcert = true,
+    k9auditpartner = true,
+    k9auditsearch = true,
+    k9auditxp = true,
+    k9auditdept = true,
+    -- family #2: dog record (2 -> 1, 'k9dog') -- server/dogcharacter.lua
+    k9setdog = true,
+    k9removedog = true,
+    -- family #3: fetch (3 -> 1, 'k9fetch') -- client/fetch.lua
+    k9throwfetchball = true,
+    k9dropfetchball = true,
+    k9recallfetchball = true,
 }
 
 --- Identical shape to tests/commandreferenceregistry_spec.lua's own
@@ -155,7 +187,13 @@ t.test('LOAD-BEARING DRIFT GUARD: every real RegisterCommand(...) name across se
 
     local unsuggested = {}
     for name in pairs(real) do
-        if not suggested[name] then unsuggested[#unsuggested + 1] = name end
+        -- HIDDEN_ALIAS_COMMANDS (COMMAND_CONSOLIDATION_SPEC.md §3): a real,
+        -- live command that a family merge deliberately stopped
+        -- chat-suggesting is not "undocumented", it's hidden on purpose --
+        -- see the allowlist's own header comment and the "every allowlisted
+        -- name must still be real" test below for what keeps this from
+        -- becoming a laundering mechanism for a genuinely dead command.
+        if not suggested[name] and not HIDDEN_ALIAS_COMMANDS[name] then unsuggested[#unsuggested + 1] = name end
     end
 
     local phantom = {}
@@ -194,6 +232,59 @@ t.test('LOAD-BEARING DRIFT GUARD: every real RegisterCommand(...) name across se
     local _, suggestedCount = SortedKeys(suggested)
     t.isTrue(realCount >= 30, ('sanity: only found %d real RegisterCommand name(s) -- expected at least 30'):format(realCount))
     t.isTrue(suggestedCount >= 30, ('sanity: only found %d COMMAND_SUGGESTIONS entr(ies) -- expected at least 30'):format(suggestedCount))
+end)
+
+t.test('HIDDEN_ALIAS_COMMANDS GUARD: every allowlisted name is still a real, live RegisterCommand(...) call somewhere in server/*.lua or client/*.lua', function()
+    -- What this catches: a family merge that later deletes an old command
+    -- entirely (rather than keeping it as a thin forwarding wrapper) must
+    -- be caught by SOME test -- otherwise the allowlist above would quietly
+    -- keep excusing a name that no longer does anything, forever, since the
+    -- main drift guard above only ever complains about a real command with
+    -- no suggestion, never about an allowlisted name that stopped being
+    -- real. Deleting my own guard here and re-running (per this task's own
+    -- "delete your guard and watch it fail" requirement) is the way to
+    -- prove this line actually does something: comment out any one old
+    -- '/k9auditxxx' RegisterCommand call in server/admin.lua and this test
+    -- goes red while the main drift guard above stays green (since the
+    -- allowlist would otherwise silently swallow the gap).
+    local realServer = RealCommandNamesIn('../server', SERVER_LUA_FILES)
+    local realClient = RealCommandNamesIn('../client', CLIENT_LUA_FILES)
+    local real = {}
+    for name in pairs(realServer) do real[name] = true end
+    for name in pairs(realClient) do real[name] = true end
+
+    local phantomAliases = {}
+    for name in pairs(HIDDEN_ALIAS_COMMANDS) do
+        if not real[name] then phantomAliases[#phantomAliases + 1] = name end
+    end
+
+    if #phantomAliases > 0 then
+        table.sort(phantomAliases)
+        error((
+            '%d name(s) in HIDDEN_ALIAS_COMMANDS are NOT a real RegisterCommand(...) call anywhere in server/*.lua ' ..
+            'or client/*.lua: %s.\n\nA genuinely removed command must never keep hiding behind this allowlist -- ' ..
+            'FIX THIS BY: removing the stale entry from HIDDEN_ALIAS_COMMANDS (if the command was truly deleted), ' ..
+            'or restoring its RegisterCommand call (if it was deleted by mistake).'
+        ):format(#phantomAliases, table.concat(phantomAliases, ', ')), 0)
+    end
+end)
+
+t.test('HIDDEN_ALIAS_COMMANDS names never leak back into COMMAND_SUGGESTIONS (a hidden alias must actually stay hidden, not merely be excused from the "undocumented" check)', function()
+    local suggested = ExtractSuggestedCommandNames(ReadFile('../client/commandsuggestions.lua'))
+
+    local leaked = {}
+    for name in pairs(HIDDEN_ALIAS_COMMANDS) do
+        if suggested[name] then leaked[#leaked + 1] = name end
+    end
+
+    if #leaked > 0 then
+        table.sort(leaked)
+        error((
+            '%d name(s) in HIDDEN_ALIAS_COMMANDS still have a COMMAND_SUGGESTIONS entry: %s.\n\nA hidden alias ' ..
+            'must not be chat-suggested -- FIX THIS BY: deleting its COMMAND_SUGGESTIONS entry, or removing it ' ..
+            'from HIDDEN_ALIAS_COMMANDS if it was actually meant to stay a fully first-class, suggested command.'
+        ):format(#leaked, table.concat(leaked, ', ')), 0)
+    end
 end)
 
 t.test('no duplicate command names within COMMAND_SUGGESTIONS (a copy-pasted entry would silently mask a genuinely missing one)', function()

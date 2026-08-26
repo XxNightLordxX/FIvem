@@ -402,13 +402,13 @@ end)
 -- Sanity + happy path
 -- ========================================================================
 
-t.test('feature on: exposes all four globals, registers 3 commands, 4 net events, both onResourceStart/onResourceStop handlers, and 2 threads', function()
+t.test('feature on: exposes all four globals, registers 4 commands (3 hidden aliases + merged k9fetch), 4 net events, both onResourceStart/onResourceStop handlers, and 2 threads', function()
     local f = newFetchFixture()
     t.isNotNil(f.env.RequestThrowFetchBall)
     t.isNotNil(f.env.ReleaseFetchBall)
     t.isNotNil(f.env.RequestRecallFetchBall)
     t.isNotNil(f.env.IsFetchCarryEngaged)
-    t.equals(#f.commands, 3)
+    t.equals(#f.commands, 4, 'k9throwfetchball, k9dropfetchball, k9recallfetchball (hidden aliases) + k9fetch (COMMAND_CONSOLIDATION_SPEC.md #3)')
     t.equals(f.netEventCount(), 4)
     t.isNotNil(f.netEventNames['qbx_k9unit:client:throwFetchBallAt'])
     t.isNotNil(f.netEventNames['qbx_k9unit:client:carryFetchBall'])
@@ -451,6 +451,119 @@ t.test('commands: k9throwfetchball/k9dropfetchball/k9recallfetchball are wired t
     -- not that the command is unwired.
     byName['k9dropfetchball']()
     t.equals(#f.serverEvents, 2, 'ReleaseFetchBall must not send anything while ActiveFetchCarry is nil')
+end)
+
+-- ========================================================================
+-- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #3) -- the merged
+-- '/k9fetch' entry point. Reference implementation for contextual dispatch
+-- across the five families (project-owner-directed mid-pass redirect) --
+-- see this file's own new comment block above RegisterCommand('k9fetch', ...)
+-- in client/fetch.lua for the full design writeup.
+-- ========================================================================
+
+--- @param f table -- newFetchFixture() result
+--- @return fun(...) k9fetch handler
+local function findK9Fetch(f)
+    for _, c in ipairs(f.commands) do
+        if c.name == 'k9fetch' then return c.handler end
+    end
+    error('k9fetch command not registered')
+end
+
+t.test('CONTEXTUAL DISPATCH: bare /k9fetch THROWS when nothing is active (no carry, no thrown ball)', function()
+    local f = newFetchFixture()
+    local k9fetch = findK9Fetch(f)
+
+    k9fetch(nil, {})
+
+    t.equals(#f.serverEvents, 1)
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestThrowFetchBall')
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9fetch RECALLS when this client has an active thrown ball out in the world', function()
+    local f = newFetchFixture()
+    local k9fetch = findK9Fetch(f)
+
+    -- Puts this client into the "I threw one, still active" state via the
+    -- REAL production path (throwFetchBallAt), not a hand-set internal --
+    -- same "drive it through the real net event" discipline the rest of
+    -- this spec already uses.
+    f.dispatchNetEvent('qbx_k9unit:client:throwFetchBallAt', 65535, 10.0, 20.0, 5.0, 1.0, 2.0, 3.0)
+
+    k9fetch(nil, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestRecallFetchBall', 'a client with an active thrown ball must recall, never throw a second one')
+end)
+
+t.test('CONTEXTUAL DISPATCH: bare /k9fetch DROPS when this client is currently carrying the ball', function()
+    local f = newFetchFixture()
+    local k9fetch = findK9Fetch(f)
+
+    f.dispatchNetEvent('qbx_k9unit:client:throwFetchBallAt', 65535, 10.0, 20.0, 5.0, 1.0, 2.0, 3.0)
+    local ballNetId = f.lastServerEvent().args[1]
+    f.dispatchNetEvent('qbx_k9unit:client:carryFetchBall', 65535, ballNetId, 'fake') -- puts this client into ActiveFetchCarry ~= nil via the real net event
+    t.isTrue(f.env.IsFetchCarryEngaged())
+
+    k9fetch(nil, {})
+
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:releaseFetchBall', 'a carrying client must drop, never throw or recall')
+end)
+
+t.test('EXPLICIT OVERRIDE: /k9fetch throw|drop|recall force that exact action regardless of dispatcher-inferred state', function()
+    local f = newFetchFixture()
+    local k9fetch = findK9Fetch(f)
+
+    k9fetch(nil, { 'throw' })
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestThrowFetchBall')
+
+    k9fetch(nil, { 'recall' })
+    t.equals(f.lastServerEvent().event, 'qbx_k9unit:server:requestRecallFetchBall')
+
+    -- 'drop' while NOT carrying -- forces ReleaseFetchBall() the same as
+    -- the old k9dropfetchball alias does, which itself correctly no-ops.
+    local eventsBefore = #f.serverEvents
+    k9fetch(nil, { 'drop' })
+    t.equals(#f.serverEvents, eventsBefore, 'ReleaseFetchBall must still no-op with no active carry, even via the explicit override')
+end)
+
+t.test('GATE NEVER WIDENED BY THE MERGE: bare /k9fetch (throw branch) still refuses without HasK9Access, identically to /k9throwfetchball', function()
+    local f = newFetchFixture()
+    local k9fetch = findK9Fetch(f)
+    f.setHasK9Access(false)
+
+    k9fetch(nil, {})
+
+    t.equals(#f.serverEvents, 0, 'no throw request must reach the server for an unauthorized caller')
+    t.equals(f.denyCallCount(), 1)
+end)
+
+t.test('GATE NEVER WIDENED BY THE MERGE: explicit /k9fetch throw ALSO refuses without HasK9Access, identically to /k9throwfetchball', function()
+    local f = newFetchFixture()
+    local k9fetch = findK9Fetch(f)
+    f.setHasK9Access(false)
+
+    k9fetch(nil, { 'throw' })
+
+    t.equals(#f.serverEvents, 0)
+    t.equals(f.denyCallCount(), 1)
+end)
+
+t.test('NO-ARGUMENT DISCOVERABILITY / unrecognized word: an argument that is not throw/drop/recall notifies the usage string instead of guessing', function()
+    local f = newFetchFixture()
+    local k9fetch = findK9Fetch(f)
+
+    k9fetch(nil, { 'bogus' })
+
+    t.equals(#f.serverEvents, 0, 'an unrecognized word must never fall through to a guessed action')
+    t.equals(f.lastNotify().description, locale('fetch.usage_k9fetch'))
+end)
+
+t.test('CONFIRMATION NAMES THE DECISION: the bare contextual dispatch notifies which action it picked before firing it', function()
+    local f = newFetchFixture()
+    local k9fetch = findK9Fetch(f)
+
+    k9fetch(nil, {})
+    t.equals(f.notifyCalls[1].description, locale('fetch.contextual_throwing'))
 end)
 
 t.test('throwFetchBallAt: happy path -- creates the ball, applies a forceType-3 impulse, reports the netId back', function()

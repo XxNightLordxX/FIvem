@@ -568,6 +568,7 @@ local FEATURE_TIERS = {
     FearStressSystem       = { tier = 'live' },
     DistractionSystem      = { tier = 'live' },
     InjuryLimping          = { tier = 'live' },
+    HungerThirstSystem     = { tier = 'live', note = 'server/wellbeing.lua has no raw top-level gate for this. The shared tick thread runs unconditionally and re-checks Config.Features.HungerThirstSystem fresh on every tick before decaying hunger/thirst, and each of feedK9Hunger/giveK9Water/drinkFromBowl opens with its own "if not Config.Features.HungerThirstSystem then return end" on every single invocation -- genuinely live in both directions, with no partial-liveness caveat (same shape as ScentVision above).' },
     PartnershipTenureBonus = { tier = 'live', note = 'The milestone check itself re-verifies HandlerPartnership/XPProgression/PartnershipTenureBonus fresh every tick. The tick thread only starts if all three were already true when server/tenure.lua loaded -- if it was off at boot, turning it on mid-session has nothing polling to notice a milestone until this resource restarts.' },
     -- ADDED 2026-08-26 (closing the 11-feature audit gap -- see header "UPDATED 2026-08-26"):
     FindAlerts             = { tier = 'live', note = 'server/findalert.lua registers both AddEventHandlers (qbx_k9unit:events:searchCompleted, qbx_k9unit:server:reportTrackSourceArrival) unconditionally at file-load time -- no raw top-level gate exists in this file at all. The shared DispatchFindAlertReaction helper both handlers funnel through re-checks Config.Features.FindAlerts fresh on every single call (its own first line: "if not Config.Features.FindAlerts then return end -- real no-op, not just hidden"), so toggling this off/on stops/starts the bark-on-find reaction genuinely and immediately, with nothing captured once at registration time.' },
@@ -1062,6 +1063,40 @@ do
 end
 
 -- ======================================================================
+-- OWNER-EDITABLE CEILING for PursuitSprint.speedMultiplier's own `max`
+-- field below (Part A of the owner's "keep the speed and stamina editing
+-- where i can edit it to as high as i want" request). Was a hardcoded
+-- 3.0; now read fresh from config.lua's `Config.MaxSpeedScentMultiplier`
+-- at this file's own load time (Config is guaranteed already fully
+-- populated by this point -- see "FXMANIFEST PLACEMENT" above).
+-- ======================================================================
+
+--- Owner-editable ceiling for speedMultiplier/scentRangeMultiplier, read
+--- fresh from config.lua at this file's own load time. CLAMPS AND WARNS,
+--- never asserts -- a bare top-level `assert` on a value an OPERATOR can
+--- reach (a mistyped config.lua) would silently abort every registration
+--- in THIS FILE from that point on, for the rest of this resource's
+--- uptime -- see server/cooldowns.lua's own ResolveConfiguredThresholdMs
+--- doc comment for the incident this mirrors. Falls back to 10.0
+--- (config.lua's own shipped default) for anything that is not a real,
+--- positive, finite number: missing, non-numeric, NaN, infinity, zero, or
+--- negative. Duplicated in server/xptiers.lua and server/k9profiles.lua
+--- rather than shared -- this resource's established "no cross-file
+--- `local` import mechanism" convention (see server/k9profiles.lua's own
+--- header, "BOUNDS -- REUSED, NOT REINVENTED").
+--- @return number
+local function ResolveMaxSpeedScentMultiplier()
+    local fallback = 10.0
+    local raw = Config and Config.MaxSpeedScentMultiplier
+    local value = tonumber(raw)
+    if value == nil or value ~= value or value == math.huge or value == -math.huge or value <= 0 then
+        print(('[qbx_k9unit] runtimecontrol: Config.MaxSpeedScentMultiplier is missing or not a valid positive number (found: %s). Using the built-in fallback of %s instead -- find Config.MaxSpeedScentMultiplier in config.lua and set it to a positive number.'):format(tostring(raw), tostring(fallback)))
+        return fallback
+    end
+    return value
+end
+
+-- ======================================================================
 -- TUNABLE REGISTRY -- explicit allowlist. See header "PART 1B" for the
 -- three exclusion rules this list was built under. `path` navigates the
 -- global `Config` table; `integer = true` additionally requires a whole
@@ -1167,15 +1202,23 @@ local TUNABLE_REGISTRY = {
     -- floor of 1.0 keeps a "boost" from ever becoming a same-or-worse-than-
     -- baseline slow (a non-positive/zero multiplier is refused outright by
     -- this file's own [min,max] check below, same discipline this task
-    -- itself named as non-negotiable); its ceiling of 3.0 is generous
-    -- headroom for an operator, made SAFE regardless of how high it is set
-    -- by infrastructure that predates this tunable entirely --
+    -- itself named as non-negotiable); its ceiling was a hardcoded 3.0,
+    -- now OWNER-EDITABLE (this pass, coder-backend) via the SAME
+    -- `Config.MaxSpeedScentMultiplier` server/xptiers.lua and
+    -- server/k9profiles.lua each read through their own identical
+    -- ResolveMaxSpeedScentMultiplier resolver, resolved once at this
+    -- file's own load time via THIS file's own local copy of that
+    -- resolver (see it declared immediately above TUNABLE_REGISTRY).
+    -- Raising it is made SAFE regardless of how high it is set by
+    -- infrastructure that predates this tunable entirely --
     -- client/movement.lua's RecomputeK9MoveRate() clamps the PRODUCT of
     -- every active move-rate modifier to [0.1, 2.0] (that file's own "CLAMP
     -- RANGE" header), so this tunable can never itself become the vector for
     -- an unbounded speed (see this file's own pursuitsprint.lua header, "THE
     -- BALANCE PROBLEM", for the full worst-case arithmetic, unchanged by
-    -- this tunable's existence). durationMs's floor of 500ms keeps a "short
+    -- this tunable's existence) -- see Config.MaxSpeedScentMultiplier's own
+    -- comment in config.lua for the plain-English version of that same
+    -- disclosure. durationMs's floor of 500ms keeps a "short
     -- burst" from ever being misread as instant/zero-duration (this file's
     -- own [min,max] check refuses a non-positive value outright -- the
     -- "does 0 mean instant or forever" ambiguity this task warns against is
@@ -1192,7 +1235,7 @@ local TUNABLE_REGISTRY = {
     -- re-read Config again regardless). cooldownMs remains EXCLUDED (baked
     -- into PursuitCooldown's own NewCooldown constructor).
     ['PursuitSprint.requestRangeMeters']        = { path = { 'PursuitSprint', 'requestRangeMeters' },            min = 5.0,   max = 100.0,     integer = false },
-    ['PursuitSprint.speedMultiplier']           = { path = { 'PursuitSprint', 'speedMultiplier' },                min = 1.0,   max = 3.0,       integer = false },
+    ['PursuitSprint.speedMultiplier']           = { path = { 'PursuitSprint', 'speedMultiplier' },                min = 1.0,   max = ResolveMaxSpeedScentMultiplier(), integer = false },
     ['PursuitSprint.durationMs']                = { path = { 'PursuitSprint', 'durationMs' },                     min = 500,   max = 30000,     integer = true },
 
     -- server/sarcalls.lua (Config.Features.SARCalls, rawtoplevel).

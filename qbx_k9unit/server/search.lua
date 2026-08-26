@@ -493,13 +493,86 @@ SearchCooldown.RegisterPlayerDropped()
 -- string key, same staleness rule/interval, behavior unchanged.
 local TargetSearchCooldown = NewCooldown()
 
--- Precomputed set of configured contraband item names, built once at file
--- load (config.lua is a shared_script loaded before this file). O(1)
--- membership test instead of re-scanning Config.SearchContrabandItems per
--- inventory slot.
-local ContrabandItemSet = {}
-for _, itemName in ipairs(Config.SearchContrabandItems) do
-    ContrabandItemSet[itemName] = true
+-- Precomputed contraband item info, built once at file load (config.lua is
+-- a shared_script loaded before this file). O(1) lookup instead of
+-- re-scanning Config.SearchContrabandItems per inventory slot.
+--
+-- SPECIALIZATION CATEGORIES (owner-directed decluttering pass, 2026-08-26 --
+-- see Config.SearchContrabandItems' own config.lua comment for the full
+-- plain-English writeup). Config.SearchContrabandItems now mixes TWO entry
+-- shapes in one table -- a plain array entry (`'weed_bud'`, integer key,
+-- string value: UNCATEGORISED) and a keyed entry
+-- (`coke_brick = 'narcotics'`, string key, string value: CATEGORISED by a
+-- Config.K9Specializations key) -- iterating with a single `pairs()` pass
+-- below naturally handles both without needing two separate loops: Lua's
+-- `pairs()` visits every key regardless of whether it came from the
+-- table's array part or its hash part, and `type(key)` alone tells the two
+-- shapes apart unambiguously (a plain array's own keys are ALWAYS the
+-- integers 1..n).
+--
+-- `ContrabandItemInfo[itemName] = { category = nil }` -- uncategorised,
+-- found by every K9 with search access (the pre-existing behavior, and the
+-- shipped default's own shape, so an upgrading server's results do not
+-- change until an owner deliberately categorises an item).
+-- `ContrabandItemInfo[itemName] = { category = 'narcotics' }` -- found
+-- only by a searcher who currently holds that Config.K9Specializations key
+-- (HasSpecialization, resolved per-request in HandleSearchTarget below).
+--
+-- CLAMP AND WARN (never assert -- a bare top-level assert in this codebase
+-- kills every registration below it silently for the whole server uptime):
+-- a keyed entry naming a category that is not a real Config.K9Specializations
+-- key degrades to UNCATEGORISED (found by everyone) with one console
+-- warning, rather than erroring or silently vanishing from the contraband
+-- list entirely -- an unfindable-by-anyone item would be a much worse
+-- failure mode for a search-and-detection feature than one that is simply
+-- less selective than the (malformed) config asked for.
+local ContrabandItemInfo = {}
+do
+    local knownSpecializations = type(Config.K9Specializations) == 'table' and Config.K9Specializations or {}
+    local rawList = type(Config.SearchContrabandItems) == 'table' and Config.SearchContrabandItems or {}
+    for key, value in pairs(rawList) do
+        if type(key) == 'number' then
+            -- Array entry: `value` is the item name, uncategorised.
+            if type(value) == 'string' then
+                ContrabandItemInfo[value] = { category = nil }
+            end
+        elseif type(key) == 'string' then
+            -- Keyed entry: `key` is the item name, `value` is the category.
+            if type(value) == 'string' and knownSpecializations[value] ~= nil then
+                ContrabandItemInfo[key] = { category = value }
+            else
+                print(('[qbx_k9unit] WARNING: Config.SearchContrabandItems[%q] names category %q, which is not a key in Config.K9Specializations -- treating %q as UNCATEGORISED (found by every K9 with search access) instead. Fix Config.SearchContrabandItems or Config.K9Specializations in config.lua to silence this warning.'):format(key, tostring(value), key))
+                ContrabandItemInfo[key] = { category = nil }
+            end
+        end
+    end
+end
+
+--- Resolves the set of Config.K9Specializations categories `citizenid`
+--- currently holds (HasSpecialization, server/certifications.lua -- carries
+--- that function's own High Command bypass). Used to scope
+--- SumContrabandWeight below to only the CATEGORISED items this specific
+--- searcher is entitled to, on top of the UNCATEGORISED baseline every K9
+--- always gets (see ContrabandItemInfo's own header for the full,
+--- deliberately monotonic design -- there is no "holds nothing -> counts
+--- everything" fallback here: an empty/absent set here simply means zero
+--- categorised items count, which is exactly correct, since uncategorised
+--- items are never gated by this set at all).
+--- @param citizenid string?
+--- @param jobName string?
+--- @return table<string, boolean> heldCategories
+local function ResolveHeldContrabandCategoriesForCitizenId(citizenid, jobName)
+    local held = {}
+    if type(HasSpecialization) ~= 'function' or type(citizenid) ~= 'string' then
+        return held -- soft dependency, this resource's established convention -- no specialization data available, so no categorised item can ever match (uncategorised items are unaffected -- see this function's own doc comment)
+    end
+    local knownSpecializations = type(Config.K9Specializations) == 'table' and Config.K9Specializations or {}
+    for specKey in pairs(knownSpecializations) do
+        if HasSpecialization(citizenid, jobName, specKey) then
+            held[specKey] = true
+        end
+    end
+    return held
 end
 
 -- Container recursion depth cap (DEVELOPER_REFERENCE.md#contraband-search §2 —
@@ -522,13 +595,21 @@ local MAX_CONTAINER_RECURSION_DEPTH = 3
 --- @param inventoryId string|number -- needed to resolve child containers via GetContainerFromSlot
 --- @param items table<number, table>? -- GetInventoryItems' return shape
 --- @param depth number -- 1 for the initial top-level call
+--- @param heldCategories table<string, boolean> -- ResolveHeldContrabandCategoriesForCitizenId's result for THIS searcher, reused unchanged across every recursive call so a category held/not-held decision can never drift mid-scan
 --- @return number totalWeight
-local function SumContrabandWeight(inventoryId, items, depth)
+local function SumContrabandWeight(inventoryId, items, depth, heldCategories)
     local total = 0
     if not items then return total end
 
     for _, slot in pairs(items) do
-        if ContrabandItemSet[slot.name] then
+        -- SPECIALIZATION-SCOPED (owner-directed decluttering pass,
+        -- 2026-08-26) -- see ContrabandItemInfo's own header for the full
+        -- writeup. An UNCATEGORISED item (`info.category == nil`) always
+        -- counts, for every searcher, no matter what heldCategories
+        -- contains -- this is the monotonic baseline. A CATEGORISED item
+        -- only counts if `heldCategories` contains that exact category key.
+        local info = ContrabandItemInfo[slot.name]
+        if info and (info.category == nil or heldCategories[info.category]) then
             total = total + (slot.weight or 0)
         end
 
@@ -548,7 +629,7 @@ local function SumContrabandWeight(inventoryId, items, depth)
                 return K9Compat.Get('inventory').GetContainerFromSlot(inventoryId, slot.slot)
             end)
             if containerOk and containerInv and containerInv.items then
-                total = total + SumContrabandWeight(containerInv.id or inventoryId, containerInv.items, depth + 1)
+                total = total + SumContrabandWeight(containerInv.id or inventoryId, containerInv.items, depth + 1, heldCategories)
             end
         end
     end
@@ -1696,7 +1777,19 @@ local function HandleSearchTarget(source, targetType, targetNetId, requestedAt)
     -- in the callback registration below, which would report the same
     -- search_failed reason to the caller but WITHOUT an audit row, even
     -- though the inventory was, in fact, read.
-    local sumOk, totalWeight = pcall(SumContrabandWeight, inventoryId, items, 1)
+    -- SPECIALIZATION-SCOPED (owner-directed decluttering pass, 2026-08-26)
+    -- -- resolved fresh, right before the scan it gates, from the SEARCHER's
+    -- (`source`) own server-held PlayerData -- never a client-supplied
+    -- value of any kind. Reuses `searcherCitizenidMidFlight` (already
+    -- resolved a few lines above for the SearchZones permission re-check)
+    -- rather than resolving the citizenid a second time; jobName has no
+    -- existing local to reuse, so it's resolved here directly.
+    local searcherPlayerForCategories = exports.qbx_core:GetPlayer(source)
+    local searcherJobNameForCategories = searcherPlayerForCategories and searcherPlayerForCategories.PlayerData
+        and searcherPlayerForCategories.PlayerData.job and searcherPlayerForCategories.PlayerData.job.name
+    local heldContrabandCategories = ResolveHeldContrabandCategoriesForCitizenId(searcherCitizenidMidFlight, searcherJobNameForCategories)
+
+    local sumOk, totalWeight = pcall(SumContrabandWeight, inventoryId, items, 1, heldContrabandCategories)
     if not sumOk then
         LogSearchAttempt(source, targetType, plate, citizenid, 'search_failed', nil, nil)
         return { ok = false, reason = 'search_failed' }

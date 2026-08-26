@@ -1231,17 +1231,71 @@ end
 --- @param key string -- a Config.Features key
 --- @param hasK9Access boolean -- already resolved for the relevant person (caller or target)
 --- @param activePermSet table<string, boolean> -- that SAME person's active k9_permissions rows
+--- @param isHighCommandBypass boolean? -- OPTIONAL, pre-resolved by the caller (mirrors ResolveEffectivePermissions's own `isHighCommandCaller` parameter shape) -- see this function's own header comment below for the full "displayed state, not the underlying record" reasoning
 --- @return string -- 'global_off' | 'blocked' | 'not_certified' | 'requires_grant_missing' | 'available'
-local function ResolveFeatureState(key, hasK9Access, activePermSet)
-    if not (Config.Features and Config.Features[key] == true) then return 'global_off' end
-    if activePermSet['block.' .. key] == true then return 'blocked' end
-    if not hasK9Access then return 'not_certified' end
+--- DISPLAY-GAP FIX (this pass): high command already implicitly holds
+--- every permission/feature/K9 upgrade -- LegacyOrHighCommandStillQualifies
+--- and this file's own ResolveEffectivePermissions have resolved that for
+--- the four admin-capability keys for a long time. This function did NOT:
+--- it read `activePermSet` (the raw k9_permissions GRANT SNAPSHOT) and
+--- `hasK9Access` (the raw certification/grant-derived access flag) alone,
+--- so a genuinely high-command officer with no PERSONAL certification or
+--- 'feature.<Name>' grant saw their own real abilities reported
+--- 'not_certified'/'requires_grant_missing' -- UNDER-reporting their real
+--- authority, the wrong direction of wrong, but still wrong (it reads as
+--- a broken feature, not a working one, and invites turning on a grant
+--- that was never needed).
+---
+--- `isHighCommandBypass` is a DISPLAY-ONLY overlay, computed by each call
+--- site from server/permissions.lua's own IsHighCommandBypassCitizenId
+--- (soft dependency, see BuildMyFeaturesArray/BuildPersonFeaturesArray
+--- below for exactly how each resolves it) -- NEVER derived here, and
+--- NEVER written back into k9_permissions: `activePermSet` above stays
+--- the untouched, real k9_permissions snapshot every other consumer of
+--- QueryActivePermissionSet (ListActivePermissionsForCitizenId, etc.)
+--- still reads -- this function changes only the STRING this ONE response
+--- reports for `state`, never the ground truth GetXP/GetXPTier/
+--- GetHandlerXPTier or the permission rows themselves reflect (those stay
+--- deliberately pure -- real earned XP, real held grants, nothing
+--- fabricated).
+---
+--- ORDER MATTERS: 'global_off' and 'blocked' are checked BEFORE the
+--- bypass, and 'blocked' explicitly SHORT-CIRCUITS it -- the owner's own
+--- explicit carve-out ("an explicit block.<Name> still beats high
+--- command, always") is the ONE lever he has to restrain one specific
+--- person without demoting them, and this fix must never quietly take
+--- that away. A globally-disabled feature likewise stays 'global_off' for
+--- everyone, high command included -- rank does not turn a server-wide
+--- switch back on.
+--- @return string state
+--- @return boolean viaHighCommand -- true ONLY when `state` came back
+--- 'available' AND the ordinary (non-bypass) path would NOT have reached
+--- 'available' on its own -- i.e. this specific person's real, personal
+--- access/grant is NOT what makes this row usable right now, their rank
+--- is. `false` for every other state, AND for an 'available' row this
+--- person would have earned honestly regardless (real K9 access, and
+--- either no grant required or a real grant held) -- a high-command
+--- officer who ALSO happens to hold the real grant is not shown as
+--- "via rank" for something they were never missing in the first place.
+--- BuildPersonFeaturesArray surfaces this as its own `viaHighCommand`
+--- field for html/tablet.js's subtle per-row marker; BuildMyFeaturesArray
+--- does not forward it at all (myFeatures[] carries no granted/
+--- requiresGrant detail to contextualize it against, and this is far
+--- less likely to confuse the high-command viewer about their OWN screen
+--- than about someone else's).
+local function ResolveFeatureState(key, hasK9Access, activePermSet, isHighCommandBypass)
+    if not (Config.Features and Config.Features[key] == true) then return 'global_off', false end
+    if activePermSet['block.' .. key] == true then return 'blocked', false end
 
     local requireGrant = type(Config.FeatureControl) == 'table' and type(Config.FeatureControl.RequireGrant) == 'table'
         and Config.FeatureControl.RequireGrant[key] == true
-    if requireGrant and activePermSet['feature.' .. key] ~= true then return 'requires_grant_missing' end
+    local hasGrant = activePermSet['feature.' .. key] == true
+    local ordinarilyAvailable = hasK9Access and (not requireGrant or hasGrant)
 
-    return 'available'
+    if ordinarilyAvailable then return 'available', false end
+    if isHighCommandBypass == true then return 'available', true end
+    if not hasK9Access then return 'not_certified', false end
+    return 'requires_grant_missing', false
 end
 
 -- ======================================================================
@@ -1337,6 +1391,7 @@ local FEATURE_DOMAINS = {
     InjuryLimping      = 'wellbeing',
     HealthStaminaHUD   = 'wellbeing',
     K9DownDispatch     = 'wellbeing',
+    HungerThirstSystem = 'wellbeing',
 
     -- 'progression' -- XP, certification, and the handler/K9 partnership
     -- record that progression is tracked against.
@@ -1411,8 +1466,9 @@ end
 --- MyRecordResult's own `myFeatures` shape.
 --- @param hasK9Access boolean
 --- @param activePermSet table<string, boolean>
+--- @param isHighCommandBypass boolean? -- see ResolveFeatureState's own doc comment. Callers of THIS function already have a live, correctly-scoped `IsHighCommand(source)` answer for the CALLER's own current job (tabletRequestMyRecord's own `isHighCommandCaller`) -- passed straight through, never re-derived via IsHighCommandBypassCitizenId here, since a fresh IsHighCommand(source) call is strictly more accurate than re-resolving the SAME online caller by citizenid a second time.
 --- @return table
-local function BuildMyFeaturesArray(hasK9Access, activePermSet)
+local function BuildMyFeaturesArray(hasK9Access, activePermSet, isHighCommandBypass)
     local out = {}
     for i, key in ipairs(ListFeatureKeys()) do
         out[i] = {
@@ -1420,7 +1476,7 @@ local function BuildMyFeaturesArray(hasK9Access, activePermSet)
             label = nil,     -- html/tablet.js's own DEFAULT_STRINGS humanizes an absent label client-side
             category = ResolveFeatureDomain(key),
             actionable = IsKnownActionableFeature(key),
-            state = ResolveFeatureState(key, hasK9Access, activePermSet),
+            state = ResolveFeatureState(key, hasK9Access, activePermSet, isHighCommandBypass),
         }
     end
     return out
@@ -1429,15 +1485,26 @@ end
 --- PersonFeaturesResult's own `features` shape -- HIGH COMMAND ONLY, richer
 --- per-row detail than myFeatures (globallyEnabled/requiresGrant/granted/
 --- blocked, alongside the same resolved `state`).
+---
+--- `granted`/`blocked`/`globallyEnabled`/`requiresGrant` below are ALL
+--- left reading `activePermSet`/`Config.Features` directly, UNCHANGED by
+--- `isHighCommandBypass` -- see ResolveFeatureState's own doc comment:
+--- this is a DISPLAYED-STATE overlay only, never a fabricated grant row.
+--- An operator reviewing a high-command TARGET with no personal
+--- 'feature.<Name>' grant still sees `granted: false` (the honest,
+--- factual record) alongside `state: 'available'` (the honest, factual
+--- REASON it works anyway) -- both true at once, neither one lying.
 --- @param hasK9Access boolean
 --- @param activePermSet table<string, boolean>
+--- @param isHighCommandBypass boolean? -- see ResolveFeatureState's own doc comment. Resolved by tabletRequestPersonFeatures for the TARGET specifically (server/permissions.lua's IsHighCommandBypassCitizenId, soft dependency) -- this is the TARGET's own rank, not the viewing high-command caller's; two high-command officers looking at a THIRD, non-high-command handler must see that handler's real, ungranted state, not their own.
 --- @return table
-local function BuildPersonFeaturesArray(hasK9Access, activePermSet)
+local function BuildPersonFeaturesArray(hasK9Access, activePermSet, isHighCommandBypass)
     local requireGrantTable = (type(Config.FeatureControl) == 'table' and type(Config.FeatureControl.RequireGrant) == 'table')
         and Config.FeatureControl.RequireGrant or {}
 
     local out = {}
     for i, key in ipairs(ListFeatureKeys()) do
+        local state, viaHighCommand = ResolveFeatureState(key, hasK9Access, activePermSet, isHighCommandBypass)
         out[i] = {
             key = key,
             label = nil,
@@ -1446,7 +1513,14 @@ local function BuildPersonFeaturesArray(hasK9Access, activePermSet)
             requiresGrant = requireGrantTable[key] == true,
             granted = activePermSet['feature.' .. key] == true,
             blocked = activePermSet['block.' .. key] == true,
-            state = ResolveFeatureState(key, hasK9Access, activePermSet),
+            state = state,
+            -- SUBTLE MARKER (owner-directed, "why can this person do
+            -- that" should be answerable at a glance, not by reading two
+            -- fields) -- see ResolveFeatureState's own doc comment for the
+            -- exact "would this row have been available anyway" contract.
+            -- Always `false` for a granted/globally-off/blocked/genuinely-
+            -- certified row -- never a second way to say "available".
+            viaHighCommand = viaHighCommand,
             blockEnforcement = ResolveBlockEnforcement(key), -- see this file's own "BLOCK ENFORCEMENT CLASSIFICATION" section above
         }
     end
@@ -1625,7 +1699,14 @@ lib.callback.register('qbx_k9unit:server:tabletRequestMyRecord', function(source
         certifications = EnrichCertificationsWithGrantedByName(BuildCertificationsArray(citizenid)),
         xp = xp,
         tierLabel = tierLabel,
-        myFeatures = BuildMyFeaturesArray(hasK9Access, activePermSet),
+        -- isHighCommandCaller is already a FRESH, correctly-job-scoped
+        -- IsHighCommand(source) answer for this exact caller (computed
+        -- above) -- reused verbatim as the DISPLAY-STATE bypass rather
+        -- than re-resolving the same online citizenid a second time via
+        -- IsHighCommandBypassCitizenId. See ResolveFeatureState's own doc
+        -- comment for the full "why", and BuildPersonFeaturesArray's own
+        -- call site below for the OFFLINE-capable sibling case.
+        myFeatures = BuildMyFeaturesArray(hasK9Access, activePermSet, isHighCommandCaller),
         -- `partnership` -- CLOSES A REAL GAP: tabletRequestPersonSummary (the
         -- high-command-only lookup path, CALLBACK 3) has called
         -- ResolvePartnershipInfo(targetCitizenId) since that callback
@@ -2179,11 +2260,24 @@ lib.callback.register('qbx_k9unit:server:tabletRequestPersonFeatures', function(
 
     local activePermSet = QueryActivePermissionSet(targetCitizenId)
     local hasK9Access = ResolveTargetHasK9Access(targetCitizenId, activePermSet)
+    -- DISPLAY-GAP FIX (this pass) -- the TARGET's OWN rank, not the
+    -- viewing high-command caller's: soft dependency on
+    -- server/permissions.lua's IsHighCommandBypassCitizenId, which itself
+    -- resolves `false` for an OFFLINE target, unconditionally and by
+    -- design (see that function's own doc comment) -- never "improved"
+    -- here. No `expectedJobName` is passed: Config.Features abilities are
+    -- not scoped to one department the way a specific certification tier
+    -- is (HasK9Access/ResolveTargetHasK9Access just above are equally
+    -- job-agnostic for the identical reason), so the target's own
+    -- CURRENT job, whatever it is, is the only one that could ever be
+    -- relevant here.
+    local targetIsHighCommandBypass = type(IsHighCommandBypassCitizenId) == 'function'
+        and IsHighCommandBypassCitizenId(targetCitizenId) == true
 
     return {
         ok = true,
         target = { citizenid = targetCitizenId, name = ResolveDisplayName(targetCitizenId) },
-        features = BuildPersonFeaturesArray(hasK9Access, activePermSet),
+        features = BuildPersonFeaturesArray(hasK9Access, activePermSet, targetIsHighCommandBypass),
     }
 end)
 

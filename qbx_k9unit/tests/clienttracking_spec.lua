@@ -266,6 +266,16 @@ local function newTrackingFixture(opts)
     local blockedFeatures = opts.blockedFeatures or {}
     local function IsK9FeatureBlocked(name) return blockedFeatures[name] == true end
 
+    -- 'k9track' chat command (owner-directed decluttering pass, 2026-08-26)
+    -- -- client/tracking.lua now calls RegisterCommand once, at file-load
+    -- time, for the merged action's command half. Captured (not merely
+    -- stubbed to a no-op) so a test can assert on it if it ever needs to --
+    -- mirrors every other capturing-stub in this fixture.
+    local registeredCommands = {}
+    local function RegisterCommand(name, fn, restricted)
+        registeredCommands[name] = { fn = fn, restricted = restricted }
+    end
+
     local overrides = {
         HasK9Access = HasK9Access,
         DenyK9UIAccess = DenyK9UIAccess,
@@ -281,6 +291,7 @@ local function newTrackingFixture(opts)
         GetGameTimer = GetGameTimer,
         CreateThread = runner.CreateThread,
         Wait = runner.Wait,
+        RegisterCommand = RegisterCommand,
     }
     if featureBlocksAvailable then
         overrides.IsK9FeatureBlocked = IsK9FeatureBlocked
@@ -368,6 +379,16 @@ local function newTrackingFixture(opts)
             assert(gameEventHandler, 'client/tracking.lua did not register a gameEventTriggered handler')
             gameEventHandler(eventName, data)
         end,
+
+        --- 'k9track' chat command (owner-directed decluttering pass,
+        --- 2026-08-26) -- dispatches the real captured RegisterCommand
+        --- handler, mirroring every other capturing-stub `dispatch` helper
+        --- in this fixture.
+        runK9TrackCommand = function()
+            local entry = assert(registeredCommands['k9track'], 'client/tracking.lua did not register the k9track command')
+            entry.fn()
+        end,
+        registeredCommands = registeredCommands,
     }
 end
 
@@ -461,6 +482,68 @@ t.test('StartBloodTrack / StartGunpowderTrack: each sends its OWN trackType, not
     fGun.env.StartGunpowderTrack()
     t.equals(fGun.env.GetActiveTrackType(), 'gunpowder')
     t.equals(fGun.lastCallbackCall().args[1], 'gunpowder')
+end)
+
+-- ========================================================================
+-- StartCertifiedTrack() -- THE ONE MERGED ACTION (owner-directed
+-- decluttering pass, 2026-08-26). Calls the NEW
+-- 'qbx_k9unit:server:findNearestTrackableSource' callback with NO
+-- trackType argument at all, and reads WHICH type matched from the
+-- server's own response (`result.trackType`) -- this file must never
+-- decide the type itself, per this pass's own "the server resolves which
+-- types apply, the client must not decide this" requirement.
+-- ========================================================================
+
+t.test('StartCertifiedTrack: calls findNearestTrackableSource with NO trackType argument, and sets GetActiveTrackType() from the SERVER response', function()
+    local f = newTrackingFixture()
+    f.queueCallbackResponse({ found = true, trackType = 'blood', coords = vec3(1, 0, 0) })
+    f.env.StartCertifiedTrack()
+
+    t.equals(f.lastCallbackCall().event, 'qbx_k9unit:server:findNearestTrackableSource')
+    t.equals(#f.lastCallbackCall().args, 0, 'the merged callback must be called with no trackType argument -- the server decides, never this file')
+    t.isTrue(f.env.IsTracking())
+    t.equals(f.env.GetActiveTrackType(), 'blood', 'the resolved track type must come from the SERVER response, not be guessed/hardcoded client-side')
+end)
+
+t.test('StartCertifiedTrack: a DIFFERENT server-resolved trackType on a different call is honored just as faithfully -- this file never hardcodes one', function()
+    local f = newTrackingFixture()
+    f.queueCallbackResponse({ found = true, trackType = 'gunpowder', coords = vec3(1, 0, 0) })
+    f.env.StartCertifiedTrack()
+    t.equals(f.env.GetActiveTrackType(), 'gunpowder')
+end)
+
+t.test('StartCertifiedTrack: result.found == false notifies tracking.nothing_to_track and leaves IsTracking() false, exactly like the single-type path', function()
+    local f = newTrackingFixture()
+    f.queueCallbackResponse({ found = false })
+    f.env.StartCertifiedTrack()
+    t.isFalse(f.env.IsTracking())
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('tracking.nothing_to_track'))
+end)
+
+t.test('StartCertifiedTrack: a malformed/unrecognized result.trackType from the server is treated as not-found, never wedges trackingState into an invalid type', function()
+    local f = newTrackingFixture()
+    f.queueCallbackResponse({ found = true, trackType = 'not_a_real_type', coords = vec3(1, 0, 0) })
+    f.env.StartCertifiedTrack()
+    t.isFalse(f.env.IsTracking())
+    t.equals(#f.notifyCalls, 1)
+    t.equals(f.notifyCalls[1].description, locale('tracking.nothing_to_track'))
+end)
+
+t.test('StartCertifiedTrack: HasK9Access() false denies access and never even calls the server callback', function()
+    local f = newTrackingFixture({ hasK9Access = false })
+    f.env.StartCertifiedTrack()
+    t.equals(f.callbackCallCount(), 0)
+    t.equals(f.denyCallCount(), 1)
+end)
+
+t.test("k9track chat command: dispatches straight to StartCertifiedTrack -- same callback, same behavior, no logic of its own", function()
+    local f = newTrackingFixture()
+    f.queueCallbackResponse({ found = true, trackType = 'scent', coords = vec3(1, 0, 0) })
+    f.runK9TrackCommand()
+    t.equals(f.lastCallbackCall().event, 'qbx_k9unit:server:findNearestTrackableSource')
+    t.isTrue(f.env.IsTracking())
+    t.equals(f.env.GetActiveTrackType(), 'scent')
 end)
 
 t.test('StartScentTrack: result.found == false notifies tracking.nothing_to_track and leaves IsTracking() false', function()

@@ -1432,6 +1432,113 @@ end
 ---     lower-stakes than leash (cosmetic only) but explicitly undecided;
 ---     not implemented here since a client re-polling this callback next
 ---     "Track" attempt already re-verifies access on its own.
+--- Shared by BOTH findTrackableSource (single-type) below and
+--- findNearestTrackableSource (merged, multi-type) further down -- EXTRACTED
+--- this pass (coder-architect) rather than duplicated, so the two callbacks'
+--- XP-tier/individual-override resolution can never drift apart. Pure
+--- refactor of what used to be findTrackableSource's own inline block --
+--- behavior byte-identical, see git history if a line-by-line diff is ever
+--- needed.
+--- @param trackerCitizenid string?
+--- @param baseMaxRange number -- trackingConfig.maxRange for whichever trackType is being resolved
+--- @return number maxRange -- baseMaxRange, or a raised value per an XP-tier/individual scentRangeMultiplier bonus
+local function ResolveMaxRangeForCitizenId(trackerCitizenid, baseMaxRange)
+    local maxRange = baseMaxRange
+    if Config.Features.XPProgression and trackerCitizenid then
+        -- INDIVIDUAL-OVERRIDE FIX (coder-backend pass) -- see
+        -- server/k9profiles.lua's own header, "INTEGRATION HANDOFF", for the
+        -- exact one-line gap this closes: resolves through
+        -- GetK9EffectiveMultipliers (server/k9profiles.lua) FIRST, the SAME
+        -- single seam server/progression.lua's own GetXPTierMedkitCooldownMs
+        -- already calls for the sibling medkit-cooldown field -- never
+        -- GetXPTier directly when an override might apply, per that file's
+        -- own resolution-order contract (GLOBAL DEFAULT -> XP TIER ->
+        -- INDIVIDUAL OVERRIDE). Falls back to a direct GetXPTier read when
+        -- GetK9EffectiveMultipliers is unavailable (an install that predates
+        -- server/k9profiles.lua, or one that had it removed). Only ever
+        -- RAISES maxRange (never lowers it below baseMaxRange) -- the
+        -- `> 1.0` check below means an uncached/base-tier citizenid's
+        -- tier.scentRangeMultiplier (Config.XPTiers[1] = 1.00) never changes
+        -- maxRange at all.
+        local scentRangeMultiplier
+        if type(GetK9EffectiveMultipliers) == 'function' then
+            local ok, effective = pcall(GetK9EffectiveMultipliers, trackerCitizenid)
+            if ok and type(effective) == 'table' and type(effective.scentRangeMultiplier) == 'number' then
+                scentRangeMultiplier = effective.scentRangeMultiplier
+            end
+        end
+        if scentRangeMultiplier == nil and type(GetXPTier) == 'function' then
+            local tier = GetXPTier(trackerCitizenid)
+            if tier and type(tier.scentRangeMultiplier) == 'number' then
+                scentRangeMultiplier = tier.scentRangeMultiplier
+            end
+        end
+        if type(scentRangeMultiplier) == 'number' and scentRangeMultiplier > 1.0 then
+            maxRange = baseMaxRange * scentRangeMultiplier
+        end
+    end
+    return maxRange
+end
+
+--- Scans TrackableLog[trackType] for the nearest still-fresh entry to
+--- `myCoords` within `maxRange` -- EXTRACTED this pass (coder-architect),
+--- pure refactor of findTrackableSource's own former inline loop, now
+--- shared with findNearestTrackableSource's own per-candidate-type scan
+--- further down. Discards entries already older than maxAgeSeconds even if
+--- PruneTrackableLogs hasn't swept them yet (belt-and-suspenders against a
+--- prune-timing gap, not a substitute for pruning).
+--- @param trackType 'scent'|'blood'|'gunpowder'
+--- @param myCoords vector3
+--- @param maxRange number
+--- @param maxAgeMs number
+--- @param now number
+--- @return number? nearestDist, vector3? sourceCoords, table? nearestEntry
+local function FindNearestFreshTrackableEntry(trackType, myCoords, maxRange, maxAgeMs, now)
+    local nearestDist, sourceCoords, nearestEntry
+
+    for _, entry in ipairs(TrackableLog[trackType]) do
+        if (now - entry.loggedAt) < maxAgeMs then
+            local dist = #(myCoords - entry.coords)
+            if dist <= maxRange and (not nearestDist or dist < nearestDist) then
+                nearestDist = dist
+                sourceCoords = entry.coords
+                nearestEntry = entry
+            end
+        end
+    end
+
+    return nearestDist, sourceCoords, nearestEntry
+end
+
+--- Anti-farm PendingTrackArrival ticket-minting -- EXTRACTED this pass
+--- (coder-architect), pure refactor of findTrackableSource's own former
+--- inline block (see MIN_TRACK_XP_DISTANCE/MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS/
+--- TrackTicketMintCooldown's own declaration comments above for the full
+--- anti-farm rationale this preserves unchanged), now shared with
+--- findNearestTrackableSource further down so a K9 arriving via the NEW
+--- merged action earns tickets under the exact same rules as the OLD
+--- single-type path, never a looser or stricter copy.
+--- @param source number
+--- @param trackType 'scent'|'blood'|'gunpowder'
+--- @param nearestDist number
+--- @param sourceCoords vector3
+--- @param nearestEntry table
+--- @param now number
+local function MaybeMintTrackArrivalTicket(source, trackType, nearestDist, sourceCoords, nearestEntry, now)
+    if Config.Features.XPProgression and nearestDist >= MIN_TRACK_XP_DISTANCE
+        and nearestEntry and not nearestEntry.ticketIssued
+        and TrackTicketMintCooldown.Consume(source, TRACK_TICKET_MINT_COOLDOWN_MS, now) then
+        nearestEntry.ticketIssued = true -- ration this entry to one ticket, ever -- the cosmetic reveal below is unaffected either way
+        PendingTrackArrival[source] = {
+            trackType = trackType,
+            coords = sourceCoords, -- the SAME server-resolved coordinate returned to the client below -- never re-derived from a later client claim
+            expiresAt = now + Config.XP.trackArrivalTTLMs,
+            createdAt = now, -- ECONOMY-AUDIT FIX, HOLE 2 -- real elapsed time is measured from this, never a client-reported duration
+            minElapsedMs = (nearestDist / MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS) * 1000, -- derived from the SAME server-measured nearestDist gated on just above
+        }
+    end
+end
+
 lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, trackType)
     if type(trackType) ~= 'string' or not TRACK_TYPE_CONFIG[trackType] then
         return { found = false } -- defensive: never trust client payload shape
@@ -1457,6 +1564,26 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
         return { found = false } -- same bare, reasonless shape every other denial in this callback already uses (§11.4 item 1's own signature has no reason field)
     end
 
+    -- SPECIALIZATION GATE (owner-directed decluttering pass, 2026-08-26) --
+    -- this OLDER single-type callback's signature never grows (per this
+    -- file's own header) and STAYS reachable (client/tracking.lua's
+    -- Start*Track() globals are kept, see that file's own header), so it
+    -- must enforce the exact same specialization scoping the NEW merged
+    -- findNearestTrackableSource below does -- otherwise a client (modified,
+    -- or simply still calling the old Start*Track() global) could bypass
+    -- specialization scoping entirely just by asking for a specific
+    -- trackType directly instead of going through the merged action. "The
+    -- server resolves which types apply. The client must NOT decide this."
+    -- Deliberately BEFORE the cooldown consume just below, same "a denial
+    -- must never burn a cooldown slot" discipline as the permission check
+    -- immediately above.
+    local jobNameForSpecialization = trackerPlayerForPermission.PlayerData.job
+        and trackerPlayerForPermission.PlayerData.job.name
+    local enabledTrackTypesForCaller = ResolveEnabledTrackTypesForCitizenId(trackerCitizenidForPermission, jobNameForSpecialization)
+    if not enabledTrackTypesForCaller[trackType] then
+        return { found = false } -- not certified for this specific track type -- same bare, reasonless shape as every other denial here
+    end
+
     local trackingConfig = TRACK_TYPE_CONFIG[trackType]
 
     -- Stamp BEFORE doing any lookup work below — see this function's own
@@ -1473,182 +1600,28 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
     local myCoords = GetEntityCoords(ped) -- NEVER a client-supplied coordinate
 
     -- PHASE 4 ADDITION (coder-backend, XPProgression pass, DEVELOPER_REFERENCE.md
-    -- §13.4.1 item (a)): "crossing a threshold... changes... the server's
-    -- own authoritative scent-range bonus for that K9, read by
-    -- server/tracking.lua's findTrackableSource in place of
-    -- Config.Tracking.<Type>.maxRange." Read via a `type(GetXPTier) ==
-    -- 'function'` runtime existence guard (server/progression.lua, same
-    -- soft-dependency convention as server/medkit.lua's RestoreInjury call
-    -- site) — this callback works identically whether or not
-    -- server/progression.lua happens to be loaded, and is unaffected by
-    -- fxmanifest.lua's server_scripts ordering either way (no load-order
-    -- assumption is made). Only ever RAISES maxRange (never lowers it below
-    -- this type's own configured baseline) — the multiplier check below
-    -- (`> 1.0`) means an uncached/base-tier citizenid's
-    -- tier.scentRangeMultiplier (Config.XPTiers[1] = 1.00) never changes
-    -- maxRange at all, so this is purely an XP-earned BONUS on top of the
-    -- type's own tuning, never a silent regression of it. Applied uniformly
-    -- to all three trackTypes (scent/blood/gunpowder) — Config.XPTiers has
-    -- one `scentRangeMultiplier` value per tier, not one per trackType, so
-    -- this reads it as "the K9's general resolved-source detection range
-    -- multiplier," not literally scoped to the 'scent' trackType by name;
-    -- flagged here as a judgment call on ambiguous spec wording, not a
-    -- silently-picked interpretation.
-    --
-    -- RENAMED + REDESIGNED this pass (economy/config-correctness fix):
-    -- this field used to be `scentRange`, a flat replacement value applied
-    -- via `math.max(maxRange, tier.scentRange)` — but every tier's
-    -- scentRange (5.0-10.0) was smaller than every
-    -- Config.Tracking.<Type>.maxRange default (40.0), so that `math.max`
-    -- could structurally never take effect: the bonus was dead code from
-    -- the moment it shipped. It is now `scentRangeMultiplier`, a factor
-    -- applied to THIS type's own `trackingConfig.maxRange` (not a flat
-    -- floor), so tiers above base genuinely extend detection range.
-    local maxRange = trackingConfig.maxRange
-    if Config.Features.XPProgression then
-        local trackerPlayer = exports.qbx_core:GetPlayer(source)
-        local trackerCitizenid = trackerPlayer and trackerPlayer.PlayerData and trackerPlayer.PlayerData.citizenid
-        if trackerCitizenid then
-            -- INDIVIDUAL-OVERRIDE FIX (this pass, coder-backend) -- see
-            -- server/k9profiles.lua's own header, "INTEGRATION HANDOFF", for
-            -- the exact one-line gap this closes: this branch used to read
-            -- GetXPTier(trackerCitizenid).scentRangeMultiplier RAW, so a
-            -- per-K9 individual override on scentRangeMultiplier
-            -- (server/k9profiles.lua's k9ProfileUpsert) was stored, audited,
-            -- and even shown back to the operator through k9ProfileGet's own
-            -- `effective` field, but THIS FILE -- the one real server-side
-            -- consumer of scentRangeMultiplier for an actual detection-range
-            -- calculation -- never read it, so the override had literally
-            -- zero effect on live behavior. FIXED by resolving through
-            -- GetK9EffectiveMultipliers (server/k9profiles.lua), the SAME
-            -- single seam server/progression.lua's own
-            -- GetXPTierMedkitCooldownMs already calls for the sibling
-            -- medkit-cooldown field -- never GetXPTier directly when an
-            -- override might apply, per that file's own resolution-order
-            -- contract (GLOBAL DEFAULT -> XP TIER -> INDIVIDUAL OVERRIDE).
-            -- Not a fourth ladder and not a re-implementation of that
-            -- composition -- this is the one call into it.
-            --
-            -- Soft dependency, this resource's established `type(...) ==
-            -- 'function'` convention: server/tracking.lua loads BEFORE
-            -- server/k9profiles.lua in fxmanifest.lua's server_scripts list,
-            -- but this call happens at CALLBACK-INVOCATION time, long after
-            -- every server_scripts file has already finished loading -- no
-            -- load-order assumption either way. Falls back to a direct
-            -- GetXPTier read (the file's ORIGINAL behavior, pcall-free
-            -- because GetXPTier itself never yields/throws for a valid
-            -- citizenid) when GetK9EffectiveMultipliers is unavailable (an
-            -- install that predates server/k9profiles.lua, or one that had
-            -- it removed), so this file works identically whether or not
-            -- that file happens to be present.
-            local scentRangeMultiplier
-            if type(GetK9EffectiveMultipliers) == 'function' then
-                local ok, effective = pcall(GetK9EffectiveMultipliers, trackerCitizenid)
-                if ok and type(effective) == 'table' and type(effective.scentRangeMultiplier) == 'number' then
-                    scentRangeMultiplier = effective.scentRangeMultiplier
-                end
-            end
-            if scentRangeMultiplier == nil and type(GetXPTier) == 'function' then
-                local tier = GetXPTier(trackerCitizenid)
-                if tier and type(tier.scentRangeMultiplier) == 'number' then
-                    scentRangeMultiplier = tier.scentRangeMultiplier
-                end
-            end
-            if type(scentRangeMultiplier) == 'number' and scentRangeMultiplier > 1.0 then
-                maxRange = trackingConfig.maxRange * scentRangeMultiplier
-            end
-        end
-    end
-
-    local sourceCoords
+    -- §13.4.1 item (a)) -- resolution logic now lives in the shared
+    -- ResolveMaxRangeForCitizenId helper above (coder-architect extraction,
+    -- this pass), behavior unchanged.
+    local maxRange = ResolveMaxRangeForCitizenId(trackerCitizenidForPermission, trackingConfig.maxRange)
 
     -- 'scent' / 'blood' / 'gunpowder': nearest still-fresh logged entry
-    -- within maxRange. UPDATED THIS PASS (DEVELOPER_REFERENCE.md §9 items 11/17,
-    -- DEVELOPER_REFERENCE.md#scent-source-resolution §4): 'scent' no longer
-    -- special-cases `sourceCoords = nil` — TrackableLog.scent is now fed by
-    -- the 'swapItems' ox_inventory hook above, so it is scanned by this
-    -- exact same loop, identically to blood/gunpowder. Discards entries
-    -- already older than maxAgeSeconds even if PruneTrackableLogs hasn't
-    -- swept them yet (belt-and-suspenders against a prune-timing gap, not a
-    -- substitute for pruning).
+    -- within maxRange -- now the shared FindNearestFreshTrackableEntry
+    -- helper above (coder-architect extraction, this pass), behavior
+    -- unchanged.
     local maxAgeMs = trackingConfig.maxAgeSeconds * 1000
-    local nearestDist
-    -- ANTI-FARM FIX (this pass) -- the actual TrackableLog entry object the
-    -- current best match came from, so the ticket-minting step below can
-    -- read/flip its `ticketIssued` flag. NOT reset per-loop-iteration on a
-    -- rejected candidate -- only ever (re)assigned in lockstep with
-    -- `nearestDist`/`sourceCoords` above, so it always refers to the SAME
-    -- entry those two describe.
-    local nearestEntry
-
-    for _, entry in ipairs(TrackableLog[trackType]) do
-        if (now - entry.loggedAt) < maxAgeMs then
-            local dist = #(myCoords - entry.coords)
-            if dist <= maxRange and (not nearestDist or dist < nearestDist) then
-                nearestDist = dist
-                sourceCoords = entry.coords
-                nearestEntry = entry
-            end
-        end
-    end
+    local nearestDist, sourceCoords, nearestEntry = FindNearestFreshTrackableEntry(trackType, myCoords, maxRange, maxAgeMs, now)
 
     if not sourceCoords then
         return { found = false }
     end
 
-    -- PHASE 4 ADDITION (coder-backend, XPProgression pass) -- see
-    -- PendingTrackArrival's own declaration comment above for the full
-    -- anti-farm rationale. Only bothers tracking a pending arrival at all
-    -- when the feature is enabled, per DEVELOPER_REFERENCE.md §3's "read the flag at the
-    -- point of use" rule -- when XPProgression is false this is simply dead
-    -- state nobody ever reads (reportTrackSourceArrival's own handler below
-    -- also re-checks the flag independently).
-    --
-    -- SECURITY FIX (coder-security finding A, this pass) -- see this file's
-    -- header FORGED TRAIL DECISION addendum for the full exploit writeup:
-    -- `nearestDist` (the K9's OWN live distance to `sourceCoords`, computed
-    -- entirely server-side above -- never a client value) must clear
-    -- MIN_TRACK_XP_DISTANCE before a ticket is created at all. Without this,
-    -- a K9 who is ALREADY standing within Config.XP.trackArrivalRadius of a
-    -- source at the moment they resolve it (trivially: they just planted
-    -- that exact source themselves via relayDamageEvent/relayWeaponFire or
-    -- an item-drop at their own feet, but this also applied to any
-    -- GENUINE source that merely happened to already be nearby) could
-    -- immediately follow up with reportTrackSourceArrival and be awarded
-    -- XP for zero meaningful travel -- round-robining scent/blood/gunpowder
-    -- turned this into a near-continuous, fully-stationary farm limited
-    -- only by TrackArrivalReportCooldown. This check requires the K9 to
-    -- cover real distance between resolving a source and arriving at it,
-    -- regardless of whether that source was forged or genuine -- the
-    -- client-cosmetic marker-trail REVEAL below is entirely unaffected (it
-    -- still returns `found = true`/`coords` either way); only XP-ticket
-    -- eligibility is gated on this.
-    -- ECONOMY-AUDIT FIX, HOLE 1 (this pass) -- see MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS's
-    -- own declaration comment above for the full writeup: `nearestEntry` (the
-    -- exact TrackableLog entry `sourceCoords` came from) must not already
-    -- have had a ticket minted from it, ever. Without this, walking
-    -- MIN_TRACK_XP_DISTANCE away from the SAME still-fresh entry and back
-    -- re-earned XP off the one real logged event indefinitely.
-    -- SECURITY FIX (coder-backend, this pass) -- `TrackTicketMintCooldown.Consume`
-    -- is deliberately the LAST condition checked (cheapest/most-defensive
-    -- checks first, same discipline this function's own doc comment already
-    -- establishes) and is a per-SOURCE, cross-trackType budget -- see that
-    -- cooldown's own declaration comment above for the full farm writeup
-    -- this closes. Ordered after `not nearestEntry.ticketIssued` so an
-    -- already-spent entry (which was never going to mint anything anyway)
-    -- doesn't burn this budget for nothing.
-    if Config.Features.XPProgression and nearestDist >= MIN_TRACK_XP_DISTANCE
-        and nearestEntry and not nearestEntry.ticketIssued
-        and TrackTicketMintCooldown.Consume(source, TRACK_TICKET_MINT_COOLDOWN_MS, now) then
-        nearestEntry.ticketIssued = true -- ration this entry to one ticket, ever -- the cosmetic reveal below is unaffected either way
-        PendingTrackArrival[source] = {
-            trackType = trackType,
-            coords = sourceCoords, -- the SAME server-resolved coordinate returned to the client below -- never re-derived from a later client claim
-            expiresAt = now + Config.XP.trackArrivalTTLMs,
-            createdAt = now, -- ECONOMY-AUDIT FIX, HOLE 2 -- real elapsed time is measured from this, never a client-reported duration
-            minElapsedMs = (nearestDist / MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS) * 1000, -- derived from the SAME server-measured nearestDist gated on just above
-        }
-    end
+    -- Anti-farm PendingTrackArrival ticket-minting -- now the shared
+    -- MaybeMintTrackArrivalTicket helper above (coder-architect extraction,
+    -- this pass), behavior unchanged. See MIN_TRACK_XP_DISTANCE/
+    -- MAX_PLAUSIBLE_ARRIVAL_SPEED_MPS/TrackTicketMintCooldown's own
+    -- declaration comments for the full anti-farm rationale.
+    MaybeMintTrackArrivalTicket(source, trackType, nearestDist, sourceCoords, nearestEntry, now)
 
     return {
         found = true,
@@ -1658,6 +1631,149 @@ lib.callback.register('qbx_k9unit:server:findTrackableSource', function(source, 
         -- read Config.WaterTrackingDecay.breaksTrail directly; populate it
         -- anyway for future-proofing (e.g. a later per-type override).
         breaksAtWater = Config.WaterTrackingDecay.breaksTrail,
+    }
+end)
+
+-- Deterministic iteration order for the merged callback below -- plain
+-- `pairs()` over TRACK_TYPE_CONFIG would work for correctness (every
+-- candidate type is scored independently and the nearest one wins
+-- regardless of scan order) but makes which type wins a TIE (two entries at
+-- the exact same distance, a realistic outcome in a test fixture using
+-- round-number coordinates) depend on Lua's per-VM-instance string hash
+-- seed -- mirrors tests/tracking_spec.lua's own TRACK_TYPES_ORDERED
+-- precedent and rationale exactly.
+local TRACK_TYPES_ORDER = { 'scent', 'blood', 'gunpowder' }
+
+-- Sentinel TrackQueryCooldown key for the merged action below -- see
+-- findNearestTrackableSource's own doc comment ("ONE COOLDOWN, DELIBERATE")
+-- for the full reasoning. Deliberately NOT one of 'scent'/'blood'/
+-- 'gunpowder' (TrackQueryCooldown is a NewNestedCooldown keyed by
+-- (source, trackType) as a plain string, so this can never collide with a
+-- real trackType).
+local MERGED_TRACK_QUERY_KEY = '__merged__'
+
+--- ONE MERGED ACTION, SERVER SIDE (owner-directed decluttering pass,
+--- 2026-08-26 -- "merge all the scent tracking stuff into one thing...
+--- when certed for extra stuff it just does it"). The ONE server callback
+--- backing client/tracking.lua's single StartCertifiedTrack() entry point
+--- (one radial item, one chat command, per that file's own header) --
+--- resolves EVERY track type `source`'s own citizenid is currently entitled
+--- to (ResolveEnabledTrackTypesForCitizenId above) in ONE round trip, and
+--- returns the nearest matching source across all of them, WITH which
+--- trackType actually matched (the client needs this to pick the right
+--- Config.Tracking.<Type> tuning/marker-spacing for whatever trail it ends
+--- up rendering -- see client/tracking.lua's own StartCertifiedTrack).
+---
+--- findTrackableSource above is UNCHANGED in shape and is NOT called three
+--- times from the client to build this -- doing so would mean three round
+--- trips and three separate cooldown consumptions, per this pass's own
+--- explicit instruction. This callback shares its VALIDATION LOGIC with
+--- that one (IsTrackingFeaturePermittedForCitizenId, ResolveMaxRangeForCitizenId,
+--- FindNearestFreshTrackableEntry, MaybeMintTrackArrivalTicket -- all
+--- extracted, shared functions above) but is its own registration with its
+--- own cooldown key, not a wrapper that calls the other callback's handler
+--- function three times.
+---
+--- ONE COOLDOWN, DELIBERATE (this pass's own explicit design question --
+--- "decide deliberately whether the merged action consumes one cooldown or
+--- one per type"): this callback consumes exactly ONE TrackQueryCooldown
+--- entry, keyed on the sentinel MERGED_TRACK_QUERY_KEY above -- entirely
+--- independent of the three per-(source, trackType) keys
+--- findTrackableSource's own single-type path uses (that path is only
+--- reachable today via the kept-but-orphaned Start*Track() globals, per
+--- client/tracking.lua's own header -- nothing in the live UI calls it
+--- anymore). The cooldown DURATION used is the MAXIMUM (slowest)
+--- searchCooldownMs among the candidate types this specific call actually
+--- searches, not the minimum/fastest: this one query already covers every
+--- enabled type at once, so throttling it at the fastest type's rate would
+--- let a handler re-run a full multi-type sweep MORE often than any single
+--- type's own configured throttle would ever have allowed on its own --
+--- three times cheaper to spam than pressing "Track <Type>" three separate
+--- times, exactly the trap this design was told to avoid. Using an
+--- independent sentinel key (rather than, say, requiring all three
+--- per-type keys to be simultaneously off cooldown) also means this action
+--- can never "refuse itself": it has no dependency on whatever unrelated
+--- state the three per-type keys happen to be in.
+lib.callback.register('qbx_k9unit:server:findNearestTrackableSource', function(source)
+    if not HasK9Access(source) then
+        return { found = false } -- reuse the global from server/certifications.lua, do not re-derive
+    end
+
+    local trackerPlayer = exports.qbx_core:GetPlayer(source)
+    local trackerCitizenid = trackerPlayer and trackerPlayer.PlayerData and trackerPlayer.PlayerData.citizenid
+    if not trackerCitizenid then
+        return { found = false } -- no resolvable citizenid -- cannot evaluate any per-person gate below, fail closed
+    end
+    local jobName = trackerPlayer.PlayerData.job and trackerPlayer.PlayerData.job.name
+
+    -- SERVER RESOLVES, CLIENT NEVER ASKS -- this callback takes NO trackType
+    -- argument at all (unlike findTrackableSource above); the enabled set is
+    -- entirely a function of `source`'s own server-held citizenid, per this
+    -- pass's own explicit "the client must not decide this" requirement.
+    local enabledTrackTypes = ResolveEnabledTrackTypesForCitizenId(trackerCitizenid, jobName)
+
+    -- Same three gates findTrackableSource's own single-type path enforces
+    -- per trackType (Config.Features.<Type>, HasSpecialization-derived
+    -- enabledTrackTypes, IsTrackingFeaturePermittedForCitizenId) -- evaluated
+    -- once per candidate type here instead of once per callback invocation.
+    local candidateTypes = {}
+    for _, trackType in ipairs(TRACK_TYPES_ORDER) do
+        if enabledTrackTypes[trackType]
+            and Config.Features[TRACK_TYPE_FEATURE_FLAGS[trackType]]
+            and IsTrackingFeaturePermittedForCitizenId(trackerCitizenid, TRACK_TYPE_FEATURE_FLAGS[trackType]) then
+            candidateTypes[#candidateTypes + 1] = trackType
+        end
+    end
+
+    if #candidateTypes == 0 then
+        return { found = false } -- nothing this citizenid is both entitled to AND currently permitted to search
+    end
+
+    -- ONE COOLDOWN, sized to the SLOWEST candidate type -- see this
+    -- function's own doc comment "ONE COOLDOWN, DELIBERATE" above for the
+    -- full reasoning. Stamped BEFORE any TrackableLog scan below, same
+    -- "a denial must never burn a slot for nothing, but an ALLOWED request
+    -- stamps before doing lookup work" discipline findTrackableSource's own
+    -- doc comment establishes.
+    local mergedCooldownMs = 0
+    for _, trackType in ipairs(candidateTypes) do
+        mergedCooldownMs = math.max(mergedCooldownMs, TRACK_TYPE_CONFIG[trackType].searchCooldownMs)
+    end
+
+    local now = GetGameTimer()
+    if not TrackQueryCooldown.Consume(source, MERGED_TRACK_QUERY_KEY, mergedCooldownMs, now) then
+        return { found = false }
+    end
+
+    local ped = GetPlayerPed(source)
+    if ped == 0 then return { found = false } end -- defensive: no live ped to read a position from
+    local myCoords = GetEntityCoords(ped) -- NEVER a client-supplied coordinate
+
+    local bestTrackType, bestDist, bestCoords, bestEntry
+    for _, trackType in ipairs(candidateTypes) do
+        local trackingConfig = TRACK_TYPE_CONFIG[trackType]
+        local maxRange = ResolveMaxRangeForCitizenId(trackerCitizenid, trackingConfig.maxRange)
+        local maxAgeMs = trackingConfig.maxAgeSeconds * 1000
+        local dist, coords, entry = FindNearestFreshTrackableEntry(trackType, myCoords, maxRange, maxAgeMs, now)
+        if dist and (not bestDist or dist < bestDist) then
+            bestTrackType = trackType
+            bestDist = dist
+            bestCoords = coords
+            bestEntry = entry
+        end
+    end
+
+    if not bestCoords then
+        return { found = false }
+    end
+
+    MaybeMintTrackArrivalTicket(source, bestTrackType, bestDist, bestCoords, bestEntry, now)
+
+    return {
+        found = true,
+        trackType = bestTrackType, -- NEW field vs. findTrackableSource's response shape -- the client needs to know WHICH type matched, since it never told the server which one to look for
+        coords = bestCoords,
+        breaksAtWater = Config.WaterTrackingDecay.breaksTrail, -- informational only, same as findTrackableSource above
     }
 end)
 

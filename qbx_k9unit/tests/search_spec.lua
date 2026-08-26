@@ -85,7 +85,20 @@ local libStub = {
 local Config = {
     Features = {},
     SearchZones = { alertBroadcastRadius = 50.0, searchCooldownMs = 5000 },
-    SearchContrabandItems = { 'weed_baggy' },
+    -- SPECIALIZATION CATEGORIES (owner-directed decluttering pass,
+    -- 2026-08-26) -- 'weed_baggy' stays a bare array entry (UNCATEGORISED,
+    -- every existing test in this file below already relies on it being
+    -- found unconditionally). 'coke_brick'/'weapon_pistol' are ADDITIVE --
+    -- categorised entries only this pass's own new specialization-category
+    -- test section further below ever puts into a fake inventory; nothing
+    -- else in this file references either name, so this does not disturb
+    -- any pre-existing test's own contraband-weight math.
+    SearchContrabandItems = { 'weed_baggy', coke_brick = 'narcotics', weapon_pistol = 'explosives' },
+    K9Specializations = {
+        narcotics  = { label = 'Narcotics detection' },
+        explosives = { label = 'Explosives detection' },
+        patrol     = { label = 'Patrol / apprehension' },
+    },
     ContrabandAlertTiers = {
         { minWeight = 0,   alert = 'clean' },
         { minWeight = 1,   alert = 'whine' },
@@ -280,6 +293,23 @@ env.TriggerClientEvent = function(eventName, _playerId, ...)
 end
 env.MySQL = { insert = { await = function(_sql, _params) mysqlInsertCount = mysqlInsertCount + 1; return 1 end } } -- .await shape: search.lua's audit write is now CreateThread + MySQL.insert.await (silent-failure fix), not a callback-less MySQL.insert
 env.AwardXP = function(citizenid, actionKey) awardCalls[#awardCalls + 1] = { citizenid = citizenid, actionKey = actionKey } end
+
+-- SPECIALIZATION CATEGORIES (owner-directed decluttering pass, 2026-08-26)
+-- -- controllable stand-in for server/certifications.lua's real
+-- HasSpecialization, same "plain mutable state + setter" shape as this
+-- section's own `requesterInVehicle` above. Defaults to NOTHING held for
+-- any citizenid -- every pre-existing test in this section keeps exercising
+-- exactly what it always has, since 'weed_baggy' (the only item those
+-- tests ever seed) is UNCATEGORISED and therefore never consults this at
+-- all.
+local specializationGrants = {} -- [citizenid][specKey] = true/false
+env.HasSpecialization = function(citizenid, _jobName, specKey)
+    return specializationGrants[citizenid] ~= nil and specializationGrants[citizenid][specKey] == true
+end
+local function grantSpecialization(citizenid, specKey, value)
+    specializationGrants[citizenid] = specializationGrants[citizenid] or {}
+    specializationGrants[citizenid][specKey] = value
+end
 
 local exportsStub = env.exports
 exportsStub.ox_inventory.GetInventoryItems = function(_self, invOrId)
@@ -1482,6 +1512,211 @@ t.test('CONFIG-ABORT REGRESSION: a malformed Config.ContrabandAlertTiers (missin
     end
     t.isTrue(warnedTiers, 'a malformed Config.ContrabandAlertTiers must print a warning naming it, not fail silently either')
     t.isTrue(warnedRadius, 'an over-ceiling alertBroadcastRadius must print a warning naming it, not fail silently either')
+end)
+
+-- ========================================================================
+-- SPECIALIZATION-SCOPED CONTRABAND CATEGORIES (owner-directed decluttering
+-- pass, 2026-08-26 -- "if i am certed in drugs... it will only search for
+-- drugs or if i am certed for drugs and explosives its still the same it
+-- will search for those 2"). Reuses the SAME shared harness/env/Config the
+-- searchVehicle()-based sections above already established (this file's
+-- top-level Config.SearchContrabandItems already carries 'coke_brick' =
+-- 'narcotics' and 'weapon_pistol' = 'explosives' additively -- see that
+-- table's own comment -- and `grantSpecialization`/`env.HasSpecialization`
+-- above are this section's own new controllable stub).
+--
+-- MONOTONIC BY DESIGN (see config.lua's own Config.SearchContrabandItems
+-- comment and server/search.lua's own ContrabandItemInfo header): an
+-- UNCATEGORISED item ('weed_baggy') is the baseline, found by everyone,
+-- always; a CATEGORISED item is found ONLY by a searcher holding that
+-- exact specialization, ON TOP OF the baseline -- there is no "holds
+-- nothing -> finds everything" fallback.
+-- ========================================================================
+
+--- Drives one full 'vehicle' searchTarget call with an ARBITRARY set of
+--- named items -- `searchVehicle`'s own generalization for this section,
+--- which needs more than one fixed item name ('weed_baggy').
+--- @param source number
+--- @param netId number
+--- @param items { name: string, weight: number }[]
+--- @return table result
+local function searchVehicleWithItems(source, netId, items)
+    local invId = 'trunkPLATE' .. tostring(netId)
+    local slots = {}
+    for i, item in ipairs(items) do
+        slots[i] = { name = item.name, weight = item.weight, slot = i }
+    end
+    currentItemsByInvId[invId] = slots
+    return searchTargetCallback(source, 'vehicle', netId)
+end
+
+t.test('BASELINE: an uncategorised item is found by a searcher with NO specializations at all', function()
+    fakeNow = 20000000
+    local result = searchVehicleWithItems(9101, 9101, { { name = 'weed_baggy', weight = 5 } })
+    t.isTrue(result.ok)
+    t.isTrue(result.contrabandFound)
+    t.equals(result.totalWeight, 5)
+end)
+
+t.test('BASELINE: an uncategorised item is ALSO found by a specialist -- specializing never takes the baseline away', function()
+    fakeNow = 20000100
+    grantSpecialization('CITIZEN9102', 'narcotics', true)
+    local result = searchVehicleWithItems(9102, 9102, { { name = 'weed_baggy', weight = 5 } })
+    t.isTrue(result.contrabandFound)
+    t.equals(result.totalWeight, 5, 'the baseline item must count for a specialist exactly as it does for anyone else')
+end)
+
+t.test('CATEGORISED: a searcher with NO specializations does NOT find a categorised item -- baseline items are unaffected', function()
+    fakeNow = 20000200
+    local result = searchVehicleWithItems(9103, 9103, {
+        { name = 'weed_baggy', weight = 5 },   -- uncategorised -- still counts
+        { name = 'coke_brick', weight = 100 }, -- narcotics-only -- must NOT count
+    })
+    t.isTrue(result.ok)
+    t.isTrue(result.contrabandFound, 'the uncategorised item alone is still enough to report a find')
+    t.equals(result.totalWeight, 5, 'the categorised item must be excluded entirely from the weight total -- not merely deprioritized')
+end)
+
+t.test('CATEGORISED: narcotics-only finds narcotics contraband, and does NOT find explosives contraband', function()
+    fakeNow = 20000300
+    grantSpecialization('CITIZEN9104', 'narcotics', true)
+    local result = searchVehicleWithItems(9104, 9104, {
+        { name = 'coke_brick', weight = 100 },    -- narcotics -- HELD -- counts
+        { name = 'weapon_pistol', weight = 200 }, -- explosives -- NOT held -- must not count
+    })
+    t.isTrue(result.contrabandFound)
+    t.equals(result.totalWeight, 100, 'only the narcotics-category item may count -- explosives must be fully excluded')
+end)
+
+t.test('CATEGORISED: narcotics AND explosives together find BOTH categories -- monotonic, nothing lost by adding a second specialization', function()
+    fakeNow = 20000400
+    grantSpecialization('CITIZEN9105', 'narcotics', true)
+    grantSpecialization('CITIZEN9105', 'explosives', true)
+    local result = searchVehicleWithItems(9105, 9105, {
+        { name = 'coke_brick', weight = 100 },
+        { name = 'weapon_pistol', weight = 200 },
+        { name = 'weed_baggy', weight = 5 },
+    })
+    t.isTrue(result.contrabandFound)
+    t.equals(result.totalWeight, 305, 'both categorised items PLUS the uncategorised baseline must all count together')
+end)
+
+t.test('MONOTONICITY: granting explosives to an ALREADY-narcotics-specialized searcher strictly ADDS the explosives find -- the narcotics find and the baseline are unaffected', function()
+    fakeNow = 20000500
+    grantSpecialization('CITIZEN9106', 'narcotics', true)
+    local before = searchVehicleWithItems(9106, 9106, {
+        { name = 'coke_brick', weight = 100 },
+        { name = 'weapon_pistol', weight = 200 },
+        { name = 'weed_baggy', weight = 5 },
+    })
+    t.equals(before.totalWeight, 105, 'PRE-GRANT: narcotics + baseline only')
+
+    fakeNow = fakeNow + 20 -- clears the 10ms sniff/target cooldowns before re-searching the SAME target
+    grantSpecialization('CITIZEN9106', 'explosives', true)
+    local after = searchVehicleWithItems(9106, 9106, {
+        { name = 'coke_brick', weight = 100 },
+        { name = 'weapon_pistol', weight = 200 },
+        { name = 'weed_baggy', weight = 5 },
+    })
+    t.equals(after.totalWeight, 305, 'POST-GRANT: strictly a superset -- explosives ADDED, nothing removed')
+end)
+
+t.test('CLAMP AND WARN: a Config.SearchContrabandItems entry naming a category not in Config.K9Specializations degrades to UNCATEGORISED (found by everyone) and warns', function()
+    -- A SEPARATE, throwaway env/load of server/search.lua with its own
+    -- malformed Config, mirroring this file's own "CONFIG-ABORT REGRESSION"
+    -- section's pattern of loading a second isolated instance rather than
+    -- reusing the shared one above (which already committed to its own
+    -- Config.SearchContrabandItems at load time).
+    local badConfig = {
+        Features = { SearchZones = true },
+        SearchZones = { alertBroadcastRadius = 50.0, searchCooldownMs = 5000, sniffAnimDurationMs = 10, vehicleSearchDistance = 100.0, personSearchDistance = 100.0 },
+        SearchContrabandItems = { 'weed_baggy', mystery_item = 'not_a_real_specialization' },
+        K9Specializations = { narcotics = { label = 'Narcotics detection' } },
+        ContrabandAlertTiers = { { minWeight = 0, alert = 'clean' }, { minWeight = 1, alert = 'whine' } },
+        Compat = {
+            diagnosticCommand = false,
+            Systems = { inventory = { override = 'ox_inventory' }, target = {}, framework = {}, dispatch = {}, ambulance = {} },
+        },
+    }
+    local printedBad = {}
+    local badEventHandlers = {}
+    local badRegisteredCallbacks = {}
+    local badEnv = Sandbox.newEnv({
+        GetGameTimer = function() return 0 end,
+        AddEventHandler = function(name, handler) badEventHandlers[name] = badEventHandlers[name] or {}; table.insert(badEventHandlers[name], handler) end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        -- Wait MUST actually yield (coroutine.yield()), not merely return --
+        -- server/cooldowns.lua's own `while true do Wait(x) ... end` sweep
+        -- thread would otherwise spin forever, synchronously, inside the
+        -- ONE coroutine.resume below, hanging this entire test file.
+        CreateThread = function(fn) local co = coroutine.create(fn); coroutine.resume(co) end,
+        Wait = function() coroutine.yield() end,
+        lib = { callback = { register = function(name, handler) badRegisteredCallbacks[name] = handler end } },
+        print = function(...)
+            local parts = {}
+            for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+            printedBad[#printedBad + 1] = table.concat(parts, '\t')
+        end,
+        exports = {
+            ox_inventory = {
+                GetInventoryItems = function() return {} end, GetContainerFromSlot = function() return nil end,
+                GetItemCount = function() return 0 end, RemoveItem = function() return false end,
+                RegisterStash = function() return true end, RegisterShop = function() return true end,
+                registerHook = function() return 1 end,
+            },
+        },
+        Config = badConfig,
+        IsDuplicityVersion = function() return true end,
+        GetResourceState = function(name) return name == 'ox_inventory' and 'started' or 'missing' end,
+    })
+    Sandbox.loadInto('../server/cooldowns.lua', badEnv)
+    Sandbox.loadInto('../server/entities.lua', badEnv)
+    Sandbox.loadInto('../server/datastore.lua', badEnv)
+    Sandbox.loadInto('../server/events.lua', badEnv)
+    Sandbox.loadInto('../shared/compat/core.lua', badEnv)
+    Sandbox.loadInto('../shared/compat/inventory.lua', badEnv)
+    Sandbox.loadInto('../server/search.lua', badEnv)
+
+    local warned = false
+    for _, line in ipairs(printedBad) do
+        if line:find('mystery_item', 1, true) and line:find('not_a_real_specialization', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'a bad category must print a console warning naming the exact item and the exact bad category')
+    -- Behavioral proof the degrade actually happened (not merely a printed
+    -- warning with no real effect): drive one real search through THIS
+    -- bad-config instance and confirm the mis-categorised item counts for
+    -- a searcher holding NO specializations at all -- exactly the
+    -- "uncategorised, found by everyone" behavior it must have degraded to.
+    badEnv.HasK9Access = function() return true end
+    badEnv.NetworkGetEntityFromNetworkId = function(netId) return netId end
+    badEnv.DoesEntityExist = function(entity) return entity ~= 0 end
+    badEnv.GetEntityType = function() return 2 end
+    badEnv.GetVehicleNumberPlateText = function(entity) return 'PLATE' .. tostring(entity) end
+    badEnv.GetPlayerPed = function() return 42 end
+    local zeroVec = vec3(0, 0, 0)
+    badEnv.GetEntityCoords = function() return zeroVec end
+    badEnv.IsPedInAnyVehicle = function() return false end
+    badEnv.GetPlayers = function() return {} end
+    badEnv.TriggerEvent = function() end
+    badEnv.TriggerClientEvent = function() end
+    badEnv.MySQL = { insert = { await = function() return 1 end } }
+    badEnv.exports.ox_inventory.GetInventoryItems = function(_self, invOrId)
+        local invId = type(invOrId) == 'table' and invOrId.id or invOrId
+        if invId == 'trunkPLATE501' then
+            return { { name = 'mystery_item', weight = 42, slot = 1 } }
+        end
+        return {}
+    end
+    badEnv.exports.qbx_core = {
+        GetPlayer = function(_self, source) return { PlayerData = { citizenid = 'BADCFG' .. tostring(source), job = { name = 'police' } } } end,
+    }
+    for _, handler in ipairs(badEventHandlers['onResourceStart'] or {}) do handler('qbx_k9unit') end
+
+    local badSearchCallback = assert(badRegisteredCallbacks['qbx_k9unit:server:searchTarget'])
+    local result = badSearchCallback(501, 'vehicle', 501)
+    t.isTrue(result.ok)
+    t.isTrue(result.contrabandFound, "the mis-categorised item must still be found (degraded to uncategorised) even for a searcher holding NO specializations")
+    t.equals(result.totalWeight, 42, "the full weight of the degraded item must count -- the bad category must never make an item unfindable by anyone")
 end)
 
 os.exit(t.summary())

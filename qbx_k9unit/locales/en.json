@@ -24,6 +24,7 @@
         "search_log_row_format": "[%s] searcher=%s(%s) target=%s(%s) result=%s weight=%s tier=%s",
         "search_log_target_citizenid_label": "citizenid=%s",
         "search_log_target_plate_label": "plate=%s",
+        "usage_audit": "Usage: /k9audit <cert|partner|search|xp|dept> ... -- run it with one of those words to see that report. The old separate commands still work.",
         "usage_auditcert": "Usage: /k9auditcert [citizenid] [limit]",
         "usage_auditdept": "Usage: /k9auditdept [job] [limit]",
         "usage_auditpartner": "Usage: /k9auditpartner [citizenid] [limit]",
@@ -243,7 +244,11 @@
         "delivered_success": "Delivered the fetch item to your handler.",
         "delivered_notice_handler": "Your K9 delivered the fetch item.",
         "no_active_ball_to_recall": "You have no active fetch item to recall.",
-        "recalled_success": "Fetch item recalled."
+        "recalled_success": "Fetch item recalled.",
+        "contextual_dropping": "Dropping the fetch ball you're carrying.",
+        "contextual_recalling": "Recalling your active fetch ball.",
+        "contextual_throwing": "Throwing a fetch ball.",
+        "usage_k9fetch": "/k9fetch by itself throws, recalls, or drops the ball depending on what's happening right now. Use /k9fetch throw, /k9fetch recall, or /k9fetch drop to force one specifically. (Old names /k9throwfetchball, /k9recallfetchball, /k9dropfetchball still work too.)"
     },
     "findalert": {
         "blocked": "High Command has individually blocked your find-alert reaction (the sit/bark on a positive search). This is not a missing grant -- ask them why.",
@@ -475,6 +480,16 @@
         "feature_group_vehicle_heading": "Vehicles",
         "feature_group_other_heading": "Other Abilities",
         "feature_vehicle_sentence_template": "{feature} is currently: {state}.",
+        "feature_group_search_heading": "Search & Contraband",
+        "feature_group_vision_heading": "Vision & Sensory",
+        "feature_group_combat_heading": "Combat & Restraint",
+        "feature_group_movement_heading": "Movement & Control",
+        "feature_group_wellbeing_heading": "Wellbeing",
+        "feature_group_progression_heading": "Progression & Records",
+        "feature_group_gear_heading": "Gear & Inventory",
+        "feature_group_training_heading": "Training & Games",
+        "feature_group_admin_heading": "Admin & Oversight",
+        "feature_group_integration_heading": "Integrations",
         "no_abilities": "Nothing to show yet.",
         "search_features_placeholder": "Search abilities...",
         "state_global_off": "Disabled server-wide",
@@ -482,6 +497,8 @@
         "state_not_certified": "Not certified",
         "state_requires_grant_missing": "Requires a grant (not granted)",
         "state_available": "Available",
+        "feature_via_high_command_marker": "High Command",
+        "feature_via_high_command_hint": "Available because this person is High Command -- they hold no personal grant or certification for this.",
         "feature_column": "Ability",
         "status_column": "Status",
         "person_features_heading": "Abilities",
@@ -1379,7 +1396,19 @@
         "runtime_tunable_desc_tracking_scentvision_queryrangemeters": "How far away Scent Vision points can be and still show up when a K9 requests them.",
         "runtime_tunable_desc_tracking_scentvision_maxvisibletrails": "The most separate scent trails Scent Vision will show a K9 at once.",
         "runtime_tunable_desc_tracking_scentvision_querymaxpointspertrail": "The most points from a single scent trail Scent Vision will show a K9 at once.",
-        "runtime_tunable_desc_tracking_scentvision_querycooldownms": "How often a K9 can request an updated Scent Vision view."
+        "runtime_tunable_desc_tracking_scentvision_querycooldownms": "How often a K9 can request an updated Scent Vision view.",
+        "cmdref_k9audit_does": "Shows a K9 audit report. One command for all five: certifications, partnerships, searches, XP and department totals.",
+        "cmdref_k9audit_usage": "/k9audit <cert|partner|search|xp|dept>",
+        "cmdref_k9track_does": "Starts a track. Your dog follows whichever trail it is trained to find -- you do not pick the type.",
+        "cmdref_k9track_usage": "/k9track",
+        "cmdref_k9audit_needs": "Same as /k9auditcert.",
+        "cmdref_k9track_needs": "K9 access. Which trails your dog can follow depends on its specializations.",
+        "cmdref_k9announce_usage": "/k9announce",
+        "cmdref_k9announce_does": "Warns the person in front of you that a dog will be released if they do not comply.",
+        "cmdref_k9announce_needs": "K9 access. The Apprehension Announcement feature must be turned on for your server.",
+        "cmdref_danger_warn_alert_usage": "/qbx_k9unit:dangerWarnAlert",
+        "cmdref_danger_warn_alert_does": "Tells your partnered handler you have spotted trouble, with a rough direction and distance.",
+        "cmdref_danger_warn_alert_needs": "K9 access and an active partnership. The Danger Warning feature must be turned on for your server."
     },
     "inventory": {
         "open_gear_target_label": "Open K9 Gear",
@@ -1565,6 +1594,7 @@
         "takedown_label": "Non-Lethal Takedown",
         "toggle_vest_label": "Toggle K9 Vest",
         "track_blood_label": "Track Blood",
+        "track_certified_label": "K9: Search",
         "track_gunpowder_label": "Track Gunpowder",
         "track_scent_label": "Track Scent",
         "vehicle_toggle_label": "Enter/Exit Vehicle"
@@ -1704,7 +1734,10 @@
         "bite_hold_complete": "Training rep complete — bite and hold released on command.",
         "search_progress_label": "Practice searching...",
         "bite_hold_progress_label": "Practice bite-and-hold...",
-        "banner_text": "TRAINING MODE — no XP, no live effect (reps: %s)"
+        "banner_text": "TRAINING MODE — no XP, no live effect (reps: %s)",
+        "usage_k9train": "/k9train by itself turns Training Mode on if it's off, or off if it's on. Use /k9train search or /k9train bite for a specific drill. (Old names /k9training on|off, /k9trainsearch and /k9trainbite still work too.)",
+        "contextual_turning_on": "Turning Training Mode ON.",
+        "contextual_turning_off": "Turning Training Mode OFF."
     },
     "vehicle": {
         "no_vehicle_nearby": "No K9 vehicle nearby.",
@@ -1786,7 +1819,10 @@
         "usage_removedog": "Usage: /k9removedog [citizen id]. This stops that character being a K9 — they go back to loading in as a person.",
         "remove_success": "%s is no longer a K9 character and will load in as a person again.",
         "remove_failed": "Could not remove that character's K9 status (%s).",
-        "not_a_dog_character": "That character is not set as a K9, so there is nothing to remove."
+        "not_a_dog_character": "That character is not set as a K9, so there is nothing to remove.",
+        "usage_dog": "Usage: /k9dog <target> -- shows whether that character is currently pinned as a K9. /k9dog set <target> <model> -- makes them one. /k9dog remove <target> -- undoes it. (Old names /k9setdog and /k9removedog still work too.)",
+        "status_pinned": "%s is currently pinned as a K9 (model: %s). Run /k9dog remove %s to undo it.",
+        "status_not_pinned": "%s is not currently pinned as a K9. Run /k9dog set %s <model> to make them one."
     },
     "leashvisual": {
         "rope_textures_unavailable": "Leash rope textures failed to load — the leash still works, but no rope will be visible this session."

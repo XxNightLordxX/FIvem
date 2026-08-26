@@ -847,34 +847,48 @@ local function RegisterK9RadialMenu()
         }
     end
 
-    --- Track Scent/Blood/Gunpowder — DEVELOPER_REFERENCE.md §11.3/§11.5, Phase 2. Each is a
-    --- single context-sensitive item: while a trail of THAT SPECIFIC type is
-    --- active it becomes a "Stop Tracking" cancel (calling the shared
-    --- StopTracking()); while tracking a DIFFERENT type is active, it defers to
-    --- Start*Track()'s own "already tracking — stop first" rejection/notify
-    --- rather than silently canceling the wrong trail; otherwise it starts that
-    --- specific trail type. This is the only in-game entry point to
-    --- client/tracking.lua's Start*Track()/StopTracking() globals.
-    --- A bare `if IsTracking() then StopTracking()` check here (not gated on
-    --- the item's OWN type) would mean clicking, say, "Track Gunpowder"
-    --- while already tracking blood would silently cancel the blood trail
-    --- and do nothing else — the click swallowed by the wrong item's toggle
-    --- branch, with zero notification, and Track Gunpowder needing a SECOND
-    --- click to actually start. Avoided via GetActiveTrackType() — each item
-    --- only self-toggles when it's already the active type. Each gated
-    --- independently by its own Config.Features flag, same pattern as
-    --- Bark/Leash/Vehicle above.
-    if Config.Features.ScentTracking then
+    --- ONE MERGED "K9: Search" ITEM (owner-directed decluttering pass,
+    --- 2026-08-26 -- "merge all the scent tracking stuff into one thing so
+    --- that way it[’s] less clutter and when certed for extra stuff it
+    --- just does it"). REPLACES the three former separate Track Scent /
+    --- Track Blood / Track Gunpowder items (DEVELOPER_REFERENCE.md §11.3/§11.5, Phase 2)
+    --- with a single context-sensitive item, following the SAME
+    --- toggle-vs-defer shape those three used to each implement
+    --- independently: while a trail of ANY type is active it becomes a
+    --- "Stop" cancel (calling the shared StopTracking(), which works
+    --- regardless of which type is active); otherwise it starts the ONE
+    --- merged action (StartCertifiedTrack(), client/tracking.lua) that
+    --- asks the server to resolve whichever type(s) this specific K9 is
+    --- currently entitled to (Config.SpecializationTracking +
+    --- HasSpecialization, server-side, never decided here) and search all
+    --- of them in one round trip. THIS FILE never picks a trackType, never
+    --- reads Config.SpecializationTracking, and never calls
+    --- HasSpecialization -- "the server resolves which types apply, the
+    --- client must NOT decide this" per this pass's own explicit
+    --- requirement; a client-side filter here would just be a filter a
+    --- modified client could turn off.
+    ---
+    --- GATED ON "is at least one of the three underlying trail types even
+    --- switched on" (a coarser, DISPLAY-ONLY check -- the real per-type
+    --- gate is server-side, re-validated independently for every candidate
+    --- type by findNearestTrackableSource regardless of this check) rather
+    --- than on any ONE of the three flags alone, since which type(s) end
+    --- up actually searchable for a given K9 is now a per-citizenid,
+    --- server-resolved fact this file cannot and must not predict.
+    --- client/tracking.lua's own 'k9track' chat command is the OTHER entry
+    --- point to the exact same StartCertifiedTrack() -- this radial item
+    --- adds no logic of its own beyond dispatching to it.
+    if Config.Features.ScentTracking or Config.Features.BloodTracking or Config.Features.GunpowderSniffing then
         k9SubmenuItems[#k9SubmenuItems + 1] = {
-            id = 'k9_track_scent',
-            label = locale('radial.track_scent_label'),
+            id = 'k9_track_certified',
+            label = locale('radial.track_certified_label'),
             icon = 'wind',
             onSelect = function()
                 -- type(...) == 'function' guards -- see k9_sit's identical
                 -- note above for the full HEADER/CODE DRIFT FIX writeup. An
-                -- absent GetActiveTrackType() is treated as "nothing active"
-                -- (falls through to the Start branch).
-                if type(GetActiveTrackType) == 'function' and GetActiveTrackType() == 'scent' then
+                -- absent GetActiveTrackType()/IsTracking() is treated as
+                -- "nothing active" (falls through to the Start branch).
+                if type(IsTracking) == 'function' and IsTracking() then
                     if type(StopTracking) == 'function' then
                         StopTracking()
                     end
@@ -886,62 +900,8 @@ local function RegisterK9RadialMenu()
                     return
                 end
 
-                if type(StartScentTrack) == 'function' then
-                    StartScentTrack()
-                end
-            end,
-        }
-    end
-
-    if Config.Features.BloodTracking then
-        k9SubmenuItems[#k9SubmenuItems + 1] = {
-            id = 'k9_track_blood',
-            label = locale('radial.track_blood_label'),
-            icon = 'droplet',
-            onSelect = function()
-                -- type(...) == 'function' guards -- see k9_sit's identical
-                -- note above for the full HEADER/CODE DRIFT FIX writeup.
-                if type(GetActiveTrackType) == 'function' and GetActiveTrackType() == 'blood' then
-                    if type(StopTracking) == 'function' then
-                        StopTracking()
-                    end
-                    return
-                end
-
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
-                    return
-                end
-
-                if type(StartBloodTrack) == 'function' then
-                    StartBloodTrack()
-                end
-            end,
-        }
-    end
-
-    if Config.Features.GunpowderSniffing then
-        k9SubmenuItems[#k9SubmenuItems + 1] = {
-            id = 'k9_track_gunpowder',
-            label = locale('radial.track_gunpowder_label'),
-            icon = 'crosshairs',
-            onSelect = function()
-                -- type(...) == 'function' guards -- see k9_sit's identical
-                -- note above for the full HEADER/CODE DRIFT FIX writeup.
-                if type(GetActiveTrackType) == 'function' and GetActiveTrackType() == 'gunpowder' then
-                    if type(StopTracking) == 'function' then
-                        StopTracking()
-                    end
-                    return
-                end
-
-                if not CanShowK9UI() then
-                    DenyK9UIAccess()
-                    return
-                end
-
-                if type(StartGunpowderTrack) == 'function' then
-                    StartGunpowderTrack()
+                if type(StartCertifiedTrack) == 'function' then
+                    StartCertifiedTrack()
                 end
             end,
         }

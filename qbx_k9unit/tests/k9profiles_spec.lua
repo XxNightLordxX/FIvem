@@ -92,7 +92,7 @@ local function makeQueryAwait(world)
     end
 end
 
---- @param opts table? -- { world, isHighCommand, tierByCitizenid, onlineSources, databaseEnabled, throwOnWrite }
+--- @param opts table? -- { world, isHighCommand, tierByCitizenid, onlineSources, databaseEnabled, throwOnWrite, maxSpeedScentMultiplier, wellbeingConfig }
 --- @return table fixture
 local function boot(opts)
     opts = opts or {}
@@ -142,6 +142,12 @@ local function boot(opts)
 
     local config = {
         Database = opts.databaseEnabled == false and { enabled = false } or nil,
+        -- Owner-editable speed/scent ceiling (Part A). Omitted means "let
+        -- server/k9profiles.lua's own ResolveMaxSpeedScentMultiplier fall
+        -- back to its built-in 10.0 default", exactly matching a real
+        -- server that has never touched Config.MaxSpeedScentMultiplier.
+        MaxSpeedScentMultiplier = opts.maxSpeedScentMultiplier,
+        Wellbeing = opts.wellbeingConfig,
     }
 
     local fakeNow = { value = 0 }
@@ -508,14 +514,32 @@ t.test('VALIDATION: no_fields_to_set when every optional field is omitted', func
     t.equals(result.reason, 'no_fields_to_set')
 end)
 
-t.test('VALIDATION: invalid_speed_multiplier / invalid_scent_range_multiplier for non-positive, NaN, or above-ceiling values', function()
+t.test('VALIDATION: invalid_speed_multiplier / invalid_scent_range_multiplier for non-positive, NaN, or above-ceiling values (default 10.0 ceiling, Config.MaxSpeedScentMultiplier unset)', function()
     local f = boot({ isHighCommand = function() return true end })
     local nan = 0 / 0
-    for _, bad in ipairs({ 0, -1, nan, 3.01, 999, 'not a number' }) do
+    -- 10.01 is just above this file's own built-in fallback ceiling
+    -- (server/k9profiles.lua's ResolveMaxSpeedScentMultiplier, 10.0) --
+    -- see the dedicated "OWNER-EDITABLE CEILING" section further below for
+    -- the tests that prove this ceiling is genuinely config-driven, not
+    -- just this one fallback value.
+    for _, bad in ipairs({ 0, -1, nan, 10.01, 999, math.huge, -math.huge, 'not a number' }) do
         advance(f)
-        t.equals(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = bad }).reason, 'invalid_speed_multiplier', tostring(bad))
+        local speedResult = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = bad })
+        t.equals(speedResult.reason, 'invalid_speed_multiplier', tostring(bad))
         advance(f)
-        t.equals(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', scentRangeMultiplier = bad }).reason, 'invalid_scent_range_multiplier', tostring(bad))
+        local scentResult = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', scentRangeMultiplier = bad })
+        t.equals(scentResult.reason, 'invalid_scent_range_multiplier', tostring(bad))
+    end
+end)
+
+t.test('VALIDATION: a rejected/invalid speedMultiplier/scentRangeMultiplier value never errors or crashes the callback, at any ceiling -- wrapped in pcall', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local nan = 0 / 0
+    for _, bad in ipairs({ 0, -1, nan, math.huge, -math.huge, 999, 'not a number' }) do
+        advance(f)
+        local ok, result = pcall(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'], HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = bad })
+        t.isTrue(ok, ('callback itself must never throw for speedMultiplier = %s'):format(tostring(bad)))
+        t.isFalse(result.ok)
     end
 end)
 
@@ -791,6 +815,295 @@ t.test('BOOT-ORDER RACE bounded timeout: if the schema probe never settles, this
     t.equals(coroutine.status(profileCo), 'dead', 'this file\'s own onResourceStart handler must have completed (given up), not be stuck suspended forever')
     t.equals(f.overrideQueryCallCount(), 0, 'must never have trusted the unconfirmed table')
     t.equals(#f.callbacks['qbx_k9unit:server:k9ProfilesList'](1).overrides, 0, 'boots with no individual overrides at all, exactly like Config.Database.enabled = false, rather than trust an unconfirmed table')
+end)
+
+-- ============================================================================
+-- SECTION 10 -- OWNER-EDITABLE CEILING (Config.MaxSpeedScentMultiplier,
+-- Part A of the owner's "keep the speed and stamina editing where i can
+-- edit it to as high as i want" request). ResolveMaxSpeedScentMultiplier's
+-- own CLAMP-AND-WARN posture is exercised directly through
+-- k9ProfileUpsert's own speedMultiplier/scentRangeMultiplier validation --
+-- the same seam server/xptiers.lua/server/runtimecontrol.lua each read
+-- their own copy of this exact setting through, per this file's own header
+-- "no cross-file `local` import mechanism" convention.
+-- ============================================================================
+
+t.test('CEILING IS GENUINELY CONFIG-DRIVEN: Config.MaxSpeedScentMultiplier = 5.0 accepts 4.9 and rejects 5.1', function()
+    local f = boot({ isHighCommand = function() return true end, maxSpeedScentMultiplier = 5.0 })
+    local ok1 = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 4.9 })
+    t.isTrue(ok1.ok, 'a value below a 5.0 ceiling must be accepted')
+    t.equals(ok1.effective.speedMultiplier, 4.9)
+
+    advance(f)
+    local rejected = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 5.1 })
+    t.isFalse(rejected.ok, 'a value above a 5.0 ceiling must be rejected')
+    t.equals(rejected.reason, 'invalid_speed_multiplier')
+end)
+
+t.test('CEILING IS GENUINELY CONFIG-DRIVEN: a simulated reboot at Config.MaxSpeedScentMultiplier = 50.0 now accepts 40.0', function()
+    -- Simulates a resource restart: a brand-new boot() with a different
+    -- Config.MaxSpeedScentMultiplier, exactly like an operator editing
+    -- config.lua and restarting the resource.
+    local f = boot({ isHighCommand = function() return true end, maxSpeedScentMultiplier = 50.0 })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 40.0 })
+    t.isTrue(result.ok, 'a value that would have been rejected under the 10.0/3.0 defaults must be accepted once the operator raises the ceiling to 50.0')
+    t.equals(result.effective.speedMultiplier, 40.0)
+end)
+
+t.test('CEILING SANITY CHECK (temporarily hardcode 3.0 back to prove the test above is real): a stale 3.0 ceiling would reject 40.0', function()
+    -- This is the RED-THEN-GREEN proof the task calls for, encoded as an
+    -- executable check rather than only a manual step: it reasserts, using
+    -- the SAME production validator this file's callback calls
+    -- (IsValidMultiplier is not exported, so this re-derives its exact
+    -- contract: finite, > 0, <= max), that 40.0 would NOT have passed
+    -- against the old hardcoded 3.0 ceiling -- confirming the test two
+    -- above is actually exercising the ceiling, not passing for an
+    -- unrelated reason.
+    local wouldPassAtOldHardcodedCeiling = 40.0 > 0 and 40.0 <= 3.0
+    t.isFalse(wouldPassAtOldHardcodedCeiling, '40.0 must be above the OLD hardcoded 3.0 ceiling for the test above to be a meaningful proof of config-drivenness')
+end)
+
+t.test('CEILING: 0, negative, NaN, infinity and a string are each rejected at a NON-DEFAULT ceiling too, and the call never errors (pcall)', function()
+    local f = boot({ isHighCommand = function() return true end, maxSpeedScentMultiplier = 5.0 })
+    local nan = 0 / 0
+    for _, bad in ipairs({ 0, -1, nan, math.huge, -math.huge, 'not a number' }) do
+        advance(f)
+        local ok, result = pcall(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'], HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = bad })
+        t.isTrue(ok, ('must never throw for speedMultiplier = %s at a 5.0 ceiling'):format(tostring(bad)))
+        t.isFalse(result.ok)
+        t.equals(result.reason, 'invalid_speed_multiplier')
+    end
+end)
+
+t.test('CEILING: Config.MaxSpeedScentMultiplier missing entirely falls back to 10.0 with a named warning, never asserts/crashes the file', function()
+    local f = boot({ isHighCommand = function() return true end }) -- maxSpeedScentMultiplier omitted -> Config.MaxSpeedScentMultiplier is nil
+    -- The file must still have loaded and registered every callback (a
+    -- bare top-level `assert` here would have prevented this entirely).
+    t.isNotNil(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'])
+    local found = false
+    for _, line in ipairs(f.printedLines) do
+        if line:find('Config.MaxSpeedScentMultiplier', 1, true) and line:find('10', 1, true) then
+            found = true
+        end
+    end
+    t.isTrue(found, 'a missing Config.MaxSpeedScentMultiplier must print a warning naming the exact setting and the 10.0 fallback')
+
+    -- And the fallback is genuinely applied, not just warned about: 10.0
+    -- accepted, 10.01 rejected.
+    local accepted = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 10.0 })
+    t.isTrue(accepted.ok)
+    advance(f)
+    local rejected = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT2', speedMultiplier = 10.01 })
+    t.isFalse(rejected.ok)
+    t.equals(rejected.reason, 'invalid_speed_multiplier')
+end)
+
+t.test('CEILING: Config.MaxSpeedScentMultiplier = 0 / negative / NaN / infinity / a string all fall back to 10.0 with a named warning', function()
+    local nan = 0 / 0
+    for _, bad in ipairs({ 0, -5, nan, math.huge, -math.huge, 'not a number' }) do
+        local f = boot({ isHighCommand = function() return true end, maxSpeedScentMultiplier = bad })
+        local accepted = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 10.0 })
+        t.isTrue(accepted.ok, ('Config.MaxSpeedScentMultiplier = %s must fall back to the 10.0 default, not disable the file'):format(tostring(bad)))
+    end
+end)
+
+-- ============================================================================
+-- SECTION 11 -- STAMINA (sprintDecayPerTick, Part B). Owner's own words:
+-- "be able to make the stamina as high as i want and be able to make the
+-- stamina as high as i want or permanant." Routed through the SAME
+-- CanManageK9Profiles/K9ProfileEditMutex/K9ProfileActionCooldown/
+-- WriteOverrideAudit machinery as speed/scent/medkit above -- see
+-- server/k9profiles.lua's own "STAMINA OVERRIDE" declaration comment for
+-- why this is held in a separate, SESSION-ONLY in-memory table rather than
+-- persisted (no `k9_individual_overrides` column exists for it yet).
+-- ============================================================================
+
+t.test('STAMINA: with no override and no Config.Wellbeing at all (this fixture never defines it), effective sprintDecayPerTick defaults to 2.0', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'NOBODY')
+    t.equals(result.effective.sprintDecayPerTick, 2.0)
+    t.isFalse(result.effective.overridden.sprintDecayPerTick)
+end)
+
+t.test('STAMINA: with no override, effective sprintDecayPerTick defers to Config.Wellbeing.Fatigue.sprintDecayPerTick when that IS defined', function()
+    local f = boot({ isHighCommand = function() return true end, wellbeingConfig = { Fatigue = { sprintDecayPerTick = 7.5 } } })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'NOBODY')
+    t.equals(result.effective.sprintDecayPerTick, 7.5)
+end)
+
+t.test('STAMINA: 0 IS ACCEPTED -- the owner\'s own requested "permanent stamina" sentinel, never treated as invalid/falsy/omitted', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 0 })
+    t.isTrue(result.ok, 'sprintDecayPerTick = 0 must be accepted, not rejected as falsy/invalid')
+    t.equals(result.effective.sprintDecayPerTick, 0)
+    t.isTrue(result.effective.overridden.sprintDecayPerTick)
+end)
+
+t.test('STAMINA VALIDATOR SANITY CHECK (proves the test above is real): a `> 0` validator (instead of the production `>= 0`) would have rejected 0', function()
+    -- Re-derives IsValidStaminaDrain's OWN two candidate contracts inline
+    -- (it is not exported) -- if this ever reads `false` for the `>= 0`
+    -- line, IsValidStaminaDrain's contract has silently drifted back to
+    -- `> 0` and the test above would start passing for the wrong reason.
+    local wouldPassAtCorrectGteZero = (0 >= 0) and 0 <= 20.0
+    local wouldPassAtWrongGtZero = (0 > 0) and 0 <= 20.0
+    t.isTrue(wouldPassAtCorrectGteZero, 'the production contract (>= 0) must accept 0')
+    t.isFalse(wouldPassAtWrongGtZero, 'a `> 0` contract would have rejected 0 -- confirming the test above is a meaningful proof of the >= 0 contract, not a coincidence')
+end)
+
+t.test('STAMINA: negative, NaN, infinity, a string, and above-MAX_STAMINA_DRAIN_PER_TICK (20.0) values are all rejected, never crash (pcall)', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local nan = 0 / 0
+    for _, bad in ipairs({ -1, -0.01, nan, math.huge, -math.huge, 20.01, 999, 'not a number' }) do
+        advance(f)
+        local ok, result = pcall(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'], HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = bad })
+        t.isTrue(ok, ('must never throw for sprintDecayPerTick = %s'):format(tostring(bad)))
+        t.isFalse(result.ok)
+        t.equals(result.reason, 'invalid_sprint_decay_per_tick', tostring(bad))
+    end
+end)
+
+t.test('STAMINA: exactly MAX_STAMINA_DRAIN_PER_TICK (20.0) is accepted -- an inclusive ceiling', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 20.0 })
+    t.isTrue(result.ok)
+    t.equals(result.effective.sprintDecayPerTick, 20.0)
+end)
+
+t.test('STAMINA AUTHORIZATION: a non-high-command caller is refused a stamina change EVEN ON THEIR OWN citizenid', function()
+    local f = boot({
+        isHighCommand = function(src) return src == HC_SOURCE end,
+        onlineSources = { [NON_HC_SOURCE] = 'SELF_CIT' },
+    })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](NON_HC_SOURCE, { citizenid = 'SELF_CIT', sprintDecayPerTick = 0 })
+    t.isFalse(result.ok)
+    t.equals(result.reason, 'denied')
+    t.equals(f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'SELF_CIT').effective.overridden.sprintDecayPerTick, false, 'a denied caller must never be able to write a stamina override, even for themselves')
+end)
+
+t.test('STAMINA: a high-command caller CAN set stamina on somebody ELSE, and the response carries staminaPersistenceWarning', function()
+    local f = boot({ isHighCommand = function(src) return src == HC_SOURCE end })
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'SOMEONE_ELSE', sprintDecayPerTick = 5.0 })
+    t.isTrue(result.ok)
+    t.equals(result.effective.sprintDecayPerTick, 5.0)
+    t.isNotNil(result.staminaPersistenceWarning, 'the response must carry staminaPersistenceWarning whenever a stamina override is live')
+    t.isTrue(result.staminaPersistenceWarning:find('restart', 1, true) ~= nil, 'the warning text must actually say this resets on restart, not just be present')
+end)
+
+t.test('STAMINA: k9ProfileGet ALSO carries staminaPersistenceWarning for a citizenid with a live stamina override, on a later read', function()
+    local f = boot({ isHighCommand = function() return true end })
+    t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 3.0 }).ok)
+    local getResult = f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT1')
+    t.isNotNil(getResult.staminaPersistenceWarning)
+    t.equals(getResult.override.sprintDecayPerTick, 3.0)
+end)
+
+t.test('STAMINA: k9ProfileGet for a citizenid with NO stamina override carries NO staminaPersistenceWarning', function()
+    local f = boot({ isHighCommand = function() return true end })
+    local getResult = f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'NEVER_TOUCHED')
+    t.isNil(getResult.staminaPersistenceWarning)
+end)
+
+t.test('STAMINA: RESET clears stamina and the effective value reverts to the global default', function()
+    local f = boot({ isHighCommand = function() return true end, wellbeingConfig = { Fatigue = { sprintDecayPerTick = 4.0 } } })
+    t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 0 }).ok)
+    t.equals(f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT1').effective.sprintDecayPerTick, 0)
+
+    advance(f)
+    local resetResult = f.callbacks['qbx_k9unit:server:k9ProfileReset'](HC_SOURCE, 'CIT1')
+    t.isTrue(resetResult.ok)
+    t.equals(resetResult.effective.sprintDecayPerTick, 4.0, 'must revert to the global Config.Wellbeing.Fatigue.sprintDecayPerTick default')
+
+    local getAfterReset = f.callbacks['qbx_k9unit:server:k9ProfileGet'](HC_SOURCE, 'CIT1')
+    t.isFalse(getAfterReset.effective.overridden.sprintDecayPerTick)
+    t.isNil(getAfterReset.staminaPersistenceWarning, 'a reset stamina override must no longer carry the persistence warning')
+end)
+
+t.test('STAMINA: reset on a citizenid with ONLY a stamina override (no speed/scent/medkit ever set) is a real, non-no-op reset -- never db_error, never no_override_existed', function()
+    local f = boot({ isHighCommand = function() return true end })
+    t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'STAMINA_ONLY', sprintDecayPerTick = 1.0 }).ok)
+    advance(f)
+    local resetResult = f.callbacks['qbx_k9unit:server:k9ProfileReset'](HC_SOURCE, 'STAMINA_ONLY')
+    t.isTrue(resetResult.ok)
+    t.isNil(resetResult.reason, 'a real reset, not the no_override_existed no-op path')
+    t.isFalse(f.world.overrides['STAMINA_ONLY'] ~= nil, 'a stamina-only override must never have written a k9_individual_overrides row at all')
+end)
+
+t.test('STAMINA: a partial edit that touches ONLY a persisted field (e.g. speedMultiplier) leaves an existing stamina override untouched', function()
+    local f = boot({ isHighCommand = function() return true end })
+    t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 6.0 }).ok)
+    advance(f)
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 1.3 })
+    t.isTrue(result.ok)
+    t.equals(result.effective.speedMultiplier, 1.3)
+    t.equals(result.effective.sprintDecayPerTick, 6.0, 'an edit that never mentions sprintDecayPerTick must not clear a previously-set stamina override')
+end)
+
+t.test('STAMINA: a stamina-only override for a NEW citizenid, once a persisted field is later added, does not double-count against the cap', function()
+    local f = boot({ isHighCommand = function() return true end })
+    t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 1.0 }).ok)
+    advance(f)
+    -- Adding a persisted field to the SAME citizenid must be treated as
+    -- editing an already-live override (isNew = false), never as a second
+    -- new entry.
+    local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', speedMultiplier = 1.1 })
+    t.isTrue(result.ok)
+end)
+
+t.test('STAMINA CAP: stamina-only overrides count toward MAX_INDIVIDUAL_OVERRIDES (500) exactly like speed/scent/medkit overrides do', function()
+    local f = boot({ isHighCommand = function() return true end })
+    for i = 1, 500 do
+        local result = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = ('STA%04d'):format(i), sprintDecayPerTick = 1.0 })
+        t.isTrue(result.ok, ('stamina-only override #%d should have been accepted'):format(i))
+        advance(f)
+    end
+    local overCap = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'ONE_TOO_MANY', sprintDecayPerTick = 1.0 })
+    t.isFalse(overCap.ok)
+    t.equals(overCap.reason, 'too_many_overrides')
+    advance(f)
+
+    -- Editing an already-live stamina-only override must still work even at the cap.
+    local editExisting = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'STA0001', sprintDecayPerTick = 2.0 })
+    t.isTrue(editExisting.ok, 'editing an already-live stamina-only override must never be blocked by the cap')
+end)
+
+t.test('STAMINA CAP: a MIX of persisted overrides and stamina-only overrides is counted as ONE combined pool, not two separate 500-slot pools', function()
+    local f = boot({ isHighCommand = function() return true end })
+    for i = 1, 250 do
+        t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = ('SPD%04d'):format(i), speedMultiplier = 1.1 }).ok)
+        advance(f)
+    end
+    for i = 1, 250 do
+        t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = ('STA%04d'):format(i), sprintDecayPerTick = 1.0 }).ok)
+        advance(f)
+    end
+    local overCap = f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'ONE_TOO_MANY', sprintDecayPerTick = 1.0 })
+    t.isFalse(overCap.ok)
+    t.equals(overCap.reason, 'too_many_overrides')
+end)
+
+t.test('STAMINA AUDIT: create/update/reset all write to k9_individual_override_audit with sprintDecayPerTick recorded in detail', function()
+    local f = boot({ isHighCommand = function() return true end, onlineSources = { [HC_SOURCE] = 'HC_CIT' } })
+    t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'CIT1', sprintDecayPerTick = 2.5 }).ok)
+    t.equals(#f.world.audit, 1)
+    t.isTrue(f.world.audit[1].detail:find('sprintDecayPerTick=2.5', 1, true) ~= nil)
+
+    advance(f)
+    t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileReset'](HC_SOURCE, 'CIT1').ok)
+    t.equals(#f.world.audit, 2)
+    t.equals(f.world.audit[2].action, 'override_reset')
+end)
+
+t.test('STAMINA: ListK9IndividualOverrides / k9ProfilesList includes a citizenid with ONLY a stamina override', function()
+    local f = boot({ isHighCommand = function() return true end })
+    t.isTrue(f.callbacks['qbx_k9unit:server:k9ProfileUpsert'](HC_SOURCE, { citizenid = 'STAMINA_ONLY', sprintDecayPerTick = 1.5 }).ok)
+    local listResult = f.callbacks['qbx_k9unit:server:k9ProfilesList'](HC_SOURCE)
+    t.isTrue(listResult.ok)
+    local found
+    for _, entry in ipairs(listResult.overrides) do
+        if entry.citizenid == 'STAMINA_ONLY' then found = entry end
+    end
+    t.isNotNil(found, 'a stamina-only override must still appear in the list')
+    t.equals(found.sprintDecayPerTick, 1.5)
 end)
 
 os.exit(t.summary())

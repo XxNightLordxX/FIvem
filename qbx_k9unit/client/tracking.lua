@@ -203,13 +203,32 @@ function GetActiveTrackType()
 end
 
 --- Shared implementation behind StartScentTrack()/StartBloodTrack()/
---- StartGunpowderTrack() below. DEVELOPER_REFERENCE.md §11.5's three trail-type
---- acceptance-criteria blocks are textually identical (only the trackType
---- string and its Config.Tracking.<Type> sub-table differ), so this is one
---- function instead of three near-duplicate copies — mirrors e.g.
---- client/vehicle.lua's ReleasePedFromVehicleState being shared rather than
---- duplicated.
---- @param trackType 'scent'|'blood'|'gunpowder'
+--- StartGunpowderTrack() AND StartCertifiedTrack() below. DEVELOPER_REFERENCE.md §11.5's
+--- three trail-type acceptance-criteria blocks are textually identical
+--- (only the trackType string and its Config.Tracking.<Type> sub-table
+--- differ), so this is one function instead of three near-duplicate copies
+--- — mirrors e.g. client/vehicle.lua's ReleasePedFromVehicleState being
+--- shared rather than duplicated.
+---
+--- EXTENDED this pass (coder-architect, owner-directed decluttering pass,
+--- 2026-08-26 -- "merge all the scent tracking stuff into one thing") to
+--- ALSO back the one new merged action: `trackType == nil` means "ask the
+--- server to resolve whichever type(s) this K9 is entitled to and find the
+--- nearest match across all of them" (calls the NEW
+--- 'qbx_k9unit:server:findNearestTrackableSource' callback, which takes no
+--- trackType argument at all — the server decides, never this file, per
+--- this pass's explicit "the client must not decide this" requirement —
+--- and echoes back WHICH type it matched in `result.trackType`, since this
+--- file needs that to pick the right Config.Tracking.<Type> tuning for
+--- rendering). A caller-supplied `trackType` string keeps calling the
+--- OLDER, still-live, single-type 'qbx_k9unit:server:findTrackableSource'
+--- callback exactly as before — StartScentTrack()/StartBloodTrack()/
+--- StartGunpowderTrack() are UNCHANGED in behavior, kept as resource-globals
+--- per this file's own header (other files/DEVELOPER_REFERENCE.md reference them by
+--- name), even though nothing in this resource's own UI calls them anymore
+--- (client/radial.lua's three Track items collapsed into StartCertifiedTrack()
+--- below).
+--- @param trackType ('scent'|'blood'|'gunpowder')? -- nil selects the merged, server-resolved action
 local function StartTrack(trackType)
     -- ANY-PED SWEEP FIX (coder-frontend, this pass — coordinator finding:
     -- "StartTrack() gates on CanShowK9UI(), which is stricter than what the
@@ -301,7 +320,18 @@ local function StartTrack(trackType)
     -- above already flags why that flag must always get reset). pcall it;
     -- the `not result or not result.found` branch further below already
     -- treats a nil `result` the same as "nothing nearby."
-    local ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findTrackableSource', false, trackType)
+    --
+    -- CALLBACK SELECTION (this pass) — see this function's own doc comment
+    -- above: `trackType == nil` calls the NEW merged, server-resolved
+    -- callback (no trackType argument sent at all — the server decides);
+    -- a caller-supplied trackType keeps calling the OLDER single-type
+    -- callback exactly as every existing Start*Track() global already did.
+    local ok, result
+    if trackType then
+        ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findTrackableSource', false, trackType)
+    else
+        ok, result = pcall(lib.callback.await, 'qbx_k9unit:server:findNearestTrackableSource', false)
+    end
     if not ok then result = nil end
 
     startInFlight = false
@@ -324,11 +354,25 @@ local function StartTrack(trackType)
         return
     end
 
+    -- RESOLVED TRACK TYPE (this pass) — a caller-supplied trackType is used
+    -- as-is (findTrackableSource never echoes one back); the merged action
+    -- reads it from the server's own response instead, since this file
+    -- never told the server which type to look for. Defensively validated
+    -- against the three real track-type strings (never trusted blindly,
+    -- even though the server is authoritative here) so a malformed/future
+    -- response can never wedge `trackingState` into a type this file's own
+    -- TRACKING_STATE_CONFIG lookup (further below) doesn't recognize.
+    local resolvedTrackType = trackType or result.trackType
+    if resolvedTrackType ~= 'scent' and resolvedTrackType ~= 'blood' and resolvedTrackType ~= 'gunpowder' then
+        lib.notify({ title = locale('common.notify_title'), description = locale('tracking.nothing_to_track'), type = 'error' })
+        return
+    end
+
     -- Read breaksTrail from the LOCAL shared_script config directly rather
     -- than trusting result.breaksAtWater (documented informational-only,
     -- see this file's EVENT/CALLBACK CONTRACT above).
     trackingState = {
-        trackType = trackType,
+        trackType = resolvedTrackType,
         coords = result.coords,
         breaksAtWater = Config.WaterTrackingDecay.breaksTrail,
         brokenByWater = false,
@@ -340,23 +384,58 @@ local function StartTrack(trackType)
     -- separate thread-start call needed").
 end
 
---- Radial-facing entry point for scent tracking (Config.Features.ScentTracking).
---- DEVELOPER_REFERENCE.md §11.3's client/radial.lua row calls this by this exact name —
---- do not rename without also updating that row and radial.lua's own
---- Track Scent item, which calls this directly (confirmed wired, see this
---- file's header FILE-TO-FILE CONTRACT).
+--- FORMERLY the radial-facing entry point for scent tracking. UPDATED this
+--- pass (coder-architect, owner-directed decluttering, 2026-08-26): kept
+--- as a resource-global by name (other files/DEVELOPER_REFERENCE.md may still
+--- reference it), but client/radial.lua's three separate Track items
+--- collapsed into ONE ("K9: Search" — see that file's own comment) calling
+--- StartCertifiedTrack() below instead, so nothing in this resource's own
+--- shipped UI calls this specific function anymore. Behavior is otherwise
+--- completely unchanged — still calls the OLDER single-type
+--- findTrackableSource callback for 'scent' specifically, still no
+--- specialization scoping possible for a fixed-type request (that
+--- callback's own server-side specialization gate — see server/tracking.lua
+--- — would simply always allow 'scent' anyway, since it is never
+--- specialization-gated).
 function StartScentTrack()
     StartTrack('scent')
 end
 
---- Radial-facing entry point for blood-trail tracking (Config.Features.BloodTracking).
+--- FORMERLY the radial-facing entry point for blood-trail tracking. See
+--- StartScentTrack()'s own updated doc comment above — identical story.
 function StartBloodTrack()
     StartTrack('blood')
 end
 
---- Radial-facing entry point for gunpowder-residue tracking (Config.Features.GunpowderSniffing).
+--- FORMERLY the radial-facing entry point for gunpowder-residue tracking.
+--- See StartScentTrack()'s own updated doc comment above — identical story.
 function StartGunpowderTrack()
     StartTrack('gunpowder')
+end
+
+--- THE ONE MERGED ACTION (owner-directed decluttering pass, 2026-08-26 --
+--- "merge all the scent tracking stuff into one thing so that way it[’s]
+--- less clutter and when certed for extra stuff it just does it"). THE
+--- single entry point client/radial.lua's one collapsed "K9: Search" item
+--- and this file's own new 'k9track' chat command (registered below) both
+--- call. Delegates to the shared StartTrack() above with `trackType = nil`,
+--- which is what selects the NEW merged, server-resolved
+--- 'qbx_k9unit:server:findNearestTrackableSource' callback instead of the
+--- older single-type one — see that function's own doc comment for the
+--- full "which callback, and why" writeup.
+---
+--- THE SERVER DECIDES, NEVER THIS FILE: this function does not read
+--- Config.SpecializationTracking, does not call HasSpecialization, and does
+--- not know or guess which track type(s) the local player's K9 is
+--- currently entitled to — a client-side filter here would be exactly the
+--- "a client-side filter is a client-side filter, and a modded client
+--- would just turn it off" trap this pass's own design explicitly rules
+--- out. Every bit of scoping happens server-side
+--- (server/tracking.lua's ResolveEnabledTrackTypesForCitizenId), and this
+--- function just asks "find whatever I'm certified for" and renders
+--- whatever comes back.
+function StartCertifiedTrack()
+    StartTrack(nil)
 end
 
 --- Manual cancel — fills the open gap DEVELOPER_REFERENCE.md#tracking
@@ -386,6 +465,30 @@ function StopTracking()
     -- its own elastic thread "naturally stopping" once IsLeashed() is
     -- false — no separate thread-teardown call needed.
 end
+
+-- ======================================================================
+-- 'k9track' CHAT COMMAND (owner-directed decluttering pass, 2026-08-26 --
+-- "when certed for extra stuff it just does it so if i am certed in
+-- drugs and i have the command or third eye it will only search for
+-- drugs"). The COMMAND half of the ONE merged action — client/radial.lua's
+-- collapsed single item is the THIRD-EYE half. Both call the exact same
+-- StartCertifiedTrack() above; this command adds no logic of its own.
+--
+-- Registered UNCONDITIONALLY, mirroring client/keybinds.lua's own 'k9sit'
+-- precedent ("no dedicated Config.Features flag of its own... the real
+-- function already performs the real gate internally on every call") —
+-- StartCertifiedTrack()/StartTrack() above already re-check HasK9Access()
+-- client-side and the server independently re-validates
+-- Config.Features.<Type> per candidate type regardless of client UI state,
+-- so a second, redundant Config.Features gate here would only make this
+-- command's availability diverge from the radial item's own (which is
+-- gated on "is at least one of the three types even switched on at all",
+-- a coarser, display-only check — see client/radial.lua's own comment on
+-- that item).
+-- ======================================================================
+RegisterCommand('k9track', function()
+    StartCertifiedTrack()
+end, false)
 
 -- State/compute thread. Reuses the exact idle/active tick-rate-switch
 -- pattern client/movement.lua's leash pull-back thread already establishes

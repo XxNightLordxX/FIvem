@@ -881,9 +881,25 @@ local TABLET_STRING_KEYS = {
     -- full mechanism these five keys support.
     'feature_group_scent_heading', 'feature_group_scent_hint', 'feature_group_vehicle_heading',
     'feature_group_other_heading', 'feature_vehicle_sentence_template',
+    -- FULL DOMAIN GROUPING (owner-directed, 2026-08-26: "same with
+    -- features and sub features") -- one heading per remaining
+    -- server/tablet.lua FEATURE_DOMAINS group; see html/tablet.js's own
+    -- FEATURE_DOMAIN_ORDER for the full, stable rendering order these
+    -- belong to.
+    'feature_group_search_heading', 'feature_group_vision_heading',
+    'feature_group_combat_heading', 'feature_group_movement_heading',
+    'feature_group_wellbeing_heading', 'feature_group_progression_heading',
+    'feature_group_gear_heading', 'feature_group_training_heading',
+    'feature_group_admin_heading', 'feature_group_integration_heading',
     'no_abilities', 'search_features_placeholder', 'state_global_off',
     'state_blocked', 'state_not_certified', 'state_requires_grant_missing',
-    'state_available', 'feature_column', 'status_column',
+    'state_available',
+    -- DISPLAY-GAP FIX (this pass) -- subtle "why can they do that" marker
+    -- for a PersonFeaturesResult row available solely via high command --
+    -- see html/tablet.js's appendViaHighCommandMarker() for the full
+    -- contract.
+    'feature_via_high_command_marker', 'feature_via_high_command_hint',
+    'feature_column', 'status_column',
     'person_features_heading', 'person_capabilities_heading',
     'capability_no_description', 'capability_self_grant_disabled_title',
     'capability_rate_limited_wait_title',
@@ -1260,6 +1276,10 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9unspecialize_usage', 'cmdref_k9unspecialize_does', 'cmdref_k9unspecialize_needs',
     'cmdref_k9unspecializeoffline_usage', 'cmdref_k9unspecializeoffline_does', 'cmdref_k9unspecializeoffline_needs',
     'cmdref_k9givexp_usage', 'cmdref_k9givexp_does', 'cmdref_k9givexp_needs',
+    'cmdref_k9announce_usage', 'cmdref_k9announce_does', 'cmdref_k9announce_needs',
+    'cmdref_danger_warn_alert_usage', 'cmdref_danger_warn_alert_does', 'cmdref_danger_warn_alert_needs',
+    'cmdref_k9audit_usage', 'cmdref_k9audit_does', 'cmdref_k9audit_needs',
+    'cmdref_k9track_usage', 'cmdref_k9track_does', 'cmdref_k9track_needs',
     'cmdref_k9auditcert_usage', 'cmdref_k9auditcert_does', 'cmdref_k9auditcert_needs',
     'cmdref_k9auditpartner_usage', 'cmdref_k9auditpartner_does', 'cmdref_k9auditpartner_needs',
     'cmdref_k9auditsearch_usage', 'cmdref_k9auditsearch_does', 'cmdref_k9auditsearch_needs',

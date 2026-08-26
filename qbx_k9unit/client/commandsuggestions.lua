@@ -173,10 +173,31 @@
 --   commandsuggestions.k9hqtablet_does = "Opens the K9 Command Tablet directly to the High Command view."
 --   commandsuggestions.k9compat_does   = "Reprints this resource's compatibility detection summary (which framework, inventory, target and other integrations it detected) to your own client console."
 -- ----------------------------------------------------------------------
+-- COMMAND_CONSOLIDATION_SPEC.md new-canonical-command entries (this pass,
+-- coder-backend): 'k9dog' is a genuinely NEW command name (family #2's
+-- merged '/k9dog <set|remove> <target> ...') with no existing
+-- `tablet.cmdref_k9dog_*` locale key yet -- html/tablet.js is a hot file
+-- this pass cannot edit (a UI agent is live in it), so its real
+-- COMMAND_REFERENCE/DEFAULT_STRINGS entry (and client/tablet.lua's matching
+-- TABLET_STRING_KEYS pair) is reported to project-lead rather than added
+-- here. Same "tries the real locale() first, only falls back here while the
+-- key hasn't landed yet" contract as the three dynamic-name commands below.
 local PENDING_LOCALE_KEYS = {
     ['commandsuggestions.k9tablet_does'] = 'Opens the K9 Command Tablet.',
     ['commandsuggestions.k9hqtablet_does'] = 'Opens the K9 Command Tablet directly to the High Command view.',
     ['commandsuggestions.k9compat_does'] = "Reprints this resource's compatibility detection summary (which framework, inventory, target and other integrations it detected) to your own client console.",
+    ['tablet.cmdref_k9dog_does'] = 'Shows or changes whether a character is permanently pinned as a K9. One command for both: /k9setdog and /k9removedog still work too.',
+    -- Deliberately just the bare "show status" shape for the chat
+    -- suggestion's own parameter hint (ParseUsageParams below only ever
+    -- extracts ONE flat parameter list, and this command's other two forms
+    -- put a literal 'set'/'remove' word BEFORE the target, which a single
+    -- bracket-token usage string cannot represent without misleading
+    -- param-order hints) -- the explicit set/remove forms are documented in
+    -- full in the `_does` string above and in dogcharacter.usage_dog's own
+    -- in-game usage print.
+    ['tablet.cmdref_k9dog_usage'] = '/k9dog <target>',
+    ['tablet.cmdref_k9fetch_does'] = 'Throws, recalls, or drops the fetch ball -- whichever one makes sense right now. Old names /k9throwfetchball, /k9recallfetchball and /k9dropfetchball still work too.',
+    ['tablet.cmdref_k9fetch_usage'] = '/k9fetch',
 }
 local function pendingLocale(key, ...)
     local ok, value = pcall(locale, key, ...)
@@ -238,6 +259,7 @@ local COMMAND_SUGGESTIONS = {
     -- client/keybinds.lua
     { command = 'k9bitehold', keySuffix = 'k9bitehold' },
     { command = 'k9takedown', keySuffix = 'k9takedown' },
+    { command = 'k9track', keySuffix = 'k9track' },
     { command = 'k9dragtoggle', keySuffix = 'k9dragtoggle' },
     { command = 'k9sit', keySuffix = 'k9sit' },
     { command = 'k9bark', keySuffix = 'k9bark' },
@@ -261,10 +283,13 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9sarcall', keySuffix = 'k9sarcall' },
     -- client/defense.lua (qbx_k9unit: namespace)
     { command = 'qbx_k9unit:confirmHandlerDownDefense', keySuffix = 'confirm_handler_down_defense' },
-    -- client/fetch.lua
-    { command = 'k9throwfetchball', keySuffix = 'k9throwfetchball' },
-    { command = 'k9dropfetchball', keySuffix = 'k9dropfetchball' },
-    { command = 'k9recallfetchball', keySuffix = 'k9recallfetchball' },
+    { command = 'qbx_k9unit:dangerWarnAlert', keySuffix = 'danger_warn_alert' },
+    -- client/fetch.lua -- COMMAND_CONSOLIDATION_SPEC.md #3:
+    -- k9throwfetchball/k9dropfetchball/k9recallfetchball are now HIDDEN
+    -- ALIASES of 'k9fetch' (still real, working RegisterCommand calls --
+    -- see that file's own comment), never chat-suggested under their own
+    -- names.
+    { command = 'k9fetch', keySuffix = 'k9fetch' },
     -- client/wellbeing.lua
     { command = 'k9calmdown', keySuffix = 'k9calmdown' },
     { command = 'k9meatbait', keySuffix = 'k9meatbait' },
@@ -288,12 +313,20 @@ local COMMAND_SUGGESTIONS = {
     { command = 'k9specialize', keySuffix = 'k9specialize' },
     { command = 'k9unspecialize', keySuffix = 'k9unspecialize' },
     { command = 'k9unspecializeoffline', keySuffix = 'k9unspecializeoffline' },
-    -- server/admin.lua
-    { command = 'k9auditcert', keySuffix = 'k9auditcert' },
-    { command = 'k9auditpartner', keySuffix = 'k9auditpartner' },
-    { command = 'k9auditsearch', keySuffix = 'k9auditsearch' },
-    { command = 'k9auditxp', keySuffix = 'k9auditxp' },
-    { command = 'k9auditdept', keySuffix = 'k9auditdept' },
+    -- server/admin.lua -- COMMAND_CONSOLIDATION_SPEC.md #1: k9auditcert/
+    -- k9auditpartner/k9auditsearch/k9auditxp/k9auditdept are now HIDDEN
+    -- ALIASES of 'k9audit' (still real, working RegisterCommand calls in
+    -- server/admin.lua -- see that file's own comment -- just no longer
+    -- chat-suggested). See HIDDEN_ALIAS_COMMANDS in
+    -- tests/commandsuggestions_spec.lua for the drift-guard allowlist that
+    -- makes removing their entries here intentional, not a silent gap.
+    { command = 'k9announce', keySuffix = 'k9announce' },
+    { command = 'k9audit', keySuffix = 'k9audit' },
+    -- server/dogcharacter.lua -- COMMAND_CONSOLIDATION_SPEC.md #2:
+    -- k9setdog/k9removedog are now HIDDEN ALIASES of 'k9dog' (still real,
+    -- working RegisterCommand calls in server/dogcharacter.lua -- see that
+    -- file's own comment), never chat-suggested under their own names.
+    { command = 'k9dog', keySuffix = 'k9dog' },
     -- server/leaderboard.lua
     { command = 'k9stats', keySuffix = 'k9stats' },
     -- server/bonetool.lua

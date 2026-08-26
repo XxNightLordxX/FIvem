@@ -233,7 +233,8 @@
                 requiresGrant: boolean,    // Config.FeatureControl.RequireGrant[key] === true
                 granted: boolean,          // meaningful only if requiresGrant -- does this TARGET currently hold an explicit grant
                 blocked: boolean,          // does this TARGET currently have an explicit block row -- ORTHOGONAL to requiresGrant/granted, see config.lua's own "steps 2 and 3 are DIFFERENT THINGS" note
-                state: 'global_off'|'blocked'|'requires_grant_missing'|'available',
+                state: 'global_off'|'blocked'|'not_certified'|'requires_grant_missing'|'available',
+                viaHighCommand: boolean,   // DISPLAY-GAP FIX (this pass) -- true ONLY when `state === 'available'` SOLELY because this TARGET's own rank bypasses requiresGrant/certification -- never true for a row they would have earned honestly anyway (a real grant, real K9 access with no grant needed). `granted`/`blocked`/`globallyEnabled`/`requiresGrant` above are NEVER altered by this -- see server/tablet.lua's ResolveFeatureState for the full "displayed state, not the underlying record" contract. appendViaHighCommandMarker() renders this as a small, quiet '(High Command)' suffix, never a prominent badge.
                 blockEnforcement?: 'enforced'|'client_enforced'|'not_yet_enforced'|'not_enforceable',
                 // ^ NOW LANDED for every Config.Features key (server/tablet.lua's
                 // ResolveBlockEnforcement, called from BuildPersonFeaturesArray) --
@@ -803,11 +804,36 @@
         feature_group_vehicle_heading: 'Vehicles',
         feature_group_other_heading: 'Other Abilities',
         feature_vehicle_sentence_template: '{feature} is currently: {state}.',
+        // FULL DOMAIN GROUPING (owner-directed, 2026-08-26: "same with
+        // features and sub features") -- one heading per
+        // server/tablet.lua FEATURE_DOMAINS group, in
+        // FEATURE_DOMAIN_ORDER's own declared order. Only 'scent'/
+        // 'vehicle' above get bespoke hint text/row styling (the owner's
+        // original "colour vs. text" ask was specific to those two); every
+        // other domain below gets an ordinary heading over ordinary
+        // badge-style rows -- see groupFeaturesByDomain()'s own header.
+        feature_group_search_heading: 'Search & Contraband',
+        feature_group_vision_heading: 'Vision & Sensory',
+        feature_group_combat_heading: 'Combat & Restraint',
+        feature_group_movement_heading: 'Movement & Control',
+        feature_group_wellbeing_heading: 'Wellbeing',
+        feature_group_progression_heading: 'Progression & Records',
+        feature_group_gear_heading: 'Gear & Inventory',
+        feature_group_training_heading: 'Training & Games',
+        feature_group_admin_heading: 'Admin & Oversight',
+        feature_group_integration_heading: 'Integrations',
         state_global_off: 'Disabled server-wide',
         state_blocked: 'Blocked',
         state_not_certified: 'Not certified',
         state_requires_grant_missing: 'Requires a grant (not granted)',
         state_available: 'Available',
+        // DISPLAY-GAP FIX (this pass, server/tablet.lua's ResolveFeatureState) --
+        // subtle "why can they do that" marker, only for a row that is
+        // available SOLELY because of this person's own high-command
+        // rank -- see appendViaHighCommandMarker()'s own header for the
+        // "quiet, not a badge" requirement this satisfies.
+        feature_via_high_command_marker: 'High Command',
+        feature_via_high_command_hint: 'Available because this person is High Command -- they hold no personal grant or certification for this.',
         feature_column: 'Ability',
         status_column: 'Status',
         person_features_heading: 'Abilities',
@@ -1585,6 +1611,18 @@
         cmdref_k9auditcert_usage: '/k9auditcert <citizenid> [limit]',
         cmdref_k9auditcert_does: 'Looks up a citizen\'s certification history (grants and revokes).',
         cmdref_k9auditcert_needs: 'High Command, the audit permission, or your department\'s audit rank. The Audit Trail feature must be turned on for your server.',
+        cmdref_k9audit_usage: '/k9audit <cert|partner|search|xp|dept>',
+        cmdref_k9audit_does: 'Shows a K9 audit report. One command for all five: certifications, partnerships, searches, XP and department totals.',
+        cmdref_k9audit_needs: 'Same as /k9auditcert.',
+        cmdref_k9announce_usage: '/k9announce',
+        cmdref_k9announce_does: 'Warns the person in front of you that a dog will be released if they do not comply.',
+        cmdref_k9announce_needs: 'K9 access. The Apprehension Announcement feature must be turned on for your server.',
+        cmdref_danger_warn_alert_usage: '/qbx_k9unit:dangerWarnAlert',
+        cmdref_danger_warn_alert_does: 'Tells your partnered handler you have spotted trouble, with a rough direction and distance.',
+        cmdref_danger_warn_alert_needs: 'K9 access and an active partnership. The Danger Warning feature must be turned on for your server.',
+        cmdref_k9track_usage: '/k9track',
+        cmdref_k9track_does: 'Starts a track. Your dog follows whichever trail it is trained to find -- you do not pick the type.',
+        cmdref_k9track_needs: 'K9 access. Which trails your dog can follow depends on its specializations.',
         cmdref_k9auditpartner_usage: '/k9auditpartner <citizenid> [limit]',
         cmdref_k9auditpartner_does: 'Looks up a citizen\'s K9 partnership history.',
         cmdref_k9auditpartner_needs: 'Same as /k9auditcert.',
@@ -2136,6 +2174,8 @@
         // across every resource a server loads, unlike a chat-only command.
         { command: 'qbx_k9unit:vault', category: 'combat', adminOnly: false, usageKey: 'cmdref_vault_usage', doesKey: 'cmdref_vault_does', needsKey: 'cmdref_vault_needs', gate: { kind: 'access', featureKey: 'AgilityAdvanced' }, defaultKeybind: 'X' },
         { command: 'qbx_k9unit:pursuitsprint', category: 'combat', adminOnly: false, usageKey: 'cmdref_pursuitsprint_usage', doesKey: 'cmdref_pursuitsprint_does', needsKey: 'cmdref_pursuitsprint_needs', gate: { kind: 'access', featureKey: 'PursuitSprint' }, defaultKeybind: 'N' },
+        { command: 'k9announce', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9announce_usage', doesKey: 'cmdref_k9announce_does', needsKey: 'cmdref_k9announce_needs', gate: { kind: 'access', featureKey: 'ApprehensionAnnouncement' }, defaultKeybind: 'M', defaultKeybindConfigurable: true },
+        { command: 'qbx_k9unit:dangerWarnAlert', category: 'combat', adminOnly: false, usageKey: 'cmdref_danger_warn_alert_usage', doesKey: 'cmdref_danger_warn_alert_does', needsKey: 'cmdref_danger_warn_alert_needs', gate: { kind: 'access', featureKey: 'DangerWarn' }, defaultKeybind: 'N', defaultKeybindConfigurable: true },
         { command: 'qbx_k9unit:confirmHandlerDownDefense', category: 'combat', adminOnly: false, usageKey: 'cmdref_confirm_handler_down_defense_usage', doesKey: 'cmdref_confirm_handler_down_defense_does', needsKey: 'cmdref_confirm_handler_down_defense_needs', gate: { kind: 'access', featureKey: 'HandlerDownDefense' }, defaultKeybind: 'G', defaultKeybindConfigurable: true },
 
         // ---- Cameras & Vision (this pass, same integration-sweep fix as
@@ -2196,6 +2236,7 @@
         { command: 'k9lineup', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9lineup_usage', doesKey: 'cmdref_k9lineup_does', needsKey: 'cmdref_k9lineup_needs', gate: { kind: 'access', featureKey: 'ScentLineup' } },
         { command: 'k9lineuppick', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9lineuppick_usage', doesKey: 'cmdref_k9lineuppick_does', needsKey: 'cmdref_k9lineuppick_needs', gate: { kind: 'open' } },
         { command: 'k9lineupcancel', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9lineupcancel_usage', doesKey: 'cmdref_k9lineupcancel_does', needsKey: 'cmdref_k9lineupcancel_needs', gate: { kind: 'open' } },
+        { command: 'k9track', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9track_usage', doesKey: 'cmdref_k9track_does', needsKey: 'cmdref_k9track_needs', gate: { kind: 'access', featureKey: 'ScentTracking' } },
         { command: 'k9nosehunt', category: 'scent_games', adminOnly: false, usageKey: 'cmdref_k9nosehunt_usage', doesKey: 'cmdref_k9nosehunt_does', needsKey: 'cmdref_k9nosehunt_needs', gate: { kind: 'access', featureKey: 'ScentTrailHunt' } },
 
         // ---- Search & Rescue ----
@@ -2226,6 +2267,7 @@
         { command: 'k9givexp', category: 'xp', adminOnly: true, usageKey: 'cmdref_k9givexp_usage', doesKey: 'cmdref_k9givexp_does', needsKey: 'cmdref_k9givexp_needs', gate: { kind: 'capability', capability: 'k9.givexp' } },
 
         // ---- Audit & Oversight (admin) ----
+        { command: 'k9audit', category: 'audit', adminOnly: true, usageKey: 'cmdref_k9audit_usage', doesKey: 'cmdref_k9audit_does', needsKey: 'cmdref_k9audit_needs', gate: { kind: 'capability', capability: 'k9.audit', featureKey: 'AdminAuditCommands' } },
         { command: 'k9auditcert', category: 'audit', adminOnly: true, usageKey: 'cmdref_k9auditcert_usage', doesKey: 'cmdref_k9auditcert_does', needsKey: 'cmdref_k9auditcert_needs', gate: { kind: 'capability', capability: 'k9.audit', featureKey: 'AdminAuditCommands' } },
         { command: 'k9auditpartner', category: 'audit', adminOnly: true, usageKey: 'cmdref_k9auditpartner_usage', doesKey: 'cmdref_k9auditpartner_does', needsKey: 'cmdref_k9auditpartner_needs', gate: { kind: 'capability', capability: 'k9.audit', featureKey: 'AdminAuditCommands' } },
         { command: 'k9auditsearch', category: 'audit', adminOnly: true, usageKey: 'cmdref_k9auditsearch_usage', doesKey: 'cmdref_k9auditsearch_does', needsKey: 'cmdref_k9auditsearch_needs', gate: { kind: 'capability', capability: 'k9.audit', featureKey: 'AdminAuditCommands' } },
@@ -5463,26 +5505,87 @@
     }
 
     /**
-     * DOMAIN GROUPING (owner: "more color based on all scent stuff vehicle
-     * related is more text based") -- `feature.category` is a small, hand-
-     * maintained tag ('scent' | 'vehicle' | null/absent) sent from
-     * server/tablet.lua's own FEATURE_DOMAINS table (mirroring that file's
-     * established NOT_ENFORCEABLE_FEATURES/CLIENT_ENFORCED_FEATURES
-     * pattern), never guessed here from a feature's name string. Splits a
-     * flat features[] into three buckets, ORDER-PRESERVING within each
-     * bucket, so this is purely a display grouping, never a re-sort of
-     * anything the server itself ordered.
-     * @param {Array<object>} features @returns {{scent:Array<object>, vehicle:Array<object>, other:Array<object>}}
+     * THE ONE DECLARED ORDER every domain-aware feature view in this file
+     * renders in -- buildMyFeaturesList() (My Record) reads it directly;
+     * personFeatureNameCellClass()/buildPersonFeatureRow() (the Person
+     * screen's admin table) read FEATURE_DOMAIN_STYLE below, keyed off the
+     * SAME set. Adding a twelfth domain someday is a one-line addition
+     * here (plus its own 'feature_group_<domain>_heading' locale key) --
+     * never a new `if`/`else if` branch anywhere else in this file.
+     * MUST stay a superset of every key server/tablet.lua's own
+     * FEATURE_DOMAINS table can send; a domain string NOT in this list
+     * still renders (see groupFeaturesByDomain()'s own 'other' bucket),
+     * just without its own heading/style, so an out-of-sync client never
+     * loses a feature row outright.
+     */
+    var FEATURE_DOMAIN_ORDER = [
+        'scent', 'search', 'vision', 'combat', 'movement', 'wellbeing',
+        'progression', 'gear', 'training', 'admin', 'integration', 'vehicle',
+    ];
+
+    /**
+     * Per-domain rendering STYLE for buildMyFeaturesList()/
+     * buildPersonFeatureRow() -- 'color' (a domain-tinted modifier class
+     * on an otherwise ordinary badge row) or 'text' (the state badge is
+     * replaced entirely by one full, locale-authored sentence -- see
+     * buildVehicleFeatureRow()/vehicleFeatureSentence()). Any domain NOT
+     * listed here (every one added this pass beyond the original two)
+     * defaults to 'plain' -- the ordinary badge row, no accent -- which is
+     * also the automatic, safe fallback for a domain string this client
+     * has never heard of at all. Owner's own original distinction
+     * ("more color based on all scent stuff vehicle related is more text
+     * based") was specific to these two; nothing about the newer ten
+     * domains asked for a third visual treatment, so they all share the
+     * ordinary style rather than inventing one nobody requested.
+     */
+    var FEATURE_DOMAIN_STYLE = { scent: 'color', vehicle: 'text' };
+
+    /** Optional extra hint paragraph shown under a domain's own heading on
+     * the My Record screen -- keyed the same way as FEATURE_DOMAIN_STYLE.
+     * Absent for a domain simply means no extra hint line, never an error. */
+    var FEATURE_DOMAIN_HINT_KEY = { scent: 'feature_group_scent_hint' };
+
+    /** @param {string} domain @returns {string} the DEFAULT_STRINGS/locale key for this domain's own section heading */
+    function featureGroupHeadingKey(domain) {
+        return 'feature_group_' + domain + '_heading';
+    }
+
+    /**
+     * FULL DOMAIN GROUPING (owner-directed, 2026-08-26: "same with
+     * features and sub features" -- extending the original, narrower
+     * "more color based on all scent stuff vehicle related is more text
+     * based" ask to EVERY Config.Features key, not just those two).
+     * `feature.category` is a small, hand-maintained tag sent from
+     * server/tablet.lua's own FEATURE_DOMAINS table, never guessed here
+     * from a feature's name string. DATA-DRIVEN: this file does not
+     * hardcode which domain STRINGS exist -- it walks FEATURE_DOMAIN_ORDER
+     * below (the client's own STABLE, DECLARED rendering order) and buckets
+     * whatever `category` each feature actually carries; a domain string
+     * this order does not recognize (an older client talking to a newer
+     * server that grew a twelfth domain, or a genuinely unset category)
+     * falls into the SAME 'other' bucket as `category === null` always
+     * has -- rendered last, under a generic heading, NEVER silently
+     * dropped. ORDER-PRESERVING within each bucket, so this is purely a
+     * display grouping, never a re-sort of anything the server itself
+     * ordered.
+     * @param {Array<object>} features
+     * @returns {Object<string, Array<object>>} -- keyed by every domain in FEATURE_DOMAIN_ORDER that had at least one match, PLUS 'other'
      */
     function groupFeaturesByDomain(features) {
-        var scent = [], vehicle = [], other = [];
+        var buckets = {};
+        var other = [];
         for (var i = 0; i < features.length; i++) {
             var f = features[i];
-            if (f && f.category === 'scent') scent.push(f);
-            else if (f && f.category === 'vehicle') vehicle.push(f);
-            else other.push(f);
+            var domain = (f && typeof f.category === 'string' && FEATURE_DOMAIN_ORDER.indexOf(f.category) !== -1) ? f.category : null;
+            if (domain) {
+                if (!buckets[domain]) buckets[domain] = [];
+                buckets[domain].push(f);
+            } else {
+                other.push(f);
+            }
         }
-        return { scent: scent, vehicle: vehicle, other: other };
+        buckets.other = other;
+        return buckets;
     }
 
     function buildMyFeaturesList() {
@@ -5494,46 +5597,54 @@
         }
 
         var grouped = groupFeaturesByDomain(features);
-        var hasDomainSections = grouped.scent.length > 0 || grouped.vehicle.length > 0;
+        var hasDomainSections = FEATURE_DOMAIN_ORDER.some(function (domain) { return grouped[domain] && grouped[domain].length > 0; });
 
-        // SCENT -- colour-forward. Config.Tracking.ScentVision.palette (the
-        // real, in-world per-person trail colour scheme) is deliberately
-        // NOT reused here: that palette identifies a SPECIFIC TRACKED
-        // PERSON, and no row in this ability list represents one -- reusing
-        // it for something else would teach a second, disagreeing meaning
-        // for the same five colours. Instead this section leans on the
-        // tablet's own theme accent colour (--k9tablet-accent, the same
-        // custom property the Block Effect column's 'client_enforced'
-        // badge already reuses for an identical reason) more heavily than
-        // the generic list does -- see html/tablet.css's own comment on
-        // .k9tablet-feature-group--scent.
-        if (grouped.scent.length > 0) {
-            wrap.appendChild(mk('h3', { class: 'k9tablet-feature-group-heading k9tablet-feature-group-heading--scent', text: S('feature_group_scent_heading') }));
-            wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S('feature_group_scent_hint') }));
-            var scentGroup = mk('div', { class: 'k9tablet-feature-group k9tablet-feature-group--scent' });
-            for (var i = 0; i < grouped.scent.length; i++) {
-                var scentRow = buildMyFeatureRow(grouped.scent[i]);
-                scentRow.className += ' k9tablet-feature-row--scent';
-                scentGroup.appendChild(scentRow);
-            }
-            wrap.appendChild(scentGroup);
-        }
+        // ONE PASS OVER THE STABLE, DECLARED ORDER -- every real domain
+        // renders the SAME way (a heading, then ordinary badge rows)
+        // EXCEPT the two the owner originally asked to look different
+        // (FEATURE_DOMAIN_STYLE below): 'scent' stays colour-forward,
+        // 'vehicle' stays text-forward (a full sentence, no badge). Adding
+        // an accent for a FUTURE domain is a one-line addition to that
+        // table, never a new `if` branch here.
+        FEATURE_DOMAIN_ORDER.forEach(function (domain) {
+            var rows = grouped[domain];
+            if (!rows || rows.length === 0) return;
 
-        // VEHICLE -- text-forward. No colour badge at all: a full,
-        // locale-authored sentence carries both what the ability is and
-        // its current state, since vehicle content is about what happens
-        // rather than about telling several things apart at a glance (the
-        // owner's own distinction). Effectively one feature today
-        // (VehicleEntryExit) -- see server/tablet.lua's FEATURE_DOMAINS
-        // comment for why vehicle *search* is not tagged here.
-        if (grouped.vehicle.length > 0) {
-            wrap.appendChild(mk('h3', { class: 'k9tablet-feature-group-heading k9tablet-feature-group-heading--vehicle', text: S('feature_group_vehicle_heading') }));
-            var vehicleGroup = mk('div', { class: 'k9tablet-feature-group k9tablet-feature-group--vehicle' });
-            for (var j = 0; j < grouped.vehicle.length; j++) {
-                vehicleGroup.appendChild(buildVehicleFeatureRow(grouped.vehicle[j]));
+            var style = FEATURE_DOMAIN_STYLE[domain] || 'plain';
+            wrap.appendChild(mk('h3', { class: 'k9tablet-feature-group-heading k9tablet-feature-group-heading--' + domain, text: S(featureGroupHeadingKey(domain)) }));
+            var hintKey = FEATURE_DOMAIN_HINT_KEY[domain];
+            if (hintKey) {
+                wrap.appendChild(mk('p', { class: 'k9tablet-muted k9tablet-hint', text: S(hintKey) }));
             }
-            wrap.appendChild(vehicleGroup);
-        }
+
+            if (style === 'text') {
+                // VEHICLE-STYLE -- text-forward. No colour badge at all: a
+                // full, locale-authored sentence carries both what the
+                // ability is and its current state, since this content is
+                // about what happens rather than about telling several
+                // things apart at a glance.
+                var textGroup = mk('div', { class: 'k9tablet-feature-group k9tablet-feature-group--' + domain });
+                for (var t = 0; t < rows.length; t++) {
+                    textGroup.appendChild(buildVehicleFeatureRow(rows[t]));
+                }
+                wrap.appendChild(textGroup);
+            } else {
+                // 'color' (scent) and 'plain' (every other real domain) --
+                // the SAME ordinary badge row either way; 'color' only
+                // adds a domain-tinted modifier class for
+                // html/tablet.css's own accent styling (see
+                // .k9tablet-feature-group--scent), which a 'plain' domain
+                // simply has no CSS rule for, so it renders identically to
+                // the pre-grouping default row.
+                var group = mk('div', { class: 'k9tablet-feature-group k9tablet-feature-group--' + domain });
+                for (var i = 0; i < rows.length; i++) {
+                    var row = buildMyFeatureRow(rows[i]);
+                    if (style === 'color') row.className += ' k9tablet-feature-row--' + domain;
+                    group.appendChild(row);
+                }
+                wrap.appendChild(group);
+            }
+        });
 
         if (grouped.other.length > 0) {
             if (hasDomainSections) {
@@ -6652,10 +6763,17 @@
         return wrap;
     }
 
-    /** @param {{category?:string}} feature @returns {string} name-cell class for this row's domain (scent/vehicle get a light visual accent here too; every other row keeps no class at all, byte-identical to before this pass). */
+    /** @param {{category?:string}} feature @returns {string?} name-cell
+     * class for this row's domain -- DATA-DRIVEN off FEATURE_DOMAIN_STYLE
+     * (shared with buildMyFeaturesList()'s own My Record rendering, single
+     * source of truth for which domains get a visual accent at all): only
+     * a 'color'-style domain (scent today) gets one; every other domain,
+     * known or not, returns null (no class at all, exactly the pre-domain-
+     * grouping default row this table has always used). */
     function personFeatureNameCellClass(feature) {
-        if (feature && feature.category === 'scent') return 'k9tablet-person-feature-name--scent';
-        if (feature && feature.category === 'vehicle') return 'k9tablet-person-feature-name--vehicle';
+        if (feature && FEATURE_DOMAIN_STYLE[feature.category] === 'color') {
+            return 'k9tablet-person-feature-name--' + feature.category;
+        }
         return null;
     }
 
@@ -6667,22 +6785,48 @@
      * three-state contract this reads and why it is never derived from
      * `feature.key` here.
      */
+    /**
+     * SUBTLE "why can they do that" MARKER (owner-directed: "why can this
+     * person do that" should be answerable at a glance, not by reading
+     * two fields -- but a small, quiet marker, never a prominent badge;
+     * the owner has said several times he wants less clutter, not more).
+     * `feature.viaHighCommand` (server/tablet.lua's own ResolveFeatureState,
+     * DISPLAY-GAP FIX pass) is `true` ONLY when this row's `state` came
+     * back 'available' SOLELY because of this target's own rank -- never
+     * for a row this person would have earned honestly regardless (a real
+     * grant, real certification, or a feature that needed neither). Same
+     * muted-parenthetical style as the Command Reference screen's own
+     * '(Admin)' marker (cmdref_admin_badge) -- deliberately reused, not a
+     * new visual language.
+     * @param {HTMLElement} td
+     * @param {{viaHighCommand?:boolean}} feature
+     */
+    function appendViaHighCommandMarker(td, feature) {
+        if (!feature.viaHighCommand) return;
+        td.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('feature_via_high_command_marker') + ')', title: S('feature_via_high_command_hint') }));
+    }
+
     function buildPersonFeatureRow(feature) {
         var tr = mk('tr');
         var nameCls = personFeatureNameCellClass(feature);
         tr.appendChild(nameCls ? mk('td', { class: nameCls, text: featureLabel(feature) }) : mk('td', { text: featureLabel(feature) }));
-        // VEHICLE -- text-forward, same reasoning as buildVehicleFeatureRow()
-        // above: a full sentence replaces the terse state badge entirely,
-        // never a colour badge, for admins looking at this same feature on
-        // a specific person's record too. Every other row (including
-        // scent) keeps the ORIGINAL badge cell, byte-identical to before
-        // this pass.
-        if (feature.category === 'vehicle') {
+        // 'text'-style domain (vehicle today) -- same reasoning as
+        // buildVehicleFeatureRow() above: a full sentence replaces the
+        // terse state badge entirely, never a colour badge, for admins
+        // looking at this same feature on a specific person's record too.
+        // DATA-DRIVEN off the SAME FEATURE_DOMAIN_STYLE table
+        // buildMyFeaturesList() reads -- every other row (including
+        // scent, and every domain added this pass) keeps the ORIGINAL
+        // badge cell.
+        if (FEATURE_DOMAIN_STYLE[feature.category] === 'text') {
             var vehicleStateTd = mk('td', { class: 'k9tablet-feature-state--' + feature.state });
             vehicleStateTd.appendChild(mk('p', { class: 'k9tablet-feature-vehicle-sentence', text: vehicleFeatureSentence(feature) }));
+            appendViaHighCommandMarker(vehicleStateTd, feature);
             tr.appendChild(vehicleStateTd);
         } else {
-            tr.appendChild(mk('td', { class: 'k9tablet-feature-state--' + feature.state, text: featureStateLabel(feature.state) }));
+            var stateTd = mk('td', { class: 'k9tablet-feature-state--' + feature.state, text: featureStateLabel(feature.state) });
+            appendViaHighCommandMarker(stateTd, feature);
+            tr.appendChild(stateTd);
         }
 
         var citizenid = state.person.citizenid;

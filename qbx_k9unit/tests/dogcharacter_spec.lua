@@ -631,6 +631,124 @@ t.test('a non-high-command caller running /k9setdog is denied with no DB write',
     t.isFalse(f.env.IsPinnedDogCharacter('TARGET01'))
 end)
 
+-- ======================================================================
+-- 8. COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #2) -- the merged
+--    '/k9dog <set|remove|target>' dispatcher. k9setdog/k9removedog stay
+--    registered forever as HIDDEN ALIASES (proven above, unchanged) --
+--    these tests are about the NEW 'k9dog' entry point specifically:
+--    per-subcommand gating survives the merge, the bare/no-arg forms behave
+--    per COMMAND_CONSOLIDATION_SPEC.md §4, and set/remove stay EXPLICIT
+--    words (never auto-inferred from pin state -- this is the family the
+--    project-owner's own "fluid" redirect explicitly named as a
+--    destructive-action carve-out: removing a record must never be
+--    guessed).
+-- ======================================================================
+
+t.test('COMMAND CONSOLIDATION: /k9dog is registered whenever k9setdog/k9removedog are (same Config.Features.HighCommand gate)', function()
+    local f = newFixture()
+    t.isNotNil(f.registeredCommands['k9dog'], 'the merged command must exist alongside its two aliases')
+    t.isNotNil(f.registeredCommands['k9setdog'], 'sanity: the hidden alias is still a real registration')
+    t.isNotNil(f.registeredCommands['k9removedog'], 'sanity: the hidden alias is still a real registration')
+end)
+
+t.test('COMMAND CONSOLIDATION: /k9dog set <target> <model> reaches the EXACT SAME SetDogCharacter path as /k9setdog -- same gate, same outcome, same DB effect', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'HC01', { name = 'police', isboss = true })
+    f.env.ApplyK9AppearanceDirect = function() return true, 'ok' end
+
+    f.registeredCommands['k9dog'](1, { 'set', 'TARGET01', 'a_c_shepherd' })
+
+    t.isTrue(f.env.IsPinnedDogCharacter('TARGET01'), '/k9dog set must actually pin the target, identically to /k9setdog')
+    t.equals(f.env.GetPinnedDogCharacterModel('TARGET01'), 'a_c_shepherd')
+    t.equals(f.notifyLog[#f.notifyLog].kind, 'success')
+end)
+
+t.test('COMMAND CONSOLIDATION: /k9dog remove <target> reaches the EXACT SAME RemoveDogCharacter path as /k9removedog', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'HC01', { name = 'police', isboss = true })
+    f.env.ApplyK9AppearanceDirect = function() return true, 'ok' end
+    f.env.MaybeRevertK9Appearance = function() end
+    f.registeredCommands['k9dog'](1, { 'set', 'TARGET01', 'a_c_shepherd' })
+    f.state.now = f.state.now + 1600 -- past the shared per-officer action cooldown
+
+    f.registeredCommands['k9dog'](1, { 'remove', 'TARGET01' })
+
+    t.isFalse(f.env.IsPinnedDogCharacter('TARGET01'), '/k9dog remove must actually unpin the target, identically to /k9removedog')
+    t.equals(f.notifyLog[#f.notifyLog].kind, 'success')
+end)
+
+t.test('PER-SUBCOMMAND GATING SURVIVES THE MERGE: a caller who could not run /k9setdog cannot reach set/remove/status via /k9dog either -- no widening from the merge', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'GRUNT01', { name = 'police', isboss = false, grade = { level = 0 } })
+
+    f.registeredCommands['k9dog'](1, { 'set', 'TARGET01', 'a_c_shepherd' })
+    t.equals(f.notifyLog[#f.notifyLog].message, 'highcommand.not_authorized', 'k9dog set must refuse exactly like k9setdog does')
+    t.isFalse(f.env.IsPinnedDogCharacter('TARGET01'))
+
+    f.registeredCommands['k9dog'](1, { 'remove', 'TARGET01' })
+    t.equals(f.notifyLog[#f.notifyLog].message, 'highcommand.not_authorized', 'k9dog remove must refuse exactly like k9removedog does')
+
+    f.registeredCommands['k9dog'](1, { 'TARGET01' }) -- bare status form
+    t.equals(f.notifyLog[#f.notifyLog].message, 'highcommand.not_authorized', 'k9dog\'s own bare status form must be gated identically -- not a free read for an unauthorized caller')
+end)
+
+t.test('A CALLER WHO COULD RUN /k9setdog CAN STILL REACH EXACTLY THAT VIA /k9dog set, AND /k9removedog VIA /k9dog remove', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'HC01', { name = 'police', isboss = true })
+    f.env.ApplyK9AppearanceDirect = function() return true, 'ok' end
+    f.env.MaybeRevertK9Appearance = function() end
+
+    f.registeredCommands['k9dog'](1, { 'set', 'TARGET01', 'a_c_shepherd' })
+    t.isTrue(f.env.IsPinnedDogCharacter('TARGET01'))
+
+    f.state.now = f.state.now + 1600
+    f.registeredCommands['k9dog'](1, { 'remove', 'TARGET01' })
+    t.isFalse(f.env.IsPinnedDogCharacter('TARGET01'))
+end)
+
+t.test('BARE /k9dog <target>: READ-ONLY status report, never mutates -- names the exact explicit command to run', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'HC01', { name = 'police', isboss = true })
+    f.env.ApplyK9AppearanceDirect = function() return true, 'ok' end
+
+    -- Not yet pinned -- tells the caller to use 'set'.
+    f.registeredCommands['k9dog'](1, { 'NOTPINNED01' })
+    t.equals(f.notifyLog[#f.notifyLog].message, 'dogcharacter.status_not_pinned:NOTPINNED01,NOTPINNED01')
+    t.isFalse(f.env.IsPinnedDogCharacter('NOTPINNED01'), 'the bare status form must never itself pin anything')
+
+    f.state.now = f.state.now + 1600
+    f.registeredCommands['k9dog'](1, { 'set', 'PINNED01', 'a_c_shepherd' })
+    t.isTrue(f.env.IsPinnedDogCharacter('PINNED01'))
+
+    -- Already pinned -- tells the caller to use 'remove', reports the model.
+    f.state.now = f.state.now + 1600
+    f.registeredCommands['k9dog'](1, { 'PINNED01' })
+    t.equals(f.notifyLog[#f.notifyLog].message, 'dogcharacter.status_pinned:PINNED01,a_c_shepherd,PINNED01')
+    t.isTrue(f.env.IsPinnedDogCharacter('PINNED01'), 'the bare status form must never itself unpin anything')
+end)
+
+t.test('NO-ARGUMENT DISCOVERABILITY: /k9dog with zero args prints the usage/help form, never errors, never treats it as a target', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'HC01', { name = 'police', isboss = true })
+
+    local ok = pcall(f.registeredCommands['k9dog'], 1, {})
+    t.isTrue(ok, 'a bare /k9dog with no args at all must never error')
+    t.equals(f.notifyLog[#f.notifyLog].message, 'dogcharacter.usage_dog')
+end)
+
+t.test('AMBIGUITY NEVER GUESSES DESTRUCTIVELY: /k9dog set/remove ALWAYS require the explicit word -- an unrecognized first argument that is not a resolvable target falls through to usage, it never silently defaults to set or remove', function()
+    local f = newFixture()
+    f.registerPlayer(1, 'HC01', { name = 'police', isboss = true })
+
+    -- 'bogus' is not 'set'/'remove' and ResolveTargetCitizenId treats any
+    -- non-empty string as a literal citizenid -- so this actually resolves
+    -- as a STATUS lookup for citizenid 'bogus', never a mutation. Proves
+    -- the dispatcher truly has no third, silent "guess a mutation" path.
+    f.registeredCommands['k9dog'](1, { 'bogus' })
+    t.equals(f.notifyLog[#f.notifyLog].message, 'dogcharacter.status_not_pinned:bogus,bogus')
+    t.isFalse(f.env.IsPinnedDogCharacter('bogus'), 'an unrecognized word must never be treated as an implicit set/remove')
+end)
+
 print('')
 print(('dogcharacter_spec: %d passed, %d failed'):format(t.passed, t.failed))
 os.exit(t.summary())

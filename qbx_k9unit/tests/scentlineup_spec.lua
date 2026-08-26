@@ -846,4 +846,95 @@ t.test('a participant disconnecting mid-session tears down the whole session too
     t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.not_in_lineup'))
 end)
 
+-- ========================================================================
+-- COMMAND CONSOLIDATION (owner-directed decluttering pass, 2026-08-26 --
+-- "merge the lineup shit to with it if it relates to the scent shit merge
+-- it"). server/scentlineup.lua's THREE top-level commands are now ONE
+-- visible command family: '/k9lineup ...' with 'pick'/'cancel' as
+-- subcommands, dispatched BEFORE any gate the START half applies -- the
+-- two OLD direct names ('k9lineuppick'/'k9lineupcancel', already exercised
+-- throughout every test above this section) are kept, registered,
+-- UNCHANGED, as hidden aliases.
+--
+-- THE LOAD-BEARING PROPERTY, straight from the coordinator's own
+-- time-critical finding: k9lineup (the START half) is gated (HasK9Access +
+-- a grant); k9lineuppick/k9lineupcancel are NOT, by design, since the
+-- person completing a pick or cancelling is very often a PARTICIPANT who
+-- was never asked to hold K9 access at all. If the merged dispatcher ever
+-- grew a single gate checked BEFORE routing to a subcommand, it would not
+-- widen access -- it would BREAK THE FEATURE for exactly the population
+-- (civilian participants) this drill exists to test. This section proves
+-- that property survives the merge, made to fail first by literally
+-- reinstating such a gate (see the manual verification in this pass's own
+-- report) -- not merely trusted by inspection.
+-- ========================================================================
+
+t.test("all THREE commands are registered: 'k9lineup' (visible, unified) plus 'k9lineuppick'/'k9lineupcancel' (kept as hidden aliases, unchanged)", function()
+    local f = newFixture()
+    t.isNotNil(f.commands['k9lineup'])
+    t.isNotNil(f.commands['k9lineuppick'])
+    t.isNotNil(f.commands['k9lineupcancel'])
+end)
+
+t.test("'/k9lineup pick <N>' behaves IDENTICALLY to the old direct '/k9lineuppick <N>' -- same shared logic, no gate of its own", function()
+    local f = newFixture()
+    local conductorSrc, aliceSrc, bobSrc = wireBasicTrio(f)
+    startLineup(f, conductorSrc, { aliceSrc, bobSrc })
+    acceptAll(f, conductorSrc, { aliceSrc, bobSrc })
+
+    -- Dispatch through the NEW subcommand form: 'k9lineup pick 1'.
+    f.runCommand('k9lineup', conductorSrc, { 'pick', '1' })
+
+    -- Same reveal message either winning branch would produce -- pin
+    -- against BOTH real outcomes since the match is picked uniformly at
+    -- random by the production code and this fixture does not control it.
+    local resultMsg = lastNotifyFor(f, conductorSrc).message
+    local isCorrect = resultMsg:find('Correct!', 1, true) ~= nil
+    local isIncorrect = resultMsg:find('Not quite.', 1, true) ~= nil
+    t.isTrue(isCorrect or isIncorrect, "the subcommand form must reach the REAL pick logic, not silently no-op: got " .. tostring(resultMsg))
+
+    -- The session must be genuinely resolved and cleaned up afterward,
+    -- exactly like the old direct command -- a second pick reports
+    -- not_in_lineup.
+    f.runCommand('k9lineuppick', conductorSrc, { '1' })
+    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.not_in_lineup'))
+end)
+
+t.test("'/k9lineup cancel' behaves IDENTICALLY to the old direct '/k9lineupcancel' -- reachable by a PARTICIPANT with NO K9 access at all, no gate of any kind", function()
+    local f = newFixture()
+    local conductorSrc, aliceSrc, bobSrc = wireBasicTrio(f)
+    startLineup(f, conductorSrc, { aliceSrc, bobSrc })
+    acceptAll(f, conductorSrc, { aliceSrc, bobSrc })
+
+    -- Alice never received f.setAccess(true) anywhere (wireBasicTrio only
+    -- grants the CONDUCTOR) -- she holds NO K9 access, NO certification,
+    -- and NO specialization of any kind. She still cancels via the NEW
+    -- subcommand form.
+    f.runCommand('k9lineup', aliceSrc, { 'cancel' })
+
+    t.equals(lastNotifyFor(f, aliceSrc).message, locale('scentlineup.left_lineup_self'))
+    t.equals(lastNotifyFor(f, conductorSrc).message, locale('scentlineup.cancelled_participant_left', 'Alice'))
+    t.equals(lastNotifyFor(f, bobSrc).message, locale('scentlineup.cancelled_participant_left', 'Alice'))
+end)
+
+t.test("REGRESSION LOCK-IN (coordinator finding, 2026-08-26): a caller with NO K9 access, NO certification, and NO specialization can complete a PICK through the merged dispatcher -- gating the START must never gate pick/cancel too", function()
+    local f = newFixture()
+    local conductorSrc, aliceSrc, bobSrc = wireBasicTrio(f)
+    startLineup(f, conductorSrc, { aliceSrc, bobSrc })
+    acceptAll(f, conductorSrc, { aliceSrc, bobSrc })
+
+    -- The conductor's certification lapses AFTER the lineup is already
+    -- locked -- same precedent as the existing "/k9lineupcancel works...
+    -- even if access has since been revoked" test above, applied to PICK
+    -- and routed through the NEW '/k9lineup pick' subcommand form
+    -- specifically (not the old direct alias) to prove the merged
+    -- dispatcher itself carries no gate.
+    f.setAccess(conductorSrc, false)
+    f.runCommand('k9lineup', conductorSrc, { 'pick', '1' })
+
+    local resultMsg = lastNotifyFor(f, conductorSrc).message
+    t.isFalse(resultMsg == locale('scentlineup.no_grant'), 'a lapsed conductor must still be able to complete an in-progress pick -- this must not be re-gated')
+    t.isFalse(resultMsg == locale('common.no_k9_access'), 'a lapsed conductor must still be able to complete an in-progress pick -- this must not be re-gated')
+end)
+
 os.exit(t.summary())

@@ -404,14 +404,42 @@
 -- and cosmetic display text, never an authorization decision.
 -- ======================================================================
 
--- Bounds chosen generously above the highest shipped default (1.20) while
--- still ruling out an obvious fat-finger (e.g. "150") reaching a live
--- movement/scent-range multiplier for everyone in that bracket -- this
--- file's own edit-time validation is the ONLY defensive check standing
--- between a bad value and client/movement.lua's K9MoveRateModifiers
--- composer, which applies speedMultiplier/scentRangeMultiplier with no
--- bounds check of its own downstream.
-local MAX_SPEED_SCENT_MULTIPLIER = 3.0
+-- OWNER-EDITABLE CEILING (this pass, coder-backend) -- owner's own words:
+-- "Keep the speed and stamina editing where i can edit it to as high as i
+-- want." Was a hardcoded 3.0; now read fresh from config.lua's
+-- `Config.MaxSpeedScentMultiplier` at this file's own load time, via the
+-- local resolver immediately below. Config.MaxSpeedScentMultiplier's own
+-- comment in config.lua carries the plain-English "this does not raise
+-- client/movement.lua's separate 2.0x visible-speed clamp" disclosure --
+-- not repeated here.
+--- Owner-editable ceiling for speedMultiplier/scentRangeMultiplier, read
+--- fresh from config.lua at this file's own load time. CLAMPS AND WARNS,
+--- never asserts -- a bare top-level `assert` on a value an OPERATOR can
+--- reach (a mistyped config.lua) would silently abort every registration
+--- in THIS FILE from that point on, for the rest of this resource's
+--- uptime (see server/cooldowns.lua's own ResolveConfiguredThresholdMs doc
+--- comment for the incident this mirrors, and this file's own header
+--- "SANITIZATION -- CLAMP AND WARN, NOT ASSERT" for the identical posture
+--- already established here for persisted rows). Falls back to 10.0
+--- (config.lua's own shipped default) for anything that is not a real,
+--- positive, finite number: missing, non-numeric, NaN, infinity, zero, or
+--- negative. Duplicated in server/k9profiles.lua and
+--- server/runtimecontrol.lua rather than shared -- this resource's
+--- established "no cross-file `local` import mechanism" convention (see
+--- server/k9profiles.lua's own header, "BOUNDS -- REUSED, NOT REINVENTED").
+--- @return number
+local function ResolveMaxSpeedScentMultiplier()
+    local fallback = 10.0
+    local raw = Config and Config.MaxSpeedScentMultiplier
+    local value = tonumber(raw)
+    if value == nil or value ~= value or value == math.huge or value == -math.huge or value <= 0 then
+        print(('[qbx_k9unit] xptiers: Config.MaxSpeedScentMultiplier is missing or not a valid positive number (found: %s). Using the built-in fallback of %s instead -- find Config.MaxSpeedScentMultiplier in config.lua and set it to a positive number.'):format(tostring(raw), tostring(fallback)))
+        return fallback
+    end
+    return value
+end
+
+local MAX_SPEED_SCENT_MULTIPLIER = ResolveMaxSpeedScentMultiplier()
 
 -- Matches GetXPTierMedkitCooldownMs's OWN downstream `(0, 1]` contract
 -- exactly (server/progression.lua) -- a value this file accepted outside

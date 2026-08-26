@@ -805,6 +805,12 @@ globals = {
     -- client/tracking.lua
     "GetActiveTrackType", "StartScentTrack", "StartBloodTrack",
     "StartGunpowderTrack", "StopTracking", "IsTracking",
+    -- client/tracking.lua -- THE ONE MERGED ACTION (owner-directed
+    -- decluttering pass, 2026-08-26): StartCertifiedTrack() is the single
+    -- entry point client/radial.lua's collapsed "K9: Search" item and the
+    -- new 'k9track' chat command both call, in place of the three former
+    -- separate Track Scent/Blood/Gunpowder items above.
+    "StartCertifiedTrack",
     -- client/tracking.lua -- SCENT VISION (owner-directed pass: a keybound
     -- coloured-dot "who walked through here" overlay, separate from the
     -- Track Scent/Blood/Gunpowder trio above). ToggleScentVision is the

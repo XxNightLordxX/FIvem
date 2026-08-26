@@ -588,9 +588,34 @@ end
 -- Config key needed for this gate.
 -- ======================================================================
 if Config.Features and Config.Features.HighCommand == true then
-    --- '/k9setdog [server id or citizenid] [variation]' -- see this
+    --- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #2) -- same
+    --- refactor shape as server/admin.lua's audit family (#1): each body
+    --- below is now a named LOCAL function, called from the original
+    --- single-purpose command (kept registered forever as a HIDDEN ALIAS --
+    --- see client/commandsuggestions.lua's HIDDEN_ALIAS_COMMANDS) AND from
+    --- the new merged '/k9dog <set|remove> ...' dispatcher further down.
+    --- IsHighCommand(source) is re-checked from inside THIS SAME function
+    --- body regardless of which name reached it -- never widened by a
+    --- shared gate at the merged command's own top.
+    ---
+    --- NOT MADE CONTEXTUAL (project-owner's own "fluid" redirect, evaluated
+    --- against this family's real code and deliberately NOT applied here):
+    --- removing a dog-character pin is the textbook "removing a record"
+    --- case the redirect itself named as requiring an explicit word, never
+    --- an auto-guessed action -- even though CURRENT PIN STATE would make
+    --- the guess technically inferable (not pinned -> must mean set; pinned
+    --- -> must mean remove), guessing right on an admin action that
+    --- immediately changes another player's live appearance is not the
+    --- same as guessing right on a reversible client-side toggle like
+    --- fetch/kennel/training. The bare '/k9dog <target>' form below is
+    --- READ-ONLY: it reports current status and NAMES the exact explicit
+    --- command to run, never performs the change itself.
+
+    --- '/k9setdog [server id or citizenid] [variation]' core -- see this
     --- file's header for the full design writeup.
-    RegisterCommand('k9setdog', function(source, args)
+    --- @param source number
+    --- @param args string[]
+    local function HandleSetDog(source, args)
         -- AUTHORIZATION CHECKED HERE TOO, purely so an unauthorized caller
         -- learns nothing about argument validity (mirrors
         -- server/highcommand.lua's own k9givexp ordering) -- the COOLDOWN
@@ -623,11 +648,17 @@ if Config.Features and Config.Features.HighCommand == true then
             -- resource's own anti-fat-finger convention of no extra toast.
             NotifyPlayer(source, locale('dogcharacter.set_failed', tostring(outcome)), 'error')
         end
+    end
+
+    RegisterCommand('k9setdog', function(source, args)
+        HandleSetDog(source, args)
     end, false)
 
-    --- '/k9removedog [server id or citizenid]' -- see this file's header
-    --- for the full design writeup.
-    RegisterCommand('k9removedog', function(source, args)
+    --- '/k9removedog [server id or citizenid]' core -- see this file's
+    --- header for the full design writeup.
+    --- @param source number
+    --- @param args string[]
+    local function HandleRemoveDog(source, args)
         -- Same "check auth here too, but consume the cooldown exactly
         -- once, inside RemoveDogCharacter below" reasoning as k9setdog
         -- above.
@@ -654,6 +685,83 @@ if Config.Features and Config.Features.HighCommand == true then
             -- already handled/logged above or (rate_limited) matches this
             -- resource's own anti-fat-finger convention of no extra toast.
             NotifyPlayer(source, locale('dogcharacter.remove_failed', tostring(outcome)), 'error')
+        end
+    end
+
+    RegisterCommand('k9removedog', function(source, args)
+        HandleRemoveDog(source, args)
+    end, false)
+
+    -- ==================================================================
+    -- '/k9dog <set|remove> ...' -- COMMAND_CONSOLIDATION_SPEC.md #2, the
+    -- merged entry point. 'set'/'remove' stay EXPLICIT WORDS, never
+    -- auto-inferred from current pin state -- see the header comment on
+    -- HandleSetDog/HandleRemoveDog above for why this specific family
+    -- keeps the destructive-action carve-out from the project-owner's own
+    -- "fluid" redirect.
+    --
+    -- BARE '/k9dog <target>' (no set/remove word) -- READ-ONLY status
+    -- report, still gated on IsHighCommand(source) the same as every other
+    -- path in this file (this is the same admin surface, not a public
+    -- info leak): tells the caller whether `target` is currently pinned
+    -- and, if so, as what model, then NAMES the exact explicit command
+    -- (set or remove) that would change it. Never mutates anything itself.
+    -- ==================================================================
+    local DOG_SUBCOMMAND_HANDLERS = {
+        set = HandleSetDog,
+        remove = HandleRemoveDog,
+    }
+
+    --- @param args string[]
+    --- @return string[] shifted
+    local function ShiftArgsPastSubcommand(args)
+        local shifted = {}
+        for i = 2, #args do
+            shifted[#shifted + 1] = args[i]
+        end
+        return shifted
+    end
+
+    RegisterCommand('k9dog', function(source, args)
+        local subcommand = args[1]
+        local handler = subcommand and DOG_SUBCOMMAND_HANDLERS[subcommand]
+
+        if handler then
+            handler(source, ShiftArgsPastSubcommand(args))
+            return
+        end
+
+        -- Not 'set'/'remove' -- if args[1] resolves to a target citizenid,
+        -- treat this as the read-only status form ('/k9dog <target>'),
+        -- gated identically to every other path here. Anything else
+        -- (nothing at all, or an unresolvable target) falls through to the
+        -- usage/help print -- COMMAND_CONSOLIDATION_SPEC.md §4's own
+        -- established no-argument-discoverability convention, reused
+        -- verbatim.
+        if not (type(IsHighCommand) == 'function' and IsHighCommand(source)) then
+            LogDogCharacterAudit(WhoLabelForSource(source), 'k9DogStatus', 'n/a', 'denied')
+            NotifyPlayer(source, locale('highcommand.not_authorized'), 'error')
+            return
+        end
+
+        local targetCitizenid = subcommand and ResolveTargetCitizenId(subcommand)
+        if not targetCitizenid then
+            local usage = locale('dogcharacter.usage_dog')
+            if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
+            return
+        end
+
+        if not DogCharacterActionCooldown.Consume(source) then
+            LogDogCharacterAudit(WhoLabelForSource(source), 'k9DogStatus', 'n/a', 'rate_limited')
+            return
+        end
+
+        local model = GetPinnedDogCharacterModel(targetCitizenid)
+        LogDogCharacterAudit(WhoLabelForSource(source), 'k9DogStatus', targetCitizenid, 'ok')
+        if model then
+            NotifyPlayer(source, locale('dogcharacter.status_pinned', targetCitizenid, model, targetCitizenid), 'info')
+        else
+            NotifyPlayer(source, locale('dogcharacter.status_not_pinned', targetCitizenid, targetCitizenid), 'info')
         end
     end, false)
 end

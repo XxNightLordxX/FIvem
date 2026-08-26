@@ -71,6 +71,9 @@ local TRACK_TYPES_ORDERED = { 'scent', 'blood', 'gunpowder' }
 ---   hasPermissionFn: function
 ---   xpProgression: boolean (default false)
 ---   maxLoggedEntries: table? -- e.g. { blood = 3 } -- per-type Config.Tracking.<Type>.maxLoggedEntries override
+---   searchCooldownMs: table? -- e.g. { blood = 9000 } -- per-type Config.Tracking.<Type>.searchCooldownMs override (default 5000 for all three)
+---   hasSpecializationDefault: boolean (default true) -- see the HasSpecialization stub's own declaration comment below
+---   specializationTracking: table? -- overrides Config.SpecializationTracking entirely (default: { explosives = { 'gunpowder' }, patrol = { 'blood' } })
 --- }
 --- @return table fixture
 local function newTrackingFixture(opts)
@@ -112,6 +115,31 @@ local function newTrackingFixture(opts)
     local hasK9Access = true
     local function HasK9Access(_src) return hasK9Access end
 
+    -- SPECIALIZATION-SCOPED TRACKING (owner-directed decluttering pass,
+    -- 2026-08-26). DEFAULT TRUE for every citizenid/specKey -- this file's
+    -- pre-existing tests (written before this feature existed) universally
+    -- assume "a certified K9 can already Track Blood/Track Gunpowder with
+    -- no extra grant", which is exactly the real, INTENTIONAL regression
+    -- this pass introduces (see Config.SpecializationTracking's own
+    -- config.lua comment) -- defaulting to true here keeps every one of
+    -- those pre-existing tests exercising what it was actually written to
+    -- test, unaffected by this new, orthogonal gate, without editing each
+    -- one individually. Tests that specifically exercise the NEW gating
+    -- behavior (below) explicitly opt into `hasSpecializationDefault =
+    -- false` and/or `setHasSpecialization` per citizenid/key instead.
+    local hasSpecializationDefault = opts.hasSpecializationDefault
+    if hasSpecializationDefault == nil then hasSpecializationDefault = true end
+    local specializationOverrides = {} -- [citizenid][specKey] = true/false
+    local hasSpecializationCalls = {}
+    local function HasSpecialization(citizenid, _jobName, specKey)
+        hasSpecializationCalls[#hasSpecializationCalls + 1] = { citizenid = citizenid, specKey = specKey }
+        local perCitizen = specializationOverrides[citizenid]
+        if perCitizen and perCitizen[specKey] ~= nil then
+            return perCitizen[specKey]
+        end
+        return hasSpecializationDefault
+    end
+
     local permissionGrants = {} -- [citizenid][key] = true/false
     local permissionCalls = {}
     local function defaultHasPermission(citizenid, key)
@@ -133,6 +161,7 @@ local function newTrackingFixture(opts)
     -- type not named here falls back to a generous default no existing test
     -- in this file could ever realistically hit.
     local maxLoggedEntriesOverrides = opts.maxLoggedEntries or {}
+    local searchCooldownMsOverrides = opts.searchCooldownMs or {}
 
     local Config = {
         Features = {
@@ -142,13 +171,22 @@ local function newTrackingFixture(opts)
             XPProgression = opts.xpProgression == true,
         },
         Tracking = {
-            Scent     = { maxAgeSeconds = 300, maxRange = 40.0, searchCooldownMs = 5000, relayCooldownMs = 500, maxLoggedEntries = maxLoggedEntriesOverrides.scent or 6000 },
-            Blood     = { maxAgeSeconds = 300, maxRange = 40.0, searchCooldownMs = 5000, relayCooldownMs = 500, maxLoggedEntries = maxLoggedEntriesOverrides.blood or 8000 },
-            Gunpowder = { maxAgeSeconds = 120, maxRange = 40.0, searchCooldownMs = 5000, relayCooldownMs = 300, maxLoggedEntries = maxLoggedEntriesOverrides.gunpowder or 6000 },
+            Scent     = { maxAgeSeconds = 300, maxRange = 40.0, searchCooldownMs = searchCooldownMsOverrides.scent or 5000, relayCooldownMs = 500, maxLoggedEntries = maxLoggedEntriesOverrides.scent or 6000 },
+            Blood     = { maxAgeSeconds = 300, maxRange = 40.0, searchCooldownMs = searchCooldownMsOverrides.blood or 5000, relayCooldownMs = 500, maxLoggedEntries = maxLoggedEntriesOverrides.blood or 8000 },
+            Gunpowder = { maxAgeSeconds = 120, maxRange = 40.0, searchCooldownMs = searchCooldownMsOverrides.gunpowder or 5000, relayCooldownMs = 300, maxLoggedEntries = maxLoggedEntriesOverrides.gunpowder or 6000 },
         },
         WaterTrackingDecay = { breaksTrail = false },
         FeatureControl = { RequireGrant = requireGrant },
         XP = { trackArrivalRadius = 3.0, trackArrivalTTLMs = 60000 },
+        K9Specializations = {
+            narcotics  = { label = 'Narcotics detection' },
+            explosives = { label = 'Explosives detection' },
+            patrol     = { label = 'Patrol / apprehension' },
+        },
+        SpecializationTracking = opts.specializationTracking or {
+            explosives = { 'gunpowder' },
+            patrol     = { 'blood' },
+        },
     }
 
     local registeredCallbacks = {}
@@ -173,6 +211,7 @@ local function newTrackingFixture(opts)
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
         HasK9Access = HasK9Access,
+        HasSpecialization = HasSpecialization,
         lib = libStub,
         RegisterNetEvent = RegisterNetEvent,
         AddEventHandler = AddEventHandler,
@@ -196,8 +235,18 @@ local function newTrackingFixture(opts)
         printLog = printLog,
         permissionCalls = permissionCalls,
         awardXpCalls = awardXpCalls,
+        hasSpecializationCalls = hasSpecializationCalls,
         advance = function(ms) state.now = state.now + ms end,
         setHasK9Access = function(v) hasK9Access = v end,
+        --- Per-citizenid/specKey override for the HasSpecialization stub
+        --- above -- e.g. `f.setHasSpecialization('K9-CID', 'patrol', true)`.
+        --- Overrides `hasSpecializationDefault` for that EXACT
+        --- (citizenid, specKey) pair only; every other pair keeps returning
+        --- the fixture's own default.
+        setHasSpecialization = function(citizenid, specKey, value)
+            specializationOverrides[citizenid] = specializationOverrides[citizenid] or {}
+            specializationOverrides[citizenid][specKey] = value
+        end,
         grantPermission = function(citizenid, key, value)
             permissionGrants[citizenid] = permissionGrants[citizenid] or {}
             permissionGrants[citizenid][key] = value
@@ -213,6 +262,14 @@ local function newTrackingFixture(opts)
             local handler = assert(registeredCallbacks['qbx_k9unit:server:findTrackableSource'],
                 'server/tracking.lua did not register qbx_k9unit:server:findTrackableSource')
             return handler(src, trackType)
+        end,
+        --- Calls the real captured findNearestTrackableSource callback
+        --- directly -- the NEW merged, server-resolved action (this pass).
+        --- @return table result
+        findNearestTrackableSource = function(src)
+            local handler = assert(registeredCallbacks['qbx_k9unit:server:findNearestTrackableSource'],
+                'server/tracking.lua did not register qbx_k9unit:server:findNearestTrackableSource')
+            return handler(src)
         end,
         --- Dispatches the real captured relayDamageEvent handler, mirroring
         --- every other RegisterNetEvent-driven fixture's `dispatch` helper
@@ -610,6 +667,13 @@ local function newTrackingOverrideChainFixture()
 
     local function HasK9Access(_src) return true end
 
+    -- Unrelated to what THIS fixture actually exercises (the
+    -- scentRangeMultiplier override chain) -- defaulted to true so this
+    -- pre-existing test keeps testing what it was written to test, per the
+    -- same reasoning newTrackingFixture's own HasSpecialization stub
+    -- documents above.
+    local function HasSpecialization(_citizenid, _jobName, _specKey) return true end
+
     local isHighCommand = true
 
     local registeredCallbacks = {}
@@ -645,6 +709,15 @@ local function newTrackingOverrideChainFixture()
             trackArrivalRadius = 3.0, trackArrivalTTLMs = 60000,
             scopePerCitizenidOrJob = 'citizenid', awards = {},
         },
+        K9Specializations = {
+            narcotics  = { label = 'Narcotics detection' },
+            explosives = { label = 'Explosives detection' },
+            patrol     = { label = 'Patrol / apprehension' },
+        },
+        SpecializationTracking = {
+            explosives = { 'gunpowder' },
+            patrol     = { 'blood' },
+        },
         -- A single-rank ladder -- this section is about the INDIVIDUAL
         -- override layered on top, not the XP-tier ladder itself. See
         -- tests/medkit_spec.lua's own identical GAP CLOSURE fixture comment
@@ -663,6 +736,7 @@ local function newTrackingOverrideChainFixture()
         GetPlayerPed = GetPlayerPed,
         GetEntityCoords = GetEntityCoords,
         HasK9Access = HasK9Access,
+        HasSpecialization = HasSpecialization,
         IsHighCommand = function(_src) return isHighCommand end,
         lib = libStub,
         RegisterNetEvent = RegisterNetEvent,
@@ -1564,6 +1638,327 @@ t.test('UPPER CEILING: every real shipped config.lua default (6000/8000/6000) si
         t.isFalse(line:find('maxLoggedEntries', 1, true) ~= nil and line:find('exceeds', 1, true) ~= nil,
             'the shipped defaults must never trip the new upper-ceiling warning: ' .. line)
     end
+end)
+
+-- ========================================================================
+-- SPECIALIZATION-SCOPED TRACKING (owner-directed decluttering pass,
+-- 2026-08-26 -- "merge all the scent tracking stuff into one thing... when
+-- certed for extra stuff it just does it"). Pins:
+--   1. 'scent' can NEVER be specialization-gated (coordinator correction:
+--      it is the base capability every K9-access handler has, not a
+--      narcotics-detection mechanic -- gating it would silently break
+--      search-and-rescue/scent-trail-hunt narratively, even though this
+--      pass confirmed by direct code reading that those two features do
+--      not actually share this file's TrackableLog.scent at all).
+--   2. blood/gunpowder require patrol/explosives respectively -- a REAL,
+--      INTENTIONAL regression from "every certified dog can already track
+--      blood/gunpowder" (see config.lua's own Config.SpecializationTracking
+--      comment for the full plain-English writeup).
+--   3. MONOTONIC: granting a specialization only ever ADDS a track type,
+--      never removes one that was already enabled -- there is deliberately
+--      NO "citizenid holds zero specializations -> enable everything"
+--      fallback (an EARLIER, REJECTED design -- see config.lua's own
+--      header for the "make it more fluid" writeup this supersedes).
+--   4. Config.SpecializationTracking is CLAMPED AND WARNED, never asserted,
+--      against a bad entry.
+--   5. Both findTrackableSource (single-type) AND the NEW merged
+--      findNearestTrackableSource enforce this SERVER-side -- a caller
+--      asking for a type it is not entitled to gets found = false, never
+--      trusted.
+-- Scent capture (the ox_inventory swapItems hook) is NOT wired into this
+-- fixture at all (see newTrackingOverrideChainFixture's own header and
+-- this file's own established "onResourceStart is never fired... zero
+-- prior references to K9Compat" convention) -- a real TrackableLog.scent
+-- entry cannot be seeded here. "Scent is never gated" is therefore proven
+-- via `hasSpecializationCalls` below (ResolveEnabledTrackTypesForCitizenId
+-- structurally never even ASKS HasSpecialization about 'scent' -- there is
+-- no key in Config.SpecializationTracking it could ever be validated
+-- under, per that config's own header) rather than via a found=true/false
+-- comparison scent's own capture path can't produce in this suite.
+-- ========================================================================
+
+t.test("SCENT IS STRUCTURALLY UNGATED: HasSpecialization is never even asked about 'scent', for either callback, regardless of what specializations are held", function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+
+    f.findTrackableSource(1, 'scent')
+    f.findNearestTrackableSource(1)
+
+    for _, call in ipairs(f.hasSpecializationCalls) do
+        t.isFalse(call.specKey == 'scent', "HasSpecialization must never be consulted for 'scent' -- it has no entry in Config.SpecializationTracking and can never be gated by one")
+    end
+end)
+
+t.test('THE REAL REGRESSION, MADE EXPLICIT: a citizenid with NO specializations at all cannot Track Blood or Track Gunpowder, even with a real, in-range, fresh logged source', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(200, 0, 0, 0)
+    f.relayDamageEvent(2)
+    f.registerPlayer(3, 'SHOOTER-CID', 300)
+    f.setPedCoords(300, 0, 0, 0)
+    f.relayWeaponFire(3)
+
+    t.isFalse(f.findTrackableSource(1, 'blood').found, 'no patrol specialization -> blood must not be findable, even though a real source is logged and in range')
+    t.isFalse(f.findTrackableSource(1, 'gunpowder').found, 'no explosives specialization -> gunpowder must not be findable, even though a real source is logged and in range')
+end)
+
+t.test('MONOTONICITY: granting explosives strictly ADDS gunpowder to the enabled set -- blood stays exactly as it was (unaffected), nothing is ever taken away', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(200, 0, 0, 0)
+    f.relayDamageEvent(2)
+    f.registerPlayer(3, 'SHOOTER-CID', 300)
+    f.setPedCoords(300, 0, 0, 0)
+    f.relayWeaponFire(3)
+
+    -- BEFORE: the pre-grant set.
+    t.isFalse(f.findTrackableSource(1, 'blood').found, 'PRE-GRANT: blood not yet enabled')
+    t.isFalse(f.findTrackableSource(1, 'gunpowder').found, 'PRE-GRANT: gunpowder not yet enabled')
+
+    f.advance(6000) -- clear both per-type query cooldowns just consumed above before re-querying
+    f.setHasSpecialization('K9-CID', 'explosives', true)
+
+    -- AFTER: strictly a SUPERSET of the pre-grant set -- gunpowder added,
+    -- blood UNCHANGED (still false -- explosives must never also grant
+    -- blood, only what it actually maps to).
+    t.isFalse(f.findTrackableSource(1, 'blood').found, 'POST-GRANT: granting explosives must never also grant blood')
+    t.isTrue(f.findTrackableSource(1, 'gunpowder').found, 'POST-GRANT: granting explosives must add gunpowder -- this is the ADD half of monotonicity')
+end)
+
+t.test('MONOTONICITY: granting patrol strictly ADDS blood to the enabled set -- gunpowder stays exactly as it was (unaffected), nothing is ever taken away', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(200, 0, 0, 0)
+    f.relayDamageEvent(2)
+    f.registerPlayer(3, 'SHOOTER-CID', 300)
+    f.setPedCoords(300, 0, 0, 0)
+    f.relayWeaponFire(3)
+
+    t.isFalse(f.findTrackableSource(1, 'blood').found, 'PRE-GRANT: blood not yet enabled')
+    t.isFalse(f.findTrackableSource(1, 'gunpowder').found, 'PRE-GRANT: gunpowder not yet enabled')
+
+    f.advance(6000)
+    f.setHasSpecialization('K9-CID', 'patrol', true)
+
+    t.isTrue(f.findTrackableSource(1, 'blood').found, 'POST-GRANT: granting patrol must add blood -- this is the ADD half of monotonicity')
+    t.isFalse(f.findTrackableSource(1, 'gunpowder').found, 'POST-GRANT: granting patrol must never also grant gunpowder')
+end)
+
+t.test('narcotics has NO track-type mapping at all -- a narcotics-only citizenid is exactly as (un)able to Track Blood/Gunpowder as a citizenid with zero specializations', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(200, 0, 0, 0)
+    f.relayDamageEvent(2)
+    f.registerPlayer(3, 'SHOOTER-CID', 300)
+    f.setPedCoords(300, 0, 0, 0)
+    f.relayWeaponFire(3)
+
+    f.setHasSpecialization('K9-CID', 'narcotics', true)
+
+    t.isFalse(f.findTrackableSource(1, 'blood').found, 'narcotics grants no track type -- blood must stay locked')
+    t.isFalse(f.findTrackableSource(1, 'gunpowder').found, 'narcotics grants no track type -- gunpowder must stay locked')
+end)
+
+t.test('CLAMP AND WARN: a Config.SpecializationTracking entry naming a specialization key not in Config.K9Specializations is dropped, warns, and grants nothing to anyone', function()
+    local f = newTrackingFixture({
+        hasSpecializationDefault = true, -- even with EVERY specialization "held", a bogus config key must grant nothing
+        specializationTracking = { not_a_real_specialization = { 'blood' } },
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(200, 0, 0, 0)
+    f.relayDamageEvent(2)
+
+    t.isFalse(f.findTrackableSource(1, 'blood').found, 'a bogus Config.SpecializationTracking key must never grant a track type, even to a citizenid holding every real specialization')
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find('not_a_real_specialization', 1, true) and line:find('Config.K9Specializations', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'the bad entry must print a console warning naming the exact bad key')
+end)
+
+t.test("CLAMP AND WARN: a Config.SpecializationTracking entry listing 'scent' is dropped for that entry, warns, and does not otherwise break the rest of that specialization's real track types", function()
+    local f = newTrackingFixture({
+        hasSpecializationDefault = false,
+        specializationTracking = { patrol = { 'scent', 'blood' } },
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(200, 0, 0, 0)
+    f.relayDamageEvent(2)
+
+    f.setHasSpecialization('K9-CID', 'patrol', true)
+    -- 'blood' (the OTHER, valid entry in the same list) must still work --
+    -- one bad list ELEMENT degrades only itself, not its whole entry.
+    t.isTrue(f.findTrackableSource(1, 'blood').found, "a 'scent' entry alongside a valid one must not also break the valid one")
+
+    local warned = false
+    for _, line in ipairs(f.printLog) do
+        if line:find("'scent'", 1, true) and line:find('patrol', 1, true) then warned = true end
+    end
+    t.isTrue(warned, "listing 'scent' under a specialization must print a console warning naming it")
+end)
+
+t.test('an EMPTY Config.SpecializationTracking (owner deletes both entries) leaves blood/gunpowder unreachable for EVERYONE -- there is no generalist fallback in the corrected design', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = true, specializationTracking = {} })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(200, 0, 0, 0)
+    f.relayDamageEvent(2)
+    f.registerPlayer(3, 'SHOOTER-CID', 300)
+    f.setPedCoords(300, 0, 0, 0)
+    f.relayWeaponFire(3)
+
+    -- hasSpecializationDefault = true means EVERY specialization is
+    -- "held" -- and it still doesn't matter, because nothing in
+    -- Config.SpecializationTracking maps ANY specialization to blood or
+    -- gunpowder anymore. This is the loud, documented, intentional
+    -- consequence server/selfcheck.lua's own boot warning exists for.
+    t.isFalse(f.findTrackableSource(1, 'blood').found)
+    t.isFalse(f.findTrackableSource(1, 'gunpowder').found)
+end)
+
+-- ------------------------------------------------------------------------
+-- THE MERGED ACTION: findNearestTrackableSource
+-- ------------------------------------------------------------------------
+
+t.test('findNearestTrackableSource: resolves the NEAREST match across every type this citizenid is entitled to, and reports WHICH type matched', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setHasSpecialization('K9-CID', 'patrol', true)
+    f.setHasSpecialization('K9-CID', 'explosives', true)
+
+    -- A gunpowder source at 20m, a blood source at 10m -- both types are
+    -- enabled (patrol + explosives both held) -- blood, the CLOSER one,
+    -- must win.
+    f.registerPlayer(2, 'SHOOTER-CID', 200)
+    f.setPedCoords(200, 20, 0, 0)
+    f.relayWeaponFire(2)
+    f.registerPlayer(3, 'VICTIM-CID', 300)
+    f.setPedCoords(300, 10, 0, 0)
+    f.relayDamageEvent(3)
+
+    local result = f.findNearestTrackableSource(1)
+    t.isTrue(result.found)
+    t.equals(result.trackType, 'blood', 'the nearer of the two enabled types must win')
+end)
+
+t.test('findNearestTrackableSource: a type this citizenid is NOT entitled to is excluded entirely, even when it is the objectively nearest source', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    -- Only patrol held -- gunpowder is NOT enabled at all.
+    f.setHasSpecialization('K9-CID', 'patrol', true)
+
+    -- Gunpowder at 5m (nearer), blood at 30m (farther) -- gunpowder must be
+    -- ignored entirely (not entitled), so blood -- the only ELIGIBLE
+    -- source -- wins despite being farther away.
+    f.registerPlayer(2, 'SHOOTER-CID', 200)
+    f.setPedCoords(200, 5, 0, 0)
+    f.relayWeaponFire(2)
+    f.registerPlayer(3, 'VICTIM-CID', 300)
+    f.setPedCoords(300, 30, 0, 0)
+    f.relayDamageEvent(3)
+
+    local result = f.findNearestTrackableSource(1)
+    t.isTrue(result.found)
+    t.equals(result.trackType, 'blood', 'gunpowder must be excluded entirely, not merely deprioritized -- the nearer gunpowder source must never win')
+end)
+
+t.test('findNearestTrackableSource: zero enabled/permitted candidate types -> found = false, no cooldown consumed, no lookup performed', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false, specializationTracking = {} })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.Config.Features.ScentTracking = false -- now NOTHING is even a candidate: scent's own feature flag is off, and blood/gunpowder have no mapping at all in this fixture's specializationTracking = {}
+
+    local result = f.findNearestTrackableSource(1)
+    t.isFalse(result.found)
+end)
+
+t.test('ONE COOLDOWN, SIZED TO THE SLOWEST CANDIDATE: the merged action is throttled at the MAXIMUM searchCooldownMs among its candidate types, not the fastest, and independently of the three per-type keys', function()
+    local f = newTrackingFixture({
+        hasSpecializationDefault = false,
+        searchCooldownMs = { scent = 2000, blood = 9000, gunpowder = 2000 },
+    })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setHasSpecialization('K9-CID', 'patrol', true) -- candidates: scent (2000ms) + blood (9000ms) -- slowest is blood's 9000ms
+
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(200, 5, 0, 0)
+    f.relayDamageEvent(2)
+
+    local first = f.findNearestTrackableSource(1)
+    t.isTrue(first.found, 'first call must succeed and consume the merged cooldown')
+
+    -- 5000ms later -- past scent's own 2000ms, but NOT past blood's 9000ms
+    -- (the slowest candidate). If the merged cooldown had wrongly used the
+    -- FASTEST candidate (2000ms) instead of the slowest, this second call
+    -- would incorrectly succeed here -- exactly the "three times cheaper to
+    -- spam" trap this design was told to avoid.
+    f.advance(5000)
+    local second = f.findNearestTrackableSource(1)
+    t.isFalse(second.found, 'still within the SLOWEST candidate type\'s own cooldown window -- must still be refused')
+
+    -- Past even the slowest candidate's 9000ms now -- must succeed again.
+    f.advance(4001)
+    local third = f.findNearestTrackableSource(1)
+    t.isTrue(third.found, 'once the slowest candidate\'s own cooldown has fully elapsed, the merged action must work again')
+end)
+
+t.test('ONE COOLDOWN, INDEPENDENT KEY: the merged action never touches, and is never blocked by, the three per-type findTrackableSource cooldown keys', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.setHasSpecialization('K9-CID', 'patrol', true)
+    f.setHasSpecialization('K9-CID', 'explosives', true)
+
+    f.registerPlayer(2, 'VICTIM-CID', 200)
+    f.setPedCoords(200, 5, 0, 0)
+    f.relayDamageEvent(2)
+
+    -- Burn the OLD single-type 'blood' cooldown key via the orphaned
+    -- findTrackableSource path first.
+    t.isTrue(f.findTrackableSource(1, 'blood').found)
+
+    -- The merged action must NOT be refused by that unrelated key -- it
+    -- has never touched it, and vice versa.
+    local merged = f.findNearestTrackableSource(1)
+    t.isTrue(merged.found, 'the merged action must never be blocked by the OLD single-type cooldown key')
+end)
+
+-- ------------------------------------------------------------------------
+-- SERVER-SIDE AUTHORITY: the client never decides which type applies.
+-- ------------------------------------------------------------------------
+
+t.test('SERVER-SIDE AUTHORITY: a client directly requesting a type it is not specialization-entitled to (via the OLDER single-type callback) is answered found = false, never trusted', function()
+    local f = newTrackingFixture({ hasSpecializationDefault = false })
+    f.registerPlayer(1, 'K9-CID', 100)
+    f.setPedCoords(100, 0, 0, 0)
+    f.registerPlayer(2, 'SHOOTER-CID', 200)
+    f.setPedCoords(200, 0, 0, 0)
+    f.relayWeaponFire(2)
+
+    -- A modified client (or the orphaned StartGunpowderTrack() global)
+    -- asking DIRECTLY for 'gunpowder' with no explosives specialization
+    -- held must be refused, exactly as if it had gone through the merged
+    -- action -- the OLDER callback is not a bypass.
+    local result = f.findTrackableSource(1, 'gunpowder')
+    t.isFalse(result.found, "a direct request for an un-entitled type must never be honored, regardless of which callback the client calls")
 end)
 
 os.exit(t.summary())

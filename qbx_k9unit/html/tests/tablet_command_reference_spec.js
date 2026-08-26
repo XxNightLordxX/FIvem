@@ -211,9 +211,13 @@ t.test('HIGH COMMAND sees every admin-tier command marked with the (Admin) badge
     await openCommandsScreen(h);
 
     const adminBadges = findAll(h.getRoot(), (n) => n._textContent === ' (Admin)');
-    // 20 admin-tier commands in COMMAND_REFERENCE: 11 certification + 1
-    // givexp + 5 audit + 1 bonetool + 2 permission grant/revoke.
-    t.equals(adminBadges.length, 20, 'every admin-tier command carries the (Admin) marker, for high command too');
+    // 21 admin-tier commands in COMMAND_REFERENCE: 11 certification + 1
+    // givexp + 6 audit + 1 bonetool + 2 permission grant/revoke.
+    // The audit count is 6, not 5: the five original /k9audit<thing>
+    // commands PLUS the merged '/k9audit <cert|partner|search|xp|dept>'
+    // that now fronts them. The five stay registered as hidden aliases, so
+    // they are still real commands and still carry the badge.
+    t.equals(adminBadges.length, 21, 'every admin-tier command carries the (Admin) marker, for high command too');
 
     const auditBadge = statusBadgeFor(h, '/k9auditcert <citizenid> [limit]');
     t.equals(auditBadge._textContent, 'Available');

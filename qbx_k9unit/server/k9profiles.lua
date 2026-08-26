@@ -150,17 +150,26 @@
     BOUNDS -- REUSED, NOT REINVENTED
     ======================================================================
 
-    `MAX_SPEED_SCENT_MULTIPLIER` (3.0) and `MAX_MEDKIT_COOLDOWN_MULTIPLIER`
-    (1.0) below are the SAME numbers server/xptiers.lua already uses for the
-    identical two field classes, duplicated here rather than shared (this
-    resource's own established "no cross-file `local` import mechanism"
-    precedent -- server/xptiers.lua's own IsSafeShortString doc comment
-    states this exact tradeoff for the identical reason). Every field is
-    independently checked with `IsValidMultiplier` (finite, > 0, <= max) --
-    a non-positive, negative, NaN, or absurd value is impossible to persist
+    `MAX_SPEED_SCENT_MULTIPLIER` (owner-editable, `Config.MaxSpeedScentMultiplier`,
+    10.0 by default -- see this file's own `ResolveMaxSpeedScentMultiplier`
+    below) and `MAX_MEDKIT_COOLDOWN_MULTIPLIER` (1.0) below are the SAME
+    numbers server/xptiers.lua already uses for the identical two field
+    classes, duplicated here rather than shared (this resource's own
+    established "no cross-file `local` import mechanism" precedent --
+    server/xptiers.lua's own IsSafeShortString doc comment states this
+    exact tradeoff for the identical reason). Every field is independently
+    checked with `IsValidMultiplier` (finite, > 0, <= max) -- a
+    non-positive, negative, NaN, or absurd value is impossible to persist
     through this surface at ANY layer: rejected here before ever reaching
     K9Store, and K9Store itself never re-derives or loosens what this file
     already validated.
+
+    STAMINA (`sprintDecayPerTick`, this pass, coder-backend) is a FOURTH
+    overridable field, added through this SAME machinery -- see
+    "STAMINA OVERRIDE" section further below for why it is NOT persisted to
+    `k9_individual_overrides` (a schema gap, disclosed, not hidden) and
+    deliberately validated with `>= 0`, not `> 0` -- zero is the owner's
+    own requested "permanent stamina" sentinel, not an error.
 
     ======================================================================
     AUTHORIZATION / CONCURRENCY -- identical posture to server/certtiers.lua/
@@ -312,9 +321,47 @@
 -- ======================================================================
 -- BOUNDS -- see header "BOUNDS -- REUSED, NOT REINVENTED".
 -- ======================================================================
-local MAX_SPEED_SCENT_MULTIPLIER = 3.0
+
+--- Owner-editable ceiling for speedMultiplier/scentRangeMultiplier, read
+--- fresh from config.lua at this file's own load time. CLAMPS AND WARNS,
+--- never asserts -- a bare top-level `assert` on a value an OPERATOR can
+--- reach (a mistyped config.lua) would silently abort every registration
+--- in THIS FILE from that point on, for the rest of this resource's
+--- uptime. Falls back to 10.0 (config.lua's own shipped default) for
+--- anything that is not a real, positive, finite number: missing,
+--- non-numeric, NaN, infinity, zero, or negative. Duplicated in
+--- server/xptiers.lua and server/runtimecontrol.lua rather than shared --
+--- this resource's established "no cross-file `local` import mechanism"
+--- convention (see this file's own header, "BOUNDS -- REUSED, NOT
+--- REINVENTED").
+--- @return number
+local function ResolveMaxSpeedScentMultiplier()
+    local fallback = 10.0
+    local raw = Config and Config.MaxSpeedScentMultiplier
+    local value = tonumber(raw)
+    if value == nil or value ~= value or value == math.huge or value == -math.huge or value <= 0 then
+        print(('[qbx_k9unit] k9profiles: Config.MaxSpeedScentMultiplier is missing or not a valid positive number (found: %s). Using the built-in fallback of %s instead -- find Config.MaxSpeedScentMultiplier in config.lua and set it to a positive number.'):format(tostring(raw), tostring(fallback)))
+        return fallback
+    end
+    return value
+end
+
+local MAX_SPEED_SCENT_MULTIPLIER = ResolveMaxSpeedScentMultiplier()
 local MAX_MEDKIT_COOLDOWN_MULTIPLIER = 1.0
 local MAX_NOTE_LENGTH = 120
+
+-- STAMINA OVERRIDE ceiling. Owner's own words: "be able to make the
+-- stamina as high as i want and be able to make the stamina...
+-- permanant" -- reuses the SAME literal value (20.0) server/runtimecontrol.lua
+-- already ships and tests for `Wellbeing.Fatigue.sprintDecayPerTick`
+-- (that file's own TUNABLE_REGISTRY entry), duplicated here per this
+-- file's own "no cross-file `local` import mechanism" convention, not
+-- reinvented. `IsValidStaminaDrain` below deliberately accepts `>= 0`, NOT
+-- `> 0` -- ZERO IS THE VALID "PERMANENT STAMINA" SENTINEL the owner asked
+-- for (server/wellbeing.lua's TickWellbeing subtracts this value from
+-- Fatigue every tick a K9 is sprinting; 0 means that subtraction never
+-- happens, i.e. Fatigue's sprint-decay never fires for that citizenid).
+local MAX_STAMINA_DRAIN_PER_TICK = 20.0
 
 -- Defensive cap on total live (non-tombstoned) override count -- mirrors
 -- server/certtiers.lua's own MAX_TIERS reasoning exactly: an
@@ -339,6 +386,17 @@ end
 --- @return boolean
 local function IsValidMultiplier(value, maxAllowed)
     return IsFiniteNumber(value) and value > 0 and value <= maxAllowed
+end
+
+--- Stamina-drain validator -- deliberately `>= 0`, NOT `> 0`, unlike
+--- IsValidMultiplier above. See MAX_STAMINA_DRAIN_PER_TICK's own comment:
+--- 0 is the owner's requested "permanent stamina" sentinel, a valid,
+--- ordinary value here, never an error.
+--- @param value any
+--- @param maxAllowed number
+--- @return boolean
+local function IsValidStaminaDrain(value, maxAllowed)
+    return IsFiniteNumber(value) and value >= 0 and value <= maxAllowed
 end
 
 --- VARCHAR(50), matching every citizenid column in this schema
@@ -388,6 +446,27 @@ end
 -- excluded from the merged catalog entirely, not flagged within it).
 -- ======================================================================
 local OverrideByCitizenId = {}
+
+-- ======================================================================
+-- STAMINA OVERRIDE -- SESSION-ONLY, DISCLOSED, NOT HIDDEN. `sprintDecayPerTick`
+-- (mirrors Config.Wellbeing.Fatigue.sprintDecayPerTick, server/wellbeing.lua's
+-- TickWellbeing Fatigue branch) has NO column in `k9_individual_overrides`
+-- (migration 0016) -- adding one is sql/* work, owned by a different agent
+-- this pass, not this file. Rather than silently drop the owner's "make
+-- stamina permanent" request or invent a second, parallel persistence
+-- mechanism, this is held in its OWN file-local, in-memory table --
+-- DELIBERATELY SEPARATE from OverrideByCitizenId above, so
+-- RefreshOverrideCache's own wholesale DB-driven rebuild (which knows
+-- nothing about stamina) can never clobber it. EVERY write path that
+-- touches this (k9ProfileUpsert/k9ProfileReset below) surfaces
+-- `staminaPersistenceWarning` in its own response so a high-command caller
+-- is told PLAINLY, every time, that this one field resets to
+-- Config.Wellbeing.Fatigue.sprintDecayPerTick on the next resource
+-- restart -- never hidden behind a response that looks identical to a
+-- fully-persisted speed/scent/medkit edit.
+-- StaminaOverrideByCitizenId[citizenid] = number (sprintDecayPerTick, >= 0)
+-- ======================================================================
+local StaminaOverrideByCitizenId = {}
 
 --- Rebuilds `OverrideByCitizenId` from the current `k9_individual_overrides`
 --- database state. Called once at this file's own onResourceStart (after
@@ -461,9 +540,23 @@ function GetK9EffectiveMultipliers(citizenid)
         end
     end
 
+    -- STAMINA (`sprintDecayPerTick`) has NO per-RANK tier field anywhere in
+    -- this codebase (unlike speed/scent/medkit above) -- its own "global
+    -- default" floor is simply config.lua's own
+    -- Config.Wellbeing.Fatigue.sprintDecayPerTick, read defensively (this
+    -- file does not own config.lua/server/wellbeing.lua, and this exact
+    -- accessor is also exercised by this file's own test harness, which
+    -- does not define Config.Wellbeing at all). 2.0 is config.lua's own
+    -- shipped default, used only if that path is itself missing/invalid.
+    local tierStamina = 2.0
+    if type(Config) == 'table' and type(Config.Wellbeing) == 'table' and type(Config.Wellbeing.Fatigue) == 'table'
+        and type(Config.Wellbeing.Fatigue.sprintDecayPerTick) == 'number' then
+        tierStamina = Config.Wellbeing.Fatigue.sprintDecayPerTick
+    end
+
     -- STEP 3: INDIVIDUAL OVERRIDE, PER FIELD, HIGHEST PRECEDENCE.
-    local speed, scent, medkit = tierSpeed, tierScent, tierMedkit
-    local overriddenSpeed, overriddenScent, overriddenMedkit = false, false, false
+    local speed, scent, medkit, stamina = tierSpeed, tierScent, tierMedkit, tierStamina
+    local overriddenSpeed, overriddenScent, overriddenMedkit, overriddenStamina = false, false, false, false
 
     local override = type(citizenid) == 'string' and OverrideByCitizenId[citizenid] or nil
     if override then
@@ -478,14 +571,24 @@ function GetK9EffectiveMultipliers(citizenid)
         end
     end
 
+    -- STAMINA OVERRIDE -- read from the SEPARATE, session-only
+    -- StaminaOverrideByCitizenId table (see that table's own declaration
+    -- comment for why it is not part of `override` above).
+    local staminaOverride = type(citizenid) == 'string' and StaminaOverrideByCitizenId[citizenid] or nil
+    if type(staminaOverride) == 'number' then
+        stamina, overriddenStamina = staminaOverride, true
+    end
+
     return {
         speedMultiplier = speed,
         scentRangeMultiplier = scent,
         medkitCooldownMultiplier = medkit,
+        sprintDecayPerTick = stamina,
         overridden = {
             speedMultiplier = overriddenSpeed,
             scentRangeMultiplier = overriddenScent,
             medkitCooldownMultiplier = overriddenMedkit,
+            sprintDecayPerTick = overriddenStamina,
         },
     }
 end
@@ -498,31 +601,44 @@ end
 --- @param citizenid any
 --- @return table? override
 local function GetK9IndividualOverride(citizenid)
-    local entry = type(citizenid) == 'string' and OverrideByCitizenId[citizenid]
-    if not entry then return nil end
+    local entry = type(citizenid) == 'string' and OverrideByCitizenId[citizenid] or nil
+    local stamina = type(citizenid) == 'string' and StaminaOverrideByCitizenId[citizenid] or nil
+    if not entry and stamina == nil then return nil end
     return {
-        speedMultiplier = entry.speedMultiplier,
-        scentRangeMultiplier = entry.scentRangeMultiplier,
-        medkitCooldownMultiplier = entry.medkitCooldownMultiplier,
-        note = entry.note,
+        speedMultiplier = entry and entry.speedMultiplier,
+        scentRangeMultiplier = entry and entry.scentRangeMultiplier,
+        medkitCooldownMultiplier = entry and entry.medkitCooldownMultiplier,
+        note = entry and entry.note,
+        -- SESSION-ONLY -- see StaminaOverrideByCitizenId's own declaration
+        -- comment. Present here whenever a stamina override is currently
+        -- live, regardless of whether the OTHER three fields have one.
+        sprintDecayPerTick = stamina,
     }
 end
 
 --- Every currently-live (non-tombstoned) override, as an ARRAY of
 --- { citizenid, speedMultiplier?, scentRangeMultiplier?,
---- medkitCooldownMultiplier?, note? } -- the tablet's own "which dogs have
---- a bespoke override" listing. A COPY, same reasoning as
---- GetK9IndividualOverride above.
+--- medkitCooldownMultiplier?, note?, sprintDecayPerTick? } -- the tablet's
+--- own "which dogs have a bespoke override" listing. A COPY, same
+--- reasoning as GetK9IndividualOverride above. Includes a citizenid that
+--- has ONLY a session-only stamina override and nothing in
+--- OverrideByCitizenId at all -- the union of both tables' keys, never
+--- just the DB-backed one.
 --- @return table[] overrides
 local function ListK9IndividualOverrides()
     local list = {}
-    for citizenid, entry in pairs(OverrideByCitizenId) do
+    local citizenidsSeen = {}
+    for citizenid in pairs(OverrideByCitizenId) do citizenidsSeen[citizenid] = true end
+    for citizenid in pairs(StaminaOverrideByCitizenId) do citizenidsSeen[citizenid] = true end
+    for citizenid in pairs(citizenidsSeen) do
+        local entry = OverrideByCitizenId[citizenid]
         list[#list + 1] = {
             citizenid = citizenid,
-            speedMultiplier = entry.speedMultiplier,
-            scentRangeMultiplier = entry.scentRangeMultiplier,
-            medkitCooldownMultiplier = entry.medkitCooldownMultiplier,
-            note = entry.note,
+            speedMultiplier = entry and entry.speedMultiplier,
+            scentRangeMultiplier = entry and entry.scentRangeMultiplier,
+            medkitCooldownMultiplier = entry and entry.medkitCooldownMultiplier,
+            note = entry and entry.note,
+            sprintDecayPerTick = StaminaOverrideByCitizenId[citizenid],
         }
     end
     table.sort(list, function(a, b) return a.citizenid < b.citizenid end)
@@ -617,12 +733,23 @@ lib.callback.register('qbx_k9unit:server:k9ProfileGet', function(source, citizen
         end
     end
 
+    local override = GetK9IndividualOverride(citizenid)
+
     return {
         ok = true,
         citizenid = citizenid,
         tierLabel = tierLabel,
         effective = GetK9EffectiveMultipliers(citizenid),
-        override = GetK9IndividualOverride(citizenid),
+        override = override,
+        -- HONESTY, NOT JUST AT WRITE TIME: whenever a stamina override is
+        -- currently live for this citizenid, say so here too, not only in
+        -- k9ProfileUpsert's own response -- a high-command officer opening
+        -- the tablet later (in a NEW session, after the resource has
+        -- already restarted once) must not be misled by a `get` that looks
+        -- identical to a fully-persisted override.
+        staminaPersistenceWarning = (override and override.sprintDecayPerTick ~= nil)
+            and 'This K9\'s stamina drain-per-tick is a SESSION-ONLY override -- it is not saved to the database and will reset to the server default the next time this resource restarts.'
+            or nil,
     }
 end)
 
@@ -653,12 +780,13 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     local hasScent = payload.scentRangeMultiplier ~= nil
     local hasMedkit = payload.medkitCooldownMultiplier ~= nil
     local hasNote = payload.note ~= nil
+    local hasStamina = payload.sprintDecayPerTick ~= nil
 
-    if not (hasSpeed or hasScent or hasMedkit or hasNote) then
+    if not (hasSpeed or hasScent or hasMedkit or hasNote or hasStamina) then
         return { ok = false, reason = 'no_fields_to_set' }
     end
 
-    local speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier
+    local speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, sprintDecayPerTick
 
     if hasSpeed then
         speedMultiplier = tonumber(payload.speedMultiplier)
@@ -681,17 +809,35 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     if hasNote and not IsValidNote(payload.note) then
         return { ok = false, reason = 'invalid_note' }
     end
+    if hasStamina then
+        sprintDecayPerTick = tonumber(payload.sprintDecayPerTick)
+        -- IsValidStaminaDrain, NOT IsValidMultiplier: 0 is a deliberately
+        -- VALID value here (the owner's own requested "permanent stamina"
+        -- sentinel), unlike every other field above.
+        if not IsValidStaminaDrain(sprintDecayPerTick, MAX_STAMINA_DRAIN_PER_TICK) then
+            return { ok = false, reason = 'invalid_sprint_decay_per_tick' }
+        end
+    end
 
     if not K9ProfileEditMutex.TryAcquire(citizenid) then
         return { ok = false, reason = 'busy' }
     end
 
     local existingBefore = OverrideByCitizenId[citizenid]
-    local isNew = existingBefore == nil
+    local existingStaminaBefore = StaminaOverrideByCitizenId[citizenid]
+    -- "New" means "this citizenid has NEITHER a persisted override NOR a
+    -- session-only stamina override yet" -- a stamina-only override for a
+    -- brand-new citizenid must be counted as new too (see cap check
+    -- below), or the field would be a free way to add an override past
+    -- MAX_INDIVIDUAL_OVERRIDES that the persisted-only check would never see.
+    local isNew = existingBefore == nil and existingStaminaBefore == nil
 
     if isNew then
+        local liveCitizenids = {}
+        for citizenidKey in pairs(OverrideByCitizenId) do liveCitizenids[citizenidKey] = true end
+        for citizenidKey in pairs(StaminaOverrideByCitizenId) do liveCitizenids[citizenidKey] = true end
         local liveCount = 0
-        for _ in pairs(OverrideByCitizenId) do liveCount = liveCount + 1 end
+        for _ in pairs(liveCitizenids) do liveCount = liveCount + 1 end
         if liveCount >= MAX_INDIVIDUAL_OVERRIDES then
             K9ProfileEditMutex.Release(citizenid)
             return { ok = false, reason = 'too_many_overrides' }
@@ -707,14 +853,31 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     local finalScent = hasScent and scentRangeMultiplier or (existingBefore and existingBefore.scentRangeMultiplier or nil)
     local finalMedkit = hasMedkit and medkitCooldownMultiplier or (existingBefore and existingBefore.medkitCooldownMultiplier or nil)
     local finalNote = hasNote and payload.note or (existingBefore and existingBefore.note or nil)
+    local finalStamina = hasStamina and sprintDecayPerTick or existingStaminaBefore
 
-    local wrote = K9Store.IndividualOverride_Upsert(citizenid, finalSpeed, finalScent, finalMedkit, finalNote, actingCitizenid or 'unknown')
+    -- PERSISTED FIELDS ONLY -- a payload that touches NOTHING but
+    -- sprintDecayPerTick (and never touched speed/scent/medkit/note before
+    -- either) has nothing to write to `k9_individual_overrides` at all;
+    -- skipping the DB round-trip avoids leaving a phantom all-NULL row
+    -- behind for a field this schema does not even have a column for yet.
+    local hasPersistedFieldChange = hasSpeed or hasScent or hasMedkit or hasNote
+    local wrote = true
+    if hasPersistedFieldChange then
+        wrote = K9Store.IndividualOverride_Upsert(citizenid, finalSpeed, finalScent, finalMedkit, finalNote, actingCitizenid or 'unknown')
+    end
     if not wrote then
         K9ProfileEditMutex.Release(citizenid)
         return { ok = false, reason = 'db_error' }
     end
 
-    RefreshOverrideCache()
+    if hasPersistedFieldChange then
+        RefreshOverrideCache()
+    end
+    -- SESSION-ONLY. `t[k] = nil` is a plain delete, so a citizenid that
+    -- never had (and still does not have) a stamina override simply never
+    -- gains a key here -- no clutter, no phantom entry.
+    StaminaOverrideByCitizenId[citizenid] = finalStamina
+
     K9ProfileEditMutex.Release(citizenid)
 
     -- LIVE PUSH (GAP 1 closure, THE step that makes this actually live
@@ -744,8 +907,8 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
     -- rather than folded into an identical-looking ordinary edit line.
     local isSelfOverride = actingCitizenid ~= nil and actingCitizenid == citizenid
     local action = isNew and 'override_create' or 'override_update'
-    local detail = ('speedMultiplier=%s scentRangeMultiplier=%s medkitCooldownMultiplier=%s note=%s'):format(
-        tostring(finalSpeed), tostring(finalScent), tostring(finalMedkit), tostring(finalNote))
+    local detail = ('speedMultiplier=%s scentRangeMultiplier=%s medkitCooldownMultiplier=%s note=%s sprintDecayPerTick=%s'):format(
+        tostring(finalSpeed), tostring(finalScent), tostring(finalMedkit), tostring(finalNote), tostring(finalStamina))
     if isSelfOverride then
         detail = detail .. ' -- SELF-OVERRIDE: acting officer edited their own citizenid\'s K9'
     end
@@ -756,12 +919,22 @@ lib.callback.register('qbx_k9unit:server:k9ProfileUpsert', function(source, payl
         warning = 'This edit changes YOUR OWN K9\'s speed/scent/medkit-cooldown values. This is logged distinctly in the individual-override audit trail for review.'
     end
 
+    -- DISCLOSED, NOT HIDDEN -- see StaminaOverrideByCitizenId's own
+    -- declaration comment. Present whenever this citizenid currently
+    -- carries a stamina override (this call set/kept one), regardless of
+    -- whether THIS specific call is what set it.
+    local staminaPersistenceWarning
+    if finalStamina ~= nil then
+        staminaPersistenceWarning = 'This K9\'s stamina drain-per-tick is a SESSION-ONLY override -- it is not saved to the database and will reset to the server default the next time this resource restarts.'
+    end
+
     return {
         ok = true,
         citizenid = citizenid,
         effective = GetK9EffectiveMultipliers(citizenid),
         override = GetK9IndividualOverride(citizenid),
         warning = warning,
+        staminaPersistenceWarning = staminaPersistenceWarning,
     }
 end)
 
@@ -781,7 +954,10 @@ lib.callback.register('qbx_k9unit:server:k9ProfileReset', function(source, citiz
         return { ok = false, reason = 'busy' }
     end
 
-    if not OverrideByCitizenId[citizenid] then
+    local hadPersistedOverride = OverrideByCitizenId[citizenid] ~= nil
+    local hadStaminaOverride = StaminaOverrideByCitizenId[citizenid] ~= nil
+
+    if not hadPersistedOverride and not hadStaminaOverride then
         -- Nothing live to reset -- not an error (idempotent, matching this
         -- resource's established "resetting an already-default state is a
         -- harmless no-op" convention), but distinguished from a real
@@ -791,13 +967,26 @@ lib.callback.register('qbx_k9unit:server:k9ProfileReset', function(source, citiz
         return { ok = true, citizenid = citizenid, reason = 'no_override_existed', effective = GetK9EffectiveMultipliers(citizenid) }
     end
 
-    local wrote = K9Store.IndividualOverride_Tombstone(citizenid, actingCitizenid or 'unknown')
-    if not wrote then
-        K9ProfileEditMutex.Release(citizenid)
-        return { ok = false, reason = 'db_error' }
+    -- The DB tombstone only applies (and is only needed) when a PERSISTED
+    -- override actually exists -- a citizenid with ONLY a session-only
+    -- stamina override has never written a `k9_individual_overrides` row
+    -- at all (see k9ProfileUpsert's own "PERSISTED FIELDS ONLY" comment),
+    -- so there is nothing there to tombstone.
+    if hadPersistedOverride then
+        local wrote = K9Store.IndividualOverride_Tombstone(citizenid, actingCitizenid or 'unknown')
+        if not wrote then
+            K9ProfileEditMutex.Release(citizenid)
+            return { ok = false, reason = 'db_error' }
+        end
+        RefreshOverrideCache()
     end
 
-    RefreshOverrideCache()
+    -- SESSION-ONLY -- always cleared on reset, regardless of whether a
+    -- persisted override also existed, so "reset" genuinely means "back to
+    -- this citizenid's plain XP-tier/global-default values" for EVERY
+    -- overridable field, stamina included.
+    StaminaOverrideByCitizenId[citizenid] = nil
+
     K9ProfileEditMutex.Release(citizenid)
 
     -- LIVE PUSH -- see k9ProfileUpsert's own identical comment above for the
@@ -809,7 +998,11 @@ lib.callback.register('qbx_k9unit:server:k9ProfileReset', function(source, citiz
         pcall(PushXPTierSnapshotIfOnline, citizenid)
     end
 
-    WriteOverrideAudit('override_reset', citizenid, 'individual override reset -- K9 now uses its plain XP-tier values with no override', actingCitizenid or 'unknown')
+    local detail = 'individual override reset -- K9 now uses its plain XP-tier values with no override'
+    if hadStaminaOverride then
+        detail = detail .. ' (including its session-only stamina override)'
+    end
+    WriteOverrideAudit('override_reset', citizenid, detail, actingCitizenid or 'unknown')
 
     return { ok = true, citizenid = citizenid, effective = GetK9EffectiveMultipliers(citizenid) }
 end)

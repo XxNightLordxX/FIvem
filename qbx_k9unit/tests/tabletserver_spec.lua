@@ -254,6 +254,14 @@ local function newFixture(opts)
         IsHighCommand = opts.isHighCommand or function(_source) return false end,
         HasPermission = opts.hasPermission, -- deliberately nil by default (type() guard must tolerate absence)
         HasK9Access = opts.hasK9Access,
+        -- DISPLAY-GAP FIX (this pass) -- server/permissions.lua's own
+        -- IsHighCommandBypassCitizenId, soft-dependency guarded exactly
+        -- like every other cross-file global in this list. Deliberately
+        -- nil by default (like HasPermission above): every EXISTING test
+        -- in this file exercises the "absent" degrade path (no bypass at
+        -- all, identical to before this pass); only the new tests below
+        -- pass opts.isHighCommandBypassCitizenId.
+        IsHighCommandBypassCitizenId = opts.isHighCommandBypassCitizenId,
         GetXP = opts.getXP,
         GetXPTier = opts.getXPTier,
         ApplyK9PedRole = opts.applyK9PedRole,
@@ -996,6 +1004,223 @@ t.test('myFeatures: DYNAMIC LIST -- a feature key with no code-level awareness a
     end
     t.isNotNil(row, 'a feature key never referenced anywhere in server/tablet.lua must still be rendered, purely from Config.Features')
     t.equals(row.state, 'available')
+end)
+
+-- ============================================================================
+-- DISPLAY-GAP FIX (this pass) -- high command already implicitly holds
+-- every permission/feature/K9 upgrade (ResolveEffectivePermissions has
+-- resolved this for the four admin-capability keys for a long time); this
+-- section proves myFeatures[] now reflects that SAME real authority for
+-- ordinary Config.Features rows too, without ever fabricating a grant row
+-- (activePermSet itself, and therefore ListActivePermissionsForCitizenId
+-- reading the identical table, is untouched -- see the ROUND TRIP section
+-- further down, which already pins that and must stay green).
+-- ============================================================================
+
+t.test('DISPLAY-GAP FIX: a high-command caller with NO grant and NO certification sees an ordinary feature as available, not not_certified/requires_grant_missing', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        hasK9Access = function() return false end, -- deliberately NO K9 access
+        config = {
+            Features = { CommandTablet = true, BiteAndHold = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    -- No addPermRow at all -- no 'feature.BiteAndHold' grant, no 'k9.access'.
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'BiteAndHold' then row = entry end end
+    t.isNotNil(row)
+    t.equals(row.state, 'available', 'high command\'s real authority must be reflected, not under-reported as not_certified/requires_grant_missing')
+end)
+
+t.test('DISPLAY-GAP FIX: an explicit block STILL beats high command -- the owner\'s own carve-out is never quietly removed by this fix', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, LeashMechanics = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addPermRow('HC1', 'block.LeashMechanics', 'OTHERHC', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'LeashMechanics' then row = entry end end
+    t.equals(row.state, 'blocked', 'a block is the one lever to restrain one specific high-command person without demoting them -- must still win')
+end)
+
+t.test('DISPLAY-GAP FIX: a globally-disabled feature stays global_off for high command too -- rank never turns a server-wide switch back on', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, BiteAndHold = false },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'BiteAndHold' then row = entry end end
+    t.equals(row.state, 'global_off')
+end)
+
+t.test('DISPLAY-GAP FIX: a NON-high-command caller is completely unaffected -- still not_certified/requires_grant_missing exactly as before this pass', function()
+    local f = newFixture({
+        isHighCommand = function() return false end,
+        hasK9Access = function() return false end,
+        config = {
+            Features = { CommandTablet = true, BiteAndHold = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'CIT1', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    local row
+    for _, entry in ipairs(result.myFeatures) do if entry.key == 'BiteAndHold' then row = entry end end
+    t.equals(row.state, 'not_certified', 'an ordinary caller must see the same honest state as always -- this fix changes nothing for them')
+end)
+
+t.test('DISPLAY-GAP FIX: does not fabricate a grant row -- activePermSet/QueryActivePermissionSet stays real for a high-command caller with no actual grant', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        hasK9Access = function() return false end,
+        config = {
+            Features = { CommandTablet = true, BiteAndHold = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local src = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestMyRecord')(src)
+    t.equals(#f.permRows, 0, 'no k9_permissions row was ever inserted by this read-only display fix')
+    t.equals(#result.viewer.effectivePermissions, 4, 'high command still resolves all four admin capabilities via the EXISTING, unrelated ResolveEffectivePermissions mechanism -- unaffected either way')
+end)
+
+t.test('DISPLAY-GAP FIX (PersonFeatures): a high-command TARGET with no personal grant/certification is shown as available, honestly labelled granted=false alongside it (never a fabricated grant)', function()
+    local f = newFixture({
+        isHighCommand = function(source) return source == 1 end, -- the VIEWER (source 1) is high command
+        isHighCommandBypassCitizenId = function(citizenid) return citizenid == 'HCTARGET' end, -- the TARGET citizenid resolves bypass true
+        config = {
+            Features = { CommandTablet = true, BiteAndHold = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local viewerSrc = f.registerPlayer(1, 'VIEWERHC', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'HCTARGET', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonFeatures')(viewerSrc, 'HCTARGET')
+    t.isTrue(result.ok)
+    local row
+    for _, entry in ipairs(result.features) do if entry.key == 'BiteAndHold' then row = entry end end
+    t.isNotNil(row)
+    t.equals(row.state, 'available', 'the TARGET\'s own real authority is reflected')
+    t.isFalse(row.granted, 'the underlying k9_permissions record is UNCHANGED -- no grant row was fabricated just because the state now reads available')
+    t.isTrue(row.viaHighCommand, 'this row would NOT be available without the bypass -- the subtle "why can they do that" marker must be true')
+end)
+
+t.test('viaHighCommand: false for a high-command target who ALSO genuinely holds the real grant -- never a second, redundant way to say "available"', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        isHighCommandBypassCitizenId = function() return true end,
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, BiteAndHold = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local viewerSrc = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'HCTARGET2', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.addPermRow('HCTARGET2', 'feature.BiteAndHold', 'HC1', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonFeatures')(viewerSrc, 'HCTARGET2')
+    local row
+    for _, entry in ipairs(result.features) do if entry.key == 'BiteAndHold' then row = entry end end
+    t.equals(row.state, 'available')
+    t.isTrue(row.granted)
+    t.isFalse(row.viaHighCommand, 'this target genuinely holds the grant -- their rank is not why this row works, so no marker')
+end)
+
+t.test('viaHighCommand: false for an ordinary feature needing no grant at all, even for a high-command target -- "available for free" is not "available via rank"', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        isHighCommandBypassCitizenId = function() return true end,
+        hasK9Access = function() return true end,
+        config = {
+            Features = { CommandTablet = true, LeashMechanics = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = {}, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local viewerSrc = f.registerPlayer(1, 'HC1', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'HCTARGET3', { name = 'police', isboss = true, grade = { level = 0 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonFeatures')(viewerSrc, 'HCTARGET3')
+    local row
+    for _, entry in ipairs(result.features) do if entry.key == 'LeashMechanics' then row = entry end end
+    t.equals(row.state, 'available')
+    t.isFalse(row.viaHighCommand, 'no grant was ever needed here -- high command or not, this was always going to be available')
+end)
+
+
+t.test('DISPLAY-GAP FIX (PersonFeatures): a high-command VIEWER looking at a THIRD, non-high-command target sees the TARGET\'s own real, ungranted state -- never the viewer\'s own rank leaking onto someone else\'s row', function()
+    local f = newFixture({
+        isHighCommand = function(source) return source == 1 end, -- only the viewer is high command
+        isHighCommandBypassCitizenId = function(citizenid) return citizenid == 'VIEWERHC' end, -- bypass resolves true ONLY for the viewer's own citizenid, never the target's
+        hasK9Access = function(source) return source == 2 end, -- the TARGET has real K9 access -- isolates this test to the RequireGrant step specifically, not a not_certified short-circuit
+        config = {
+            Features = { CommandTablet = true, BiteAndHold = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local viewerSrc = f.registerPlayer(1, 'VIEWERHC', { name = 'police', isboss = true, grade = { level = 0 } })
+    f.registerPlayer(2, 'ORDINARYTARGET', { name = 'police', grade = { level = 1 } })
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonFeatures')(viewerSrc, 'ORDINARYTARGET')
+    t.isTrue(result.ok)
+    local row
+    for _, entry in ipairs(result.features) do if entry.key == 'BiteAndHold' then row = entry end end
+    t.equals(row.state, 'requires_grant_missing', 'the TARGET\'s own honest state, unaffected by the VIEWING officer\'s own high-command status')
+    t.isFalse(row.viaHighCommand, 'no bypass applied to this target at all -- never true just because the VIEWER happens to be high command')
+end)
+
+t.test('DISPLAY-GAP FIX (PersonFeatures): OFFLINE resolves false unconditionally, by design -- soft dependency never invoked for a target with no live source at all in this fixture, matching IsHighCommandBypassCitizenId\'s own real offline contract', function()
+    local f = newFixture({
+        isHighCommand = function() return true end,
+        isHighCommandBypassCitizenId = function(_citizenid) return false end, -- mirrors the REAL function's own offline answer
+        config = {
+            Features = { CommandTablet = true, BiteAndHold = true },
+            Departments = {}, Permissions = {},
+            FeatureControl = { RequireGrant = { BiteAndHold = true }, everyoneCanViewOwnRecord = true },
+            CommandTablet = {},
+        },
+    })
+    local viewerSrc = f.registerPlayer(1, 'VIEWERHC', { name = 'police', isboss = true, grade = { level = 0 } })
+    -- OFFLINE-TARGET never registered as an online player at all -- a real,
+    -- active certification (not a grant) gives them genuine K9 access
+    -- offline, isolating this test to the RequireGrant step specifically
+    -- rather than a not_certified short-circuit.
+    f.addCertRow('OFFLINE-HC-TARGET', 'police', 'SOMEONE', true)
+    local result = cb(f, 'qbx_k9unit:server:tabletRequestPersonFeatures')(viewerSrc, 'OFFLINE-HC-TARGET')
+    t.isTrue(result.ok)
+    local row
+    for _, entry in ipairs(result.features) do if entry.key == 'BiteAndHold' then row = entry end end
+    t.equals(row.state, 'requires_grant_missing', 'an offline citizenid never gets the bypass, even if they would otherwise qualify while online -- under-granting offline is the deliberately safe direction')
 end)
 
 -- ============================================================================

@@ -499,6 +499,91 @@ RegisterCommand('k9recallfetchball', function()
     RequestRecallFetchBall()
 end, false)
 
+-- ======================================================================
+-- '/k9fetch' -- COMMAND_CONSOLIDATION_SPEC.md #3, the merged entry point.
+-- k9throwfetchball/k9dropfetchball/k9recallfetchball above stay registered
+-- forever as HIDDEN ALIASES (unchanged bodies -- see
+-- client/commandsuggestions.lua's HIDDEN_ALIAS_COMMANDS).
+--
+-- CONTEXTUAL DISPATCH (project-owner-directed redirect, mid-pass -- "do the
+-- obviously-right thing" rather than requiring a subcommand word), THE
+-- REFERENCE IMPLEMENTATION for this shape across the five families: a bare
+-- '/k9fetch' reads THIS CLIENT'S OWN real local state (never guesses blind)
+-- and picks the one action that state actually implies --
+--   ActiveFetchCarry ~= nil   -> this client IS the K9 currently carrying
+--                                the ball -> DROP (ReleaseFetchBall()).
+--   myThrownBallNetId ~= nil  -> this client threw a ball that is still
+--                                out there (thrown/carried/dropped, not yet
+--                                ended) -> RECALL (RequestRecallFetchBall()).
+--   neither                   -> nothing active for this client -> THROW
+--                                (RequestThrowFetchBall()).
+-- Exactly mirrors client/radial.lua's own pre-existing 'k9_fetch_throw'
+-- item (Throw/Release combined into one context-sensitive toggle keyed off
+-- IsFetchCarryEngaged(), Recall kept as its own separate action) -- this
+-- resource's own already-shipped house style for this exact shape, not a
+-- new invention.
+--
+-- WHY THIS IS SAFE TO GUESS (never true for a destructive family):
+-- throw/drop/recall are all reversible, low-stakes actions -- worst case of
+-- a "wrong" guess is a no-op (ReleaseFetchBall() itself no-ops if
+-- ActiveFetchCarry is nil; RequestRecallFetchBall() server-side no-ops with
+-- no active cycle) or a redundant throw attempt the server independently
+-- refuses. Contrast family #2 (dog record), where the equivalent guess
+-- would touch another player's live appearance and stays explicit-only.
+--
+-- GATE NEVER WIDENED BY THE MERGE: every branch below calls the EXACT SAME
+-- resource-global (RequestThrowFetchBall/ReleaseFetchBall/
+-- RequestRecallFetchBall) the old standalone command of the same name
+-- already called -- RequestThrowFetchBall() itself still re-runs
+-- HasK9Access()/DenyK9UIAccess() every time it's invoked, from bare
+-- '/k9fetch', from '/k9fetch throw', or from '/k9throwfetchball' alike.
+-- This dispatcher performs no authorization check of its own to skip.
+--
+-- EXPLICIT OVERRIDE: '/k9fetch <throw|drop|recall>' forces that action
+-- regardless of current state (identical body to the matching old
+-- standalone command).
+--
+-- CONFIRMATION NAMES THE DECISION (project-owner's own requirement #3): a
+-- short notify fires BEFORE the resolved action runs, so a player who gets
+-- a result they didn't expect from the bare form can see what state this
+-- client read and why -- the underlying Request*/Release* call still fires
+-- its own success/failure notify on top, unchanged.
+-- ======================================================================
+local FETCH_EXPLICIT_ACTIONS = {
+    throw = function() RequestThrowFetchBall() end,
+    drop = function() ReleaseFetchBall() end,
+    recall = function() RequestRecallFetchBall() end,
+}
+
+RegisterCommand('k9fetch', function(_source, args)
+    local explicit = args[1] and FETCH_EXPLICIT_ACTIONS[args[1]]
+    if explicit then
+        explicit()
+        return
+    end
+
+    if args[1] then
+        -- An argument was given but it's not throw/drop/recall --
+        -- COMMAND_CONSOLIDATION_SPEC.md §4's no-argument/bad-subcommand
+        -- discoverability convention, reused for "recognized command,
+        -- unrecognized word" too.
+        lib.notify({ title = locale('common.notify_title'), description = locale('fetch.usage_k9fetch'), type = 'error' })
+        return
+    end
+
+    -- Bare '/k9fetch' -- contextual dispatch, see this block's own header.
+    if ActiveFetchCarry then
+        lib.notify({ title = locale('common.notify_title'), description = locale('fetch.contextual_dropping'), type = 'inform' })
+        ReleaseFetchBall()
+    elseif myThrownBallNetId then
+        lib.notify({ title = locale('common.notify_title'), description = locale('fetch.contextual_recalling'), type = 'inform' })
+        RequestRecallFetchBall()
+    else
+        lib.notify({ title = locale('common.notify_title'), description = locale('fetch.contextual_throwing'), type = 'inform' })
+        RequestThrowFetchBall()
+    end
+end, false)
+
 -- "Pick Up Ball" / "Deliver to Handler" target options — ROUTED THROUGH
 -- K9Compat.Get('target') (shared/compat/target.lua), never a direct
 -- `exports.ox_target` call — canInteract/onSelect below are unchanged

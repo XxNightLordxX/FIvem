@@ -240,7 +240,7 @@ local function newRadialFixture(opts)
     -- test can assert a release branch never re-derives state it doesn't
     -- need (e.g. Detach Leash never calling CanShowK9UI at all).
     local queryState = {
-        isLeashed = false, isInK9Vehicle = false, activeTrackType = nil,
+        isLeashed = false, isInK9Vehicle = false, activeTrackType = nil, isTracking = false,
         isBiteHoldEngaged = false, isDragEngaged = false, isFetchCarryEngaged = false,
         isSarCallActive = false, isTrainingModeActive = false,
         -- Top-level icon access gate (this pass) -- see this file's header
@@ -389,10 +389,12 @@ local function newRadialFixture(opts)
         EnterNearestK9Vehicle = record('EnterNearestK9Vehicle'),
         ExitK9Vehicle = record('ExitK9Vehicle'),
         GetActiveTrackType = queryFn('GetActiveTrackType', 'activeTrackType'),
+        IsTracking = queryFn('IsTracking', 'isTracking'),
         StopTracking = record('StopTracking'),
         StartScentTrack = record('StartScentTrack'),
         StartBloodTrack = record('StartBloodTrack'),
         StartGunpowderTrack = record('StartGunpowderTrack'),
+        StartCertifiedTrack = record('StartCertifiedTrack'),
         IsBiteHoldEngaged = queryFn('IsBiteHoldEngaged', 'isBiteHoldEngaged'),
         ReleaseBiteHold = record('ReleaseBiteHold'),
         RequestBiteHold = record('RequestBiteHold'),
@@ -669,7 +671,7 @@ t.test('this spec\'s baseline flags: Sit, Bark, Leash, Vehicle (Phase 1) are pre
     t.isTrue(presentIds.k9_exit_kennel, 'k9_exit_kennel has no dedicated Config.Features flag of its own -- see this file own header comment on why an exit-adjacent item is registered unconditionally')
 
     local shouldBeAbsent = {
-        'k9_track_scent', 'k9_track_blood', 'k9_track_gunpowder',
+        'k9_track_certified',
         'k9_bite_hold', 'k9_takedown', 'k9_drag',
         'k9_break_partnership', 'k9_partner_up', 'k9_recall', 'k9_defense',
         'k9_fetch', 'k9_prop_attachment', 'k9_deploy_kennel',
@@ -687,9 +689,6 @@ end)
 -- ----------------------------------------------------------------------
 
 local FALSE_BY_DEFAULT_SINGLE_ITEM_CASES = {
-    { flag = 'ScentTracking', itemId = 'k9_track_scent' },
-    { flag = 'BloodTracking', itemId = 'k9_track_blood' },
-    { flag = 'GunpowderSniffing', itemId = 'k9_track_gunpowder' },
     { flag = 'BiteAndHold', itemId = 'k9_bite_hold' },
     { flag = 'NonLethalTakedown', itemId = 'k9_takedown' },
     { flag = 'PropDragging', itemId = 'k9_drag' },
@@ -719,6 +718,28 @@ for _, case in ipairs(FALSE_BY_DEFAULT_SINGLE_ITEM_CASES) do
     t.test(('%s: appears ONLY when Config.Features.%s is explicitly true'):format(case.itemId, case.flag), function()
         local f = newRadialFixture({ features = { [case.flag] = true } })
         t.isNotNil(f.findInMenu('k9unit', case.itemId), ('%s must appear once %s is true'):format(case.itemId, case.flag))
+    end)
+end
+
+-- ----------------------------------------------------------------------
+-- k9_track_certified (owner-directed decluttering pass, 2026-08-26) -- the
+-- ONE merged item REPLACING the three former separate k9_track_scent/
+-- k9_track_blood/k9_track_gunpowder items. Unlike every case in
+-- FALSE_BY_DEFAULT_SINGLE_ITEM_CASES above (exactly one flag gates exactly
+-- one item), this ONE item is gated on an OR of three flags -- tested
+-- individually below rather than folded into that generic table, since the
+-- generic helper assumes a strict one-flag-to-one-item mapping this item no
+-- longer has.
+-- ----------------------------------------------------------------------
+t.test('k9_track_certified: absent when ScentTracking, BloodTracking, and GunpowderSniffing are all false', function()
+    local f = newRadialFixture()
+    t.isNil(f.findInMenu('k9unit', 'k9_track_certified'))
+end)
+
+for _, flag in ipairs({ 'ScentTracking', 'BloodTracking', 'GunpowderSniffing' }) do
+    t.test(('k9_track_certified: appears when ONLY %s is true (the item is gated on an OR of the three, not an AND)'):format(flag), function()
+        local f = newRadialFixture({ features = { [flag] = true } })
+        t.isNotNil(f.findInMenu('k9unit', 'k9_track_certified'), ('k9_track_certified must appear once %s alone is true'):format(flag))
     end)
 end
 
@@ -1292,15 +1313,13 @@ t.test('FIXED: k9_vehicle is now guarded -- absent IsInK9Vehicle/EnterNearestK9V
     assertGuardDoesNotThrow(fExit.findInMenu('k9unit', 'k9_vehicle'))
 end)
 
-t.test('FIXED: k9_track_scent/blood/gunpowder are now guarded -- absent GetActiveTrackType/StopTracking/Start*Track does not throw in either branch', function()
-    local fStart = newRadialFixture({ features = { ScentTracking = true, BloodTracking = true, GunpowderSniffing = true }, omit = { 'GetActiveTrackType', 'StartScentTrack', 'StartBloodTrack', 'StartGunpowderTrack' } })
-    assertGuardDoesNotThrow(fStart.findInMenu('k9unit', 'k9_track_scent'))
-    assertGuardDoesNotThrow(fStart.findInMenu('k9unit', 'k9_track_blood'))
-    assertGuardDoesNotThrow(fStart.findInMenu('k9unit', 'k9_track_gunpowder'))
+t.test('FIXED: k9_track_certified is guarded -- absent IsTracking/StartCertifiedTrack does not throw in either branch', function()
+    local fStart = newRadialFixture({ features = { ScentTracking = true }, omit = { 'IsTracking', 'StartCertifiedTrack' } })
+    assertGuardDoesNotThrow(fStart.findInMenu('k9unit', 'k9_track_certified'))
 
     local fStop = newRadialFixture({ features = { ScentTracking = true }, omit = { 'StopTracking' } })
-    fStop.setState('activeTrackType', 'scent')
-    assertGuardDoesNotThrow(fStop.findInMenu('k9unit', 'k9_track_scent'))
+    fStop.setState('isTracking', true)
+    assertGuardDoesNotThrow(fStop.findInMenu('k9unit', 'k9_track_certified'))
 end)
 
 t.test('FIXED: k9_bite_hold/k9_takedown/k9_drag are now guarded -- absent targets do not throw in either branch', function()
@@ -1492,34 +1511,43 @@ t.test('k9_bite_hold / k9_drag: the Release branch is UNGATED; the Start branch 
 end)
 
 -- ----------------------------------------------------------------------
--- Track Scent/Blood/Gunpowder -- the regression this file's own comment
--- names by name: clicking a DIFFERENT track type while one is already
--- active must NOT silently cancel the active trail; it must fall through
--- to that OTHER type's own Start*Track()/access-gate path instead.
+-- k9_track_certified (owner-directed decluttering pass, 2026-08-26) -- ONE
+-- context-sensitive item now, so the OLD "clicking a DIFFERENT track type
+-- while another is active must not cancel it" disambiguation this section
+-- used to pin (GetActiveTrackType()-based) no longer applies -- there is
+-- only one item, so ANY active tracking session (of whatever type the
+-- SERVER resolved) makes it a Stop; otherwise it starts the ONE merged
+-- action. This ALSO means this file never needs to know or care which
+-- specific type is active -- IsTracking() alone is enough, exactly per
+-- this pass's own "the server resolves which types apply, the client must
+-- not decide this" requirement.
 -- ----------------------------------------------------------------------
 
-t.test('REGRESSION LOCK-IN: clicking Track Gunpowder while Blood is the active type does NOT call StopTracking -- starts Gunpowder instead (each item only self-toggles its OWN type)', function()
-    local f = newRadialFixture({ features = { ScentTracking = true, BloodTracking = true, GunpowderSniffing = true } })
-    f.setState('activeTrackType', 'blood')
-    f.findInMenu('k9unit', 'k9_track_gunpowder').onSelect()
-    t.isNil(f.calls.StopTracking, 'must never stop the OTHER active type')
-    t.equals(#f.calls.StartGunpowderTrack, 1)
-end)
-
-t.test('Track Scent/Blood/Gunpowder: clicking the CURRENTLY active type\'s own item stops it, UNGATED', function()
-    local f = newRadialFixture({ features = { ScentTracking = true, BloodTracking = true, GunpowderSniffing = true }, canShowK9UI = false })
-    f.setState('activeTrackType', 'scent')
-    f.findInMenu('k9unit', 'k9_track_scent').onSelect()
+t.test('k9_track_certified: any active tracking session (regardless of type) makes this item a Stop, UNGATED', function()
+    local f = newRadialFixture({ features = { ScentTracking = true }, canShowK9UI = false })
+    f.setState('isTracking', true)
+    f.findInMenu('k9unit', 'k9_track_certified').onSelect()
     t.equals(#f.calls.StopTracking, 1)
-    t.equals(f.denyCallCount(), 0, 'stopping your own active trail must never be gated')
+    t.equals(f.denyCallCount(), 0, 'stopping an active trail must never be gated')
+    t.isNil(f.calls.StartCertifiedTrack, 'must never also start a new search on the same click')
 end)
 
-t.test('Track Scent/Blood/Gunpowder: starting a trail (nothing active) is GATED on CanShowK9UI', function()
-    local f = newRadialFixture({ features = { ScentTracking = true, BloodTracking = true, GunpowderSniffing = true }, canShowK9UI = false })
-    f.setState('activeTrackType', nil)
-    f.findInMenu('k9unit', 'k9_track_scent').onSelect()
+t.test('k9_track_certified: nothing active -- starting the merged search is GATED on CanShowK9UI', function()
+    local f = newRadialFixture({ features = { ScentTracking = true }, canShowK9UI = false })
+    f.setState('isTracking', false)
+    f.findInMenu('k9unit', 'k9_track_certified').onSelect()
     t.equals(f.denyCallCount(), 1)
-    t.isNil(f.calls.StartScentTrack)
+    t.isNil(f.calls.StartCertifiedTrack)
+end)
+
+t.test('k9_track_certified: nothing active, access granted -- calls StartCertifiedTrack (the ONE merged action, never a specific Start*Track)', function()
+    local f = newRadialFixture({ features = { ScentTracking = true } })
+    f.setState('isTracking', false)
+    f.findInMenu('k9unit', 'k9_track_certified').onSelect()
+    t.equals(#f.calls.StartCertifiedTrack, 1)
+    t.isNil(f.calls.StartScentTrack, 'the collapsed item must never call the old per-type globals directly')
+    t.isNil(f.calls.StartBloodTrack)
+    t.isNil(f.calls.StartGunpowderTrack)
 end)
 
 -- ----------------------------------------------------------------------

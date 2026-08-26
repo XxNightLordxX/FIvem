@@ -117,26 +117,146 @@ end
 -- Snapshot taken 2026-08-26 -- see this file's header "HAND-MAINTAINED FILE
 -- LIST" above for the disclosed tradeoff and the "add a new file here in
 -- the same change" obligation.
+-- 'announce.lua', 'selfcheck.lua', 'vehicle.lua', 'webhook.lua' added this
+-- pass -- all four were missing from this hand-maintained snapshot; none of
+-- the four registers any command today (confirmed by reading each file, not
+-- assumed), so adding them changes nothing about either loop below, only
+-- future-proofs this list against the exact "silently missing FILE" gap
+-- class dangerwarn.lua's own command was found in. 'dogcharacter.lua'
+-- (family #2, k9setdog/k9removedog) is added separately, alongside that
+-- family's own HIDDEN_ALIAS_COMMANDS entries, since those two names need
+-- the allowlist skip to land in the SAME change as this list gaining
+-- visibility into them.
 local SERVER_LUA_FILES = {
-    'admin.lua', 'appearance.lua', 'bonetool.lua', 'certifications.lua', 'certtiers.lua',
-    'combat.lua', 'cooldowns.lua', 'datastore.lua', 'defense.lua', 'entities.lua',
+    'admin.lua', 'announce.lua', 'appearance.lua', 'bonetool.lua', 'certifications.lua', 'certtiers.lua',
+    'combat.lua', 'cooldowns.lua', 'datastore.lua', 'defense.lua', 'dogcharacter.lua', 'entities.lua',
     'equipmentshop.lua', 'events.lua', 'exports.lua', 'fetch.lua', 'findalert.lua',
     'highcommand.lua', 'integrations.lua', 'inventory.lua', 'k9profiles.lua', 'kennel.lua',
     'leaderboard.lua', 'main.lua', 'medkit.lua', 'notify.lua', 'partnership.lua',
     'permissionkeycatalog.lua', 'permissions.lua', 'progression.lua', 'propattachment.lua',
     'pursuitsprint.lua', 'recall.lua', 'runtimecontrol.lua', 'sarcalls.lua', 'scentlineup.lua',
-    'scenttrail.lua', 'search.lua', 'tablet.lua', 'tenure.lua', 'tracking.lua', 'training.lua',
-    'wellbeing.lua', 'xptiers.lua',
+    'scenttrail.lua', 'search.lua', 'selfcheck.lua', 'tablet.lua', 'tenure.lua', 'tracking.lua', 'training.lua',
+    'vehicle.lua', 'webhook.lua', 'wellbeing.lua', 'xptiers.lua',
 }
 
+-- 'announce.lua'/'dangerwarn.lua' added this pass -- both were missing from
+-- this hand-maintained snapshot despite each registering a real command
+-- (k9announce, qbx_k9unit:dangerWarnAlert) that ALREADY has a full
+-- COMMAND_REFERENCE/DEFAULT_STRINGS/TABLET_STRING_KEYS entry -- confirmed by
+-- reading html/tablet.js and client/tablet.lua directly, not assumed --
+-- so this closes a pure list-gap with no documentation debt behind it,
+-- the same class of gap dangerwarn.lua's own command was found in on the
+-- client/commandsuggestions.lua side.
 local CLIENT_LUA_FILES = {
-    'agility.lua', 'appearance.lua', 'audio.lua', 'bonetool.lua', 'combat.lua', 'defense.lua',
+    'agility.lua', 'announce.lua', 'appearance.lua', 'audio.lua', 'bonetool.lua', 'combat.lua', 'dangerwarn.lua', 'defense.lua',
     'equipmentshop.lua', 'exports.lua', 'featureblocks.lua', 'fetch.lua', 'findalert.lua',
     'hud.lua', 'inventory.lua', 'keybinds.lua', 'kennel.lua', 'leashvisual.lua', 'main.lua', 'medkit.lua',
     'movement.lua', 'partnership.lua', 'progression.lua', 'propattachment.lua', 'proximityaudio.lua',
     'pursuitsprint.lua', 'radial.lua', 'recall.lua', 'sarcalls.lua', 'scentlineup.lua',
     'scenttrail.lua', 'screenfx.lua', 'search.lua', 'tablet.lua', 'tracking.lua', 'training.lua',
     'vehicle.lua', 'vision.lua', 'wellbeing.lua',
+}
+
+-- HIDDEN_ALIAS_COMMANDS (COMMAND_CONSOLIDATION_SPEC.md §3) -- SAME
+-- MEMBERSHIP as tests/commandsuggestions_spec.lua's own table of the same
+-- name (kept as an independent, duplicated literal, same disclosed
+-- tradeoff as this file's own SERVER_LUA_FILES/CLIENT_LUA_FILES snapshot,
+-- not a shared `require` between two otherwise-independent spec files),
+-- but shaped as name -> owning family here (not name -> true) so the
+-- "Commands tab cleanup" test below can key off which FAMILY a name
+-- belongs to -- see COMMANDS_TAB_CLEANUP_COMPLETE immediately below this
+-- table for why.
+local HIDDEN_ALIAS_COMMANDS = {
+    -- family #1: audit (5 -> 1, 'k9audit') -- server/admin.lua
+    k9auditcert = 'audit',
+    k9auditpartner = 'audit',
+    k9auditsearch = 'audit',
+    k9auditxp = 'audit',
+    k9auditdept = 'audit',
+    -- family #2: dog record (2 -> 1, 'k9dog') -- server/dogcharacter.lua.
+    -- Unlike audit's five originals, k9setdog/k9removedog have NEVER had a
+    -- COMMAND_REFERENCE entry at all (a pre-existing, pre-this-pass gap,
+    -- confirmed by reading html/tablet.js directly) -- so for THIS family
+    -- specifically, the "skip from undocumented" behavior below is already
+    -- the FINAL state, not an interim one: there is nothing to remove from
+    -- COMMAND_REFERENCE later, only a new 'k9dog' entry to add (reported to
+    -- project-lead separately). COMMANDS_TAB_CLEANUP_COMPLETE.dog_record can
+    -- be set true as soon as that's confirmed -- it costs nothing either way
+    -- since these two names were never documented to begin with.
+    k9setdog = 'dog_record',
+    k9removedog = 'dog_record',
+    -- family #3: fetch (3 -> 1, 'k9fetch') -- client/fetch.lua. Same
+    -- "never had a COMMAND_REFERENCE entry to begin with" shape as
+    -- k9throwfetchball/k9dropfetchball/k9recallfetchball actually DO have
+    -- entries today (confirmed by reading html/tablet.js) -- these three
+    -- are NOT yet flagged complete below because their COMMAND_REFERENCE
+    -- entries are real, live, and not yet removed (same interim state as
+    -- audit's five).
+    k9throwfetchball = 'fetch',
+    k9dropfetchball = 'fetch',
+    k9recallfetchball = 'fetch',
+}
+
+-- COMMANDS_TAB_CLEANUP_COMPLETE -- coordination table, project-lead-owned.
+-- STARTS EMPTY ON PURPOSE (2026-08-26). html/tablet.js's own
+-- COMMAND_REFERENCE currently still documents all five original audit
+-- commands ALONGSIDE 'k9audit' (six entries total, matching
+-- html/tests/tablet_command_reference_spec.js's own "21 admin-tier
+-- commands" count) -- a real, disclosed, INTENTIONALLY TEMPORARY state:
+-- removing those five is a coordinated edit across COMMAND_REFERENCE,
+-- DEFAULT_STRINGS, client/tablet.lua's TABLET_STRING_KEYS, and
+-- locales/en.json's tablet group all at once (this resource's own
+-- tabletlocalization_spec.lua fails on a partial removal, per that spec's
+-- own strict key-set-equality assertion), batched across every family at
+-- once rather than once per family while a UI agent is live in
+-- html/tablet.js.
+--
+-- THE TEST BELOW THEREFORE DOES NOT YET FAIL for any name in
+-- HIDDEN_ALIAS_COMMANDS -- it only starts enforcing "this alias's five (or
+-- however many) old names must no longer appear in COMMAND_REFERENCE" for
+-- a family once that family's key is added HERE, in the SAME change that
+-- actually does the removal in html/tablet.js. This is deliberately NOT a
+-- "we'll add the guard afterwards" promise (this codebase has been bitten
+-- by exactly that pattern before) -- the guard ships now, inert until the
+-- fact it checks becomes true, then it starts enforcing itself the moment
+-- that fact changes, with zero further code to write at that point beyond
+-- flipping this one flag.
+local COMMANDS_TAB_CLEANUP_COMPLETE = {
+    -- audit = true, -- flip once html/tablet.js's COMMAND_REFERENCE (and
+    -- its own DEFAULT_STRINGS/TABLET_STRING_KEYS/locales/en.json
+    -- three-way-contract siblings) no longer list k9auditcert/
+    -- k9auditpartner/k9auditsearch/k9auditxp/k9auditdept as their own
+    -- separate entries.
+
+    -- dog_record = true, set HONESTLY (not a placeholder): k9setdog/
+    -- k9removedog never had a COMMAND_REFERENCE entry at all -- confirmed
+    -- by reading html/tablet.js directly, not assumed -- so this family
+    -- has zero Commands-tab cleanup debt to pay down; there was never
+    -- anything for this flag to catch turning false. Unlike audit (still
+    -- commented out above because that debt is real and outstanding),
+    -- flipping this one true costs nothing and starts the guard actually
+    -- enforcing "neither old name may creep into COMMAND_REFERENCE later"
+    -- from this pass onward.
+    dog_record = true,
+}
+
+-- PENDING_NEW_CANONICAL_COMMANDS -- a DIFFERENT exception from
+-- HIDDEN_ALIAS_COMMANDS, disclosed separately rather than folded into it:
+-- these are the brand-NEW merged command names themselves (e.g. 'k9dog'),
+-- real and registered, that do not YET have their own first-ever
+-- COMMAND_REFERENCE/DEFAULT_STRINGS entry (and client/tablet.lua's matching
+-- TABLET_STRING_KEYS triple) because html/tablet.js is a hot file this pass
+-- cannot edit while a UI agent is live in it. This is the mirror image of
+-- the audit situation (there, project-lead landed html/tablet.js's entry
+-- BEFORE this pass's server/admin.lua registration existed; here, this
+-- pass's registration exists BEFORE html/tablet.js has an entry for it) --
+-- same underlying cause (this pass cannot touch that file directly),
+-- opposite ordering. Reported to project-lead per family below; remove a
+-- name from this table in the SAME change that adds its real
+-- COMMAND_REFERENCE entry.
+local PENDING_NEW_CANONICAL_COMMANDS = {
+    k9dog = true, -- family #2 (dog record) -- needs cmdref_k9dog_usage/_does/_needs; see client/commandsuggestions.lua's own PENDING_LOCALE_KEYS for the exact interim _does/_usage text already in use client-side.
+    k9fetch = true, -- family #3 (fetch) -- needs cmdref_k9fetch_usage/_does/_needs; same interim text location.
 }
 
 --- Pure text-in, set-out extraction -- exactly the
@@ -309,7 +429,14 @@ t.test('LOAD-BEARING DRIFT GUARD: every real RegisterCommand(...) name across se
 
     local undocumented = {}
     for name in pairs(real) do
-        if not documented[name] then undocumented[#undocumented + 1] = name end
+        -- HIDDEN_ALIAS_COMMANDS: skip a real, live command that a family
+        -- merge deliberately stopped documenting as its own separate
+        -- Commands-tab entry -- see that table's own header comment above
+        -- for the current, disclosed exception (audit's five originals are
+        -- still documented today; this skip is a no-op for them until/
+        -- unless that changes, and becomes load-bearing the moment a
+        -- future family DOES hide its old names from COMMAND_REFERENCE).
+        if not documented[name] and not HIDDEN_ALIAS_COMMANDS[name] and not PENDING_NEW_CANONICAL_COMMANDS[name] then undocumented[#undocumented + 1] = name end
     end
 
     local phantom = {}
@@ -359,6 +486,83 @@ t.test('LOAD-BEARING DRIFT GUARD: every real RegisterCommand(...) name across se
     local _, documentedCount = SortedKeys(documented)
     t.isTrue(realCount >= 30, ('sanity: only found %d real RegisterCommand name(s) across server/*.lua + client/*.lua -- expected at least 30; an extraction pattern or file list may be out of date'):format(realCount))
     t.isTrue(documentedCount >= 30, ('sanity: only found %d documented command(s) in html/tablet.js\'s COMMAND_REFERENCE -- expected at least 30'):format(documentedCount))
+end)
+
+t.test('HIDDEN_ALIAS_COMMANDS GUARD: every allowlisted name is still a real, live RegisterCommand(...) call somewhere in server/*.lua or client/*.lua', function()
+    -- Same "the allowlist can only ever excuse a name that is still live"
+    -- property as tests/commandsuggestions_spec.lua's own identically-named
+    -- test -- see that file's header comment for the full reasoning and the
+    -- "delete this guard and watch it fail" proof.
+    local realServer = RealCommandNamesIn('../server', SERVER_LUA_FILES)
+    local realClient = RealCommandNamesIn('../client', CLIENT_LUA_FILES)
+    local real = {}
+    for name in pairs(realServer) do real[name] = true end
+    for name in pairs(realClient) do real[name] = true end
+
+    local phantomAliases = {}
+    for name in pairs(HIDDEN_ALIAS_COMMANDS) do
+        if not real[name] then phantomAliases[#phantomAliases + 1] = name end
+    end
+
+    if #phantomAliases > 0 then
+        table.sort(phantomAliases)
+        error((
+            '%d name(s) in HIDDEN_ALIAS_COMMANDS are NOT a real RegisterCommand(...) call anywhere in server/*.lua ' ..
+            'or client/*.lua: %s.\n\nA genuinely removed command must never keep hiding behind this allowlist -- ' ..
+            'FIX THIS BY: removing the stale entry from HIDDEN_ALIAS_COMMANDS (if the command was truly deleted), ' ..
+            'or restoring its RegisterCommand call (if it was deleted by mistake).'
+        ):format(#phantomAliases, table.concat(phantomAliases, ', ')), 0)
+    end
+end)
+
+t.test('PENDING_NEW_CANONICAL_COMMANDS GUARD: every name in it is (a) still a real, live RegisterCommand(...) call, and (b) NOT already documented -- a name that already landed in COMMAND_REFERENCE must be removed from this table in the same change, not left here as stale noise', function()
+    local realServer = RealCommandNamesIn('../server', SERVER_LUA_FILES)
+    local realClient = RealCommandNamesIn('../client', CLIENT_LUA_FILES)
+    local real = {}
+    for name in pairs(realServer) do real[name] = true end
+    for name in pairs(realClient) do real[name] = true end
+
+    local documented = ExtractDocumentedCommandNames(ReadFile('../html/tablet.js'))
+
+    local phantomPending, stalePending = {}, {}
+    for name in pairs(PENDING_NEW_CANONICAL_COMMANDS) do
+        if not real[name] then phantomPending[#phantomPending + 1] = name end
+        if documented[name] then stalePending[#stalePending + 1] = name end
+    end
+
+    if #phantomPending > 0 then
+        table.sort(phantomPending)
+        error(('%d name(s) in PENDING_NEW_CANONICAL_COMMANDS are NOT a real RegisterCommand(...) call: %s.'):format(#phantomPending, table.concat(phantomPending, ', ')), 0)
+    end
+    if #stalePending > 0 then
+        table.sort(stalePending)
+        error((
+            '%d name(s) in PENDING_NEW_CANONICAL_COMMANDS already have a real COMMAND_REFERENCE entry: %s.\n\n' ..
+            'FIX THIS BY: removing them from PENDING_NEW_CANONICAL_COMMANDS now that html/tablet.js documents them for real.'
+        ):format(#stalePending, table.concat(stalePending, ', ')), 0)
+    end
+end)
+
+t.test('COMMANDS TAB CLEANUP (currently inert, starts enforcing per-family the moment COMMANDS_TAB_CLEANUP_COMPLETE lists that family): once a family is flagged complete, none of its HIDDEN_ALIAS_COMMANDS names may still appear in html/tablet.js\'s COMMAND_REFERENCE', function()
+    local documented = ExtractDocumentedCommandNames(ReadFile('../html/tablet.js'))
+
+    local stillDocumented = {}
+    for name, family in pairs(HIDDEN_ALIAS_COMMANDS) do
+        if COMMANDS_TAB_CLEANUP_COMPLETE[family] and documented[name] then
+            stillDocumented[#stillDocumented + 1] = name
+        end
+    end
+
+    if #stillDocumented > 0 then
+        table.sort(stillDocumented)
+        error((
+            '%d name(s) are flagged as COMMANDS_TAB_CLEANUP_COMPLETE but still have a COMMAND_REFERENCE entry in ' ..
+            'html/tablet.js: %s.\n\nFIX THIS BY: removing their COMMAND_REFERENCE entries (and now-orphaned ' ..
+            'DEFAULT_STRINGS keys, and client/tablet.lua\'s matching TABLET_STRING_KEYS entries) as part of the ' ..
+            'same change that flips this family in COMMANDS_TAB_CLEANUP_COMPLETE -- or revert the flag if the ' ..
+            'removal has not actually landed yet.'
+        ):format(#stillDocumented, table.concat(stillDocumented, ', ')), 0)
+    end
 end)
 
 t.test('no duplicate command names within COMMAND_REFERENCE (a copy-pasted entry would silently mask a different, genuinely undocumented command)', function()

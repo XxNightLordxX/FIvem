@@ -614,9 +614,19 @@ local function LockSession(conductorSrc, session)
 end
 
 -- ----------------------------------------------------------------------
--- COMMAND 1: /k9lineup <serverId1> <serverId2> ...>
+-- COMMAND 1 (the START half): /k9lineup <serverId1> <serverId2> ...>
+-- EXTRACTED into a named local function this pass (coder-architect,
+-- owner-directed decluttering, 2026-08-26) so the ACTUAL 'k9lineup'
+-- RegisterCommand registration below (COMMAND DISPATCH section) can
+-- delegate to it after ruling out the 'pick'/'cancel' subcommand forms —
+-- pure extraction, gate placement and body UNCHANGED: this is still the
+-- ONLY function in this file that checks Config.Features.ScentLineup /
+-- HasK9Access / CanUseScentLineup / StartCooldown, exactly as it did as a
+-- bare RegisterCommand handler. HandleScentLineupPick/HandleScentLineupCancel
+-- below carry NO such gate, by design — see this file's own header "WHO
+-- NEEDS WHAT ACCESS" and "NO UNBOUNDED TRAP".
 -- ----------------------------------------------------------------------
-RegisterCommand('k9lineup', function(source, args)
+local function HandleScentLineupStart(source, args)
     local src = source
 
     if not Config.Features.ScentLineup then
@@ -716,7 +726,7 @@ RegisterCommand('k9lineup', function(source, args)
     end
 
     NotifyPlayer(src, locale('scentlineup.invite_sent_summary', #targets), 'info')
-end, false)
+end
 
 -- ----------------------------------------------------------------------
 -- NET EVENT: an invited player's response to client/scentlineup.lua's
@@ -764,11 +774,18 @@ RegisterNetEvent('qbx_k9unit:server:respondScentLineupInvite', function(fromServ
 end)
 
 -- ----------------------------------------------------------------------
--- COMMAND 2: /k9lineuppick <N> -- see header "THE SECURITY SHAPE": this is
--- the ONLY message in this whole feature that touches the puzzle, and it
--- is a one-shot guess, never a query.
+-- COMMAND 2 (the PICK half): /k9lineuppick <N> -- see header "THE SECURITY
+-- SHAPE": this is the ONLY message in this whole feature that touches the
+-- puzzle, and it is a one-shot guess, never a query. EXTRACTED into a named
+-- local function this pass (coder-architect, owner-directed decluttering,
+-- 2026-08-26) -- gate placement and body UNCHANGED: NO HasK9Access/
+-- CanUseScentLineup/grant check of any kind, by design (a real scent
+-- lineup's picker is the CONDUCTOR, who was already gated once, at
+-- HandleScentLineupStart -- see this function's own EXECUTION note in the
+-- COMMAND DISPATCH section below for why re-gating here would be wrong,
+-- not merely redundant).
 -- ----------------------------------------------------------------------
-RegisterCommand('k9lineuppick', function(source, args)
+local function HandleScentLineupPick(source, args)
     local src = source
 
     local session = Sessions[src]
@@ -825,14 +842,27 @@ RegisterCommand('k9lineuppick', function(source, args)
     FireOutboundEvent('qbx_k9unit:events:scentLineupResolved', src, correct)
 
     CleanupSession(src, session)
-end, false)
+end
 
 -- ----------------------------------------------------------------------
--- COMMAND 3: /k9lineupcancel -- see header "NO UNBOUNDED TRAP". NO
--- HasK9Access/CanUseScentLineup/grant check anywhere in this handler, by
--- design.
+-- COMMAND 3 (the CANCEL half): /k9lineupcancel -- see header "NO UNBOUNDED
+-- TRAP". NO HasK9Access/CanUseScentLineup/grant check anywhere in this
+-- handler, by design -- reachable by the CONDUCTOR (Sessions[src]) OR any
+-- currently-invited/accepted PARTICIPANT (ParticipantSession[src]), and a
+-- participant never needs, and is never asked to hold, K9 access at all
+-- (this file's own header "WHO NEEDS WHAT ACCESS": "a real scent lineup
+-- tests suspects, who are not K9s"). EXTRACTED into a named local function
+-- this pass (coder-architect, owner-directed decluttering, 2026-08-26) --
+-- gate placement (none) and body UNCHANGED. TREAT THIS AS SACRED: the
+-- COMMAND DISPATCH section below routes to this function BEFORE any gate
+-- of any kind runs, on purpose -- a caller with no K9 access, no
+-- certification, and no specialization must be able to reach this exact
+-- function, every time, with nothing standing in front of it. See
+-- tests/scentlineup_spec.lua's own regression pinning this (added this
+-- pass, made to fail first by reinstating a gate, per this pass's own
+-- verification requirement).
 -- ----------------------------------------------------------------------
-RegisterCommand('k9lineupcancel', function(source)
+local function HandleScentLineupCancel(source)
     local src = source
 
     if Sessions[src] then
@@ -849,6 +879,79 @@ RegisterCommand('k9lineupcancel', function(source)
     end
 
     NotifyPlayer(src, locale('scentlineup.not_in_lineup'), 'error')
+end
+
+-- ----------------------------------------------------------------------
+-- COMMAND DISPATCH (owner-directed decluttering pass, 2026-08-26 -- "merge
+-- the lineup shit to with it if it relates to the scent shit merge it").
+-- STRUCTURAL VERDICT (coder-architect, this pass): the lineup's START step
+-- (this file's own HandleScentLineupStart above) genuinely cannot become
+-- part of client/tracking.lua's single StartCertifiedTrack() action --
+-- starting a lineup requires an explicit, multi-target list of named
+-- server IDs (`/k9lineup <id1> <id2> ...>`), which neither ox_target
+-- (single-entity-targeted, one option per click) nor a zero-argument chat
+-- command can express, and OVERLOADING StartCertifiedTrack() itself so
+-- that an accidental extra numeric argument silently summoned real,
+-- named players into a public identification drill instead of running a
+-- harmless coordinate search would be a genuine safety regression for a
+-- non-technical owner's server, not a decluttering win. See this pass's
+-- own report for the full writeup; that verdict was NOT applied
+-- unilaterally, it was checked back with the coordinator first.
+--
+-- What DOES reduce clutter, and IS applied here: the pick/cancel HALVES,
+-- which only ever make sense once a lineup already exists, are folded
+-- into the SAME 'k9lineup' command family as SUBCOMMANDS instead of two
+-- more independent top-level names to remember -- '/k9lineup pick <N>'
+-- and '/k9lineup cancel' now work identically to the old direct commands.
+-- The VISIBLE command surface therefore shrinks from three names to one
+-- ('/k9lineup ...'). The two old direct names ('k9lineuppick'/
+-- 'k9lineupcancel') are KEPT, registered, unchanged, as HIDDEN ALIASES
+-- (see their own registrations just below) so existing muscle memory/
+-- keybinds/macros keep working -- only the visible/autocomplete surface
+-- shrinks (client/commandsuggestions.lua/html/tablet.js, owned by other
+-- agents this pass -- see this pass's own report for the exact entries
+-- requested there).
+--
+-- DISPATCH ORDER IS THE WHOLE SAFETY PROPERTY HERE: 'pick'/'cancel' are
+-- checked FIRST, delegating straight to HandleScentLineupPick/
+-- HandleScentLineupCancel with NO gate of any kind run by this dispatcher
+-- itself -- exactly matching how the old direct 'k9lineuppick'/
+-- 'k9lineupcancel' commands worked (see coordinator finding, this pass:
+-- "if the merged action puts a single gate at the top... you BREAK THE
+-- FEATURE" -- a civilian participant with no K9 access must still be able
+-- to cancel or complete a pick). Only once BOTH subcommand keywords are
+-- ruled out does this fall through to HandleScentLineupStart, which
+-- performs its OWN full gate internally, completely unchanged. 'pick' and
+-- 'cancel' can never collide with a real invite target list: every
+-- element of that list must be a positive integer server ID
+-- (HandleScentLineupStart's own validation, unchanged), and neither
+-- keyword is a valid `tonumber(...)` result.
+-- ----------------------------------------------------------------------
+RegisterCommand('k9lineup', function(source, args)
+    args = type(args) == 'table' and args or {}
+    local subcommand = args[1]
+
+    if subcommand == 'pick' then
+        HandleScentLineupPick(source, { args[2] })
+        return
+    elseif subcommand == 'cancel' then
+        HandleScentLineupCancel(source)
+        return
+    end
+
+    HandleScentLineupStart(source, args)
+end, false)
+
+-- HIDDEN ALIASES -- see COMMAND DISPATCH's own header above. Registered,
+-- unchanged, calling the exact same shared functions the dispatcher above
+-- calls -- byte-identical behavior to what 'k9lineuppick'/'k9lineupcancel'
+-- did before this pass.
+RegisterCommand('k9lineuppick', function(source, args)
+    HandleScentLineupPick(source, args)
+end, false)
+
+RegisterCommand('k9lineupcancel', function(source)
+    HandleScentLineupCancel(source)
 end, false)
 
 -- ----------------------------------------------------------------------

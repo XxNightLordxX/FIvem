@@ -412,6 +412,35 @@ Config.Features = {
     K9Medkit             = true,
     ContrabandScreenFX   = true,
 
+    -- HungerThirstSystem -- ADDED (this pass, coder-backend). This feature
+    -- was already fully built and wired in server/wellbeing.lua/
+    -- client/wellbeing.lua (feedK9Hunger/giveK9Water/drinkFromBowl,
+    -- /k9eat and /k9drink, the passive-decay tick branch, the HUD) but
+    -- SHIPPED WITHOUT this flag or its own Config.Wellbeing.Hunger/.Thirst
+    -- tables -- with this key absent, `Config.Features.HungerThirstSystem`
+    -- read as `nil` (falsy), so the whole feature was silently OFF with
+    -- nothing anywhere saying so. Flipped on here now that its config
+    -- exists too (see Config.Wellbeing.Hunger/.Thirst below).
+    --
+    -- TWO THINGS TO CHECK ON YOUR OWN SERVER BEFORE RELYING ON THIS,
+    -- STATED PLAINLY, NOT BURIED:
+    --   1. `k9_food` / `k9_water` (Config.Wellbeing.Hunger.feedItemName /
+    --      Config.Wellbeing.Thirst.drinkItemName below) are PLACEHOLDER
+    --      item names. If neither exists in your own ox_inventory item
+    --      list, feeding/watering a K9 silently fails as an ordinary "you
+    --      do not have that item" message -- server/wellbeing.lua already
+    --      prints a one-time startup warning naming this exact gap if
+    --      either item is missing, so check your server console on boot.
+    --   2. `'water_bowl'` (Config.Wellbeing.Thirst.bowlSources below) is an
+    --      UNVERIFIED model name -- the same disclosed guess
+    --      Config.Wellbeing.Fatigue.restSources already carries. If it does
+    --      not resolve to a real prop in your world, the "Drink from Bowl"
+    --      ox_target option simply never appears on ANYTHING, with no
+    --      error anywhere -- Thirst still works fully via the item path
+    --      (giveK9Water) regardless. See KNOWN_ISSUES.md for this exact
+    --      risk.
+    HungerThirstSystem   = true,
+
     -- server/admin.lua. A read-only, JOB-RANK-gated in-game audit surface
     -- over the three tables this resource already writes (k9_certifications,
     -- k9_partnerships, k9_search_log) -- five commands, nine hardcoded SQL
@@ -1572,6 +1601,44 @@ Config.LeashVisual = {
 -- with no spawn/despawn/registry concept at all. Removed; do not re-add
 -- without a new documented reason, since nothing currently consumes it.
 -- ======================================================================
+
+-- ======================================================================
+-- OWNER-EDITABLE CEILING for speedMultiplier/scentRangeMultiplier, read by
+-- server/xptiers.lua (per-XP-tier speed/scent, Config.XPTiers below),
+-- server/k9profiles.lua (per-INDIVIDUAL-K9 override, "god mode over one
+-- dog"), and server/runtimecontrol.lua's PursuitSprint.speedMultiplier
+-- tunable. Owner's own words: "Keep the speed and stamina editing where i
+-- can edit it to as high as i want." Each of those three files reads this
+-- through its OWN local resolver (this resource's established "no
+-- cross-file `local` import mechanism" convention -- see
+-- server/k9profiles.lua's own header, "BOUNDS -- REUSED, NOT REINVENTED")
+-- that CLAMPS AND WARNS rather than asserts: a missing, non-numeric, NaN,
+-- infinite, zero, or negative value here falls back to the 10.0 default
+-- below with a loud console warning naming this exact setting, rather than
+-- aborting that file's own script chunk (a bare top-level `assert` on an
+-- operator-reachable config value would silently disable every
+-- registration below it in that file for the rest of this resource's
+-- uptime -- see server/cooldowns.lua's own ResolveConfiguredThresholdMs
+-- doc comment for the incident this mirrors).
+--
+-- PLAIN-ENGLISH HEADS-UP, so raising this is not a "why did nothing
+-- happen" mystery: this setting controls what a K9's speed/scent
+-- multiplier is genuinely ACCEPTED AND SAVED as. It does NOT change the
+-- separate, hardcoded safety clamp in client/movement.lua that caps the
+-- FINAL, all-modifiers-combined move rate a player actually SEES at 2.0x
+-- (twice normal speed) -- that clamp is intentionally outside this
+-- setting's reach. Concretely: setting this to 8.0 and then setting a K9's
+-- speedMultiplier to 8.0 will be accepted, saved, and shown as 8.0
+-- everywhere in the tablet, but the K9 will still only move at the same
+-- visible top speed as an accepted value of 2.0 or higher would already
+-- produce, because every other active modifier (tier, mood, fatigue,
+-- injury, ...) multiplies together with it before that final 2.0x cap is
+-- applied. Raising this setting is still meaningful for VALUES BELOW that
+-- visible ceiling and for scentRangeMultiplier (which has no such client
+-- clamp at all), but if you raise speedMultiplier expecting to SEE a dog
+-- run faster than 2x normal past that point, you will not -- that is a
+-- separate, deliberate decision left to you, not a bug in this setting.
+Config.MaxSpeedScentMultiplier = 10.0
 
 -- ======================================================================
 -- XP TIERS — Phase 4, placeholder numbers pending economy-balance-agent review
@@ -3695,6 +3762,50 @@ Config.Wellbeing = {
         -- low enough to reopen the exploit. Same reasoning as
         -- HESITATION_MAX_CONTINUOUS_MS elsewhere in that file.
         deathRespawnRestoreAmount = 100,
+    },
+
+    -- HUNGER / THIRST (Config.Features.HungerThirstSystem). ADDED (this
+    -- pass, coder-backend) -- server/wellbeing.lua's feature code already
+    -- existed and already reads every field below through its own
+    -- GetResolvedHungerThirstConfig() (CLAMP AND WARN, never abort), which
+    -- is why this block's defaults below were copied FROM that function's
+    -- own fallback values, not chosen independently -- keep the two in
+    -- sync if either changes. See Config.Features.HungerThirstSystem's own
+    -- comment above for the two things (the item names, the bowl model)
+    -- you must confirm on your own server before relying on this feature.
+    Hunger = {
+        max                    = 100,
+        decayPerTick           = 0.093, -- empties in ~90 minutes of one on-duty shift at the shipped tickIntervalMs (5000ms) if never fed
+        lowThreshold           = 30,    -- hunger below this triggers the speed penalty
+        speedPenaltyMultiplier = 0.95,  -- fed into RecomputeK9MoveRate() (client/movement.lua), same "MULTIPLIES with every other penalty" caveat as Fatigue/Injury/Mood above
+        feedRegenAmount        = 35,    -- restored per feedK9Hunger (/k9eat) use
+        -- PLACEHOLDER item name -- see Config.Features.HungerThirstSystem's
+        -- own comment above. Must exist in your ox_inventory item list or
+        -- feeding silently fails.
+        feedItemName           = 'k9_food',
+        feedCooldownMs         = 120000, -- 2 minutes between feeds, per citizenid
+    },
+
+    Thirst = {
+        max                    = 100,
+        decayPerTick           = 0.139, -- empties in ~60 minutes if never watered -- faster than Hunger, dogs need water more often
+        lowThreshold           = 30,
+        speedPenaltyMultiplier = 0.95,
+        drinkRegenAmount       = 35,    -- restored per giveK9Water (/k9drink) use, the item path
+        -- PLACEHOLDER item name -- see Config.Features.HungerThirstSystem's
+        -- own comment above. Must exist in your ox_inventory item list or
+        -- watering silently fails.
+        drinkItemName          = 'k9_water',
+        drinkCooldownMs        = 90000,  -- 90 seconds between item-based drinks, per citizenid
+        bowlRegenAmount        = 15,     -- restored per drinkFromBowl use -- smaller than the item path, the free/no-cost world-prop alternative
+        bowlCooldownMs         = 60000,  -- 60 seconds between bowl drinks, per citizenid -- shorter than the item cooldown since there is no item cost
+        bowlInteractRange      = 2.0,    -- metres, how close the K9 must be to a matched bowl entity
+        -- UNVERIFIED model name -- see KNOWN_ISSUES.md and
+        -- Config.Features.HungerThirstSystem's own comment above. If this
+        -- does not resolve to a real world prop on your server, the "Drink
+        -- from Bowl" option never appears anywhere, with no error --
+        -- giveK9Water (the item path, above) is unaffected either way.
+        bowlSources            = { 'water_bowl' },
     },
 }
 

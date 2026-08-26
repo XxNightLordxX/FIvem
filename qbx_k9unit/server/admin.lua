@@ -1460,9 +1460,31 @@ AddEventHandler('onResourceStart', function(resourceName)
     -- 25 matches config.lua's own shipped default for this key too.
     ResolveMaxResultsKey('CatalogAudit', 25)
 
-    --- '/k9auditcert [citizenid] [limit]' — see this file's header
+    --- COMMAND CONSOLIDATION (COMMAND_CONSOLIDATION_SPEC.md #1) -- the five
+    --- bodies below are now named LOCAL functions, called from TWO places
+    --- each: (a) the original, single-purpose command name
+    --- ('k9auditcert'/etc, kept registered and fully working forever --
+    --- macros/keybinds/cheat-sheets never break -- but now a HIDDEN ALIAS,
+    --- no longer chat-suggested or tablet-documented, see
+    --- client/commandsuggestions.lua's HIDDEN_ALIAS_COMMANDS /
+    --- html/tablet.js's own matching allowlist), and (b) the new merged
+    --- '/k9audit <cert|partner|search|xp|dept> ...' dispatcher further
+    --- below, which parses the subcommand keyword FIRST and then forwards
+    --- into the exact same function -- so `IsAuthorizedAdmin(source)` is
+    --- re-checked from inside THIS SAME function body regardless of which
+    --- of the two names reached it, never widened by a single shared gate
+    --- at the merged command's own top. All five happen to share an
+    --- IDENTICAL gate/cooldown already (see COMMAND_CONSOLIDATION_SPEC.md
+    --- §1's own audit table) -- this refactor changes nothing about WHEN or
+    --- HOW that gate runs, only removes four duplicate copies of the
+    --- dispatch-and-forward boilerplate that used to sit directly inside
+    --- each RegisterCommand call.
+
+    --- '/k9auditcert [citizenid] [limit]' core -- see this file's header
     --- "COMMAND SURFACE" item 1.
-    RegisterCommand('k9auditcert', function(source, args)
+    --- @param source number
+    --- @param args string[]
+    local function HandleAuditCert(source, args)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'k9auditcert', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
@@ -1493,11 +1515,17 @@ AddEventHandler('onResourceStart', function(resourceName)
         else
             PresentRows(source, label, rows, FormatCertRow)
         end
+    end
+
+    RegisterCommand('k9auditcert', function(source, args)
+        HandleAuditCert(source, args)
     end, false)
 
-    --- '/k9auditpartner [citizenid] [limit]' — see this file's header
+    --- '/k9auditpartner [citizenid] [limit]' core -- see this file's header
     --- "COMMAND SURFACE" item 2.
-    RegisterCommand('k9auditpartner', function(source, args)
+    --- @param source number
+    --- @param args string[]
+    local function HandleAuditPartner(source, args)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'k9auditpartner', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
@@ -1528,10 +1556,14 @@ AddEventHandler('onResourceStart', function(resourceName)
         else
             PresentRows(source, label, rows, FormatPartnershipRow)
         end
+    end
+
+    RegisterCommand('k9auditpartner', function(source, args)
+        HandleAuditPartner(source, args)
     end, false)
 
-    --- '/k9auditsearch <officer|plate|person|recent> [value] [limit]' —
-    --- see this file's header "COMMAND SURFACE" item 3. Authorization is
+    --- '/k9auditsearch <officer|plate|person|recent> [value] [limit]' core
+    --- -- see this file's header "COMMAND SURFACE" item 3. Authorization is
     --- checked BEFORE the `mode` argument is even inspected — an
     --- unauthorized caller learns nothing about argument validity, not
     --- even whether their chosen mode string was recognized. This is a
@@ -1543,7 +1575,9 @@ AddEventHandler('onResourceStart', function(resourceName)
     --- by the caller reaching the handler at all. Flagged for
     --- coder-security to confirm or override, same as the console
     --- carve-out in this file's header.
-    RegisterCommand('k9auditsearch', function(source, args)
+    --- @param source number
+    --- @param args string[]
+    local function HandleAuditSearch(source, args)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'k9auditsearch', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
@@ -1600,13 +1634,19 @@ AddEventHandler('onResourceStart', function(resourceName)
         else
             PresentRows(source, label, rows, FormatSearchLogRow)
         end
+    end
+
+    RegisterCommand('k9auditsearch', function(source, args)
+        HandleAuditSearch(source, args)
     end, false)
 
-    --- '/k9auditxp [citizenid]' — see this file's header "COMMAND SURFACE"
-    --- item 4 and "COVERAGE RE-CHECK" for the full reasoning. No `[limit]`
-    --- argument — `citizenid` is k9_progression's own PRIMARY KEY, so
-    --- there is never more than one row to bound.
-    RegisterCommand('k9auditxp', function(source, args)
+    --- '/k9auditxp [citizenid]' core -- see this file's header "COMMAND
+    --- SURFACE" item 4 and "COVERAGE RE-CHECK" for the full reasoning. No
+    --- `[limit]` argument — `citizenid` is k9_progression's own PRIMARY
+    --- KEY, so there is never more than one row to bound.
+    --- @param source number
+    --- @param args string[]
+    local function HandleAuditXp(source, args)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'k9auditxp', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
@@ -1636,15 +1676,21 @@ AddEventHandler('onResourceStart', function(resourceName)
         else
             PresentRows(source, label, rows, FormatProgressionRow)
         end
+    end
+
+    RegisterCommand('k9auditxp', function(source, args)
+        HandleAuditXp(source, args)
     end, false)
 
-    --- '/k9auditdept <job> [limit]' — see this file's header "COMMAND
+    --- '/k9auditdept <job> [limit]' core -- see this file's header "COMMAND
     --- SURFACE" item 5 and "COVERAGE RE-CHECK (this pass, take 2)" for the
     --- full reasoning (idx_job_active, specified/indexed for but never
     --- queried until now). Reuses Config.AdminAudit.MaxResults.Certifications
     --- as its result cap — see item 5's own "RESULT CAP" note for why no
     --- new config key was added.
-    RegisterCommand('k9auditdept', function(source, args)
+    --- @param source number
+    --- @param args string[]
+    local function HandleAuditDept(source, args)
         if not IsAuthorizedAdmin(source) then
             LogAuditInvocation(source, 'k9auditdept', 'n/a', 'denied')
             if source ~= 0 then NotifyPlayer(source, locale('admin.not_authorized'), 'error') end
@@ -1675,6 +1721,78 @@ AddEventHandler('onResourceStart', function(resourceName)
         else
             PresentRows(source, label, rows, FormatDeptCertRow)
         end
+    end
+
+    RegisterCommand('k9auditdept', function(source, args)
+        HandleAuditDept(source, args)
+    end, false)
+
+    -- ==================================================================
+    -- '/k9audit <cert|partner|search|xp|dept> ...' -- COMMAND_CONSOLIDATION_SPEC.md
+    -- #1, the merged entry point. NOT contextual dispatch (project-owner's
+    -- own "fluid, do the obviously-right-thing" redirect was evaluated
+    -- against this family's REAL code and does not fit it, unlike
+    -- fetch/kennel/training -- see this pass's own report for the full
+    -- reasoning): all five subcommands share the IDENTICAL
+    -- IsAuthorizedAdmin gate (nobody is ever entitled to exactly one of the
+    -- five but not the others), and every one of the five needs a
+    -- DIFFERENT mandatory target argument (a citizenid string for
+    -- cert/partner/xp, a whitelisted mode keyword for search, a
+    -- Config.Departments job name for dept) with no ambient "current
+    -- context" this dispatcher could infer any of them from -- there is no
+    -- state to guess FROM. An explicit subcommand keyword stays required;
+    -- the no-argument path below still just prints the subcommand list
+    -- (COMMAND_CONSOLIDATION_SPEC.md §4's own established convention,
+    -- reused verbatim from '/k9auditsearch' with no bad-subcommand args at
+    -- all).
+    --
+    -- PARSE THE SUBCOMMAND FIRST, then forward into that ONE subcommand's
+    -- own Handle* function above UNCHANGED -- IsAuthorizedAdmin(source) is
+    -- re-run from inside whichever Handle* function is reached, exactly as
+    -- it would be via the old standalone command name. This dispatcher
+    -- itself performs NO authorization check of its own before forwarding
+    -- -- there is nothing to widen by skipping one, since every branch's
+    -- own gate still runs, unconditionally, before that branch does
+    -- anything else.
+    -- ==================================================================
+    local AUDIT_SUBCOMMAND_HANDLERS = {
+        cert = HandleAuditCert,
+        partner = HandleAuditPartner,
+        search = HandleAuditSearch,
+        xp = HandleAuditXp,
+        dept = HandleAuditDept,
+    }
+
+    --- Shifts args[2..] down to a new table's [1..], so a subcommand's own
+    --- Handle* function sees an identical `args` shape to what it sees when
+    --- reached via its own standalone command name (where args[1] is
+    --- already the citizenid/mode/job, not the subcommand keyword).
+    --- @param args string[]
+    --- @return string[] shifted
+    local function ShiftArgsPastSubcommand(args)
+        local shifted = {}
+        for i = 2, #args do
+            shifted[#shifted + 1] = args[i]
+        end
+        return shifted
+    end
+
+    RegisterCommand('k9audit', function(source, args)
+        local subcommand = args[1]
+        local handler = subcommand and AUDIT_SUBCOMMAND_HANDLERS[subcommand]
+
+        if not handler then
+            -- NO-ARGUMENT / UNRECOGNIZED-SUBCOMMAND DISCOVERABILITY
+            -- (COMMAND_CONSOLIDATION_SPEC.md §4) -- the exact convention
+            -- '/k9auditsearch' already established, reused verbatim. Never
+            -- an error for a bare invocation -- this IS the "what are my
+            -- options" answer for a non-technical owner.
+            local usage = locale('admin.usage_audit')
+            if source == 0 then print('[qbx_k9unit] ' .. usage) else NotifyPlayer(source, usage, 'error') end
+            return
+        end
+
+        handler(source, ShiftArgsPastSubcommand(args))
     end, false)
 
     -- ======================================================================

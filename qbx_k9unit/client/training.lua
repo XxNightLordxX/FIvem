@@ -180,6 +180,86 @@ RegisterCommand('k9training', function(_source, args)
     end
 end, false)
 
+-- ======================================================================
+-- '/k9train' -- COMMAND_CONSOLIDATION_SPEC.md #4, the merged entry point.
+-- k9training/k9trainsearch/k9trainbite above stay registered forever as
+-- HIDDEN ALIASES (unchanged bodies -- see client/commandsuggestions.lua's
+-- HIDDEN_ALIAS_COMMANDS).
+--
+-- CONTEXTUAL DISPATCH, DELIBERATELY NARROWER THAN THE ORIGINAL "RESUME
+-- WHATEVER DRILL THE ZONE IMPLIES" BRIEF: verified against the real code
+-- (both this file AND server/training.lua, not just this one) before
+-- building anything -- Config.TrainingZones is real and server-authoritative
+-- (CheckTrainingActionEligibility's own IsWithinAnyTrainingZone radius
+-- check), but every zone entry is homogeneous (label/x/y/z/radius only --
+-- no per-zone drill-type field) and this file has zero client-side
+-- visibility into zone coordinates by design (the server never trusts a
+-- client-supplied "I'm in the zone" claim). There is no signal, anywhere,
+-- a bare command could read to pick 'search' vs 'bite' by location. The
+-- ONLY state this file can read that actually disambiguates an action is
+-- `trainingModeActive` itself, so the bare form is a deterministic ON/OFF
+-- TOGGLE:
+--   trainingModeActive == true  -> turn OFF (unconditional, matches
+--                                  RequestSetTrainingMode(false)'s own
+--                                  "never gate the stop" contract).
+--   trainingModeActive == false -> turn ON (courtesy HasK9Access() gate,
+--                                  matches RequestSetTrainingMode(true)'s
+--                                  own contract -- server independently
+--                                  re-verifies access AND the zone check
+--                                  regardless).
+-- 'search'/'bite' stay EXPLICIT WORDS -- nothing in real state, zone or
+-- otherwise, picks one over the other, so guessing would serve no one
+-- (project-owner's own "where state genuinely does not determine one
+-- action, do not pick" rule).
+--
+-- GATE NEVER WIDENED BY THE MERGE: every branch below calls the EXACT SAME
+-- resource-global (RequestSetTrainingMode/RequestTrainingSearchDrill/
+-- RequestTrainingBiteDrill) the old standalone command already called --
+-- RequestSetTrainingMode(true) itself still re-runs HasK9Access()/
+-- DenyK9UIAccess() every time, and RunTrainingDrill still re-checks
+-- trainingModeActive, whether reached via bare '/k9train', an explicit
+-- '/k9train search', or the old '/k9trainsearch' name.
+-- ======================================================================
+-- Every entry is wrapped in its own closure, deliberately, even though
+-- RequestSetTrainingMode already exists by this point in the file --
+-- RequestTrainingSearchDrill/RequestTrainingBiteDrill do NOT exist yet at
+-- this table's own construction time (they're declared further down this
+-- same file); a bare `search = RequestTrainingSearchDrill` here would
+-- capture today's `nil` global permanently, not a live reference to it.
+-- A closure resolves the global by name at CALL time instead, once every
+-- one of this file's own top-level statements has already run.
+local TRAIN_EXPLICIT_ACTIONS = {
+    on = function() RequestSetTrainingMode(true) end,
+    off = function() RequestSetTrainingMode(false) end,
+    search = function() RequestTrainingSearchDrill() end,
+    bite = function() RequestTrainingBiteDrill() end,
+}
+
+RegisterCommand('k9train', function(_source, args)
+    local explicit = args[1] and TRAIN_EXPLICIT_ACTIONS[args[1]]
+    if explicit then
+        explicit()
+        return
+    end
+
+    if args[1] then
+        lib.notify({ title = locale('common.notify_title'), description = locale('training.usage_k9train'), type = 'error' })
+        return
+    end
+
+    -- Bare '/k9train' -- deterministic ON/OFF toggle, see this block's own
+    -- header for why this is the ONLY state that actually disambiguates.
+    -- CONFIRMATION NAMES THE DECISION (project-owner's own requirement):
+    -- notified BEFORE the resolved action runs.
+    if trainingModeActive then
+        lib.notify({ title = locale('common.notify_title'), description = locale('training.contextual_turning_off'), type = 'inform' })
+        RequestSetTrainingMode(false)
+    else
+        lib.notify({ title = locale('common.notify_title'), description = locale('training.contextual_turning_on'), type = 'inform' })
+        RequestSetTrainingMode(true)
+    end
+end, false)
+
 --- Shared shell for both practice drills below -- pacing via
 --- lib.progressBar (the same primitive/UX shape client/search.lua's own
 --- PerformSearch already establishes for this resource), then an awaited
