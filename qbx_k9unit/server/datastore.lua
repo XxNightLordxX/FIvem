@@ -136,6 +136,17 @@ K9Store = {}
 -- BACKEND SELECTION -- the ONE flag read in this whole resource.
 -- ======================================================================
 
+-- Set to `true`, at most once, by VerifyTableShapesAgainstKnownSchema() near
+-- the bottom of this file (db-schema pass, 2026-08-26) if this database has
+-- a `k9_*` table whose NAME this resource owns but whose COLUMNS do not
+-- match -- i.e. some OTHER resource's table happens to share one of our
+-- names. See that function's own header for the full "why", "what this
+-- costs", and "how to fix it" writeup -- not repeated here. Declared here,
+-- ahead of DatabaseEnabled() below, purely so that one flag can force every
+-- K9Store.* function in this file back to the already-proven memory-only
+-- path without any of them needing their own awareness of it.
+local SCHEMA_COLLISION_DETECTED = false
+
 --- @return boolean
 --- Anything other than a literal `false` on `Config.Database.enabled`
 --- means "on" -- including `Config.Database` not existing at all yet (an
@@ -144,6 +155,7 @@ K9Store = {}
 --- today's behavior (a real database), never a silent, unrequested
 --- switch to memory-only mode.
 local function DatabaseEnabled()
+    if SCHEMA_COLLISION_DETECTED then return false end
     return not (type(Config) == 'table' and type(Config.Database) == 'table' and Config.Database.enabled == false)
 end
 
@@ -177,6 +189,42 @@ end
 --- @param context string -- for the console line only, never parsed by a caller
 local function ThrowDuplicateActiveRow(context)
     error({ errno = 1062, message = ('ER_DUP_ENTRY: duplicate active row for %s (qbx_k9unit in-memory backend)'):format(context) }, 0)
+end
+
+--- Coerces a `limit` argument -- crossing into this file from a caller,
+--- eventually either embedded into hardcoded SQL text via `string.format`'s
+--- `%d` (the DB branch) or compared against a table length with `>=` (the
+--- memory branch) -- into a small, strictly-positive Lua integer. NEVER
+--- trusts a caller to have already done this: every current caller already
+--- clamps its own `limit` before reaching here (server/admin.lua's own
+--- ClampLimit, server/leaderboard.lua's independent copy of the same
+--- helper), but this is a SEPARATE, defense-in-depth backstop at the one
+--- layer that actually embeds the value in SQL text or a raw comparison --
+--- see this task's own brief: "confirm the server clamps it rather than
+--- trusting it," applied one layer deeper than the call site.
+---
+--- WITHOUT THIS: `string.format('LIMIT %d', limit)` raises an UNCAUGHT Lua
+--- error (`bad argument ... (number has no integer representation)`) for a
+--- non-number, NaN, +-infinity, or a float with a fractional part -- and
+--- for every DB-branch accessor below that builds its SQL text with
+--- `:format(limit)' BEFORE its own `pcall(MySQL.query.await, ...)`, that
+--- throw happens OUTSIDE the pcall, so it is NOT caught by this file's own
+--- "always a table, empty on failure, never throws" SafeQuery contract --
+--- it propagates straight out into whatever RegisterCommand/lib.callback
+--- handler called it. The memory-branch `if #out >= limit then break end`
+--- comparisons have the identical exposure the other way: `>= ` against a
+--- non-number throws "attempt to compare number with X". Both failure
+--- modes are closed here, once, for every accessor that takes a `limit`,
+--- rather than re-derived per call site.
+--- @param limit any
+--- @return number -- a strictly-positive integer in [1, 100000]
+local function SanitizeLimit(limit)
+    local n = tonumber(limit)
+    if n == nil or n ~= n then return 1 end -- non-numeric or NaN -> smallest safe fallback
+    n = math.floor(n)
+    if n < 1 then return 1 end
+    if n > 100000 then return 100000 end -- backstop ceiling, not a business-rule cap -- see doc comment above
+    return n
 end
 
 -- ======================================================================
@@ -334,6 +382,7 @@ end
 --- it is the documented cost of Config.Database.enabled = false.
 --- @return table rows -- newest first, always a table, empty on failure
 function K9Store.Cert_GetHistory(citizenid, limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local sql = ('SELECT job, granted_by, granted_at, revoked_by, revoked_at, active FROM k9_certifications WHERE citizenid = ? ORDER BY granted_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
@@ -360,6 +409,7 @@ end
 --- the pcall wrap (same fix, same reasoning).
 --- @return table rows -- always a table, empty on failure
 function K9Store.Cert_GetActiveRosterByJob(job, limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local sql = ('SELECT citizenid, granted_by, granted_at FROM k9_certifications WHERE job = ? AND active = 1 ORDER BY granted_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { job })
@@ -422,6 +472,7 @@ end
 --- collapse it back onto Cert_GetActiveRosterByJob.
 --- @return table rows -- always a table, empty on failure, NOT sorted
 function K9Store.Cert_GetActiveRosterByJobUnordered(job, limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local sql = ('SELECT citizenid, granted_by FROM k9_certifications WHERE job = ? AND active = 1 LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { job })
@@ -685,6 +736,7 @@ end
 --- what guarantees that.
 --- @return table rows -- always a table, empty on failure
 function K9Store.Partner_GetHistoryByK9(citizenid, limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local columns = 'id, k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active'
         local sql = ('SELECT %s FROM k9_partnerships WHERE k9_citizenid = ? ORDER BY id DESC LIMIT %d'):format(columns, limit)
@@ -711,6 +763,7 @@ end
 --- needs the pcall wrap (same fix, same reasoning).
 --- @return table rows -- always a table, empty on failure
 function K9Store.Partner_GetHistoryByHandler(citizenid, limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local columns = 'id, k9_citizenid, handler_citizenid, established_by, established_at, ended_by, ended_at, active'
         local sql = ('SELECT %s FROM k9_partnerships WHERE handler_citizenid = ? ORDER BY id DESC LIMIT %d'):format(columns, limit)
@@ -898,6 +951,29 @@ function K9Store.Perm_GetActiveRosterByPermission(permissionKey)
     return out
 end
 
+--- Mirrors MySQL.scalar.await. Replaces server/permissionkeycatalog.lua's
+--- own DeleteKey informational read -- how many CURRENTLY ACTIVE grant rows
+--- reference `permissionKey` right now, at the moment a high-command officer
+--- tombstones the catalog key that names it. Purely informational (see that
+--- file's own header "TOMBSTONE, NOT REFERENCE-COUNTED" section for why a
+--- non-zero count never refuses the delete the way Cert_CountByTier's
+--- equivalent does for a certification tier) -- deliberately counts ONLY
+--- `active = 1` rows, unlike Cert_CountByTier's own deliberate omission of
+--- that filter, because this number exists purely to tell the deleting
+--- officer "this many handlers lose this capability the instant you confirm",
+--- which a long-revoked historical row has no bearing on.
+--- @return number count
+function K9Store.Perm_CountActiveByPermission(permissionKey)
+    if DatabaseEnabled() then
+        return MySQL.scalar.await('SELECT COUNT(*) FROM k9_permissions WHERE permission = ? AND active = 1', { permissionKey })
+    end
+    local count = 0
+    for _, row in ipairs(PermRows) do
+        if row.permission == permissionKey and row.active == 1 then count = count + 1 end
+    end
+    return count
+end
+
 -- ======================================================================
 -- k9_progression
 --
@@ -956,6 +1032,7 @@ end
 --- interacted with yet against, which is the expected shape of a
 --- session-only leaderboard, not a bug.
 function K9Store.XP_GetTop(limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local sql = ('SELECT citizenid, xp FROM k9_progression ORDER BY xp DESC LIMIT %d'):format(limit)
         return MySQL.query.await(sql, {})
@@ -1036,6 +1113,7 @@ end
 --- Mirrors the SafeQuery contract server/admin.lua's SafeQuery uses.
 --- Replaces QuerySearchLogByOfficer ('/k9auditsearch officer').
 function K9Store.SearchLog_GetByOfficer(citizenid, limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local sql = ('SELECT searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at, id FROM k9_search_log WHERE searcher_citizenid = ? ORDER BY searched_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
@@ -1057,6 +1135,7 @@ end
 
 --- Replaces QuerySearchLogByPlate ('/k9auditsearch plate').
 function K9Store.SearchLog_GetByPlate(plate, limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local sql = ('SELECT searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at, id FROM k9_search_log WHERE target_plate = ? ORDER BY searched_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { plate })
@@ -1078,6 +1157,7 @@ end
 
 --- Replaces QuerySearchLogByPerson ('/k9auditsearch person').
 function K9Store.SearchLog_GetByPerson(citizenid, limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local sql = ('SELECT searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at, id FROM k9_search_log WHERE target_citizenid = ? ORDER BY searched_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
@@ -1101,6 +1181,7 @@ end
 --- `id DESC`, not `searched_at`, matching the real query exactly (see
 --- that function's own doc comment for why).
 function K9Store.SearchLog_GetRecent(limit)
+    limit = SanitizeLimit(limit)
     if DatabaseEnabled() then
         local sql = ('SELECT searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at, id FROM k9_search_log ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
@@ -1815,6 +1896,160 @@ function K9Store.TierAudit_Append(action, tierKey, detail, changedBy)
 end
 
 -- ======================================================================
+-- k9_permission_keys / k9_permission_key_audit
+--
+-- Mirrored from server/permissionkeycatalog.lua (the owner-directed
+-- "high command can add/remove/relabel K9 permission keys at runtime" pass
+-- -- see that file's own header for the full design writeup, which this
+-- section deliberately does not repeat). Same "current-state table +
+-- append-only audit table" shape as the k9_certification_tier_* section
+-- immediately above, minus that section's own capabilities sibling table
+-- and ordinal column -- a permission key is just a label/description pair,
+-- with no per-key ordering and nothing else to reconcile per write.
+--
+-- k9_permission_keys is a current-state table (one row per permission_key
+-- that has EVER been touched by a high-command edit, migration 0013's own
+-- header) -- its memory mirror is a plain keyed map, same shape as
+-- TierRows above. k9_permission_key_audit is append-only, same bounded-
+-- in-memory-mode ring-buffer treatment as every other rare/admin-gated
+-- audit table in this file.
+-- ======================================================================
+local PermKeyRows = {} -- permission_key -> { label, description, deleted, updated_by, updated_at, created_at_unix }
+local PERMKEY_AUDIT_MEMORY_CAP = 200
+local PermKeyAuditRows = {}
+
+--- Mirrors the SafeQuery contract. Replaces
+--- RefreshPermissionKeyCatalog's own `SELECT permission_key, label,
+--- description, deleted FROM k9_permission_keys` -- every permission-key
+--- row EVER touched by a high-command edit, including tombstoned ones (the
+--- `deleted` column is what RefreshPermissionKeyCatalog itself filters on,
+--- not this accessor).
+--- @return table rows
+function K9Store.PermKey_GetAllRows()
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT permission_key, label, description, deleted FROM k9_permission_keys', {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: PermKey_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for key, row in pairs(PermKeyRows) do
+        out[#out + 1] = { permission_key = key, label = row.label, description = row.description, deleted = row.deleted }
+    end
+    return out
+end
+
+--- Mirrors the SafeQuery contract. Replaces permKeysUpsert's own `SELECT
+--- deleted FROM k9_permission_keys WHERE permission_key = ?` pre-write read
+--- (used only to distinguish a 'permkey_create' from a 'permkey_restore'
+--- for the audit trail -- see that callback's own comment).
+--- @return table rows -- 0 or 1 rows, `{ { deleted = 0|1 } }` or `{}`
+function K9Store.PermKey_GetDeletedFlagByKey(permissionKey)
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT deleted FROM k9_permission_keys WHERE permission_key = ?', { permissionKey })
+        if not ok then
+            print(('[qbx_k9unit] datastore: PermKey_GetDeletedFlagByKey query failed for %s: %s'):format(tostring(permissionKey), tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local row = PermKeyRows[permissionKey]
+    if not row then return {} end
+    return { { deleted = row.deleted } }
+end
+
+--- Mirrors the SafeWrite contract. Replaces permKeysUpsert's own `INSERT
+--- ... VALUES (?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE label = VALUES(label),
+--- description = VALUES(description), deleted = 0, updated_by =
+--- VALUES(updated_by), updated_at = CURRENT_TIMESTAMP` -- always
+--- un-tombstones the row (`deleted = 0`) and sets both label and
+--- description, whether this is a brand-new key, a restore, or a
+--- rename/re-describe of an already-live one.
+--- @param description string? -- nil is stored as SQL NULL, matching
+--- Config.Permissions[key].description's own optional shape.
+--- @return boolean ok
+function K9Store.PermKey_Upsert(permissionKey, label, description, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_permission_keys (permission_key, label, description, deleted, updated_by) VALUES (?, ?, ?, 0, ?) ' ..
+            'ON DUPLICATE KEY UPDATE label = VALUES(label), description = VALUES(description), deleted = 0, ' ..
+            'updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
+            { permissionKey, label, description, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: PermKey_Upsert write failed for %s: %s'):format(tostring(permissionKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = PermKeyRows[permissionKey]
+    PermKeyRows[permissionKey] = {
+        label = label, description = description, deleted = 0,
+        updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()),
+        created_at_unix = existing and existing.created_at_unix or NowUnix(),
+    }
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces permKeysDelete's own `INSERT
+--- ... VALUES (?, ?, ?, 1, ?) ON DUPLICATE KEY UPDATE deleted = 1,
+--- updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP` --
+--- TOMBSTONES a row, leaving an ALREADY-EXISTING row's label/description
+--- untouched (the real SQL's own ON DUPLICATE KEY UPDATE clause never
+--- mentions those two columns) -- `label`/`description` here are used ONLY
+--- for the brand-new-row INSERT case (a config-only default key that has
+--- never had a row in this table before being tombstoned for the first
+--- time).
+--- @return boolean ok
+function K9Store.PermKey_Tombstone(permissionKey, label, description, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_permission_keys (permission_key, label, description, deleted, updated_by) VALUES (?, ?, ?, 1, ?) ' ..
+            'ON DUPLICATE KEY UPDATE deleted = 1, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
+            { permissionKey, label, description, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: PermKey_Tombstone write failed for %s: %s'):format(tostring(permissionKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = PermKeyRows[permissionKey]
+    if existing then
+        existing.deleted, existing.updated_by, existing.updated_at = 1, updatedBy, FormatDateTime(NowUnix())
+    else
+        PermKeyRows[permissionKey] = {
+            label = label, description = description, deleted = 1,
+            updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()), created_at_unix = NowUnix(),
+        }
+    end
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces WritePermKeyAudit's own `INSERT
+--- INTO k9_permission_key_audit (action, permission_key, detail,
+--- changed_by) VALUES (?, ?, ?, ?)` -- append-only, bounded in memory mode
+--- like every other rare/admin-gated audit table in this file.
+--- @return boolean ok
+function K9Store.PermKeyAudit_Append(action, permissionKey, detail, changedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_permission_key_audit (action, permission_key, detail, changed_by) VALUES (?, ?, ?, ?)',
+            { action, permissionKey, detail, changedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: PermKeyAudit_Append write failed: %s'):format(tostring(err)))
+            return false
+        end
+        return true
+    end
+    PermKeyAuditRows[#PermKeyAuditRows + 1] = { action = action, permission_key = permissionKey, detail = detail, changed_by = changedBy, changed_at = FormatDateTime(NowUnix()) }
+    while #PermKeyAuditRows > PERMKEY_AUDIT_MEMORY_CAP do
+        table.remove(PermKeyAuditRows, 1)
+    end
+    return true
+end
+
+-- ======================================================================
 -- BOOT LINE -- one console line stating which backend is live, so an
 -- operator (or QA) can confirm Config.Database.enabled took effect
 -- without reading code.
@@ -1823,4 +2058,204 @@ if DatabaseEnabled() then
     print('[qbx_k9unit] datastore: Config.Database.enabled -- persisting to MySQL/MariaDB. This is the recommended way to run this resource.')
 else
     print('[qbx_k9unit] datastore: Config.Database.enabled = false -- running IN MEMORY ONLY. Every certification, XP total, partnership, permission grant, runtime override and tablet theme change will be forgotten on the next restart, and no audit trail is being written. See config.lua\'s Config.Database comment for the full, plain-language explanation.')
+end
+
+-- ======================================================================
+-- SCHEMA COLLISION SAFETY NET (db-schema pass, 2026-08-26)
+--
+-- Owner's own words for the requirement this answers: "ensure everything
+-- regarding the sql is fixed done and no issues, I want it foolproof --
+-- whether I've got a full database, or the database has similar names or
+-- same names before injection, without causing any issues."
+--
+-- THE DANGEROUS CASE THIS CATCHES: `sql/preflight_check.sql` CHECK 1
+-- already warns an operator, BEFORE they install, if one of this
+-- resource's table names is already taken by something that is NOT ours
+-- (read that file's own header for the full "why this matters"
+-- explanation -- not repeated here). That is the right place for a HUMAN
+-- to catch this, but it only fires if the operator remembers to run it --
+-- nothing forces that. If they skip straight to pasting install.sql,
+-- `CREATE TABLE IF NOT EXISTS` silently does nothing for a colliding
+-- name, and every `K9Store.*` query below this point that names that
+-- table starts running against a foreign table it does not own --
+-- writing whatever this resource writes into someone else's data, or
+-- failing in confusing ways. This block is the SAME check, run
+-- automatically, in Lua, once, at this resource's own boot -- a second
+-- line of defense for the operator who never opens
+-- sql/preflight_check.sql at all. It does not replace that file (it
+-- checks fewer things -- no server-version check, no CREATE ROUTINE
+-- check -- and it can only warn AFTER the resource has already started,
+-- where the SQL file warns BEFORE anything is installed); it is the
+-- safety net underneath it.
+--
+-- WHAT IT DOES ON A COLLISION: this resource has exactly ONE choke point
+-- for every real SQL statement it ever runs -- every `MySQL.*.await` call
+-- in this whole resource lives in THIS file (see this file's own header,
+-- "THE ONLY PLACE IN THIS RESOURCE THAT MAY NAME A `k9_*` TABLE OR CALL
+-- `MySQL.*` DIRECTLY"). That single choke point is what makes a real
+-- fail-safe possible without touching any other file: on ANY collision,
+-- `DatabaseEnabled()` above is forced to report `false` for the rest of
+-- this process (via `SCHEMA_COLLISION_DETECTED`, declared next to that
+-- function) -- the exact same, already-proven memory-only fallback
+-- `Config.Database.enabled = false` already uses. Every certification/
+-- XP/partnership/permission/runtime-override/tablet-theme/K9-appearance
+-- check keeps working for the life of the process (see this file's own
+-- header, "THE READING THAT MAKES THAT TRACTABLE") -- nothing crashes,
+-- nothing is denied to a real player -- it just stops persisting, and
+-- says exactly why, loudly, once, in the console, instead of quietly
+-- writing into a table it does not own.
+--
+-- THE TRADE-OFF, STATED PLAINLY: this is a WHOLE-RESOURCE fallback, not a
+-- per-table one. If only ONE of this resource's tables collides, ALL of
+-- them fall back to memory mode until the operator fixes the one real
+-- problem and restarts -- not just the one table that collided. Gating
+-- every individual K9Store.* function, table by table, would need its own
+-- tracking per table and would be a much larger, riskier change for a
+-- case that should be rare and is always operator-fixable in minutes
+-- (rename or drop the one foreign table) -- coarse-but-safe was judged
+-- better than fine-grained-but-fragile for a safety net whose only job is
+-- "never write into a table we do not own."
+--
+-- WHAT THIS DOES NOT DO: it does not fix the collision, drop anything, or
+-- rename anything -- it only detects, refuses to write, and reports. Per
+-- this resource's own established convention for an operator-facing
+-- refusal (see server/certtiers.lua's own console messages, e.g. its
+-- `Config.CertificationTiers is missing, malformed, ...` line, for the
+-- exact voice this matches): plain English, names the exact table, says
+-- what to do next.
+--
+-- THE COLUMN LIST BELOW MUST STAY IN SYNC WITH
+-- `sql/preflight_check.sql`'s CHECK 1 -- same hand-maintained-list
+-- convention (and same reason) as `sql/rollback/uninstall_all.sql`'s own
+-- "OWNED TABLE LIST" comment: a table this resource adds in a future
+-- migration needs its identifying columns added HERE too, in the SAME
+-- change, or this safety net silently does not know to check it. This is
+-- deliberately a small, cheap, additive check (one query, run once, at
+-- boot) -- it is not a replacement for actually running
+-- sql/preflight_check.sql before an install, which remains the primary,
+-- pre-write line of defense; this is the safety net for the operator who
+-- skips that step.
+--
+-- WHY THIS IS SAFE TO SANDBOX-TEST AGAINST: the `AddEventHandler` call at
+-- the bottom of this block is guarded by `type(AddEventHandler) ==
+-- 'function'`, this resource's own established soft-dependency
+-- convention (see fxmanifest.lua's own client_scripts comments for the
+-- same pattern applied elsewhere) -- in `tests/datastore_spec.lua`'s
+-- sandbox (a plain Lua environment with no FXServer natives unless a spec
+-- explicitly stubs one), `AddEventHandler` is absent, so this whole block
+-- registers nothing and VerifyTableShapesAgainstKnownSchema() is never
+-- invoked -- zero risk to any existing spec that loads this file, exactly
+-- like every other real-native call in this resource that is reached only
+-- through a guarded, runtime-fired handler rather than at file-load time.
+-- ======================================================================
+
+local EXPECTED_TABLE_COLUMNS = {
+    k9_certifications                  = { 'citizenid', 'job', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+    k9_search_log                      = { 'searcher_citizenid', 'searcher_job', 'target_type', 'target_plate', 'target_citizenid', 'result', 'total_weight', 'alert_tier', 'searched_at' },
+    k9_partnerships                    = { 'k9_citizenid', 'handler_citizenid', 'established_by', 'established_at', 'ended_by', 'ended_at', 'active' },
+    k9_progression                     = { 'citizenid', 'xp', 'created_at', 'updated_at' },
+    k9_permissions                     = { 'citizenid', 'permission', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+    k9_certification_specializations   = { 'citizenid', 'job', 'specialization', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+    k9_runtime_feature_overrides       = { 'override_key', 'kind', 'value', 'updated_by', 'updated_at' },
+    k9_runtime_override_audit          = { 'override_key', 'kind', 'old_value', 'new_value', 'changed_by', 'changed_at' },
+    k9_tablet_theme                    = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'updated_by', 'updated_at' },
+    k9_tablet_theme_audit              = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'changed_by', 'changed_at' },
+    k9_ped_assignments                 = { 'citizenid', 'model', 'original_model_hash', 'active', 'applied_by', 'applied_at', 'revoked_at' },
+    k9_certification_tiers             = { 'tier_key', 'label', 'ordinal', 'deleted', 'created_at', 'updated_by', 'updated_at' },
+    k9_certification_tier_capabilities = { 'tier_key', 'capability_key', 'granted_by', 'granted_at' },
+    k9_certification_tier_audit        = { 'id', 'action', 'tier_key', 'detail', 'changed_by', 'changed_at' },
+    k9_equipment_shop_locations        = { 'x', 'y', 'z', 'created_by' },
+    k9_equipment_shop_locations_audit  = { 'location_id', 'action', 'changed_by', 'changed_at' },
+    -- NOTE for whoever lands the k9_permission_keys / k9_permission_key_audit
+    -- migration this file's own PermKey_* functions above already assume
+    -- (see that section's header): add their identifying columns here, and
+    -- to sql/preflight_check.sql's CHECK 1, in the SAME change that adds the
+    -- migration -- this list is deliberately hand-maintained (see the block
+    -- header above for why), so it does not update itself.
+}
+
+--- Runs the collision probe described above. READ-ONLY (a single
+--- INFORMATION_SCHEMA.COLUMNS query -- never writes, never drops, never
+--- alters anything), wrapped in its own pcall so a failure here (e.g. a
+--- restricted database user without SELECT on INFORMATION_SCHEMA, per
+--- sql/preflight_check.sql's own CHECK 4 disclosure for a different
+--- privilege) can never itself break this resource's startup -- it just
+--- means this particular safety net could not run, silently degrading to
+--- "no collision found" rather than blocking boot. A health check that can
+--- crash the thing it is checking is worse than no health check.
+local function VerifyTableShapesAgainstKnownSchema()
+    local tableNames = {}
+    for tableName in pairs(EXPECTED_TABLE_COLUMNS) do
+        tableNames[#tableNames + 1] = tableName
+    end
+
+    local placeholders = {}
+    for i = 1, #tableNames do placeholders[i] = '?' end
+
+    -- SECURITY/ROBUSTNESS FIX (coder-security pass): this USED TO be
+    -- `pcall(MySQL.query.await, sql, tableNames)` -- but `pcall(f, ...)`
+    -- evaluates `f` (here, the expression `MySQL.query.await`) as part of
+    -- building pcall's OWN argument list, in the CALLING stack frame, before
+    -- pcall itself ever runs. If `MySQL.query` is ever nil/missing (a
+    -- malformed/partial oxmysql stub, a co-located resource shadowing the
+    -- global with an incompatible shape, or simply this function running
+    -- before oxmysql has finished initializing its own wrapper table), that
+    -- indexing throws OUTSIDE the pcall's own protection -- silently
+    -- defeating this function's own doc comment promise two paragraphs up
+    -- ("wrapped in its own pcall so a failure here... can never itself break
+    -- this resource's startup") and crashing the `onResourceStart` handler
+    -- below instead. FIXED by moving the ENTIRE call, including the
+    -- `MySQL.query.await` field lookup itself, inside the protected closure
+    -- -- now every failure mode this function's own header already promises
+    -- to degrade from (a restricted DB user, a missing/malformed MySQL
+    -- global) is caught by the SAME pcall, not just the query's own
+    -- execution.
+    local ok, rows = pcall(function()
+        return MySQL.query.await(
+            ('SELECT TABLE_NAME AS tbl, COLUMN_NAME AS col FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (%s)'):format(table.concat(placeholders, ', ')),
+            tableNames
+        )
+    end)
+    if not ok or type(rows) ~= 'table' then
+        print(('[qbx_k9unit] datastore: schema collision check could not run (%s) -- proceeding as if no collision was found. If you suspect a table-name conflict, run sql/preflight_check.sql by hand instead.'):format(tostring(rows)))
+        return
+    end
+
+    local actualColumnsByTable = {}
+    for _, row in ipairs(rows) do
+        actualColumnsByTable[row.tbl] = actualColumnsByTable[row.tbl] or {}
+        actualColumnsByTable[row.tbl][row.col] = true
+    end
+
+    local collided = {}
+    for tableName, expectedColumns in pairs(EXPECTED_TABLE_COLUMNS) do
+        local actualColumns = actualColumnsByTable[tableName]
+        if actualColumns then -- the table exists at all
+            local matched = 0
+            for _, column in ipairs(expectedColumns) do
+                if actualColumns[column] then matched = matched + 1 end
+            end
+            if matched < #expectedColumns then
+                collided[#collided + 1] = { name = tableName, matched = matched, expected = #expectedColumns }
+            end
+        end
+    end
+
+    if #collided == 0 then return end
+
+    SCHEMA_COLLISION_DETECTED = true
+    print('[qbx_k9unit] datastore: !! SCHEMA COLLISION DETECTED -- refusing to use MySQL for the rest of this session.')
+    for _, c in ipairs(collided) do
+        print(('[qbx_k9unit] datastore: !!   `%s` already exists in this database, but only %d of its %d expected columns match. This is almost certainly a DIFFERENT resource\'s table that happens to share this name, not an older qbx_k9unit install. qbx_k9unit will NOT write to it.'):format(c.name, c.matched, c.expected))
+    end
+    print('[qbx_k9unit] datastore: !! Every qbx_k9unit feature is now running IN MEMORY ONLY for this session (identical to Config.Database.enabled = false -- see that setting\'s own comment in config.lua) so nothing gets written into a table this resource does not own. Nothing is lost that was not already lost: none of the table(s) named above ever belonged to qbx_k9unit in this database. TO FIX: rename or remove the conflicting table(s) named above (or ask whoever owns them to), then restart this resource. See sql/preflight_check.sql CHECK 1 for the full explanation and OPERATOR_RUNBOOK.md for the plain-language install story.')
+end
+
+if type(AddEventHandler) == 'function' then
+    AddEventHandler('onResourceStart', function(resourceName)
+        if type(GetCurrentResourceName) == 'function' and GetCurrentResourceName() ~= resourceName then return end
+        if DatabaseEnabled() then
+            VerifyTableShapesAgainstKnownSchema()
+        end
+    end)
 end

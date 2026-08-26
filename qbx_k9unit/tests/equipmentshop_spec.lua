@@ -320,6 +320,25 @@ local function newFixture(opts)
     -- assertions fail against a print that was never equipmentshop's.
     for i = #printedLines, 1, -1 do printedLines[i] = nil end
 
+    -- Same reasoning as the print discard directly above, extended to
+    -- event handlers. server/datastore.lua now registers its OWN
+    -- onResourceStart handler (the schema-collision safety net, which
+    -- checks the live table shapes against the ones this resource expects
+    -- and drops to memory-only rather than writing into a table that has
+    -- our name but is not ours). That handler prints. fireResourceStart()
+    -- below fires every registered onResourceStart handler, so without
+    -- this the datastore's line would land in printedLines AFTER the
+    -- discard above, and the "equipmentshop prints exactly zero when its
+    -- flag is off" tests would fail against output that was never
+    -- equipmentshop's -- exactly the failure the discard above exists to
+    -- prevent, arriving one step later in the lifecycle.
+    --
+    -- Dropping the handlers rather than filtering the prints keeps this
+    -- fixture measuring one thing: what the file under test does. Any
+    -- future dependency that registers a lifecycle handler is covered
+    -- automatically, with no new special case here.
+    for name in pairs(eventHandlers) do eventHandlers[name] = nil end
+
     Sandbox.loadInto('../server/equipmentshop.lua', env)
 
     return {

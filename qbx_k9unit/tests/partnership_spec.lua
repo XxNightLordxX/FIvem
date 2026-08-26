@@ -237,6 +237,21 @@ local function newFixture(opts)
     Sandbox.loadInto('../server/entities.lua', env)
     Sandbox.loadInto('../server/datastore.lua', env) -- K9Store; server/partnership.lua reads and writes through it now rather than calling MySQL directly
     Sandbox.loadInto('../server/events.lua', env) -- FireOutboundEvent, extracted from six identical local copies into one shared helper; loaded in the real resource via fxmanifest, so a sandbox that omits it fails where the game would not
+    -- Drop every lifecycle handler the DEPENDENCIES above registered, so
+    -- the handler-count assertions below measure server/partnership.lua's
+    -- own registrations and nothing else -- which is what those tests say
+    -- they are checking. server/datastore.lua now registers its own
+    -- onResourceStart handler (the schema-collision safety net), which
+    -- would otherwise make this file's "registers exactly 1
+    -- onResourceStart" assertion read 2 and fail against a handler that
+    -- was never partnership.lua's.
+    --
+    -- This deliberately runs BEFORE partnership.lua loads, so everything
+    -- that file registers -- including PartnerRequestCooldown's own
+    -- :RegisterPlayerDropped(), which is why the playerDropped count below
+    -- is legitimately 2 -- is still captured exactly as before.
+    for name in pairs(eventHandlers) do eventHandlers[name] = nil end
+
     Sandbox.loadInto('../server/partnership.lua', env)
 
     --- Drives `netEvents[eventName]` to completion inside a real coroutine,

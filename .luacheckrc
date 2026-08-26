@@ -464,6 +464,27 @@ globals = {
     -- install predates capabilities, so failing closed would silently strip
     -- abilities from everyone on upgrade.
     "TierCapabilityPermits",
+    -- IsK9FeatureBlocked / DenyK9FeatureBlocked: client/featureblocks.lua
+    -- (defined at :280 and :289). The client-side half of per-person feature
+    -- control -- the twelve features that live entirely on the player's own
+    -- game and so have no server-side enforcement point to gate. Every call
+    -- site gates the START of a feature only; the rule these must never
+    -- violate is that a termination or cleanup path is never gated on a
+    -- block check, or a blocked player gets stranded mid-feature.
+    "IsK9FeatureBlocked", "DenyK9FeatureBlocked",
+    -- server/permissionkeycatalog.lua -- the live, operator-editable
+    -- permission-key catalog, overlaying Config.Permissions the same way
+    -- server/certtiers.lua overlays its own config defaults. Definitions:
+    -- IsKnownPermissionCatalogKey :425, GetPermissionCatalogLabel :433,
+    -- ListPermissionCatalogKeys :454, PermissionKeyEditMutex :498.
+    -- Consumed by server/permissions.lua through a type-guarded soft
+    -- dependency, so permissions.lua keeps working if this file is absent.
+    -- PermissionKeyEditMutex guards the delete-vs-grant race: without it a
+    -- grant can commit a brand-new reference to a key deleted between the
+    -- existence check and the write -- the same race TierEditMutex exists
+    -- for in server/certtiers.lua.
+    "IsKnownPermissionCatalogKey", "GetPermissionCatalogLabel",
+    "ListPermissionCatalogKeys", "PermissionKeyEditMutex",
     "IsFetchCarryEngaged", "ReleaseFetchBall", "RequestRecallFetchBall", "RequestThrowFetchBall",
     -- server/cooldowns.lua constructors
     "NewCooldown", "NewNestedCooldown", "NewMutex",

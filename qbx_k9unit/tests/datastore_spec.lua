@@ -790,4 +790,114 @@ t.test('Parity: Tier_Upsert/Tier_UpdateOrdinal/Tier_Tombstone reach the IDENTICA
     t.equals(mysqlOutcome.deletedAfterTombstone, 1)
 end)
 
+-- ----------------------------------------------------------------------
+-- ADDITIONAL COVERAGE (coder-security pass) -- SanitizeLimit hardening.
+--
+-- Every current caller of a `limit`-taking accessor already clamps its own
+-- value before reaching this file (server/admin.lua's ClampLimit,
+-- server/leaderboard.lua's independent copy) -- these specs deliberately
+-- do NOT re-test that (already covered by admin_spec.lua/leaderboard_spec.lua).
+-- What they DO test is this file's OWN backstop: a malformed/hostile
+-- `limit` reaching server/datastore.lua directly -- via a future caller
+-- that forgets to clamp, or a bug -- must never throw an uncaught Lua error
+-- out of a net event/callback handler (`string.format('%d', ...)` on a
+-- non-integer-representable value, or a `>= ` comparison against a
+-- non-number in the memory branch), and must never silently become an
+-- unbounded or negative-LIMIT query either.
+-- ----------------------------------------------------------------------
+
+t.test('MySQL branch: a non-numeric limit (string, table, boolean) never throws -- degrades to a safe LIMIT 1 rather than erroring out of string.format', function()
+    for _, badLimit in ipairs({ 'not-a-number', {}, true, false }) do
+        resetCapture()
+        canned = {}
+        local ok, rows = pcall(MysqlStore.SearchLog_GetRecent, badLimit)
+        t.isTrue(ok, ('a non-numeric limit (%s) must never throw'):format(tostring(badLimit)))
+        t.equals(#rows, 0)
+        t.contains(captured[1].sql, 'LIMIT 1', ('a non-numeric limit (%s) must fall back to the smallest safe default'):format(tostring(badLimit)))
+    end
+
+    -- `nil` tested separately -- a literal `nil` inside a `{ ... }` table
+    -- constructor creates a hole that would silently truncate the ipairs()
+    -- loop above rather than actually exercising a nil limit.
+    resetCapture()
+    canned = {}
+    local ok, rows = pcall(MysqlStore.SearchLog_GetRecent, nil)
+    t.isTrue(ok, 'a nil limit must never throw')
+    t.equals(#rows, 0)
+    t.contains(captured[1].sql, 'LIMIT 1')
+end)
+
+t.test('MySQL branch: a negative or zero limit is floored up to 1, never embedded as a negative/zero LIMIT (invalid SQL syntax on a real server)', function()
+    resetCapture()
+    canned = {}
+    MysqlStore.Cert_GetHistory('CIT1', -5)
+    t.contains(captured[1].sql, 'LIMIT 1')
+    t.notContains(captured[1].sql, 'LIMIT -5')
+
+    resetCapture()
+    canned = {}
+    MysqlStore.Cert_GetHistory('CIT1', 0)
+    t.contains(captured[1].sql, 'LIMIT 1')
+end)
+
+t.test('MySQL branch: NaN and +-infinity never reach string.format\'s %d (both raise "number has no integer representation" if unsanitized) -- both degrade to a safe, finite LIMIT', function()
+    local nan = 0 / 0
+
+    resetCapture()
+    canned = {}
+    local ok1 = pcall(MysqlStore.XP_GetTop, nan)
+    t.isTrue(ok1, 'NaN must never throw')
+    t.contains(captured[1].sql, 'LIMIT 1')
+
+    resetCapture()
+    canned = {}
+    local ok2 = pcall(MysqlStore.XP_GetTop, math.huge)
+    t.isTrue(ok2, '+infinity must never throw')
+    t.contains(captured[1].sql, 'LIMIT 100000', 'a fixed backstop ceiling, not a caller-specific business cap -- see SanitizeLimit\'s own doc comment')
+
+    resetCapture()
+    canned = {}
+    local ok3 = pcall(MysqlStore.XP_GetTop, -math.huge)
+    t.isTrue(ok3, '-infinity must never throw')
+    t.contains(captured[1].sql, 'LIMIT 1')
+end)
+
+t.test('MySQL branch: a fractional limit is floored, never passed through with a fractional part (string.format(\'%d\', ...) raises on a non-integer-representable float)', function()
+    resetCapture()
+    canned = {}
+    MysqlStore.SearchLog_GetByOfficer('CIT1', 10.9)
+    t.contains(captured[1].sql, 'LIMIT 10')
+end)
+
+t.test('MySQL branch: a legitimate, already-clamped limit is passed through completely unchanged -- SanitizeLimit is a backstop, not a second business-rule cap', function()
+    resetCapture()
+    canned = {}
+    MysqlStore.SearchLog_GetRecent(1000)
+    t.contains(captured[1].sql, 'LIMIT 1000')
+end)
+
+t.test('Memory branch: a non-numeric/negative/NaN limit never throws against a >= comparison either, and degrades the same way as the MySQL branch', function()
+    -- Scoped to a plate no other test in this file ever inserts, so this
+    -- test's row count assertions can never be perturbed by fixture state
+    -- any other test in this file leaves behind in the SAME long-lived
+    -- MemStore instance.
+    local PLATE = 'SANITIZELIMITTEST'
+    MemStore.SearchLog_Insert('SANOFF1', 'police', 'vehicle', PLATE, nil, 'clean', 0, nil)
+    MemStore.SearchLog_Insert('SANOFF1', 'police', 'vehicle', PLATE, nil, 'clean', 0, nil)
+
+    for _, badLimit in ipairs({ 'nope', {}, 0 / 0, -5, -math.huge }) do
+        local ok, rows = pcall(MemStore.SearchLog_GetByPlate, PLATE, badLimit)
+        t.isTrue(ok, ('a bad limit (%s) must never throw in memory mode either'):format(tostring(badLimit)))
+        t.equals(#rows, 1, 'floors up to the smallest safe default (1 row), never 0 and never every matching row')
+    end
+
+    local okNil, rowsNil = pcall(MemStore.SearchLog_GetByPlate, PLATE, nil)
+    t.isTrue(okNil, 'a nil limit must never throw in memory mode')
+    t.equals(#rowsNil, 1)
+
+    local okInf, rowsInf = pcall(MemStore.SearchLog_GetByPlate, PLATE, math.huge)
+    t.isTrue(okInf, '+infinity must never throw in memory mode')
+    t.equals(#rowsInf, 2, 'capped at the backstop ceiling, far above the 2 real matching rows here -- not an unbounded read of the whole log')
+end)
+
 os.exit(t.summary())
