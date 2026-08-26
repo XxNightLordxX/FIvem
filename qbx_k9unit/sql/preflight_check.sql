@@ -71,6 +71,17 @@ FROM (
       (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'),
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnerships'
          AND COLUMN_NAME IN ('k9_citizenid','handler_citizenid','established_by','established_at','ended_by','ended_at','active'))
+    -- k9_partnership_pair_progress (migration 0018) -- the fully durable
+    -- anti-farm guard table; see that migration's own header and
+    -- server/datastore.lua's PairProgress_* accessors for the full design.
+    -- Brand new (no prior version of this resource ever shipped it), so
+    -- every one of its 3 columns is safe to check here, unlike
+    -- k9_progression's own deliberate 4-of-5 exclusion just below.
+    UNION ALL SELECT 'k9_partnership_pair_progress', 3,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnership_pair_progress'),
+      (SELECT TABLE_TYPE  FROM INFORMATION_SCHEMA.TABLES  WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnership_pair_progress'),
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnership_pair_progress'
+         AND COLUMN_NAME IN ('k9_citizenid','handler_citizenid','highest_tenure_tier_granted'))
     -- Column list deliberately stays at the ORIGINAL 4 founding columns
     -- (migration 0002), NOT the 5 real columns this table has carried
     -- since migration 0017 added `handler_xp` -- see sql/install.sql's own
@@ -306,7 +317,8 @@ WHERE TABLE_SCHEMA = DATABASE()
                           'k9_permission_keys','k9_permission_key_audit',
                           'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                           'k9_xp_tiers','k9_xp_tier_audit',
-                          'k9_individual_overrides','k9_individual_override_audit');
+                          'k9_individual_overrides','k9_individual_override_audit',
+                          'k9_partnership_pair_progress');
 
 
 -- ---------------------------------------------------------------------
@@ -350,7 +362,7 @@ SELECT
 SELECT TABLE_NAME AS `our_table`, TABLE_ROWS AS `approx_rows`
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = DATABASE()
-  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations','k9_runtime_feature_overrides','k9_runtime_override_audit','k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments','k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit','k9_equipment_shop_locations','k9_equipment_shop_locations_audit','k9_permission_keys','k9_permission_key_audit','k9_equipment_shop_items','k9_equipment_shop_item_audit','k9_xp_tiers','k9_xp_tier_audit','k9_individual_overrides','k9_individual_override_audit')
+  AND TABLE_NAME IN ('k9_certifications','k9_search_log','k9_partnerships','k9_progression','k9_permissions','k9_certification_specializations','k9_runtime_feature_overrides','k9_runtime_override_audit','k9_tablet_theme','k9_tablet_theme_audit','k9_ped_assignments','k9_certification_tiers','k9_certification_tier_capabilities','k9_certification_tier_audit','k9_equipment_shop_locations','k9_equipment_shop_locations_audit','k9_permission_keys','k9_permission_key_audit','k9_equipment_shop_items','k9_equipment_shop_item_audit','k9_xp_tiers','k9_xp_tier_audit','k9_individual_overrides','k9_individual_override_audit','k9_partnership_pair_progress')
 ORDER BY TABLE_NAME;
 
 

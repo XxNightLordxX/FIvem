@@ -934,7 +934,7 @@ t.test('BOOT-ORDER RACE control: once the probe settles with NO collision, this 
     -- this file's own table, which was enough back when the boot probe only
     -- looked for name collisions -- it now ALSO refuses to use a database
     -- that is missing tables at all ("the SQL was never imported", or a
-    -- part-finished install), and one table out of twenty-four reads as
+    -- part-finished install), and one table out of twenty-five reads as
     -- exactly that. See tests/datastore_spec.lua's own SETTLEMENT tests.
     t.isTrue(f.resumeNext(Sandbox.installedSchemaRows()))
     t.isTrue(f.env.K9Store.IsDatabaseEnabled(), 'no collision -- the real database stays live')

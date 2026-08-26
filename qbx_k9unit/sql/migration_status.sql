@@ -104,17 +104,20 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_overrides')
     UNION ALL SELECT 'k9_individual_override_audit',
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_individual_override_audit')
+    UNION ALL SELECT 'k9_partnership_pair_progress',
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnership_pair_progress')
 ) t
 ORDER BY t.table_name;
--- NOTE: install.sql now converges with sql/migrations/0001-0016 (24 tables
+-- NOTE: install.sql now converges with sql/migrations/0001-0018 (25 tables
 -- total, including k9_progression's idx_xp, migration 0010's three
 -- certification-tier tables, migration 0011's two equipment-shop-location
 -- tables, migration 0013's two permission-key-catalog tables, migration
 -- 0014's two equipment-shop-item tables, migration 0015's two
--- XP-rank-override tables, and migration 0016's two per-individual-K9
--- override tables). If this comment and install.sql's real table count
--- ever disagree again, install.sql is out of date; report it rather than
--- trust this file. (This comment previously said "0001-0011 / 16
+-- XP-rank-override tables, migration 0016's two per-individual-K9
+-- override tables, and migration 0018's one partnership-tenure
+-- anti-farm-guard table). If this comment and install.sql's real table
+-- count ever disagree again, install.sql is out of date; report it rather
+-- than trust this file. (This comment previously said "0001-0011 / 16
 -- tables", then "0001-0013/0015 / 20 tables" while claiming migration
 -- 0014's own two tables were a still-pending, separately-landing pass --
 -- that was itself the exact class of silent omission this note exists to
@@ -228,7 +231,7 @@ SELECT
             IF(base.uq_exists = 0,
                IF(@k9ms_dupe_pairs > 0,
                   CONCAT('ADD UNIQUE KEY uq_one_active_cert_per_job -- WILL FAIL: ', @k9ms_dupe_pairs,
-                         ' (citizenid, job) pair(s) already have more than one active row. See README.md §7 STEP 5 BEFORE running this migration.'),
+                         ' (citizenid, job) pair(s) already have more than one active row. See sql/migrations/0004_add_k9_certifications_active_cert_key.sql''s own OPERATOR NOTE BEFORE running this migration.'),
                   'ADD UNIQUE KEY uq_one_active_cert_per_job'),
                '')
         )
@@ -465,6 +468,25 @@ FROM (
       (SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_progression' AND COLUMN_NAME='handler_xp') AS col_exists
 ) base;
 
+-- 0018: CREATE TABLE (k9_partnership_pair_progress) -- the fully durable
+-- half of the partnership-tenure anti-farm guard, closing the
+-- "in-memory only, a restart re-opens the exploit once per pair" gap
+-- KNOWN_ISSUES.md used to disclose (see that migration's own header for
+-- the full design). Independent of every other table (no FK, no
+-- dependency on any other table -- see that migration's own header
+-- "ORDERING" section), so there is no "BLOCKED" case to report here, same
+-- as 0010/0011/0013/0014/0015/0016 above.
+SELECT
+    t.table_name AS `0018_create_k9_partnership_pair_progress.sql would...`,
+    CASE WHEN t.tbl_exists = 0
+         THEN CONCAT('CREATE TABLE `', t.table_name, '` (currently absent)')
+         ELSE CONCAT('no-op -- `', t.table_name, '` already exists')
+    END AS plan
+FROM (
+    SELECT 'k9_partnership_pair_progress' AS table_name,
+      (SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='k9_partnership_pair_progress') AS tbl_exists
+) t;
+
 
 -- ---------------------------------------------------------------------
 -- PART 3: blast-radius summary -- row counts for every table that
@@ -483,7 +505,8 @@ WHERE TABLE_SCHEMA = DATABASE()
                       'k9_permission_keys','k9_permission_key_audit',
                       'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                       'k9_xp_tiers','k9_xp_tier_audit',
-                      'k9_individual_overrides','k9_individual_override_audit')
+                      'k9_individual_overrides','k9_individual_override_audit',
+                      'k9_partnership_pair_progress')
 ORDER BY TABLE_NAME;
 
 -- DRIFT CHECK -- same posture and same reasoning as preflight_check.sql's
@@ -512,6 +535,7 @@ WHERE TABLE_SCHEMA = DATABASE()
                           'k9_permission_keys','k9_permission_key_audit',
                           'k9_equipment_shop_items','k9_equipment_shop_item_audit',
                           'k9_xp_tiers','k9_xp_tier_audit',
-                          'k9_individual_overrides','k9_individual_override_audit');
+                          'k9_individual_overrides','k9_individual_override_audit',
+                          'k9_partnership_pair_progress');
 
 SELECT 'DRY RUN COMPLETE -- nothing was changed by this report. Run sql/k9_setup.sh (without --dry-run) to actually apply the plan above; it backs up your whole database first, automatically, and refuses to write anything if that backup fails.' AS final_note;

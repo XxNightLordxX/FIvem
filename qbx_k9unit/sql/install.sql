@@ -4,13 +4,13 @@
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
 -- This is a hard requirement, not a recommendation. Four of the
--- twenty-four (24) tables below (k9_certifications,
+-- twenty-five (25) tables below (k9_certifications,
 -- k9_certification_specializations, k9_partnerships, k9_permissions)
 -- declare an INDEXED VIRTUAL GENERATED COLUMN backing a UNIQUE KEY
 -- (`k9_certifications.active_cert_key`,
 -- `k9_certification_specializations.active_spec_key`,
 -- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
--- `k9_permissions.active_permission_key`) -- the other twenty
+-- `k9_permissions.active_permission_key`) -- the other twenty-one
 -- (k9_search_log, k9_progression, k9_runtime_feature_overrides,
 -- k9_runtime_override_audit, k9_tablet_theme, k9_tablet_theme_audit,
 -- k9_ped_assignments, k9_certification_tiers,
@@ -18,7 +18,8 @@
 -- k9_equipment_shop_locations, k9_equipment_shop_locations_audit,
 -- k9_permission_keys, k9_permission_key_audit, k9_equipment_shop_items,
 -- k9_equipment_shop_item_audit, k9_xp_tiers, k9_xp_tier_audit,
--- k9_individual_overrides, k9_individual_override_audit) need
+-- k9_individual_overrides, k9_individual_override_audit,
+-- k9_partnership_pair_progress) need
 -- nothing from this floor and would run on an older server on their own,
 -- but this resource has one stated minimum for the schema as a whole, not
 -- a per-table one.
@@ -76,9 +77,12 @@
 -- an existing table's stored collation is a full table rewrite (`CONVERT
 -- TO CHARACTER SET`), not a free metadata change, so it is deliberately an
 -- OPT-IN migration rather than part of the default upgrade path -- see
--- `sql/migrations/0012_convert_charset_collation.sql` and that file's own
--- header for the full cost/benefit disclosure, and README.md §7
--- for the plain-language version of "do I need to run this."
+-- `sql/migrations/optional/0012_convert_charset_collation.sql` (CORRECTED
+-- path -- this used to say `sql/migrations/0012_...` with no `optional/`
+-- segment; that file does not exist at the old path) and that file's own
+-- header for the full cost/benefit disclosure and the plain-language
+-- version of "do I need to run this" (its own "WHO ACTUALLY NEEDS THIS"
+-- section -- CORRECTED: this used to point to a nonexistent "README.md §7").
 -- =====================================================================
 
 -- =====================================================================
@@ -1455,4 +1459,69 @@ CREATE TABLE IF NOT EXISTS `k9_individual_override_audit` (
 
   PRIMARY KEY (`id`),
   KEY `idx_citizenid_changed_at` (`citizenid`, `changed_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_partnership_pair_progress
+--
+-- Added alongside `sql/migrations/0018_create_k9_partnership_pair_progress.sql`,
+-- byte-for-byte the same shape -- see that file's own header for the full
+-- design rationale. The FULLY DURABLE half of the partnership-tenure
+-- anti-farm guard KNOWN_ISSUES.md used to disclose as "in-memory only, a
+-- restart re-opens the loop once per pair": server/partnership.lua's
+-- CaptureTenureSeedForPair (called from the shared break-teardown core,
+-- DoBreakPartnership) writes the highest partnership-tenure milestone tier
+-- an exact (k9, handler) pair has ever confirmed-earned into THIS table,
+-- keyed by the pair itself rather than by `k9_partnerships.id` -- so the
+-- value survives that row being superseded by a brand-new one on
+-- break+reform, AND survives a genuine resource restart (unlike the
+-- in-memory table this replaces, which could not). Read back by
+-- `respondPartnerUp`'s own establish critical section the moment that
+-- exact pair reforms, and re-applied via the SAME optimistic-CAS primitive
+-- (`K9Store.Partner_SetTenureTierCAS`) server/tenure.lua's own tick already
+-- uses to write `k9_partnerships.tenure_bonus_tier_granted` -- so a pair
+-- can never re-earn an already-earned milestone by cycling break/reform,
+-- restart or no restart.
+--
+-- `k9_citizenid` / `handler_citizenid` VARCHAR(50): same convention as
+-- every other citizenid column in this schema. Together they form the
+-- PRIMARY KEY -- at most one progress row per EXACT pair, ever; a
+-- role-swapped "pair" (the same two humans, K9 and handler roles
+-- reversed) is deliberately treated as a different relationship, never
+-- sharing a row with the original (see server/partnership.lua's
+-- TenurePairKey-equivalent key construction, `PairProgressKey`,
+-- server/datastore.lua, for the same role-order-sensitive reasoning).
+--
+-- `highest_tenure_tier_granted` TINYINT UNSIGNED NOT NULL DEFAULT 0: only
+-- ever written via `GREATEST(highest_tenure_tier_granted, VALUES(...))`
+-- (`K9Store.PairProgress_UpsertHighestTenureTier`) -- a write can never
+-- LOWER this column, matching this resource's own "an already-earned
+-- milestone is never re-grantable" invariant.
+--
+-- NO FK, matching this schema's own established "no FK, relational
+-- integrity enforced at the application layer" convention -- neither
+-- citizenid column references `k9_partnerships` (a pair's progress row is
+-- deliberately independent of any single partnership row's lifecycle) nor
+-- any player table.
+--
+-- No audit table: unlike `k9_individual_overrides`/`k9_certification_tiers`,
+-- this table is never hand-edited by an operator -- it is written
+-- automatically, exactly once per confirmed milestone grant, by the same
+-- anti-farm logic already covered by tests/partnership_spec.lua and
+-- tests/datastore_spec.lua. Matches `k9_progression`'s own precedent (a
+-- live, automatically-upserted total, no companion audit table) rather
+-- than the admin-edited tables' precedent.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates this table, run
+-- `sql/migrations/0018_create_k9_partnership_pair_progress.sql` instead (a
+-- guaranteed no-op if this file already created it).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_partnership_pair_progress` (
+  `k9_citizenid`                 VARCHAR(50)       NOT NULL,
+  `handler_citizenid`            VARCHAR(50)       NOT NULL,
+  `highest_tenure_tier_granted`  TINYINT UNSIGNED  NOT NULL DEFAULT 0,
+
+  PRIMARY KEY (`k9_citizenid`, `handler_citizenid`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

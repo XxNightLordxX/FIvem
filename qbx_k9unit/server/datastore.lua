@@ -136,38 +136,107 @@ K9Store = {}
 -- BACKEND SELECTION -- the ONE flag read in this whole resource.
 -- ======================================================================
 
--- Set to `true`, at most once per reason, by either of two independent
--- checks in this file -- VerifyTableShapesAgainstKnownSchema() (db-schema
--- pass, 2026-08-26) near the bottom, if this database has a `k9_*` table
--- whose NAME this resource owns but whose COLUMNS do not match (some OTHER
--- resource's table happens to share one of our names); or the "LIVE
--- QUERY-FAILURE CIRCUIT BREAKER" just below, if a REAL query against one of
--- this resource's own tables fails because that table does not exist at
--- all (no-SQL-import pass, same date) -- either because sql/install.sql was
--- never run, or because it was run and the table was later dropped while
--- this resource kept running. See each check's own header for the full
--- "why", "what this costs", and "how to fix it" writeup for its own case --
--- not repeated here. Declared here, ahead of DatabaseEnabled() below,
--- purely so that one flag can force every K9Store.* function in this file
--- back to the already-proven memory-only path without any of them needing
--- their own awareness of it.
+-- Set to `true`, at most once per boot, exclusively by
+-- VerifyTableShapesAgainstKnownSchema() (db-schema pass, 2026-08-26) near
+-- the bottom of this file -- the ONE check in this file that can force
+-- every K9Store.* function back to the already-proven memory-only path,
+-- run exactly ONCE, at `onResourceStart`, before this resource's first real
+-- query. That single boot-time probe covers TWO different findings, not
+-- two independent checks: (a) this database has a `k9_*` table whose NAME
+-- this resource owns but whose COLUMNS do not match (some OTHER resource's
+-- table happens to share one of our names), or (b) one or more of this
+-- resource's own tables do not exist in this database at all (sql/install.sql
+-- was never run, or was run but a later migration was not, or a table was
+-- later dropped). See that function's own header for the full "why", "what
+-- this costs", and "how to fix it" writeup for each case -- not repeated
+-- here. Declared here, ahead of DatabaseEnabled() below, purely so that one
+-- flag can force every K9Store.* function in this file back to the
+-- memory-only path without any of them needing their own awareness of it.
+--
+-- CORRECTED, THIS PASS (lifecycle QA pass -- header-accuracy finding): this
+-- comment used to also describe a "LIVE QUERY-FAILURE CIRCUIT BREAKER"
+-- that would supposedly fire "if a REAL query against one of this
+-- resource's own tables fails because that table does not exist at
+-- all... either because sql/install.sql was never run, or because it was
+-- run and the table was later dropped WHILE THIS RESOURCE KEPT RUNNING."
+-- That second clause was never true, and no such capability exists
+-- anywhere in this file: every write to SCHEMA_COLLISION_DETECTED (and to
+-- TABLE_MISSING_THIS_SESSION below) happens exclusively inside
+-- VerifyTableShapesAgainstKnownSchema, which this file's own
+-- `onResourceStart` handler runs exactly once, at boot -- there is no
+-- mid-session monitor watching ordinary K9Store.* query failures for a
+-- table that vanished after this resource already started. A table
+-- genuinely dropped out from under a live, already-running install will
+-- simply make every subsequent query against it throw a normal "table
+-- doesn't exist" error at that call's own pcall boundary, handled however
+-- that specific call site's own existing failure-handling already treats
+-- an unexpected query error (most already degrade to "could not confirm,"
+-- never to a schema-collision determination) -- it will never flip this
+-- flag and never force memory-only mode for the rest of this resource's
+-- process. Correcting the claim here rather than building the capability
+-- it described: a boot-time probe answering "does the schema match right
+-- now" is a fundamentally different (and cheaper, and already reliable)
+-- guarantee than a live monitor watching for a table to vanish mid-session
+-- would be, and nothing else in this resource's own design ever actually
+-- depended on the latter existing.
 local SCHEMA_COLLISION_DETECTED = false
+
+-- PER-TABLE FALLBACK (db-schema-fallback-granularity pass, this pass):
+-- table name (e.g. `k9_progression`) -> `true` for exactly the tables
+-- VerifyTableShapesAgainstKnownSchema's PART-INSTALLED branch confirmed
+-- missing THIS boot, while at least one other of this resource's tables
+-- was confirmed present and matching (if EVERY table is missing, or a real
+-- collision is found, SCHEMA_COLLISION_DETECTED above is set instead and
+-- this table is irrelevant -- it is populated in that case too, for
+-- diagnostic completeness, but nothing ever needs to read it there since
+-- the whole-resource flag already answers every table `false`). Declared
+-- here, ahead of DatabaseEnabled() below, for the same reason
+-- SCHEMA_COLLISION_DETECTED is: so DatabaseEnabled(tableName) can answer a
+-- per-table question without every caller needing its own awareness of
+-- where this comes from. See this file's own "SCHEMA COLLISION SAFETY NET"
+-- section near the bottom, sub-header "PER-TABLE FALLBACK, NOT
+-- WHOLE-RESOURCE, FOR A MISSING TABLE", for the full "why" writeup this
+-- pass replaced -- including the one deliberate exception this table also
+-- encodes (a missing `k9_certifications` forces
+-- `k9_certification_specializations` in here too, even when that table's
+-- own columns matched).
+local TABLE_MISSING_THIS_SESSION = {}
 
 -- Set to `true` exactly once the schema-collision determination above is
 -- FINAL for this boot -- either because there was nothing to check
 -- (`Config.Database.enabled == false`, so the probe below never runs at
 -- all) or because the probe ran and returned, by whatever outcome (a real
--- collision, a clean match, or the probe's own pcall degrading a failed
--- check to "no collision found" -- see VerifyTableShapesAgainstKnownSchema's
--- own header). NEVER read directly by a K9Store.* accessor -- only by
+-- collision, a clean match, a part-installed database -- which settles
+-- TABLE_MISSING_THIS_SESSION above, not this whole-resource flag -- or the
+-- probe's own pcall degrading a failed check to "no collision found" --
+-- see VerifyTableShapesAgainstKnownSchema's own header). NEVER read
+-- directly by a K9Store.* accessor -- only by
 -- K9Store.WaitForSchemaCheckToSettle() below, which every OTHER file's own
--- boot-time cache read (permissionkeycatalog.lua, xptiers.lua,
--- equipmentshop.lua, k9profiles.lua) must call before trusting its own first query -- see
--- that function's own header for the race this closes and this file's own
--- "SCHEMA COLLISION SAFETY NET" section near the bottom for the full
--- writeup.
+-- boot-time cache read of a table in EXPECTED_TABLE_COLUMNS (currently
+-- certtiers.lua, permissionkeycatalog.lua, xptiers.lua, k9profiles.lua --
+-- see that function's own doc comment for why this list is bigger than it
+-- looks and how to tell if a new file needs adding to it) must call before
+-- trusting its own first query -- see that function's own header for the
+-- race this closes and this file's own "SCHEMA COLLISION SAFETY NET"
+-- section near the bottom for the full writeup.
 local SCHEMA_CHECK_SETTLED = false
 
+--- @param tableName string? -- OPTIONAL. When given, also checks
+--- TABLE_MISSING_THIS_SESSION (declared just above, next to
+--- SCHEMA_COLLISION_DETECTED) for THIS one table -- see this file's own
+--- "SCHEMA COLLISION SAFETY NET" section near the bottom, sub-header "PER-
+--- TABLE FALLBACK, NOT WHOLE-RESOURCE, FOR A MISSING TABLE", for the full
+--- "why" writeup.
+--- Every one of this file's ~99 real `K9Store.*` accessors passes its own
+--- table's exact name here (verified against the literal SQL two-or-so
+--- lines below its own call, not guessed) -- the two call sites that
+--- genuinely have no single table in mind (the plain boot-status PRINT,
+--- and the onResourceStart gate deciding whether to even run the probe at
+--- all) call this with NO argument, exactly as before this pass.
+--- Omitting `tableName` (or passing nil) answers the GLOBAL question only
+--- -- "is the database on at all, resource-wide" -- never per-table, which
+--- is what every pre-existing caller of `K9Store.IsDatabaseEnabled()` (this
+--- file's own tests included) already expects unchanged.
 --- @return boolean
 --- Anything other than a literal `false` on `Config.Database.enabled`
 --- means "on" -- including `Config.Database` not existing at all yet (an
@@ -175,11 +244,28 @@ local SCHEMA_CHECK_SETTLED = false
 --- fail-safe default: a config that has never heard of this flag gets
 --- today's behavior (a real database), never a silent, unrequested
 --- switch to memory-only mode.
-local function DatabaseEnabled()
+local function DatabaseEnabled(tableName)
     if SCHEMA_COLLISION_DETECTED then return false end
-    return not (type(Config) == 'table' and type(Config.Database) == 'table' and Config.Database.enabled == false)
+    if type(Config) == 'table' and type(Config.Database) == 'table' and Config.Database.enabled == false then return false end
+    -- PER-TABLE FALLBACK (db-schema-fallback-granularity pass): a table
+    -- named here was individually confirmed missing by
+    -- VerifyTableShapesAgainstKnownSchema's PART-INSTALLED branch, while at
+    -- least one other of this resource's tables was confirmed to exist and
+    -- match -- SCHEMA_COLLISION_DETECTED above is deliberately NOT set for
+    -- that case (see that branch's own header for the full "why", including
+    -- the one deliberate exception: a caller asking about
+    -- `k9_certification_specializations` gets `false` here whenever
+    -- `k9_certifications` itself is the one missing, even though
+    -- `k9_certification_specializations`'s own columns matched -- that
+    -- table is force-added to TABLE_MISSING_THIS_SESSION alongside its
+    -- owner for exactly that reason, so this lookup alone is sufficient;
+    -- no caller needs its own awareness of the coupling).
+    if tableName ~= nil and TABLE_MISSING_THIS_SESSION[tableName] then return false end
+    return true
 end
 
+--- @param tableName string? -- see DatabaseEnabled's own doc comment --
+--- forwarded as-is; omit for the resource-wide answer.
 K9Store.IsDatabaseEnabled = DatabaseEnabled
 
 -- ======================================================================
@@ -410,7 +496,7 @@ end
 --- RefreshCertificationCache/IsCertRowConfirmedActive/GrantCertification
 --- existence-check queries.
 function K9Store.Cert_GetActiveId(citizenid, job)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         return MySQL.scalar.await('SELECT id FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', { citizenid, job })
     end
     local row = CertFindActive(citizenid, job)
@@ -421,7 +507,7 @@ end
 --- IsCertifiedK9ForAnyJob and server/tablet.lua's
 --- QueryHasAnyActiveCertification (identical "any department" query).
 function K9Store.Cert_GetActiveIdAnyJob(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         return MySQL.scalar.await('SELECT id FROM k9_certifications WHERE citizenid = ? AND active = 1 LIMIT 1', { citizenid })
     end
     local row = CertFindActive(citizenid, nil)
@@ -432,7 +518,7 @@ end
 --- tier/expiry metadata read.
 --- @return table? { tier: string, expires_at_unix: number? }
 function K9Store.Cert_GetActiveMeta(citizenid, job)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         return MySQL.single.await(
             'SELECT tier, UNIX_TIMESTAMP(expires_at) AS expires_at_unix FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1',
             { citizenid, job })
@@ -448,7 +534,7 @@ end
 --- @param expiryDays number? -- nil = no expiry (DEFAULT NULL, matches the real schema)
 --- @return number id
 function K9Store.Cert_Insert(citizenid, job, grantedBy, expiryDays)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         if expiryDays then
             return MySQL.insert.await(
                 'INSERT INTO k9_certifications (citizenid, job, granted_by, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))',
@@ -472,7 +558,7 @@ end
 --- QBCore:Server:OnJobUpdate auto-revoke branch.
 --- @return number affectedRows
 function K9Store.Cert_RevokeActive(citizenid, job, revokedBy, reason)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         return MySQL.update.await(
             'UPDATE k9_certifications SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP, revoke_reason = ? WHERE citizenid = ? AND job = ? AND active = 1',
             { revokedBy, reason, citizenid, job })
@@ -485,7 +571,7 @@ end
 
 --- Mirrors MySQL.update.await. Replaces SetCertificationTier's UPDATE.
 function K9Store.Cert_SetTier(citizenid, job, tier)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         return MySQL.update.await('UPDATE k9_certifications SET tier = ? WHERE citizenid = ? AND job = ? AND active = 1', { tier, citizenid, job })
     end
     local row = CertFindActive(citizenid, job)
@@ -496,7 +582,7 @@ end
 
 --- Mirrors MySQL.update.await. Replaces RenewCertification's UPDATE.
 function K9Store.Cert_RenewExpiry(citizenid, job, expiryDays)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         return MySQL.update.await('UPDATE k9_certifications SET expires_at = DATE_ADD(NOW(), INTERVAL ? DAY) WHERE citizenid = ? AND job = ? AND active = 1', { expiryDays, citizenid, job })
     end
     local row = CertFindActive(citizenid, job)
@@ -509,7 +595,7 @@ end
 --- row read (that function still layers QueryActiveSpecializations on
 --- top itself -- unchanged, that is a separate table/call below).
 function K9Store.Cert_GetActiveRecord(citizenid, job)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         return MySQL.single.await(
             'SELECT tier, granted_by, granted_at, revoked_by, revoked_at, revoke_reason, UNIX_TIMESTAMP(expires_at) AS expires_at_unix ' ..
             'FROM k9_certifications WHERE citizenid = ? AND job = ? AND active = 1 LIMIT 1', { citizenid, job })
@@ -536,7 +622,7 @@ end
 --- @return table rows -- newest first, always a table, empty on failure
 function K9Store.Cert_GetHistory(citizenid, limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         local sql = ('SELECT job, granted_by, granted_at, revoked_by, revoked_at, active FROM k9_certifications WHERE citizenid = ? ORDER BY granted_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
         if not ok then
@@ -563,7 +649,7 @@ end
 --- @return table rows -- always a table, empty on failure
 function K9Store.Cert_GetActiveRosterByJob(job, limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         local sql = ('SELECT citizenid, granted_by, granted_at FROM k9_certifications WHERE job = ? AND active = 1 ORDER BY granted_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { job })
         if not ok then
@@ -596,7 +682,7 @@ end
 --- SafeQuery) for the full context this accessor closes out.
 --- @return table rows -- always a table, empty on failure
 function K9Store.Cert_GetActiveJobsForCitizen(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT job, granted_by FROM k9_certifications WHERE citizenid = ? AND active = 1', { citizenid })
         if not ok then
             print(('[qbx_k9unit] datastore: Cert_GetActiveJobsForCitizen query failed for %s: %s'):format(citizenid, tostring(rowsOrErr)))
@@ -626,7 +712,7 @@ end
 --- @return table rows -- always a table, empty on failure, NOT sorted
 function K9Store.Cert_GetActiveRosterByJobUnordered(job, limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         local sql = ('SELECT citizenid, granted_by FROM k9_certifications WHERE job = ? AND active = 1 LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { job })
         if not ok then
@@ -659,7 +745,7 @@ end
 --- nothing".
 --- @return number count
 function K9Store.Cert_CountByTier(tier)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certifications') then
         return MySQL.scalar.await('SELECT COUNT(*) FROM k9_certifications WHERE tier = ?', { tier })
     end
     local count = 0
@@ -694,7 +780,7 @@ end
 --- replaces (RefreshSpecializationCache, RevokeAllSpecializationsForCitizenJob)
 --- iterate `row.specialization` directly.
 function K9Store.Spec_GetActiveKeys(citizenid, job)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_specializations') then
         return MySQL.query.await('SELECT specialization FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND active = 1', { citizenid, job })
     end
     local out = {}
@@ -708,7 +794,7 @@ end
 
 --- Mirrors MySQL.scalar.await. Replaces GrantSpecialization's existence check.
 function K9Store.Spec_GetActiveId(citizenid, job, specialization)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_specializations') then
         return MySQL.scalar.await(
             'SELECT id FROM k9_certification_specializations WHERE citizenid = ? AND job = ? AND specialization = ? AND active = 1 LIMIT 1',
             { citizenid, job, specialization })
@@ -719,7 +805,7 @@ end
 
 --- Mirrors MySQL.insert.await.
 function K9Store.Spec_Insert(citizenid, job, specialization, grantedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_specializations') then
         return MySQL.insert.await(
             'INSERT INTO k9_certification_specializations (citizenid, job, specialization, granted_by) VALUES (?, ?, ?, ?)',
             { citizenid, job, specialization, grantedBy })
@@ -738,7 +824,7 @@ end
 --- Mirrors MySQL.update.await. Replaces RevokeSpecialization/
 --- RevokeSpecializationOffline's (byte-identical) UPDATE.
 function K9Store.Spec_RevokeOne(citizenid, job, specialization, revokedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_specializations') then
         return MySQL.update.await(
             'UPDATE k9_certification_specializations SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND specialization = ? AND active = 1',
             { revokedBy, citizenid, job, specialization })
@@ -753,7 +839,7 @@ end
 --- RevokeAllSpecializationsForCitizenJob's bulk UPDATE (cascades every
 --- active specialization for one (citizenid, job) pair at once).
 function K9Store.Spec_RevokeAllForJob(citizenid, job, revokedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_specializations') then
         return MySQL.update.await(
             'UPDATE k9_certification_specializations SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND job = ? AND active = 1',
             { revokedBy, citizenid, job })
@@ -806,7 +892,7 @@ end
 --- read and DoBreakPartnership's initial SELECT (both select `id,
 --- k9_citizenid, handler_citizenid` for either-role lookup).
 function K9Store.Partner_GetActiveRowByParty(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_partnerships') then
         return MySQL.single.await(
             'SELECT id, k9_citizenid, handler_citizenid FROM k9_partnerships WHERE active = 1 AND (k9_citizenid = ? OR handler_citizenid = ?) LIMIT 1',
             { citizenid, citizenid })
@@ -819,7 +905,7 @@ end
 --- Mirrors MySQL.scalar.await. Replaces the establish critical section's
 --- two identical pre-INSERT existence checks (one per party).
 function K9Store.Partner_GetActiveIdByParty(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_partnerships') then
         return MySQL.scalar.await(
             'SELECT id FROM k9_partnerships WHERE active = 1 AND (k9_citizenid = ? OR handler_citizenid = ?) LIMIT 1',
             { citizenid, citizenid })
@@ -832,7 +918,7 @@ end
 --- mode) if EITHER party already has an active row -- mirrors the real
 --- schema's two independent UNIQUE KEYs backstopping the same INSERT.
 function K9Store.Partner_Insert(k9Citizenid, handlerCitizenid, establishedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_partnerships') then
         return MySQL.insert.await('INSERT INTO k9_partnerships (k9_citizenid, handler_citizenid, established_by) VALUES (?, ?, ?)', { k9Citizenid, handlerCitizenid, establishedBy })
     end
     if PartnerFindActiveRowByParty(k9Citizenid) then ThrowDuplicateActiveRow('k9_partnerships k9=' .. k9Citizenid) end
@@ -849,7 +935,7 @@ end
 --- Mirrors MySQL.update.await. Replaces DoBreakPartnership's UPDATE
 --- (`WHERE id = ? AND active = 1`).
 function K9Store.Partner_EndById(id, endedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_partnerships') then
         return MySQL.update.await('UPDATE k9_partnerships SET active = 0, ended_by = ?, ended_at = CURRENT_TIMESTAMP WHERE id = ? AND active = 1', { endedBy, id })
     end
     local row = PartnerFindById(id)
@@ -868,7 +954,7 @@ end
 --- LIMIT 1`) -- deliberately looks up by id ALONE, regardless of current
 --- `active` value, matching the real query's own unfiltered WHERE clause.
 function K9Store.Partner_GetActiveFlagById(id)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_partnerships') then
         return MySQL.scalar.await('SELECT active FROM k9_partnerships WHERE id = ? LIMIT 1', { id })
     end
     local row = PartnerFindById(id)
@@ -904,7 +990,7 @@ end
 --- @return table rows -- always a table, empty on failure
 function K9Store.Partner_GetHistoryByK9(citizenid, limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_partnerships') then
         -- `tenure_bonus_tier_granted`/`UNIX_TIMESTAMP(...)` ADDED this pass
         -- (Partners tab, coder-ui) -- additive columns only, appended after
         -- every pre-existing one so a positional consumer (none today) is
@@ -936,7 +1022,7 @@ end
 --- @return table rows -- always a table, empty on failure
 function K9Store.Partner_GetHistoryByHandler(citizenid, limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_partnerships') then
         -- `tenure_bonus_tier_granted`/`UNIX_TIMESTAMP(...)` ADDED this pass
         -- (Partners tab, coder-ui) -- additive columns only, appended after
         -- every pre-existing one so a positional consumer (none today) is
@@ -967,7 +1053,7 @@ end
 --- measured against real wall-clock time; in memory mode a restart resets
 --- tenure to zero along with everything else in this table).
 function K9Store.Partner_GetTenureRow(k9Citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_partnerships') then
         return MySQL.single.await(
             'SELECT id, k9_citizenid, handler_citizenid, tenure_bonus_tier_granted, TIMESTAMPDIFF(SECOND, established_at, NOW()) AS tenure_seconds FROM k9_partnerships WHERE active = 1 AND k9_citizenid = ? LIMIT 1',
             { k9Citizenid })
@@ -990,7 +1076,7 @@ end
 --- `expectedOldTier` (a lost race returns 0, exactly like the real
 --- UPDATE's affected-row count would).
 function K9Store.Partner_SetTenureTierCAS(id, newTier, expectedOldTier)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_partnerships') then
         return MySQL.update.await(
             'UPDATE k9_partnerships SET tenure_bonus_tier_granted = ? WHERE id = ? AND active = 1 AND tenure_bonus_tier_granted = ?',
             { newTier, id, expectedOldTier })
@@ -998,6 +1084,75 @@ function K9Store.Partner_SetTenureTierCAS(id, newTier, expectedOldTier)
     local row = PartnerFindById(id)
     if not row or row.active ~= 1 or row.tenure_bonus_tier_granted ~= expectedOldTier then return 0 end
     row.tenure_bonus_tier_granted = newTier
+    return 1
+end
+
+-- ======================================================================
+-- k9_partnership_pair_progress
+--
+-- Mirrored from server/partnership.lua (CaptureTenureSeedForPair, the
+-- establish critical section's own seed read) -- migration 0018 / this
+-- table's own header in sql/install.sql for the full "why a table, not a
+-- column on k9_partnerships" writeup (also restated in server/tenure.lua's
+-- "TENURE PROGRESSION EXTENSIONS" item 3, the design this table
+-- implements verbatim). THE FULLY DURABLE REPLACEMENT for what used to be
+-- server/partnership.lua's own in-memory-only `PairTenureSeed` table: keyed
+-- by the PAIR (k9_citizenid, handler_citizenid), never by partnership id,
+-- so a value written here outlives any one k9_partnerships row being
+-- superseded by a brand-new one on reform, AND survives a genuine resource
+-- restart when Config.Database.enabled = true (the exact gap the old
+-- in-memory-only table could not close -- see that table's own former
+-- header comment, preserved in git history, for the full "why in-memory,
+-- why not TTL'd" reasoning this table now makes moot for the DB-on case).
+-- ======================================================================
+local PairProgressRows = {} -- pairKey (see PairProgressKey) -> { highest_tenure_tier_granted = number }
+
+--- @param k9Citizenid string
+--- @param handlerCitizenid string
+--- @return string
+local function PairProgressKey(k9Citizenid, handlerCitizenid)
+    return k9Citizenid .. ':' .. handlerCitizenid
+end
+
+--- Mirrors MySQL.scalar.await. Replaces server/partnership.lua's own
+--- former in-memory `PairTenureSeed[pairKey]` read at establish time.
+--- @return number? highestTierGranted -- nil if this EXACT (k9, handler) pair has never had a milestone tier captured for it
+function K9Store.PairProgress_GetHighestTenureTier(k9Citizenid, handlerCitizenid)
+    if DatabaseEnabled('k9_partnership_pair_progress') then
+        return MySQL.scalar.await(
+            'SELECT highest_tenure_tier_granted FROM k9_partnership_pair_progress WHERE k9_citizenid = ? AND handler_citizenid = ? LIMIT 1',
+            { k9Citizenid, handlerCitizenid })
+    end
+    local row = PairProgressRows[PairProgressKey(k9Citizenid, handlerCitizenid)]
+    return row and row.highest_tenure_tier_granted or nil
+end
+
+--- Mirrors MySQL.insert.await -- an UPSERT that never LOWERS the stored
+--- tier (`GREATEST(...)`, matching this resource's own "an already-earned
+--- milestone is never re-grantable" invariant): writing a tier smaller
+--- than what is already on file for this exact pair is a genuine no-op,
+--- never a regression. Throws only on a real DB-mode error; there is no
+--- uniqueness conflict to reject in an atomic upsert.
+--- @param k9Citizenid string
+--- @param handlerCitizenid string
+--- @param tier number -- the tier just confirmed granted (k9_partnerships.tenure_bonus_tier_granted at capture time)
+--- @return number insertId -- unused by every real caller today; returned only for parity with MySQL.insert.await's own contract
+function K9Store.PairProgress_UpsertHighestTenureTier(k9Citizenid, handlerCitizenid, tier)
+    if DatabaseEnabled('k9_partnership_pair_progress') then
+        return MySQL.insert.await(
+            'INSERT INTO k9_partnership_pair_progress (k9_citizenid, handler_citizenid, highest_tenure_tier_granted) VALUES (?, ?, ?) ' ..
+            'ON DUPLICATE KEY UPDATE highest_tenure_tier_granted = GREATEST(highest_tenure_tier_granted, VALUES(highest_tenure_tier_granted))',
+            { k9Citizenid, handlerCitizenid, tier })
+    end
+    local key = PairProgressKey(k9Citizenid, handlerCitizenid)
+    local row = PairProgressRows[key]
+    if not row then
+        row = { highest_tenure_tier_granted = 0 }
+        PairProgressRows[key] = row
+    end
+    if tier > row.highest_tenure_tier_granted then
+        row.highest_tenure_tier_granted = tier
+    end
     return 1
 end
 
@@ -1023,7 +1178,7 @@ end
 --- Mirrors MySQL.scalar.await. Replaces IsPermissionRowConfirmedActive's
 --- read and GrantPermission's own pre-check.
 function K9Store.Perm_GetActiveId(citizenid, permission)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permissions') then
         return MySQL.scalar.await('SELECT id FROM k9_permissions WHERE citizenid = ? AND permission = ? AND active = 1 LIMIT 1', { citizenid, permission })
     end
     local row = PermFindActive(citizenid, permission)
@@ -1035,7 +1190,7 @@ end
 --- server/tablet.lua's QueryActivePermissionSet iterate `row.permission`
 --- directly.
 function K9Store.Perm_GetActiveForCitizen(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permissions') then
         return MySQL.query.await('SELECT permission FROM k9_permissions WHERE citizenid = ? AND active = 1', { citizenid })
     end
     local out = {}
@@ -1049,7 +1204,7 @@ end
 
 --- Mirrors MySQL.insert.await.
 function K9Store.Perm_Insert(citizenid, permission, grantedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permissions') then
         return MySQL.insert.await('INSERT INTO k9_permissions (citizenid, permission, granted_by) VALUES (?, ?, ?)', { citizenid, permission, grantedBy })
     end
     if PermFindActive(citizenid, permission) then ThrowDuplicateActiveRow('k9_permissions ' .. citizenid .. '::' .. permission) end
@@ -1063,7 +1218,7 @@ end
 
 --- Mirrors MySQL.update.await. Replaces RevokePermission's UPDATE.
 function K9Store.Perm_RevokeActive(citizenid, permission, revokedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permissions') then
         return MySQL.update.await('UPDATE k9_permissions SET active = 0, revoked_by = ?, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND permission = ? AND active = 1', { revokedBy, citizenid, permission })
     end
     local row = PermFindActive(citizenid, permission)
@@ -1082,7 +1237,7 @@ end
 --- capped list).
 --- @return table rows -- newest first, always a table, empty on failure
 function K9Store.Perm_GetHistoryByCitizenId(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permissions') then
         local ok, rowsOrErr = pcall(MySQL.query.await,
             'SELECT permission, granted_by, granted_at FROM k9_permissions WHERE citizenid = ? AND active = 1 ORDER BY granted_at DESC',
             { citizenid })
@@ -1108,7 +1263,7 @@ end
 --- permission" view). No LIMIT clause, matching the real query exactly.
 --- @return table rows -- newest-granted first, always a table, empty on failure
 function K9Store.Perm_GetActiveRosterByPermission(permissionKey)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permissions') then
         local ok, rowsOrErr = pcall(MySQL.query.await,
             'SELECT citizenid, granted_by, granted_at FROM k9_permissions WHERE permission = ? AND active = 1 ORDER BY granted_at DESC',
             { permissionKey })
@@ -1141,7 +1296,7 @@ end
 --- which a long-revoked historical row has no bearing on.
 --- @return number count
 function K9Store.Perm_CountActiveByPermission(permissionKey)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permissions') then
         return MySQL.scalar.await('SELECT COUNT(*) FROM k9_permissions WHERE permission = ? AND active = 1', { permissionKey })
     end
     local count = 0
@@ -1167,7 +1322,7 @@ local ProgressionRows = {} -- citizenid -> { xp = number, created_at_unix, updat
 --- real query's own nil-on-no-row shape; every existing caller already
 --- treats nil as "0 XP", see LoadXPForCitizenid's own `xpOrErr or 0`).
 function K9Store.XP_Get(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_progression') then
         return MySQL.scalar.await('SELECT xp FROM k9_progression WHERE citizenid = ? LIMIT 1', { citizenid })
     end
     local row = ProgressionRows[citizenid]
@@ -1186,7 +1341,7 @@ end
 --- @param delta number -- the per-award DELTA, never the new running total
 --- @return number insertId -- unused by every real caller today; returned only for parity with MySQL.insert.await's own contract
 function K9Store.XP_UpsertAdd(citizenid, delta)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_progression') then
         return MySQL.insert.await(
             'INSERT INTO k9_progression (citizenid, xp) VALUES (?, ?) ON DUPLICATE KEY UPDATE xp = xp + VALUES(xp), updated_at = CURRENT_TIMESTAMP',
             { citizenid, delta })
@@ -1210,7 +1365,7 @@ end
 --- session-only leaderboard, not a bug.
 function K9Store.XP_GetTop(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_progression') then
         local sql = ('SELECT citizenid, xp FROM k9_progression ORDER BY xp DESC LIMIT %d'):format(limit)
         return MySQL.query.await(sql, {})
     end
@@ -1227,7 +1382,7 @@ end
 --- Mirrors the SafeQuery contract server/admin.lua's own
 --- QueryProgressionSnapshot ('/k9auditxp') uses -- an array of 0 or 1 rows.
 function K9Store.XP_GetSnapshotRows(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_progression') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT xp, updated_at FROM k9_progression WHERE citizenid = ? LIMIT 1', { citizenid })
         if not ok then
             print(('[qbx_k9unit] datastore: XP_GetSnapshotRows query failed for %s: %s'):format(citizenid, tostring(rowsOrErr)))
@@ -1282,7 +1437,7 @@ end
 -- elsewhere in this file.
 --- @return number? handlerXp -- nil if this citizenid has no row yet (matches XP_Get's own nil-on-no-row shape)
 function K9Store.HandlerXP_Get(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_progression') then
         return MySQL.scalar.await('SELECT handler_xp FROM k9_progression WHERE citizenid = ? LIMIT 1', { citizenid })
     end
     local row = ProgressionRows[citizenid]
@@ -1295,7 +1450,7 @@ end
 --- @param delta number -- the per-award DELTA, never the new running total
 --- @return boolean ok
 function K9Store.HandlerXP_UpsertAdd(citizenid, delta)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_progression') then
         local ok, err = pcall(MySQL.insert.await,
             'INSERT INTO k9_progression (citizenid, handler_xp) VALUES (?, ?) ON DUPLICATE KEY UPDATE handler_xp = handler_xp + VALUES(handler_xp), updated_at = CURRENT_TIMESTAMP',
             { citizenid, delta })
@@ -1334,7 +1489,7 @@ local SearchLogNextId = 0
 
 --- Mirrors MySQL.insert.await.
 function K9Store.SearchLog_Insert(searcherCitizenid, searcherJob, targetType, targetPlate, targetCitizenid, result, totalWeight, alertTier)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_search_log') then
         return MySQL.insert.await([[
             INSERT INTO k9_search_log
                 (searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier)
@@ -1366,7 +1521,7 @@ end
 --- Replaces QuerySearchLogByOfficer ('/k9auditsearch officer').
 function K9Store.SearchLog_GetByOfficer(citizenid, limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_search_log') then
         local sql = ('SELECT searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at, id FROM k9_search_log WHERE searcher_citizenid = ? ORDER BY searched_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
         if not ok then
@@ -1388,7 +1543,7 @@ end
 --- Replaces QuerySearchLogByPlate ('/k9auditsearch plate').
 function K9Store.SearchLog_GetByPlate(plate, limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_search_log') then
         local sql = ('SELECT searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at, id FROM k9_search_log WHERE target_plate = ? ORDER BY searched_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { plate })
         if not ok then
@@ -1410,7 +1565,7 @@ end
 --- Replaces QuerySearchLogByPerson ('/k9auditsearch person').
 function K9Store.SearchLog_GetByPerson(citizenid, limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_search_log') then
         local sql = ('SELECT searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at, id FROM k9_search_log WHERE target_citizenid = ? ORDER BY searched_at DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, { citizenid })
         if not ok then
@@ -1434,7 +1589,7 @@ end
 --- that function's own doc comment for why).
 function K9Store.SearchLog_GetRecent(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_search_log') then
         local sql = ('SELECT searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at, id FROM k9_search_log ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
         if not ok then
@@ -1476,7 +1631,7 @@ local OverrideAuditRows = {}
 --- boot loop naturally applies zero overrides and leaves config.lua's
 --- shipped defaults in effect -- exactly the documented behavior.
 function K9Store.Override_GetAll()
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_runtime_feature_overrides') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT override_key, kind, value, updated_by, updated_at FROM k9_runtime_feature_overrides', {})
         if not ok then
             print(('[qbx_k9unit] datastore: Override_GetAll query failed: %s'):format(tostring(rowsOrErr)))
@@ -1495,7 +1650,7 @@ end
 --- `INSERT ... ON DUPLICATE KEY UPDATE` write against
 --- k9_runtime_feature_overrides.
 function K9Store.Override_Upsert(overrideKey, kind, value, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_runtime_feature_overrides') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_runtime_feature_overrides (override_key, kind, value, updated_by) VALUES (?, ?, ?, ?) ' ..
             'ON DUPLICATE KEY UPDATE value = VALUES(value), updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
@@ -1513,7 +1668,7 @@ end
 --- Mirrors the SafeWrite contract. Replaces the `DELETE FROM
 --- k9_runtime_feature_overrides WHERE override_key = ?` reset path.
 function K9Store.Override_Delete(overrideKey)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_runtime_feature_overrides') then
         local ok, err = pcall(MySQL.query.await, 'DELETE FROM k9_runtime_feature_overrides WHERE override_key = ?', { overrideKey })
         if not ok then
             print(('[qbx_k9unit] datastore: Override_Delete write failed: %s'):format(tostring(err)))
@@ -1528,7 +1683,7 @@ end
 --- Mirrors the SafeWrite contract. `newValue` may be nil (the "reset back
 --- to default" shape the real INSERT already allows via a NULL column).
 function K9Store.OverrideAudit_Append(overrideKey, kind, oldValue, newValue, changedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_runtime_override_audit') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_runtime_override_audit (override_key, kind, old_value, new_value, changed_by) VALUES (?, ?, ?, ?, ?)',
             { overrideKey, kind, oldValue, newValue, changedBy })
@@ -1564,7 +1719,7 @@ end
 --- @return table rows -- { { override_key, kind, old_value, new_value, changed_by, changed_at }, ... }, most recent first
 function K9Store.OverrideAudit_GetRecent(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_runtime_override_audit') then
         local sql = ('SELECT override_key, kind, old_value, new_value, changed_by, changed_at FROM k9_runtime_override_audit ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
         if not ok then
@@ -1599,7 +1754,7 @@ local ThemeAuditRows = {}
 --- Mirrors the SafeQuery contract -- an array of 0 or 1 rows, matching
 --- runtimecontrol.lua's own onResourceStart read exactly.
 function K9Store.Theme_GetRows()
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_tablet_theme') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT primary_color, accent_color, background_color, text_color, density, header_title FROM k9_tablet_theme WHERE id = 1', {})
         if not ok then
             print(('[qbx_k9unit] datastore: Theme_GetRows query failed: %s'):format(tostring(rowsOrErr)))
@@ -1615,7 +1770,7 @@ end
 --- tabletResetTheme's identical `INSERT ... ON DUPLICATE KEY UPDATE`
 --- against the id=1 singleton row.
 function K9Store.Theme_Upsert(primaryColor, accentColor, backgroundColor, textColor, density, headerTitle, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_tablet_theme') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_tablet_theme (id, primary_color, accent_color, background_color, text_color, density, header_title, updated_by) ' ..
             'VALUES (1, ?, ?, ?, ?, ?, ?, ?) ' ..
@@ -1639,7 +1794,7 @@ end
 
 --- Mirrors the SafeWrite contract.
 function K9Store.ThemeAudit_Append(primaryColor, accentColor, backgroundColor, textColor, density, headerTitle, changedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_tablet_theme_audit') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_tablet_theme_audit (primary_color, accent_color, background_color, text_color, density, header_title, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
             { primaryColor, accentColor, backgroundColor, textColor, density, headerTitle, changedBy })
@@ -1668,7 +1823,7 @@ end
 --- @return table rows -- { { primary_color, accent_color, background_color, text_color, density, header_title, changed_by, changed_at }, ... }, most recent first
 function K9Store.ThemeAudit_GetRecent(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_tablet_theme_audit') then
         local sql = ('SELECT primary_color, accent_color, background_color, text_color, density, header_title, changed_by, changed_at FROM k9_tablet_theme_audit ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
         if not ok then
@@ -1705,7 +1860,7 @@ local AssignmentRows = {} -- citizenid -> { model, original_model_hash, active }
 --- Mirrors GetAppearanceRow's own contract (single row or nil, already
 --- pcall-wrapped internally on the DB side).
 function K9Store.Appearance_GetRow(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_ped_assignments') then
         local ok, rows = pcall(MySQL.query.await, 'SELECT model, original_model_hash, active FROM k9_ped_assignments WHERE citizenid = ? LIMIT 1', { citizenid })
         if not ok then
             print(('[qbx_k9unit] datastore: Appearance_GetRow query failed for %s: %s'):format(citizenid, tostring(rows)))
@@ -1726,7 +1881,7 @@ end
 --- caller migrated to this function without also carrying over
 --- appearance.lua's own pre-read `keepOriginal` computation.
 function K9Store.Appearance_UpsertApplied(citizenid, model, originalHash, appliedByLabel)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_ped_assignments') then
         local ok, err = pcall(MySQL.query.await, [[
             INSERT INTO k9_ped_assignments (citizenid, model, original_model_hash, active, applied_by, applied_at, revoked_at)
             VALUES (?, ?, ?, 1, ?, CURRENT_TIMESTAMP, NULL)
@@ -1756,7 +1911,7 @@ end
 
 --- Mirrors WriteAppearanceReverted's own boolean contract.
 function K9Store.Appearance_MarkReverted(citizenid)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_ped_assignments') then
         local ok, err = pcall(MySQL.query.await, 'UPDATE k9_ped_assignments SET active = 0, revoked_at = CURRENT_TIMESTAMP WHERE citizenid = ? AND active = 1', { citizenid })
         if not ok then
             print(('[qbx_k9unit] datastore: Appearance_MarkReverted write failed for %s: %s'):format(citizenid, tostring(err)))
@@ -1777,7 +1932,7 @@ end
 --- used when a persisted, offline-created assignment never had its first
 --- swap attempt's original hash captured.
 function K9Store.Appearance_SetOriginalHashIfMissing(citizenid, hash)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_ped_assignments') then
         local ok, err = pcall(MySQL.query.await, 'UPDATE k9_ped_assignments SET original_model_hash = ? WHERE citizenid = ? AND active = 1 AND original_model_hash IS NULL', { hash, citizenid })
         if not ok then
             print(('[qbx_k9unit] datastore: Appearance_SetOriginalHashIfMissing write failed for %s: %s'):format(citizenid, tostring(err)))
@@ -1823,7 +1978,7 @@ local ShopLocationAuditRows = {}
 --- k9_equipment_shop_locations` read.
 --- @return table rows
 function K9Store.ShopLocation_GetAll()
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_locations') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT id, x, y, z, heading, model, scenario, label FROM k9_equipment_shop_locations', {})
         if not ok then
             print(('[qbx_k9unit] datastore: ShopLocation_GetAll query failed: %s'):format(tostring(rowsOrErr)))
@@ -1844,7 +1999,7 @@ end
 --- (...) VALUES (...)`.
 --- @return boolean ok, number? insertId
 function K9Store.ShopLocation_Insert(x, y, z, heading, model, scenario, label, createdBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_locations') then
         local ok, resultOrErr = pcall(MySQL.insert.await,
             'INSERT INTO k9_equipment_shop_locations (x, y, z, heading, model, scenario, label, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             { x, y, z, heading, model, scenario, label, createdBy })
@@ -1864,7 +2019,7 @@ end
 --- k9_equipment_shop_locations SET ... WHERE id = ?`.
 --- @return boolean ok
 function K9Store.ShopLocation_Update(x, y, z, heading, model, scenario, label, updatedBy, id)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_locations') then
         local ok, err = pcall(MySQL.query.await,
             'UPDATE k9_equipment_shop_locations SET x = ?, y = ?, z = ?, heading = ?, model = ?, scenario = ?, label = ?, updated_by = ? WHERE id = ?',
             { x, y, z, heading, model, scenario, label, updatedBy, id })
@@ -1886,7 +2041,7 @@ end
 --- WHERE id = ?`.
 --- @return boolean ok
 function K9Store.ShopLocation_Delete(id)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_locations') then
         local ok, err = pcall(MySQL.query.await, 'DELETE FROM k9_equipment_shop_locations WHERE id = ?', { id })
         if not ok then
             print(('[qbx_k9unit] datastore: ShopLocation_Delete failed: %s'):format(tostring(err)))
@@ -1904,7 +2059,7 @@ end
 --- remove all share this one shape).
 --- @return boolean ok
 function K9Store.ShopLocationAudit_Insert(locationId, action, x, y, z, heading, model, scenario, label, changedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_locations_audit') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_equipment_shop_locations_audit (location_id, action, x, y, z, heading, model, scenario, label, changed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
             { locationId, action, x, y, z, heading, model, scenario, label, changedBy })
@@ -1931,7 +2086,7 @@ end
 --- @return table rows -- { { location_id, action, x, y, z, heading, model, scenario, label, changed_by, changed_at }, ... }, most recent first
 function K9Store.ShopLocationAudit_GetRecent(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_locations_audit') then
         local sql = ('SELECT location_id, action, x, y, z, heading, model, scenario, label, changed_by, changed_at FROM k9_equipment_shop_locations_audit ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
         if not ok then
@@ -1988,7 +2143,7 @@ local TierAuditRows = {}
 --- itself filters on, not this accessor).
 --- @return table rows
 function K9Store.Tier_GetAllRows()
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tiers') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT tier_key, label, ordinal, deleted FROM k9_certification_tiers', {})
         if not ok then
             print(('[qbx_k9unit] datastore: Tier_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
@@ -2009,7 +2164,7 @@ end
 --- 'tier_restore' for the audit trail -- see that callback's own comment).
 --- @return table rows -- 0 or 1 rows, `{ { deleted = 0|1 } }` or `{}`
 function K9Store.Tier_GetDeletedFlagByKey(tierKey)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tiers') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT deleted FROM k9_certification_tiers WHERE tier_key = ?', { tierKey })
         if not ok then
             print(('[qbx_k9unit] datastore: Tier_GetDeletedFlagByKey query failed for %s: %s'):format(tostring(tierKey), tostring(rowsOrErr)))
@@ -2033,7 +2188,7 @@ end
 --- must never call this one instead.
 --- @return boolean ok
 function K9Store.Tier_Upsert(tierKey, label, ordinal, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tiers') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_certification_tiers (tier_key, label, ordinal, deleted, updated_by) VALUES (?, ?, ?, 0, ?) ' ..
             'ON DUPLICATE KEY UPDATE label = VALUES(label), ordinal = VALUES(ordinal), deleted = 0, ' ..
@@ -2076,7 +2231,7 @@ end
 --- property; Tier_Upsert's memory-mode branch would not.
 --- @return boolean ok
 function K9Store.Tier_UpdateOrdinal(tierKey, label, ordinal, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tiers') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_certification_tiers (tier_key, label, ordinal, deleted, updated_by) VALUES (?, ?, ?, 0, ?) ' ..
             'ON DUPLICATE KEY UPDATE ordinal = VALUES(ordinal), deleted = 0, updated_by = VALUES(updated_by), ' ..
@@ -2112,7 +2267,7 @@ end
 --- legacy config-only key being tombstoned for the very first time).
 --- @return boolean ok
 function K9Store.Tier_Tombstone(tierKey, label, ordinal, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tiers') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_certification_tiers (tier_key, label, ordinal, deleted, updated_by) VALUES (?, ?, ?, 1, ?) ' ..
             'ON DUPLICATE KEY UPDATE deleted = 1, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
@@ -2140,7 +2295,7 @@ end
 --- -- every currently-granted tier/capability pair, across every tier.
 --- @return table rows
 function K9Store.TierCap_GetAllRows()
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tier_capabilities') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT tier_key, capability_key FROM k9_certification_tier_capabilities', {})
         if not ok then
             print(('[qbx_k9unit] datastore: TierCap_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
@@ -2163,7 +2318,7 @@ end
 --- currently holds, before diffing against the requested set).
 --- @return table rows
 function K9Store.TierCap_GetForTier(tierKey)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tier_capabilities') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT capability_key FROM k9_certification_tier_capabilities WHERE tier_key = ?', { tierKey })
         if not ok then
             print(('[qbx_k9unit] datastore: TierCap_GetForTier query failed for %s: %s'):format(tostring(tierKey), tostring(rowsOrErr)))
@@ -2186,7 +2341,7 @@ end
 --- reconciliation loop).
 --- @return boolean ok
 function K9Store.TierCap_Insert(tierKey, capabilityKey, grantedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tier_capabilities') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_certification_tier_capabilities (tier_key, capability_key, granted_by) VALUES (?, ?, ?)',
             { tierKey, capabilityKey, grantedBy })
@@ -2207,7 +2362,7 @@ end
 --- per capability inside that same reconciliation loop).
 --- @return boolean ok
 function K9Store.TierCap_Delete(tierKey, capabilityKey)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tier_capabilities') then
         local ok, err = pcall(MySQL.query.await, 'DELETE FROM k9_certification_tier_capabilities WHERE tier_key = ? AND capability_key = ?', { tierKey, capabilityKey })
         if not ok then
             print(('[qbx_k9unit] datastore: TierCap_Delete write failed for %s/%s: %s'):format(tostring(tierKey), tostring(capabilityKey), tostring(err)))
@@ -2225,7 +2380,7 @@ end
 --- other rare/admin-gated audit table in this file (see header above).
 --- @return boolean ok
 function K9Store.TierAudit_Append(action, tierKey, detail, changedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tier_audit') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_certification_tier_audit (action, tier_key, detail, changed_by) VALUES (?, ?, ?, ?)',
             { action, tierKey, detail, changedBy })
@@ -2249,7 +2404,7 @@ end
 --- @return table rows -- { { action, tier_key, detail, changed_by, changed_at }, ... }, most recent first
 function K9Store.TierAudit_GetRecent(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_certification_tier_audit') then
         local sql = ('SELECT action, tier_key, detail, changed_by, changed_at FROM k9_certification_tier_audit ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
         if not ok then
@@ -2298,7 +2453,7 @@ local PermKeyAuditRows = {}
 --- not this accessor).
 --- @return table rows
 function K9Store.PermKey_GetAllRows()
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permission_keys') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT permission_key, label, description, deleted FROM k9_permission_keys', {})
         if not ok then
             print(('[qbx_k9unit] datastore: PermKey_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
@@ -2319,7 +2474,7 @@ end
 --- for the audit trail -- see that callback's own comment).
 --- @return table rows -- 0 or 1 rows, `{ { deleted = 0|1 } }` or `{}`
 function K9Store.PermKey_GetDeletedFlagByKey(permissionKey)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permission_keys') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT deleted FROM k9_permission_keys WHERE permission_key = ?', { permissionKey })
         if not ok then
             print(('[qbx_k9unit] datastore: PermKey_GetDeletedFlagByKey query failed for %s: %s'):format(tostring(permissionKey), tostring(rowsOrErr)))
@@ -2343,7 +2498,7 @@ end
 --- Config.Permissions[key].description's own optional shape.
 --- @return boolean ok
 function K9Store.PermKey_Upsert(permissionKey, label, description, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permission_keys') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_permission_keys (permission_key, label, description, deleted, updated_by) VALUES (?, ?, ?, 0, ?) ' ..
             'ON DUPLICATE KEY UPDATE label = VALUES(label), description = VALUES(description), deleted = 0, ' ..
@@ -2375,7 +2530,7 @@ end
 --- time).
 --- @return boolean ok
 function K9Store.PermKey_Tombstone(permissionKey, label, description, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permission_keys') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_permission_keys (permission_key, label, description, deleted, updated_by) VALUES (?, ?, ?, 1, ?) ' ..
             'ON DUPLICATE KEY UPDATE deleted = 1, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
@@ -2404,7 +2559,7 @@ end
 --- like every other rare/admin-gated audit table in this file.
 --- @return boolean ok
 function K9Store.PermKeyAudit_Append(action, permissionKey, detail, changedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permission_key_audit') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_permission_key_audit (action, permission_key, detail, changed_by) VALUES (?, ?, ?, ?)',
             { action, permissionKey, detail, changedBy })
@@ -2428,7 +2583,7 @@ end
 --- @return table rows -- { { action, permission_key, detail, changed_by, changed_at }, ... }, most recent first
 function K9Store.PermKeyAudit_GetRecent(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_permission_key_audit') then
         local sql = ('SELECT action, permission_key, detail, changed_by, changed_at FROM k9_permission_key_audit ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
         if not ok then
@@ -2479,7 +2634,7 @@ local XPTierAuditRows = {}
 --- touched by a high-command edit.
 --- @return table rows
 function K9Store.XPTier_GetAllRows()
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_xp_tiers') then
         local ok, rowsOrErr = pcall(MySQL.query.await,
             'SELECT ordinal, xp_threshold, label, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, badge FROM k9_xp_tiers', {})
         if not ok then
@@ -2513,7 +2668,7 @@ end
 --- `model`/`scenario`/`label`.
 --- @return boolean ok
 function K9Store.XPTier_Upsert(ordinal, xpThreshold, label, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, badge, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_xp_tiers') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_xp_tiers (ordinal, xp_threshold, label, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, badge, updated_by) ' ..
             'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE xp_threshold = VALUES(xp_threshold), label = VALUES(label), ' ..
@@ -2549,7 +2704,7 @@ end
 --- one ever be added) needs no schema change, only a new literal value.
 --- @return boolean ok
 function K9Store.XPTierAudit_Append(ordinal, detail, changedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_xp_tier_audit') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_xp_tier_audit (action, ordinal, detail, changed_by) VALUES (?, ?, ?, ?)',
             { 'xp_tier_update', ordinal, detail, changedBy })
@@ -2573,7 +2728,7 @@ end
 --- @return table rows -- { { action, ordinal, detail, changed_by, changed_at }, ... }, most recent first
 function K9Store.XPTierAudit_GetRecent(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_xp_tier_audit') then
         local sql = ('SELECT action, ordinal, detail, changed_by, changed_at FROM k9_xp_tier_audit ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
         if not ok then
@@ -2654,7 +2809,7 @@ local IndividualOverrideAuditRows = {}
 --- accessor).
 --- @return table rows
 function K9Store.IndividualOverride_GetAllRows()
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_individual_overrides') then
         local ok, rowsOrErr = pcall(MySQL.query.await,
             'SELECT citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, note, deleted FROM k9_individual_overrides', {})
         if not ok then
@@ -2693,7 +2848,7 @@ end
 --- file's own XPTier_Upsert/ShopLocation_Insert already rely on.
 --- @return boolean ok
 function K9Store.IndividualOverride_Upsert(citizenid, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, note, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_individual_overrides') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_individual_overrides (citizenid, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, note, deleted, updated_by) ' ..
             'VALUES (?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE speed_multiplier = VALUES(speed_multiplier), ' ..
@@ -2730,7 +2885,7 @@ end
 --- payload validation have already passed.
 --- @return boolean ok
 function K9Store.IndividualOverride_Tombstone(citizenid, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_individual_overrides') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_individual_overrides (citizenid, deleted, updated_by) VALUES (?, 1, ?) ' ..
             'ON DUPLICATE KEY UPDATE deleted = 1, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
@@ -2759,7 +2914,7 @@ end
 --- like every other rare/admin-gated audit table in this file.
 --- @return boolean ok
 function K9Store.IndividualOverrideAudit_Append(action, citizenid, detail, changedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_individual_override_audit') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_individual_override_audit (action, citizenid, detail, changed_by) VALUES (?, ?, ?, ?)',
             { action, citizenid, detail, changedBy })
@@ -2783,7 +2938,7 @@ end
 --- @return table rows -- { { action, citizenid, detail, changed_by, changed_at }, ... }, most recent first
 function K9Store.IndividualOverrideAudit_GetRecent(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_individual_override_audit') then
         local sql = ('SELECT action, citizenid, detail, changed_by, changed_at FROM k9_individual_override_audit ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
         if not ok then
@@ -2838,7 +2993,7 @@ local ShopItemAuditRows = {}
 --- this accessor).
 --- @return table rows
 function K9Store.ShopItem_GetAllRows()
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_items') then
         local ok, rowsOrErr = pcall(MySQL.query.await,
             'SELECT item_key, label, price, currency, sort_order, required_tier_key, required_specialization, deleted FROM k9_equipment_shop_items', {})
         if not ok then
@@ -2864,7 +3019,7 @@ end
 --- the audit trail -- see that callback's own comment).
 --- @return table rows -- 0 or 1 rows, `{ { deleted = 0|1 } }` or `{}`
 function K9Store.ShopItem_GetDeletedFlagByKey(itemKey)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_items') then
         local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT deleted FROM k9_equipment_shop_items WHERE item_key = ?', { itemKey })
         if not ok then
             print(('[qbx_k9unit] datastore: ShopItem_GetDeletedFlagByKey query failed for %s: %s'):format(tostring(itemKey), tostring(rowsOrErr)))
@@ -2889,7 +3044,7 @@ end
 --- the identical reasoning applied here.
 --- @return boolean ok
 function K9Store.ShopItem_Upsert(itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_items') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_equipment_shop_items (item_key, label, price, currency, sort_order, required_tier_key, required_specialization, deleted, updated_by) ' ..
             'VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?) ' ..
@@ -2928,7 +3083,7 @@ end
 --- it for the first time).
 --- @return boolean ok
 function K9Store.ShopItem_UpdateSortOrder(itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_items') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_equipment_shop_items (item_key, label, price, currency, sort_order, required_tier_key, required_specialization, deleted, updated_by) ' ..
             'VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?) ' ..
@@ -2965,7 +3120,7 @@ end
 --- tombstoned for the very first time).
 --- @return boolean ok
 function K9Store.ShopItem_Tombstone(itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_items') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_equipment_shop_items (item_key, label, price, currency, sort_order, required_tier_key, required_specialization, deleted, updated_by) ' ..
             'VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?) ' ..
@@ -2996,7 +3151,7 @@ end
 --- like every other rare/admin-gated audit table in this file.
 --- @return boolean ok
 function K9Store.ShopItemAudit_Append(action, itemKey, detail, changedBy)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_item_audit') then
         local ok, err = pcall(MySQL.query.await,
             'INSERT INTO k9_equipment_shop_item_audit (action, item_key, detail, changed_by) VALUES (?, ?, ?, ?)',
             { action, itemKey, detail, changedBy })
@@ -3020,7 +3175,7 @@ end
 --- @return table rows -- { { action, item_key, detail, changed_by, changed_at }, ... }, most recent first
 function K9Store.ShopItemAudit_GetRecent(limit)
     limit = SanitizeLimit(limit)
-    if DatabaseEnabled() then
+    if DatabaseEnabled('k9_equipment_shop_item_audit') then
         local sql = ('SELECT action, item_key, detail, changed_by, changed_at FROM k9_equipment_shop_item_audit ORDER BY id DESC LIMIT %d'):format(limit)
         local ok, rowsOrErr = pcall(MySQL.query.await, sql, {})
         if not ok then
@@ -3182,6 +3337,7 @@ local EXPECTED_TABLE_COLUMNS = {
     k9_certifications                  = { 'citizenid', 'job', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
     k9_search_log                      = { 'searcher_citizenid', 'searcher_job', 'target_type', 'target_plate', 'target_citizenid', 'result', 'total_weight', 'alert_tier', 'searched_at' },
     k9_partnerships                    = { 'k9_citizenid', 'handler_citizenid', 'established_by', 'established_at', 'ended_by', 'ended_at', 'active' },
+    k9_partnership_pair_progress       = { 'k9_citizenid', 'handler_citizenid', 'highest_tenure_tier_granted' },
     k9_progression                     = { 'citizenid', 'xp', 'created_at', 'updated_at' },
     k9_permissions                     = { 'citizenid', 'permission', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
     k9_certification_specializations   = { 'citizenid', 'job', 'specialization', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
@@ -3213,6 +3369,107 @@ local EXPECTED_TABLE_COLUMNS = {
     -- in sync if either changes.
     k9_permission_keys                 = { 'permission_key', 'label', 'description', 'deleted', 'created_at', 'updated_by', 'updated_at' },
     k9_permission_key_audit            = { 'id', 'action', 'permission_key', 'detail', 'changed_by', 'changed_at' },
+}
+
+--- Short, operator-facing phrase for each table in EXPECTED_TABLE_COLUMNS
+--- above -- used ONLY by the PART-INSTALLED branch below to name exactly
+--- which FEATURES will not be remembered this session, rather than making
+--- an operator cross-reference a bare table name against sql/install.sql
+--- to work out what it backs. Hand-maintained, same convention (and same
+--- reason) as EXPECTED_TABLE_COLUMNS itself -- a table added there without
+--- a matching entry here still works (the fallback below tolerates a
+--- missing description, see its own code), it just prints a less useful
+--- message for that one table until this is filled in too.
+local MISSING_TABLE_FEATURE_DESCRIPTIONS = {
+    k9_certifications                  = 'certifications (who is certified, and at what tier)',
+    k9_search_log                      = 'the search audit log',
+    k9_partnerships                    = 'K9/handler partnerships',
+    k9_partnership_pair_progress       = 'partnership tenure-bonus anti-farm history -- NOTE: while this table is missing, a pair that breaks up and reforms AFTER a restart can re-earn tenure-bonus XP milestones they already collected (see MISSING_TABLE_CASCADES\'s own doc comment for the full "why" and why this is disclosed here rather than fixed by a cascade)',
+    k9_progression                     = 'XP and handler XP',
+    k9_permissions                     = 'individual permission grants and feature blocks',
+    k9_certification_specializations   = 'certification specializations',
+    k9_runtime_feature_overrides       = 'live feature on/off overrides',
+    k9_runtime_override_audit          = 'the feature-override audit log',
+    k9_tablet_theme                    = "the tablet's saved theme",
+    k9_tablet_theme_audit              = 'the tablet-theme audit log',
+    k9_ped_assignments                 = 'K9 ped/model assignments',
+    k9_certification_tiers             = 'the certification tier catalog',
+    k9_certification_tier_capabilities = 'which capabilities each certification tier unlocks',
+    k9_certification_tier_audit        = 'the certification-tier audit log',
+    k9_equipment_shop_locations        = 'runtime K9 Supply shop locations',
+    k9_equipment_shop_locations_audit  = 'the shop-location audit log',
+    k9_xp_tiers                        = 'the XP tier/rank catalog',
+    k9_xp_tier_audit                   = 'the XP-tier audit log',
+    k9_individual_overrides            = 'per-officer speed/scent/cooldown overrides',
+    k9_individual_override_audit       = 'the per-officer override audit log',
+    k9_equipment_shop_items            = 'the K9 Supply shop item catalog',
+    k9_equipment_shop_item_audit       = 'the shop-item audit log',
+    k9_permission_keys                 = 'the permission-key catalog',
+    k9_permission_key_audit            = 'the permission-key audit log',
+}
+
+--- A table this resource treats as MISSING when the table it is listed
+--- under here is missing, EVEN IF this table's own columns matched --
+--- forced into TABLE_MISSING_THIS_SESSION alongside its owner rather than
+--- left to fall back independently. This is the ONE exception to "each
+--- table falls back on its own", and it exists for exactly one reason
+--- today:
+---
+--- `k9_certifications` -> `k9_certification_specializations`: HasSpecialization
+--- (server/certifications.lua) only ever consults a citizenid's
+--- specializations AFTER first confirming their CURRENT certification
+--- cache entry is active -- so if `k9_certifications` is missing (memory
+--- mode, reset on every restart, nobody pre-certified) while
+--- `k9_certification_specializations` is a real, intact table, a citizenid
+--- who was properly certified-and-specialized before some past restart,
+--- lost that (memory-mode) certification at restart, and is later
+--- RE-certified fresh by a high-command officer for an unrelated reason
+--- would silently regain their OLD specializations the instant
+--- RefreshSpecializationCache re-reads the still-persisted row -- specializations
+--- that officer never chose to grant and has no way to know exist. That is
+--- specifically what config.lua's own invariant on this feature forbids: a
+--- memory-mode fallback may only ever be easier to LOSE than a working
+--- database, never easier to get BACK without a fresh, deliberate grant.
+--- Forcing `k9_certification_specializations` to memory mode alongside its
+--- owning table closes this -- both reset together, so a fresh
+--- certification this session starts with zero specializations, exactly
+--- like a fresh certification always has, regardless of what an untouched
+--- real table remembers.
+---
+--- Every OTHER table pair in this schema was checked for the same shape of
+--- coupling (an in-session USE-time check that trusts a persisted row from
+--- a DIFFERENT table without re-validating the relationship live) and
+--- found NOT to have it -- see this pass's own investigation notes,
+--- summarized: catalog tables (k9_certification_tiers/
+--- k9_certification_tier_capabilities, k9_xp_tiers, k9_permission_keys)
+--- already fall back to config.lua's own defaults independently of this
+--- mechanism (an established, pre-existing pattern -- see
+--- K9Store.WaitForSchemaCheckToSettle's own callers), and every grant
+--- table's own USE-time check (HasK9Access, HasPermission,
+--- GetActivePartnerCitizenId) reads that SAME table's own current backend,
+--- never a different one -- so a missing k9_progression, k9_partnerships,
+--- or k9_permissions table produces ordinary, honest DATA LOSS ("a
+--- returning veteran looks like a rookie for the session"), never an
+--- authorization state a working database would not also produce.
+--- `k9_partnership_pair_progress` was the other candidate raised during
+--- this review (it exists specifically to survive a k9_partnerships row
+--- being superseded on reform). UPDATE, corrected rather than left stale:
+--- it is NOT dead weight -- server/partnership.lua's CaptureTenureSeedForPair
+--- and respondPartnerUp's own establish critical section already call
+--- PairProgress_UpsertHighestTenureTier/PairProgress_GetHighestTenureTier
+--- directly (that file's own former in-memory-only PairTenureSeed table is
+--- gone, replaced outright rather than kept as a cache in front of this
+--- one -- see that file's own header for why). Checked here anyway, for
+--- the SAME reason this comment already checks every other grant table's
+--- USE-time path: this table's own two callers each read/write through
+--- THIS table's own current backend (never a different one), so a missing
+--- k9_partnership_pair_progress produces the same ordinary, honest
+--- consequence the paragraph above already accepts for k9_progression/
+--- k9_partnerships/k9_permissions -- a pair's earned-milestone history
+--- looks fresh for the session, never a wrong AUTHORIZATION state a
+--- working database would not also produce. No cascade entry needed here.
+local MISSING_TABLE_CASCADES = {
+    k9_certifications = { 'k9_certification_specializations' },
 }
 
 --- Runs the collision probe described above. READ-ONLY (a single
@@ -3276,44 +3533,76 @@ local function VerifyTableShapesAgainstKnownSchema()
     -- dropped -- taking the SQL back out is something an owner is entitled
     -- to do, see config.lua's Config.Database block).
     --
-    -- Why this forces memory mode for EVERY feature rather than only the
-    -- ones whose own table is missing: a half-installed database is the
-    -- worst of both worlds. Certifications would save and XP would not, so
-    -- a handler would be certified after a restart but back at rank one,
-    -- and nothing would tell the owner why. Memory-only is at least
-    -- consistent and is already a fully supported way to run -- everything
-    -- works tonight, nothing is remembered after a restart.
+    -- PER-TABLE FALLBACK, NOT WHOLE-RESOURCE, FOR A MISSING TABLE (revised
+    -- this pass -- REPLACES the original "half-installed is the worst of
+    -- both worlds, so blank every table" reasoning that used to sit here;
+    -- kept out of git history, not restated, since it is no longer this
+    -- function's actual behavior). Challenged in a lifecycle QA pass on a
+    -- real, disproportionate blast radius: an operator forgetting ONE new
+    -- migration after an update -- a common, trivial, entirely recoverable
+    -- mistake -- silently made every OTHER already-intact table invisible
+    -- to every officer for the rest of the session, with no way to tell
+    -- from the tablet alone which specific feature was actually affected.
     --
-    -- Deliberately NOT a hard failure: refusing to start would take the
-    -- whole resource down over something the owner can fix in a minute,
-    -- and would punish exactly the person who is trying it for the first
-    -- time. Loud once, in plain English, then run.
-    local missing = {}
-    local totalExpected = 0
-    for tableName in pairs(EXPECTED_TABLE_COLUMNS) do
-        totalExpected = totalExpected + 1
-        if not actualColumnsByTable[tableName] then
-            missing[#missing + 1] = tableName
-        end
-    end
-    table.sort(missing) -- pairs() order is undefined; an operator reading this needs a stable, scannable list
-
-    if #missing == totalExpected then
-        SCHEMA_COLLISION_DETECTED = true
-        print('[qbx_k9unit] datastore: this resource\'s own tables were not found in this database -- it looks like the SQL was never imported.')
-        print('[qbx_k9unit] datastore: Running IN MEMORY ONLY for this session. Every feature works right now, for everyone on the server -- certifications, XP, partnerships, permissions, the tablet, all of it. What is missing is memory across a restart: when this server next restarts, all of it resets and everyone starts over. The audit trail is not kept at all.')
-        print('[qbx_k9unit] datastore: TO FIX: run sql/k9_setup.sh against the database this server uses -- it runs install.sql, then every file in sql/migrations/, in the right order, safely, whether this is a first install or an upgrade. If you are pasting SQL by hand instead (no shell/mysql CLI available), run sql/install.sql first, then every file under sql/migrations/ in numeric order (0001, 0002, 0003, ... through the highest number present) -- install.sql alone does NOT create every table this resource uses; skipping the migrations folder will trigger this same warning again on the next restart. Then restart this resource. If you MEANT to run without a database, set Config.Database.enabled = false in config.lua and this message stops. See sql/DATABASE_GUIDE.md for a step-by-step version of all of this.')
-        return
-    end
-
-    if #missing > 0 then
-        SCHEMA_COLLISION_DETECTED = true
-        print(('[qbx_k9unit] datastore: !! PART-INSTALLED DATABASE -- %d of this resource\'s %d tables do not exist in this database: %s'):format(#missing, totalExpected, table.concat(missing, ', ')))
-        print('[qbx_k9unit] datastore: !! This usually means sql/install.sql was run at some point but a later migration in sql/migrations/ was not, or a table was dropped afterwards. Running IN MEMORY ONLY for this session rather than saving some things and silently losing others -- a half-saved server is worse than an honestly forgetful one, because nobody can tell which half worked.')
-        print('[qbx_k9unit] datastore: !! TO FIX: run the migrations in sql/migrations/ in number order (or re-run sql/install.sql, which is safe to run again -- it creates only what is missing), then restart this resource.')
-        return
-    end
-
+    -- Re-examined against this file's own concrete example ("certifications
+    -- would save and XP would not, so a handler comes back certified but at
+    -- rank one"): that is not actually an inconsistent state -- it is the
+    -- SAME state every brand-new certification already starts in
+    -- (zero XP, tier one), produced honestly by an intact k9_certifications
+    -- table and a missing k9_progression table each independently telling
+    -- the truth about what they do and do not remember. A returning
+    -- veteran looking like a rookie for one session is a real, disclosed
+    -- COST (see the per-table message below, which names it) -- it is not
+    -- corruption, and it is not a reason to also blank the k9_certifications
+    -- table, which has nothing wrong with it.
+    --
+    -- The one place a genuine cross-table inconsistency WAS found -- a
+    -- missing k9_certifications alongside an intact
+    -- k9_certification_specializations letting a later, unrelated
+    -- re-certification silently hand back specializations nobody re-granted
+    -- -- is handled explicitly, not by abandoning per-table fallback
+    -- wholesale: see MISSING_TABLE_CASCADES above, consulted below, which
+    -- forces that one dependent table to fall back alongside its owner.
+    -- Every other table in this schema was checked for the same shape of
+    -- coupling and found not to have it (see MISSING_TABLE_CASCADES's own
+    -- doc comment for the full per-table accounting).
+    --
+    -- THE INVARIANT THIS MUST NEVER VIOLATE (config.lua's own, restated
+    -- here because this is the mechanism that must keep proving it): a
+    -- memory-only fallback may only ever be easier to LOSE than a working
+    -- database gives, never easier to GET. Per-table fallback only ever
+    -- REMOVES persistence from a table that already cannot persist today
+    -- (it was already going to memory mode under the old whole-resource
+    -- design too) -- it never grants a table LESS scrutiny than before, and
+    -- the one identified coupling above is closed explicitly rather than
+    -- left to chance.
+    --
+    -- Deliberately NOT a hard failure, same reasoning as always: refusing
+    -- to start would take the whole resource down over something the owner
+    -- can fix in a minute, and would punish exactly the person who is
+    -- trying it for the first time. Loud once, in plain English, names
+    -- exactly which FEATURES are affected (not just which tables), then
+    -- runs.
+    -- ORDERING FIX, this pass: `missing` and `collided` are now BOTH
+    -- computed up front, independently of each other, from the SAME
+    -- `actualColumnsByTable` -- and the collision check (below) is
+    -- evaluated and acted on FIRST, before either missing-table branch
+    -- gets a chance to `return`. This used to matter far less: under the
+    -- old whole-resource design, whichever branch ran first set the exact
+    -- same flag with the exact same effect, so a table that was BOTH
+    -- missing (some OTHER table) and a genuine collision (a THIRD table)
+    -- at once was already, silently, only ever reported as "missing" --
+    -- the collision check below was structurally unreachable whenever
+    -- `#missing > 0`, because the old missing-table branches `return`ed
+    -- first. That silent gap is now a real, distinct behavioral risk under
+    -- per-table fallback: a genuinely colliding table could keep receiving
+    -- real writes for the rest of the session, undetected, for no reason
+    -- other than a SEPARATE, unrelated table happening to be missing at
+    -- the same time. Fixed by checking collision FIRST -- a collision
+    -- always wins and forces the whole-resource fallback regardless of
+    -- what else is missing (any missing tables found are still named in
+    -- the same message, for a complete diagnostic picture, but do not
+    -- change the outcome once a real collision exists).
     local collided = {}
     for tableName, expectedColumns in pairs(EXPECTED_TABLE_COLUMNS) do
         local actualColumns = actualColumnsByTable[tableName]
@@ -3328,14 +3617,100 @@ local function VerifyTableShapesAgainstKnownSchema()
         end
     end
 
-    if #collided == 0 then return end
-
-    SCHEMA_COLLISION_DETECTED = true
-    print('[qbx_k9unit] datastore: !! SCHEMA COLLISION DETECTED -- refusing to use MySQL for the rest of this session.')
-    for _, c in ipairs(collided) do
-        print(('[qbx_k9unit] datastore: !!   `%s` already exists in this database, but only %d of its %d expected columns match. This is almost certainly a DIFFERENT resource\'s table that happens to share this name, not an older qbx_k9unit install. qbx_k9unit will NOT write to it.'):format(c.name, c.matched, c.expected))
+    local missing = {}
+    local totalExpected = 0
+    for tableName in pairs(EXPECTED_TABLE_COLUMNS) do
+        totalExpected = totalExpected + 1
+        if not actualColumnsByTable[tableName] then
+            missing[#missing + 1] = tableName
+        end
     end
-    print('[qbx_k9unit] datastore: !! Every qbx_k9unit feature is now running IN MEMORY ONLY for this session (identical to Config.Database.enabled = false -- see that setting\'s own comment in config.lua) so nothing gets written into a table this resource does not own. Nothing is lost that was not already lost: none of the table(s) named above ever belonged to qbx_k9unit in this database. TO FIX: rename or remove the conflicting table(s) named above (or ask whoever owns them to), then restart this resource. See sql/preflight_check.sql CHECK 1 for the full explanation and README.md for the plain-language install story.')
+    table.sort(missing) -- pairs() order is undefined; an operator reading this needs a stable, scannable list
+
+    if #collided > 0 then
+        SCHEMA_COLLISION_DETECTED = true
+        print('[qbx_k9unit] datastore: !! SCHEMA COLLISION DETECTED -- refusing to use MySQL for the rest of this session.')
+        for _, c in ipairs(collided) do
+            print(('[qbx_k9unit] datastore: !!   `%s` already exists in this database, but only %d of its %d expected columns match. This is almost certainly a DIFFERENT resource\'s table that happens to share this name, not an older qbx_k9unit install. qbx_k9unit will NOT write to it.'):format(c.name, c.matched, c.expected))
+        end
+        if #missing > 0 then
+            print(('[qbx_k9unit] datastore: !!   Separately, %d of this resource\'s %d tables do not exist in this database at all: %s -- irrelevant to the collision above (a missing table cannot collide), named here only so this one message is a complete diagnostic picture.'):format(#missing, totalExpected, table.concat(missing, ', ')))
+        end
+        print('[qbx_k9unit] datastore: !! Every qbx_k9unit feature is now running IN MEMORY ONLY for this session (identical to Config.Database.enabled = false -- see that setting\'s own comment in config.lua) so nothing gets written into a table this resource does not own. Nothing is lost that was not already lost: none of the table(s) named above ever belonged to qbx_k9unit in this database. TO FIX: rename or remove the conflicting table(s) named above (or ask whoever owns them to), then restart this resource. See sql/preflight_check.sql CHECK 1 for the full explanation and README.md for the plain-language install story.')
+        return
+    end
+
+    if #missing == totalExpected then
+        -- Every single expected table is absent -- sql/install.sql was
+        -- never run at all, not merely a table or two behind. Nothing to
+        -- gain from per-table granularity here (every table would fall
+        -- back anyway), and the "SQL was never imported" story is a
+        -- single, simple fact worth one whole-resource message rather than
+        -- a 25-line wall of per-table cascade bookkeeping -- so this
+        -- branch keeps using the whole-resource flag, same as a real
+        -- collision. TABLE_MISSING_THIS_SESSION is populated too, purely
+        -- for consistency (nothing currently reads it while
+        -- SCHEMA_COLLISION_DETECTED is set, since that flag alone already
+        -- makes DatabaseEnabled(anything) false).
+        for _, tableName in ipairs(missing) do
+            TABLE_MISSING_THIS_SESSION[tableName] = true
+        end
+        SCHEMA_COLLISION_DETECTED = true
+        print('[qbx_k9unit] datastore: this resource\'s own tables were not found in this database -- it looks like the SQL was never imported.')
+        print('[qbx_k9unit] datastore: Running IN MEMORY ONLY for this session. Every feature works right now, for everyone on the server -- certifications, XP, partnerships, permissions, the tablet, all of it. What is missing is memory across a restart: when this server next restarts, all of it resets and everyone starts over. The audit trail is not kept at all.')
+        print('[qbx_k9unit] datastore: TO FIX: run sql/k9_setup.sh against the database this server uses -- it runs install.sql, then every file in sql/migrations/, in the right order, safely, whether this is a first install or an upgrade. If you are pasting SQL by hand instead (no shell/mysql CLI available), run sql/install.sql first, then every file under sql/migrations/ in numeric order (0001, 0002, 0003, ... through the highest number present) -- install.sql alone does NOT create every table this resource uses; skipping the migrations folder will trigger this same warning again on the next restart. Then restart this resource. If you MEANT to run without a database, set Config.Database.enabled = false in config.lua and this message stops. See sql/DATABASE_GUIDE.md for a step-by-step version of all of this.')
+        return
+    end
+
+    if #missing > 0 then
+        -- PART-INSTALLED: at least one real, matching table exists, so this
+        -- is not "never imported" -- apply the coupling exceptions from
+        -- MISSING_TABLE_CASCADES, then fall back ONLY the affected tables.
+        -- Every table NOT named below keeps using the real database exactly
+        -- as before -- this is the whole point of this pass's change.
+        local affected = {} -- tableName -> true, includes cascaded tables, for TABLE_MISSING_THIS_SESSION + the message below
+        local cascaded = {} -- tableName -> the owner that pulled it in, for the message below (only ones NOT already genuinely missing)
+        for _, tableName in ipairs(missing) do
+            affected[tableName] = true
+        end
+        for _, tableName in ipairs(missing) do
+            local dependents = MISSING_TABLE_CASCADES[tableName]
+            if dependents then
+                for _, dependentTable in ipairs(dependents) do
+                    if not affected[dependentTable] then
+                        affected[dependentTable] = true
+                        cascaded[dependentTable] = tableName
+                    end
+                end
+            end
+        end
+        for tableName in pairs(affected) do
+            TABLE_MISSING_THIS_SESSION[tableName] = true
+        end
+
+        local affectedSorted = {}
+        for tableName in pairs(affected) do affectedSorted[#affectedSorted + 1] = tableName end
+        table.sort(affectedSorted)
+
+        print(('[qbx_k9unit] datastore: !! PART-INSTALLED DATABASE -- %d of this resource\'s %d tables do not exist in this database: %s'):format(#missing, totalExpected, table.concat(missing, ', ')))
+        print('[qbx_k9unit] datastore: !! This usually means sql/install.sql was run at some point but a later migration in sql/migrations/ was not, or a table was dropped afterwards.')
+        print('[qbx_k9unit] datastore: !! THE FOLLOWING FEATURES WILL NOT BE REMEMBERED PAST A RESTART THIS SESSION (everything else keeps saving to the database normally):')
+        for _, tableName in ipairs(affectedSorted) do
+            local description = MISSING_TABLE_FEATURE_DESCRIPTIONS[tableName] or tableName
+            local owner = cascaded[tableName]
+            if owner then
+                print(('[qbx_k9unit] datastore: !!   - %s (`%s`) -- this table itself is fine, but it is running in memory too because `%s` (%s) is missing and this feature depends on it -- see MISSING_TABLE_CASCADES in server/datastore.lua for why.'):format(description, tableName, owner, MISSING_TABLE_FEATURE_DESCRIPTIONS[owner] or owner))
+            else
+                print(('[qbx_k9unit] datastore: !!   - %s (`%s`)'):format(description, tableName))
+            end
+        end
+        print('[qbx_k9unit] datastore: !! TO FIX: run the migrations in sql/migrations/ in number order (or re-run sql/install.sql, which is safe to run again -- it creates only what is missing), then restart this resource. Every feature listed above will resume normal persistence the moment its table exists again -- nothing about the tables that were already fine needs any action.')
+        return
+    end
+
+    -- Nothing missing, nothing collided -- a real, fully migrated install.
+    -- Every table keeps using the database exactly as configured; nothing
+    -- left to do here.
 end
 
 if type(AddEventHandler) == 'function' then

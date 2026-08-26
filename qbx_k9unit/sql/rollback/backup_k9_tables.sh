@@ -9,6 +9,10 @@
 #     k9_certifications   who is certified, granted/revoked by whom
 #     k9_search_log       every contraband search ever performed
 #     k9_partnerships     every K9/handler partnership, past and present
+#     k9_partnership_pair_progress
+#                         the highest partnership-tenure milestone tier each
+#                         exact (K9, handler) pair has ever earned -- the
+#                         fully durable anti-farm guard table
 #     k9_progression      every player's accumulated K9 XP
 #     k9_permissions      every named permission grant/revoke, and by whom
 #     k9_certification_specializations
@@ -161,7 +165,8 @@ fi
 # these two table names need adding to that script's own table list"),
 # fixed here the same way. The DRIFT GUARD immediately below is the
 # backstop for the next table a future migration adds here.
-ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_permissions
+ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_partnership_pair_progress
+            k9_progression k9_permissions
             k9_certification_specializations k9_runtime_feature_overrides
             k9_runtime_override_audit k9_tablet_theme k9_tablet_theme_audit k9_ped_assignments
             k9_certification_tiers k9_certification_tier_capabilities k9_certification_tier_audit

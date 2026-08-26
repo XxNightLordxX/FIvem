@@ -127,6 +127,27 @@ t.test('MySQL branch: Partner_Insert forwards k9/handler/establishedBy in the do
     t.equals(captured[1].params[3], 'HANDLERCIT')
 end)
 
+t.test('MySQL branch: PairProgress_UpsertHighestTenureTier/GetHighestTenureTier forward the real SQL/params -- the fully durable half of the partnership-tenure anti-farm guard (migration 0018, server/partnership.lua\'s CaptureTenureSeedForPair)', function()
+    resetCapture()
+    canned = 1
+    MysqlStore.PairProgress_UpsertHighestTenureTier('K9CIT', 'HANDLERCIT', 2)
+    t.equals(captured[1].kind, 'insert')
+    t.contains(captured[1].sql, 'INSERT INTO k9_partnership_pair_progress')
+    t.contains(captured[1].sql, 'ON DUPLICATE KEY UPDATE highest_tenure_tier_granted = GREATEST(highest_tenure_tier_granted, VALUES(highest_tenure_tier_granted))')
+    t.equals(captured[1].params[1], 'K9CIT')
+    t.equals(captured[1].params[2], 'HANDLERCIT')
+    t.equals(captured[1].params[3], 2)
+
+    resetCapture()
+    canned = 3
+    local tier = MysqlStore.PairProgress_GetHighestTenureTier('K9CIT', 'HANDLERCIT')
+    t.equals(tier, 3)
+    t.equals(captured[1].kind, 'scalar')
+    t.contains(captured[1].sql, 'FROM k9_partnership_pair_progress')
+    t.equals(captured[1].params[1], 'K9CIT')
+    t.equals(captured[1].params[2], 'HANDLERCIT')
+end)
+
 t.test('MySQL branch: XP_UpsertAdd sends the per-award DELTA, not a running total, via ON DUPLICATE KEY UPDATE', function()
     resetCapture()
     canned = 1
@@ -469,6 +490,33 @@ t.test('Memory: tenure CAS only applies when the row is still active AND the exp
     local tenureRow = MemStore.Partner_GetTenureRow('K9D')
     t.equals(tenureRow.tenure_bonus_tier_granted, 2)
     t.isTrue(tenureRow.tenure_seconds >= 0)
+end)
+
+t.test('Memory: PairProgress_UpsertHighestTenureTier is a GREATEST upsert keyed by the EXACT (k9, handler) pair -- never lowers an existing value, is role-order-sensitive, and is completely independent of any k9_partnerships ROW (survives that row being replaced by a break+reform)', function()
+    t.isNil(MemStore.PairProgress_GetHighestTenureTier('K9E', 'HANDLERE'), 'a pair that has never earned anything starts with no row at all')
+
+    MemStore.PairProgress_UpsertHighestTenureTier('K9E', 'HANDLERE', 1)
+    t.equals(MemStore.PairProgress_GetHighestTenureTier('K9E', 'HANDLERE'), 1)
+
+    MemStore.PairProgress_UpsertHighestTenureTier('K9E', 'HANDLERE', 0)
+    t.equals(MemStore.PairProgress_GetHighestTenureTier('K9E', 'HANDLERE'), 1, 'writing a SMALLER tier than what is already on file must never lower it')
+
+    MemStore.PairProgress_UpsertHighestTenureTier('K9E', 'HANDLERE', 3)
+    t.equals(MemStore.PairProgress_GetHighestTenureTier('K9E', 'HANDLERE'), 3)
+
+    -- A role-swapped "pair" (the same two humans, K9 and handler roles
+    -- reversed) is a DIFFERENT relationship -- never shares a row with the
+    -- original, mirroring server/partnership.lua's own role-order-sensitive
+    -- key construction (that file's own TenurePairKey-equivalent doc
+    -- comment).
+    t.isNil(MemStore.PairProgress_GetHighestTenureTier('HANDLERE', 'K9E'), 'a role-reversed lookup must not find the original pair\'s row')
+
+    -- Independent of any k9_partnerships ROW -- this is the entire reason
+    -- this table exists (see sql/install.sql's own header on this table):
+    -- ending a k9_partnerships row must never affect it.
+    local id = MemStore.Partner_Insert('K9E', 'HANDLERE', 'HANDLERE')
+    MemStore.Partner_EndById(id, 'HANDLERE')
+    t.equals(MemStore.PairProgress_GetHighestTenureTier('K9E', 'HANDLERE'), 3, 'this table is keyed by the pair, never by any one partnership row -- ending the row must not touch it')
 end)
 
 t.test('Memory: Perm_Insert/RevokeActive round-trip and duplicate-active rejection, same shape as certifications', function()
@@ -915,6 +963,77 @@ t.test('Parity: Tier_Upsert/Tier_UpdateOrdinal/Tier_Tombstone reach the IDENTICA
 end)
 
 -- ----------------------------------------------------------------------
+-- RESTART-DURABILITY (this pass -- closes the KNOWN_ISSUES.md item
+-- "the partnership tenure-bonus anti-farm fix is in-memory only... a
+-- restart re-opens the exploit once, for any pair that happens to break
+-- up and reform around that restart"). A resource restart discards EVERY
+-- Lua-level table this file owns -- both K9Store's own in-memory fallback
+-- rows AND server/partnership.lua's local state -- but leaves a REAL
+-- database untouched. Reloading server/datastore.lua fresh (a brand-new
+-- `K9Store` table, a brand-new `PairProgressRows`) into TWO different
+-- fixtures models exactly that: one backed by a fake table that survives
+-- the reload (standing in for a real database), one that does not
+-- (Config.Database.enabled = false, memory mode) -- proving the DB-mode
+-- guard is genuinely restart-proof, and that the disclosed memory-mode
+-- limit is exactly what KNOWN_ISSUES.md now says it is (a real, meaningful
+-- improvement for that process's own uptime, not a restart-proof one).
+-- ----------------------------------------------------------------------
+
+--- @return table mysql -- a minimal fake persistent table for
+--- k9_partnership_pair_progress's own GREATEST-upsert shape, kept in an
+--- upvalue OUTSIDE any one K9Store instance so it survives that instance
+--- being thrown away and a fresh one loaded against the SAME fake table --
+--- the one thing a real database does that this process's own Lua state
+--- never can.
+local function newFakePairProgressMySQL()
+    local rows = {} -- pairKey -> tier
+    local function key(k9, handler) return k9 .. ':' .. handler end
+    return {
+        scalar = { await = function(_sql, p)
+            return rows[key(p[1], p[2])]
+        end },
+        insert = { await = function(_sql, p)
+            local k = key(p[1], p[2])
+            local existing = rows[k]
+            if not existing or p[3] > existing then rows[k] = p[3] end
+            return 1
+        end },
+    }
+end
+
+t.test('RESTART-DURABILITY: DB mode -- PairProgress_UpsertHighestTenureTier written by one K9Store instance is read back correctly by a BRAND NEW K9Store instance loaded afterward against the SAME (fake) persistent database, modelling a genuine resource restart with Config.Database.enabled = true', function()
+    local fakeMysql = newFakePairProgressMySQL()
+
+    local beforeRestartEnv = Sandbox.newEnv({ Config = { Database = { enabled = true } }, MySQL = fakeMysql, print = function(...) end })
+    Sandbox.loadInto('../server/datastore.lua', beforeRestartEnv)
+    beforeRestartEnv.K9Store.PairProgress_UpsertHighestTenureTier('K9RESTART', 'HANDLERRESTART', 2)
+
+    -- Model the restart: a completely FRESH env, a completely fresh
+    -- server/datastore.lua load (fresh `K9Store` table, fresh
+    -- `PairProgressRows` upvalue) -- the same "everything in this
+    -- process is gone" reset a real FXServer restart performs -- but
+    -- reusing the SAME `fakeMysql` table, standing in for the one thing
+    -- that genuinely does survive a restart: a real database.
+    local afterRestartEnv = Sandbox.newEnv({ Config = { Database = { enabled = true } }, MySQL = fakeMysql, print = function(...) end })
+    Sandbox.loadInto('../server/datastore.lua', afterRestartEnv)
+
+    t.equals(afterRestartEnv.K9Store.PairProgress_GetHighestTenureTier('K9RESTART', 'HANDLERRESTART'), 2,
+        'a value written before the (simulated) restart must still read back correctly after it, when the database is on -- this is the exact restart-proofing KNOWN_ISSUES.md used to disclose as missing')
+end)
+
+t.test('RESTART-DURABILITY: memory mode (Config.Database.enabled = false) -- the DISCLOSED, ACCEPTED limit -- a value written by one K9Store instance does NOT survive a brand new instance being loaded, because there is no real database standing behind it', function()
+    local beforeRestartEnv = Sandbox.newEnv({ Config = { Database = { enabled = false } }, print = function(...) end })
+    Sandbox.loadInto('../server/datastore.lua', beforeRestartEnv)
+    beforeRestartEnv.K9Store.PairProgress_UpsertHighestTenureTier('K9RESTART2', 'HANDLERRESTART2', 2)
+    t.equals(beforeRestartEnv.K9Store.PairProgress_GetHighestTenureTier('K9RESTART2', 'HANDLERRESTART2'), 2, 'sanity: the write is visible within the SAME process, same as the guard\'s own running-uptime coverage')
+
+    local afterRestartEnv = Sandbox.newEnv({ Config = { Database = { enabled = false } }, print = function(...) end })
+    Sandbox.loadInto('../server/datastore.lua', afterRestartEnv)
+    t.isNil(afterRestartEnv.K9Store.PairProgress_GetHighestTenureTier('K9RESTART2', 'HANDLERRESTART2'),
+        'a genuinely fresh process (no database backing it) must NOT see a value written by a previous process -- this is the honest, disclosed boundary of what running WITHOUT a database can promise, unchanged by migration 0018 (which only closes the gap for servers that have the database on)')
+end)
+
+-- ----------------------------------------------------------------------
 -- ADDITIONAL COVERAGE (coder-security pass) -- SanitizeLimit hardening.
 --
 -- Every current caller of a `limit`-taking accessor already clamps its own
@@ -1082,6 +1201,7 @@ t.test('SETTLEMENT: a database where every table already matches (a real, migrat
                 k9_certifications = { 'citizenid', 'job', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
                 k9_search_log = { 'searcher_citizenid', 'searcher_job', 'target_type', 'target_plate', 'target_citizenid', 'result', 'total_weight', 'alert_tier', 'searched_at' },
                 k9_partnerships = { 'k9_citizenid', 'handler_citizenid', 'established_by', 'established_at', 'ended_by', 'ended_at', 'active' },
+                k9_partnership_pair_progress = { 'k9_citizenid', 'handler_citizenid', 'highest_tenure_tier_granted' },
                 k9_progression = { 'citizenid', 'xp', 'created_at', 'updated_at' },
                 k9_permissions = { 'citizenid', 'permission', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
                 k9_certification_specializations = { 'citizenid', 'job', 'specialization', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
@@ -1150,7 +1270,7 @@ t.test('SETTLEMENT: a clean/never-installed database (every table absent -- sql/
     t.isTrue(sawExplanation, 'must print a plain-English explanation naming the actual situation (SQL not yet imported), not stay silent about why memory mode kicked in')
 end)
 
-t.test('SETTLEMENT: a PARTIAL install (some but not all of our tables exist, e.g. install.sql ran but a later migration did not) also forces DatabaseEnabled false, and names exactly which tables are missing', function()
+t.test('SETTLEMENT: a PARTIAL install (some but not all of our tables exist, e.g. install.sql ran but a later migration did not) falls back to memory mode ONLY for the missing tables, names exactly which features are affected, and leaves every intact table on the real database (per-table fallback, this pass -- REPLACES the old whole-resource-for-any-missing-table behavior; see server/datastore.lua\'s own VerifyTableShapesAgainstKnownSchema header for the full "why")', function()
     local eventHandlers = {}
     local printedLines = {}
     local env = Sandbox.newEnv({
@@ -1179,14 +1299,101 @@ t.test('SETTLEMENT: a PARTIAL install (some but not all of our tables exist, e.g
     Sandbox.loadInto('../server/datastore.lua', env)
     for _, fn in ipairs(eventHandlers['onResourceStart']) do fn('qbx_k9unit') end
 
-    t.isFalse(env.K9Store.IsDatabaseEnabled(), 'one real table present out of many must still fall back to memory mode for EVERY feature, not just the ones whose table is missing')
+    t.isTrue(env.K9Store.IsDatabaseEnabled(), 'the resource-wide flag must stay true -- this is not a whole-resource fallback anymore, only specific tables are affected')
+    t.isTrue(env.K9Store.IsDatabaseEnabled('k9_certifications'), 'k9_certifications itself is fully intact and present -- it must keep using the real database, unaffected by every OTHER table being missing')
+    t.isFalse(env.K9Store.IsDatabaseEnabled('k9_search_log'), 'k9_search_log is genuinely missing -- it alone must fall back to memory mode')
+    t.isFalse(env.K9Store.IsDatabaseEnabled('k9_progression'), 'k9_progression is genuinely missing -- it alone must fall back to memory mode')
     t.isTrue(env.K9Store.WaitForSchemaCheckToSettle())
 
-    local sawMissingList = false
+    local sawMissingList, sawFeatureName = false, false
     for _, line in ipairs(printedLines) do
         if line:find('k9_search_log', 1, true) and line:find('do not', 1, true) then sawMissingList = true end
+        if line:find('search audit log', 1, true) then sawFeatureName = true end
     end
     t.isTrue(sawMissingList, 'must name at least one of the actually-missing tables so an operator can tell which migration to run')
+    t.isTrue(sawFeatureName, 'must name the FEATURE (not just the bare table name) so an operator immediately understands what will not be remembered this session')
+end)
+
+t.test('SETTLEMENT: PART-INSTALLED database, CASCADE CASE -- a missing k9_certifications forces the intact k9_certification_specializations into memory mode too, even though its own columns matched (the one identified cross-table coupling -- see MISSING_TABLE_CASCADES in server/datastore.lua for the full "why")', function()
+    local eventHandlers = {}
+    local printedLines = {}
+    -- Mirrors sql/preflight_check.sql's own CHECK 1 column list (same
+    -- hand-maintained-list convention this whole mechanism already uses) --
+    -- kept local to this test, not exported by datastore.lua itself, purely
+    -- so the mock query below can return a realistic full column set for
+    -- every table without hand-typing all 25 tables' worth of columns
+    -- inline. Declared BEFORE Sandbox.newEnv (not assigned onto `env`
+    -- afterward) so the MySQL.query.await closure below captures it as a
+    -- normal upvalue -- referencing a same-named `local env` field from
+    -- INSIDE the table literal building that very `local env` would only
+    -- ever see the pre-existing (nil/global) `env`, never the new local,
+    -- since the right-hand side of `local env = ...` is fully evaluated
+    -- before the new local binding takes effect.
+    local expectedColumnsForTest = {
+        k9_certifications = { 'citizenid', 'job', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+        k9_search_log = { 'searcher_citizenid', 'searcher_job', 'target_type', 'target_plate', 'target_citizenid', 'result', 'total_weight', 'alert_tier', 'searched_at' },
+        k9_partnerships = { 'k9_citizenid', 'handler_citizenid', 'established_by', 'established_at', 'ended_by', 'ended_at', 'active' },
+        k9_partnership_pair_progress = { 'k9_citizenid', 'handler_citizenid', 'highest_tenure_tier_granted' },
+        k9_progression = { 'citizenid', 'xp', 'created_at', 'updated_at' },
+        k9_permissions = { 'citizenid', 'permission', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+        k9_certification_specializations = { 'citizenid', 'job', 'specialization', 'granted_by', 'granted_at', 'revoked_by', 'revoked_at', 'active' },
+        k9_runtime_feature_overrides = { 'override_key', 'kind', 'value', 'updated_by', 'updated_at' },
+        k9_runtime_override_audit = { 'override_key', 'kind', 'old_value', 'new_value', 'changed_by', 'changed_at' },
+        k9_tablet_theme = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'updated_by', 'updated_at' },
+        k9_tablet_theme_audit = { 'primary_color', 'accent_color', 'background_color', 'text_color', 'density', 'header_title', 'changed_by', 'changed_at' },
+        k9_ped_assignments = { 'citizenid', 'model', 'original_model_hash', 'active', 'applied_by', 'applied_at', 'revoked_at' },
+        k9_certification_tiers = { 'tier_key', 'label', 'ordinal', 'deleted', 'created_at', 'updated_by', 'updated_at' },
+        k9_certification_tier_capabilities = { 'tier_key', 'capability_key', 'granted_by', 'granted_at' },
+        k9_certification_tier_audit = { 'id', 'action', 'tier_key', 'detail', 'changed_by', 'changed_at' },
+        k9_equipment_shop_locations = { 'x', 'y', 'z', 'created_by' },
+        k9_equipment_shop_locations_audit = { 'location_id', 'action', 'changed_by', 'changed_at' },
+        k9_xp_tiers = { 'ordinal', 'xp_threshold', 'label', 'speed_multiplier', 'scent_range_multiplier', 'updated_by', 'updated_at' },
+        k9_xp_tier_audit = { 'id', 'action', 'ordinal', 'detail', 'changed_by', 'changed_at' },
+        k9_individual_overrides = { 'citizenid', 'speed_multiplier', 'scent_range_multiplier', 'medkit_cooldown_multiplier', 'note', 'deleted', 'updated_by' },
+        k9_individual_override_audit = { 'id', 'action', 'citizenid', 'detail', 'changed_by', 'changed_at' },
+        k9_equipment_shop_items = { 'item_key', 'price', 'sort_order', 'required_tier_key', 'required_specialization', 'deleted', 'updated_by' },
+        k9_equipment_shop_item_audit = { 'id', 'action', 'item_key', 'detail', 'changed_by', 'changed_at' },
+        k9_permission_keys = { 'permission_key', 'label', 'description', 'deleted', 'created_at', 'updated_by', 'updated_at' },
+        k9_permission_key_audit = { 'id', 'action', 'permission_key', 'detail', 'changed_by', 'changed_at' },
+    }
+    local env = Sandbox.newEnv({
+        Config = { Database = { enabled = true } },
+        MySQL = { query = { await = function()
+            -- Every OTHER table exists and matches, EXCEPT k9_certifications
+            -- itself, which is entirely absent -- modelling an operator who
+            -- dropped/never migrated that one table while everything built
+            -- on top of it (specializations) survived untouched.
+            local rows = {}
+            for tableName, columns in pairs(expectedColumnsForTest) do
+                if tableName ~= 'k9_certifications' then
+                    for _, col in ipairs(columns) do
+                        rows[#rows + 1] = { tbl = tableName, col = col }
+                    end
+                end
+            end
+            return rows
+        end } },
+        AddEventHandler = function(name, fn)
+            eventHandlers[name] = eventHandlers[name] or {}
+            eventHandlers[name][#eventHandlers[name] + 1] = fn
+        end,
+        GetCurrentResourceName = function() return 'qbx_k9unit' end,
+        print = function(line) printedLines[#printedLines + 1] = line end,
+    })
+    Sandbox.loadInto('../server/datastore.lua', env)
+    for _, fn in ipairs(eventHandlers['onResourceStart']) do fn('qbx_k9unit') end
+
+    t.isTrue(env.K9Store.IsDatabaseEnabled(), 'resource-wide flag stays true -- 24 of 25 tables are genuinely fine')
+    t.isFalse(env.K9Store.IsDatabaseEnabled('k9_certifications'), 'k9_certifications is genuinely missing')
+    t.isFalse(env.K9Store.IsDatabaseEnabled('k9_certification_specializations'), 'CASCADE: specializations must ALSO fall back to memory this session even though its own table is fully intact, because it depends on live certification state -- see MISSING_TABLE_CASCADES')
+    t.isTrue(env.K9Store.IsDatabaseEnabled('k9_permissions'), 'an unrelated, uncoupled table must NOT be swept into the cascade -- only the one documented coupling is affected')
+    t.isTrue(env.K9Store.IsDatabaseEnabled('k9_progression'), 'an unrelated, uncoupled table must NOT be swept into the cascade')
+
+    local sawCascadeExplanation = false
+    for _, line in ipairs(printedLines) do
+        if line:find('k9_certification_specializations', 1, true) and line:find('this table itself is fine', 1, true) then sawCascadeExplanation = true end
+    end
+    t.isTrue(sawCascadeExplanation, 'the console message must explain WHY a fine table is also running in memory, not just list it bare')
 end)
 
 t.test('SETTLEMENT: a real collision (a foreign table sharing one of our names) settles true, forces DatabaseEnabled false, and names the offending table', function()

@@ -16,13 +16,28 @@
     WHAT THIS DOES NOT DO: it does not connect to a database, and it does not
     parse full SQL grammar. Like tests/tabletlocalization_spec.lua (same
     technique, applied to html/tablet.js's DEFAULT_STRINGS instead of a k9_*
-    table list), it extracts just the SET OF TABLE NAMES each file commits to
+    table list), it extracts the SET OF TABLE NAMES each file commits to
     knowing about, using a narrow pattern matched against each file's own
     real, already-established text shape -- precise enough to catch a table
     completely missing from one of these files (the actual historical bug),
     not a substitute for `sql/preflight_check.sql`'s own live
     INFORMATION_SCHEMA drift checks, which need a real database connection
     this spec deliberately does not require.
+
+    TABLE NAMES ARE NOT THE WHOLE STORY, so this spec also extracts and
+    compares the identifying-COLUMN lists carried inside `sql/preflight_check
+    .sql`'s CHECK 1, BOTH per-table signature blocks inside
+    `sql/rollback/uninstall_all.sql` (the SHAPE GATE and its own internal
+    duplicate in the DEPENDENCY REPORT's DRIFT CHECK branch), and
+    `server/datastore.lua`'s `EXPECTED_TABLE_COLUMNS` -- see the "COLUMN-LEVEL
+    EXTRACTION"/"COLUMN-LEVEL CONVERGENCE" sections further down. A table
+    NAME agreeing everywhere says nothing about whether these four places
+    agree on WHICH COLUMNS make that table "ours" on a real name collision;
+    a silent disagreement there is the gap a second, independent review of
+    this resource's uninstall safety work found and flagged as the one that
+    matters most, since these four lists have no way to `require()`/import a
+    shared source of truth and are, by every one of their own header
+    comments, hand-maintained copies that must be kept in sync by hand.
 
     `sql/install.sql` is treated as the ONE authoritative source of "every
     table this resource owns" -- its own top-of-file header states the
@@ -100,6 +115,161 @@ local function AssertSameTableSet(actual, expected, label)
     if #missing > 0 or #extra > 0 then
         error(('%s does not match install.sql\'s table set -- missing: [%s]; unexpected/stale: [%s]'):format(
             label, table.concat(missing, ', '), table.concat(extra, ', ')), 2)
+    end
+end
+
+-- ----------------------------------------------------------------------
+-- COLUMN-LEVEL EXTRACTION -- everything above this line compares only the
+-- SET OF TABLE NAMES each file knows about. That is not the whole story:
+-- sql/preflight_check.sql's CHECK 1, BOTH per-table column-signature
+-- blocks inside sql/rollback/uninstall_all.sql (the SHAPE GATE itself and
+-- the near-identical block inside its DEPENDENCY REPORT's DRIFT CHECK
+-- branch -- see that file's own "OWNED TABLE LIST" comment, which admits
+-- outright that these are independently hand-typed and can drift), and
+-- server/datastore.lua's EXPECTED_TABLE_COLUMNS do not just need to agree
+-- on WHICH tables they know about -- they need to agree on WHICH COLUMNS
+-- identify each one of those tables as "ours" on a real name collision.
+-- Two files that both list `k9_permission_keys` but disagree on its
+-- identifying columns can give a real operator a different verdict --
+-- "OK, safe to install" from one file, "!! CONFLICT" from the other -- on
+-- the exact same foreign table. That disagreement is invisible to every
+-- test above this line, which only ever checks that a table NAME appears
+-- somewhere in each file, never what its signature there actually is.
+--
+-- All four of these locations share (or, for server/datastore.lua's Lua
+-- table, closely mirror) the same textual shape they were hand-written
+-- in: a per-table `SELECT 'k9_x' AS table_name, N AS cols_expected, ...,
+-- COLUMN_NAME IN ('c1','c2',...)` block for the three .sql locations, and
+-- a `k9_x = { 'c1', 'c2', ... }` entry for the one Lua location. The
+-- functions below extract the REAL column set each one commits to, from
+-- each file's own real text, same technique as ExtractTableSet above --
+-- not a fifth hand-typed copy of the answer.
+-- ----------------------------------------------------------------------
+
+--- Matches one `SELECT 'k9_x'[ AS table_name], N[ AS cols_expected], ...,
+--- COLUMN_NAME IN ('c1','c2',...)` block, in either of the two real
+--- shapes this resource's .sql files use for it (the FIRST row in a
+--- UNION ALL chain spells out `AS table_name`/`AS cols_expected`; every
+--- row after it does not, since those column aliases only need stating
+--- once per query) -- capturing the table name, the declared
+--- `cols_expected` number, and the raw text inside `COLUMN_NAME IN (...)`.
+--- The two `.-` gaps are Lua's lazy "as few characters as possible"
+--- quantifier, which is what lets one pattern match both row shapes: each
+--- walks forward only as far as the next literal comma/`COLUMN_NAME IN`,
+--- never past it, so it cannot accidentally swallow a later table's row.
+local SQL_SIGNATURE_PATTERN = "SELECT%s+'(k9_[%w_]+)'.-,%s*(%d+).-,.-COLUMN_NAME IN %(([^%)]+)%)"
+
+--- @param text string
+--- @return table<string, {columns: table<string,boolean>, count: integer, expected: integer}>
+local function ExtractSqlColumnSignatures(text)
+    local signatures = {}
+    for tableName, expected, columnListText in text:gmatch(SQL_SIGNATURE_PATTERN) do
+        local columns, count = {}, 0
+        for column in columnListText:gmatch("'([^']+)'") do
+            if not columns[column] then
+                columns[column] = true
+                count = count + 1
+            end
+        end
+        signatures[tableName] = { columns = columns, count = count, expected = tonumber(expected) }
+    end
+    return signatures
+end
+
+--- server/datastore.lua's EXPECTED_TABLE_COLUMNS uses plain Lua table
+--- syntax, not SQL -- `k9_x = { 'c1', 'c2', ... },` -- so it needs its own
+--- extraction shape, but the same idea: pull the real column list out of
+--- the file's own text rather than retyping it.
+--- @param tableBody string -- already isolated to the `{ ... }` body, the
+--- same substring the existing EXPECTED_TABLE_COLUMNS name-set test above
+--- computes from `local EXPECTED_TABLE_COLUMNS = {` through the closing `}`
+--- @return table<string, {columns: table<string,boolean>, count: integer}>
+local function ExtractLuaColumnSignatures(tableBody)
+    local signatures = {}
+    for tableName, columnListText in tableBody:gmatch("(k9_[%w_]+)%s*=%s*{([^}]*)}") do
+        local columns, count = {}, 0
+        for column in columnListText:gmatch("'([^']+)'") do
+            if not columns[column] then
+                columns[column] = true
+                count = count + 1
+            end
+        end
+        signatures[tableName] = { columns = columns, count = count }
+    end
+    return signatures
+end
+
+--- sql/rollback/uninstall_all.sql contains the signature block TWICE (see
+--- that file's own "OWNED TABLE LIST" comment) -- the SHAPE GATE itself
+--- (`shape_blockers`) and the near-identical block inside the DEPENDENCY
+--- REPORT's DRIFT CHECK branch (`shp2`). Both open with the shared
+--- `FROM (` a per-table UNION ALL chain opens with, and each is closed by
+--- its own uniquely-spelled subquery alias -- `) shp` for the first
+--- block, `) shp2` for the second. Matching the closing alias literally
+--- (rather than, say, counting balanced parentheses) is deliberate: the
+--- literal bytes `) shp` followed by a newline are NOT a substring of
+--- `) shp2` (the character right after "shp" differs -- newline vs "2"),
+--- so searching for `) shp\n` specifically can never accidentally stop
+--- early inside the second block's own close.
+--- @param text string -- the whole file's text
+--- @param afterAnchor string -- unique literal text appearing once, shortly before this block's own "FROM ("
+--- @param closeMarker string -- unique literal text this block's own "FROM (...)" closes with
+--- @return string -- the block's own text, `FROM (` through the close marker inclusive
+local function SliceUninstallSignatureBlock(text, afterAnchor, closeMarker)
+    local anchorPos = text:find(afterAnchor, 1, true)
+    assert(anchorPos, ('could not find %q in sql/rollback/uninstall_all.sql -- this file must have changed shape'):format(afterAnchor))
+    local fromPos = text:find('FROM (', anchorPos, true)
+    assert(fromPos, ('could not find "FROM (" after %q in sql/rollback/uninstall_all.sql'):format(afterAnchor))
+    local closePos = text:find(closeMarker, fromPos, true)
+    assert(closePos, ('could not find %q after %q in sql/rollback/uninstall_all.sql'):format(closeMarker, afterAnchor))
+    return text:sub(fromPos, closePos)
+end
+
+--- Fails with a message naming the table, naming BOTH files, and showing
+--- which columns are on which side of the disagreement -- the "what do I
+--- change" an operator or agent needs at 2am, not just "these two
+--- disagree".
+--- @param signaturesA table<string, {columns: table<string,boolean>}>
+--- @param labelA string
+--- @param signaturesB table<string, {columns: table<string,boolean>}>
+--- @param labelB string
+local function AssertSameColumnSignatures(signaturesA, labelA, signaturesB, labelB)
+    local tableNames, seen = {}, {}
+    for name in pairs(signaturesA) do
+        if not seen[name] then seen[name] = true; tableNames[#tableNames + 1] = name end
+    end
+    for name in pairs(signaturesB) do
+        if not seen[name] then seen[name] = true; tableNames[#tableNames + 1] = name end
+    end
+    table.sort(tableNames)
+
+    local problems = {}
+    for _, tableName in ipairs(tableNames) do
+        local a, b = signaturesA[tableName], signaturesB[tableName]
+        if not a then
+            problems[#problems + 1] = ('  %s: %s has a signature for this table, but %s has none at all'):format(tableName, labelB, labelA)
+        elseif not b then
+            problems[#problems + 1] = ('  %s: %s has a signature for this table, but %s has none at all'):format(tableName, labelA, labelB)
+        else
+            local onlyInA, onlyInB = {}, {}
+            for column in pairs(a.columns) do
+                if not b.columns[column] then onlyInA[#onlyInA + 1] = column end
+            end
+            for column in pairs(b.columns) do
+                if not a.columns[column] then onlyInB[#onlyInB + 1] = column end
+            end
+            if #onlyInA > 0 or #onlyInB > 0 then
+                table.sort(onlyInA)
+                table.sort(onlyInB)
+                problems[#problems + 1] = ('  %s: %s has [%s] that %s does not; %s has [%s] that %s does not'):format(
+                    tableName, labelA, table.concat(onlyInA, ', '), labelB, labelB, table.concat(onlyInB, ', '), labelA)
+            end
+        end
+    end
+
+    if #problems > 0 then
+        error(('%s and %s disagree on the identifying-column signature for %d table(s) -- a real name collision could get a different verdict from each:\n%s'):format(
+            labelA, labelB, #problems, table.concat(problems, '\n')), 2)
     end
 end
 
@@ -206,6 +376,98 @@ t.test('server/datastore.lua\'s EXPECTED_TABLE_COLUMNS (schema collision safety 
 end)
 
 -- ----------------------------------------------------------------------
+-- COLUMN-LEVEL CONVERGENCE -- the gap the table-name checks above cannot
+-- see: every "knows about exactly install.sql's table set" test above
+-- only checked that (say) `k9_permission_keys` appears in CHECK 1
+-- SOMEWHERE, never that CHECK 1's own idea of "these are
+-- k9_permission_keys' identifying columns" agrees with
+-- sql/rollback/uninstall_all.sql's (either of its own two internal
+-- copies) or server/datastore.lua's idea of the same thing. If a future
+-- migration widens which columns identify a table as ours in ONE of
+-- these places without doing the same in the others -- exactly the
+-- "change all three [places] in the same commit" instruction each of
+-- these files already gives by hand, in prose, and which this resource
+-- has been bitten by before (see e.g. sql/preflight_check.sql's own
+-- "BOOT-CHECK SYNC" comments on its `k9_individual_overrides`,
+-- `k9_equipment_shop_items` and `k9_xp_tiers` rows, each documenting a
+-- real, already-happened drift against server/datastore.lua fixed by
+-- hand) -- the two files then disagree about what "this table is ours"
+-- means. On a real name collision with some other resource's table, that
+-- disagreement can hand the operator a clean "OK, safe to install" from
+-- one file and a "!! CONFLICT, do not install" from the other for the
+-- SAME foreign table, or let an armed uninstall drop a table its own
+-- second internal copy of this same check would have refused. Compared
+-- here by parsing each file's own real text (see the extraction helpers
+-- above this file's GROUND TRUTH section), not by re-hardcoding the
+-- answer a fifth time.
+-- ----------------------------------------------------------------------
+
+local preflightColumnSignatures = ExtractSqlColumnSignatures(ReadFile('../sql/preflight_check.sql'))
+
+local uninstallAllText = ReadFile('../sql/rollback/uninstall_all.sql')
+local uninstallShapeGateColumnSignatures = ExtractSqlColumnSignatures(
+    SliceUninstallSignatureBlock(uninstallAllText, 'INTO shape_blockers', ') shp\n'))
+local uninstallDriftCheckColumnSignatures = ExtractSqlColumnSignatures(
+    SliceUninstallSignatureBlock(uninstallAllText, 'BLOCKS UNINSTALL - table name is not ours', ') shp2'))
+
+local datastoreTextForColumns = ReadFile('../server/datastore.lua')
+local datastoreBodyStart = datastoreTextForColumns:find('local EXPECTED_TABLE_COLUMNS = {', 1, true)
+assert(datastoreBodyStart, 'local EXPECTED_TABLE_COLUMNS = { not found in server/datastore.lua -- this file must have changed shape')
+local datastoreBodyClose = datastoreTextForColumns:find('\n}', datastoreBodyStart, true)
+assert(datastoreBodyClose, 'closing "}" for EXPECTED_TABLE_COLUMNS not found in server/datastore.lua')
+local datastoreColumnSignatures = ExtractLuaColumnSignatures(datastoreTextForColumns:sub(datastoreBodyStart, datastoreBodyClose))
+
+-- Sanity check on the three SQL sources' OWN internal consistency, a
+-- precondition for the cross-file comparisons below to mean anything:
+-- each row's hand-typed `N AS cols_expected` should equal the real length
+-- of that same row's own `COLUMN_NAME IN (...)` list. If it does not,
+-- that row's own `COUNT(*) = N` comparison at query time is already wrong
+-- before any cross-file comparison even happens -- either it reports a
+-- genuine one-of-ours table as a false CONFLICT because N is too high, or
+-- accepts a foreign table as ours because N is too low.
+local SQL_SIGNATURE_SOURCES_FOR_SELF_CHECK = {
+    { label = 'sql/preflight_check.sql (CHECK 1)', signatures = preflightColumnSignatures },
+    { label = 'sql/rollback/uninstall_all.sql (SHAPE GATE)', signatures = uninstallShapeGateColumnSignatures },
+    { label = 'sql/rollback/uninstall_all.sql (DRIFT CHECK)', signatures = uninstallDriftCheckColumnSignatures },
+}
+
+for _, source in ipairs(SQL_SIGNATURE_SOURCES_FOR_SELF_CHECK) do
+    t.test(("%s's own declared cols_expected matches its own COLUMN_NAME IN (...) list length, for every table"):format(source.label), function()
+        local mismatches = {}
+        for tableName, signature in pairs(source.signatures) do
+            if signature.count ~= signature.expected then
+                mismatches[#mismatches + 1] = ('%s (declared %d, found %d)'):format(tableName, signature.expected, signature.count)
+            end
+        end
+        table.sort(mismatches)
+        t.isTrue(#mismatches == 0, ('%s: cols_expected does not match the real column list length for: %s'):format(source.label, table.concat(mismatches, '; ')))
+    end)
+end
+
+-- Every distinct pair of the four real signature-bearing locations, so a
+-- drift between ANY two of them fails with a direct, specific message
+-- naming exactly that pair -- including sql/rollback/uninstall_all.sql's
+-- own two internal copies against each other, the "easiest kind to let
+-- drift" pair because both live in one file and a reviewer's eye slides
+-- past the second copy assuming it must match the first.
+local COLUMN_SIGNATURE_SOURCES = {
+    { label = 'sql/preflight_check.sql (CHECK 1)', signatures = preflightColumnSignatures },
+    { label = 'sql/rollback/uninstall_all.sql (SHAPE GATE)', signatures = uninstallShapeGateColumnSignatures },
+    { label = 'sql/rollback/uninstall_all.sql (DRIFT CHECK)', signatures = uninstallDriftCheckColumnSignatures },
+    { label = 'server/datastore.lua (EXPECTED_TABLE_COLUMNS)', signatures = datastoreColumnSignatures },
+}
+
+for i = 1, #COLUMN_SIGNATURE_SOURCES do
+    for j = i + 1, #COLUMN_SIGNATURE_SOURCES do
+        local sourceA, sourceB = COLUMN_SIGNATURE_SOURCES[i], COLUMN_SIGNATURE_SOURCES[j]
+        t.test(('%s and %s agree on every table\'s identifying-column signature'):format(sourceA.label, sourceB.label), function()
+            AssertSameColumnSignatures(sourceA.signatures, sourceA.label, sourceB.signatures, sourceB.label)
+        end)
+    end
+end
+
+
+-- ----------------------------------------------------------------------
 -- sql/migrations/*.sql -- every table this resource's UPGRADE path (as
 -- opposed to a fresh install) knows how to create for an existing
 -- database. `k9_certifications` and `k9_search_log` are the two founding
@@ -235,6 +497,7 @@ local MIGRATION_FILES_THAT_CREATE_TABLES = {
     '0014_create_k9_equipment_shop_items.sql',
     '0015_create_k9_xp_tiers.sql',
     '0016_create_k9_individual_overrides.sql',
+    '0018_create_k9_partnership_pair_progress.sql',
 }
 
 local FOUNDING_TABLES_WITH_NO_DEDICATED_MIGRATION = {
