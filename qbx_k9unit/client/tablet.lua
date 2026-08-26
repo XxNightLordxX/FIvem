@@ -68,7 +68,16 @@
         rather than deleted, so the reasoning for the ORIGINAL removal
         (a generic passthrough is not how this file exposes new server
         capability) still reads accurately for whoever finds this
-        comment.)
+        comment. STATUS UPDATE (later pass, 2): server/admin.lua grew a
+        SIXTH callback, `qbx_k9unit:server:tabletAuditCatalog` (its own
+        header: "the GAP 2 read side"), the same pass that closed its own
+        eight `*Audit_Append` writers' matching read side -- it shipped
+        with full test coverage but, unlike the five above, no
+        `tablet:auditCatalog` bridge and no consuming screen, which is
+        exactly the seam this note exists to flag. That gap is now closed
+        too: `tablet:auditCatalog` is the sixth bridge in the NUI CONTRACT
+        below, and the Audit Trail tab's own Catalog Changes mode is what
+        consumes it -- see auditColumnsForCatalog() in html/tablet.js.)
     ======================================================================
 
     ======================================================================
@@ -376,25 +385,30 @@
       tablet:auditSearch {mode, value?, limit?}     -> cb(AuditResult)  [tabletAuditSearch -- mode in {'officer','plate','person','recent'}]
       tablet:auditXp {targetCitizenId}              -> cb(AuditResult)  [tabletAuditXp -- no limit, single-row point lookup]
       tablet:auditDept {departmentKey, limit?}      -> cb(AuditResult)  [tabletAuditDept]
+      tablet:auditCatalog {catalogName, limit?}     -> cb(AuditResult)  [tabletAuditCatalog -- catalogName MUST be an exact key of server/admin.lua's own CATALOG_AUDIT_SOURCES (certTiers/permissionKeys/xpTiers/shopItems/shopLocations/k9Profiles/runtimeOverrides/tabletThemes); forwarded VERBATIM, never whitelist-checked a second time here -- same THE SECURITY RULE as tablet:auditSearch's own `mode` immediately below, and for the identical reason: that file's own CATALOG_AUDIT_SOURCES lookup is the ONLY real gate, a second copy of its key list here could only drift from it, never make it safer]
         AuditResult = { ok:true, rows:table, label:string, cap:number, limit?:number, truncated?:boolean } |
                       { ok:false, error:'not_authorized'|'rate_limited'|'invalid_args', message?:string }
         `cap` (server/admin.lua's own HARD_MAX_RESULTS, added in a LATER
-        pass than these five bridges themselves) is present on every
+        pass than the first five bridges below) is present on every
         success response, including tabletAuditXp's -- a uniform shape
-        across all five, even though that one callback takes no `limit` at
-        all. `limit`/`truncated` are present on the other four (the ones
+        across all six, even though that one callback takes no `limit` at
+        all. `limit`/`truncated` are present on the other five (the ones
         that DO take a `limit`): `limit` is the exact, already-clamped
         value the server actually used, and `truncated` is `true` only when
         the caller's own request exceeded `cap` and was cut down to it --
         see server/admin.lua's own ClampLimit doc comment for the full
         contract these two mirror verbatim. NEVER present on a failure --
         an unauthorized/rate-limited/malformed caller learns nothing new
-        from these fields. These five bridges originally closed the gap
+        from these fields. The first five bridges originally closed the gap
         server/admin.lua's own header once named by name: "no NUI callback
         and no client/tablet.lua change are part of this pass; this is the
         server-side contract a follow-up tablet screen builds against" --
         THIS file is that follow-up (that sentence has since been corrected
-        in server/admin.lua's own header to say so). Forwarded VERBATIM --
+        in server/admin.lua's own header to say so). tablet:auditCatalog is
+        the SIXTH, closing the identical gap server/admin.lua's own
+        CATALOG_AUDIT_SOURCES header named separately, later ("the GAP 2
+        read side") -- see this file's own header STATUS UPDATE (later
+        pass, 2) note above. Forwarded VERBATIM --
         that file's own CALLBACK SURFACE header states its response shape
         mirrors THIS file's established `{ok, error, message}` convention
         DIRECTLY, so AwaitServerCallback's own synthetic
@@ -405,10 +419,15 @@
         (QueryCertificationHistory/QueryPartnershipHistory/
         QuerySearchLogBy{Officer,Plate,Person}/Recent/
         QueryProgressionSnapshot/QueryDepartmentRoster) for the
-        authoritative column list of each; this file does not reshape or
-        rename a single field. `limit` is always OPTIONAL: an absent or
-        non-number value is dropped to `nil` here (see
-        OptionalNumericLimit below), letting server/admin.lua's own
+        authoritative column list of each of the first five; tabletAuditCatalog's
+        own `rows` shape instead depends on WHICH `catalogName` was
+        requested -- see server/admin.lua's own CATALOG_AUDIT_SOURCES table
+        and the eight `K9Store.*Audit_GetRecent` accessors it names for the
+        authoritative column list per catalog, mirrored one-to-one by
+        html/tablet.js's own auditColumnsForCatalog(). This file does not
+        reshape or rename a single field for any of the six. `limit` is
+        always OPTIONAL: an absent or non-number value is dropped to `nil`
+        here (see OptionalNumericLimit below), letting server/admin.lua's own
         ClampLimit apply ITS configured default/hard cap (HARD_MAX_RESULTS
         = 100) rather than this file guessing one. GATING: that file's own
         IsAuthorizedAdmin (job.isboss, job.grade >=
@@ -422,15 +441,14 @@
       { action = 'tablet:open', data = { capabilities = Config.Permissions,
           strings = BuildTabletStrings() (locales/en.json's `tablet` group -- see LOCALIZATION below),
           requestedView = 'highCommand' | nil, -- PRESENTATION HINT ONLY, threaded straight through from the OpenTablet(requestedView) argument the caller passed (see OPENING below for the two RegisterCommand call sites -- the ORIGINAL command/item always pass nil). Decides NOTHING by itself: html/tablet.js's loadMyRecord() only switches to the console screen once tablet:requestMyRecord's own `viewer.isHighCommand` -- server-verified, IsHighCommand(source), the SAME function every other high-command gate in this resource calls, re-run fresh on every request -- comes back true for THIS caller. A non-high-command caller who opened via the new command still gets their own record back exactly as tabletRequestMyRecord already returns it for the ordinary command; html/tablet.js just shows an explicit "you don't have access" notice above it instead of silently landing on the console tab.
-          blockClientEnforcedBadge = locale('tablet.block_client_enforced_badge') | nil,
-          blockClientEnforcedHint = locale('tablet.block_client_enforced_hint') | nil,
-              -- ^ THIS PASS -- the Block Effect column's new 'client_enforced'
-              -- badge/hint text, resolved via SafeLocale() above. Sent as two
-              -- STANDALONE fields rather than folded into `strings` -- see
-              -- SafeLocale()'s own doc comment for why (a locked spec file
-              -- hardcodes `strings`'/DEFAULT_STRINGS' exact key counts).
-              -- `nil` on a locale() failure -- html/tablet.js falls back to
-              -- its own hardcoded English text for exactly that case.
+          -- The Block Effect column's 'client_enforced' badge/hint text
+          -- (block_client_enforced_badge/_hint) used to be sent as two
+          -- STANDALONE fields here, resolved via a dedicated SafeLocale()
+          -- helper, specifically to dodge a now-removed hardcoded key count
+          -- in tests/tabletlocalization_spec.lua. That blocker is gone, so
+          -- both are ordinary TABLET_STRING_KEYS entries now, resolved by
+          -- BuildTabletStrings() into `strings` like every other key --
+          -- html/tablet.js reads them via its normal S() helper.
           maxXpPerGrant = Config.HighCommand.maxXpPerGrant,
           peds = Config.Peds,               -- shared config, no round trip -- display list only for tablet:assignK9Role's model picker; server/appearance.lua's IsValidPedModelName is the real gate
           specializations = Config.K9Specializations, -- shared config, no round trip -- display list only for the person screen's specialization grant picker (buildCertificationRow); server/certifications.lua's GrantSpecialization re-checks this SAME table server-side, the real gate
@@ -806,6 +824,15 @@ local TABLET_STRING_KEYS = {
     -- and why it is never guessed client-side).
     'column_block_effect', 'block_enforced_badge', 'block_not_yet_enforced_badge',
     'block_not_yet_enforced_hint', 'block_not_enforceable_note',
+    -- CLIENT-ENFORCED badge/hint (html/tablet.js's clientEnforcedBadgeText()/
+    -- clientEnforcedHintText()) -- folded into the ordinary TABLET_STRING_KEYS/
+    -- DEFAULT_STRINGS mechanism now that tests/tabletlocalization_spec.lua no
+    -- longer hardcodes an exact key count (see that file's own "WHY THERE IS
+    -- NO HARDCODED KEY COUNT ANY MORE"). These two used to be sent as two
+    -- STANDALONE OpenTablet() fields via the now-removed SafeLocale() helper
+    -- specifically to avoid tripping that count; that blocker is gone, so
+    -- they are ordinary `strings` entries like every other key here.
+    'block_client_enforced_badge', 'block_client_enforced_hint',
     'back_label', 'givexp_label', 'givexp_placeholder', 'givexp_max_hint',
     'self_grant_disabled_title', 'truncated_notice', 'action_working',
     'action_failed', 'action_succeeded', 'no_certifications',
@@ -955,6 +982,30 @@ local TABLET_STRING_KEYS = {
     'column_ended_by', 'column_ended_at', 'column_searched_at', 'column_searcher',
     'column_searcher_job', 'column_target_type', 'column_target', 'column_result',
     'column_weight', 'column_alert_tier', 'column_audit_xp', 'column_updated_at',
+    -- 'catalog' -- the SIXTH Audit Trail mode (this pass), bridging
+    -- server/admin.lua's own 'qbx_k9unit:server:tabletAuditCatalog' (see
+    -- this file's own NUI CONTRACT note and header STATUS UPDATE (later
+    -- pass, 2)). 'audit_mode_catalog'/'audit_catalog_label' are the only
+    -- two brand-new strings this mode needs beyond the shared audit_*
+    -- chrome above -- every column header its 8 possible catalogs need is
+    -- either a brand-new 'column_*' key immediately below (the concepts
+    -- genuinely new to this mode: action/detail/changed-by/changed-at/
+    -- override-key/kind/old-new-value/heading) or an EXISTING key already
+    -- serving the exact same field elsewhere on this page (cert_tier_key_label,
+    -- permission_key_key_label, shop_item_key_label, column_rank,
+    -- column_citizenid, column_coordinates, shop_location_model_label,
+    -- shop_location_scenario_label, shop_location_label_label,
+    -- theme_primary_label, theme_accent_label, theme_background_label,
+    -- theme_text_label, theme_density_label, theme_header_title_label,
+    -- cert_tiers_heading, permission_keys_heading, xp_tiers_heading,
+    -- shop_items_heading, shop_locations_heading, k9_profiles_heading,
+    -- runtime_control_heading, theme_heading -- see
+    -- html/tablet.js's own auditColumnsForCatalog()/AUDIT_CATALOG_NAMES
+    -- for exactly which key backs which column/option), so none of those
+    -- are duplicated here.
+    'audit_mode_catalog', 'audit_catalog_label', 'column_action', 'column_detail',
+    'column_changed_by', 'column_changed_at', 'column_old_value', 'column_new_value',
+    'column_kind', 'column_override_key', 'column_heading',
     -- CERTIFICATION TIER / RENEWAL / SPECIALIZATION (this pass) -- the
     -- person screen's certification row grows a tier control, a renew
     -- button, and a specializations sub-list (buildCertificationRow).
@@ -1136,6 +1187,25 @@ local TABLET_STRING_KEYS = {
     'cmdref_k9bonetool_usage', 'cmdref_k9bonetool_does', 'cmdref_k9bonetool_needs',
     'cmdref_k9grantpermission_usage', 'cmdref_k9grantpermission_does', 'cmdref_k9grantpermission_needs',
     'cmdref_k9revokepermission_usage', 'cmdref_k9revokepermission_does', 'cmdref_k9revokepermission_needs',
+    -- Integration-sweep fix (this pass): seven REAL, working keybind
+    -- commands (RegisterCommand + RegisterKeyMapping, confirmed in
+    -- client/agility.lua, client/pursuitsprint.lua, client/movement.lua,
+    -- client/vision.lua, client/defense.lua) that had ZERO
+    -- COMMAND_REFERENCE entry in html/tablet.js before this pass -- see
+    -- tests/commandreferenceregistry_spec.lua's own header "WIDENED, THIS
+    -- PASS" for why the drift guard never caught this, and
+    -- html/tablet.js's own DEFAULT_STRINGS for these same 21 keys' English
+    -- text plus one new shared template
+    -- (cmdref_default_keybind_configurable_template) and one new category
+    -- label (cmdref_category_vision) this same fix also added.
+    'cmdref_vault_usage', 'cmdref_vault_does', 'cmdref_vault_needs',
+    'cmdref_pursuitsprint_usage', 'cmdref_pursuitsprint_does', 'cmdref_pursuitsprint_needs',
+    'cmdref_confirm_handler_down_defense_usage', 'cmdref_confirm_handler_down_defense_does', 'cmdref_confirm_handler_down_defense_needs',
+    'cmdref_toggle_camera_usage', 'cmdref_toggle_camera_does', 'cmdref_toggle_camera_needs',
+    'cmdref_toggle_camera_feed_usage', 'cmdref_toggle_camera_feed_does', 'cmdref_toggle_camera_feed_needs',
+    'cmdref_toggle_thermal_vision_usage', 'cmdref_toggle_thermal_vision_does', 'cmdref_toggle_thermal_vision_needs',
+    'cmdref_toggle_night_vision_usage', 'cmdref_toggle_night_vision_does', 'cmdref_toggle_night_vision_needs',
+    'cmdref_default_keybind_configurable_template', 'cmdref_category_vision',
     -- GUIDED FLOWS (this pass, owner's own words: "expand the workflow
     -- paths for all the features to make them smoother, easier to
     -- understand") -- high command only, html/tablet.js's own
@@ -1248,14 +1318,16 @@ local TABLET_STRING_KEYS = {
 --- gap for that one key, same "resilience net" role it already documents.
 --- @return table<string,string>
 --- Single-key pcall-wrapped locale() resolution -- the SAME fail-safe
---- shape as BuildTabletStrings()'s own per-key guard above, extracted here
---- for the two `blockClientEnforced*` OpenTablet() fields below, which are
---- DELIBERATELY NOT folded into TABLET_STRING_KEYS/BuildTabletStrings'
---- `strings` table -- see OpenTablet()'s own comment on those two fields
---- for why (tests/tabletlocalization_spec.lua hardcodes both
---- html/tablet.js's DEFAULT_STRINGS and this file's own `strings` payload
---- at an exact key count this pass is not permitted to change).
---- @param fullKey string -- e.g. 'tablet.block_client_enforced_badge'
+--- shape as BuildTabletStrings()'s own per-key guard above, for any
+--- locale() call OUTSIDE the TABLET_STRING_KEYS/`strings` mechanism (a
+--- one-off value resolved directly at its own call site, e.g. an optional
+--- `message`/`description` field on a specific response, rather than a
+--- fixed UI-chrome string sent on every tablet:open). A missing/renamed
+--- key here must never throw out of the caller -- it degrades to `nil`,
+--- exactly like an omitted `strings` entry, so the caller can fall back to
+--- an unlocalized default or simply omit the optional field, instead of
+--- erroring out of an otherwise-successful action.
+--- @param fullKey string -- e.g. 'tablet.open_failed_generic'
 --- @return string?
 local function SafeLocale(fullKey)
     local ok, value = pcall(locale, fullKey)
@@ -1410,24 +1482,12 @@ function OpenTablet(requestedView)
             capabilities = Config.Permissions, -- shared config, no round trip
             strings = BuildTabletStrings(), -- locales/en.json's `tablet` group, one key per html/tablet.js's own DEFAULT_STRINGS -- see this file's header LOCALIZATION note
             requestedView = (requestedView == 'highCommand') and 'highCommand' or nil, -- see NUI CONTRACT above and this function's own @param doc -- presentation hint only
-            -- CLIENT-ENFORCED block-effect badge/hint text (this pass;
-            -- locales/en.json's tablet.block_client_enforced_badge/_hint,
-            -- both already landed). Sent as TWO STANDALONE fields rather
-            -- than folded into TABLET_STRING_KEYS/`strings` above:
-            -- tests/tabletlocalization_spec.lua hardcodes html/tablet.js's
-            -- DEFAULT_STRINGS at an EXACT 287 keys and this file's own
-            -- `strings` payload at EXACTLY 287 entries -- routing either
-            -- new key through that shared mechanism would push both counts
-            -- to 289 and fail a locked assertion this pass has no
-            -- permission to edit. `nil` (a locale() failure, or the key
-            -- ever being removed) is a safe, honest value -- html/tablet.js
-            -- falls back to its own hardcoded English text for exactly
-            -- that case, same "resilience net" role DEFAULT_STRINGS plays
-            -- for every other key. FOLLOW-UP, reported: once that spec's
-            -- owner can update its hardcoded counts, fold these two back
-            -- into the normal mechanism and retire this standalone pair.
-            blockClientEnforcedBadge = SafeLocale('tablet.block_client_enforced_badge'),
-            blockClientEnforcedHint = SafeLocale('tablet.block_client_enforced_hint'),
+            -- The Block Effect column's 'client_enforced' badge/hint text
+            -- (block_client_enforced_badge/_hint) used to be sent as two
+            -- standalone fields here -- folded into the ordinary
+            -- TABLET_STRING_KEYS/`strings` mechanism above now that the
+            -- hardcoded key count that blocked it is gone (see
+            -- TABLET_STRING_KEYS' own comment at those two keys).
             maxXpPerGrant = (type(Config.HighCommand) == 'table' and type(Config.HighCommand.maxXpPerGrant) == 'number')
                 and Config.HighCommand.maxXpPerGrant or nil,
             peds = Config.Peds, -- shared config, no round trip -- see this file's header NUI CONTRACT note on tablet:assignK9Role
@@ -1546,7 +1606,7 @@ if openMode == 'item' or openMode == 'both' then
     AddEventHandler('qbx_k9unit:client:useTabletItem', function(data, slot)
         if not IsInventoryUseCapable() then
             print('[qbx_k9unit] WARNING: the K9 Command Tablet item was used, but no usable inventory adapter is currently detected (Config.Compat) -- cannot open. Run /k9compat (if enabled) to see why.')
-            lib.notify({ title = locale('common.notify_title'), description = locale('tablet.open_failed_generic'), type = 'error' })
+            lib.notify({ title = locale('common.notify_title'), description = SafeLocale('tablet.open_failed_generic'), type = 'error' })
             return
         end
 
@@ -2185,9 +2245,9 @@ local function ReasonToJsResult(serverResult)
         return { ok = false, error = serverResult.error or serverResult.reason or 'server_error' }
     end
     if serverResult.reason == 'rank_or_high_command' then
-        return { ok = true, message = locale('tablet.revoke_still_has_access') }
+        return { ok = true, message = SafeLocale('tablet.revoke_still_has_access') }
     elseif serverResult.reason == 'unknown_target_offline' then
-        return { ok = true, message = locale('tablet.revoke_target_offline') }
+        return { ok = true, message = SafeLocale('tablet.revoke_target_offline') }
     end
     return { ok = true }
 end
@@ -2973,6 +3033,29 @@ RegisterNUICallback('tablet:auditDept', function(data, cb)
         return
     end
     cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditDept', data.departmentKey, OptionalNumericLimit(data)))
+end)
+
+--- 'tablet:auditCatalog' -- mirrors NO chat command (there is no
+--- '/k9auditcatalog' -- this catalog-change audit was only ever reachable
+--- from a chat command's log/toast for the ORIGINAL eight `*Audit_Append`
+--- writes themselves, never a read command); the sixth bridge, closing
+--- server/admin.lua's own separately-named "GAP 2 read side" gap (see this
+--- file's own header STATUS UPDATE (later pass, 2) note). `catalogName` is
+--- forwarded VERBATIM, NOT whitelist-checked against
+--- CATALOG_AUDIT_SOURCES' eight real keys here -- same THE SECURITY RULE
+--- as `tablet:auditSearch`'s own `mode` above: that file's own lookup
+--- already refuses anything else with `invalid_args` before running a
+--- single query, so a second copy of that allowlist here could only drift
+--- from the real one. `rows` shape depends on WHICH catalog was requested
+--- -- see html/tablet.js's own auditColumnsForCatalog() and
+--- server/admin.lua's own CATALOG_AUDIT_SOURCES table for the authoritative
+--- per-catalog column list; this file reshapes nothing.
+RegisterNUICallback('tablet:auditCatalog', function(data, cb)
+    if type(data) ~= 'table' or type(data.catalogName) ~= 'string' or data.catalogName == '' then
+        cb({ ok = false, error = 'invalid_args' })
+        return
+    end
+    cb(AwaitServerCallback('qbx_k9unit:server:tabletAuditCatalog', data.catalogName, OptionalNumericLimit(data)))
 end)
 
 -- ----------------------------------------------------------------------

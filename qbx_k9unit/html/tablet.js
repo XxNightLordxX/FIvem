@@ -490,16 +490,22 @@
       tablet:auditSearch { mode: 'officer'|'plate'|'person'|'recent', value?: string, limit?: number } -> cb(AuditResult)
       tablet:auditXp { targetCitizenId: string } -> cb(AuditResult)
       tablet:auditDept { departmentKey: string, limit?: number } -> cb(AuditResult)
-        The K9 Audit Trail viewer's own tab -- server/admin.lua's five
+      tablet:auditCatalog { catalogName: string, limit?: number } -> cb(AuditResult)
+        The K9 Audit Trail viewer's own tab -- server/admin.lua's SIX
         tabletAudit* callbacks, verified directly against that file's own
-        source (not assumed): each is a thin, read-only wrapper around the
-        EXACT SAME Query* function/K9Store accessor its `/k9audit*` chat
-        command counterpart already calls, gated by the SAME
-        IsAuthorizedAdmin(source) and the SAME shared per-source cooldown
-        budget. AuditResult, success:
+        source (not assumed). The first five are each a thin, read-only
+        wrapper around the EXACT SAME Query* function/K9Store accessor its
+        `/k9audit*` chat command counterpart already calls, gated by the
+        SAME IsAuthorizedAdmin(source) and the SAME shared per-source
+        cooldown budget. tabletAuditCatalog (the sixth, no chat command
+        counterpart at all) is the same shape but reads instead from
+        server/admin.lua's own CATALOG_AUDIT_SOURCES table, keyed by
+        `catalogName` -- see that table's own trust-boundary header for why
+        an adversarial `catalogName` can never reach any table it does not
+        explicitly name. AuditResult, success:
           { ok: true, rows: Array<object>, label: string, cap: number, limit?: number, truncated?: boolean }
-        `cap`/`limit`/`truncated` (added in a LATER pass than the five
-        bridges themselves -- see server/admin.lua's own ClampLimit and
+        `cap`/`limit`/`truncated` (added in a LATER pass than the first
+        five bridges -- see server/admin.lua's own ClampLimit and
         CALLBACK SURFACE comments for the authoritative contract): `cap` is
         that file's own HARD_MAX_RESULTS, served back on EVERY success
         response (including tabletAuditXp's, for a uniform shape, even
@@ -524,6 +530,15 @@
           search:  { searcher_citizenid, searcher_job, target_type, target_plate, target_citizenid, result, total_weight, alert_tier, searched_at } (also carries `id`, not rendered)
           xp:      { xp, updated_at } -- 0 or 1 rows, citizenid is k9_progression's own PRIMARY KEY
           dept:    { citizenid, granted_by, granted_at } -- ACTIVE roster only, never revoked history
+          catalog: shape depends on WHICH of the 8 `catalogName` values was requested -- see
+                   server/admin.lua's own CATALOG_AUDIT_SOURCES table and this file's own
+                   auditColumnsForCatalog() for the authoritative per-catalog column list;
+                   six share { action, <catalog-specific key>, detail, changed_by, changed_at },
+                   shopLocations carries { action, x, y, z, heading, model, scenario, label,
+                   changed_by, changed_at } instead, runtimeOverrides carries
+                   { override_key, kind, old_value, new_value, changed_by, changed_at }, and
+                   tabletThemes carries { primary_color, accent_color, background_color,
+                   text_color, density, header_title, changed_by, changed_at }
         Failure: { ok: false, error: 'not_authorized'|'rate_limited'|'invalid_args'|'timeout'|'network_error'|'exception', message?: string }
         -- same generic failure shape/fetchNui() synthesis as every other
         callback on this page; see auditErrorText() below.
@@ -748,6 +763,8 @@
         block_not_yet_enforced_badge: 'Not enforced yet',
         block_not_yet_enforced_hint: 'Blocking this here will not currently stop the feature in-game -- the server does not enforce this block yet.',
         block_not_enforceable_note: 'Cannot be blocked per-person -- there is no server-side enforcement point for this feature.',
+        block_client_enforced_badge: 'Enforced (client-side)',
+        block_client_enforced_hint: "Blocking this stops the ability on the player's own game client. Unlike a server-enforced block, a modified or cheating client can bypass it -- treat this as best-effort, not a guarantee.",
         manage_label: 'Manage',
         back_label: '← Back to roster',
         givexp_label: 'Give XP',
@@ -1008,18 +1025,23 @@
         // see canViewAudit()/buildTabs()'s own comment for why.
         tab_audit: 'Audit Trail',
         audit_heading: 'K9 Audit Trail',
-        audit_intro: 'Read-only history from this resource\'s own certification, partnership, search, XP and department records. Every query here is rate-limited and logged, the same as running the equivalent chat command.',
+        audit_intro: 'Read-only history from this resource\'s own certification, partnership, search, XP, department and catalog-change records. Every query here is rate-limited and logged, the same as running the equivalent chat command where one exists.',
         audit_disabled_note: 'The audit command surface is disabled server-wide. Queries cannot be run until it is re-enabled.',
         audit_mode_cert: 'Certifications',
         audit_mode_partner: 'Partnerships',
         audit_mode_search: 'Search Log',
         audit_mode_xp: 'XP Snapshot',
         audit_mode_dept: 'Department Roster',
+        // catalog (this pass) -- the SIXTH mode, bridging server/admin.lua's
+        // own 'qbx_k9unit:server:tabletAuditCatalog' (see this file's own
+        // NUI CONTRACT note near the top for the full six-bridge list).
+        audit_mode_catalog: 'Catalog Changes',
         audit_citizenid_label: 'Citizen ID',
         audit_citizenid_placeholder: 'e.g. ABC12345',
         audit_department_label: 'Department',
         audit_department_placeholder: 'e.g. police',
         audit_department_hint: 'Must match a configured department key -- pick one of your own certified departments below, or type another.',
+        audit_catalog_label: 'Catalog',
         audit_search_mode_label: 'Search by',
         audit_search_mode_officer: 'Officer (searches performed by)',
         audit_search_mode_plate: 'Vehicle plate',
@@ -1072,6 +1094,28 @@
         column_alert_tier: 'Alert Tier',
         column_audit_xp: 'XP',
         column_updated_at: 'Updated At',
+        // Catalog Changes mode's own new column concepts (this pass) --
+        // every OTHER column its 8 possible catalogs need reuses an
+        // EXISTING key already serving the exact same field elsewhere on
+        // this page (see auditColumnsForCatalog()'s own doc comment for
+        // the full per-catalog reuse map) -- these six are the ones with
+        // no prior equivalent. column_changed_by/column_changed_at are
+        // deliberately their OWN keys, not a reuse of column_granted_by/
+        // column_updated_at above -- "changed" is a catalog EDIT audit's
+        // own vocabulary (server/datastore.lua's own `changed_by`/
+        // `changed_at` columns, shared by all eight catalog audit tables),
+        // distinct from a certification's "granted" or a live row's own
+        // "updated", same reasoning column_audit_xp above already applies
+        // to column_xp.
+        column_action: 'Action',
+        column_detail: 'Detail',
+        column_changed_by: 'Changed By',
+        column_changed_at: 'Changed At',
+        column_old_value: 'Old Value',
+        column_new_value: 'New Value',
+        column_kind: 'Kind',
+        column_override_key: 'Override Key',
+        column_heading: 'Heading',
         // CERTIFICATION TIER / RENEWAL / SPECIALIZATION (this pass) -- see
         // client/tablet.lua's own TABLET_STRING_KEYS comment on this exact
         // 7-key set for the "not yet in locales/en.json" disclosure.
@@ -1292,8 +1336,8 @@
         home_view_all_abilities_label: 'View all abilities',
         home_blocked_count_template: '{count} of your abilities are currently blocked',
 
-        // ---- COMMAND REFERENCE (this pass -- "36 commands, no way for a
-        // player to discover them in-game"). See COMMAND_REFERENCE/
+        // ---- COMMAND REFERENCE (this pass -- "dozens of commands, no way
+        // for a player to discover them in-game"). See COMMAND_REFERENCE/
         // buildCommandReferenceScreen() below for the full design. Every
         // one of these keys is NOT YET present in locales/en.json's
         // `tablet` group as of this pass -- flagged to that file's owner
@@ -1316,10 +1360,18 @@
         // comment on `defaultKeybind` for why the per-row line never
         // repeats this (this pass, keybinds handoff, client/keybinds.lua).
         cmdref_default_keybind_template: 'Default key: {key} — rebindable in Settings > Key Bindings > FiveM.',
+        // Same shape as cmdref_default_keybind_template above, for the
+        // subset of commands whose default is read from a config.lua VALUE
+        // this server's own operator set, not a literal baked into
+        // client/keybinds.lua -- see COMMAND_REFERENCE's own
+        // `defaultKeybindConfigurable` doc comment for exactly which
+        // entries use this one instead of the plain template above.
+        cmdref_default_keybind_configurable_template: 'Default key: {key} — this server chose that value, so another server running this same resource could have a different one. Still rebindable in Settings > Key Bindings > FiveM.',
         cmdref_keybind_caveat: "A default keybind only applies to a player who has never set that key themselves. Changing a default later never moves anyone's existing binding.",
 
         cmdref_category_basic_commands: 'Basic K9 Commands',
         cmdref_category_combat: 'Combat & Restraint',
+        cmdref_category_vision: 'Cameras & Vision',
         cmdref_category_field_gear: 'Field Gear & Equipment',
         cmdref_category_calling_off: 'Calling Your K9 Off',
         cmdref_category_scent_games: 'Scent Games',
@@ -1478,6 +1530,41 @@
         cmdref_k9revokepermission_usage: '/k9revokepermission <citizenid> <permissionKey>',
         cmdref_k9revokepermission_does: 'Revokes a previously-granted permission key from a citizen.',
         cmdref_k9revokepermission_needs: 'High Command only. This feature must be turned on for your server.',
+
+        // ---- Integration-sweep fix (this pass): seven REAL, working
+        // keybind commands (RegisterCommand + RegisterKeyMapping, both
+        // confirmed in client/agility.lua, client/pursuitsprint.lua,
+        // client/movement.lua, client/vision.lua, client/defense.lua) that
+        // had ZERO COMMAND_REFERENCE entry -- see
+        // tests/commandreferenceregistry_spec.lua's own header "WIDENED,
+        // THIS PASS" for why the drift guard never caught this. Named
+        // cmdref_<shortname>_* rather than cmdref_<full command name>_* the
+        // way every entry above does, because these seven commands are
+        // namespaced under this resource's own `qbx_k9unit:` prefix (a
+        // colon is not a valid bareword object-key character) -- see each
+        // COMMAND_REFERENCE entry's own `command` field for the real,
+        // exact RegisterCommand name each of these keys backs. ----
+        cmdref_vault_usage: '/qbx_k9unit:vault',
+        cmdref_vault_does: 'Makes your K9 hop over a low obstacle right in front of it, like a fence or a low wall.',
+        cmdref_vault_needs: 'K9 access, and Advanced Agility enabled on this server. You must be controlling your K9, and the obstacle has to be low enough to clear.',
+        cmdref_pursuitsprint_usage: '/qbx_k9unit:pursuitsprint',
+        cmdref_pursuitsprint_does: 'Gives your K9 a short burst of real speed so it can catch up with a fleeing suspect it is already chasing.',
+        cmdref_pursuitsprint_needs: 'K9 access, and Pursuit Sprint enabled on this server. There must be a fleeing suspect nearby for your K9 to chase.',
+        cmdref_confirm_handler_down_defense_usage: '/qbx_k9unit:confirmHandlerDownDefense',
+        cmdref_confirm_handler_down_defense_does: 'Confirms your K9 should defend its handler after a Handler-Down alert appears on your screen. Your K9 never acts on its own without this.',
+        cmdref_confirm_handler_down_defense_needs: 'K9 access, an active Handler-Down alert currently showing, and Handler-Down Defense enabled on this server.',
+        cmdref_toggle_camera_usage: '/qbx_k9unit:toggleCamera',
+        cmdref_toggle_camera_does: 'Switches your view between looking through your K9\'s own eyes (first-person) and the normal camera behind it (third-person). Press again to switch back.',
+        cmdref_toggle_camera_needs: 'You must be controlling your K9. Nothing else -- no certification and no server setting can turn this off.',
+        cmdref_toggle_camera_feed_usage: '/qbx_k9unit:toggleCameraFeed',
+        cmdref_toggle_camera_feed_does: 'Opens a small picture-in-picture window showing what your partner (K9 or handler) can currently see. Press again to close it.',
+        cmdref_toggle_camera_feed_needs: 'K9 access, an online partner within range, and Partner Camera Feed enabled on this server.',
+        cmdref_toggle_thermal_vision_usage: '/qbx_k9unit:toggleThermalVision',
+        cmdref_toggle_thermal_vision_does: 'Turns on heat vision: people and animals glow so they are easier to spot, even in the dark or through smoke. Press again to turn it off. Turning this on switches Night Vision off automatically.',
+        cmdref_toggle_thermal_vision_needs: 'You must be controlling your K9, and Thermal Vision enabled on this server. No certification needed.',
+        cmdref_toggle_night_vision_usage: '/qbx_k9unit:toggleNightVision',
+        cmdref_toggle_night_vision_does: 'Turns on night vision so you can see clearly in the dark. Press again to turn it off. Turning this on switches Thermal Vision off automatically.',
+        cmdref_toggle_night_vision_needs: 'You must be controlling your K9, and Night Vision enabled on this server. No certification needed.',
 
         // ---- GUIDED FLOWS (this pass, owner's own words: "expand the
         // workflow paths for all the features to make them smoother,
@@ -1832,7 +1919,7 @@
     var THEME_DENSITY_OPTIONS = ['comfortable', 'compact'];
 
     // ------------------------------------------------------------------
-    // COMMAND REFERENCE (this pass) -- "the resource registers 36
+    // COMMAND REFERENCE (this pass) -- "the resource registers dozens of
     // commands, a player has no way to discover them in-game". This is
     // the single, HAND-MAINTAINED catalog that screen renders from --
     // see buildCommandReferenceScreen() below for the UI itself.
@@ -1840,18 +1927,27 @@
     // DRIFT GUARD, NOT A PROMISE THIS NEVER ROTS BY ITSELF: nothing on
     // this page derives COMMAND_REFERENCE from the real RegisterCommand
     // calls (there is no shared runtime registry the commands themselves
-    // feed -- they are plain `RegisterCommand('k9x', ...)` calls scattered
-    // across 19 server/client files with nothing to introspect from a
-    // browser sandbox). What keeps this list honest instead is
-    // tests/commandreferenceregistry_spec.lua: it greps the REAL
-    // server/*.lua + client/*.lua source for every literal
-    // `RegisterCommand('...')` name (the exact
-    // `RegisterCommand\('[a-z0-9_]+'` shape this task was scoped from) and
-    // fails LOUDLY, naming the exact command, if that set and this
+    // feed -- they are plain `RegisterCommand(name, ...)` calls scattered
+    // across two dozen-plus server/client files with nothing to
+    // introspect from a browser sandbox). What keeps this list honest
+    // instead is tests/commandreferenceregistry_spec.lua: it greps the
+    // REAL server/*.lua + client/*.lua source for every literal
+    // `RegisterCommand('...')` name (the
+    // `RegisterCommand\('[a-zA-Z0-9_:]+'` shape -- widened this pass to
+    // also catch a command namespaced under this resource's own
+    // `qbx_k9unit:` prefix, the exact gap that let seven real keybind
+    // commands -- qbx_k9unit:vault/pursuitsprint/toggleCamera/
+    // toggleCameraFeed/toggleThermalVision/toggleNightVision/
+    // confirmHandlerDownDefense -- go undocumented here until this pass)
+    // and fails LOUDLY, naming the exact command, if that set and this
     // catalog's own `command` field set ever diverge in EITHER direction
     // -- a command added here with no real RegisterCommand behind it, or a
-    // real command with no entry here. Add command #37 to this array in
-    // the SAME change that registers it, or that spec turns red.
+    // real command with no entry here. Deliberately not naming an exact
+    // count here -- a hardcoded total is one more place to go stale every
+    // time a command is added, exactly what this task's own accuracy pass
+    // fixed for the "36 commands" phrasing this comment used to carry --
+    // add the next command to this array in the SAME change that
+    // registers it, or that spec turns red.
     //
     // Each entry:
     //   command    string   -- the exact RegisterCommand name, e.g. 'k9auditcert'
@@ -1886,6 +1982,12 @@
         // that got a rebindable key at all.
         { key: 'basic_commands', labelKey: 'cmdref_category_basic_commands' },
         { key: 'combat', labelKey: 'cmdref_category_combat' },
+        // Camera/vision keybinds (this pass, integration-sweep undocumented-
+        // keybinds fix) -- toggleCamera/toggleCameraFeed/toggleThermalVision/
+        // toggleNightVision all change what you SEE, never a command TO your
+        // K9, which is why these four get their own category rather than
+        // folding into Basic K9 Commands or Combat & Restraint above.
+        { key: 'vision', labelKey: 'cmdref_category_vision' },
         { key: 'field_gear', labelKey: 'cmdref_category_field_gear' },
         { key: 'calling_off', labelKey: 'cmdref_category_calling_off' },
         { key: 'scent_games', labelKey: 'cmdref_category_scent_games' },
@@ -1918,6 +2020,56 @@
         { command: 'k9bitehold', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9bitehold_usage', doesKey: 'cmdref_k9bitehold_does', needsKey: 'cmdref_k9bitehold_needs', gate: { kind: 'access', featureKey: 'BiteAndHold' }, defaultKeybind: 'B' },
         { command: 'k9takedown', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9takedown_usage', doesKey: 'cmdref_k9takedown_does', needsKey: 'cmdref_k9takedown_needs', gate: { kind: 'access', featureKey: 'NonLethalTakedown' }, defaultKeybind: 'T' },
         { command: 'k9dragtoggle', category: 'combat', adminOnly: false, usageKey: 'cmdref_k9dragtoggle_usage', doesKey: 'cmdref_k9dragtoggle_does', needsKey: 'cmdref_k9dragtoggle_needs', gate: { kind: 'access', featureKey: 'PropDragging' }, defaultKeybind: 'Y' },
+        // qbx_k9unit:vault/qbx_k9unit:pursuitsprint/
+        // qbx_k9unit:confirmHandlerDownDefense (this pass -- integration-
+        // sweep fix): three REAL, working keybind commands that had ZERO
+        // COMMAND_REFERENCE entry before this pass -- see
+        // tests/commandreferenceregistry_spec.lua's own header "WIDENED,
+        // THIS PASS" for exactly why the drift guard never caught this.
+        // Grouped into Combat & Restraint, not a new category, because
+        // config.lua's own "COMBAT & ADVANCED AGILITY" section already
+        // groups AgilityAdvanced/HandlerDownDefense alongside BiteAndHold/
+        // NonLethalTakedown/PropDragging as one family, and Pursuit Sprint
+        // is a chase-support ability for the same apprehension workflow.
+        // command names use this resource's OWN `qbx_k9unit:` prefix, not
+        // a bare `k9x` name -- both RegisterCommand calls in
+        // client/agility.lua/client/pursuitsprint.lua/client/defense.lua
+        // pair a RegisterKeyMapping, whose own id must be globally unique
+        // across every resource a server loads, unlike a chat-only command.
+        { command: 'qbx_k9unit:vault', category: 'combat', adminOnly: false, usageKey: 'cmdref_vault_usage', doesKey: 'cmdref_vault_does', needsKey: 'cmdref_vault_needs', gate: { kind: 'access', featureKey: 'AgilityAdvanced' }, defaultKeybind: 'X' },
+        { command: 'qbx_k9unit:pursuitsprint', category: 'combat', adminOnly: false, usageKey: 'cmdref_pursuitsprint_usage', doesKey: 'cmdref_pursuitsprint_does', needsKey: 'cmdref_pursuitsprint_needs', gate: { kind: 'access', featureKey: 'PursuitSprint' }, defaultKeybind: 'N' },
+        { command: 'qbx_k9unit:confirmHandlerDownDefense', category: 'combat', adminOnly: false, usageKey: 'cmdref_confirm_handler_down_defense_usage', doesKey: 'cmdref_confirm_handler_down_defense_does', needsKey: 'cmdref_confirm_handler_down_defense_needs', gate: { kind: 'access', featureKey: 'HandlerDownDefense' }, defaultKeybind: 'G', defaultKeybindConfigurable: true },
+
+        // ---- Cameras & Vision (this pass, same integration-sweep fix as
+        // Combat & Restraint's three additions immediately above) --
+        // toggleCamera (client/movement.lua), toggleCameraFeed/
+        // toggleThermalVision/toggleNightVision (client/vision.lua). All
+        // four change what the K9 player SEES, never a command issued TO
+        // the K9, which is why COMMAND_REFERENCE_CATEGORIES gives them
+        // their own 'vision' bucket rather than folding into Basic K9
+        // Commands or Combat & Restraint. `defaultKeybindConfigurable`
+        // (this pass, NEW, OPTIONAL field): true for a command whose
+        // RegisterKeyMapping default is read from a config.lua VALUE
+        // (Config.CameraFeed.toggleKey/Config.Vision.Thermal.toggleKey/
+        // Config.Vision.Night.toggleKey/
+        // Config.Combat.HandlerDownDefense.confirmKey), not a literal
+        // baked into client/keybinds.lua the way 'V'/'C'/'B'/'T'/'Y'/'Z'/
+        // 'U'/'O'/'X'/'N' above are -- `defaultKeybind` below is still the
+        // REAL current value read directly from config.lua (never
+        // guessed), but buildCommandReferenceRow() renders an HONEST extra
+        // caveat for these four: this server's operator chose that value,
+        // so it can legitimately be different from server to server, unlike
+        // every literal default above. k9bitehold/k9takedown/k9dragtoggle/
+        // k9scentvision above are ALSO config-sourced defaults
+        // (Config.Combat.BiteAndHold.toggleKeybind etc.) but were not
+        // marked this way when first written -- a known, disclosed
+        // inconsistency from before this pass, not a new one, and out of
+        // this pass's own narrow scope (the seven undocumented commands) to
+        // retrofit.
+        { command: 'qbx_k9unit:toggleCamera', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_camera_usage', doesKey: 'cmdref_toggle_camera_does', needsKey: 'cmdref_toggle_camera_needs', gate: { kind: 'open' }, defaultKeybind: 'L' },
+        { command: 'qbx_k9unit:toggleCameraFeed', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_camera_feed_usage', doesKey: 'cmdref_toggle_camera_feed_does', needsKey: 'cmdref_toggle_camera_feed_needs', gate: { kind: 'access', featureKey: 'CameraFeedPiP' }, defaultKeybind: 'H', defaultKeybindConfigurable: true },
+        { command: 'qbx_k9unit:toggleThermalVision', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_thermal_vision_usage', doesKey: 'cmdref_toggle_thermal_vision_does', needsKey: 'cmdref_toggle_thermal_vision_needs', gate: { kind: 'open', featureKey: 'ThermalVision' }, defaultKeybind: 'K', defaultKeybindConfigurable: true },
+        { command: 'qbx_k9unit:toggleNightVision', category: 'vision', adminOnly: false, usageKey: 'cmdref_toggle_night_vision_usage', doesKey: 'cmdref_toggle_night_vision_does', needsKey: 'cmdref_toggle_night_vision_needs', gate: { kind: 'open', featureKey: 'NightVision' }, defaultKeybind: 'J', defaultKeybindConfigurable: true },
 
         // ---- Field Gear & Equipment ----
         { command: 'k9deploykennel', category: 'field_gear', adminOnly: false, usageKey: 'cmdref_k9deploykennel_usage', doesKey: 'cmdref_k9deploykennel_does', needsKey: 'cmdref_k9deploykennel_needs', gate: { kind: 'access', featureKey: 'DeployableKennel' } },
@@ -2143,11 +2295,6 @@
         open: false,
         screen: 'home', // 'home' | 'my_record' | 'commands' | 'help' | 'console' | 'person' | 'theme' | 'cert_tiers' | 'shop_locations' | 'runtime_control' | 'xp_tiers' | 'flows' | 'flow_onboard' | 'flow_offboard' | 'flow_problem' | 'flow_tuning' | ... -- 'home' is the DEFAULT landing view (see buildHomeScreen()), reset on every open in handleOpen()
         strings: {},
-        // Standalone block-enforcement badge/hint text -- see
-        // clientEnforcedBadgeText()/clientEnforcedHintText()'s own doc
-        // comment for why these two are NOT part of `strings` above.
-        blockClientEnforcedBadge: null,
-        blockClientEnforcedHint: null,
         capabilities: {},
         maxXpPerGrant: null,
         peds: [], // Config.Peds, verbatim -- see tablet:assignK9Role's own NUI contract note; display list only, server re-validates the chosen model regardless
@@ -2383,18 +2530,20 @@
         shopItemFieldError: null, // 'key' | 'price' | 'label' | 'currency' | 'requiredTierKey' | 'requiredSpecialization' | null -- which of the draft form's own inputs the server's last equipmentShopItemsUpsert rejected
         shopItemActionError: null, // { key, text } -- a Delete/Reorder refusal rendered inline on that specific row, same convention as certTierActionError above
 
-        // K9 Audit Trail viewer -- server/admin.lua's five tabletAudit*
+        // K9 Audit Trail viewer -- server/admin.lua's six tabletAudit*
         // callbacks (this file's own NUI CONTRACT note on
-        // tablet:auditCert/Partner/Search/Xp/Dept has the full contract).
-        // Gated on canViewAudit() (see buildTabs()), NOT isHighCommand
-        // alone, unlike runtimeControlEnabled/shopLocationsEnabled/
-        // themingEnabled above -- see that function's own comment.
+        // tablet:auditCert/Partner/Search/Xp/Dept/Catalog has the full
+        // contract). Gated on canViewAudit() (see buildTabs()), NOT
+        // isHighCommand alone, unlike runtimeControlEnabled/
+        // shopLocationsEnabled/themingEnabled above -- see that function's
+        // own comment.
         auditEnabled: false, // Config.Features.AdminAuditCommands -- UX hint only, but see this file's own NUI CONTRACT note on why this one specifically disables the query controls rather than just showing a note
-        auditMode: 'cert', // 'cert' | 'partner' | 'search' | 'xp' | 'dept' -- which of the five tabletAudit* callbacks the query form below currently targets
+        auditMode: 'cert', // 'cert' | 'partner' | 'search' | 'xp' | 'dept' | 'catalog' -- which of the six tabletAudit* callbacks the query form below currently targets
         auditCitizenId: '', // shared free-text input for the cert/partner/xp modes
         auditDepartment: '', // tabletAuditDept's own `departmentKey` input -- free text, but pre-offered as a <select> from state.myRecord.certifications' own real departmentKey list (never a hardcoded department list -- see buildAuditDeptFields())
         auditSearchMode: 'officer', // 'officer' | 'plate' | 'person' | 'recent' -- tabletAuditSearch's own `mode`
         auditSearchValue: '', // citizenid (officer/person) or plate (plate); unused for 'recent'
+        auditCatalogName: 'certTiers', // tabletAuditCatalog's own `catalogName` -- one of AUDIT_CATALOG_NAMES' 8 keys; 'certTiers' (that array's first entry) is the default, same "first entry of the fixed list" convention auditSearchMode's own 'officer' default already uses
         auditLimit: 20, // shared numeric input for every mode except 'xp' (which takes none) -- clamped into [AUDIT_LIMIT_MIN, auditEffectiveCap()] before ever being sent, see runAuditQuery()
         auditServerCap: null, // the REAL cap (server/admin.lua's HARD_MAX_RESULTS) as reported by `result.cap` on the most recent successful tabletAudit* response -- null until the FIRST one ever succeeds this session, or if a response is ever missing the field (older server build) -- see auditEffectiveCap()/AUDIT_LIMIT_MAX_FALLBACK
         auditLoading: false,
@@ -3589,8 +3738,8 @@
         });
         tabs.appendChild(partnershipsTab);
 
-        // COMMANDS -- the command reference (this pass, "36 commands, no
-        // way for a player to discover them in-game"). ALWAYS shown, same
+        // COMMANDS -- the command reference (this pass, "dozens of commands,
+        // no way for a player to discover them in-game"). ALWAYS shown, same
         // as Home/My Record immediately above and for the identical
         // reason: it is presentation over data every resolved viewer
         // already has (state.viewer/state.myRecord.myFeatures -- see
@@ -4438,7 +4587,7 @@
         return wrap;
     }
 
-    /** @param {{command:string, adminOnly:boolean, usageKey:string, doesKey:string, needsKey:string, gate:object, defaultKeybind?:string}} entry */
+    /** @param {{command:string, adminOnly:boolean, usageKey:string, doesKey:string, needsKey:string, gate:object, defaultKeybind?:string, defaultKeybindConfigurable?:boolean}} entry */
     function buildCommandReferenceRow(entry) {
         var tr = mk('tr');
 
@@ -4457,17 +4606,26 @@
             commandTd.appendChild(mk('span', { class: 'k9tablet-muted', text: ' (' + S('cmdref_admin_badge') + ')' }));
         }
         // Default keybind (this pass, keybinds handoff) -- OPTIONAL, only
-        // the six commands client/keybinds.lua actually registers a
-        // RegisterKeyMapping default for carry this field at all. A
-        // separate block-level line under the command's own usage text,
-        // never appended inline onto it, so it reads as its own fact
+        // commands with a real RegisterKeyMapping default carry this field
+        // at all. A separate block-level line under the command's own usage
+        // text, never appended inline onto it, so it reads as its own fact
         // rather than part of the command syntax. The "only applies if
         // never rebound" caveat is NOT repeated per-row here -- see
         // cmdref_keybind_caveat, shown once in this screen's own intro.
+        // `defaultKeybindConfigurable` (this pass, integration-sweep
+        // keybinds fix, NEW/OPTIONAL) picks the HONEST second template
+        // (cmdref_default_keybind_configurable_template) for a command
+        // whose default is read from a config.lua VALUE this server's own
+        // operator set, rather than a literal baked into
+        // client/keybinds.lua -- see COMMAND_REFERENCE's own doc comment
+        // on this field for exactly which entries use it.
         if (typeof entry.defaultKeybind === 'string' && entry.defaultKeybind.length > 0) {
+            var keybindTemplateKey = entry.defaultKeybindConfigurable
+                ? 'cmdref_default_keybind_configurable_template'
+                : 'cmdref_default_keybind_template';
             commandTd.appendChild(mk('div', {
                 class: 'k9tablet-muted',
-                text: formatTemplate(S('cmdref_default_keybind_template'), { key: entry.defaultKeybind }),
+                text: formatTemplate(S(keybindTemplateKey), { key: entry.defaultKeybind }),
             }));
         }
         tr.appendChild(commandTd);
@@ -4670,7 +4828,7 @@
         return wrap;
     }
 
-    /** @param {Array<{command:string,adminOnly:boolean,usageKey:string,doesKey:string,needsKey:string,gate:object,defaultKeybind?:string}>} entries */
+    /** @param {Array<{command:string,adminOnly:boolean,usageKey:string,doesKey:string,needsKey:string,gate:object,defaultKeybind?:string,defaultKeybindConfigurable?:boolean}>} entries */
     function buildHelpCommandTable(entries) {
         var table = mk('table', { class: 'k9tablet-table' });
         var thead = mk('thead');
@@ -7940,10 +8098,14 @@
 
     // ---- K9 Audit Trail viewer screen (see canViewAudit()) ----
 
-    /** Fixed order the five mode buttons render in -- matches
+    /** Fixed order the first five mode buttons render in -- matches
      * server/admin.lua's own COMMAND SURFACE listing (k9auditcert,
-     * k9auditpartner, k9auditsearch, k9auditxp, k9auditdept). */
-    var AUDIT_MODES = ['cert', 'partner', 'search', 'xp', 'dept'];
+     * k9auditpartner, k9auditsearch, k9auditxp, k9auditdept). 'catalog' is
+     * the SIXTH mode (this pass), appended rather than interleaved -- it
+     * has no k9audit* command counterpart at all (bridges
+     * tabletAuditCatalog directly, see this file's own NUI CONTRACT note),
+     * so it does not belong inside that five-command ordering. */
+    var AUDIT_MODES = ['cert', 'partner', 'search', 'xp', 'dept', 'catalog'];
 
     /** @param {string} mode @returns {string} */
     function auditModeLabel(mode) {
@@ -7953,6 +8115,7 @@
             case 'search': return S('audit_mode_search');
             case 'xp': return S('audit_mode_xp');
             case 'dept': return S('audit_mode_dept');
+            case 'catalog': return S('audit_mode_catalog');
             default: return mode;
         }
     }
@@ -8026,6 +8189,32 @@
         return out;
     }
 
+    /**
+     * The 8 real catalog names server/admin.lua's own CATALOG_AUDIT_SOURCES
+     * table names, in that table's own declared order -- a DISPLAY
+     * convenience only, never the real allowlist (that table itself is;
+     * see tablet:auditCatalog's own doc comment in client/tablet.lua for
+     * why this file does not re-check it). Each pair is
+     * [catalogName, an EXISTING heading-locale-key already naming this
+     * exact catalog/screen elsewhere on this page] -- reused rather than
+     * a brand-new key per catalog, so this dropdown's option text can
+     * never drift from what that screen already calls itself.
+     * runtimeOverrides has no dedicated catalog SCREEN of its own (it
+     * spans both the Runtime Feature Control screen's tunables AND its
+     * feature toggles) -- runtime_control_heading is that screen's own
+     * heading and the closest real match.
+     */
+    var AUDIT_CATALOG_NAMES = [
+        ['certTiers', 'cert_tiers_heading'],
+        ['permissionKeys', 'permission_keys_heading'],
+        ['xpTiers', 'xp_tiers_heading'],
+        ['shopItems', 'shop_items_heading'],
+        ['shopLocations', 'shop_locations_heading'],
+        ['k9Profiles', 'k9_profiles_heading'],
+        ['runtimeOverrides', 'runtime_control_heading'],
+        ['tabletThemes', 'theme_heading'],
+    ];
+
     function buildAuditForm() {
         var form = mk('div', { class: 'k9tablet-audit-form' });
 
@@ -8087,6 +8276,17 @@
                 valueInput.addEventListener('input', function (e) { state.auditSearchValue = e.target.value; });
                 form.appendChild(valueInput);
             }
+        } else if (state.auditMode === 'catalog') {
+            form.appendChild(mk('span', { class: 'k9tablet-audit-label', text: S('audit_catalog_label') }));
+            var catalogSelect = mk('select', { class: 'k9tablet-audit-select' });
+            AUDIT_CATALOG_NAMES.forEach(function (pair) {
+                var opt = mk('option', { text: S(pair[1]) });
+                opt.setAttribute('value', pair[0]);
+                catalogSelect.appendChild(opt);
+            });
+            catalogSelect.value = state.auditCatalogName;
+            catalogSelect.addEventListener('input', function (e) { state.auditCatalogName = e.target.value; });
+            form.appendChild(catalogSelect);
         }
 
         if (state.auditMode !== 'xp') {
@@ -8193,6 +8393,10 @@
      * renamed. `id` (partner/search rows' own sort key) is deliberately
      * never a column here -- it is a MergeSortedByIdDesc implementation
      * detail server-side, meaningless to an officer reading the table.
+     * Does NOT cover the SIXTH mode, 'catalog' -- that one has no single
+     * fixed row shape (it depends on which of 8 catalogs was queried), so
+     * it gets its own auditColumnsForCatalog() immediately below instead;
+     * `buildAuditResultTable()` is what decides which of the two to call.
      * @param {'cert'|'partner'|'search'|'xp'|'dept'} mode
      * @returns {Array<{header:string, render:(row:object)=>string}>}
      */
@@ -8245,11 +8449,118 @@
     }
 
     /**
-     * @param {'cert'|'partner'|'search'|'xp'|'dept'} mode
-     * @param {Array<object>} rows
+     * Column definitions for the 'catalog' mode's own 8 possible
+     * catalogs -- unlike every other mode above, 'catalog' has no single
+     * fixed row shape of its own; it depends entirely on WHICH catalog was
+     * queried (server/admin.lua's own CATALOG_AUDIT_SOURCES table and the
+     * eight distinct K9Store.*Audit_GetRecent accessors it names are the
+     * authoritative source for every shape below -- see that table's own
+     * trust-boundary header comment). Every citizenid-identified column
+     * still pairs its raw id with its resolved `_name` sibling via
+     * auditIdWithName(), same convention as auditColumnsForMode() above.
+     *
+     * REUSE MAP (why so few of these headers are brand-new keys): six of
+     * the eight catalogs (certTiers/permissionKeys/xpTiers/shopItems/
+     * k9Profiles, plus shopLocations' own wider shape) share the exact
+     * same `action`/`detail`/`changed_by`/`changed_at` envelope server-side
+     * (server/datastore.lua's own K9Store.*Audit_Append writers all share
+     * this shape) around ONE catalog-specific "what changed" column --
+     * that one column's header is reused from whichever EXISTING screen
+     * already edits that exact field (cert_tier_key_label, etc. -- see
+     * each case below for which), never a new key. tabletThemes reuses
+     * the Tablet Appearance screen's own six field labels verbatim, for
+     * the identical reason.
+     * @param {'certTiers'|'permissionKeys'|'xpTiers'|'shopItems'|'shopLocations'|'k9Profiles'|'runtimeOverrides'|'tabletThemes'} catalogName
+     * @returns {Array<{header:string, render:(row:object)=>string}>}
      */
-    function buildAuditResultTable(mode, rows) {
-        var columns = auditColumnsForMode(mode);
+    function auditColumnsForCatalog(catalogName) {
+        var changedByColumn = { header: S('column_changed_by'), render: function (r) { return auditIdWithName(r.changed_by, r.changed_by_name); } };
+        var changedAtColumn = { header: S('column_changed_at'), render: function (r) { return auditText(r.changed_at); } };
+        var actionColumn = { header: S('column_action'), render: function (r) { return auditText(r.action); } };
+        var detailColumn = { header: S('column_detail'), render: function (r) { return auditText(r.detail); } };
+
+        switch (catalogName) {
+            case 'certTiers':
+                return [actionColumn, { header: S('cert_tier_key_label'), render: function (r) { return auditText(r.tier_key); } }, detailColumn, changedByColumn, changedAtColumn];
+            case 'permissionKeys':
+                return [actionColumn, { header: S('permission_key_key_label'), render: function (r) { return auditText(r.permission_key); } }, detailColumn, changedByColumn, changedAtColumn];
+            case 'xpTiers':
+                // 'ordinal' is that rank's own position in the ladder --
+                // xp_tier_error_invalid_ordinal's own vocabulary -- shown
+                // via column_rank, the SAME word the Person screen already
+                // uses for a handler's own current rank (person_rank_heading's
+                // neighbour), never a new 'ordinal' key for the same concept.
+                return [actionColumn, { header: S('column_rank'), render: function (r) { return auditText(r.ordinal); } }, detailColumn, changedByColumn, changedAtColumn];
+            case 'shopItems':
+                return [actionColumn, { header: S('shop_item_key_label'), render: function (r) { return auditText(r.item_key); } }, detailColumn, changedByColumn, changedAtColumn];
+            case 'k9Profiles':
+                // citizenid doubles as this catalog's own "what changed"
+                // key (which K9/handler override) -- column_citizenid,
+                // paired with its resolved name exactly like every other
+                // citizenid column on this page, never a bare id.
+                return [actionColumn, { header: S('column_citizenid'), render: function (r) { return auditIdWithName(r.citizenid, r.citizenid_name); } }, detailColumn, changedByColumn, changedAtColumn];
+            case 'shopLocations':
+                // The one catalog with NO `detail` column at all -- its own
+                // K9Store.ShopLocationAudit_GetRecent instead carries the
+                // real position/model/scenario/label fields directly (see
+                // that accessor's own doc comment). Coordinates reuse
+                // formatShopLocationCoordinates() -- the EXACT same x/y/z
+                // formatter the live Shop Locations editor screen already
+                // uses, so a coordinate never renders differently in the
+                // audit trail than it does on the screen that sets it.
+                // `heading` has no editor-table column of its own to reuse
+                // (that screen never lists it in a table), hence the one
+                // brand-new column_heading key.
+                return [
+                    actionColumn,
+                    { header: S('column_coordinates'), render: function (r) { return auditText(formatShopLocationCoordinates(r)); } },
+                    { header: S('column_heading'), render: function (r) { return auditText(r.heading); } },
+                    { header: S('shop_location_model_label'), render: function (r) { return auditText(r.model); } },
+                    { header: S('shop_location_scenario_label'), render: function (r) { return auditText(r.scenario); } },
+                    { header: S('shop_location_label_label'), render: function (r) { return auditText(r.label); } },
+                    changedByColumn, changedAtColumn,
+                ];
+            case 'runtimeOverrides':
+                // The only catalog shaped as a real before/after DIFF
+                // (K9Store.OverrideAudit_GetRecent's own `old_value`/
+                // `new_value` pair) rather than an action + free-text
+                // detail -- no `action`/`detail` columns here at all.
+                return [
+                    { header: S('column_override_key'), render: function (r) { return auditText(r.override_key); } },
+                    { header: S('column_kind'), render: function (r) { return auditText(r.kind); } },
+                    { header: S('column_old_value'), render: function (r) { return auditText(r.old_value); } },
+                    { header: S('column_new_value'), render: function (r) { return auditText(r.new_value); } },
+                    changedByColumn, changedAtColumn,
+                ];
+            case 'tabletThemes':
+                // The Tablet Appearance screen's own six field labels,
+                // verbatim -- this catalog's row shape IS that screen's
+                // own save payload (K9Store.ThemeAudit_GetRecent mirrors
+                // K9Store.Theme_Upsert's columns exactly), so reusing its
+                // labels here is the same field, not merely a similar one.
+                return [
+                    { header: S('theme_primary_label'), render: function (r) { return auditText(r.primary_color); } },
+                    { header: S('theme_accent_label'), render: function (r) { return auditText(r.accent_color); } },
+                    { header: S('theme_background_label'), render: function (r) { return auditText(r.background_color); } },
+                    { header: S('theme_text_label'), render: function (r) { return auditText(r.text_color); } },
+                    { header: S('theme_density_label'), render: function (r) { return auditText(r.density); } },
+                    { header: S('theme_header_title_label'), render: function (r) { return auditText(r.header_title); } },
+                    changedByColumn, changedAtColumn,
+                ];
+            default:
+                return [];
+        }
+    }
+
+    /**
+     * @param {'cert'|'partner'|'search'|'xp'|'dept'|'catalog'} mode
+     * @param {Array<object>} rows
+     * @param {string} [catalogName] -- REQUIRED when mode === 'catalog' (see
+     *   auditColumnsForCatalog()'s own doc comment for why that one mode has
+     *   no single fixed column set of its own); ignored otherwise.
+     */
+    function buildAuditResultTable(mode, rows, catalogName) {
+        var columns = (mode === 'catalog') ? auditColumnsForCatalog(catalogName) : auditColumnsForMode(mode);
         var table = mk('table', { class: 'k9tablet-table' });
         var thead = mk('thead');
         var headRow = mk('tr');
@@ -8307,7 +8618,7 @@
             wrap.appendChild(mk('p', { class: 'k9tablet-muted', text: S('audit_result_empty') }));
             return wrap;
         }
-        wrap.appendChild(buildAuditResultTable(state.auditMode, state.auditResult.rows));
+        wrap.appendChild(buildAuditResultTable(state.auditMode, state.auditResult.rows, state.auditResult.catalogName));
         return wrap;
     }
 
@@ -11652,7 +11963,7 @@
         var limit = clampAuditLimit(state.auditLimit);
         state.auditLimit = limit; // reflect the clamp back into the input itself, so a typed 500 visibly becomes 100, never silently
 
-        var name, payload;
+        var name, payload, catalogName;
         switch (state.auditMode) {
             case 'cert':
             case 'partner': {
@@ -11701,6 +12012,18 @@
                 if (searchMode !== 'recent') payload.value = searchValue;
                 break;
             }
+            case 'catalog': {
+                // No blank-field check here, unlike every branch above --
+                // state.auditCatalogName always holds a real value from
+                // AUDIT_CATALOG_NAMES (the <select> in buildAuditForm()
+                // always has one selected; there is no free-text/blank
+                // state for this field to be in), so there is nothing to
+                // reject client-side before the round trip.
+                catalogName = state.auditCatalogName;
+                name = 'tablet:auditCatalog';
+                payload = { catalogName: catalogName, limit: limit };
+                break;
+            }
             default:
                 return;
         }
@@ -11743,6 +12066,16 @@
                 truncated: result.truncated === true,
                 requestedLimit: limit,
                 actualLimit: (typeof result.limit === 'number') ? result.limit : null,
+                // Which catalog produced THESE rows (closured from the
+                // request that produced this exact response, same "never
+                // re-derived from CURRENT state" reasoning as
+                // requestedLimit above) -- undefined for every mode except
+                // 'catalog'. buildAuditResultTable() needs this because,
+                // unlike every other mode, 'catalog' rows have a DIFFERENT
+                // column shape per catalogName, not one fixed shape for
+                // the whole mode -- state.auditMode alone is not enough to
+                // pick auditColumnsForCatalog()'s own column set.
+                catalogName: catalogName,
             };
             render();
         });
@@ -12093,6 +12426,7 @@
         state.auditDepartment = '';
         state.auditSearchMode = 'officer';
         state.auditSearchValue = '';
+        state.auditCatalogName = 'certTiers';
         state.auditError = null;
         state.auditResult = null;
         // state.auditServerCap is DELIBERATELY NOT reset here -- same

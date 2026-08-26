@@ -57,6 +57,14 @@ const { findByText, findAll, findByTag } = require('./tablet-dom-stub');
 // SAME array buildCommandReferenceScreen() reads, so a real rendering bug
 // (dropping or duplicating rows) still fails it -- it just never needs a
 // manual bump when the catalog itself legitimately grows.
+//
+// WIDENED, THIS PASS: the character class below used to be `[a-z0-9_]+`,
+// which silently missed every command namespaced under this resource's own
+// `qbx_k9unit:` prefix (a `:`, and for several of them, camelCase letters
+// too -- both outside that class) -- the exact same blind spot
+// tests/commandreferenceregistry_spec.lua's own Lua-side extractor had,
+// fixed in the same pass. `[a-zA-Z0-9_:]+` matches both the plain `k9x`
+// shape and the namespaced one.
 const tabletJsSourceForCommandCount = fs.readFileSync(path.join(__dirname, '..', 'tablet.js'), 'utf8');
 function countRealCommandReferenceEntries() {
     const startPos = tabletJsSourceForCommandCount.indexOf('var COMMAND_REFERENCE = [');
@@ -64,7 +72,7 @@ function countRealCommandReferenceEntries() {
     const endPos = tabletJsSourceForCommandCount.indexOf('\n    ];', startPos);
     if (endPos === -1) throw new Error('tablet_command_reference_spec: closing "];" for COMMAND_REFERENCE not found in html/tablet.js');
     const body = tabletJsSourceForCommandCount.slice(startPos, endPos);
-    const matches = body.match(/command:\s*'[a-z0-9_]+'/g);
+    const matches = body.match(/command:\s*'[a-zA-Z0-9_:]+'/g);
     if (!matches) throw new Error('tablet_command_reference_spec: matched zero command entries -- extraction pattern is stale');
     return matches.length;
 }

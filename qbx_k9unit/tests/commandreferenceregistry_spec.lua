@@ -16,8 +16,8 @@
 
     HOW THE REAL COMMAND NAMES ARE FOUND -- deliberately the EXACT same
     shape this task itself was scoped from:
-        grep -rhoE "RegisterCommand\('[a-z0-9_]+'" server/*.lua client/*.lua
-    reproduced here as a Lua pattern (`RegisterCommand%('([%l%d_]+)'`)
+        grep -rhoE "RegisterCommand\('[a-zA-Z0-9_:]+'" server/*.lua client/*.lua
+    reproduced here as a Lua pattern (`RegisterCommand%('([%a%d_:]+)'`)
     against each real file's own raw text -- see
     tests/customizationregistry_spec.lua's header "WHY TEXT-PATTERN
     EXTRACTION" for why raw source text, not a loaded/executed file, is this
@@ -27,6 +27,30 @@
     booting all 39 of them into one sandbox just to read a list of literal
     strings would be this spec's entire runtime cost for zero extra
     correctness).
+
+    WIDENED, THIS PASS -- A REAL BLIND SPOT, FOUND AND FIXED: the pattern
+    above used to be `[a-z0-9_]+`/`[%l%d_]+` -- lowercase letters, digits,
+    and underscore ONLY. Every bare `RegisterCommand('k9x', ...)` call
+    matches that fine, but `RegisterKeyMapping` requires its own id to be
+    GLOBALLY unique across every resource a server loads, which pushed
+    seven real keybind commands (client/agility.lua's `qbx_k9unit:vault`,
+    client/pursuitsprint.lua's `qbx_k9unit:pursuitsprint`,
+    client/movement.lua's `qbx_k9unit:toggleCamera`,
+    client/vision.lua's `qbx_k9unit:toggleCameraFeed`/
+    `qbx_k9unit:toggleThermalVision`/`qbx_k9unit:toggleNightVision`, and
+    client/defense.lua's `qbx_k9unit:confirmHandlerDownDefense`) onto this
+    resource's own `qbx_k9unit:` namespace prefix instead -- a `:` character,
+    and for four of the seven, camelCase letters too, BOTH outside the old
+    character class. The old pattern silently skipped every one of them on
+    BOTH sides of the comparison (the real-file scan below AND
+    ExtractDocumentedCommandNames' own `command:%s*'...'` extraction from
+    html/tablet.js), so this spec had been reporting a clean match for years
+    while blind to an entire class of real, player-usable commands with zero
+    COMMAND_REFERENCE entry -- passing green while catching nothing for
+    exactly the seven that needed it. Widened to `[%a%d_:]+` (any letter,
+    upper or lower, plus digit/underscore/colon) so a future namespaced
+    `RegisterCommand`/`RegisterKeyMapping` pair is caught by this same guard
+    instead of silently repeating this gap.
 
     HAND-MAINTAINED FILE LIST, SAME DISCLOSED TRADEOFF
     tests/customizationregistry_spec.lua's OWN SERVER_LUA_FILES already
@@ -46,13 +70,20 @@
 
     WHY THIS CANNOT BE "DERIVE COMMAND_REFERENCE FROM THE REAL REGISTRY"
     INSTEAD (the option this task's own brief names first): there is no
-    such registry. Every one of the 36 commands is a bare, independent
-    `RegisterCommand('k9x', function(...) ... end, false)` call, spread
-    across 19 different server/client files, each with its own
-    authorization shape (see html/tablet.js's own COMMAND_REFERENCE header
-    for the "gate kind" taxonomy this screen uses instead) -- there is
-    nothing today for a fifth file to read the master list FROM. This
-    spec is the cheaper option this task's brief explicitly names second,
+    such registry. Every real command is an independent
+    `RegisterCommand(name, function(...) ... end, false)` call -- most
+    named bare (`k9x`), a handful namespaced under this resource's own
+    `qbx_k9unit:` prefix where a paired `RegisterKeyMapping` needed a
+    globally-unique id -- spread across two dozen-plus server/client files,
+    each with its own authorization shape (see html/tablet.js's own
+    COMMAND_REFERENCE header for the "gate kind" taxonomy this screen uses
+    instead) -- there is nothing today for a fifth file to read the master
+    list FROM. Deliberately not pinned to an exact command/file count here
+    (see MIN_PLAUSIBLE_TABLET_STRINGS-style reasoning in
+    tests/tabletlocalization_spec.lua's own header for why a moving total
+    is never worth hardcoding) -- the LOAD-BEARING DRIFT GUARD test below
+    is what actually keeps both sides honest, not a number in this comment.
+    This spec is the cheaper option this task's brief explicitly names second,
     matching the SAME reasoning tests/tabletlocalization_spec.lua already
     gives for html/tablet.js's own DEFAULT_STRINGS vs. locales/en.json
     (also two independently-maintained lists, pinned against each other by
@@ -91,25 +122,26 @@ local SERVER_LUA_FILES = {
 local CLIENT_LUA_FILES = {
     'agility.lua', 'appearance.lua', 'audio.lua', 'bonetool.lua', 'combat.lua', 'defense.lua',
     'equipmentshop.lua', 'exports.lua', 'featureblocks.lua', 'fetch.lua', 'findalert.lua',
-    'hud.lua', 'inventory.lua', 'keybinds.lua', 'kennel.lua', 'main.lua', 'medkit.lua', 'movement.lua',
-    'partnership.lua', 'progression.lua', 'propattachment.lua', 'proximityaudio.lua',
+    'hud.lua', 'inventory.lua', 'keybinds.lua', 'kennel.lua', 'leashvisual.lua', 'main.lua', 'medkit.lua',
+    'movement.lua', 'partnership.lua', 'progression.lua', 'propattachment.lua', 'proximityaudio.lua',
     'pursuitsprint.lua', 'radial.lua', 'recall.lua', 'sarcalls.lua', 'scentlineup.lua',
     'scenttrail.lua', 'screenfx.lua', 'search.lua', 'tablet.lua', 'tracking.lua', 'training.lua',
     'vehicle.lua', 'vision.lua', 'wellbeing.lua',
 }
 
 --- Pure text-in, set-out extraction -- exactly the
---- `RegisterCommand\('[a-z0-9_]+'` shape this whole task was scoped from,
---- reproduced as a Lua pattern. Deliberately takes raw TEXT, not a file
---- path, so the synthetic drift test below can feed it a fabricated
---- in-memory string and prove the comparison logic itself actually
---- catches a divergence, with no dependency on the real files ever being
---- (or ever becoming) out of sync.
+--- `RegisterCommand\('[a-zA-Z0-9_:]+'` shape this whole task was scoped
+--- from (see this file's header "WIDENED, THIS PASS" for why the character
+--- class is not just `[a-z0-9_]`), reproduced as a Lua pattern.
+--- Deliberately takes raw TEXT, not a file path, so the synthetic drift
+--- test below can feed it a fabricated in-memory string and prove the
+--- comparison logic itself actually catches a divergence, with no
+--- dependency on the real files ever being (or ever becoming) out of sync.
 --- @param text string
 --- @return table<string, boolean> set
 local function ExtractRegisterCommandNames(text)
     local set = {}
-    for name in text:gmatch("RegisterCommand%('([%l%d_]+)'") do
+    for name in text:gmatch("RegisterCommand%('([%a%d_:]+)'") do
         set[name] = true
     end
     return set
@@ -150,7 +182,7 @@ local function ExtractDocumentedCommandNames(text)
     local body = text:sub(startPos, endPos)
 
     local set = {}
-    for name in body:gmatch("command:%s*'([%l%d_]+)'") do
+    for name in body:gmatch("command:%s*'([%a%d_:]+)'") do
         set[name] = true
     end
     return set
@@ -207,6 +239,28 @@ t.test('SYNTHETIC: a documented command with no matching real RegisterCommand ca
 
     t.isNil(real['k9phantom'], 'k9phantom is documented but was never really registered in this fabricated fixture')
     t.isTrue(documented['k9phantom'] == true, 'sanity: extraction found the phantom documented command')
+end)
+
+t.test('SYNTHETIC: a namespaced, mixed-case RegisterKeyMapping-paired command (e.g. qbx_k9unit:toggleSomething) is no longer invisible to either extractor -- the exact gap the seven real keybind commands fell into', function()
+    local fakeServerText = [[
+        RegisterCommand('qbx_k9unit:toggleSomething', function() end, false)
+        RegisterKeyMapping('qbx_k9unit:toggleSomething', 'Toggle Something', 'keyboard', 'X')
+    ]]
+    local fakeDocumentedTextMissing = "var COMMAND_REFERENCE = [\n"
+        .. "        { command: 'k9realone', category: 'field_gear' },\n"
+        .. "    ];\n"
+    local fakeDocumentedTextPresent = "var COMMAND_REFERENCE = [\n"
+        .. "        { command: 'qbx_k9unit:toggleSomething', category: 'field_gear' },\n"
+        .. "    ];\n"
+
+    local real = ExtractRegisterCommandNames(fakeServerText)
+    t.isTrue(real['qbx_k9unit:toggleSomething'] == true, 'a colon-namespaced, camelCase command name is found by the widened real-side extractor')
+
+    local documentedMissing = ExtractDocumentedCommandNames(fakeDocumentedTextMissing)
+    t.isNil(documentedMissing['qbx_k9unit:toggleSomething'], 'sanity: the fixture that omits it really does not document it')
+
+    local documentedPresent = ExtractDocumentedCommandNames(fakeDocumentedTextPresent)
+    t.isTrue(documentedPresent['qbx_k9unit:toggleSomething'] == true, 'a colon-namespaced, camelCase command name is found by the widened documented-side extractor too, when it IS present')
 end)
 
 -- ============================================================================
@@ -266,9 +320,10 @@ t.test('LOAD-BEARING DRIFT GUARD: every real RegisterCommand(...) name across se
     -- (a comment reformat, a rename of the JS var, a rewritten
     -- RegisterCommand call shape), which would make the two loops above
     -- pass vacuously on two empty sets. Deliberately NOT the real count
-    -- (36 as of this pass) -- see this task's own explicit instruction
-    -- not to hardcode a count that would need bumping every time a
-    -- command is added.
+    -- (52 as of this pass -- 45 bare + 7 namespaced, see this file's own
+    -- header "WIDENED, THIS PASS") -- see this task's own explicit
+    -- instruction not to hardcode a count that would need bumping every
+    -- time a command is added.
     local _, realCount = SortedKeys(real)
     local _, documentedCount = SortedKeys(documented)
     t.isTrue(realCount >= 30, ('sanity: only found %d real RegisterCommand name(s) across server/*.lua + client/*.lua -- expected at least 30; an extraction pattern or file list may be out of date'):format(realCount))
@@ -285,7 +340,7 @@ t.test('no duplicate command names within COMMAND_REFERENCE (a copy-pasted entry
 
     local seen = {}
     local duplicates = {}
-    for name in body:gmatch("command:%s*'([%l%d_]+)'") do
+    for name in body:gmatch("command:%s*'([%a%d_:]+)'") do
         if seen[name] then
             duplicates[#duplicates + 1] = name
         end
