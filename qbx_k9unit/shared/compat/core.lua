@@ -249,7 +249,22 @@ local REALM = IsDuplicityVersion() and 'server' or 'client'
 K9Compat.RequiredMethods = {
     inventory = {
         client = { 'OpenStash', 'OpenShop', 'UseItem', 'ItemExists' },
-        server = { 'GetInventoryItems', 'GetContainerFromSlot', 'GetItemCount', 'RemoveItem', 'RegisterStash', 'RegisterShop', 'RegisterHook' },
+        -- 'ItemExists' ADDED THIS PASS (coder-architect, resource-auto-
+        -- connect sweep): server/equipmentshop.lua's and server/wellbeing.lua's
+        -- own onResourceStart item-name sanity warnings both independently
+        -- found and documented ("COMPAT-LAYER FINDING, DELIBERATELY NOT
+        -- ROUTED") the exact same gap -- this list had no server-realm
+        -- ItemExists for them to route through, so both stayed hardwired to
+        -- a direct `exports.ox_inventory:Items(...)` call. See
+        -- shared/compat/inventory.lua's own header for what every
+        -- registered adapter now does with this: ox_inventory answers it
+        -- for real (same export the client realm already used); every
+        -- other adapter that returns a non-nil server table for a
+        -- resource-name it cannot verify a catalog-lookup capability for
+        -- must still supply a disclosed, honest placeholder -- never guess
+        -- an export name to fill this slot, see that file's own per-adapter
+        -- comments.
+        server = { 'GetInventoryItems', 'GetContainerFromSlot', 'GetItemCount', 'RemoveItem', 'RegisterStash', 'RegisterShop', 'RegisterHook', 'ItemExists' },
     },
     target = {
         client = { 'AddGlobalPlayer', 'AddGlobalVehicle', 'AddGlobalObject', 'AddModel', 'AddSphereZone', 'Remove', 'AddLocalEntity', 'RemoveLocalEntity' },

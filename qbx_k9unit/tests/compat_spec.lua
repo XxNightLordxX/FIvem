@@ -148,7 +148,10 @@ do
         local expected = {
             inventory = {
                 client = { 'OpenStash', 'OpenShop', 'UseItem', 'ItemExists' },
-                server = { 'GetInventoryItems', 'GetContainerFromSlot', 'GetItemCount', 'RemoveItem', 'RegisterStash', 'RegisterShop', 'RegisterHook' },
+                -- 'ItemExists' added to the server realm this pass
+                -- (coder-architect) -- see shared/compat/core.lua's own
+                -- comment on this exact line for why.
+                server = { 'GetInventoryItems', 'GetContainerFromSlot', 'GetItemCount', 'RemoveItem', 'RegisterStash', 'RegisterShop', 'RegisterHook', 'ItemExists' },
             },
             target = {
                 client = { 'AddGlobalPlayer', 'AddGlobalVehicle', 'AddGlobalObject', 'AddModel', 'AddSphereZone', 'Remove', 'AddLocalEntity', 'RemoveLocalEntity' },
@@ -184,7 +187,7 @@ do
     t.test('Get: never nil for a known system, even before any RegisterAdapter call', function()
         local adapter = ctx.K9Compat.Get('inventory')
         t.isNotNil(adapter)
-        t.equals(type(adapter.ItemExists), 'nil') -- server realm: ItemExists is a CLIENT-only method, not stubbed here
+        t.equals(type(adapter.ItemExists), 'function', 'server realm: ItemExists is now a required server method too (added this pass), so the no-op stub must expose it like every other required method')
         t.equals(type(adapter.GetItemCount), 'function', 'server realm must stub every server-required method')
     end)
 
@@ -279,6 +282,7 @@ do
             RegisterStash = function() return true end,
             RegisterShop = function() return true end,
             RegisterHook = function() return true end,
+            ItemExists = function() return true end, -- added to the server-realm contract this pass
         }
     end
 
@@ -588,6 +592,7 @@ do
                 GetInventoryItems = function() end, GetContainerFromSlot = function() end,
                 GetItemCount = function() end, RemoveItem = function() end,
                 RegisterStash = function() end, RegisterShop = function() end, RegisterHook = function() end,
+                ItemExists = function() end,
             }
         end)
         t.isNil(ctx.K9Compat.Which('inventory'))
@@ -706,6 +711,7 @@ do
             GetInventoryItems = function() end, GetContainerFromSlot = function() end,
             GetItemCount = function() end, RemoveItem = function() end,
             RegisterStash = function() end, RegisterShop = function() end, RegisterHook = function() end,
+            ItemExists = function() end,
         }
     end)
     ctx.resourceStates['ox_inventory'] = 'started'

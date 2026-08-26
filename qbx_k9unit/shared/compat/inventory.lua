@@ -20,6 +20,71 @@
     runs in -- see IsResourceExportCapable's own doc comment).
 
     ======================================================================
+    ADDENDUM (this pass, coder-architect, resource-auto-connect sweep):
+    SERVER-REALM `ItemExists` ADDED TO THE CONTRACT.
+
+    `K9Compat.RequiredMethods.inventory.server` used to stop at seven names
+    (`ItemExists` was CLIENT-only). Two independent server files each
+    already found and documented the resulting gap on their own, under the
+    same "COMPAT-LAYER FINDING, DELIBERATELY NOT ROUTED" heading, and
+    reported it here rather than working around it themselves (their own
+    words: "if a call site has no clean accessor, that is a finding, not a
+    licence to improvise"):
+      - server/equipmentshop.lua's `WarnIfItemMissing` (its own onResourceStart
+        sanity check for every configured K9 Supply shop item name)
+      - server/wellbeing.lua's `WarnIfItemMissing` (the same check for
+        Config.K9Medkit.itemName / Config.Wellbeing.Mood.feedItemName)
+    Both stayed hardwired to a direct `exports.ox_inventory:Items(itemName)`
+    pcall, unable to route through `K9Compat.Get('inventory')` at all,
+    because the accessor this section now adds did not exist yet.
+
+    THE CONTRACT CHANGE ADDS A REQUIRED METHOD, WHICH IS NOT FREE -- every
+    registered adapter that returns a non-nil table for `realm == 'server'`
+    MUST now expose a callable `ItemExists`, or `VerifyMethods` in core.lua
+    rejects that WHOLE table (all eight methods lost, not just the missing
+    one) -- this is exactly the "adding one means every adapter must
+    implement it or be skipped" risk the two finding comments above named
+    explicitly as the reason they did not make this change unilaterally.
+    Resolved here, per adapter, rather than left open:
+      - `ox_inventory` (BuildOxInventoryServer, below): CONFIRMED, for free --
+        the CLIENT realm's own `ItemExists` already established that
+        `Items` is registered identically on both realms (this file's own
+        BuildOxInventoryClient comment, unchanged); the server implementation
+        below is the byte-for-byte same body against the same export.
+      - `qb-inventory` (BuildQbInventoryServer, below): NOT a new guess --
+        this file's own qb-inventory section header already establishes,
+        from a complete read of its server-side source, that no confirmed
+        item-catalog-lookup export exists (`QBCore.Shared.Items` is a
+        plausible client-side answer but reaching into a SPECIFIC
+        framework's global from the inventory adapter is the exact coupling
+        this file's header already forbids). Implemented as a disclosed,
+        honest placeholder that always answers `true` ("assume present,
+        cannot verify on this backend") rather than inventing an export --
+        see that factory's own doc comment for why `true`, not `false`, is
+        the correct direction for an UNVERIFIABLE answer to a existence
+        check whose only current real consumer is an operator-facing
+        "did you typo this item name" WARNING: an unverifiable `false` would
+        read as "this item is missing" for an item that may well exist,
+        actively misleading an operator into "fixing" something that was
+        never broken; an unverifiable `true` reproduces today's status quo
+        for every non-ox_inventory backend (no warning fires) rather than
+        inventing a new false alarm.
+      - The six UNCONFIRMED candidates (qs-inventory, ps-inventory,
+        origen_inventory, codem-inventory, core_inventory, tgiann-inventory)
+        need no change at all: every one of their factories already returns
+        `nil` unconditionally for both realms, so `VerifyMethods` is never
+        even reached for them.
+
+    NOT DONE BY THIS ADDENDUM, reported rather than assumed: the two real
+    call sites (server/equipmentshop.lua, server/wellbeing.lua) are outside
+    this pass's file ownership and still make their own direct
+    `exports.ox_inventory:Items(...)` call today -- this addendum only makes
+    the accessor they were asking for exist. Routing those two call sites
+    onto `K9Compat.Get('inventory').ItemExists(itemName)` is a small,
+    mechanical follow-up reported to coder-backend (the agent who wrote both
+    finding comments), not performed here.
+
+    ======================================================================
     RESEARCH DISCIPLINE (this task's own explicit requirement, restated so
     the next reader does not have to re-derive it): every signature below is
     either CONFIRMED against a primary source fetched and read directly this
@@ -29,8 +94,8 @@
     working and then silently does nothing" -- this file follows that rule
     even where it costs real coverage (see ps-inventory below, a real,
     found, actively-maintained project that still gets skipped because three
-    of the seven required server methods have no confirmed equivalent in its
-    source).
+    of the required server methods -- seven at the time this was researched,
+    now eight -- have no confirmed equivalent in its source).
 
     CONFIRMATION LEDGER, one line per candidate, fullest detail in each
     adapter's own section below:
@@ -89,7 +154,10 @@
                                      (Project-Sloth/ps-inventory, branch
                                      `main` -- fetched and read
                                      server/main.lua + client/main.lua this
-                                     session; 3 of 7 required server methods
+                                     session; 3 of the (then-7, now 8 --
+                                     ItemExists was added in a later pass and
+                                     was not separately re-checked against
+                                     this candidate) required server methods
                                      have no confirmed equivalent)
       qs-inventory      UNCONFIRMED -- no public source repository located
                                      this session (see "UNCONFIRMED
@@ -310,8 +378,9 @@ end
 -- ======================================================================
 -- ox_inventory -- CONFIRMED. The reference this resource was built
 -- against (fxmanifest.lua hard `dependencies` entry) and the only
--- candidate with every one of the eleven required methods (4 client + 7
--- server) backed by a real, cited export.
+-- candidate with every one of the twelve required methods (4 client + 8
+-- server, since a later pass added server-realm ItemExists) backed by a
+-- real, cited export.
 -- ======================================================================
 
 --- @return table|nil
@@ -388,6 +457,17 @@ local function BuildOxInventoryServer()
     if not IsResourceExportCapable('ox_inventory', 'RegisterStash') then return nil end
     if not IsResourceExportCapable('ox_inventory', 'RegisterShop') then return nil end
     if not IsResourceExportCapable('ox_inventory', 'registerHook') then return nil end
+    -- DELIBERATELY NOT GATED ON 'Items' HERE, unlike the other seven: doing
+    -- so would mean an ox_inventory install (or, just as importantly, a
+    -- TEST FIXTURE in this resource's own suite) that is missing/hasn't
+    -- stubbed only THIS ONE export loses ALL EIGHT capabilities at once --
+    -- exactly the "adding one means every adapter must implement it or be
+    -- skipped" risk this file's header ADDENDUM names explicitly. ItemExists
+    -- below checks its own capability at call time via SafeExportCall
+    -- (which already fails closed to `callOk = false` -- and therefore
+    -- `false` -- when the export is absent), the same "no top-level gate,
+    -- self-contained fail-closed body" pattern BuildQbInventoryServer's own
+    -- GetContainerFromSlot already uses for a confirmed-absent capability.
 
     return {
         --- PASS-THROUGH, NATIVE SHAPE -- see this file's header on why
@@ -546,6 +626,21 @@ local function BuildOxInventoryServer()
                     :format(eventName))
             end
             return callOk
+        end,
+
+        --- ADDED THIS PASS (coder-architect, resource-auto-connect sweep) --
+        --- see this file's header ADDENDUM for the full "why now" writeup.
+        --- CONFIRMED, for free: identical body to BuildOxInventoryClient's
+        --- own `ItemExists` above, against the SAME `Items` export -- that
+        --- factory's own doc comment already establishes `Items` is
+        --- registered identically on both realms, so no new research was
+        --- needed to add this half.
+        --- @param itemName string
+        --- @return boolean
+        ItemExists = function(itemName)
+            if type(itemName) ~= 'string' or itemName == '' then return false end
+            local callOk, item = SafeExportCall('ox_inventory', 'Items', itemName)
+            return callOk and item ~= nil
         end,
     }
 end
@@ -945,6 +1040,40 @@ local function BuildQbInventoryServer()
 
             return true
         end,
+
+        --- ADDED THIS PASS (coder-architect, resource-auto-connect sweep) --
+        --- see this file's header ADDENDUM for the full "why now" writeup.
+        --- DISCLOSED PLACEHOLDER, NOT A GUESSED EXPORT: this backend's
+        --- complete server-side source (server/main.lua, server/functions.lua,
+        --- server/commands.lua, server/hooks.lua) has no confirmed
+        --- item-catalog-lookup export this method could call -- reaching
+        --- into `QBCore.Shared.Items` would couple this INVENTORY adapter to
+        --- one specific FRAMEWORK choice, which this file's own header
+        --- (see "THE `RegisterHook` VOCABULARY", and the qb-inventory CLIENT
+        --- realm's own identical refusal a few sections up) already
+        --- establishes this compat layer's systems must not do to stay
+        --- independently pluggable.
+        ---
+        --- Always answers `true` ("assume present"), never `false`
+        --- ("assume absent") -- deliberately, not arbitrarily: this method's
+        --- one current real-world consumer (a startup sanity WARNING for a
+        --- misconfigured item name, see server/equipmentshop.lua's/
+        --- server/wellbeing.lua's own WarnIfItemMissing) would, on a
+        --- guessable-but-wrong `false`, tell an operator a real item is
+        --- missing when this adapter genuinely cannot check -- an active,
+        --- misleading false alarm. Answering `true` unconditionally instead
+        --- reproduces exactly today's status quo for every non-ox_inventory
+        --- backend (that warning simply never fires), adding no new failure
+        --- mode. If qb-inventory ever gains a confirmed, real catalog-lookup
+        --- export, replace this body with a real call the same way every
+        --- other CONFIRMED method above does -- do not read this as
+        --- "qb-inventory has no items," only as "this file found no export
+        --- to ask it with."
+        --- @param _itemName any
+        --- @return boolean
+        ItemExists = function(_itemName)
+            return true
+        end,
     }
 end
 
@@ -962,7 +1091,10 @@ end)
 -- export named/shaped like `GetInventoryItems`, `RegisterStash`, or any
 -- hook-registration mechanism at all (`AddHook`/`TriggerHook`/
 -- `registerHook` -- zero matches for "Hook" anywhere in the file). That is
--- 3 of the 7 required server methods with no confirmed real equivalent --
+-- 3 of the required server methods (7 at the time this was researched, now
+-- 8 -- `ItemExists` was added in a later pass and was NOT separately
+-- re-checked against ps-inventory's source, so its status here is simply
+-- unknown, not confirmed either way) with no confirmed real equivalent --
 -- `OpenInventory`/`OpenShop` are, like qb-inventory, SERVER-side exports
 -- taking `source`, so the client realm has the identical architectural
 -- mismatch as qb-inventory on top of that.
@@ -975,7 +1107,7 @@ end)
 -- ======================================================================
 K9Compat.RegisterAdapter('inventory', 'ps-inventory', function(_realm)
     WarnUnconfirmedOnce('ps-inventory', "a real source repository was found and read this session " ..
-        '(Project-Sloth/ps-inventory) but 3 of the 7 required server methods -- GetInventoryItems, ' ..
+        '(Project-Sloth/ps-inventory) but at least 3 of the 8 required server methods -- GetInventoryItems, ' ..
         'RegisterStash, and any hook-registration mechanism at all -- have no confirmed real export ' ..
         'in its source, and its OpenInventory/OpenShop are server-side-only exports with no ' ..
         'client-callable equivalent (same architecture as qb-inventory).')

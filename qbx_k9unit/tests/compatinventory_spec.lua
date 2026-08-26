@@ -332,10 +332,10 @@ end)
 
 -- ---- ox_inventory SERVER ----
 
-t.test('ox_inventory SERVER: all seven capabilities present returns a full 7-method table', function()
+t.test('ox_inventory SERVER: all eight capabilities present returns a full 8-method table', function()
     local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = oxFullExports() } })
     local server = f.getFactory('inventory', 'ox_inventory')('server')
-    for _, name in ipairs({ 'GetInventoryItems', 'GetContainerFromSlot', 'GetItemCount', 'RemoveItem', 'RegisterStash', 'RegisterShop', 'RegisterHook' }) do
+    for _, name in ipairs({ 'GetInventoryItems', 'GetContainerFromSlot', 'GetItemCount', 'RemoveItem', 'RegisterStash', 'RegisterShop', 'RegisterHook', 'ItemExists' }) do
         t.equals(type(server[name]), 'function', name .. ' must be a function')
     end
 end)
@@ -348,6 +348,45 @@ end)
 t.test('ox_inventory SERVER: missing registerHook -> nil (whole server adapter skipped)', function()
     local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = oxFullExports({ registerHook = false }) } })
     t.isNil(f.getFactory('inventory', 'ox_inventory')('server'))
+end)
+
+t.test('ox_inventory SERVER: missing Items does NOT skip the whole adapter, unlike the other seven -- ItemExists alone degrades to false, every other method keeps working', function()
+    -- DELIBERATE, see shared/compat/inventory.lua's own comment on this
+    -- exact line in BuildOxInventoryServer: gating construction of the
+    -- whole table on 'Items' would break every existing fixture across this
+    -- suite (search_spec.lua, inventory_spec.lua, coopsearchbonus_spec.lua,
+    -- ...) that never stubbed that one export, none of which call
+    -- ItemExists at all today.
+    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = oxFullExports({ Items = false }) } })
+    local server = f.getFactory('inventory', 'ox_inventory')('server')
+    t.isNotNil(server, 'the adapter as a whole must still be returned')
+    t.equals(type(server.GetItemCount), 'function', 'every other method must be unaffected')
+    local ok, result = pcall(server.ItemExists, 'k9_medkit')
+    t.isTrue(ok)
+    t.isFalse(result, 'ItemExists itself fails closed to false when Items is not actually callable')
+end)
+
+t.test('ox_inventory SERVER ItemExists: a real, resolvable item name is true', function()
+    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = oxFullExports() } })
+    local server = f.getFactory('inventory', 'ox_inventory')('server')
+    t.isTrue(server.ItemExists('k9_medkit'))
+end)
+
+t.test('ox_inventory SERVER ItemExists: an unresolvable item name is false, never an error', function()
+    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = oxFullExports() } })
+    local server = f.getFactory('inventory', 'ox_inventory')('server')
+    t.isFalse(server.ItemExists('totally_made_up_item'))
+    t.isFalse(server.ItemExists(''))
+    t.isFalse(server.ItemExists(nil))
+end)
+
+t.test('ox_inventory SERVER ItemExists: the Items() export itself throwing resolves to false, never propagated', function()
+    local exportsTbl = oxFullExports({ Items = function() error('simulated') end })
+    local f = newCompatFixture({ resourceStates = { ox_inventory = 'started' }, exportTables = { ox_inventory = exportsTbl } })
+    local server = f.getFactory('inventory', 'ox_inventory')('server')
+    local ok, result = pcall(server.ItemExists, 'k9_medkit')
+    t.isTrue(ok)
+    t.isFalse(result)
 end)
 
 t.test('ox_inventory SERVER GetInventoryItems: forwards the table-shaped vehicle inv argument unchanged (server/search.lua\'s own {id=,netid=} shape)', function()
@@ -537,12 +576,20 @@ t.test('qb-inventory CLIENT: always nil, regardless of resource state or export 
     t.isNil(f.getFactory('inventory', 'qb-inventory')('client'))
 end)
 
-t.test('qb-inventory SERVER: all six required capabilities present returns a full 7-method table', function()
+t.test('qb-inventory SERVER: all six required export capabilities present returns a full 8-method table (ItemExists needs no export of its own -- see its own doc comment)', function()
     local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = qbFullExports() } })
     local server = f.getFactory('inventory', 'qb-inventory')('server')
-    for _, name in ipairs({ 'GetInventoryItems', 'GetContainerFromSlot', 'GetItemCount', 'RemoveItem', 'RegisterStash', 'RegisterShop', 'RegisterHook' }) do
+    for _, name in ipairs({ 'GetInventoryItems', 'GetContainerFromSlot', 'GetItemCount', 'RemoveItem', 'RegisterStash', 'RegisterShop', 'RegisterHook', 'ItemExists' }) do
         t.equals(type(server[name]), 'function', name .. ' must be a function')
     end
+end)
+
+t.test('qb-inventory SERVER ItemExists: DISCLOSED PLACEHOLDER -- always true, no confirmed catalog-lookup export exists on this backend, never a guess', function()
+    local f = newCompatFixture({ resourceStates = { ['qb-inventory'] = 'started' }, exportTables = { ['qb-inventory'] = qbFullExports() } })
+    local server = f.getFactory('inventory', 'qb-inventory')('server')
+    t.isTrue(server.ItemExists('k9_medkit'))
+    t.isTrue(server.ItemExists('totally_made_up_item'))
+    t.isTrue(server.ItemExists(nil), 'unconditional placeholder -- does not even validate the argument, since it never uses it')
 end)
 
 t.test('qb-inventory SERVER: missing AddHook -> nil (whole server adapter skipped)', function()
