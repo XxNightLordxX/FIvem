@@ -554,6 +554,17 @@ t.test('ApplyK9PedRole: re-applying a DIFFERENT model to a citizenid who already
     local f = newFixture()
     setupGranterAndTarget(f)
     f.grantPermissionDirect('CITIZEN_TARGET', 'k9.access') -- already holds the role, e.g. via an earlier grant
+    -- grantPermissionDirect above re-fires the REAL, captured
+    -- 'QBCore:Server:PlayerLoaded' handler (see that helper's own doc
+    -- comment) to warm PermissionCache the same way a real reconnect would
+    -- -- server/permissions.lua's own PlayerLoaded handler now ALSO pushes
+    -- this pass's feature-block sync on every fire (see that file's
+    -- "FEATURE-BLOCK PUSH" section), which lands in this SAME captured
+    -- clientEvents log. Cleared here, same as every other
+    -- grantPermissionDirect/revokePermissionDirect call site in this file,
+    -- so the assertion below counts only the applyK9Ped push this test is
+    -- actually about.
+    f.clearClientEvents()
 
     local ok, outcome = f.env.ApplyK9PedRole(HIGH_COMMAND_SRC, 'CITIZEN_TARGET', 'a_c_husky')
     t.isTrue(ok)

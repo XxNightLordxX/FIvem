@@ -2050,6 +2050,338 @@ function K9Store.PermKeyAudit_Append(action, permissionKey, detail, changedBy)
 end
 
 -- ======================================================================
+-- k9_xp_tiers / k9_xp_tier_audit
+--
+-- Mirrored from server/xptiers.lua (the owner-directed "set experience
+-- level for each rank up" pass -- see that file's own header for the full
+-- design, including why the overlay is applied by mutating the live
+-- `Config.XPTiers[ordinal]` table IN PLACE rather than a second merged
+-- catalog structure the way k9_certification_tiers/k9_permission_keys
+-- above are). `k9_xp_tiers` is keyed by `ordinal` (the rank's fixed
+-- 1-based POSITION in Config.XPTiers, not a string key -- this pass does
+-- not add or remove ranks, only edits existing ones in place, so a stable
+-- position IS a stable identity here), a current-state table exactly like
+-- OverrideRows/TierRows/PermKeyRows above -- one row per rank that has
+-- EVER been touched by a high-command edit; a rank's absence from this
+-- table means "use Config.XPTiers[ordinal]'s own shipped default". No
+-- tombstone/`deleted` flag -- unlike the tier-catalog/permission-key
+-- overlays, this one has no delete surface at all (server/xptiers.lua's
+-- own header, "SCOPE DECISION"), so there is nothing to tombstone.
+-- `k9_xp_tier_audit` is append-only, same bounded-in-memory-mode
+-- ring-buffer treatment as every other rare/admin-gated audit table in
+-- this file.
+-- ======================================================================
+local XPTierRows = {} -- ordinal -> { xp_threshold, label, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, badge, updated_by, updated_at, created_at_unix }
+local XPTIER_AUDIT_MEMORY_CAP = 200
+local XPTierAuditRows = {}
+
+--- Mirrors the SafeQuery contract. Replaces
+--- ApplyPersistedXPTierOverrides's own `SELECT ordinal, xp_threshold,
+--- label, speed_multiplier, scent_range_multiplier,
+--- medkit_cooldown_multiplier, badge FROM k9_xp_tiers` -- every rank ever
+--- touched by a high-command edit.
+--- @return table rows
+function K9Store.XPTier_GetAllRows()
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await,
+            'SELECT ordinal, xp_threshold, label, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, badge FROM k9_xp_tiers', {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: XPTier_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for ordinal, row in pairs(XPTierRows) do
+        out[#out + 1] = {
+            ordinal = ordinal, xp_threshold = row.xp_threshold, label = row.label,
+            speed_multiplier = row.speed_multiplier, scent_range_multiplier = row.scent_range_multiplier,
+            medkit_cooldown_multiplier = row.medkit_cooldown_multiplier, badge = row.badge,
+        }
+    end
+    return out
+end
+
+--- Mirrors the SafeWrite contract. Replaces xpTiersUpsert's own
+--- `INSERT INTO k9_xp_tiers (...) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON
+--- DUPLICATE KEY UPDATE xp_threshold = VALUES(xp_threshold), label =
+--- VALUES(label), speed_multiplier = VALUES(speed_multiplier),
+--- scent_range_multiplier = VALUES(scent_range_multiplier),
+--- medkit_cooldown_multiplier = VALUES(medkit_cooldown_multiplier), badge
+--- = VALUES(badge), updated_by = VALUES(updated_by), updated_at =
+--- CURRENT_TIMESTAMP`. `medkitCooldownMultiplier`/`badge` may legitimately
+--- be `nil` (an unset optional field) -- passed straight through to
+--- oxmysql as SQL NULL, the same nullable-middle-parameter shape this
+--- file's own ShopLocation_Insert/ShopLocation_Update already rely on for
+--- `model`/`scenario`/`label`.
+--- @return boolean ok
+function K9Store.XPTier_Upsert(ordinal, xpThreshold, label, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, badge, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_xp_tiers (ordinal, xp_threshold, label, speed_multiplier, scent_range_multiplier, medkit_cooldown_multiplier, badge, updated_by) ' ..
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE xp_threshold = VALUES(xp_threshold), label = VALUES(label), ' ..
+            'speed_multiplier = VALUES(speed_multiplier), scent_range_multiplier = VALUES(scent_range_multiplier), ' ..
+            'medkit_cooldown_multiplier = VALUES(medkit_cooldown_multiplier), badge = VALUES(badge), ' ..
+            'updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
+            { ordinal, xpThreshold, label, speedMultiplier, scentRangeMultiplier, medkitCooldownMultiplier, badge, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: XPTier_Upsert write failed for ordinal %s: %s'):format(tostring(ordinal), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = XPTierRows[ordinal]
+    XPTierRows[ordinal] = {
+        xp_threshold = xpThreshold, label = label, speed_multiplier = speedMultiplier,
+        scent_range_multiplier = scentRangeMultiplier, medkit_cooldown_multiplier = medkitCooldownMultiplier, badge = badge,
+        updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()),
+        created_at_unix = existing and existing.created_at_unix or NowUnix(),
+    }
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces server/xptiers.lua's own
+--- `INSERT INTO k9_xp_tier_audit (action, ordinal, detail, changed_by)
+--- VALUES ('xp_tier_update', ?, ?, ?)` -- append-only, bounded in memory
+--- mode like every other rare/admin-gated audit table in this file. The
+--- `action` column always holds the literal `'xp_tier_update'` today (this
+--- pass has no other action kind -- see server/xptiers.lua's own header,
+--- "SCOPE DECISION": no create/delete/reorder surface exists) -- kept as a
+--- real column rather than omitted, matching k9_certification_tier_audit/
+--- k9_permission_key_audit's own shape, so a future action kind (should
+--- one ever be added) needs no schema change, only a new literal value.
+--- @return boolean ok
+function K9Store.XPTierAudit_Append(ordinal, detail, changedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_xp_tier_audit (action, ordinal, detail, changed_by) VALUES (?, ?, ?, ?)',
+            { 'xp_tier_update', ordinal, detail, changedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: XPTierAudit_Append write failed: %s'):format(tostring(err)))
+            return false
+        end
+        return true
+    end
+    XPTierAuditRows[#XPTierAuditRows + 1] = { action = 'xp_tier_update', ordinal = ordinal, detail = detail, changed_by = changedBy, changed_at = FormatDateTime(NowUnix()) }
+    while #XPTierAuditRows > XPTIER_AUDIT_MEMORY_CAP do
+        table.remove(XPTierAuditRows, 1)
+    end
+    return true
+end
+
+-- ======================================================================
+-- k9_equipment_shop_items / k9_equipment_shop_item_audit
+--
+-- Mirrored from server/equipmentshop.lua (owner-directed "give high
+-- command real control over the equipment shop" pass -- the INVENTORY
+-- half: which items are sold, at what price, in what order, and under
+-- what purchase requirement, extending that file's own pre-existing
+-- RUNTIME SHOP LOCATIONS work, migration 0011, to the shop's item
+-- catalog). Same "SafeQuery/SafeWrite bespoke contract, never throws"
+-- discipline as every other K9Store accessor in this file, and the exact
+-- same shape as K9Store.Tier_*/TierAudit_Append immediately above (one
+-- current-state table + one append-only audit table -- see migration
+-- 0014's own header, "WHY NO SEPARATE CAPABILITIES-STYLE SIBLING TABLE",
+-- for why this feature needs one fewer table than the tier catalog did).
+--
+-- k9_equipment_shop_items is a current-state table (one row per item_key
+-- that has EVER been touched by a high-command edit, a real PRIMARY KEY
+-- per migration 0014's own header) -- its memory mirror is a plain
+-- keyed map, same shape as TierRows above. k9_equipment_shop_item_audit
+-- is append-only, same bounded-in-memory-mode ring-buffer treatment as
+-- every other rare/admin-gated audit table in this file (this surface is
+-- high-command-gated, not ordinary gameplay volume, per migration 0014's
+-- own header).
+-- ======================================================================
+local ShopItemRows = {} -- item_key -> { item_key, label, price, currency, sort_order, required_tier_key, required_specialization, deleted, updated_by, updated_at, created_at_unix }
+local SHOP_ITEM_AUDIT_MEMORY_CAP = 200
+local ShopItemAuditRows = {}
+
+--- Mirrors the SafeQuery contract. Replaces
+--- RefreshEquipmentShopItemCatalog's own `SELECT item_key, label, price,
+--- currency, sort_order, required_tier_key, required_specialization,
+--- deleted FROM k9_equipment_shop_items` -- every item row EVER touched
+--- by a high-command edit, including tombstoned ones (the `deleted`
+--- column is what RefreshEquipmentShopItemCatalog itself filters on, not
+--- this accessor).
+--- @return table rows
+function K9Store.ShopItem_GetAllRows()
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await,
+            'SELECT item_key, label, price, currency, sort_order, required_tier_key, required_specialization, deleted FROM k9_equipment_shop_items', {})
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopItem_GetAllRows query failed: %s'):format(tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local out = {}
+    for itemKey, row in pairs(ShopItemRows) do
+        out[#out + 1] = {
+            item_key = itemKey, label = row.label, price = row.price, currency = row.currency,
+            sort_order = row.sort_order, required_tier_key = row.required_tier_key,
+            required_specialization = row.required_specialization, deleted = row.deleted,
+        }
+    end
+    return out
+end
+
+--- Mirrors the SafeQuery contract. Replaces ShopItemsUpsert's own `SELECT
+--- deleted FROM k9_equipment_shop_items WHERE item_key = ?` pre-write read
+--- (used only to distinguish an 'item_create' from an 'item_restore' for
+--- the audit trail -- see that callback's own comment).
+--- @return table rows -- 0 or 1 rows, `{ { deleted = 0|1 } }` or `{}`
+function K9Store.ShopItem_GetDeletedFlagByKey(itemKey)
+    if DatabaseEnabled() then
+        local ok, rowsOrErr = pcall(MySQL.query.await, 'SELECT deleted FROM k9_equipment_shop_items WHERE item_key = ?', { itemKey })
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopItem_GetDeletedFlagByKey query failed for %s: %s'):format(tostring(itemKey), tostring(rowsOrErr)))
+            return {}
+        end
+        return rowsOrErr or {}
+    end
+    local row = ShopItemRows[itemKey]
+    if not row then return {} end
+    return { { deleted = row.deleted } }
+end
+
+--- Mirrors the SafeWrite contract. Full-replacement upsert -- always
+--- un-tombstones the row (`deleted = 0`) and sets label/price/currency/
+--- required_tier_key/required_specialization, whether this is a
+--- brand-new key, a restore, or an edit of an already-live one. Does NOT
+--- touch `sort_order` on an existing row -- mirrors
+--- K9Store.Tier_Upsert/Tier_UpdateOrdinal's own split responsibility
+--- exactly (Tier_Upsert sets ordinal only for a brand-new/restoring row;
+--- an existing row's rank is changed ONLY by ShopItem_UpdateSortOrder
+--- below, never by this function) -- see that pair's own doc comments for
+--- the identical reasoning applied here.
+--- @return boolean ok
+function K9Store.ShopItem_Upsert(itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_equipment_shop_items (item_key, label, price, currency, sort_order, required_tier_key, required_specialization, deleted, updated_by) ' ..
+            'VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?) ' ..
+            'ON DUPLICATE KEY UPDATE label = VALUES(label), price = VALUES(price), currency = VALUES(currency), ' ..
+            'required_tier_key = VALUES(required_tier_key), required_specialization = VALUES(required_specialization), ' ..
+            'deleted = 0, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
+            { itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopItem_Upsert write failed for %s: %s'):format(tostring(itemKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = ShopItemRows[itemKey]
+    ShopItemRows[itemKey] = {
+        item_key = itemKey, label = label, price = price, currency = currency,
+        sort_order = existing and existing.sort_order or sortOrder,
+        required_tier_key = requiredTierKey, required_specialization = requiredSpecialization,
+        deleted = 0, updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()),
+        created_at_unix = existing and existing.created_at_unix or NowUnix(),
+    }
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces ShopItemsReorder's own per-key
+--- `INSERT ... VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?) ON DUPLICATE KEY UPDATE
+--- sort_order = VALUES(sort_order), deleted = 0, updated_by =
+--- VALUES(updated_by), updated_at = CURRENT_TIMESTAMP` -- DELIBERATELY
+--- DOES NOT TOUCH label/price/currency/required_tier_key/
+--- required_specialization ON CONFLICT, matching K9Store.Tier_UpdateOrdinal's
+--- own "never overwrite the other editable fields with a stale in-memory
+--- snapshot on a reorder" reasoning EXACTLY (see that function's own doc
+--- comment for the full race this closes) -- the non-sort_order arguments
+--- here are used ONLY for the brand-new-row INSERT branch (a config-only
+--- item that has never had a row in this table before a reorder touches
+--- it for the first time).
+--- @return boolean ok
+function K9Store.ShopItem_UpdateSortOrder(itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_equipment_shop_items (item_key, label, price, currency, sort_order, required_tier_key, required_specialization, deleted, updated_by) ' ..
+            'VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?) ' ..
+            'ON DUPLICATE KEY UPDATE sort_order = VALUES(sort_order), deleted = 0, updated_by = VALUES(updated_by), ' ..
+            'updated_at = CURRENT_TIMESTAMP',
+            { itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopItem_UpdateSortOrder write failed for %s: %s'):format(tostring(itemKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = ShopItemRows[itemKey]
+    if existing then
+        existing.sort_order, existing.deleted, existing.updated_by, existing.updated_at = sortOrder, 0, updatedBy, FormatDateTime(NowUnix())
+    else
+        ShopItemRows[itemKey] = {
+            item_key = itemKey, label = label, price = price, currency = currency, sort_order = sortOrder,
+            required_tier_key = requiredTierKey, required_specialization = requiredSpecialization,
+            deleted = 0, updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()), created_at_unix = NowUnix(),
+        }
+    end
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces ShopItemsDelete's own `INSERT
+--- ... VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?) ON DUPLICATE KEY UPDATE deleted
+--- = 1, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP`
+--- -- TOMBSTONES a row, leaving an ALREADY-EXISTING row's other columns
+--- untouched, exactly like K9Store.Tier_Tombstone above and for the
+--- identical reason -- the non-deleted-flag arguments here are used ONLY
+--- for the brand-new-row INSERT case (an item_key that has never had a
+--- row in this table before, e.g. a legacy config-only item being
+--- tombstoned for the very first time).
+--- @return boolean ok
+function K9Store.ShopItem_Tombstone(itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_equipment_shop_items (item_key, label, price, currency, sort_order, required_tier_key, required_specialization, deleted, updated_by) ' ..
+            'VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?) ' ..
+            'ON DUPLICATE KEY UPDATE deleted = 1, updated_by = VALUES(updated_by), updated_at = CURRENT_TIMESTAMP',
+            { itemKey, label, price, currency, sortOrder, requiredTierKey, requiredSpecialization, updatedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopItem_Tombstone write failed for %s: %s'):format(tostring(itemKey), tostring(err)))
+            return false
+        end
+        return true
+    end
+    local existing = ShopItemRows[itemKey]
+    if existing then
+        existing.deleted, existing.updated_by, existing.updated_at = 1, updatedBy, FormatDateTime(NowUnix())
+    else
+        ShopItemRows[itemKey] = {
+            item_key = itemKey, label = label, price = price, currency = currency, sort_order = sortOrder,
+            required_tier_key = requiredTierKey, required_specialization = requiredSpecialization,
+            deleted = 1, updated_by = updatedBy, updated_at = FormatDateTime(NowUnix()), created_at_unix = NowUnix(),
+        }
+    end
+    return true
+end
+
+--- Mirrors the SafeWrite contract. Replaces WriteShopItemAudit's own
+--- `INSERT INTO k9_equipment_shop_item_audit (action, item_key, detail,
+--- changed_by) VALUES (?, ?, ?, ?)` -- append-only, bounded in memory mode
+--- like every other rare/admin-gated audit table in this file.
+--- @return boolean ok
+function K9Store.ShopItemAudit_Append(action, itemKey, detail, changedBy)
+    if DatabaseEnabled() then
+        local ok, err = pcall(MySQL.query.await,
+            'INSERT INTO k9_equipment_shop_item_audit (action, item_key, detail, changed_by) VALUES (?, ?, ?, ?)',
+            { action, itemKey, detail, changedBy })
+        if not ok then
+            print(('[qbx_k9unit] datastore: ShopItemAudit_Append write failed: %s'):format(tostring(err)))
+            return false
+        end
+        return true
+    end
+    ShopItemAuditRows[#ShopItemAuditRows + 1] = { action = action, item_key = itemKey, detail = detail, changed_by = changedBy, changed_at = FormatDateTime(NowUnix()) }
+    while #ShopItemAuditRows > SHOP_ITEM_AUDIT_MEMORY_CAP do
+        table.remove(ShopItemAuditRows, 1)
+    end
+    return true
+end
+
+-- ======================================================================
 -- BOOT LINE -- one console line stating which backend is live, so an
 -- operator (or QA) can confirm Config.Database.enabled took effect
 -- without reading code.
@@ -2166,6 +2498,19 @@ local EXPECTED_TABLE_COLUMNS = {
     k9_certification_tier_audit        = { 'id', 'action', 'tier_key', 'detail', 'changed_by', 'changed_at' },
     k9_equipment_shop_locations        = { 'x', 'y', 'z', 'created_by' },
     k9_equipment_shop_locations_audit  = { 'location_id', 'action', 'changed_by', 'changed_at' },
+    k9_xp_tiers                        = { 'ordinal', 'xp_threshold', 'label', 'speed_multiplier', 'scent_range_multiplier', 'updated_by', 'updated_at' },
+    k9_xp_tier_audit                   = { 'id', 'action', 'ordinal', 'detail', 'changed_by', 'changed_at' },
+    k9_equipment_shop_items            = { 'item_key', 'price', 'sort_order', 'required_tier_key', 'required_specialization', 'deleted', 'updated_by' },
+    k9_equipment_shop_item_audit       = { 'id', 'action', 'item_key', 'detail', 'changed_by', 'changed_at' },
+    -- NOTE (this pass): sql/preflight_check.sql's own CHECK 1 (and CHECK
+    -- 1b's hand-maintained table-name list) still needs the two table
+    -- names immediately above added to it, in the SAME shape as its
+    -- existing k9_equipment_shop_locations/k9_equipment_shop_locations_audit
+    -- UNION ALL blocks -- NOT done in this change, since that file is
+    -- reported to be under active, concurrent hardening by another agent
+    -- this same pass, and a collision there was judged a worse outcome
+    -- than a one-pass lag between this list and that one. Reported to
+    -- main/whoever owns sql/** rather than risking that edit here.
     -- NOTE for whoever lands the k9_permission_keys / k9_permission_key_audit
     -- migration this file's own PermKey_* functions above already assume
     -- (see that section's header): add their identifying columns here, and

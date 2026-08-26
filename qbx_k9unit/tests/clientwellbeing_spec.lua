@@ -11,22 +11,37 @@
     `local` (ApplyMoveRateModifiers/ApplyWellbeingSnapshot/NotifyResult/
     UseDistractionItem) this spec has no other way to reach.
 
-    LOAD-TIME GATING, IMPORTANT FOR THIS FIXTURE: unlike client/tracking.lua
-    (whose Config.Features reads all happen at RUNTIME, inside thread
-    bodies), client/wellbeing.lua's five feature gates
-    (`if Config.Features.InjuryLimping then ... end`,
-    `if Config.Features.MoodSystem then ... end`,
-    `if Config.Features.DistractionSystem then ... end`, and the on-demand
-    snapshot thread's own five-flag OR) are bare top-level `if` blocks --
-    they run ONCE, at file-load time, deciding whether to even CREATE the
-    relevant thread/register the relevant command/ox_target option at all.
-    Exactly like clientradial_spec.lua's own newRadialFixture(), every flag
-    this spec needs MUST be set on the real config.lua's Config.Features
-    table BEFORE client/wellbeing.lua is loaded -- newWellbeingFixture()
-    below defaults every one of the five wellbeing flags to `false` and
-    requires each test to opt in exactly what it needs, per this task's own
+    LOAD-TIME GATING, UPDATED (RUNTIME TOGGLE FIX pass) -- IMPORTANT FOR
+    THIS FIXTURE: this file used to gate its InjuryLimping thread,
+    MoodSystem ox_target registration, and DistractionSystem commands with
+    bare top-level `if Config.Features.<Name> then ... end` blocks, run ONCE
+    at file-load time -- a real, confirmed bug (an already-connected client
+    could never learn of a runtime tablet toggle either direction: OFF left
+    an in-flight movement penalty/input block frozen forever, ON left a
+    client that booted disabled with nothing registered to ever pick it up).
+    FIXED: registration for all three of those now ALWAYS happens
+    (CreateThread/RegisterCommand/ox_target AddGlobalPlayer are never
+    gated), and the actual per-flag decision is made at the POINT OF USE via
+    `LiveFeatureFlags.<Name>` -- a mirror kept fresh by every
+    `wellbeingUpdate` push's new `featureFlags` field (see
+    server/wellbeing.lua's SnapshotOf), not the static
+    `Config.Features.<Name>` this client shipped with. The on-demand
+    snapshot-fetch thread's own five-flag OR gate is the ONE exception,
+    deliberately left load-time-gated (a disclosed, bounded staleness
+    optimization only, not a correctness path -- see client/wellbeing.lua's
+    own file header). Exactly like clientradial_spec.lua's own
+    newRadialFixture(), every flag this spec needs MUST still be set on the
+    real config.lua's Config.Features table BEFORE client/wellbeing.lua is
+    loaded (it seeds `LiveFeatureFlags`' own starting values, and still
+    gates the on-demand fetch thread) -- newWellbeingFixture() below
+    defaults every one of the five wellbeing flags to `false` and requires
+    each test to opt in exactly what it needs, per this task's own
     instruction to never depend on config.lua's shipped defaults (currently
-    all 40 flags `true`).
+    all 40 flags `true`). A test that specifically wants to prove the LIVE
+    (post-first-snapshot) flag value differs from the boot-time one should
+    push a `featureFlags` field via `triggerWellbeingUpdate` rather than
+    relying on the fixture's own boot-time `features` option, which only
+    ever seeds the STARTING value.
 
     THIS PASS'S PRIORITY, per this file's own task brief:
     1. The InjuryLimping control-block thread's own-death guard, added this
@@ -391,19 +406,28 @@ t.test('client/wellbeing.lua exposes RequestK9CalmDown and registers the wellbei
 end)
 
 -- ----------------------------------------------------------------------
--- SECTION A -- no thread/command/ox_target option exists at all when its
--- owning flag is off ("no code needed when disabled", per this file's own
--- header). Proven first since sections B/C build on top of this.
+-- SECTION A -- registration vs. enforcement, with every flag off.
+--
+-- UPDATED (RUNTIME TOGGLE FIX pass): this section used to prove "no
+-- thread/command/ox_target option exists at all when its owning flag is
+-- off" -- that was EXACTLY the shape of the confirmed bug this pass fixed
+-- (a client booted disabled had nothing left to ever pick up a later
+-- runtime toggle-ON). Now proves the INVERSE, deliberately: registration
+-- always happens regardless of the boot-time flag value, and the real gate
+-- lives at the point of use (`LiveFeatureFlags`), matching
+-- client/featureblocks.lua's own established rule for this exact class of
+-- check ("check at the point it acts, never merely at registration").
 -- ----------------------------------------------------------------------
 
-t.test('every wellbeing flag off: zero threads created, zero ox_target options registered, zero commands beyond none of this file\'s conditional ones', function()
+t.test('every wellbeing flag off: the InjuryLimping thread and all commands/ox_target options still REGISTER, but do/gate nothing -- only the on-demand snapshot thread stays load-time-gated', function()
     local f = newWellbeingFixture() -- all five flags false by default
-    t.equals(#f.threads, 0, 'neither the on-demand snapshot thread nor the InjuryLimping thread may exist when every flag is off')
-    t.equals(f.addGlobalPlayerCallCount(), 0, 'Pet K9/Feed K9 must never be registered when MoodSystem is off')
-    t.isNil(f.command('k9meatbait'))
-    t.isNil(f.command('k9whistle'))
-    -- k9calmdown IS always registered (RequestK9CalmDown itself checks the
-    -- flag at call time, not at registration time -- see section E).
+    t.equals(#f.threads, 1, 'the InjuryLimping thread now ALWAYS registers (idling, per its own LiveFeatureFlags gate) -- only the on-demand snapshot thread (a disclosed, bounded staleness optimization, not a correctness path) stays load-time-gated and is absent here')
+    t.equals(f.addGlobalPlayerCallCount(), 1, 'Pet K9/Feed K9 now ALWAYS register -- canInteract itself refuses while LiveFeatureFlags.MoodSystem is false, proven in section F')
+    -- k9meatbait/k9whistle/k9calmdown are ALL always registered now --
+    -- each one's OWN body checks LiveFeatureFlags.<Name> first (proven in
+    -- sections E/G), never gated by skipping RegisterCommand entirely.
+    t.isNotNil(f.command('k9meatbait'))
+    t.isNotNil(f.command('k9whistle'))
     t.isNotNil(f.command('k9calmdown'))
 end)
 
@@ -518,44 +542,100 @@ end)
 -- values happened to be healthy").
 -- ----------------------------------------------------------------------
 
-t.test('every wellbeing flag off: extreme stat values touch NOTHING -- K9MoveRateModifiers untouched, zero notifies, yet RecomputeK9MoveRate is STILL called unconditionally', function()
+t.test('every wellbeing flag off: extreme stat values touch NOTHING -- K9MoveRateModifiers explicitly RESET to 1.0 (never left frozen), zero notifies, RecomputeK9MoveRate STILL called unconditionally', function()
+    -- UPDATED (RUNTIME TOGGLE FIX pass): this test used to assert the
+    -- sentinel 42 SURVIVED untouched, i.e. "a disabled stat's modifier slot
+    -- is left exactly as it was". That was the confirmed "unbounded trap"
+    -- bug this pass fixed -- a K9 already carrying a real (non-1.0) penalty
+    -- when its owning flag was switched off at runtime would keep that
+    -- exact modifier forever, because nothing was ever going to move it
+    -- back to neutral on its own (server/wellbeing.lua stops
+    -- decaying/regenerating a stat the instant its flag goes false). FIXED:
+    -- ApplyMoveRateModifiers now explicitly resets a disabled stat's own
+    -- slot to 1.0 on every call, so the sentinel can never survive past the
+    -- very first applied snapshot regardless of which flags are on.
     local f = newWellbeingFixture() -- all five flags false
     f.triggerWellbeingUpdate(65535, {
         fatigue = 0, mood = 0, injury = 0, fearStress = 100,
         distractedUntil = 999999, hesitatingUntil = 999999,
     })
-    t.equals(f.k9MoveRateModifiers.fatigue, 42, 'a disabled stat\'s modifier slot must be left exactly as it was -- never forced by a flag this file doesn\'t own the meaning of')
-    t.equals(f.k9MoveRateModifiers.injury, 42)
-    t.equals(f.k9MoveRateModifiers.mood, 42)
+    t.equals(f.k9MoveRateModifiers.fatigue, 1.0, 'a disabled stat\'s modifier slot must be explicitly RESET to neutral, never left at whatever the sentinel/previous value was')
+    t.equals(f.k9MoveRateModifiers.injury, 1.0)
+    t.equals(f.k9MoveRateModifiers.mood, 1.0)
     t.equals(f.recomputeCallCount(), 1, 'RecomputeK9MoveRate is called unconditionally on every applied snapshot, regardless of which (if any) flags are on')
     t.equals(#f.notifyCalls, 0, 'no distraction/hesitation notify may fire while both owning flags are off, however extreme the pushed values are')
 end)
 
-t.test('FatigueSystem alone on: low fatigue updates ONLY K9MoveRateModifiers.fatigue; injury/mood stay untouched', function()
+t.test('FatigueSystem alone on: low fatigue updates ONLY K9MoveRateModifiers.fatigue; injury/mood are reset to neutral (their owning flags are off)', function()
     local f = newWellbeingFixture({ features = { FatigueSystem = true } })
     local belowThreshold = f.env.Config.Wellbeing.Fatigue.speedPenaltyThreshold - 1
     f.triggerWellbeingUpdate(65535, { fatigue = belowThreshold, injury = 0, mood = 0 })
     t.equals(f.k9MoveRateModifiers.fatigue, f.env.Config.Wellbeing.Fatigue.speedPenaltyMultiplier)
-    t.equals(f.k9MoveRateModifiers.injury, 42, 'InjuryLimping is off -- injury slot must stay untouched even though injury = 0 would trip its own penalty if that flag were on')
-    t.equals(f.k9MoveRateModifiers.mood, 42)
+    t.equals(f.k9MoveRateModifiers.injury, 1.0, 'InjuryLimping is off -- injury slot must be reset to neutral even though injury = 0 would trip its own penalty if that flag were on')
+    t.equals(f.k9MoveRateModifiers.mood, 1.0)
 end)
 
-t.test('InjuryLimping alone on (move-rate path, distinct from section B\'s input-block thread): low injury updates ONLY K9MoveRateModifiers.injury', function()
+t.test('InjuryLimping alone on (move-rate path, distinct from section B\'s input-block thread): low injury updates ONLY K9MoveRateModifiers.injury; fatigue/mood are reset to neutral', function()
     local f = newWellbeingFixture({ features = { InjuryLimping = true } })
     local injuryThreshold = math.max(f.env.Config.Wellbeing.Injury.sprintBlockThreshold, f.env.Config.Wellbeing.Injury.jumpBlockThreshold)
     f.triggerWellbeingUpdate(65535, { injury = injuryThreshold - 1, fatigue = 0, mood = 0 })
     t.equals(f.k9MoveRateModifiers.injury, f.env.Config.Wellbeing.Injury.speedPenaltyMultiplier)
-    t.equals(f.k9MoveRateModifiers.fatigue, 42)
-    t.equals(f.k9MoveRateModifiers.mood, 42)
+    t.equals(f.k9MoveRateModifiers.fatigue, 1.0)
+    t.equals(f.k9MoveRateModifiers.mood, 1.0)
 end)
 
-t.test('MoodSystem alone on: low mood updates ONLY K9MoveRateModifiers.mood', function()
+t.test('MoodSystem alone on: low mood updates ONLY K9MoveRateModifiers.mood; fatigue/injury are reset to neutral', function()
     local f = newWellbeingFixture({ features = { MoodSystem = true } })
     local belowThreshold = f.env.Config.Wellbeing.Mood.performancePenaltyThreshold - 1
     f.triggerWellbeingUpdate(65535, { mood = belowThreshold, fatigue = 0, injury = 0 })
     t.equals(f.k9MoveRateModifiers.mood, f.env.Config.Wellbeing.Mood.performancePenaltyMultiplier)
-    t.equals(f.k9MoveRateModifiers.fatigue, 42)
-    t.equals(f.k9MoveRateModifiers.injury, 42)
+    t.equals(f.k9MoveRateModifiers.fatigue, 1.0)
+    t.equals(f.k9MoveRateModifiers.injury, 1.0)
+end)
+
+t.test('RUNTIME TOGGLE OFF closes the unbounded trap: a K9 already carrying a real fatigue penalty has it REMOVED (not merely stopped from reapplying) the moment a live featureFlags push reports the flag off', function()
+    -- THE CORE REGRESSION TEST FOR THIS PASS'S FIX. Reproduces the exact
+    -- scenario the task brief described: FatigueSystem is on, a real
+    -- penalty is already applied, then a runtime tablet toggle switches it
+    -- off -- represented here exactly as server/wellbeing.lua's own
+    -- SnapshotOf now sends it, a `featureFlags` field on the very next
+    -- wellbeingUpdate push, NOT a change to this client's own static
+    -- Config.Features (which a runtime toggle can never reach).
+    local f = newWellbeingFixture({ features = { FatigueSystem = true } })
+    local belowThreshold = f.env.Config.Wellbeing.Fatigue.speedPenaltyThreshold - 1
+    f.triggerWellbeingUpdate(65535, { fatigue = belowThreshold })
+    t.equals(f.k9MoveRateModifiers.fatigue, f.env.Config.Wellbeing.Fatigue.speedPenaltyMultiplier, 'sanity: the penalty is genuinely applied first')
+
+    -- Server turned FatigueSystem off -- stat itself is now frozen
+    -- server-side too (server/wellbeing.lua stops ticking it), so the SAME
+    -- low fatigue value is still what arrives, but featureFlags.FatigueSystem
+    -- is now false.
+    f.triggerWellbeingUpdate(65535, { fatigue = belowThreshold, featureFlags = { FatigueSystem = false } })
+    t.equals(f.k9MoveRateModifiers.fatigue, 1.0, 'THE FIX: the modifier must be REMOVED immediately, not left frozen at the penalty value just because the underlying stat never moved')
+
+    -- Turning it back on (still below threshold) must restore the penalty
+    -- immediately, with no restart -- proves this is a live toggle in BOTH
+    -- directions, not just a one-way safety valve.
+    f.triggerWellbeingUpdate(65535, { fatigue = belowThreshold, featureFlags = { FatigueSystem = true } })
+    t.equals(f.k9MoveRateModifiers.fatigue, f.env.Config.Wellbeing.Fatigue.speedPenaltyMultiplier, 'turning the feature back on must restore normal behaviour with no restart')
+end)
+
+t.test('featureFlags ingest is defensive: a malformed/missing field never errors and never invents an unrecognised flag name', function()
+    local f = newWellbeingFixture({ features = { FatigueSystem = true } })
+    local belowThreshold = f.env.Config.Wellbeing.Fatigue.speedPenaltyThreshold - 1
+
+    -- Missing featureFlags entirely -- must not disturb the current mirror.
+    f.triggerWellbeingUpdate(65535, { fatigue = belowThreshold })
+    t.equals(f.k9MoveRateModifiers.fatigue, f.env.Config.Wellbeing.Fatigue.speedPenaltyMultiplier)
+
+    -- Non-table featureFlags, and a non-boolean value for a real flag name,
+    -- and an unrecognised flag name -- none of these may error or change
+    -- FatigueSystem's own current (true) value.
+    f.triggerWellbeingUpdate(65535, { fatigue = belowThreshold, featureFlags = 'not a table' })
+    t.equals(f.k9MoveRateModifiers.fatigue, f.env.Config.Wellbeing.Fatigue.speedPenaltyMultiplier)
+
+    f.triggerWellbeingUpdate(65535, { fatigue = belowThreshold, featureFlags = { FatigueSystem = 'not a boolean', SomeUnrelatedFutureFlag = true } })
+    t.equals(f.k9MoveRateModifiers.fatigue, f.env.Config.Wellbeing.Fatigue.speedPenaltyMultiplier, 'a non-boolean value for a real flag name must be ignored, not coerced')
 end)
 
 t.test('DistractionSystem OFF: a distractedUntil far in the future never notifies, and toggling it back and forth still never notifies -- a fully defined, silent no-op path', function()
@@ -769,10 +849,26 @@ end)
 -- gated on CanShowK9UI, per this file's own header -- open to any player.
 -- ----------------------------------------------------------------------
 
-t.test('DistractionSystem off: neither /k9meatbait nor /k9whistle is registered at all', function()
+t.test('DistractionSystem off: /k9meatbait and /k9whistle ARE registered (RUNTIME TOGGLE FIX), but calling either is a silent, network-free no-op', function()
+    -- UPDATED (RUNTIME TOGGLE FIX pass): this test used to assert neither
+    -- command was registered at all while the flag was off -- exactly the
+    -- shape of bug this pass fixed (a client who booted disabled could
+    -- never even attempt either command after a later runtime toggle-ON,
+    -- for the rest of that session). FIXED: both commands always register;
+    -- UseDistractionItem itself now checks LiveFeatureFlags.DistractionSystem
+    -- FIRST and returns before ever awaiting the server -- proven here by
+    -- asserting zero callback invocations, not just "no notify".
     local f = newWellbeingFixture() -- DistractionSystem false
-    t.isNil(f.command('k9meatbait'))
-    t.isNil(f.command('k9whistle'))
+    t.isNotNil(f.command('k9meatbait'))
+    t.isNotNil(f.command('k9whistle'))
+
+    f.command('k9meatbait')()
+    t.equals(f.callbackCallCount(), 0, 'must return locally before ever awaiting applyK9Distraction -- the flag is already known to be off')
+    t.equals(#f.notifyCalls, 0)
+
+    f.command('k9whistle')()
+    t.equals(f.callbackCallCount(), 0)
+    t.equals(#f.notifyCalls, 0)
 end)
 
 t.test('meat-bait/whistle: deliberately UNGATED -- CanShowK9UI is never even consulted, success case notifies distraction_used', function()

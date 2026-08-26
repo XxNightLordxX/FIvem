@@ -305,13 +305,26 @@
       tablet:auditSearch {mode, value?, limit?}     -> cb(AuditResult)  [tabletAuditSearch -- mode in {'officer','plate','person','recent'}]
       tablet:auditXp {targetCitizenId}              -> cb(AuditResult)  [tabletAuditXp -- no limit, single-row point lookup]
       tablet:auditDept {departmentKey, limit?}      -> cb(AuditResult)  [tabletAuditDept]
-        AuditResult = { ok:true, rows:table, label:string } |
+        AuditResult = { ok:true, rows:table, label:string, cap:number, limit?:number, truncated?:boolean } |
                       { ok:false, error:'not_authorized'|'rate_limited'|'invalid_args', message?:string }
-        Five NEW bridges (this pass) closing the gap server/admin.lua's own
-        header names by name: "no NUI callback and no client/tablet.lua
-        change are part of this pass; this is the server-side contract a
-        follow-up tablet screen builds against." Forwarded VERBATIM -- that
-        file's own CALLBACK SURFACE header states its response shape
+        `cap` (server/admin.lua's own HARD_MAX_RESULTS, added in a LATER
+        pass than these five bridges themselves) is present on every
+        success response, including tabletAuditXp's -- a uniform shape
+        across all five, even though that one callback takes no `limit` at
+        all. `limit`/`truncated` are present on the other four (the ones
+        that DO take a `limit`): `limit` is the exact, already-clamped
+        value the server actually used, and `truncated` is `true` only when
+        the caller's own request exceeded `cap` and was cut down to it --
+        see server/admin.lua's own ClampLimit doc comment for the full
+        contract these two mirror verbatim. NEVER present on a failure --
+        an unauthorized/rate-limited/malformed caller learns nothing new
+        from these fields. These five bridges originally closed the gap
+        server/admin.lua's own header once named by name: "no NUI callback
+        and no client/tablet.lua change are part of this pass; this is the
+        server-side contract a follow-up tablet screen builds against" --
+        THIS file is that follow-up (that sentence has since been corrected
+        in server/admin.lua's own header to say so). Forwarded VERBATIM --
+        that file's own CALLBACK SURFACE header states its response shape
         mirrors THIS file's established `{ok, error, message}` convention
         DIRECTLY, so AwaitServerCallback's own synthetic
         `{ok=false, error='timeout'}` (a thrown/unregistered callback)

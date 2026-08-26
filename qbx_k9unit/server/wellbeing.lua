@@ -16,7 +16,10 @@
     disabling e.g. FatigueSystem while MoodSystem stays on means fatigue is
     never ticked, never read, and never pushed to a meaningful value; it
     simply idles at its default. This file starts NO thread at all if all
-    five flags are false (see the CreateThread guard near the bottom).
+    five flags are false (see the CreateThread guard near the bottom, and
+    its own "DISCLOSED, NOT FIXED HERE" comment for the one runtime-toggle-ON
+    gap this shape still has, and why an always-on alternative was tried
+    and reverted this pass).
 
     ======================================================================
     CONFIDENCE GRADING — read before extending this file:
@@ -206,6 +209,15 @@
        carrying all five wellbeing values together (mirrors
        phase2_notes/DEVELOPER_REFERENCE.md#hud-bridge's own "one combined message
        beats a split one" reasoning, DEVELOPER_REFERENCE.md §13.4.3.1).
+       UPDATED (LIVE FEATURE FLAG PUSH, this pass): `stats.featureFlags` is
+       now also included (see `SnapshotOf`'s own header comment above for
+       the full "why piggyback here, not a new event" writeup) — the LIVE,
+       fresh-read state of all five Config.Features flags this file owns,
+       so client/wellbeing.lua's move-rate composer and Injury sprint/jump
+       block can react to a runtime tablet toggle within one tick instead of
+       only ever seeing the value this client's OWN copy of config.lua
+       shipped with at that client's own resource start. Same shape from
+       `getWellbeingSnapshot` (item 1 above) for the on-demand fetch path.
 
     Resource-globals (no `local` — other files call these directly):
     - RestoreInjury(citizenid: string, amount: number) — the accessor
@@ -761,6 +773,43 @@ end
 -- Every call site below is unchanged: this file never passed a custom
 -- title, which is server/notify.lua's own default.
 
+-- ======================================================================
+-- LIVE FEATURE FLAG PUSH (this pass -- closes a real, confirmed gap traced
+-- from server/runtimecontrol.lua's own disclosed limitation, "It does not
+-- push a live Config update to already-connected CLIENTS... reported as a
+-- follow-up, not built here"). All five of this file's own Config.Features
+-- flags are tiered `live` in that file specifically BECAUSE this file
+-- re-checks each one fresh at the point of use, tick to tick -- but
+-- client/wellbeing.lua's own move-rate composer (K9MoveRateModifiers.fatigue/
+-- .injury/.mood) and its Injury sprint/jump block used to read ONLY that
+-- CLIENT's own static Config.Features.<Name> copy, fixed at that client's
+-- own resource start and never updated by a runtime tablet toggle -- so an
+-- operator switching e.g. FatigueSystem off mid-session left every
+-- already-connected, already-penalized K9 stuck at its last-applied
+-- move-rate penalty forever (this file stops decaying/regenerating that
+-- stat the instant the flag is false, so nothing was ever going to carry
+-- it back across the threshold that would have cleared the modifier, and
+-- the client had no way to learn the flag had changed at all) -- a control
+-- that reports success while silently doing nothing, worse than one that
+-- honestly requires a restart.
+--
+-- THE FIX, REUSING THE EXISTING CHANNEL RATHER THAN BUILDING A SECOND ONE
+-- (client/featureblocks.lua's own header states this exact principle for
+-- its unrelated per-person block channel; applied here to this file's own
+-- already-existing per-tick push instead): `featureFlags` is piggybacked
+-- onto the SAME `wellbeingUpdate` push / `getWellbeingSnapshot` on-demand
+-- fetch this file already sends every tick to every connected K9 -- no new
+-- event, no new network round trip, no new poll. Read FRESH off the live
+-- `Config.Features` table at the exact moment each snapshot is built (never
+-- captured once), so a runtime toggle is reflected on this K9's very next
+-- snapshot -- within one `TICK_INTERVAL_MS` of a SetFeature/ResetFeature
+-- call for an already-connected client, or immediately for a client whose
+-- ped only just became K9-modeled (the on-demand fetch path). See
+-- client/wellbeing.lua's own `LiveFeatureFlags` mirror and the explicit
+-- reset branches in `ApplyMoveRateModifiers` for the client-side half of
+-- this fix -- a flag reported here as false now REMOVES an in-flight
+-- modifier immediately, rather than merely stopping it from being
+-- reapplied.
 --- @param stats table
 --- @return table snapshot -- a plain copy safe to hand to TriggerClientEvent/lib.callback
 local function SnapshotOf(stats)
@@ -771,6 +820,13 @@ local function SnapshotOf(stats)
         injury = stats.injury,
         distractedUntil = stats.distractedUntil,
         hesitatingUntil = stats.hesitatingUntil,
+        featureFlags = {
+            FatigueSystem = Config.Features.FatigueSystem == true,
+            MoodSystem = Config.Features.MoodSystem == true,
+            FearStressSystem = Config.Features.FearStressSystem == true,
+            DistractionSystem = Config.Features.DistractionSystem == true,
+            InjuryLimping = Config.Features.InjuryLimping == true,
+        },
     }
 end
 
@@ -1851,6 +1907,44 @@ AddEventHandler('playerDropped', function(_reason)
     end
 end)
 
+-- DISCLOSED, NOT FIXED HERE (audited this pass, alongside the LIVE FEATURE
+-- FLAG PUSH change above): this is a ONE-TIME check, evaluated once at this
+-- file's own load time -- a server that ships all five wellbeing flags
+-- false starts NO thread at all. Attempted, this pass, to make this thread
+-- always start and idle while every flag is false (mirroring
+-- client/movement.lua's own MOVE-RATE WATCHDOG shape) so a later runtime
+-- toggle-ON would have something already running to pick it up -- REVERTED
+-- after it broke this file's own tests/wellbeing_spec.lua on two counts:
+-- (1) the DISCREPANCY test asserting exactly ONE CreateThread call at
+-- file-load with every flag off (DistractionCooldown's own always-on sweep
+-- alone), and (2) the step()-per-tick harness, which assumes this thread's
+-- own OWN Wait()-then-act ordering to line up one TickWellbeing pass per
+-- simulated step. Both are real, already-relied-upon, deliberately-tested
+-- invariants elsewhere in this codebase (this file's own established "no
+-- code needed when disabled" posture, restated in this file's own header),
+-- not incidental test debt -- overriding them to close this one gap was
+-- the wrong trade.
+--
+-- THE HONEST STATE, FOR THE TIER TABLE: this is the SAME disclosed shape
+-- server/runtimecontrol.lua's own FEATURE_TIERS already accepts for
+-- CertificationExpiry ("the courtesy expiry-warning sweep thread only
+-- starts if this was already true when server/certifications.lua loaded")
+-- and PartnershipTenureBonus ("the tick thread only starts if all three
+-- were already true when server/tenure.lua loaded") -- FatigueSystem/
+-- MoodSystem/FearStressSystem/DistractionSystem/InjuryLimping's own
+-- FEATURE_TIERS entries do NOT yet carry the equivalent note, despite
+-- sharing the identical shape: if a server ships ALL FIVE of these flags
+-- false at boot, a later runtime toggle-ON of ANY ONE of them has nothing
+-- polling to ever begin ticking that stat, or pushing a single
+-- `wellbeingUpdate`, until this resource restarts -- reported to
+-- server/runtimecontrol.lua's owner (out of this pass's file-ownership
+-- scope) as a FEATURE_TIERS documentation gap, not a mis-tier: the
+-- OFF-direction fix immediately above (LIVE FEATURE FLAG PUSH) IS fully
+-- live with no caveat whenever at least one of the five was already true
+-- at boot -- the overwhelmingly likely real-world deployment shape for a
+-- flagship subsystem like this one -- so `tier = 'live'` remains the
+-- correct classification; it just needs the same disclosed-caveat `note`
+-- CertificationExpiry/PartnershipTenureBonus already carry.
 if Config.Features.FatigueSystem or Config.Features.MoodSystem
     or Config.Features.FearStressSystem or Config.Features.DistractionSystem
     or Config.Features.InjuryLimping then

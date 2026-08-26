@@ -286,6 +286,22 @@
       server/progression.lua, or server/wellbeing.lua -- all have live
       owners this pass. The one integration those files would otherwise
       need (highcommand.lua's '/k9givexp') is reported, not performed.
+    - OWNER-DIRECTED EXTENSION (later pass, "add or remove permissions"):
+      IsValidPermissionKey/PermissionLabelFor now consult
+      server/permissionkeycatalog.lua's own IsKnownPermissionCatalogKey/
+      GetPermissionCatalogLabel, both behind `type(...) == 'function'`
+      guards -- a genuine soft dependency, no load-order requirement either
+      way, falling back to this file's original Config.Permissions-only
+      behavior if that file is absent. GrantPermission additionally
+      acquires that file's own PermissionKeyEditMutex (a bare global,
+      `type(...) == 'table'` guarded) around its own write, mirroring
+      server/certifications.lua's SetCertificationTier / TierEditMutex
+      pairing exactly -- see server/permissionkeycatalog.lua's own header
+      "THE DELETE-VS-GRANT RACE" for the full writeup. THIS FILE does not
+      call into that file for anything else, and that file's own three
+      tablet callbacks are registered entirely on its own, independent of
+      this file's own tabletGrantPermission/tabletRevokePermission pair
+      below.
 
     CONFIG THIS FILE ASSUMES EXISTS (already added by the config owner):
       Config.Features.PermissionGrants : boolean
@@ -353,6 +369,52 @@
     be called by whichever file ends up owning that aggregation.
     ======================================================================
 
+    FEATURE-BLOCK PUSH (this pass) -- closes a drift-guard finding: client/
+    featureblocks.lua registers RegisterNetEvent('qbx_k9unit:client:
+    featureBlocksSync', ...) but, until now, no server file ever fired it,
+    so the twelve purely client-rendered features that file exists to gate
+    per-person could never actually learn they were blocked -- the tablet
+    would report a successful `block.<Name>` grant that silently did
+    nothing. See this file's own "FEATURE-BLOCK PUSH" code section
+    (immediately after RefreshPermissionCacheIfOnline below) for the full
+    per-function writeup; summarized here for a header-only reader:
+      - PUSHES (TriggerClientEvent('qbx_k9unit:client:featureBlocksSync',
+        targetSrc, blockedFeatureNames)) fire from FOUR points: this file's
+        own 'QBCore:Server:PlayerLoaded' handler (join/reconnect), this
+        file's own 'onResourceStart' backfill loop (a restart while already
+        online), and the tails of GrantPermission/RevokePermission
+        themselves, scoped to the `block.<Name>` permission namespace only
+        and ONLY when the target is currently online. Every push targets
+        that ONE citizenid's own resolved server id -- never `-1`/broadcast.
+      - PULLS: a new RegisterNetEvent('qbx_k9unit:server:
+        requestFeatureBlocksSync', ...), registered near the bottom of this
+        file, lets client/featureblocks.lua re-request its own set on demand
+        (a client-side script restart mid-session, or simply as a defensive
+        belt-and-suspenders call at that file's own load) -- see that
+        registration's own doc comment for the full ordering writeup.
+      - THE CLIENT IS NOT A SECURITY BOUNDARY, and this push does not change
+        that: every one of the twelve features this closes the gap for is
+        confirmed, by grep across server/*.lua (client/featureblocks.lua's
+        own header states this plainly), to have NO server-side effect at
+        all -- this push is a UX affordance a modified client could always
+        ignore, exactly like every other client-side check this resource
+        already ships. It is NOT extended to, and must never be extended to,
+        anything with a server-side consequence -- those 29 OTHER features
+        already enforce `block.<Name>` for real, inside their OWN
+        server-side handler, via this file's pre-existing HasPermission --
+        this push adds nothing to that path and does not touch it.
+      - FAILS OPEN, both directions: GetActiveBlockedFeatureNames (below)
+        returns an empty array on any unresolvable state (feature flag off,
+        no cache entry yet), and PushFeatureBlocksToSource silently no-ops
+        rather than throwing when it has no valid target -- a push that
+        never arrives at all (dropped packet, client not yet loaded, feature
+        flag off) leaves client/featureblocks.lua's own ClientFeatureBlocks
+        at its documented empty-table default, which that file's own header
+        states plainly means "nothing is blocked". A networking hiccup
+        degrades to every ability WORKING, never to one being incorrectly
+        frozen.
+    ======================================================================
+
     FXMANIFEST.LUA PLACEMENT REQUESTED (server_scripts, not edited here):
     insert `'server/permissions.lua',` immediately after
     `'server/highcommand.lua',` and before `'server/main.lua',` -- satisfies
@@ -374,21 +436,51 @@
 -- time, same reasoning as server/certifications.lua's own guard for
 -- Config.Departments/Config.Peds: HasPermission below is consulted from
 -- always-live gates regardless of Config.Features.PermissionGrants'
--- current value, so a malformed Config.Permissions must fail loudly at
--- resource start, not silently as "nobody can ever hold any permission".
+-- current value.
+--
+-- CLAMP AND WARN, NOT ASSERT (this pass -- see server/cooldowns.lua's
+-- header ADDENDUM: "does an operator's config.lua edit alone... reach this
+-- value? If yes it must be clamped and warned about, never asserted and
+-- aborted"). This used to be a hard `assert` per entry -- correctly
+-- diagnosing a real risk, but with the wrong remedy: an uncaught error
+-- thrown from THIS FILE's own top-level chunk (this guard runs
+-- unconditionally, with no deferring onResourceStart/RegisterNetEvent
+-- wrapper, and with no Config.Features gate to make it opt-in) aborts
+-- server/permissions.lua's load from that line onward -- taking
+-- HasPermission/GrantPermission/RevokePermission (and every other gate in
+-- this resource that consults them) down with it, for the rest of that
+-- server's uptime, over one operator typo while adding a fifth capability.
+-- A malformed entry is dropped (not fatal) instead: PermissionLabelFor
+-- already falls back to the raw key when `.label` is missing (see below),
+-- so a dropped entry degrades to "this one named capability can no longer
+-- be granted" rather than disabling every capability, including the four
+-- that were fine.
 -- ======================================================================
-assert(type(Config.Permissions) == 'table',
-    '[qbx_k9unit] Config.Permissions must be a table -- HasPermission, GrantPermission and RevokePermission ' ..
-    'all validate a caller-supplied permission key against it; a missing table would make every permission ' ..
-    'check fail closed with nothing logged to explain why.')
-for key, def in pairs(Config.Permissions) do
-    assert(type(key) == 'string' and key ~= '',
-        '[qbx_k9unit] every Config.Permissions key must be a non-empty string.')
-    assert(type(def) == 'table' and type(def.label) == 'string' and def.label ~= '',
-        ('[qbx_k9unit] Config.Permissions[%s].label must be a non-empty string -- the tablet renders this as ' ..
-         'the human-readable capability name.'):format(tostring(key)))
-    assert(def.description == nil or type(def.description) == 'string',
-        ('[qbx_k9unit] Config.Permissions[%s].description must be a string if present.'):format(tostring(key)))
+if type(Config.Permissions) ~= 'table' then
+    print(
+        '[qbx_k9unit] WARNING: Config.Permissions is missing or not a table -- HasPermission/GrantPermission/' ..
+        'RevokePermission will treat every permission key as unknown until config.lua is fixed (fails closed, ' ..
+        'same as no grants existing). Add the Config.Permissions settings table back to config.lua.'
+    )
+    Config.Permissions = {}
+else
+    local validPermissions = {}
+    for key, def in pairs(Config.Permissions) do
+        if type(key) == 'string' and key ~= ''
+            and type(def) == 'table' and type(def.label) == 'string' and def.label ~= ''
+            and (def.description == nil or type(def.description) == 'string')
+        then
+            validPermissions[key] = def
+        else
+            print(
+                ('[qbx_k9unit] WARNING: Config.Permissions[%s] is malformed (every key must be a non-empty ' ..
+                 'string, .label must be a non-empty string, .description must be a string if present) -- ' ..
+                 'dropping this entry so it can never be granted, and continuing to load the rest of ' ..
+                 'Config.Permissions.'):format(tostring(key))
+            )
+        end
+    end
+    Config.Permissions = validPermissions
 end
 
 -- PermissionCache[citizenid] = { [permissionKey] = true, ... } -- see this
@@ -462,19 +554,54 @@ end
 --- 'feature.<Name>' grant when RequireGrant[Name] is true) -- narrowing
 --- this further than Config.Features itself would reject a legitimate
 --- block with no corresponding safety benefit.
+--- OVERLAY UPDATE (owner-directed "add or remove permissions" pass, server/
+--- permissionkeycatalog.lua): the four-key `Config.Permissions[value] ~=
+--- nil` check below is REPLACED by a soft-dependency call into that file's
+--- own live, DB-overlaid catalog (IsKnownPermissionCatalogKey), falling
+--- back to the original Config.Permissions-only check if that file is ever
+--- absent. This is a genuine behavior WIDENING, deliberate and disclosed:
+--- a permission key created PURELY at runtime (never in Config.Permissions
+--- at all) now validates here too, and a key high command has TOMBSTONED
+--- through that file's own permKeysDelete callback now correctly stops
+--- validating even though it is still, unchanged, a literal key of
+--- Config.Permissions -- consulting Config.Permissions directly, as this
+--- function used to, would have made a tombstoned DEFAULT key impossible
+--- to ever actually retire. See server/permissionkeycatalog.lua's own
+--- header "NAMESPACE PROTECTION" for why the feature./block. check below
+--- is checked FIRST and is completely unaffected by this change -- that
+--- namespace is never represented in the permission-key catalog at all,
+--- by construction on both sides.
 --- @param value any
 --- @return boolean
 local function IsValidPermissionKey(value)
     if type(value) ~= 'string' or value == '' or #value > 50 then return false end
 
-    if type(Config.Permissions) == 'table' and Config.Permissions[value] ~= nil then
-        return true
+    -- feature./block. namespace -- UNCHANGED, checked first, never routed
+    -- through the permission-key catalog. See this function's own doc
+    -- comment above this pass's OVERLAY UPDATE note for the original,
+    -- still-accurate "why" writeup.
+    if type(Config.Features) == 'table' then
+        local featureName = value:match('^feature%.(.+)$') or value:match('^block%.(.+)$')
+        if featureName ~= nil and Config.Features[featureName] ~= nil then
+            return true
+        end
     end
 
-    if type(Config.Features) ~= 'table' then return false end
+    -- PERMISSION-KEY CATALOG (soft dependency -- server/permissionkeycatalog.lua).
+    -- OVERLAYS Config.Permissions: when that file is loaded, its own merged
+    -- catalog (Config.Permissions defaults + DB overrides/additions, minus
+    -- any tombstoned key) is THE authority for this namespace -- consulting
+    -- Config.Permissions directly here would let a high-command-tombstoned
+    -- default key keep validating forever, and would never recognize a
+    -- purely DB-added key at all.
+    if type(IsKnownPermissionCatalogKey) == 'function' then
+        return IsKnownPermissionCatalogKey(value)
+    end
 
-    local featureName = value:match('^feature%.(.+)$') or value:match('^block%.(.+)$')
-    return featureName ~= nil and Config.Features[featureName] ~= nil
+    -- FALLBACK (server/permissionkeycatalog.lua absent): the original,
+    -- config-only check -- preserves this function's pre-existing behavior
+    -- exactly if that file is ever removed.
+    return type(Config.Permissions) == 'table' and Config.Permissions[value] ~= nil
 end
 
 --- Returns true if `err` (the value pcall caught around the grant INSERT)
@@ -546,6 +673,89 @@ local function RefreshPermissionCacheIfOnline(citizenid)
     if onlinePlayer and onlinePlayer.PlayerData and onlinePlayer.PlayerData.source then
         RefreshPermissionCache(citizenid)
     end
+end
+
+-- ======================================================================
+-- FEATURE-BLOCK PUSH (this pass) -- closes the drift-guard finding that
+-- client/featureblocks.lua registers RegisterNetEvent('qbx_k9unit:client:
+-- featureBlocksSync', ...) but no server file ever fired it, so the twelve
+-- purely client-rendered features that file exists to gate (RadialMenu,
+-- VehicleEntryExit, AgilityBasicJump, AgilityAdvanced, ThermalVision,
+-- NightVision, HealthStaminaHUD, ContrabandScreenFX, AdvancedBarkRadial,
+-- ProximityAudioFX, WaterTrackingDecay, CameraFeedPiP) could never actually
+-- be told they were blocked -- the tablet would report a successful block
+-- that silently did nothing. See this file's own header "TABLET NETWORK
+-- CONTRACT" section neighbourhood for the other server-side contracts this
+-- mirrors; this section is deliberately self-contained instead, since it is
+-- infrastructure server/tablet.lua's tabletBlockFeature/tabletUnblockFeature
+-- reach only indirectly (through the SAME GrantPermission/RevokePermission
+-- calls every other permission namespace already goes through -- see
+-- IsValidPermissionKey's own 'block.<Name>' branch above).
+-- ======================================================================
+
+--- Every active `block.<Name>` row currently cached for `citizenid`, as a
+--- bare array of `Name` strings (the `block.` prefix stripped -- never sent
+--- over the wire, since client/featureblocks.lua's own
+--- CLIENT_ENFORCED_FEATURES allowlist is keyed by the bare name, e.g.
+--- `NightVision`, never `block.NightVision`).
+---
+--- DELIBERATELY NOT filtered down to the twelve client-only names here:
+--- this returns every `block.<Name>` row that exists at all, covering both
+--- the twelve client-only features AND the twenty-nine server-enforced ones
+--- this file's own header describes elsewhere -- client/featureblocks.lua's
+--- own CLIENT_ENFORCED_FEATURES table already does that filtering safely,
+--- client-side, dropping anything it does not recognise (see that file's
+--- own comment on it); duplicating that exact twelve-name list here would
+--- be a second copy this file has no way to keep in sync with a future
+--- change to a file this pass does not own.
+---
+--- Reads ONLY the already-warmed PermissionCache -- never a fresh DB query
+--- of its own -- so this is a synchronous, zero-cost, in-memory read every
+--- time, safe to call from a hot grant/revoke path as well as the bulk
+--- PlayerLoaded/onResourceStart warm paths below. Returns an empty table
+--- (never nil, never throws) when Config.Features.PermissionGrants is off
+--- or `citizenid` has no cache entry at all (not yet warmed, or genuinely
+--- holds zero active permissions) -- FAILS OPEN, matching HasPermission's
+--- own "feature off means nothing is granted" posture and
+--- client/featureblocks.lua's own documented "unknown means allowed"
+--- contract: an empty array pushed to a client clears every block it may
+--- have been holding, never invents one that is not real.
+--- @param citizenid string
+--- @return string[] blockedFeatureNames
+local function GetActiveBlockedFeatureNames(citizenid)
+    if not (Config.Features and Config.Features.PermissionGrants == true) then return {} end
+    local set = PermissionCache[citizenid]
+    if not set then return {} end
+    local names = {}
+    for key, active in pairs(set) do
+        if active == true then
+            local featureName = key:match('^block%.(.+)$')
+            if featureName then
+                names[#names + 1] = featureName
+            end
+        end
+    end
+    return names
+end
+
+--- Pushes `citizenid`'s CURRENT, COMPLETE block set to THEIR OWN live
+--- client only -- NEVER a broadcast (`TriggerClientEvent(-1, ...)`), per
+--- this task's own explicit "send that one player their own block set, not
+--- everyone's" requirement. `targetSrc` is always a specific, already-
+--- resolved server id this file itself resolved (GetPlayerByCitizenId for
+--- the grant/revoke/PlayerLoaded paths, GetPlayers' own per-connection loop
+--- for the onResourceStart backfill) -- never a client-supplied value at
+--- any call site below. A silent no-op (never throws) when `targetSrc` is
+--- not currently a number -- covers every caller that resolves an
+--- online-target lookup which came back nil (target is offline; there is
+--- no live client to push to, and nothing to clean up either, since an
+--- offline citizenid has no cache entry per RefreshPermissionCacheIfOnline's
+--- own SCOPE).
+--- @param targetSrc number?
+--- @param citizenid string
+local function PushFeatureBlocksToSource(targetSrc, citizenid)
+    if type(targetSrc) ~= 'number' then return end
+    TriggerClientEvent('qbx_k9unit:client:featureBlocksSync', targetSrc, GetActiveBlockedFeatureNames(citizenid))
 end
 
 --- Re-checks a SPECIFIC (citizenid, permission) row's `active` column
@@ -642,8 +852,12 @@ end
 
 --- Human-readable label for a NotifyPlayer'd grant/revoke, covering BOTH
 --- permission namespaces this file accepts (IsValidPermissionKey above):
---- Config.Permissions[key].label for the four admin capabilities (k9.access/
---- k9.certify/k9.audit/k9.givexp -- unchanged from before this pass), and a
+--- the permission-key catalog's own live label (server/permissionkeycatalog.lua's
+--- GetPermissionCatalogLabel -- OVERLAYS Config.Permissions[key].label the
+--- same way IsValidPermissionKey now does, this pass, so a high-command
+--- RELABEL of a key is reflected here too, not just at validation time) for
+--- the admin-capability namespace, falling back to
+--- Config.Permissions[key].label directly if that file is absent, and a
 --- plain fallback to the raw key itself for 'feature.<Name>'/'block.<Name>'
 --- -- config.lua's Config.FeatureControl has no per-feature human label the
 --- way Config.Permissions does (RequireGrant is a bare `{ Name = true }`
@@ -656,6 +870,13 @@ end
 --- @param permissionKey string
 --- @return string
 local function PermissionLabelFor(permissionKey)
+    if type(GetPermissionCatalogLabel) == 'function' then
+        local catalogLabel = GetPermissionCatalogLabel(permissionKey)
+        if type(catalogLabel) == 'string' then
+            return catalogLabel
+        end
+    end
+
     local def = type(Config.Permissions) == 'table' and Config.Permissions[permissionKey]
     if def and type(def.label) == 'string' then
         return def.label
@@ -708,7 +929,7 @@ end
 --- @param permissionKey string
 --- @param appearanceModelOverride string? -- K9 ROLE/MODEL DECOUPLING (coder-architect, server/appearance.lua): ONLY consulted when permissionKey == 'k9.access' and Config.K9Appearance.applyPedModelOnCertify is on -- the explicit ped model server/appearance.lua's ApplyK9PedRole (the tablet's direct "apply K9" action) wants applied instead of the automatic-grant default (Config.Peds[1].model). Every OTHER caller of GrantPermission simply omits this and gets the default, exactly as before this parameter existed.
 --- @return boolean ok
---- @return string outcome -- 'ok' | 'feature_disabled' | 'denied' | 'invalid_permission' | 'invalid_target' | 'invalid_granter' | 'self_grant_blocked' | 'rate_limited' | 'already_granted' | 'db_error'
+--- @return string outcome -- 'ok' | 'feature_disabled' | 'denied' | 'invalid_permission' | 'invalid_target' | 'invalid_granter' | 'self_grant_blocked' | 'rate_limited' | 'busy' | 'already_granted' | 'db_error'
 function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceModelOverride)
     if not (Config.Features and Config.Features.PermissionGrants == true) then
         return false, 'feature_disabled'
@@ -751,8 +972,41 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
         return false, 'self_grant_blocked'
     end
 
+    -- PERMISSION-KEY CATALOG RACE GUARD (owner-directed "add or remove
+    -- permissions" pass, server/permissionkeycatalog.lua) -- see that
+    -- file's own header "THE DELETE-VS-GRANT RACE" for the full writeup.
+    -- Acquires the SAME cross-file PermissionKeyEditMutex, keyed by
+    -- `permissionKey`, that file's own DeleteKey/UpsertKey acquire before
+    -- their own tombstone/relabel writes -- this closes the window where a
+    -- concurrent delete of `permissionKey` could otherwise land between
+    -- "this key is currently known" (already checked above) and this
+    -- INSERT actually committing. Guarded by a `type(...) == 'table'`
+    -- runtime existence check, this resource's established soft-dependency
+    -- convention -- this function still works exactly as before (accepting
+    -- only this previously-undocumented, now-disclosed, narrow race) if
+    -- server/permissionkeycatalog.lua is ever removed. Mirrors
+    -- server/certifications.lua's own SetCertificationTier /
+    -- TierEditMutex pairing exactly, and cannot deadlock against that
+    -- entirely separate mutex (see this new file's own header for why).
+    local havePermKeyMutex = type(PermissionKeyEditMutex) == 'table'
+    if havePermKeyMutex and not PermissionKeyEditMutex.TryAcquire(permissionKey) then
+        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'busy')
+        return false, 'busy'
+    end
+
+    -- Re-check AFTER acquiring the lock, in case `permissionKey` was
+    -- deleted by a concurrent permKeysDelete call in the gap between the
+    -- earlier check and acquiring this lock -- refuse now rather than
+    -- write a grant row for a key that no longer validates.
+    if havePermKeyMutex and not IsValidPermissionKey(permissionKey) then
+        PermissionKeyEditMutex.Release(permissionKey)
+        LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'invalid_permission')
+        return false, 'invalid_permission'
+    end
+
     local lockKey = targetCitizenid .. ':' .. permissionKey
     if GrantInFlight[lockKey] then
+        if havePermKeyMutex then PermissionKeyEditMutex.Release(permissionKey) end
         LogAuditInvocation(granterSrc, 'grantPermission', ('permission=%s target=%s'):format(permissionKey, targetCitizenid), 'already_granted')
         return false, 'already_granted'
     end
@@ -793,6 +1047,12 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
 
     local grantOk, grantErr = pcall(doGrantInsert)
     GrantInFlight[lockKey] = nil
+    -- Released here, immediately after the write's own critical section
+    -- ends, exactly where server/certifications.lua's SetCertificationTier
+    -- releases TierEditMutex relative to its own K9Store.Cert_SetTier call
+    -- -- never held across the notification/cache-refresh/appearance-hook
+    -- tail below.
+    if havePermKeyMutex then PermissionKeyEditMutex.Release(permissionKey) end
 
     if not grantOk then
         print(('[qbx_k9unit] permissions.lua GrantPermission unexpected error for %s/%s: %s'):format(targetCitizenid, permissionKey, tostring(grantErr)))
@@ -813,6 +1073,22 @@ function GrantPermission(granterSrc, targetCitizenid, permissionKey, appearanceM
     local onlineTargetSrc = onlineTargetPlayer and onlineTargetPlayer.PlayerData and onlineTargetPlayer.PlayerData.source
     if onlineTargetSrc then
         NotifyPlayer(onlineTargetSrc, locale('permissions.grant_notify_target', PermissionLabelFor(permissionKey)), 'success')
+    end
+
+    -- FEATURE-BLOCK PUSH ON CHANGE -- see "FEATURE-BLOCK PUSH" above for the
+    -- full contract. A `block.<Name>` GRANT here means high command just
+    -- blocked `Name` for this specific, already-online citizenid -- push
+    -- their fresh, complete block set immediately so client/featureblocks.lua
+    -- (and, through it, each owning client file's own maintenance-thread
+    -- check) can force off an ALREADY-ACTIVE effect within one polling
+    -- interval, per client/featureblocks.lua's own "NEVER GATE A
+    -- TERMINATION PATH" rule -- this push only ever ADDS a block; it is
+    -- each consuming client file's own existing force-off call that
+    -- actually tears down a live effect, never this push itself. Scoped to
+    -- the `block.` namespace only -- a `feature.<Name>`/`k9.access`/etc.
+    -- grant has nothing to do with this sync and must never trigger it.
+    if onlineTargetSrc and permissionKey:match('^block%.') then
+        PushFeatureBlocksToSource(onlineTargetSrc, targetCitizenid)
     end
 
     -- K9 ROLE/MODEL DECOUPLING (coder-architect, server/appearance.lua) --
@@ -989,6 +1265,24 @@ function RevokePermission(granterSrc, targetCitizenid, permissionKey)
         end
     else
         stillHasAccess = 'unknown_target_offline'
+    end
+
+    -- FEATURE-BLOCK PUSH ON CHANGE -- see "FEATURE-BLOCK PUSH" above and
+    -- GrantPermission's own identical comment. A `block.<Name>` REVOKE here
+    -- means high command just UNBLOCKED `Name` for this online citizenid --
+    -- push their fresh, complete block set immediately so the twelve
+    -- client-only features (and every other consumer of
+    -- IsK9FeatureBlocked()) become usable again without a reconnect.
+    -- `stillHasAccess` is always `nil` here for the block.<Name> namespace
+    -- when `onlineTargetSrc` is truthy (LegacyOrHighCommandStillQualifies
+    -- has no legacy tier for this namespace -- see that function's own doc
+    -- comment), so this is unconditional on `onlineTargetSrc` alone, not
+    -- additionally gated on `stillHasAccess == nil` the way the
+    -- target-facing NotifyPlayer below deliberately is -- there is no
+    -- "still has it another way" case for a per-feature block to suppress
+    -- this sync against.
+    if onlineTargetSrc and permissionKey:match('^block%.') then
+        PushFeatureBlocksToSource(onlineTargetSrc, targetCitizenid)
     end
 
     LogAuditInvocation(granterSrc, 'revokePermission', ('permission=%s target=%s still_has_access=%s'):format(permissionKey, targetCitizenid, tostring(stillHasAccess)), 'ok')
@@ -1182,6 +1476,30 @@ AddEventHandler('QBCore:Server:PlayerLoaded', function(Player)
     local citizenid = Player.PlayerData.citizenid
     if citizenid then
         RefreshPermissionCache(citizenid)
+
+        -- FEATURE-BLOCK PUSH ON CONNECT -- see "FEATURE-BLOCK PUSH" above.
+        -- This is trigger #1 of client/featureblocks.lua's own documented
+        -- two: every fresh connection/reconnect gets this citizenid's
+        -- current block set immediately, before they can act on any of the
+        -- twelve client-only features. Fired AFTER RefreshPermissionCache
+        -- above so this reads this citizenid's own, current, just-warmed
+        -- cache entry, never stale leftover state from a previous session.
+        --
+        -- ORDERING, DISCLOSED: this fires the instant QBCore reports the
+        -- player loaded, which this resource's own established convention
+        -- (server/appearance.lua's identical PlayerLoaded-time push,
+        -- server/certifications.lua's own confidence note on this same
+        -- event) already treats as safe for a push -- client-side resources
+        -- start streaming, and run their own top-level RegisterNetEvent
+        -- calls, well before a connecting player finishes loading in, so
+        -- client/featureblocks.lua's handler is already registered by the
+        -- time this fires for the ORDINARY join/reconnect case this handler
+        -- exists for. The one case this does NOT cover -- a resource
+        -- restart's client half racing this same push -- is handled
+        -- separately below (onResourceStart) and by the client-initiated
+        -- 'qbx_k9unit:server:requestFeatureBlocksSync' pull further down
+        -- this file, not by adding complexity here.
+        PushFeatureBlocksToSource(Player.PlayerData.source, citizenid)
     end
 end)
 
@@ -1215,7 +1533,89 @@ AddEventHandler('onResourceStart', function(resourceName)
             local Player = exports.qbx_core:GetPlayer(src)
             if Player and Player.PlayerData and Player.PlayerData.citizenid then
                 RefreshPermissionCache(Player.PlayerData.citizenid)
+
+                -- FEATURE-BLOCK PUSH ON RESOURCE RESTART -- see
+                -- "FEATURE-BLOCK PUSH" above. 'QBCore:Server:PlayerLoaded'
+                -- never fires again for a player who was already connected
+                -- BEFORE this resource (re)started, so this backfill loop is
+                -- this citizenid's only immediate re-sync opportunity --
+                -- without this, an officer already online when qbx_k9unit
+                -- restarts would keep whatever stale block state (or total
+                -- absence of one) survived the restart until their next full
+                -- reconnect.
+                --
+                -- ORDERING, DISCLOSED, NOT SOLVED HERE: this server-side
+                -- onResourceStart and that SAME player's client-side
+                -- onClientResourceStart are two independent events with no
+                -- ordering guarantee between them -- this push can still
+                -- race a client that has not finished (re)registering its
+                -- own RegisterNetEvent('qbx_k9unit:client:featureBlocksSync',
+                -- ...) handler yet. This push is still worth sending
+                -- unconditionally (best effort, free of charge, correct in
+                -- the common case), but the genuine fix for that race is the
+                -- client-initiated 'qbx_k9unit:server:requestFeatureBlocksSync'
+                -- pull further down this file, which client/featureblocks.lua's
+                -- own owner is asked to call once that file's own
+                -- onClientResourceStart (if/when it adds one) has finished
+                -- registering -- see this pass's own hand-off report.
+                PushFeatureBlocksToSource(Player.PlayerData.source, Player.PlayerData.citizenid)
             end
         end
     end
+end)
+
+-- ======================================================================
+-- FEATURE-BLOCK PUSH -- CLIENT-INITIATED RE-REQUEST. See "FEATURE-BLOCK
+-- PUSH" above for the two SERVER-initiated triggers (PlayerLoaded,
+-- onResourceStart backfill) and their own disclosed ordering caveat: either
+-- one can race a client resource that has not finished (re)registering its
+-- own RegisterNetEvent('qbx_k9unit:client:featureBlocksSync', ...) handler
+-- yet -- most concretely a bare CLIENT-side script restart with the server
+-- resource left running, which fires no server-observable event this file
+-- could hang a push on at all.
+--
+-- This is this file's answer to that gap: a plain, CLIENT-initiated pull.
+-- Because the request originates FROM the client that wants the answer, it
+-- structurally cannot arrive before that same client is ready to receive
+-- the reply -- unlike a server-initiated push, there is no ordering race to
+-- solve here at all. client/featureblocks.lua's own owner is asked to fire
+-- `TriggerServerEvent('qbx_k9unit:server:requestFeatureBlocksSync')` once at
+-- that file's own top-level load (covers a normal resource start/restart,
+-- redundantly with the pushes above -- redundant is fine, see below) AND
+-- again from inside an `AddEventHandler('onClientResourceStart', ...)`
+-- handler if that file adds one (covers a client-only restart) -- see this
+-- pass's own hand-off report for the exact two-line request; NOT added
+-- here, since client/featureblocks.lua has a live owner this pass.
+--
+-- NO COOLDOWN, unlike GrantPermission/RevokePermission's
+-- PERMISSION_ACTION_COOLDOWN_MS -- deliberately: this is a read-only,
+-- sub-millisecond in-memory table read (GetActiveBlockedFeatureNames above
+-- never touches the DB), expected to fire at most a handful of times per
+-- player per session, not a repeatable write a fat-fingering or malicious
+-- caller could abuse to change persisted state. Calling it twice in a row
+-- (a late reply racing a duplicate request, or simply an operator's own
+-- resource restart firing both the onResourceStart push above AND this
+-- request) is harmless BY CONSTRUCTION: GetActiveBlockedFeatureNames
+-- rebuilds the full array fresh from PermissionCache every single call, so
+-- two identical pushes back to back are simply two identical, idempotent
+-- full replacements -- never a merge, never double-counted -- exactly
+-- matching client/featureblocks.lua's own documented "full reassignment,
+-- not a merge" handling on the receiving end.
+--
+-- Resolves `citizenid` from `source` itself -- never trusts a client-
+-- supplied identity, matching every other RegisterNetEvent handler in this
+-- resource. If that resolves to nothing (this fires before this
+-- connection's own QBCore player object exists yet, e.g. during character
+-- selection), this is a silent no-op: client/featureblocks.lua's own
+-- ClientFeatureBlocks starts empty and fails OPEN, so "no reply yet" is
+-- already the correct, safe answer -- there is no unblocked state to
+-- correct here, unlike a mutating action that would need to report a
+-- failure back to a caller.
+-- ======================================================================
+RegisterNetEvent('qbx_k9unit:server:requestFeatureBlocksSync', function()
+    local src = source
+    local Player = exports.qbx_core:GetPlayer(src)
+    local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+    if not citizenid then return end
+    PushFeatureBlocksToSource(src, citizenid)
 end)

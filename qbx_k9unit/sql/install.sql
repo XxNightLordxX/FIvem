@@ -3,21 +3,22 @@
 --
 -- MINIMUM SERVER VERSION: MySQL >= 5.7.8, or MariaDB >= 10.2.
 --
--- This is a hard requirement, not a recommendation. Four of the sixteen
+-- This is a hard requirement, not a recommendation. Four of the twenty
 -- tables below (k9_certifications, k9_certification_specializations,
 -- k9_partnerships, k9_permissions) declare an INDEXED VIRTUAL GENERATED
 -- COLUMN backing a UNIQUE KEY (`k9_certifications.active_cert_key`,
 -- `k9_certification_specializations.active_spec_key`,
 -- `k9_partnerships.active_partner_k9_key` and `active_partner_handler_key`,
--- `k9_permissions.active_permission_key`) -- the other twelve
+-- `k9_permissions.active_permission_key`) -- the other sixteen
 -- (k9_search_log, k9_progression, k9_runtime_feature_overrides,
 -- k9_runtime_override_audit, k9_tablet_theme, k9_tablet_theme_audit,
 -- k9_ped_assignments, k9_certification_tiers,
 -- k9_certification_tier_capabilities, k9_certification_tier_audit,
--- k9_equipment_shop_locations, k9_equipment_shop_locations_audit) need
--- nothing from this floor and would run on an older server on their own,
--- but this resource has one stated minimum for the schema as a whole,
--- not a per-table one.
+-- k9_equipment_shop_locations, k9_equipment_shop_locations_audit,
+-- k9_permission_keys, k9_permission_key_audit, k9_xp_tiers,
+-- k9_xp_tier_audit) need nothing from this floor and would run on an
+-- older server on their own, but this resource has one stated minimum for
+-- the schema as a whole, not a per-table one.
 -- -- the DB-level backstop for this resource's "at most one active
 -- certification per (citizenid, job)", "at most one active partnership
 -- per party" and "at most one active permission grant per (citizenid,
@@ -1216,4 +1217,90 @@ CREATE TABLE IF NOT EXISTS `k9_equipment_shop_locations_audit` (
 
   PRIMARY KEY (`id`),
   KEY `idx_location_id_changed_at` (`location_id`, `changed_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_permission_keys / k9_permission_key_audit
+--
+-- Added alongside `sql/migrations/0013_create_k9_permission_keys.sql`,
+-- byte-for-byte the same shape -- see that file's own header for the full
+-- design rationale (why this overlays server/permissions.lua's
+-- Config.Permissions catalog the same way k9_certification_tiers overlays
+-- Config.CertificationTiers, why `deleted` is a tombstone rather than a
+-- real row DELETE, why there is no ordinal or capabilities sibling table
+-- the way the certification-tier tables have, and why neither table
+-- declares an FK) -- not repeated a second time here.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates these tables, run
+-- `sql/migrations/0013_create_k9_permission_keys.sql` instead (a
+-- guaranteed no-op if this file already created them).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_permission_keys` (
+  `permission_key` VARCHAR(50)  NOT NULL,
+  `label`          VARCHAR(60)  NOT NULL,
+  `description`    VARCHAR(300) DEFAULT NULL,
+  `deleted`        TINYINT(1)   NOT NULL DEFAULT 0,
+  `created_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_by`     VARCHAR(50)  NOT NULL,
+  `updated_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`permission_key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `k9_permission_key_audit` (
+  `id`             INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `action`         VARCHAR(20)  NOT NULL,
+  `permission_key` VARCHAR(50)  NOT NULL,
+  `detail`         TEXT         NOT NULL,
+  `changed_by`     VARCHAR(50)  NOT NULL,
+  `changed_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  KEY `idx_permission_key_changed_at` (`permission_key`, `changed_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================================
+-- qbx_k9unit :: k9_xp_tiers / k9_xp_tier_audit
+--
+-- Added alongside `sql/migrations/0015_create_k9_xp_tiers.sql`,
+-- byte-for-byte the same shape -- see that file's own header for the full
+-- design rationale (why this overlays Config.XPTiers by mutating it in
+-- place rather than a second merged-catalog structure, why there is no
+-- `deleted` tombstone column at all, why `ordinal` -- not a free-form
+-- string key -- is this table's own stable identity, and why neither
+-- table declares an FK) -- not repeated a second time here.
+--
+-- Safe to run against a fresh database; CREATE TABLE IF NOT EXISTS makes
+-- this idempotent if executed more than once. For an EXISTING database
+-- that predates these tables, run
+-- `sql/migrations/0015_create_k9_xp_tiers.sql` instead (a guaranteed
+-- no-op if this file already created them).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS `k9_xp_tiers` (
+  `ordinal`                    INT          NOT NULL,
+  `xp_threshold`               INT          NOT NULL,
+  `label`                      VARCHAR(60)  NOT NULL,
+  `speed_multiplier`           DOUBLE       NOT NULL,
+  `scent_range_multiplier`     DOUBLE       NOT NULL,
+  `medkit_cooldown_multiplier` DOUBLE       DEFAULT NULL,
+  `badge`                      VARCHAR(30)  DEFAULT NULL,
+  `created_at`                 DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_by`                 VARCHAR(50)  NOT NULL,
+  `updated_at`                 DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`ordinal`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `k9_xp_tier_audit` (
+  `id`           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `action`       VARCHAR(20)  NOT NULL,
+  `ordinal`      INT          NOT NULL,
+  `detail`       TEXT         NOT NULL,
+  `changed_by`   VARCHAR(50)  NOT NULL,
+  `changed_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`id`),
+  KEY `idx_ordinal_changed_at` (`ordinal`, `changed_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

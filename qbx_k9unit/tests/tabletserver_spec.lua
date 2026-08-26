@@ -1149,6 +1149,19 @@ local function newIntegrationFixture(opts)
         HasK9Access = opts.hasK9Access or function(_source) return false end,
         NotifyPlayer = function() end,
         AddEventHandler = function(_name, _fn) end,
+        -- FEATURE-BLOCK PUSH (this pass) -- server/permissions.lua now
+        -- registers 'qbx_k9unit:server:requestFeatureBlocksSync' via
+        -- RegisterNetEvent unconditionally at file-load time, and calls
+        -- TriggerClientEvent from GrantPermission/RevokePermission's own
+        -- block.<Name> tail whenever the target below (TARGET1) is online
+        -- -- both genuinely exercised by this fixture's own "ROUND TRIP...
+        -- BLOCK" test further down. Neither is asserted on by name here
+        -- (that contract has its own dedicated coverage in
+        -- tests/permissions_spec.lua); these are just enough stub for
+        -- server/permissions.lua's own load and normal grant/revoke calls
+        -- to not crash this fixture with "attempt to call a nil value".
+        RegisterNetEvent = function(_name, _fn) end,
+        TriggerClientEvent = function(_eventName, _target, ...) end,
         GetPlayers = function() return {} end,
         GetCurrentResourceName = function() return 'qbx_k9unit' end,
         GetGameTimer = GetGameTimerStub,

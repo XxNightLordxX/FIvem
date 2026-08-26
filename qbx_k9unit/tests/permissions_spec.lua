@@ -187,6 +187,22 @@ local function newFixture(opts)
     local capturedCallbacks = {}
     local libStub = { callback = { register = function(name, fn) capturedCallbacks[name] = fn end } }
 
+    -- FEATURE-BLOCK PUSH capture -- this pass. `clientEvents` mirrors
+    -- tests/partnership_spec.lua's own established `{event=, target=,
+    -- args={...}}` shape for capturing TriggerClientEvent, so a test can
+    -- assert exactly who was pushed what without a real network layer.
+    -- `capturedNetEvents`/`RegisterNetEvent` mirrors that same file's own
+    -- `capturedEvents` shape for a server-side RegisterNetEvent handler this
+    -- suite needs to invoke directly (this pass's new
+    -- 'qbx_k9unit:server:requestFeatureBlocksSync').
+    local clientEvents = {}
+    local function TriggerClientEventStub(eventName, target, ...)
+        clientEvents[#clientEvents + 1] = { event = eventName, target = target, args = { ... } }
+    end
+
+    local capturedNetEvents = {}
+    local function RegisterNetEventStub(name, fn) capturedNetEvents[name] = fn end
+
     -- FIX (this pass, "the de-assign button" finding) -- RevokePermission's
     -- 'k9.access'-fully-revoked teardown calls these three, all of which
     -- load AFTER server/permissions.lua in fxmanifest.lua's server_scripts
@@ -252,6 +268,8 @@ local function newFixture(opts)
         AddEventHandler = AddEventHandler,
         GetCurrentResourceName = GetCurrentResourceNameStub,
         lib = libStub,
+        TriggerClientEvent = TriggerClientEventStub,
+        RegisterNetEvent = RegisterNetEventStub,
         -- Test-controlled soft dependencies -- see this file's header.
         IsHighCommand = opts.isHighCommand or function(_source) return false end,
         HasK9Access = opts.hasK9Access, -- deliberately nil by default (type() guard must tolerate absence)
@@ -283,6 +301,8 @@ local function newFixture(opts)
         leashDetachCalls = leashDetachCalls,
         effectEndCalls = effectEndCalls,
         partnershipBreakCalls = partnershipBreakCalls,
+        clientEvents = clientEvents,
+        netEvents = capturedNetEvents,
         registerPlayer = registerPlayer,
         disconnectPlayer = disconnectPlayer,
         setSource = function(src) env.source = src end,
@@ -299,6 +319,30 @@ local function newFixture(opts)
         end,
         fireOnResourceStart = function()
             for _, handler in ipairs(eventHandlers['onResourceStart'] or {}) do handler('qbx_k9unit') end
+        end,
+        --- Drives the captured 'qbx_k9unit:server:requestFeatureBlocksSync'
+        --- RegisterNetEvent handler directly, with `env.source` set to `src`
+        --- first -- mirrors every other RegisterNetEvent dispatch convention
+        --- in this suite (this file's own `firePlayerDropped` above,
+        --- tests/partnership_spec.lua's `dispatchNetEvent`). Asserts the
+        --- handler actually exists rather than silently no-op'ing, so a
+        --- typo'd event name fails the test that uses this, not passes it
+        --- vacuously.
+        --- @param src number
+        fireRequestFeatureBlocksSync = function(src)
+            env.source = src
+            local handler = capturedNetEvents['qbx_k9unit:server:requestFeatureBlocksSync']
+            assert(handler, 'no handler registered for qbx_k9unit:server:requestFeatureBlocksSync')
+            handler()
+        end,
+        --- @param source number
+        --- @return table? -- the LAST { event, target, args } entry pushed to `source`, or nil if none
+        lastClientEventFor = function(source)
+            local found
+            for _, entry in ipairs(clientEvents) do
+                if entry.target == source then found = entry end
+            end
+            return found
         end,
     }
 end
@@ -430,6 +474,16 @@ local function newIntegrationFixture()
     local function GetCurrentResourceNameStub() return 'qbx_k9unit' end
     local function GetHashKeyStub(_name) return 111 end
     local function TriggerEventStub(_name, ...) end
+    -- FEATURE-BLOCK PUSH (this pass) -- server/permissions.lua's
+    -- PlayerLoaded/onResourceStart/GrantPermission/RevokePermission now
+    -- call TriggerClientEvent for a `block.<Name>` change against an online
+    -- target. None of THIS fixture's own tests exercise `block.<Name>` or a
+    -- non-empty GetPlayers() (its own onResourceStart backfill loop is a
+    -- no-op here -- see GetPlayers below), so this is a pure no-op stub,
+    -- purely so a future test added to this fixture cannot crash this
+    -- file's own top-level load with "attempt to call a nil value" the way
+    -- every OTHER FiveM native stub in this fixture already guards against.
+    local function TriggerClientEventStub(_eventName, _target, ...) end
 
     -- lib.callback.register is only actually reached by server/certifications.lua's
     -- hasK9Access callback here (permissions.lua's OWN tabletGrant/Revoke
@@ -479,6 +533,7 @@ local function newIntegrationFixture()
         GetCurrentResourceName = GetCurrentResourceNameStub,
         GetHashKey = GetHashKeyStub,
         TriggerEvent = TriggerEventStub,
+        TriggerClientEvent = TriggerClientEventStub,
         lib = libStub,
     })
 
@@ -516,23 +571,50 @@ local function lastPrintContains(f, label)
 end
 
 -- ============================================================================
--- LOAD-TIME CONFIG-SAFETY GUARD -- Config.Permissions is asserted
--- unconditionally at THIS FILE'S OWN LOAD TIME (not deferred to
--- onResourceStart), matching server/certifications.lua's authorization-root
--- convention. Each case here loads a FRESH, minimal env directly (not
--- newFixture(), since the point is to observe the load itself failing).
+-- LOAD-TIME CONFIG-SAFETY GUARD -- CLAMP AND WARN, NOT ASSERT.
+--
+-- REGRESSION (this pass): every test below used to assert the OPPOSITE --
+-- that Config.Permissions being missing entirely, or any ONE entry being
+-- malformed, FAILED THE ENTIRE FILE'S LOAD via a hard `assert` running
+-- unconditionally at this file's own load time (not deferred to
+-- onResourceStart, and not gated behind Config.Features.PermissionGrants).
+-- See server/cooldowns.lua's header ADDENDUM: an uncaught error thrown
+-- there would abort server/permissions.lua's load from that line onward,
+-- taking HasPermission/GrantPermission/RevokePermission down with it, over
+-- one operator typo while adding a fifth capability. Now CLAMP AND WARN: a
+-- missing table degrades to "no permissions exist" (fails closed, same as
+-- before this feature existed), and a malformed entry is dropped
+-- individually rather than taking every other, valid entry down with it.
+-- Each case here loads a FRESH, minimal env directly (not newFixture()),
+-- since the point is to observe the load and the resulting Config.Permissions
+-- shape, not to exercise HasPermission/GrantPermission behavior.
 -- ============================================================================
 
+--- @return boolean ok, table env, table printLog
 local function tryLoadPermissionsWithConfig(permissionsConfig)
+    local printLog = {}
+    local function printStub(...)
+        local parts = {}
+        for i = 1, select('#', ...) do parts[i] = tostring(select(i, ...)) end
+        printLog[#printLog + 1] = table.concat(parts, '\t')
+    end
     local env = Sandbox.newEnv({
-        Config = { Permissions = permissionsConfig },
+        Config = permissionsConfig == false and {} or { Permissions = permissionsConfig },
         GetGameTimer = function() return 0 end,
         AddEventHandler = function(_name, _fn) end,
+        -- FEATURE-BLOCK PUSH (this pass) -- server/permissions.lua now
+        -- registers 'qbx_k9unit:server:requestFeatureBlocksSync' via
+        -- RegisterNetEvent unconditionally at file-load time; this minimal
+        -- env (deliberately narrower than newFixture's) needs this stub for
+        -- the same reason it already needs AddEventHandler above.
+        RegisterNetEvent = function(_name, _fn) end,
+        print = printStub,
     })
-    return pcall(function()
+    local ok = pcall(function()
         Sandbox.loadInto('../server/cooldowns.lua', env)
         Sandbox.loadInto('../server/permissions.lua', env)
     end)
+    return ok, env, printLog
 end
 
 t.test('LOAD-TIME: a well-formed Config.Permissions loads cleanly', function()
@@ -540,28 +622,43 @@ t.test('LOAD-TIME: a well-formed Config.Permissions loads cleanly', function()
     t.isTrue(ok)
 end)
 
-t.test('LOAD-TIME: Config.Permissions missing entirely fails loudly at load time', function()
-    local ok = pcall(function()
-        local env = Sandbox.newEnv({ Config = {}, GetGameTimer = function() return 0 end })
-        Sandbox.loadInto('../server/cooldowns.lua', env)
-        Sandbox.loadInto('../server/permissions.lua', env)
-    end)
-    t.isFalse(ok, 'a missing Config.Permissions must fail resource start, not silently pass')
+t.test('LOAD-TIME: Config.Permissions missing entirely no longer fails to load -- warns loudly and degrades to "no permissions exist" (fails closed)', function()
+    local ok, env, printLog = tryLoadPermissionsWithConfig(false)
+    t.isTrue(ok, 'a missing Config.Permissions must not abort resource start')
+    local warned = false
+    for _, line in ipairs(printLog) do
+        if line:find('Config.Permissions', 1, true) and line:find('missing', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must warn that the whole settings table is missing')
+    t.equals(type(env.Config.Permissions), 'table')
+    t.isNil(next(env.Config.Permissions), 'must degrade to empty, never to some other default')
 end)
 
-t.test('LOAD-TIME: a Config.Permissions entry with no label fails loudly', function()
-    local ok = tryLoadPermissionsWithConfig({ ['k9.access'] = { description = 'no label here' } })
-    t.isFalse(ok)
+t.test('LOAD-TIME: a Config.Permissions entry with no label no longer fails to load -- warns and drops only that entry', function()
+    local ok, env, printLog = tryLoadPermissionsWithConfig({
+        ['k9.access'] = { description = 'no label here' },
+        ['k9.audit'] = { label = 'View the audit records' },
+    })
+    t.isTrue(ok)
+    local warned = false
+    for _, line in ipairs(printLog) do
+        if line:find('Config.Permissions[k9.access]', 1, true) then warned = true end
+    end
+    t.isTrue(warned, 'must name the exact malformed key')
+    t.isNil(env.Config.Permissions['k9.access'], 'the malformed entry must be dropped')
+    t.isNotNil(env.Config.Permissions['k9.audit'], 'a sibling, valid entry must survive untouched')
 end)
 
-t.test('LOAD-TIME: a Config.Permissions entry with an empty-string label fails loudly', function()
-    local ok = tryLoadPermissionsWithConfig({ ['k9.access'] = { label = '' } })
-    t.isFalse(ok)
+t.test('LOAD-TIME: a Config.Permissions entry with an empty-string label no longer fails to load -- warns and drops only that entry', function()
+    local ok, env = tryLoadPermissionsWithConfig({ ['k9.access'] = { label = '' } })
+    t.isTrue(ok)
+    t.isNil(env.Config.Permissions['k9.access'])
 end)
 
-t.test('LOAD-TIME: a Config.Permissions entry with a non-string description fails loudly', function()
-    local ok = tryLoadPermissionsWithConfig({ ['k9.access'] = { label = 'ok', description = 123 } })
-    t.isFalse(ok)
+t.test('LOAD-TIME: a Config.Permissions entry with a non-string description no longer fails to load -- warns and drops only that entry', function()
+    local ok, env = tryLoadPermissionsWithConfig({ ['k9.access'] = { label = 'ok', description = 123 } })
+    t.isTrue(ok)
+    t.isNil(env.Config.Permissions['k9.access'])
 end)
 
 -- ============================================================================
@@ -1384,5 +1481,189 @@ do
         t.notContains(last.message, 'not authorized', 'the officer must still pass IsEligibleCertifier via rank alone, exactly as config.lua documents')
     end)
 end
+
+-- ============================================================================
+-- FEATURE-BLOCK PUSH (this pass) -- server/permissions.lua's new
+-- TriggerClientEvent('qbx_k9unit:client:featureBlocksSync', ...) push and
+-- its 'qbx_k9unit:server:requestFeatureBlocksSync' pull, closing the
+-- drift-guard finding that client/featureblocks.lua registered a handler
+-- for that event that no server file had ever fired. See this file's own
+-- header "FEATURE-BLOCK PUSH" section for the full contract these tests
+-- exercise: push on connect, push on change, one player's own set only,
+-- the revoke-side push carrying the UPDATED (shorter) set (the actual
+-- force-off of an in-flight effect is each owning client file's own job,
+-- outside this file's scope -- this only proves the trigger it depends on
+-- fires promptly and correctly), a late/duplicate re-request being
+-- idempotent, and failing OPEN (an empty/unblocked array) on every
+-- unresolvable or disabled state.
+-- ============================================================================
+
+--- @param f table -- a newFixture() fixture
+--- @param src number
+--- @return table[] -- every { event, target, args } entry captured for `src`, in order
+local function clientEventsFor(f, src)
+    local out = {}
+    for _, entry in ipairs(f.clientEvents) do
+        if entry.target == src then out[#out + 1] = entry end
+    end
+    return out
+end
+
+do
+    local f = newFixture({ isHighCommand = function(source) return source == 900 end })
+    local hcSrc = f.registerPlayer(900, 'HC-FB', { name = 'police', isboss = true, grade = { level = 0 } })
+
+    t.test('FEATURE-BLOCK PUSH ON CONNECT: PlayerLoaded pushes this citizenid\'s CURRENT block set immediately, reflecting a block that was already granted while they were offline', function()
+        local ok = f.env.GrantPermission(hcSrc, 'FB-CONNECT', 'block.BiteAndHold')
+        t.isTrue(ok, 'sanity: the grant itself must succeed even though the target is not online yet')
+        t.equals(#clientEventsFor(f, 910), 0, 'nothing can be pushed to a source that has not connected yet')
+
+        local src = f.registerPlayer(910, 'FB-CONNECT', { name = 'police', grade = { level = 1 } })
+        f.firePlayerLoaded({ PlayerData = { citizenid = 'FB-CONNECT', source = src, job = { name = 'police' } } })
+
+        local events = clientEventsFor(f, src)
+        t.equals(#events, 1, 'PlayerLoaded must push exactly once')
+        t.equals(events[1].event, 'qbx_k9unit:client:featureBlocksSync')
+        t.equals(#events[1].args[1], 1)
+        t.equals(events[1].args[1][1], 'BiteAndHold')
+        f.disconnectPlayer(src)
+    end)
+
+    t.test('FEATURE-BLOCK PUSH ON CHANGE: GrantPermission(block.<Name>) pushes an online target immediately; a feature.<Name> grant on the SAME citizenid never triggers this push', function()
+        local src = f.registerPlayer(920, 'FB-CHANGE', { name = 'police', grade = { level = 1 } })
+        f.advanceTime(2000)
+
+        f.env.GrantPermission(hcSrc, 'FB-CHANGE', 'feature.BiteAndHold')
+        t.equals(#clientEventsFor(f, src), 0, 'feature.<Name> is a DIFFERENT namespace -- it must never fire a featureBlocksSync push')
+
+        f.advanceTime(2000)
+        f.env.GrantPermission(hcSrc, 'FB-CHANGE', 'block.BiteAndHold')
+        local events = clientEventsFor(f, src)
+        t.equals(#events, 1, 'a block.<Name> grant to an online target must push exactly once, live')
+        t.equals(events[1].args[1][1], 'BiteAndHold')
+        f.disconnectPlayer(src)
+    end)
+
+    t.test('FEATURE-BLOCK PUSH ON CHANGE (revoke): RevokePermission(block.<Name>) pushes the UPDATED, now-EMPTY set to the online target immediately -- the trigger an in-flight effect\'s own force-off depends on, not merely something that stops a future re-block', function()
+        local src = f.registerPlayer(930, 'FB-REVOKE', { name = 'police', grade = { level = 1 } })
+        f.advanceTime(2000)
+        f.env.GrantPermission(hcSrc, 'FB-REVOKE', 'block.BiteAndHold')
+        f.advanceTime(2000)
+
+        local ok = f.env.RevokePermission(hcSrc, 'FB-REVOKE', 'block.BiteAndHold')
+        t.isTrue(ok)
+
+        local events = clientEventsFor(f, src)
+        local last = events[#events]
+        t.isNotNil(last)
+        t.equals(#last.args[1], 0, 'the revoke push must carry an EMPTY array -- client/featureblocks.lua\'s own "full reassignment, not a merge" handling reads this as "nothing blocked now", which is what lets each owning client file\'s own maintenance thread force an already-live effect off within one polling interval')
+        f.disconnectPlayer(src)
+    end)
+
+    t.test('FEATURE-BLOCK PUSH: a player receives ONLY their own block set -- an unrelated online player gets nothing, and the push is never a broadcast', function()
+        local srcA = f.registerPlayer(940, 'FB-ONLY-A', { name = 'police', grade = { level = 1 } })
+        local srcB = f.registerPlayer(941, 'FB-ONLY-B', { name = 'police', grade = { level = 1 } })
+        f.advanceTime(2000)
+
+        f.env.GrantPermission(hcSrc, 'FB-ONLY-A', 'block.BiteAndHold')
+
+        t.equals(#clientEventsFor(f, srcA), 1, 'the actual target must be pushed')
+        t.equals(#clientEventsFor(f, srcB), 0, 'an unrelated online player must receive NOTHING from someone else\'s block change')
+        for _, entry in ipairs(f.clientEvents) do
+            t.isTrue(entry.target ~= -1, 'must never be sent as a broadcast (-1) target')
+        end
+        f.disconnectPlayer(srcA)
+        f.disconnectPlayer(srcB)
+    end)
+
+    t.test('FEATURE-BLOCK PUSH: the pushed array contains ONLY block.<Name> entries -- a k9.access/feature.<Name> grant on the same citizenid never leaks into it', function()
+        local src = f.registerPlayer(970, 'FB-MIXED', { name = 'police', grade = { level = 1 } })
+        f.advanceTime(2000)
+        f.env.GrantPermission(hcSrc, 'FB-MIXED', 'k9.access')
+        f.advanceTime(2000)
+        f.env.GrantPermission(hcSrc, 'FB-MIXED', 'feature.BiteAndHold')
+        f.advanceTime(2000)
+        f.env.GrantPermission(hcSrc, 'FB-MIXED', 'block.BiteAndHold')
+
+        local pushed = f.lastClientEventFor(src)
+        t.isNotNil(pushed)
+        t.equals(#pushed.args[1], 1, 'only the one block.<Name> grant may appear -- k9.access/feature.<Name> must never leak into this array')
+        t.equals(pushed.args[1][1], 'BiteAndHold')
+        f.disconnectPlayer(src)
+    end)
+
+    t.test('FEATURE-BLOCK PUSH ON RESTART: onResourceStart backfill re-pushes every already-connected citizenid\'s block set (PlayerLoaded never fires again for them)', function()
+        local src = f.registerPlayer(980, 'FB-RESTART', { name = 'police', grade = { level = 1 } })
+        f.advanceTime(2000)
+        f.env.GrantPermission(hcSrc, 'FB-RESTART', 'block.BiteAndHold')
+
+        -- Simulate "fresh resource load, no PlayerLoaded fired yet for this
+        -- already-connected player" the same way the pre-existing
+        -- "cache: onResourceStart backfills already-connected players" test
+        -- above does.
+        f.firePlayerDropped(src)
+        f.registerPlayer(src, 'FB-RESTART', { name = 'police', grade = { level = 1 } })
+
+        f.fireOnResourceStart()
+
+        local pushed = f.lastClientEventFor(src)
+        t.isNotNil(pushed, 'onResourceStart must push a fresh sync for every already-connected citizenid holding an active block')
+        t.equals(#pushed.args[1], 1)
+        t.equals(pushed.args[1][1], 'BiteAndHold')
+        f.disconnectPlayer(src)
+    end)
+
+    t.test('FEATURE-BLOCK PUSH, CLIENT-INITIATED RE-REQUEST: a late/duplicate qbx_k9unit:server:requestFeatureBlocksSync returns the SAME current set both times -- idempotent, never a merge or a double-count', function()
+        local src = f.registerPlayer(950, 'FB-REQUEST', { name = 'police', grade = { level = 1 } })
+        f.advanceTime(2000)
+        f.env.GrantPermission(hcSrc, 'FB-REQUEST', 'block.BiteAndHold')
+
+        f.fireRequestFeatureBlocksSync(src)
+        f.fireRequestFeatureBlocksSync(src) -- late/duplicate re-request (e.g. a client script restart)
+
+        local events = clientEventsFor(f, src)
+        t.isTrue(#events >= 2, 'both explicit requests must each get their own reply')
+        local last, secondLast = events[#events], events[#events - 1]
+        t.equals(#last.args[1], 1)
+        t.equals(last.args[1][1], 'BiteAndHold')
+        t.equals(#secondLast.args[1], 1)
+        t.equals(secondLast.args[1][1], 'BiteAndHold')
+        f.disconnectPlayer(src)
+    end)
+
+    t.test('FEATURE-BLOCK PUSH, CLIENT-INITIATED RE-REQUEST: a request from a source with no resolvable citizenid yet (e.g. still on character select) is a silent no-op, never errors', function()
+        -- 999 was never registered via f.registerPlayer -- exports.qbx_core:GetPlayer(999) resolves to nil.
+        f.fireRequestFeatureBlocksSync(999)
+        t.equals(#clientEventsFor(f, 999), 0)
+    end)
+
+    t.test('FEATURE-BLOCK PUSH FAILS OPEN: a citizenid with no cache entry at all (never granted anything) is pushed an EMPTY (unblocked) array, never omitted or defaulted to blocked', function()
+        local src = f.registerPlayer(960, 'FB-NEVERBLOCKED', { name = 'police', grade = { level = 1 } })
+        f.firePlayerLoaded({ PlayerData = { citizenid = 'FB-NEVERBLOCKED', source = src, job = { name = 'police' } } })
+
+        local pushed = f.lastClientEventFor(src)
+        t.isNotNil(pushed, 'a citizenid with zero grants must still receive a sync -- an empty one')
+        t.equals(#pushed.args[1], 0)
+        f.disconnectPlayer(src)
+    end)
+
+    t.test('FEATURE-BLOCK PUSH: a block.<Name> grant to an OFFLINE citizenid produces zero client events -- nothing to push to, and this never errors', function()
+        f.advanceTime(2000)
+        local before = #f.clientEvents
+        local ok = f.env.GrantPermission(hcSrc, 'FB-OFFLINE-TARGET', 'block.BiteAndHold')
+        t.isTrue(ok)
+        t.equals(#f.clientEvents, before, 'no client event may be emitted for a target with no online source')
+    end)
+end
+
+t.test('FEATURE-BLOCK PUSH FAILS OPEN: with Config.Features.PermissionGrants off, a request still replies, with an EMPTY (unblocked) array -- a disabled feature must never read as "everything blocked"', function()
+    local g = newFixture({ isHighCommand = function(_source) return true end, permissionGrantsEnabled = false })
+    local src = g.registerPlayer(1, 'FLAG-OFF-TARGET', { name = 'police', grade = { level = 1 } })
+    g.fireRequestFeatureBlocksSync(src)
+
+    local pushed = g.lastClientEventFor(src)
+    t.isNotNil(pushed)
+    t.equals(#pushed.args[1], 0)
+end)
 
 os.exit(t.summary())

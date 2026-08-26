@@ -1522,4 +1522,75 @@ t.test('tablet:auditSearch: recent mode forwards a real limit correctly position
     t.equals(f.callbackCallLog[1].args[3], 25)
 end)
 
+-- ----------------------------------------------------------------------
+-- XP-RANK EDITOR -- server/xptiers.lua, owner-directed "set experience
+-- level for each rank up" pass. Mirrors the certTiersList/certTiersUpsert
+-- test shape immediately above (SECTION near line 1278) exactly -- same
+-- TranslateReasonResult bridge, same fail-closed-to-timeout contract.
+-- ----------------------------------------------------------------------
+
+t.test('tablet:xpTiersList: forwards tiers verbatim on success', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:xpTiersList', {
+        ok = true,
+        tiers = { { ordinal = 1, xp = 0, label = 'Recruit K9', speedMultiplier = 1.0, scentRangeMultiplier = 1.0, xpLocked = true } },
+    })
+    local result = f.callNui('tablet:xpTiersList', {})
+    t.isTrue(result.ok)
+    t.equals(result.tiers[1].label, 'Recruit K9')
+    t.isTrue(result.tiers[1].xpLocked)
+end)
+
+t.test('tablet:xpTiersList: reason="denied" (non-high-command caller) is translated to error="denied"', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:xpTiersList', { ok = false, reason = 'denied' })
+    local result = f.callNui('tablet:xpTiersList', {})
+    t.isFalse(result.ok)
+    t.equals(result.error, 'denied')
+    t.isNil(result.reason, 'the raw `reason` key must not leak through to the JS-facing contract')
+end)
+
+t.test('tablet:xpTiersList: a THROWN server callback fails closed to error="timeout"', function()
+    local f = newTabletFixture()
+    local result = f.callNui('tablet:xpTiersList', {})
+    t.isFalse(result.ok)
+    t.equals(result.error, 'timeout')
+end)
+
+t.test('tablet:xpTiersUpsert: a non-numeric/missing ordinal is invalid_args before any server round trip', function()
+    local f = newTabletFixture()
+    t.equals(f.callNui('tablet:xpTiersUpsert', {}).error, 'invalid_args')
+    t.equals(f.callNui('tablet:xpTiersUpsert', { ordinal = 'two' }).error, 'invalid_args')
+    t.equals(#f.callbackCallLog, 0)
+end)
+
+t.test('tablet:xpTiersUpsert: forwards the WHOLE payload table verbatim as ONE argument', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:xpTiersUpsert', { ok = true, tiers = {} })
+    f.callNui('tablet:xpTiersUpsert', { ordinal = 2, xp = 1500, label = 'Rookie K9', speedMultiplier = 1.06, scentRangeMultiplier = 1.06 })
+    t.equals(f.callbackCallLog[1].name, 'qbx_k9unit:server:xpTiersUpsert')
+    t.equals(f.callbackCallLog[1].args[1].ordinal, 2)
+    t.equals(f.callbackCallLog[1].args[1].xp, 1500)
+    t.equals(f.callbackCallLog[1].args[1].label, 'Rookie K9')
+end)
+
+t.test('tablet:xpTiersUpsert: a demotion warning is forwarded verbatim, unmodified', function()
+    local f = newTabletFixture()
+    f.setServerCallback('qbx_k9unit:server:xpTiersUpsert', { ok = true, tiers = {}, warning = '1 currently-connected K9(s) just moved to a LOWER rank' })
+    local result = f.callNui('tablet:xpTiersUpsert', { ordinal = 4, xp = 15000, label = 'Elite K9', speedMultiplier = 1.15, scentRangeMultiplier = 1.20 })
+    t.isTrue(result.ok)
+    t.isNotNil(result.warning)
+    t.isTrue(result.warning:find('LOWER rank', 1, true) ~= nil)
+end)
+
+t.test('tablet:xpTiersUpsert: reason="invalid_order"/"base_tier_xp_fixed"/"busy" all forward as the plain error code', function()
+    local f = newTabletFixture()
+    for _, reason in ipairs({ 'invalid_order', 'base_tier_xp_fixed', 'invalid_xp', 'invalid_label', 'busy', 'rate_limited' }) do
+        f.setServerCallback('qbx_k9unit:server:xpTiersUpsert', { ok = false, reason = reason })
+        local result = f.callNui('tablet:xpTiersUpsert', { ordinal = 2, xp = 1500, label = 'x', speedMultiplier = 1, scentRangeMultiplier = 1 })
+        t.isFalse(result.ok)
+        t.equals(result.error, reason)
+    end
+end)
+
 os.exit(t.summary())

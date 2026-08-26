@@ -25,6 +25,16 @@
 #     k9_equipment_shop_locations / k9_equipment_shop_locations_audit
 #                         every tablet-added K9 equipment shop location, and
 #                         the full history of every add/move/remove made
+#     k9_permission_keys / k9_permission_key_audit
+#                         the high-command-editable permission-key catalog
+#                         (config defaults plus any custom key added,
+#                         relabeled, or tombstoned), and the full history of
+#                         every catalog edit made
+#     k9_xp_tiers / k9_xp_tier_audit
+#                         every high-command-edited XP-rank field override
+#                         (threshold/label/multipliers/badge) on top of
+#                         config.lua's own Config.XPTiers defaults, and the
+#                         full history of every rank edit made
 #
 # ...into a single timestamped .sql file, and prints the one command that
 # puts it all back. It touches nothing else in your database, and it makes
@@ -128,14 +138,19 @@ fi
 # (see that file's "OWNED TABLE LIST" comment): this database can
 # legitimately contain another K9 resource's own tables (e.g. `k9_units`),
 # and a blind sweep would try to dump those too, which is not this script's
-# job and may not even be readable by this database user. The DRIFT GUARD
-# immediately below is the backstop for the next table a future migration
-# adds here.
+# job and may not even be readable by this database user. migration 0013
+# (owner-directed "add or remove permissions" pass): the same class of gap,
+# this time for the two permission-key-catalog tables -- flagged explicitly
+# by sql/rollback/0013_down.sql's own header, fixed here the same way. The
+# DRIFT GUARD immediately below is the backstop for the next table a future
+# migration adds here.
 ALL_TABLES=(k9_certifications k9_search_log k9_partnerships k9_progression k9_permissions
             k9_certification_specializations k9_runtime_feature_overrides
             k9_runtime_override_audit k9_tablet_theme k9_tablet_theme_audit k9_ped_assignments
             k9_certification_tiers k9_certification_tier_capabilities k9_certification_tier_audit
-            k9_equipment_shop_locations k9_equipment_shop_locations_audit)
+            k9_equipment_shop_locations k9_equipment_shop_locations_audit
+            k9_permission_keys k9_permission_key_audit
+            k9_xp_tiers k9_xp_tier_audit)
 PRESENT=()
 MISSING=()
 for t in "${ALL_TABLES[@]}"; do

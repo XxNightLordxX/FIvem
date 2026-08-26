@@ -691,6 +691,35 @@ AddEventHandler('onResourceStart', function(resourceName)
 end)
 
 -- ======================================================================
+-- PER-PERSON FEATURE CONTROL FOR K9EquipmentShop -- CORRECTED, THIS PASS.
+--
+-- A PRIOR analysis (this exact comment block, until this pass) concluded
+-- K9EquipmentShop was STRUCTURALLY EXEMPT from a per-person block/grant,
+-- reasoning that "the actual transaction never reaches this file's own
+-- code at all" and that no callback/event/hook existed for this file to
+-- gate a purchase attempt with. THAT REASONING WAS WRONG, not merely
+-- superseded: re-reading ox_inventory's own real source
+-- (modules/shops/server.lua, modules/hooks/server.lua) this pass found
+-- that ox_inventory DOES fire exactly such a hook -- `registerHook('openShop',
+-- ...)` (and separately `'buyItem'`) -- per attempt, server-side, with a
+-- veto (`return false`) that genuinely prevents the shop from ever
+-- opening for that one player. This resource's own K9Compat inventory
+-- adapter already exposes a fully generic `RegisterHook(eventName,
+-- callback)` pass-through (shared/compat/inventory.lua) capable of
+-- registering exactly this. A real per-person `block.K9EquipmentShop` /
+-- `feature.K9EquipmentShop` gate is therefore both possible and NOW
+-- IMPLEMENTED -- see this file's own "EQUIPMENT SHOP ITEM CATALOG"
+-- section below for IsEquipmentShopPermittedForCitizenId and the two
+-- RegisterEquipmentShopOpenShopBlockHook/
+-- RegisterEquipmentShopBuyItemRequirementHook registrations that gate
+-- with it. The `equipmentShopGetLocations` "security theater" argument
+-- (point 2 of the deleted analysis) was never wrong on its own terms and
+-- remains true -- that specific read callback is still not a meaningful
+-- place to gate anything -- but it was never the ONLY candidate, and
+-- ox_inventory's own openShop/buyItem hooks are.
+-- ======================================================================
+
+-- ======================================================================
 -- CALLBACKS -- see this file's header "RUNTIME SHOP LOCATIONS" section
 -- for the full contract. ALWAYS registered, unconditionally -- each
 -- re-checks Config.Features.K9EquipmentShop live, on every call, matching
@@ -936,4 +965,1007 @@ lib.callback.register('qbx_k9unit:server:equipmentShopRemoveLocation', function(
     TriggerClientEvent('qbx_k9unit:client:equipmentShopLocationsUpdated', -1, effective)
 
     return { ok = true, locations = effective }
+end)
+
+-- ======================================================================
+-- EQUIPMENT SHOP ITEM CATALOG (this pass). Owner's own words: "give high
+-- command real control over the equipment shop" -- the RUNTIME SHOP
+-- LOCATIONS section above already let the tablet add/move/remove WHERE a
+-- shop ped stands; this section is the other half the owner's own ask
+-- named explicitly: WHICH items are sold, at what price, in what order,
+-- and under what certification-tier/specialization purchase requirement
+-- -- all of which previously lived ONLY in Config.K9EquipmentShop.items
+-- and needed a file edit plus a restart to change.
+--
+-- ======================================================================
+-- THE PATTERN THIS FOLLOWS, ON EXPLICIT INSTRUCTION: server/certtiers.lua
+-- ======================================================================
+-- Exactly the same shape as that file's tier catalog: config.lua stays
+-- the shipped DEFAULT item list; `k9_equipment_shop_items`
+-- (sql/migrations/0014_create_k9_equipment_shop_items.sql) layers
+-- high-command RUNTIME EDITS on top, keyed by `item_key` (an ox_inventory
+-- item NAME). THE DATABASE WINS per key. A tombstoned row (`deleted = 1`)
+-- excludes that key from the live, sellable catalog entirely, whether it
+-- originated in Config.K9EquipmentShop.items or was created purely at
+-- runtime from the tablet. See RefreshEquipmentShopItemCatalog below for
+-- the exact merge algorithm -- byte-for-byte the same shape as
+-- server/certtiers.lua's own RefreshCertificationTierCatalog.
+--
+-- WHY NO SEPARATE CAPABILITIES-STYLE SIBLING TABLE: see migration 0014's
+-- own header, "WHY NO SEPARATE CAPABILITIES-STYLE SIBLING TABLE" -- an
+-- item's purchase requirement is AT MOST one certification tier AND AT
+-- MOST one specialization (an AND of at most one each, never an open
+-- set), which two plain nullable columns represent completely.
+--
+-- ======================================================================
+-- THE REAL ITEM SHAPE (confirmed by reading this file's own pre-existing
+-- REGISTRATION section above, top to bottom, before writing any of this):
+-- Config.K9EquipmentShop.items is `{ { name: string, price: number,
+-- currency: string? }, ... }` -- a bare array, no `label` field of its
+-- own (ox_inventory's own Items(name).label is what the shop UI has
+-- always shown), no `order` field of its own (array index IS the order),
+-- and NO purchase-requirement concept anywhere in this resource before
+-- this pass. This section adds `label` (an OPTIONAL display override),
+-- `sortOrder` (editable via Reorder only, exactly like
+-- server/certtiers.lua's `ordinal`), and `requiredTierKey`/
+-- `requiredSpecialization` (both optional, both independently nullable)
+-- as NEW, purely additive, database-only concepts layered on top of the
+-- exact same three config fields that have always existed.
+--
+-- ======================================================================
+-- PRICE VALIDATION -- ECONOMY CODE, TREATED AS HOSTILE TERRITORY
+-- ======================================================================
+-- IsValidShopItemPrice below rejects: non-number, NaN (`value ~= value`),
+-- +/-infinity, negative, fractional (`value ~= math.floor(value)` -- a
+-- currency unit is a whole number in this resource; ox_inventory itself
+-- computes `count * price` as a plain Lua number with no rounding step of
+-- its own, so a fractional price here would silently produce a fractional
+-- total the player-facing UI was never designed to render), and anything
+-- above MAX_SHOP_ITEM_PRICE (an "absurdly large" ceiling, matching
+-- server/certtiers.lua's own MAX_TIERS-style belt-and-suspenders cap
+-- philosophy -- a high-command account is already highly trusted, but an
+-- unbounded value is still an unforced footgun, e.g. a fat-fingered extra
+-- zero making an item cost more than a 64-bit signed value could ever pay
+-- out through ox_inventory's own item-count arithmetic).
+--
+-- ZERO IS EXPLICITLY ALLOWED (a legitimate free item) -- THIS PASS'S OWN
+-- DISCLOSED DECISION, not left ambiguous: the ORIGINAL, pre-existing
+-- REGISTRATION loop above this section has ALWAYS accepted `price = 0`
+-- (its own guard is `entry.price < 0`, never `<= 0`) -- rejecting zero
+-- here, in the NEW overlay validator, while the untouched original path
+-- continues to accept it for a config-sourced item, would be an
+-- inconsistency this pass refuses to introduce. A high-command officer
+-- who wants to give away an item for free (e.g. a starter kit) can.
+--
+-- ======================================================================
+-- THE PURCHASE PATH -- WAS IT ALREADY SAFE? YES, CONFIRMED AGAINST REAL
+-- ox_inventory SOURCE (overextended/ox_inventory, main branch,
+-- modules/shops/server.lua, fetched and read directly this pass -- same
+-- "verify before believing" discipline this resource's own COORDINATION
+-- notes require).
+-- ======================================================================
+-- Before this pass, this resource had NO purchase callback of its own at
+-- all (this file's own pre-existing header already states this
+-- plainly: "no RegisterNetEvent/lib.callback of its own for the actual
+-- shop transaction... every player-facing interaction already flows
+-- entirely through ox_inventory's own already-security-reviewed
+-- ox_inventory:openShop/buyItem callbacks"). Confirmed, line by line, this
+-- pass: ox_inventory's OWN `buyItem` callback captures `fromData =
+-- shop.items[data.fromSlot]` (a reference into `Shops[shopType]`, a table
+-- this resource writes ONLY via RegisterShop) and computes `price = count
+-- * fromData.price` -- a fully SERVER-SIDE value, read from
+-- ox_inventory's own internal registry, at the moment of purchase, NEVER
+-- accepted from the client's own request payload (`data.fromSlot` is
+-- only ever a SLOT INDEX, never a price). The client is never trusted for
+-- a price, and no price is ever cached client-side and sent back. This
+-- was ALREADY SAFE before this pass, and remains so -- this pass adds NO
+-- new purchase callback of its own, on the identical "would be pure
+-- duplication with a second place to get the authorization checks wrong"
+-- reasoning this file's own header already gives.
+--
+-- WHAT THIS PASS DOES CHANGE: `Shops[shopType].items` used to be written
+-- ONCE, at this resource's own onResourceStart, straight from
+-- `Config.K9EquipmentShop.items` -- an EDIT made via the tablet would
+-- therefore not take effect until a restart. LiveRefreshRegisteredShop
+-- below re-calls `K9Compat.Get('inventory').RegisterShop` (the SAME
+-- export the original REGISTRATION section already calls) after every
+-- successful item edit, so a price/label/order/requirement change is
+-- live for every already-connected player immediately -- see "THE
+-- EDIT/PURCHASE RACE" below for why this is safe to do while a purchase
+-- may be in flight.
+--
+-- ======================================================================
+-- THE EDIT/PURCHASE RACE -- CONFIRMED AGAINST REAL SOURCE, NOT ASSUMED
+-- ======================================================================
+-- ox_inventory's own `registerShopType` (the function
+-- `exports.ox_inventory:RegisterShop` ultimately calls) does a single,
+-- UNCONDITIONAL, NON-YIELDING Lua table assignment: `Shops[shopType] =
+-- { ... }` -- a full overwrite, never a merge, never a partial mutation
+-- in place. Two consequences, both confirmed by reading that function
+-- directly:
+--   1. There is NO intermediate state a concurrent reader could ever
+--      observe -- `Shops[shopType]` is, at every instant, either the
+--      FULLY OLD table or the FULLY NEW one, never a half-old/half-new
+--      mix. A "torn price" (part of one transaction computed against the
+--      old price, the rest against the new one) is structurally
+--      impossible, not merely unlikely.
+--   2. `buyItem`'s own callback captures `local shop = ... Shops[shopType]`
+--      and `fromData = shop.items[data.fromSlot]` as its OWN local
+--      variables at the very top of a single, synchronous Lua callback
+--      invocation, with no `await`/yield point between that capture and
+--      the final `removeCurrency(playerInv, currency, price)` call --
+--      FXServer's cooperative Lua scheduler cannot interleave a
+--      RegisterShop call from a totally different resource invocation in
+--      the MIDDLE of that one callback's own execution (a resource's Lua
+--      VM only yields at an explicit await point, and this callback has
+--      none between capture and charge).
+-- Net effect: whichever price was live in `Shops[shopType]` at the
+-- instant a given purchase attempt captured it is the price used for
+-- that ENTIRE transaction, start to finish, consistently -- "which price
+-- applies" has a clean, non-racy answer BY CONSTRUCTION of ox_inventory's
+-- own execution model, not because this file adds a lock of its own
+-- around ox_inventory's internal state (which this file has no access to
+-- lock in the first place -- `Shops` is a `local` inside ox_inventory's
+-- own resource).
+--
+-- WHAT THIS FILE'S OWN MUTEX (ShopItemEditMutex, below) THEREFORE ACTUALLY
+-- PROTECTS: not that structurally-already-safe race, but the ONE race
+-- this file's OWN code could otherwise produce -- two concurrent
+-- high-command EDITS to the SAME item_key (e.g. one officer tombstones an
+-- item while another is mid-upsert of that exact key), which could
+-- otherwise interleave across the `MySQL.await` yield points inside
+-- K9Store.ShopItem_Upsert/UpdateSortOrder/Tombstone and produce a lost
+-- update or an inconsistent audit trail -- the SAME class of hazard
+-- server/certtiers.lua's own header documents for TierEditMutex ("THE
+-- DELETE-VS-ASSIGN RACE"), applied here to this file's own writes.
+-- ShopItemsUpsert/Reorder/Delete all acquire this mutex, keyed by
+-- item_key, around their own check-then-write critical section, exactly
+-- mirroring TierEditMutex's own usage.
+--
+-- CANNOT DEADLOCK AGAINST TierEditMutex: ShopItemEditMutex is a SEPARATE
+-- `NewMutex()` instance, keyed by a disjoint string space (ox_inventory
+-- item names, never a certification tier key), and no code path in this
+-- file ever acquires TierEditMutex, nor does any code path in
+-- server/certtiers.lua ever acquire ShopItemEditMutex -- two independent
+-- locks with no cross-acquisition anywhere in either direction cannot
+-- form a lock-ordering cycle, which is the only way two mutexes can ever
+-- deadlock each other.
+--
+-- ======================================================================
+-- TOMBSTONE, NOT HARD-DELETE -- AND WHY THIS FILE NEEDS NO REFERENCE-COUNT
+-- CHECK BEFORE ALLOWING ONE (UNLIKE server/certtiers.lua's DeleteTier)
+-- ======================================================================
+-- server/certtiers.lua's DeleteTier must refuse a delete while ANY
+-- k9_certifications row still references the tier key, because deleting
+-- that key out from under an existing reference would strand a REAL,
+-- persisted row pointing at nothing. This resource keeps NO row of its
+-- own that references an item_key at all -- ox_inventory owns the actual
+-- player inventory grant (an item sitting in someone's bag is
+-- ox_inventory's own row, not this resource's), and no OTHER item's
+-- `required_tier_key`/`required_specialization` ever references another
+-- item's `item_key` (those two columns reference a CERTIFICATION TIER /
+-- SPECIALIZATION key, never another shop item). There is therefore
+-- nothing this file's own schema could ever strand by tombstoning an
+-- item_key -- ShopItemsDelete tombstones unconditionally once
+-- authorization/validation pass, with no reference-count read at all.
+-- Tombstoning (never a real DELETE) is still the right choice regardless,
+-- for the SAME reason migration 0010 gives for tiers: a config-sourced
+-- item_key has no row to delete FROM until first touched, so "remove
+-- this item" has to mean "record that this key is now suppressed" -- and
+-- it keeps a removed item from silently becoming buyable again the
+-- moment a stale in-memory catalog snapshot elsewhere is rebuilt (a
+-- tombstone row always wins over a config default for the same key, by
+-- construction of the merge in RefreshEquipmentShopItemCatalog).
+--
+-- ======================================================================
+-- PURCHASE REQUIREMENTS -- REAL ENFORCEMENT, NOT A COSMETIC FIELD
+-- ======================================================================
+-- server/certtiers.lua's own header ("CAPABILITY COMPOSITION", the
+-- `specialized_equipment_access` capability) investigated wiring a
+-- per-item purchase gate to this exact shop and found it needed "more
+-- than a diff": ox_inventory's whole-shop RegisterShop/openShop/buyItem
+-- design has no per-player, per-item ACL primitive built into the shop
+-- registration shape itself. That finding is still correct for the shop
+-- REGISTRATION shape -- but this pass found the ACTUAL enforcement point
+-- that finding was not looking for: ox_inventory ALSO fires a
+-- `registerHook('buyItem', ...)` event, PER PURCHASE ATTEMPT, with the
+-- real `source`, `shopType` and `itemName` -- BEFORE currency is
+-- deducted or the item is granted -- and a hook that returns the literal
+-- `false` VETOES that one purchase outright (confirmed directly against
+-- ox_inventory's own modules/hooks/server.lua: `TriggerEventHooks`
+-- returns `hooks.success = false` the instant any registered hook returns
+-- `false`, and `buyItem`'s own callback checks `if not hooks.success ...
+-- then return false end` BEFORE calling `removeCurrency`/`SetSlot` at
+-- all). This is exactly the "resource's own buy-item callback in front
+-- of ox_inventory" mechanism server/certtiers.lua's header proposed as a
+-- hypothetical -- except it needs no NEW callback of this resource's own
+-- at all: `RegisterEquipmentShopBuyItemRequirementHook` below is a PURE
+-- ADDITIVE HOOK on ox_inventory's OWN existing, already-reviewed purchase
+-- path, never a parallel purchase pipeline, never a duplicate
+-- currency-deduction/item-grant implementation of this file's own (which
+-- would have needed a server-side AddItem export this resource's own
+-- K9Compat inventory contract does not currently offer at all -- see
+-- shared/compat/core.lua's RequiredMethods.inventory.server list;
+-- confirmed absent before choosing this design, not discovered by
+-- trial and error).
+--
+-- FAILS CLOSED ON AN UNRESOLVABLE BUYER IDENTITY, DELIBERATELY DIFFERENT
+-- FROM TierCapabilityPermits' OWN DEFAULT-PERMISSIVE POSTURE: server/
+-- certtiers.lua's TierCapabilityPermits is a FLOOR laid underneath THREE
+-- other, already-independently-gating checks (Config.Features /
+-- Config.FeatureControl / HasK9Access) -- it fails open on an
+-- unclassifiable citizenid specifically because those three other gates
+-- remain the real authority and TierCapabilityPermits must never WIDEN
+-- what they already decided. The buyItem hook below is different in
+-- kind: for an item an admin has explicitly gated, THIS hook is the ONLY
+-- check standing between "no requirement" and "sold" -- there is no
+-- other, independent gate underneath it for a restricted item. An
+-- unresolvable buyer identity here is therefore treated as a DENIAL, not
+-- an allow -- the conservative direction for the one and only gate a
+-- purchase must pass.
+--
+-- REQUIREMENT SEMANTICS: an item may carry a `requiredTierKey` AND a
+-- `requiredSpecialization` SIMULTANEOUSLY -- THIS PASS'S OWN DISCLOSED
+-- DECISION: both, when both are set, are ANDed (a purchaser must satisfy
+-- EVERY configured requirement, never merely one of several), matching
+-- how every other multi-condition gate in this resource composes
+-- (HasK9Access's own three routes are the one documented OR-composition
+-- in this codebase, and that is a DIFFERENT question -- "is there any way
+-- in" -- from "does this specific purchase meet every requirement its
+-- own seller attached to it").
+--
+-- ======================================================================
+-- PER-PERSON FEATURE CONTROL -- THE GAP FOUND BY
+-- tests/customizationregistry_spec.lua's OWN DRIFT GUARD (this pass,
+-- addressed, not merely disclosed)
+-- ======================================================================
+-- Config.Features.K9EquipmentShop (server-wide on/off) already existed;
+-- what did not, anywhere in this file, was a `block.K9EquipmentShop` /
+-- `feature.K9EquipmentShop` per-person path -- the SAME 4-step
+-- Config.FeatureControl resolution every other blockable feature in this
+-- resource already implements (server/pursuitsprint.lua's own
+-- IsPursuitSprintPermittedForCitizenId is THE canonical shape;
+-- server/fetch.lua's IsFetchMechanicPermittedForCitizenId and
+-- server/combat.lua's IsCombatFeaturePermittedForCitizenId are both
+-- byte-for-byte copies of that same shape). IsEquipmentShopPermittedForCitizenId
+-- below is this file's own copy, same four steps, same fail-closed
+-- posture on missing machinery (step 2's block check simply cannot fire
+-- when HasPermission is absent -- nobody could ever hold a block in that
+-- case, which is a fully safe default-permissive outcome exactly like
+-- every sibling copy's own doc comment states; step 3's grant check FAILS
+-- CLOSED -- DENIES -- when RequireGrant demands an active grant this
+-- resource is structurally unable to verify).
+--
+-- WHERE THIS IS GATED -- THE POINT THIS RESOURCE ACTUALLY "DECIDES TO
+-- OPEN THE SHOP", FOUND BY READING REAL ox_inventory SOURCE, NOT ASSUMED:
+-- this resource has no OpenStash-style wrapper of its own for this shop
+-- (client/equipmentshop.lua calls `exports.ox_inventory:openInventory`
+-- directly -- see this file's own header, point 3) -- so "gate the point
+-- where this resource decides to open the shop" cannot mean "add a
+-- server round-trip before that client call" without inventing a new
+-- client/server contract this pass did not need to invent. ox_inventory
+-- ALSO fires a `registerHook('openShop', ...)` event -- CONFIRMED against
+-- modules/shops/server.lua this pass: the `openShop` lib.callback
+-- computes the FULL hook payload (`source`, `shopType`, ...) and checks
+-- `if not hooks.success then return end` BEFORE ever calling
+-- `playerInv:openInventory(...)` or setting `playerInv.currentShop` --
+-- i.e. a hook returning `false` here means the shop UI NEVER OPENS for
+-- that one player, for that one attempt, and nothing else on the server
+-- is affected. This is the real "opening" decision point, it is
+-- PER-PLAYER (unlike shop registration, which is whole-server, once), and
+-- it is SERVER-AUTHORITATIVE (ox_inventory's own callback, not a
+-- client-side canInteract predicate a modified client could ignore).
+-- RegisterEquipmentShopOpenShopBlockHook below gates exactly this event,
+-- filtered to THIS shop's own shopType only (never any other shop on the
+-- server) -- and ONLY this event: closing/leaving the shop UI is never
+-- touched by anything in this section, matching this resource's
+-- established "gate the request that OPENS an effect, never the release
+-- that closes one" rule (server/certtiers.lua's own HAZARD 5;
+-- server/combat.lua's ValidateCombatRequest doc comment states the
+-- identical rule for its own effects). The buyItem hook below ALSO
+-- re-checks the same per-person permit, defense-in-depth, in case a
+-- future ox_inventory version's openShop hook translation ever silently
+-- stops registering while buyItem's own keeps working -- belt-and-
+-- suspenders, not the primary enforcement point.
+-- ======================================================================
+
+--- Server-authoritative: may `source` edit the K9 equipment shop's item
+--- catalog (list/price/label/order/purchase-requirement) right now?
+--- Re-resolved fresh on every call, same shape as this file's own
+--- CanManageShopLocations immediately above -- kept under its OWN
+--- permission key ('k9.equipmentshopitems', not
+--- 'k9.equipmentshoplocations') so a server could one day grant "may edit
+--- shop item prices" without also granting "may move the shop ped",
+--- matching that function's own "kept SEPARATE" reasoning for its two
+--- keys.
+--- @param source number
+--- @return boolean, string? citizenid
+local function CanManageShopItems(source)
+    local citizenid = ResolveCitizenId(source)
+    if type(IsHighCommand) == 'function' and IsHighCommand(source) then
+        return true, citizenid
+    end
+    if citizenid and type(HasPermission) == 'function' and HasPermission(citizenid, 'k9.equipmentshopitems') == true then
+        return true, citizenid
+    end
+    return false, citizenid
+end
+
+--- PER-PERSON FEATURE CONTROL for K9EquipmentShop -- see this section's
+--- own header for the full writeup and for exactly why this is gated at
+--- ox_inventory's own `openShop`/`buyItem` hooks rather than inside a
+--- shop-registration step this resource has no per-player control over.
+--- Step 1 (the global Config.Features.K9EquipmentShop flag) is folded
+--- into THIS function, unlike server/fetch.lua's/server/combat.lua's own
+--- copies (which rely on a separate "top of file"/caller-side gate) --
+--- this function's own two call sites are ox_inventory-fired HOOKS, not a
+--- request handler with a natural "top of file" of its own, so keeping
+--- the flag check self-contained here is safer than trusting every future
+--- call site to remember it independently.
+--- @param citizenid string
+--- @return boolean allowed
+local function IsEquipmentShopPermittedForCitizenId(citizenid)
+    -- step 1: global off beats everything.
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return false end
+
+    -- Soft dependency, this resource's established convention -- see
+    -- server/pursuitsprint.lua's own identical comment on its own copy of
+    -- this guard.
+    local hasPermissionAvailable = type(HasPermission) == 'function'
+
+    if hasPermissionAvailable and HasPermission(citizenid, 'block.K9EquipmentShop') == true then
+        return false -- step 2: an explicit block always wins, even over an active grant
+    end
+
+    local featureControl = Config.FeatureControl
+    local requiresGrant = type(featureControl) == 'table'
+        and type(featureControl.RequireGrant) == 'table'
+        and featureControl.RequireGrant.K9EquipmentShop == true
+
+    if requiresGrant then
+        -- step 3: listed in RequireGrant -> ALLOW only with an active grant.
+        return hasPermissionAvailable and HasPermission(citizenid, 'feature.K9EquipmentShop') == true
+    end
+
+    return true -- step 4: not listed in RequireGrant at all -- default allow
+end
+
+-- Defensive cap on total live (non-tombstoned) item count -- same
+-- reasoning as server/certtiers.lua's own MAX_TIERS.
+local MAX_SHOP_ITEMS = 200
+
+-- Absurdly-large-price ceiling -- see this section's own header "PRICE
+-- VALIDATION". One BILLION whole currency units.
+local MAX_SHOP_ITEM_PRICE = 1000000000
+
+--- 1-50 chars, lowercase-start, lowercase/digit/underscore only -- an
+--- ox_inventory item-name shape. Comfortably inside
+--- k9_equipment_shop_items.item_key's VARCHAR(50) (migration 0014). Also
+--- reused, unchanged, to validate an OPTIONAL `currency` override (which
+--- is itself just another ox_inventory item name).
+--- @param key any
+--- @return boolean
+local function IsValidShopItemKey(key)
+    if type(key) ~= 'string' then return false end
+    local len = #key
+    if len < 1 or len > 50 then return false end
+    return key:match('^[a-z][a-z0-9_]*$') ~= nil
+end
+
+--- See this section's own header "PRICE VALIDATION" for the full
+--- reasoning behind every one of these five rejections, and for why ZERO
+--- is deliberately NOT one of them.
+--- @param value any
+--- @return boolean
+local function IsValidShopItemPrice(value)
+    return type(value) == 'number'
+        and value == value                      -- reject NaN
+        and value > -math.huge and value < math.huge -- reject +/-infinity
+        and value >= 0                           -- reject negative; ZERO IS ALLOWED (a free item)
+        and value <= MAX_SHOP_ITEM_PRICE         -- reject absurdly large
+        and value == math.floor(value)           -- reject fractional -- whole currency units only
+end
+
+-- Live, in-memory catalog state -- rebuilt wholesale by
+-- RefreshEquipmentShopItemCatalog below, never partially mutated in
+-- place. Same discipline as server/certtiers.lua's TierByKey/TierOrder.
+local ItemByKey
+local ItemOrder
+
+--- Builds a fresh item_key -> { price, currency, label, requiredTierKey,
+--- requiredSpecialization, sortOrder } map from
+--- Config.K9EquipmentShop.items ONLY -- does NOT consult the database
+--- (see RefreshEquipmentShopItemCatalog for the merge step that layers
+--- runtime overrides on top). A malformed entry (not a table, or no valid
+--- string `name`) is warned about and excluded from THIS map -- it is
+--- NOT thereby excluded from the ORIGINAL REGISTRATION section's own,
+--- entirely separate and UNCHANGED validation loop above, which
+--- independently warns about and skips the identical entry in its own
+--- pass over the raw config array; this is disclosed, harmless
+--- duplication (two warnings for one bad entry), never a silent gap,
+--- chosen specifically to leave that pre-existing, already-tested loop
+--- byte-for-byte untouched by this section.
+--- @param shopConfig any -- Config.K9EquipmentShop
+--- @return table<string, table>
+local function BuildCatalogFromConfigItemDefaults(shopConfig)
+    local map = {}
+    if type(shopConfig) == 'table' and type(shopConfig.items) == 'table' then
+        for i, entry in ipairs(shopConfig.items) do
+            if type(entry) ~= 'table' or type(entry.name) ~= 'string' or entry.name == '' then
+                print(('[qbx_k9unit] equipmentshop: WARNING: Config.K9EquipmentShop.items[%d] is not a table or has no valid string name -- excluded from the item-catalog overlay used for tablet editing / live refresh (the original shop-registration loop above evaluates this entry independently).'):format(i))
+            else
+                map[entry.name] = {
+                    price = entry.price, currency = entry.currency, label = nil,
+                    requiredTierKey = nil, requiredSpecialization = nil, sortOrder = i,
+                }
+            end
+        end
+    end
+    return map
+end
+
+-- Initial SYNCHRONOUS population from config defaults ONLY, at this
+-- file's own load time -- same reasoning/safety property as
+-- server/certtiers.lua's own identical block: makes ItemByKey/ItemOrder
+-- safe to read even before onResourceStart fires for this resource. The
+-- onResourceStart handler at the bottom of this section layers the
+-- database on top a moment later.
+ItemByKey = BuildCatalogFromConfigItemDefaults(Config.K9EquipmentShop)
+do
+    local order = {}
+    for key in pairs(ItemByKey) do order[#order + 1] = key end
+    table.sort(order, function(a, b) return ItemByKey[a].sortOrder < ItemByKey[b].sortOrder end)
+    ItemOrder = order
+end
+
+--- Rebuilds `ItemByKey`/`ItemOrder` from Config.K9EquipmentShop.items
+--- merged with the current `k9_equipment_shop_items` database state --
+--- THE DATABASE WINS per key. Byte-for-byte the same merge shape as
+--- server/certtiers.lua's own RefreshCertificationTierCatalog. Called
+--- once at this file's own onResourceStart (see bottom of this section)
+--- and again after every successful ShopItemsUpsert/Reorder/Delete.
+--- @return boolean hasOverlay -- true if at least one row exists in
+--- k9_equipment_shop_items (touched or tombstoned) -- used at boot ONLY
+--- to decide whether a live shop re-registration is actually needed (see
+--- LiveRefreshRegisteredShop's own call site at the bottom of this
+--- section for why: a fresh install with zero tablet edits ever made must
+--- stay BYTE-FOR-BYTE identical, including registering the shop exactly
+--- ONCE, to this resource's behavior before this pass -- the same
+--- "zero-behavior-change-until-touched" guarantee server/certtiers.lua's
+--- own header calls HAZARD 1).
+local function RefreshEquipmentShopItemCatalog()
+    local merged = BuildCatalogFromConfigItemDefaults(Config.K9EquipmentShop)
+
+    local overrideRows = K9Store.ShopItem_GetAllRows()
+    local hasOverlay = #overrideRows > 0
+    for _, row in ipairs(overrideRows) do
+        if row.deleted == 1 or row.deleted == true then
+            -- TOMBSTONE: exclude entirely -- see this section's own header
+            -- "TOMBSTONE, NOT HARD-DELETE".
+            merged[row.item_key] = nil
+        else
+            merged[row.item_key] = {
+                price = tonumber(row.price), currency = row.currency, label = row.label,
+                requiredTierKey = row.required_tier_key, requiredSpecialization = row.required_specialization,
+                sortOrder = tonumber(row.sort_order) or 0,
+            }
+        end
+    end
+
+    local order = {}
+    for key in pairs(merged) do order[#order + 1] = key end
+    table.sort(order, function(a, b)
+        if merged[a].sortOrder ~= merged[b].sortOrder then return merged[a].sortOrder < merged[b].sortOrder end
+        return a < b -- stable, deterministic tie-break -- same as server/certtiers.lua's own CONCURRENT-ADD ORDINAL TIE handling
+    end)
+
+    ItemByKey = merged
+    ItemOrder = order
+    return hasOverlay
+end
+
+--- Display label for the tablet's own item list -- an explicit DB
+--- override wins; otherwise this resource asks ox_inventory itself for
+--- the item's own real label (never hardcoded, never duplicated into this
+--- resource's own storage as a required field); if THAT is unavailable
+--- (ox_inventory not running, or the item genuinely does not exist in its
+--- registry -- e.g. a not-yet-installed item an admin pre-configured), the
+--- raw item_key itself is shown rather than nothing at all.
+--- @param key string
+--- @param overrideLabel string?
+--- @return string
+local function ResolveShopItemDisplayLabel(key, overrideLabel)
+    if type(overrideLabel) == 'string' and overrideLabel ~= '' then return overrideLabel end
+    local ok, item = pcall(function() return exports.ox_inventory:Items(key) end)
+    if ok and type(item) == 'table' and type(item.label) == 'string' and item.label ~= '' then
+        return item.label
+    end
+    return key
+end
+
+--- Ordered (by sortOrder ascending) snapshot of the live item catalog for
+--- the tablet's own editing screen -- a COPY, not the live tables, same
+--- "caller cannot mutate this file's own authoritative state" reasoning
+--- as server/certtiers.lua's own ListCertificationTiers.
+--- @return table[]
+local function ListEquipmentShopItems()
+    local list = {}
+    for _, key in ipairs(ItemOrder) do
+        local entry = ItemByKey[key]
+        list[#list + 1] = {
+            key = key,
+            label = ResolveShopItemDisplayLabel(key, entry.label),
+            price = entry.price,
+            currency = entry.currency,
+            sortOrder = entry.sortOrder,
+            requiredTierKey = entry.requiredTierKey,
+            requiredSpecialization = entry.requiredSpecialization,
+        }
+    end
+    return list
+end
+
+--- Builds the `{name,price,currency?}[]` array `RegisterShop` expects
+--- from the LIVE MERGED catalog (config ∪ database overlay) -- the exact
+--- same per-entry price-shape + WarnIfItemMissing validation as the
+--- ORIGINAL REGISTRATION loop above, parameterized over the merged
+--- catalog instead of the raw config array (that original loop is left
+--- completely untouched -- see this section's own header for why running
+--- both, independently, is a deliberate, disclosed, harmless choice, not
+--- an oversight).
+--- @param currencyItem string
+--- @return table[]
+local function BuildValidatedShopInventoryArray(currencyItem)
+    local inventoryItems = {}
+    for _, key in ipairs(ItemOrder) do
+        local entry = ItemByKey[key]
+        local diagnosticPath = ('k9_equipment_shop_items[%q]'):format(key)
+        if not IsValidShopItemPrice(entry.price) then
+            print(('[qbx_k9unit] equipmentshop: WARNING: %s has an invalid price (%s) -- skipped from the live shop refresh.'):format(diagnosticPath, tostring(entry.price)))
+        elseif WarnIfItemMissing(key, diagnosticPath .. '.name') then
+            inventoryItems[#inventoryItems + 1] = {
+                name = key,
+                price = entry.price,
+                currency = (entry.currency ~= nil and entry.currency ~= currencyItem) and entry.currency or nil,
+            }
+        end
+    end
+    return inventoryItems
+end
+
+--- Re-registers the K9 Supply shop from the LIVE merged catalog -- makes
+--- a tablet item edit take effect for every already-connected player
+--- IMMEDIATELY, with no restart. Safe to call at any time, any number of
+--- times (registerShopType's own real implementation is an unconditional
+--- table overwrite -- see this section's own header "THE EDIT/PURCHASE
+--- RACE"). A WARNING ONLY on failure, never a thrown error -- mirrors
+--- this file's own pre-existing REGISTRATION section's identical posture.
+local function LiveRefreshRegisteredShop()
+    local shopConfig = Config.K9EquipmentShop
+    if type(shopConfig) ~= 'table' or type(shopConfig.shopType) ~= 'string' or shopConfig.shopType == '' then
+        return -- nothing to refresh -- the original REGISTRATION handler already warned about this shape problem
+    end
+
+    local currencyItem = shopConfig.currencyItem
+    if type(currencyItem) ~= 'string' or currencyItem == '' then currencyItem = 'money' end
+
+    local inventoryItems = BuildValidatedShopInventoryArray(currencyItem)
+    if #inventoryItems == 0 then
+        print('[qbx_k9unit] equipmentshop: WARNING: the merged item catalog has nothing left to sell after validation -- the live shop refresh was skipped (ox_inventory keeps whatever it last had registered, if anything).')
+        return
+    end
+
+    local groups = nil
+    if type(Config.Departments) == 'table' then
+        groups = {}
+        for jobName in pairs(Config.Departments) do groups[jobName] = 0 end
+        if next(groups) == nil then groups = nil end
+    end
+
+    local shopLabel = type(shopConfig.label) == 'string' and shopConfig.label ~= '' and shopConfig.label or 'K9 Supply'
+    local registered = K9Compat.Get('inventory').RegisterShop(shopConfig.shopType, {
+        label = shopLabel,
+        items = inventoryItems,
+        groups = groups,
+    })
+
+    if not registered then
+        print('[qbx_k9unit] equipmentshop: WARNING: live shop refresh (RegisterShop) failed -- the most recent item edit will not be visible to players until the next resource restart.')
+    end
+end
+
+-- Cross-file-pattern critical-section lock, keyed by item_key -- see this
+-- section's own header "THE EDIT/PURCHASE RACE" for exactly what this
+-- protects (concurrent EDITS to the same item, never the already-safe
+-- ox_inventory purchase path itself) and for why it cannot deadlock
+-- against server/certtiers.lua's TierEditMutex.
+local ShopItemEditMutex = NewMutex()
+
+-- Anti-fat-finger/double-submit rate limit, keyed by the ACTING officer's
+-- own source -- a SEPARATE instance from EquipmentShopLocationActionCooldown
+-- above (a different concern, a different budget), mirroring
+-- server/certtiers.lua's own CertTierActionCooldown shape exactly.
+local EQUIPMENT_SHOP_ITEM_ACTION_COOLDOWN_MS = 1000
+local EquipmentShopItemActionCooldown = NewCooldown(EQUIPMENT_SHOP_ITEM_ACTION_COOLDOWN_MS)
+EquipmentShopItemActionCooldown.RegisterPlayerDropped()
+
+--- @param action string
+--- @param itemKey string
+--- @param detail string
+--- @param changedBy string
+local function WriteShopItemAudit(action, itemKey, detail, changedBy)
+    K9Store.ShopItemAudit_Append(action, itemKey, detail, changedBy or 'unknown')
+end
+
+-- ======================================================================
+-- CALLBACKS -- all four re-verify CanManageShopItems(source) as their own
+-- first action, mirroring server/certtiers.lua's own certTiersList/
+-- certTiersUpsert/certTiersReorder/certTiersDelete shape and response
+-- convention (`{ ok, reason, ... }`) exactly.
+-- ======================================================================
+
+lib.callback.register('qbx_k9unit:server:equipmentShopItemsList', function(source)
+    local authorized = CanManageShopItems(source)
+    if not authorized then return { ok = false, reason = 'denied' } end
+    return { ok = true, items = ListEquipmentShopItems() }
+end)
+
+lib.callback.register('qbx_k9unit:server:equipmentShopItemsUpsert', function(source, payload)
+    local authorized, citizenid = CanManageShopItems(source)
+    if not authorized then return { ok = false, reason = 'denied' } end
+
+    if not EquipmentShopItemActionCooldown.Consume(source, EQUIPMENT_SHOP_ITEM_ACTION_COOLDOWN_MS) then
+        return { ok = false, reason = 'rate_limited' }
+    end
+
+    if type(payload) ~= 'table' or type(payload.key) ~= 'string' then
+        return { ok = false, reason = 'invalid_payload' }
+    end
+
+    local key = payload.key
+    if not IsValidShopItemKey(key) then
+        return { ok = false, reason = 'invalid_key' }
+    end
+    if not IsValidShopItemPrice(payload.price) then
+        return { ok = false, reason = 'invalid_price' }
+    end
+
+    local label = nil
+    if payload.label ~= nil then
+        if not IsSafeShortString(payload.label, 60) then
+            return { ok = false, reason = 'invalid_label' }
+        end
+        label = payload.label
+    end
+
+    local currency = nil
+    if payload.currency ~= nil then
+        if not IsValidShopItemKey(payload.currency) then
+            return { ok = false, reason = 'invalid_currency' }
+        end
+        currency = payload.currency
+    end
+
+    local requiredTierKey = nil
+    if payload.requiredTierKey ~= nil then
+        if type(payload.requiredTierKey) ~= 'string'
+            or type(IsKnownCertificationTierKey) ~= 'function'
+            or not IsKnownCertificationTierKey(payload.requiredTierKey) then
+            return { ok = false, reason = 'invalid_required_tier' }
+        end
+        requiredTierKey = payload.requiredTierKey
+    end
+
+    local requiredSpecialization = nil
+    if payload.requiredSpecialization ~= nil then
+        if type(payload.requiredSpecialization) ~= 'string'
+            or type(Config.K9Specializations) ~= 'table'
+            or Config.K9Specializations[payload.requiredSpecialization] == nil then
+            return { ok = false, reason = 'invalid_required_specialization' }
+        end
+        requiredSpecialization = payload.requiredSpecialization
+    end
+
+    if not ShopItemEditMutex.TryAcquire(key) then
+        return { ok = false, reason = 'busy' }
+    end
+
+    -- `existing` is nil both for a genuinely brand-new key AND for one
+    -- currently tombstoned (ItemByKey excludes tombstoned keys entirely)
+    -- -- `priorRow` below (a direct DB read, ignoring the tombstone
+    -- filter) is what actually distinguishes "create" from "restore" for
+    -- the audit trail -- same pattern as server/certtiers.lua's own
+    -- certTiersUpsert.
+    local existing = ItemByKey[key]
+    local isNewOrRestoring = existing == nil
+
+    if isNewOrRestoring then
+        local liveCount = 0
+        for _ in pairs(ItemByKey) do liveCount = liveCount + 1 end
+        if liveCount >= MAX_SHOP_ITEMS then
+            ShopItemEditMutex.Release(key)
+            return { ok = false, reason = 'too_many_items' }
+        end
+    end
+
+    local sortOrder
+    if isNewOrRestoring then
+        -- Append at the end -- both for a genuinely new key and for one
+        -- being restored from a tombstone (a restore does not attempt to
+        -- reclaim its old position -- same reasoning as
+        -- server/certtiers.lua's own UpsertTier).
+        local maxOrder = 0
+        for _, entry in pairs(ItemByKey) do
+            if entry.sortOrder > maxOrder then maxOrder = entry.sortOrder end
+        end
+        sortOrder = maxOrder + 1
+    else
+        -- Editing an already-live item: sortOrder is untouched here. The
+        -- ONLY way to change an existing item's order is
+        -- equipmentShopItemsReorder below.
+        sortOrder = existing.sortOrder
+    end
+
+    local priorRow = K9Store.ShopItem_GetDeletedFlagByKey(key)[1]
+
+    local wrote = K9Store.ShopItem_Upsert(key, label, payload.price, currency, sortOrder, requiredTierKey, requiredSpecialization, citizenid or 'unknown')
+    ShopItemEditMutex.Release(key)
+
+    if not wrote then
+        return { ok = false, reason = 'db_error' }
+    end
+
+    local action
+    if not isNewOrRestoring then
+        action = 'item_update'
+    elseif priorRow ~= nil and (priorRow.deleted == 1 or priorRow.deleted == true) then
+        action = 'item_restore'
+    else
+        action = 'item_create'
+    end
+
+    WriteShopItemAudit(action, key,
+        ('label=%s price=%d currency=%s required_tier=%s required_specialization=%s'):format(
+            label or '(default)', payload.price, currency or '(default)', requiredTierKey or '(none)', requiredSpecialization or '(none)'),
+        citizenid or 'unknown')
+
+    RefreshEquipmentShopItemCatalog()
+    LiveRefreshRegisteredShop()
+
+    return { ok = true, items = ListEquipmentShopItems() }
+end)
+
+lib.callback.register('qbx_k9unit:server:equipmentShopItemsReorder', function(source, orderedKeys)
+    local authorized, citizenid = CanManageShopItems(source)
+    if not authorized then return { ok = false, reason = 'denied' } end
+
+    if not EquipmentShopItemActionCooldown.Consume(source, EQUIPMENT_SHOP_ITEM_ACTION_COOLDOWN_MS) then
+        return { ok = false, reason = 'rate_limited' }
+    end
+
+    if type(orderedKeys) ~= 'table' or #orderedKeys > MAX_SHOP_ITEMS then
+        return { ok = false, reason = 'invalid_payload' }
+    end
+
+    -- Must be EXACTLY a permutation of every currently-known
+    -- (non-tombstoned) item key -- no partial reorder, ever -- same
+    -- "HAZARD 3"-style rule as server/certtiers.lua's own ReorderTiers.
+    local currentKeys, expectedCount = {}, 0
+    for key in pairs(ItemByKey) do
+        currentKeys[key] = true
+        expectedCount = expectedCount + 1
+    end
+
+    local seen, cleanOrder = {}, {}
+    for _, key in ipairs(orderedKeys) do
+        if type(key) ~= 'string' or not currentKeys[key] or seen[key] then
+            return { ok = false, reason = 'invalid_key_set' }
+        end
+        seen[key] = true
+        cleanOrder[#cleanOrder + 1] = key
+    end
+    if #cleanOrder ~= expectedCount then
+        return { ok = false, reason = 'must_include_every_item' }
+    end
+
+    local beforeParts = {}
+    for _, key in ipairs(cleanOrder) do
+        beforeParts[#beforeParts + 1] = ('%s=%d'):format(key, ItemByKey[key].sortOrder)
+    end
+
+    local afterParts = {}
+    for index, key in ipairs(cleanOrder) do
+        -- Per-key mutex, held only for THIS key's own write -- same
+        -- reasoning as server/certtiers.lua's own ReorderTiers: a busy key
+        -- is skipped THIS pass (its order left unchanged) rather than
+        -- blocking the rest of the reorder.
+        if ShopItemEditMutex.TryAcquire(key) then
+            local entry = ItemByKey[key]
+            K9Store.ShopItem_UpdateSortOrder(key, entry.label, entry.price, entry.currency, index, entry.requiredTierKey, entry.requiredSpecialization, citizenid or 'unknown')
+            ShopItemEditMutex.Release(key)
+        else
+            print(('[qbx_k9unit] equipmentshop ReorderItems: item %s busy (concurrent edit) -- its sort order was left unchanged this pass'):format(key))
+        end
+        afterParts[#afterParts + 1] = ('%s=%d'):format(key, index)
+    end
+
+    WriteShopItemAudit('item_reorder', 'ALL',
+        ('before=[%s] after=[%s]'):format(table.concat(beforeParts, ', '), table.concat(afterParts, ', ')),
+        citizenid or 'unknown')
+
+    RefreshEquipmentShopItemCatalog()
+    LiveRefreshRegisteredShop()
+
+    return { ok = true, items = ListEquipmentShopItems() }
+end)
+
+lib.callback.register('qbx_k9unit:server:equipmentShopItemsDelete', function(source, key)
+    local authorized, citizenid = CanManageShopItems(source)
+    if not authorized then return { ok = false, reason = 'denied' } end
+
+    if not EquipmentShopItemActionCooldown.Consume(source, EQUIPMENT_SHOP_ITEM_ACTION_COOLDOWN_MS) then
+        return { ok = false, reason = 'rate_limited' }
+    end
+
+    if type(key) ~= 'string' or not ItemByKey[key] then
+        return { ok = false, reason = 'unknown_item' }
+    end
+
+    if not ShopItemEditMutex.TryAcquire(key) then
+        return { ok = false, reason = 'busy' }
+    end
+
+    -- No reference-count check before tombstoning -- see this section's
+    -- own header "TOMBSTONE, NOT HARD-DELETE" for exactly why this file's
+    -- own schema has nothing an item_key delete could ever strand.
+    local entry = ItemByKey[key]
+    local wrote = K9Store.ShopItem_Tombstone(key, entry.label, entry.price, entry.currency, entry.sortOrder, entry.requiredTierKey, entry.requiredSpecialization, citizenid or 'unknown')
+    ShopItemEditMutex.Release(key)
+
+    if not wrote then
+        return { ok = false, reason = 'db_error' }
+    end
+
+    WriteShopItemAudit('item_delete', key, ('item %s removed from sale (tombstoned)'):format(key), citizenid or 'unknown')
+
+    RefreshEquipmentShopItemCatalog()
+    LiveRefreshRegisteredShop()
+
+    return { ok = true, items = ListEquipmentShopItems() }
+end)
+
+-- ======================================================================
+-- PURCHASE-TIME ENFORCEMENT -- ox_inventory `registerHook` additions, see
+-- this section's own header for the full design/verification writeup.
+-- Both hooks are ONLY ever registered when Config.Features.K9EquipmentShop
+-- is true at THIS resource's own onResourceStart (see the handler at the
+-- bottom of this section) -- an ABSENT/false feature flag registers
+-- neither, matching this file's own established "ABSENCE IS A CLEAN
+-- NO-OP" posture. Both filter to THIS shop's own `shopType` ONLY, in
+-- their very first line -- never touching any other shop registered by
+-- ox_inventory itself or by any other resource.
+-- ======================================================================
+
+--- Gates ox_inventory's own `openShop` event -- see this section's own
+--- header "WHERE THIS IS GATED" for the full "why this is the real
+--- opening decision point" writeup. NEVER gates closing/leaving the shop
+--- UI (there is no such hook here at all).
+--- @param shopType string -- Config.K9EquipmentShop.shopType, captured once at registration time
+local function RegisterEquipmentShopOpenShopBlockHook(shopType)
+    local registered = K9Compat.Get('inventory').RegisterHook('openShop', function(payload)
+        if type(payload) ~= 'table' or payload.shopType ~= shopType then return end -- not our shop -- never touch anyone else's
+
+        local source = payload.source
+        local Player = type(source) == 'number' and exports.qbx_core:GetPlayer(source)
+        local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+        if type(citizenid) ~= 'string' or citizenid == '' then
+            return false -- cannot identify the requester at all -- fail closed, never open the shop for an unresolvable identity
+        end
+
+        if not IsEquipmentShopPermittedForCitizenId(citizenid) then
+            if type(NotifyPlayer) == 'function' and type(source) == 'number' then
+                NotifyPlayer(source, locale('equipmentshop.blocked_from_shop'), 'error')
+            end
+            return false -- VETO: the shop UI never opens for this one attempt
+        end
+        -- allowed -- return nil, no veto
+    end)
+
+    if not registered then
+        print('[qbx_k9unit] equipmentshop: WARNING: could not register the openShop per-person block/grant hook -- a `block.K9EquipmentShop`/`feature.K9EquipmentShop` permission grant will NOT be enforced this session (expected/inert on a non-ox_inventory backend -- see shared/compat/inventory.lua\'s own "RegisterHook VOCABULARY" section: only ox_inventory currently translates the \'openShop\' event). The server-wide Config.Features.K9EquipmentShop flag is unaffected either way.')
+    end
+end
+
+--- Gates ox_inventory's own `buyItem` event with THIS item's own
+--- `requiredTierKey`/`requiredSpecialization`, AND re-checks the same
+--- per-person block/grant as RegisterEquipmentShopOpenShopBlockHook above
+--- (defense-in-depth -- see this section's own header). NEVER gates a
+--- termination/cleanup path -- there is no "give the item back" concept
+--- here at all; a purchase either completes or it does not.
+--- @param shopType string
+local function RegisterEquipmentShopBuyItemRequirementHook(shopType)
+    local registered = K9Compat.Get('inventory').RegisterHook('buyItem', function(payload)
+        if type(payload) ~= 'table' or payload.shopType ~= shopType then return end -- not our shop
+
+        local source = payload.source
+        local Player = type(source) == 'number' and exports.qbx_core:GetPlayer(source)
+        local citizenid = Player and Player.PlayerData and Player.PlayerData.citizenid
+        local jobName = Player and Player.PlayerData and Player.PlayerData.job and Player.PlayerData.job.name
+
+        if type(citizenid) ~= 'string' or citizenid == '' then
+            return false -- unresolvable identity -- fail closed (see header)
+        end
+
+        if not IsEquipmentShopPermittedForCitizenId(citizenid) then
+            if type(NotifyPlayer) == 'function' and type(source) == 'number' then
+                NotifyPlayer(source, locale('equipmentshop.blocked_from_shop'), 'error')
+            end
+            return false
+        end
+
+        local itemName = payload.itemName
+        local entry = type(itemName) == 'string' and ItemByKey[itemName]
+        if not entry then return end -- unknown to this file's own overlay -- nothing configured to gate here
+        if entry.requiredTierKey == nil and entry.requiredSpecialization == nil then return end -- no requirement configured -- allow
+
+        if type(jobName) ~= 'string' or jobName == '' then
+            return false -- have a citizenid but no resolvable job -- cannot evaluate a job-scoped requirement -- fail closed
+        end
+
+        if entry.requiredTierKey ~= nil then
+            local meets = type(MeetsTierRequirement) == 'function' and MeetsTierRequirement(citizenid, jobName, entry.requiredTierKey)
+            if meets ~= true then
+                if type(NotifyPlayer) == 'function' and type(source) == 'number' then
+                    NotifyPlayer(source, locale('equipmentshop.requires_tier', entry.requiredTierKey), 'error')
+                end
+                return false
+            end
+        end
+
+        if entry.requiredSpecialization ~= nil then
+            local has = type(HasSpecialization) == 'function' and HasSpecialization(citizenid, jobName, entry.requiredSpecialization)
+            if has ~= true then
+                if type(NotifyPlayer) == 'function' and type(source) == 'number' then
+                    NotifyPlayer(source, locale('equipmentshop.requires_specialization', entry.requiredSpecialization), 'error')
+                end
+                return false
+            end
+        end
+        -- every configured requirement met -- allow (return nil, no veto)
+    end)
+
+    if not registered then
+        print('[qbx_k9unit] equipmentshop: WARNING: could not register the buyItem purchase-requirement hook -- any tier/specialization requirement set on a shop item will NOT be enforced this session (expected/inert on a non-ox_inventory backend -- see shared/compat/inventory.lua\'s own "RegisterHook VOCABULARY" section: only ox_inventory currently translates the \'buyItem\' event).')
+    end
+end
+
+-- ======================================================================
+-- BOOT -- layer the persisted DB item overrides on top of config.lua's own
+-- shipped defaults, refresh the live shop registration ONLY if there is
+-- actually an overlay to apply (see RefreshEquipmentShopItemCatalog's own
+-- doc comment for why -- a fresh install with zero tablet edits ever made
+-- must register the shop exactly ONCE, unchanged from this resource's
+-- pre-existing behavior), and register both purchase-time hooks. A
+-- SEPARATE, ADDITIONAL onResourceStart handler from BOTH this file's own
+-- pre-existing ones above (AddEventHandler allows any number of handlers
+-- for the same event; all three run, in registration order, when the
+-- event actually fires) -- deliberately not folded into either existing
+-- handler, so this section stays independently readable/reviewable, same
+-- reasoning this file's own RUNTIME SHOP LOCATIONS boot handler gives for
+-- its own separateness.
+-- ======================================================================
+AddEventHandler('onResourceStart', function(resourceName)
+    if GetCurrentResourceName() ~= resourceName then return end
+    if not (Config.Features and Config.Features.K9EquipmentShop == true) then return end
+
+    local hasOverlay = RefreshEquipmentShopItemCatalog()
+    if hasOverlay then
+        LiveRefreshRegisteredShop()
+    end
+
+    local shopConfig = Config.K9EquipmentShop
+    if type(shopConfig) == 'table' and type(shopConfig.shopType) == 'string' and shopConfig.shopType ~= '' then
+        RegisterEquipmentShopOpenShopBlockHook(shopConfig.shopType)
+        RegisterEquipmentShopBuyItemRequirementHook(shopConfig.shopType)
+    end
 end)
